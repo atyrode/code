@@ -1182,7 +1182,7 @@ func hasDesc(descs []string, want string) bool {
 func TestUsageProviderAccountsComeFromSnapshot(t *testing.T) {
 	m := layoutModel()
 	m.vaults = []vault{{
-		ID: "p", Label: "custom vault", Claude: "Mum", Codex: "Victor + Alex",
+		ID: "p", Label: "custom vault", Claude: "owner-claude-label", Codex: "owner-codex-a + owner-codex-b",
 	}}
 	m.avail.accountsOK = true
 	m.avail.accounts = map[string][]vaultAccount{
@@ -1203,7 +1203,7 @@ func TestUsageProviderAccountsComeFromSnapshot(t *testing.T) {
 			t.Fatalf("%s must be a provider-only heading:\n%s", provider, panel)
 		}
 	}
-	for _, forbidden := range []string{"Mum", "Victor + Alex", "opaque-z", "opaque-a", "do-not-render"} {
+	for _, forbidden := range []string{"owner-claude-label", "owner-codex-a + owner-codex-b", "opaque-z", "opaque-a", "do-not-render"} {
 		if strings.Contains(panel, forbidden) {
 			t.Errorf("rendered configured or opaque identity %q:\n%s", forbidden, panel)
 		}
