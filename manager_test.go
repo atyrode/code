@@ -376,8 +376,8 @@ func TestManagerRetainsCachedFablePerVault(t *testing.T) {
 
 func TestManagerProviderAccountsAndOrdering(t *testing.T) {
 	m := managerModel()
-	m.vaults[0].Claude = "Mum"
-	m.vaults[0].Codex = "Victor + Alex"
+	m.vaults[0].Claude = "owner-claude-label"
+	m.vaults[0].Codex = "owner-codex-a + owner-codex-b"
 	m.vaultUsage["primary"] = availability{
 		ok: true, accountsOK: true,
 		bucket: map[string]string{}, reset: map[string]int64{},
@@ -405,7 +405,7 @@ func TestManagerProviderAccountsAndOrdering(t *testing.T) {
 		codexUsage < claude && claude < claudeEmail && claudeEmail < claudeUsage) {
 		t.Fatalf("manager detail must reuse full Usage with Codex first and sorted accounts:\n%s", panel)
 	}
-	for _, forbidden := range []string{"Mum", "Victor + Alex", "opaque-z", "opaque-a", "opaque-claude"} {
+	for _, forbidden := range []string{"owner-claude-label", "owner-codex-a + owner-codex-b", "opaque-z", "opaque-a", "opaque-claude"} {
 		if strings.Contains(panel, forbidden) {
 			t.Errorf("manager rendered configured or opaque identity %q:\n%s", forbidden, panel)
 		}
