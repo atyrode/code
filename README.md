@@ -19,6 +19,11 @@ you dial in what the task in front of you actually needs:
 Press `enter` and `code` launches oh-my-pi with that setup, as a one-shot
 overlay — your omp config is never modified.
 
+It's made for people who run oh-my-pi with **both Anthropic and OpenAI**:
+the whole point is deciding, per task, how to blend the two pools and which
+quota to spend. With a single provider you can still launch, but the dials
+lose most of their meaning.
+
 Too lazy to dial? Press `ctrl+o` and describe the task: a small local model
 rates its difficulty and sets the dials for you. (Optional — needs
 [ollama](https://ollama.com); everything else works without it.)
