@@ -67,6 +67,12 @@ func loadCatalog(path string) (*catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	return loadCatalogBytes(raw, path)
+}
+
+// loadCatalogBytes is loadCatalog over in-memory content (name only labels
+// errors) — the first-run onboarding reviews a scaffold before it hits disk.
+func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

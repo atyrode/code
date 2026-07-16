@@ -41,15 +41,12 @@ or grab a [release binary](https://github.com/atyrode/code/releases).
 You need [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed —
 `code` launches it, it doesn't replace it.
 
-Then, once:
+Then just run `code`. The first run notices there's no routing catalog yet
+and walks you through building one from your omp's model list — it shows you
+which model it picked for each rung, you sanity-check, press enter, done.
 
-```
-code generate init   # reads your omp's model list, scaffolds a models file
-code generate        # renders the routing catalog the dials browse
-```
-
-Review the tier guesses `init` makes in the models file (it tells you where),
-re-run `code generate` after any edit, and you're set: run `code`.
+The same machinery is scriptable as `code generate init` (scaffold the models
+file) and `code generate` (re-render the catalog after you edit it).
 
 ## More
 

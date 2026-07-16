@@ -22,7 +22,7 @@ environment variable with a sane fallback.
 
 | Variable | Purpose | Without it |
 |---|---|---|
-| `CODE_GENERATED` | path to the generated facet catalog (the routing blocks behind the dials) | `$XDG_DATA_HOME/code/generated.plain`, where `code generate` writes |
+| `CODE_GENERATED` | path to the generated facet catalog (the routing blocks behind the dials) | `$XDG_DATA_HOME/code/generated.plain`, where `code generate` writes; if that's missing too, the TUI opens the guided first-run that builds it |
 | `CODE_USAGE` | command printing `omp usage --json` for the usage panel | panel hidden |
 | `CODE_SELECTION_STATE` | file persisting your dial choices | choices reset each run |
 | `CODE_OMP` | omp binary for trusted launches | `omp-managed`, then `omp` on PATH |

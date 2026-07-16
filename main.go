@@ -2877,10 +2877,18 @@ func main() {
 			m.vaultFetching[v.ID] = true
 		}
 	}
+	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
+	// TUI in the guided onboarding that builds one (an explicit but broken
+	// CODE_GENERATED is an operator config error and is left visible as the
+	// usual empty routing panel instead).
+	app := tea.Model(m)
+	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" {
+		app = newOnboarding(m)
+	}
 	// Cell-motion mouse reporting carries wheel events. Filter rejected
 	// momentum and unused motion before Bubble Tea's redraw-after-Update loop.
 	inputFilter := &wheelInputFilter{}
-	final, err := clikit.Run(m, clikit.WithAltScreen(), clikit.WithMouseCellMotion(),
+	final, err := clikit.Run(app, clikit.WithAltScreen(), clikit.WithMouseCellMotion(),
 		clikit.WithMessageFilter(inputFilter.Filter))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
