@@ -8,23 +8,23 @@
 # any platform). Version + hashes are repointed after each release by
 # scripts/bump-flake-pin.sh.
 let
-  version = "0.1.0";
+  version = "0.2.0";
   sources = {
     "x86_64-linux" = {
       asset = "code-linux-amd64";
-      hash = "sha256-FmHrQAu9fs6aqfRtRuyDDKfIoTXsCVVOL5Q9W737gcY=";
+      hash = "sha256-G6saSqVz3cJRdfSEWGZA3/+y2sRRZ//tMuGjMrSXXgI=";
     };
     "aarch64-linux" = {
       asset = "code-linux-arm64";
-      hash = "sha256-F39GL95WLxGDokHRa3mZR2zYBGjfaSim9wFrnx/z7kk=";
+      hash = "sha256-1YSITlk5KuNFOcEDNgSQAGOJp2zKOARzwzGns26p4dA=";
     };
     "x86_64-darwin" = {
       asset = "code-darwin-amd64";
-      hash = "sha256-J0KorW2g17WNsUbFXRGzqkB2MvO+53IFGHJVLqVbrs4=";
+      hash = "sha256-ZTlQngwEf/MibSGVkyQir+N9dTXof8PoNm35N04nO60=";
     };
     "aarch64-darwin" = {
       asset = "code-darwin-arm64";
-      hash = "sha256-HhFiSs4nm2TTCbwenw22fgjCwyTU5HrGPdkd4DbI3pE=";
+      hash = "sha256-0i7DHo8RC4LuoYlEyxWDZr6g8DulvxlkSIXNwjQCWUE=";
     };
   };
   source =
