@@ -9,6 +9,11 @@ Pushing a `v*` tag triggers goreleaser and publishes release binaries.
 latest release within ~6 hours (`scripts/update-pins.sh`) and its machines
 pick it up on their next `atyrode apply`. Only tag what you would deploy.
 
+After goreleaser finishes, run `scripts/bump-flake-pin.sh <tag>` and PR the
+result: the flake wraps the published release binaries (not a source build),
+so `nix run github:atyrode/code` serves the new version only once
+`nix/code.nix` is repointed.
+
 ## Never move or delete a published tag
 
 Go modules are immutable: the first time anyone — a user, CI, the dotfiles

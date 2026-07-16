@@ -32,14 +32,28 @@ rates its difficulty and sets the dials for you. (Optional — needs
 
 ## Install
 
+**Grab a [release binary](https://github.com/atyrode/code/releases)** — one
+static file, nothing else to install:
+
 ```
-go install github.com/atyrode/code@latest
+curl -fsSL https://github.com/atyrode/code/releases/latest/download/code-linux-amd64.tar.gz | tar xz code
 ```
 
-or grab a [release binary](https://github.com/atyrode/code/releases).
+(swap `linux-amd64` for `linux-arm64`, `darwin-amd64`, or `darwin-arm64`)
 
-You need [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed —
-`code` launches it, it doesn't replace it.
+**Or with Nix** — the same binary, with oh-my-pi bundled if you want it:
+
+```
+nix run github:atyrode/code            # just code
+nix run github:atyrode/code#with-omp   # code + a pinned omp on PATH
+```
+
+**Or, for Gophers:** `go install github.com/atyrode/code@latest`
+
+Unless you took `#with-omp`, you need
+[oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed — `code`
+launches it, it doesn't replace it. (Either way, omp still needs your
+provider logins: `omp login`.)
 
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you
