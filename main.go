@@ -2824,6 +2824,11 @@ func defaultGlyphs() map[string]string {
 }
 
 func main() {
+	// `code generate [...]` is the catalog generator, not a TUI session (any
+	// other argv is forwarded to the launched omp session as before).
+	if len(os.Args) > 1 && os.Args[1] == "generate" {
+		os.Exit(runGenerate(os.Args[2:]))
+	}
 	glyphs := defaultGlyphs()
 	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
 		if p := strings.SplitN(kv, "=", 2); len(p) == 2 && p[1] != "" {
@@ -2832,7 +2837,13 @@ func main() {
 	}
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	generated := loadBlocks(os.Getenv("CODE_GENERATED"))
+	// The catalog: an explicit CODE_GENERATED wins (the Nix wrapper pre-bakes
+	// one); otherwise fall back to where `code generate` writes.
+	catalogPath := os.Getenv("CODE_GENERATED")
+	if catalogPath == "" {
+		catalogPath = defaultCatalogPath()
+	}
+	generated := loadBlocks(catalogPath)
 	vaults, vaultManifest := resolveVaults(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	vaultState := os.Getenv("CODE_AUTH_STATE")
 	selected, disabled := loadVaultState(vaults, vaultState)

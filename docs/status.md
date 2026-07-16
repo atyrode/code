@@ -10,14 +10,14 @@ If you run omp with more than one provider subscription and care which model
 chain answers which task, this tool is for you. If you run omp on one
 provider with defaults, you probably don't need it.
 
-## The one real gap: the catalog
+## The catalog
 
-The dials map to pre-generated routing blocks (`CODE_GENERATED`). Today that
-catalog is produced by a generator living in the author's dotfiles, from a
-pinned model list — so out of the box, the routing preview is empty for
-everyone else. Porting the generator into the tool as `code generate`
-(reading your own `omp models --json`) is the top roadmap item:
-[#1](https://github.com/atyrode/code/issues/1).
+The dials map to pre-generated routing blocks. `code generate init` scaffolds
+a models file from your own omp instance (`omp models --json`) and
+`code generate` renders the catalog from it — see the README quickstart. Two
+honest limits: the tier assignments `init` guesses from price deserve a human
+look, and the speed/ttft numbers it writes are placeholders (they only drive
+the TUI's speed meter) until you measure and update them.
 
 ## Other honest caveats
 
