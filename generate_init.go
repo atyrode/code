@@ -33,6 +33,12 @@ type ompModels struct {
 	Models []ompModel `json:"models"`
 }
 
+// ompModelsJSON fetches the user's model list; a var so tests and the
+// onboarding flow can stub the omp dependency.
+var ompModelsJSON = func() ([]byte, error) {
+	return exec.Command("omp", "models", "--json").Output()
+}
+
 var datedID = regexp.MustCompile(`-\d{6,8}$`)
 
 func poolOf(provider string) string {
@@ -94,54 +100,13 @@ func pickLadder(cands []ompModel) []ompModel {
 	}
 }
 
-func runGenerateInit(args []string) int {
-	fromJSON, out := "", defaultModelsPath()
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--from-json":
-			i++
-			if i >= len(args) {
-				fmt.Fprintln(os.Stderr, "code generate init: --from-json needs a path")
-				return 2
-			}
-			fromJSON = args[i]
-		case "--models-file":
-			i++
-			if i >= len(args) {
-				fmt.Fprintln(os.Stderr, "code generate init: --models-file needs a path")
-				return 2
-			}
-			out = args[i]
-		case "-h", "--help":
-			fmt.Print(generateHelp)
-			return 0
-		default:
-			fmt.Fprintf(os.Stderr, "code generate init: unknown flag %q\n%s", args[i], generateHelp)
-			return 2
-		}
-	}
-
-	var raw []byte
-	var err error
-	if fromJSON != "" {
-		raw, err = os.ReadFile(fromJSON)
-	} else {
-		raw, err = exec.Command("omp", "models", "--json").Output()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "code generate init: running `omp models --json` failed — is oh-my-pi installed? (or pass --from-json)")
-			return 1
-		}
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
-		return 1
-	}
+// scaffoldModels turns an `omp models --json` payload into models.yml content.
+// Pure, so the CLI and the first-run onboarding share it.
+func scaffoldModels(raw []byte) (string, error) {
 	var parsed ompModels
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		fmt.Fprintf(os.Stderr, "code generate init: parsing model list: %v\n", err)
-		return 1
+		return "", fmt.Errorf("parsing model list: %w", err)
 	}
-
 	byPool := map[string][]ompModel{}
 	for _, m := range parsed.Models {
 		pool := poolOf(m.Provider)
@@ -154,8 +119,7 @@ func runGenerateInit(args []string) int {
 	ladders := map[string][]ompModel{"O": pickLadder(byPool["O"]), "A": pickLadder(byPool["A"])}
 	for pool, name := range map[string]string{"O": "OpenAI/Codex", "A": "Anthropic"} {
 		if len(ladders[pool]) < 3 {
-			fmt.Fprintf(os.Stderr, "code generate init: found %d usable %s model(s), need 3 (cheap/regular/smart) — code assumes both Anthropic and OpenAI are set up in omp\n", len(ladders[pool]), name)
-			return 1
+			return "", fmt.Errorf("found %d usable %s model(s), need 3 (cheap/regular/smart) — code assumes both Anthropic and OpenAI are set up in omp", len(ladders[pool]), name)
 		}
 	}
 
@@ -196,6 +160,56 @@ models:
 				m.Thinking[0], m.Thinking[len(m.Thinking)-1]))
 		}
 	}
+	return b.String(), nil
+}
+
+func runGenerateInit(args []string) int {
+	fromJSON, out := "", defaultModelsPath()
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--from-json":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "code generate init: --from-json needs a path")
+				return 2
+			}
+			fromJSON = args[i]
+		case "--models-file":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "code generate init: --models-file needs a path")
+				return 2
+			}
+			out = args[i]
+		case "-h", "--help":
+			fmt.Print(generateHelp)
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "code generate init: unknown flag %q\n%s", args[i], generateHelp)
+			return 2
+		}
+	}
+
+	var raw []byte
+	var err error
+	if fromJSON != "" {
+		raw, err = os.ReadFile(fromJSON)
+	} else {
+		raw, err = ompModelsJSON()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "code generate init: running `omp models --json` failed — is oh-my-pi installed? (or pass --from-json)")
+			return 1
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
+		return 1
+	}
+	yml, err := scaffoldModels(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
+		return 1
+	}
 
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
@@ -205,7 +219,7 @@ models:
 		fmt.Fprintf(os.Stderr, "code generate init: %s already exists — review or delete it first\n", out)
 		return 1
 	}
-	if err := os.WriteFile(out, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(out, []byte(yml), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
 		return 1
 	}
