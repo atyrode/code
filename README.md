@@ -1,6 +1,8 @@
 # code
 
-> Everyone's PATH has room for exactly one `code`. If you, too, never plan to
+**Mission control for your coding agents.**
+
+> There can only be one `code` on your machine. If you, too, never plan to
 > run VS Code again — the name just freed up.
 
 ![the code generator](docs/screenshot.png)
