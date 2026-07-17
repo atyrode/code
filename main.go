@@ -48,7 +48,7 @@ type keyMap struct {
 // ShortHelp is a static single-line stand-in used only when measuring the
 // footer height for mode selection (which would otherwise recurse through the
 // state-derived compact help). The rendered compact line comes from
-// contextHelp, which derives its bindings from the live model state (#198).
+// contextHelp, which derives its bindings from the live model state (atyrode/dotfiles#198).
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Move, k.Change, k.Reset, k.Help, k.Quit}
 }
@@ -1033,7 +1033,7 @@ func prefixed(model string) string {
 // block for the current facets — what Enter launches omp with. The agent
 // overrides mirror the preview: without them the static managed defaults
 // would keep the five agent-backed types pinned regardless of the generated
-// profile (issue #173).
+// profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
 	rows := m.applyAdvisor(m.generated[comboID(m.sel)], m.sel["advisor"])
 	var mr, fc, ao strings.Builder
@@ -1112,7 +1112,7 @@ const (
 )
 
 // size classes behind mode(): derived from terminal cells and the measured
-// rendered minima of each section (#197) — never from pixels or a hard-coded
+// rendered minima of each section (atyrode/dotfiles#197) — never from pixels or a hard-coded
 // screenshot width.
 const (
 	sizeWide = iota
@@ -1437,7 +1437,7 @@ type model struct {
 	depth      int  // 0 lead · 1 full
 	collapse   bool // p: hide the Routing section
 	showResult bool // in collapsed mode: show the preview full-width
-	hideUsage  bool // s: hide the Usage section (#198); fetch state keeps running unseen
+	hideUsage  bool // s: hide the Usage section (atyrode/dotfiles#198); fetch state keeps running unseen
 	showUsage  bool // narrow mode: show Usage full-screen instead of silently shedding it
 
 	facets         []facet
@@ -1476,6 +1476,7 @@ type model struct {
 
 	launchManaged   bool              // m: run CODE_OMP with no overlay (the managed defaults)
 	launchUntrusted bool              // u: run the CODE_OMP_UNTRUSTED sandbox
+	hasSandbox      bool              // a sandbox binary exists; gates the u key
 	genConfig       string            // generated config YAML to launch omp with (generator Enter)
 	firstPrompt     string            // prompt from the suggest box, forwarded as omp's first message
 	savedSel        map[string]string // selection snapshot before a live suggest preview (for revert)
@@ -1633,7 +1634,7 @@ func shortWin(l string) string {
 // usageCtrlLine is the Usage chrome's action row: the refresh status/countdown
 // with its manual-refresh cue, then the profile-switch cue (omitted when only
 // one auth profile exists). The identity itself lives in the provider group
-// headings, so no separate auth equation remains (#198). A profile-switch
+// headings, so no separate auth equation remains (atyrode/dotfiles#198). A profile-switch
 // error stays attached here — next to the control that caused it.
 func (m *model) usageCtrlLine() string {
 	var parts []string
@@ -2203,7 +2204,7 @@ type helpKeys struct {
 func (h helpKeys) ShortHelp() []key.Binding  { return h.short }
 func (h helpKeys) FullHelp() [][]key.Binding { return h.full }
 
-// contextHelp derives the compact footer from the model state (#198):
+// contextHelp derives the compact footer from the model state (atyrode/dotfiles#198):
 //   - navigation, reset, full-help discovery, and quit are always offered;
 //   - a hidden section contributes its recovery action (show routing/usage) —
 //     usage only when the current terminal could actually seat it again;
@@ -2456,7 +2457,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleFacet(1)
 		case "u":
 			// Untrusted sandbox: hand off to CODE_OMP_UNTRUSTED (ompu), which owns its
-			// own routing/policy — no generated --config is passed to it.
+			// own routing/policy — no generated --config is passed to it. Inert when
+			// no sandbox binary exists (the help hides the key too), so a stranger
+			// can't kill the TUI with a stray keypress.
+			if !m.hasSandbox {
+				return m, nil
+			}
 			m.launchUntrusted = true
 			return m, tea.Quit
 		case "pgup", "ctrl+u":
@@ -2849,6 +2855,17 @@ func main() {
 	selected, disabled := loadVaultState(vaults, vaultState)
 	facets := facetDefs(glyphs)
 	selectionState := os.Getenv("CODE_SELECTION_STATE")
+	// The u key only exists when a sandbox binary does — an explicit
+	// CODE_OMP_UNTRUSTED or an ompu on PATH; otherwise hide it from the help
+	// and ignore the keypress rather than dying on exec.
+	hasSandbox := os.Getenv("CODE_OMP_UNTRUSTED") != ""
+	if !hasSandbox {
+		_, lookErr := exec.LookPath("ompu")
+		hasSandbox = lookErr == nil
+	}
+	if !hasSandbox {
+		keys.Untrusted.SetEnabled(false)
+	}
 	m := model{
 		generated:       generated,
 		advisors:        parseAdvisors(generated["__advisors__"]),
@@ -2871,6 +2888,7 @@ func main() {
 		facets:          facets,
 		sel:             loadSelectionState(selectionState, facets),
 		selectionState:  selectionState,
+		hasSandbox:      hasSandbox,
 	}
 	if m.usageCmd != "" {
 		for _, v := range m.vaults {
@@ -2899,11 +2917,12 @@ func main() {
 	case fm.launchUntrusted:
 		// The sandbox owns its own fixed profile and must never inherit the
 		// selected vault's broker env — no forced default, no broker vars.
-		runExec("CODE_OMP_UNTRUSTED", "ompu", sandboxLaunchArgv, fm.firstPrompt, nil)
+		// No fallback past ompu: substituting plain omp would run unsandboxed.
+		runExec("CODE_OMP_UNTRUSTED", []string{"ompu"}, sandboxLaunchArgv, fm.firstPrompt, nil)
 	case fm.launchManaged:
 		// m — omp-managed on the managed defaults, no generated overlay, on the
 		// shared default client profile with the selected vault's broker env.
-		runExec("CODE_OMP", "omp-managed", managedLaunchArgv, fm.firstPrompt, mustBrokerEnv(fm))
+		runExec("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv, fm.firstPrompt, mustBrokerEnv(fm))
 	case fm.genConfig != "":
 		launchGenerated(fm.genConfig, fm.firstPrompt, mustBrokerEnv(fm))
 	}
@@ -2952,12 +2971,21 @@ func generatedLaunchArgv(path, cfgPath string, forwarded []string, prompt string
 // runExec execs the launcher named by env (falling back to a bare command name
 // on PATH), forwarding this process's args via argv and overlaying extraEnv (the
 // vault broker environment) onto the inherited environment.
-func runExec(env, fallback string, argv func(string, []string, string) []string, prompt string, extraEnv []string) {
-	cmd := os.Getenv(env)
-	if cmd == "" {
-		cmd = fallback
+func runExec(env string, fallbacks []string, argv func(string, []string, string) []string, prompt string, extraEnv []string) {
+	var path string
+	var err error
+	if cmd := os.Getenv(env); cmd != "" {
+		// An explicit binary is operator config: fail loudly, never substitute.
+		path, err = exec.LookPath(cmd)
+	} else {
+		// Fallback chain: e.g. the managed launch prefers a wrapper named
+		// omp-managed but degrades to plain omp for setups that have no wrapper.
+		for _, fb := range fallbacks {
+			if path, err = exec.LookPath(fb); err == nil {
+				break
+			}
+		}
 	}
-	path, err := exec.LookPath(cmd)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: not found:", err)
 		os.Exit(1)

@@ -114,6 +114,19 @@ func scaffoldModels(raw []byte) (string, error) {
 			m.Cost.Input <= 0 || datedID.MatchString(m.ID) {
 			continue
 		}
+		// Keep only thinking levels the generator's scale knows (omp can expose
+		// provider-specific extras like "off"); without this the scaffold would
+		// write a range 'code generate' rejects one step later.
+		var levels []string
+		for _, lv := range m.Thinking {
+			if _, ok := thIdx(lv); ok {
+				levels = append(levels, lv)
+			}
+		}
+		if len(levels) == 0 {
+			continue
+		}
+		m.Thinking = levels
 		byPool[pool] = append(byPool[pool], m)
 	}
 	ladders := map[string][]ompModel{"O": pickLadder(byPool["O"]), "A": pickLadder(byPool["A"])}

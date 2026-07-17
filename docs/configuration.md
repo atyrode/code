@@ -16,7 +16,12 @@ environment variable with a sane fallback.
 | `u` | launch through a sandboxed omp, if you have one |
 | `a` / `v` | cycle / manage auth vaults (if configured) |
 | `p` / `f` / `s` | toggle routing panel / fallback chains / usage panel |
+| `r` | refresh the usage panel now |
+| `?` | expanded help |
+| `pgup` / `pgdn` | scroll the routing preview |
 | `q` | quit |
+
+`↑↓←→` also answer to their vim aliases (`j`/`k`/`h`/`l`).
 
 ## Environment variables
 
@@ -25,10 +30,10 @@ environment variable with a sane fallback.
 | `CODE_GENERATED` | path to the generated facet catalog (the routing blocks behind the dials) | `$XDG_DATA_HOME/code/generated.plain`, where `code generate` writes; if that's missing too, the TUI opens the guided first-run that builds it |
 | `CODE_USAGE` | command printing `omp usage --json` for the usage panel | panel hidden |
 | `CODE_SELECTION_STATE` | file persisting your dial choices | choices reset each run |
-| `CODE_OMP` | omp binary for trusted launches | `omp-managed`, then `omp` on PATH |
+| `CODE_OMP` | omp binary for trusted launches (`m` and `enter`) | `omp-managed`, then `omp` on PATH |
 | `CODE_OMP_RAW` | plain omp, used for per-vault login handoff | `omp` on PATH |
-| `CODE_OMP_UNTRUSTED` | sandboxed omp for the `u` key | `ompu` on PATH, else key hidden |
-| `CODE_AUTH_VAULTS` / `CODE_AUTH_VAULTS_FILE` | vault manifest (inline JSON / path) | single default identity, vault UI hidden |
+| `CODE_OMP_UNTRUSTED` | sandboxed omp for the `u` key | `ompu` on PATH, else the key is hidden and inert |
+| `CODE_AUTH_VAULTS` / `CODE_AUTH_VAULTS_FILE` | vault manifest (inline JSON / path) | `~/.config/atyrode/code-auth-vaults.json` if present, else a single default identity |
 | `CODE_AUTH_STATE` | persisted vault selection | vault choice resets each run |
 | `CODE_EVAL_MODEL` | ollama model tag for `ctrl+o` | `qwen2.5:3b` |
 | `CODE_OLLAMA_ENDPOINT` | non-default ollama endpoint | `http://127.0.0.1:11434` |
