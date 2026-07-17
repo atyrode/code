@@ -27,8 +27,9 @@ the TUI's speed meter) until you measure and update them.
   [#3](https://github.com/atyrode/code/issues/3).
 - Some quota heuristics (bucket names, model-family colouring) reflect the
   author's provider mix. They fail soft.
-- A Nix flake with oh-my-pi baked in (`nix run` and it just works) is
-  planned: [#2](https://github.com/atyrode/code/issues/2).
+- The auth-vault state lives under `~/.config/atyrode/` (and matching state/
+  cache dirs) — a namespace inherited from the author's dotfiles, distinct
+  from the generator's `~/.config/code/`.
 
 ## Built on
 

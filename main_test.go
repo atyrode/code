@@ -42,7 +42,7 @@ func routeLines(out string) []string {
 	return strings.Split(strings.TrimRight(out, "\n"), "\n")
 }
 
-// TestRenderRouteHangingIndent locks the bug fixed in #118: when a chain wraps,
+// TestRenderRouteHangingIndent locks the bug fixed in atyrode/dotfiles#118: when a chain wraps,
 // every continuation line must be indented to align under the first model (a
 // hanging block), never flush-left.
 func TestRenderRouteHangingIndent(t *testing.T) {
@@ -158,9 +158,9 @@ func TestComboID(t *testing.T) {
 	}
 }
 
-// TestDefaultSelValid guards the reset-to-defaults key (#119) against facet
+// TestDefaultSelValid guards the reset-to-defaults key (atyrode/dotfiles#119) against facet
 // drift: every default must name a real facet and a value that facet offers,
-// every facet must be seeded exactly once, and the model default is smart (#178).
+// every facet must be seeded exactly once, and the model default is smart (atyrode/dotfiles#178).
 func TestDefaultSelValid(t *testing.T) {
 	facets := facetDefs(map[string]string{})
 	byKey := map[string][]string{}
@@ -280,7 +280,7 @@ func TestLaunchKeys(t *testing.T) {
 	}
 }
 
-// TestGenConfigYAMLAgentOverrides locks the #173 fix: every ●-marked
+// TestGenConfigYAMLAgentOverrides locks the atyrode/dotfiles#173 fix: every ●-marked
 // agent-backed role in the generated block is mirrored into
 // task.agentModelOverrides (so spawned agents follow the generated profile),
 // while unmarked roles and the advisor never are. Prompt-focused keystrokes
@@ -476,7 +476,7 @@ func TestPreviewColumn(t *testing.T) {
 	}
 }
 
-// ── responsive layout (#197) ─────────────────────────────────────────────────
+// ── responsive layout (atyrode/dotfiles#197) ─────────────────────────────────────────────────
 
 // layoutModel builds a fully-populated model the way main() does — real facets,
 // a generated routing block, and usage windows for both providers — so layout
@@ -517,7 +517,7 @@ func layoutModel() model {
 }
 
 // resize drives a live tea.WindowSizeMsg through Update and asserts the one
-// hard rule of #197 resizing: it must never produce a command (no fetches).
+// hard rule of atyrode/dotfiles#197 resizing: it must never produce a command (no fetches).
 func resize(t *testing.T, m model, w, h int) model {
 	t.Helper()
 	nm, cmd := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
@@ -588,7 +588,7 @@ func lineIndex(lines []string, needles ...string) int {
 	return -1
 }
 
-// TestResponsiveCompositions locks the #197 hierarchy: wide keeps Generator and
+// TestResponsiveCompositions locks the atyrode/dotfiles#197 hierarchy: wide keeps Generator and
 // Routing side by side over a full-width Usage band (provider groups side by
 // side); medium is generator-dominant — the list full width on top, Routing and
 // Usage sharing a secondary row, Usage's provider groups stacked vertically;
@@ -1136,7 +1136,7 @@ func TestRawMouseBurstRemainsResponsive(t *testing.T) {
 		2*wheelStepEvents*3, views.Load(), redrawsAtKey, time.Since(started))
 }
 
-// ── usage identity · collapsible sections · contextual help (#198) ──────────
+// ── usage identity · collapsible sections · contextual help (atyrode/dotfiles#198) ──────────
 
 // press drives one rune keypress through Update.
 func press(t *testing.T, m model, k string) (model, tea.Cmd) {
