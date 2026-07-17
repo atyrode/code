@@ -26,9 +26,46 @@ the whole point is deciding, per task, how to blend the two pools and which
 quota to spend. With a single provider you can still launch, but the dials
 lose most of their meaning.
 
-Too lazy to dial? Press `ctrl+o` and describe the task: a small local model
-rates its difficulty and sets the dials for you. (Optional — needs
-[ollama](https://ollama.com); everything else works without it.)
+## Usage
+
+```bash
+code
+```
+
+That's the whole manual. Dial what the task needs, press `enter`, and you're
+in an oh-my-pi session routed exactly as previewed.
+
+Everything after `code` belongs to oh-my-pi — it's carried verbatim into the
+session you launch:
+
+```bash
+code "fix the failing tests"   # launches omp with that as its first message
+code --continue                # dial, then pick up your last omp session
+```
+
+Two words `code` keeps for itself: `generate` (the [catalog
+subcommand](docs/configuration.md)) and `--profile` (routing is code's job —
+a forwarded `--profile` is replaced).
+
+## Features
+
+- **Dials, not config files** — provider lane, model tier, thinking depth,
+  advisor level, plus the spark/fable toggles; every combination maps to a
+  pre-computed routing.
+- **Live preview** — see which model leads every role, and its fallback
+  chain, before anything runs.
+- **One-shot overlays** — each launch is an ephemeral `--config`; your omp
+  configuration is never written.
+- **Prompt → profile** — `ctrl+o`, describe the task, a small local model
+  rates its difficulty and sets the dials (optional, needs
+  [ollama](https://ollama.com); the prompt is forwarded into the session).
+- **Usage at a glance** — quota bars and reset countdowns per provider,
+  before you spend the scarce bucket.
+- **Auth vaults** — cycle isolated provider identities (`a` / `v`).
+- **Cost & speed meters** — every dial change reprices the session.
+- **Guided first run** — no catalog? `code` builds one from your omp,
+  interactively; `code generate` scripts the same thing.
+- **Argument passthrough** — `code <anything omp understands>` just works.
 
 ## Install
 
