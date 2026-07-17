@@ -33,7 +33,7 @@ environment variable with a sane fallback.
 | `CODE_OMP` | omp binary for trusted launches (`m` and `enter`) | `omp-managed`, then `omp` on PATH |
 | `CODE_OMP_RAW` | plain omp, used for per-vault login handoff | `omp` on PATH |
 | `CODE_OMP_UNTRUSTED` | sandboxed omp for the `u` key | `ompu` on PATH, else the key is hidden and inert |
-| `CODE_AUTH_VAULTS` / `CODE_AUTH_VAULTS_FILE` | vault manifest (inline JSON / path) | `~/.config/atyrode/code-auth-vaults.json` if present, else a single default identity |
+| `CODE_AUTH_VAULTS` / `CODE_AUTH_VAULTS_FILE` | vault manifest (inline JSON / path) | `~/.config/code/auth-vaults.json` if present, else a single default identity |
 | `CODE_AUTH_STATE` | persisted vault selection | vault choice resets each run |
 | `CODE_EVAL_MODEL` | ollama model tag for `ctrl+o` | `qwen2.5:3b` |
 | `CODE_OLLAMA_ENDPOINT` | non-default ollama endpoint | `http://127.0.0.1:11434` |

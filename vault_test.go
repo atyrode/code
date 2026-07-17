@@ -40,7 +40,7 @@ func TestParseVaultsEmptyFallback(t *testing.T) {
 func TestLoadVaultsFromMachineLocalFile(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
-	path := filepath.Join(configHome, "atyrode", "code-auth-vaults.json")
+	path := filepath.Join(configHome, "code", "auth-vaults.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +93,10 @@ func TestNewVaultSlugCollisionAndLocalPaths(t *testing.T) {
 	if !strings.HasPrefix(got.BrokerURL, "http://127.0.0.1:") || got.BrokerURL == existing[0].BrokerURL {
 		t.Fatalf("broker URL is not unique loopback: %q", got.BrokerURL)
 	}
-	if got.TokenFile != filepath.Join(state, "atyrode", "code-auth-vaults", got.ID, "broker.token") {
+	if got.TokenFile != filepath.Join(state, "code", "auth-vaults", got.ID, "broker.token") {
 		t.Fatalf("token path = %q", got.TokenFile)
 	}
-	if got.SnapshotCache != filepath.Join(cache, "atyrode", "code-auth-vaults", got.ID, "snapshot.json") {
+	if got.SnapshotCache != filepath.Join(cache, "code", "auth-vaults", got.ID, "snapshot.json") {
 		t.Fatalf("snapshot path = %q", got.SnapshotCache)
 	}
 }
