@@ -102,7 +102,7 @@ func TestSelectionStateInvalidEntriesKeepCurrentDefaults(t *testing.T) {
 }
 
 func TestSelectionStatePrivateModes(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "atyrode")
+	dir := filepath.Join(t.TempDir(), "code")
 	path := filepath.Join(dir, "selection.json")
 	if err := saveSelectionState(path, defaultSel(), testFacets()); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestSelectionStatePreservesExistingParentMode(t *testing.T) {
 }
 
 func TestSelectionStateAtomicReplacementFailureKeepsLastGoodFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "atyrode", "selection.json")
+	path := filepath.Join(t.TempDir(), "code", "selection.json")
 	old := defaultSel()
 	old["thinking"] = "low"
 	if err := saveSelectionState(path, old, testFacets()); err != nil {
@@ -219,7 +219,7 @@ func TestSelectionStateFableMainInvariant(t *testing.T) {
 }
 
 func TestFacetChangeAndResetPersistSelection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "atyrode", "selection.json")
+	path := filepath.Join(t.TempDir(), "code", "selection.json")
 	m := model{facets: testFacets(), sel: defaultSel(), selectionState: path}
 
 	changedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})

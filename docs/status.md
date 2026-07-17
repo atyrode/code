@@ -27,9 +27,6 @@ the TUI's speed meter) until you measure and update them.
   [#3](https://github.com/atyrode/code/issues/3).
 - Some quota heuristics (bucket names, model-family colouring) reflect the
   author's provider mix. They fail soft.
-- The auth-vault state lives under `~/.config/atyrode/` (and matching state/
-  cache dirs) — a namespace inherited from the author's dotfiles, distinct
-  from the generator's `~/.config/code/`.
 
 ## Built on
 

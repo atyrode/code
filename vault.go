@@ -143,7 +143,7 @@ func resolveVaults(raw, path string) ([]vault, string) {
 			}
 		}
 		if configHome != "" {
-			path = filepath.Join(configHome, "atyrode", "code-auth-vaults.json")
+			path = filepath.Join(configHome, "code", "auth-vaults.json")
 		}
 	}
 	if path != "" {
@@ -301,8 +301,8 @@ func newVault(name string, existing []vault) (vault, error) {
 		Label:         label,
 		Profile:       profile,
 		BrokerURL:     fmt.Sprintf("http://127.0.0.1:%d", port),
-		TokenFile:     filepath.Join(stateHome, "atyrode", "code-auth-vaults", id, "broker.token"),
-		SnapshotCache: filepath.Join(cacheHome, "atyrode", "code-auth-vaults", id, "snapshot.json"),
+		TokenFile:     filepath.Join(stateHome, "code", "auth-vaults", id, "broker.token"),
+		SnapshotCache: filepath.Join(cacheHome, "code", "auth-vaults", id, "snapshot.json"),
 	}, nil
 }
 
