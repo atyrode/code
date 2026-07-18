@@ -1,0 +1,461 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"math"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	herdrUsageDefaultInterval = 300 * time.Second
+	herdrUsageTTLMillis       = 720000
+	herdrUsageMaxRows         = 24
+)
+
+const herdrUsageHelp = `usage: code herdr-usage [--once] [--interval <seconds>]
+
+Publish auth-broker usage bars to every active herdr session.
+
+  --once                publish one cycle and exit
+  --interval <seconds>  seconds between cycles (default 300, with ±10% jitter)
+`
+
+type herdrUsageBar struct {
+	Fraction   float64 `json:"fraction"`
+	Title      string  `json:"title"`
+	TitleColor string  `json:"title_color"`
+	Label      string  `json:"label"`
+	Fill       string  `json:"fill"`
+	Empty      string  `json:"empty"`
+}
+
+type herdrUsageRow struct {
+	Bar   *herdrUsageBar `json:"bar,omitempty"`
+	Spans *[]any         `json:"spans,omitempty"`
+}
+
+type herdrUsageCredential struct {
+	Provider    string `json:"provider"`
+	IdentityKey string `json:"identityKey"`
+	Credential  struct {
+		Email string `json:"email"`
+	} `json:"credential"`
+}
+
+type herdrUsageLimit struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Scope struct {
+		Tier     string `json:"tier"`
+		WindowID string `json:"windowId"`
+	} `json:"scope"`
+	Amount struct {
+		UsedFraction *float64 `json:"usedFraction"`
+	} `json:"amount"`
+	Window struct {
+		ID         string `json:"id"`
+		ResetsAt   *int64 `json:"resetsAt"`
+		DurationMs int64  `json:"durationMs"`
+	} `json:"window"`
+}
+
+type herdrUsageWindow struct {
+	Fraction float64
+	ResetsAt *int64
+}
+
+type herdrUsageAccount struct {
+	Provider    string
+	IdentityKey string
+	Email       string
+	VaultLabel  string
+	Name        string
+	Windows     map[string]herdrUsageWindow
+}
+
+type herdrUsageCycleResult struct {
+	Rows      int
+	Attempts  int
+	Successes int
+}
+
+func (r herdrUsageCycleResult) allPublishesFailed() bool {
+	return r.Rows > 0 && r.Attempts > 0 && r.Successes == 0
+}
+
+func defaultHerdrSessionsDir() string {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, ".config")
+		}
+	}
+	return filepath.Join(base, "herdr", "sessions")
+}
+
+func parseHerdrUsageInterval(raw string) (time.Duration, error) {
+	seconds, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
+		return 0, fmt.Errorf("interval must be a positive number of seconds")
+	}
+	interval := time.Duration(seconds * float64(time.Second))
+	if interval <= 0 {
+		return 0, fmt.Errorf("interval must be a positive number of seconds")
+	}
+	return interval, nil
+}
+
+func jitterHerdrUsageInterval(interval time.Duration) time.Duration {
+	return time.Duration(float64(interval) * (0.9 + rand.Float64()*0.2))
+}
+
+func runHerdrUsage(args []string) int {
+	once := false
+	interval := herdrUsageDefaultInterval
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--once":
+			once = true
+		case args[i] == "--interval":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "code herdr-usage: --interval needs seconds")
+				return 2
+			}
+			var err error
+			interval, err = parseHerdrUsageInterval(args[i])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "code herdr-usage: --interval: %v\n", err)
+				return 2
+			}
+		case strings.HasPrefix(args[i], "--interval="):
+			var err error
+			interval, err = parseHerdrUsageInterval(strings.TrimPrefix(args[i], "--interval="))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "code herdr-usage: --interval: %v\n", err)
+				return 2
+			}
+		case args[i] == "-h" || args[i] == "--help":
+			fmt.Print(herdrUsageHelp)
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "code herdr-usage: unknown flag %q\n%s", args[i], herdrUsageHelp)
+			return 2
+		}
+	}
+
+	sessionsDir := defaultHerdrSessionsDir()
+	if override := os.Getenv("HERDR_SESSIONS_DIR"); override != "" {
+		sessionsDir = override
+	}
+	for {
+		result := runHerdrUsageCycle(time.Now(), sessionsDir, os.Stderr)
+		if result.allPublishesFailed() {
+			return 1
+		}
+		if once {
+			return 0
+		}
+		time.Sleep(jitterHerdrUsageInterval(interval))
+	}
+}
+
+func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) herdrUsageCycleResult {
+	vaults, _ := resolveVaults(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
+	_, disabled := loadVaultState(vaults, os.Getenv("CODE_AUTH_STATE"))
+	rows := collectHerdrUsageRows(vaults, disabled, now, stderr)
+	result := herdrUsageCycleResult{Rows: len(rows)}
+	if len(rows) == 0 {
+		return result
+	}
+
+	sockets, err := filepath.Glob(filepath.Join(sessionsDir, "*", "herdr.sock"))
+	if err != nil {
+		fmt.Fprintf(stderr, "code herdr-usage: discover sessions: %v\n", err)
+		return result
+	}
+	params := struct {
+		SectionID string          `json:"section_id"`
+		Source    string          `json:"source"`
+		Seq       int64           `json:"seq"`
+		TTLMillis int             `json:"ttl_ms"`
+		Rows      []herdrUsageRow `json:"rows"`
+	}{
+		SectionID: "usage",
+		Source:    "atyrode:usage",
+		Seq:       now.Unix(),
+		TTLMillis: herdrUsageTTLMillis,
+		Rows:      rows,
+	}
+	for _, socketPath := range sockets {
+		result.Attempts++
+		if err := herdrRequest(socketPath, "sidebar.report_section", params); err != nil {
+			fmt.Fprintf(stderr, "code herdr-usage: publish %s: %v\n", socketPath, err)
+			continue
+		}
+		result.Successes++
+	}
+	return result
+}
+
+func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Time, stderr io.Writer) []herdrUsageRow {
+	accounts := map[string][]*herdrUsageAccount{
+		"anthropic":    {},
+		"openai-codex": {},
+	}
+	byIdentity := map[string]*herdrUsageAccount{}
+
+	for _, v := range vaults {
+		if disabled[v.ID] || v.BrokerURL == "" || v.TokenFile == "" {
+			continue
+		}
+		snapshotBody, snapshotErr := fetchVaultEndpoint(v, "/v1/snapshot")
+		usageBody, usageErr := fetchVaultEndpoint(v, "/v1/usage")
+		if snapshotErr != nil {
+			fmt.Fprintf(stderr, "code herdr-usage: vault %s snapshot: %v\n", v.ID, snapshotErr)
+		}
+		if usageErr != nil {
+			fmt.Fprintf(stderr, "code herdr-usage: vault %s usage: %v\n", v.ID, usageErr)
+		}
+		if snapshotErr != nil {
+			continue
+		}
+
+		var snapshot struct {
+			Credentials []herdrUsageCredential `json:"credentials"`
+		}
+		if err := json.Unmarshal(snapshotBody, &snapshot); err != nil {
+			fmt.Fprintf(stderr, "code herdr-usage: vault %s snapshot: %v\n", v.ID, err)
+			continue
+		}
+		reports := map[string][]herdrUsageLimit{}
+		if usageErr == nil {
+			var usage struct {
+				Reports []struct {
+					Provider string            `json:"provider"`
+					Limits   []herdrUsageLimit `json:"limits"`
+				} `json:"reports"`
+			}
+			if err := json.Unmarshal(usageBody, &usage); err != nil {
+				fmt.Fprintf(stderr, "code herdr-usage: vault %s usage: %v\n", v.ID, err)
+			} else {
+				for _, report := range usage.Reports {
+					reports[report.Provider] = append(reports[report.Provider], report.Limits...)
+				}
+			}
+		}
+
+		for _, credential := range snapshot.Credentials {
+			if credential.Provider != "anthropic" && credential.Provider != "openai-codex" {
+				continue
+			}
+			key := credential.Provider + "\x00" + credential.IdentityKey
+			account := byIdentity[key]
+			if account == nil {
+				account = &herdrUsageAccount{
+					Provider:    credential.Provider,
+					IdentityKey: credential.IdentityKey,
+					Email:       credential.Credential.Email,
+					VaultLabel:  v.Label,
+					Windows:     map[string]herdrUsageWindow{},
+				}
+				byIdentity[key] = account
+				accounts[credential.Provider] = append(accounts[credential.Provider], account)
+			} else if account.Email == "" && credential.Credential.Email != "" {
+				account.Email = credential.Credential.Email
+			}
+			for _, limit := range reports[credential.Provider] {
+				token, ok := herdrUsageWindowToken(limit)
+				if !ok || limit.Amount.UsedFraction == nil {
+					continue
+				}
+				if _, exists := account.Windows[token]; exists {
+					continue
+				}
+				account.Windows[token] = herdrUsageWindow{
+					Fraction: *limit.Amount.UsedFraction,
+					ResetsAt: limit.Window.ResetsAt,
+				}
+			}
+		}
+	}
+
+	namePrefixes := map[string]int{}
+	for _, provider := range []string{"anthropic", "openai-codex"} {
+		for _, account := range accounts[provider] {
+			namePrefixes[firstRunes(herdrUsageNameSource(account), 2)]++
+		}
+	}
+	for _, provider := range []string{"anthropic", "openai-codex"} {
+		for _, account := range accounts[provider] {
+			source := herdrUsageNameSource(account)
+			if namePrefixes[firstRunes(source, 2)] > 1 {
+				account.Name = firstRunes(source, 3)
+			} else {
+				account.Name = firstRunes(source, 2) + "*"
+			}
+		}
+	}
+
+	rows := make([]herdrUsageRow, 0)
+	for _, provider := range []string{"anthropic", "openai-codex"} {
+		for _, account := range accounts[provider] {
+			group := herdrUsageAccountRows(account, now)
+			if len(group) == 0 {
+				continue
+			}
+			if len(rows) > 0 {
+				empty := []any{}
+				rows = append(rows, herdrUsageRow{Spans: &empty})
+			}
+			rows = append(rows, group...)
+		}
+	}
+	if len(rows) > herdrUsageMaxRows {
+		fmt.Fprintf(stderr, "code herdr-usage: usage rows truncated from %d to %d\n", len(rows), herdrUsageMaxRows)
+		rows = rows[:herdrUsageMaxRows]
+	}
+	return rows
+}
+
+func herdrUsageNameSource(account *herdrUsageAccount) string {
+	if email := strings.TrimSpace(account.Email); email != "" {
+		local, _, _ := strings.Cut(email, "@")
+		if local = strings.ToLower(strings.TrimSpace(local)); local != "" {
+			return local
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(account.VaultLabel))
+}
+
+func firstRunes(value string, count int) string {
+	if utf8.RuneCountInString(value) <= count {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:count])
+}
+
+func herdrUsageWindowToken(limit herdrUsageLimit) (string, bool) {
+	kindText := strings.ToLower(limit.Scope.Tier + " " + limit.Label)
+	kind := "core"
+	if strings.Contains(kindText, "fable") {
+		kind = "fable"
+	} else if strings.Contains(kindText, "spark") {
+		kind = "spark"
+	}
+
+	bucket := ""
+	for _, marker := range []string{limit.Window.ID, limit.Scope.WindowID, limit.ID} {
+		if bucket = herdrUsageBucketMarker(marker); bucket != "" {
+			break
+		}
+	}
+	if bucket == "" {
+		switch limit.Window.DurationMs {
+		case 18000000:
+			bucket = "5h"
+		case 604800000:
+			bucket = "7d"
+		}
+	}
+	if bucket == "" {
+		bucket = herdrUsageBucketMarker(limit.Label)
+	}
+	if bucket == "" {
+		return "", false
+	}
+
+	switch kind {
+	case "fable":
+		return "fa", true
+	case "spark":
+		return "sp " + bucket, true
+	default:
+		return bucket, true
+	}
+}
+
+func herdrUsageBucketMarker(value string) string {
+	value = strings.ToLower(value)
+	if strings.Contains(value, "5h") || strings.Contains(value, "5 hour") || strings.Contains(value, "5-hour") {
+		return "5h"
+	}
+	if strings.Contains(value, "7d") || strings.Contains(value, "7 day") || strings.Contains(value, "7-day") {
+		return "7d"
+	}
+	return ""
+}
+
+func herdrUsageAccountRows(account *herdrUsageAccount, now time.Time) []herdrUsageRow {
+	rows := make([]herdrUsageRow, 0, len(account.Windows))
+	for _, token := range []string{"5h", "7d", "fa", "sp 5h", "sp 7d"} {
+		window, ok := account.Windows[token]
+		if !ok {
+			continue
+		}
+		fraction := window.Fraction
+		if fraction < 0 {
+			fraction = 0
+		} else if fraction > 1 {
+			fraction = 1
+		}
+		pct := int(math.Floor(fraction*100 + 0.5))
+		label := fmt.Sprintf("%d%%", pct)
+		if window.ResetsAt != nil {
+			label += " ↻" + herdrUsageCountdown(*window.ResetsAt, now)
+		}
+		color := "#ff9f52"
+		if account.Provider == "openai-codex" {
+			color = "#62a7ff"
+		}
+		rows = append(rows, herdrUsageRow{Bar: &herdrUsageBar{
+			Fraction:   fraction,
+			Title:      account.Name + " " + token,
+			TitleColor: color,
+			Label:      label,
+			Fill:       herdrUsageFill(pct),
+			Empty:      "#78829b",
+		}})
+	}
+	return rows
+}
+
+func herdrUsageCountdown(resetsAtMillis int64, now time.Time) string {
+	remaining := resetsAtMillis - now.UnixMilli()
+	if remaining < 0 {
+		remaining = 0
+	}
+	totalMinutes := remaining / int64(time.Minute/time.Millisecond)
+	if totalMinutes < 60 {
+		return fmt.Sprintf("%dm", totalMinutes)
+	}
+	if totalMinutes < 24*60 {
+		return fmt.Sprintf("%dh%dm", totalMinutes/60, totalMinutes%60)
+	}
+	return fmt.Sprintf("%dd%dh", totalMinutes/(24*60), (totalMinutes/60)%24)
+}
+
+func herdrUsageFill(pct int) string {
+	r, g := 0, 0
+	if pct <= 50 {
+		r, g = 90+3*pct, 200
+	} else {
+		r, g = 235, 200-3*(pct-50)
+	}
+	if r > 235 {
+		r = 235
+	}
+	if g < 60 {
+		g = 60
+	}
+	return fmt.Sprintf("#%02x%02x46", r, g)
+}
