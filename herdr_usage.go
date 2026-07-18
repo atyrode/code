@@ -294,13 +294,15 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 		}
 	}
 
-	namePrefixes := map[string]int{}
+	// Collision tags are scoped per provider: the operator's visual contract
+	// is two letters + `*` with provider color carrying the Claude/Codex
+	// distinction, so the same person's accounts may share a tag across
+	// providers while same-provider neighbors widen to three letters.
 	for _, provider := range []string{"anthropic", "openai-codex"} {
+		namePrefixes := map[string]int{}
 		for _, account := range accounts[provider] {
 			namePrefixes[firstRunes(herdrUsageNameSource(account), 2)]++
 		}
-	}
-	for _, provider := range []string{"anthropic", "openai-codex"} {
 		for _, account := range accounts[provider] {
 			source := herdrUsageNameSource(account)
 			if namePrefixes[firstRunes(source, 2)] > 1 {
