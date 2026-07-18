@@ -513,3 +513,55 @@ func TestHerdrUsageCrossProviderTagsShareAndKeepStar(t *testing.T) {
 		t.Fatalf("codex row = %+v", rows[2].Bar)
 	}
 }
+
+func TestHerdrUsageSurvivesBrokerRestartWithinOneProcess(t *testing.T) {
+	// The daemon is long-lived while brokers restart underneath it (Home
+	// Manager reconciliation). A second cycle in the same process must reach
+	// the restarted broker instead of wedging on remembered connections.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/snapshot":
+			_, _ = io.WriteString(w, `{"credentials":[{"provider":"anthropic","identityKey":"id-r","credential":{"email":"restart@example.com"}}]}`)
+		case "/v1/usage":
+			_, _ = io.WriteString(w, `{"reports":[{"provider":"anthropic","limits":[{"label":"5-hour","scope":{"tier":"-"},"amount":{"usedFraction":0.5},"window":{"durationMs":18000000}}]}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	first := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}
+	first.Start()
+	vaults := []vault{{
+		ID: "restart", Label: "Restart",
+		BrokerURL: "http://" + address,
+		TokenFile: herdrUsageTokenFile(t),
+	}}
+	now := time.Unix(1_700_000_000, 0)
+	if rows := collectHerdrUsageRows(vaults, nil, now, io.Discard); len(rows) == 0 {
+		t.Fatal("first cycle produced no rows")
+	}
+	first.Close()
+
+	var relisten net.Listener
+	for range 50 {
+		relisten, err = net.Listen("tcp", address)
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("rebind %s: %v", address, err)
+	}
+	second := &httptest.Server{Listener: relisten, Config: &http.Server{Handler: handler}}
+	second.Start()
+	t.Cleanup(second.Close)
+
+	if rows := collectHerdrUsageRows(vaults, nil, now.Add(time.Minute), io.Discard); len(rows) == 0 {
+		t.Fatal("second cycle after broker restart produced no rows")
+	}
+}
