@@ -486,3 +486,30 @@ func TestHerdrUsageSeqAdvancesWithinOneSecond(t *testing.T) {
 		t.Fatalf("seq must advance within one second: %v", seqs)
 	}
 }
+
+func TestHerdrUsageCrossProviderTagsShareAndKeepStar(t *testing.T) {
+	// The same human's Claude and Codex accounts share `al*` — provider
+	// color distinguishes them; only same-provider collisions widen.
+	broker := newHerdrUsageBroker(t,
+		`{"credentials":[
+			{"provider":"anthropic","identityKey":"id-claude","credential":{"email":"alex@example.com"}},
+			{"provider":"openai-codex","identityKey":"id-codex","credential":{"email":"alex@example.com"}}
+		]}`,
+		`{"reports":[
+			{"provider":"anthropic","limits":[{"label":"5-hour","scope":{"tier":"-"},"amount":{"usedFraction":0.5},"window":{"durationMs":18000000}}]},
+			{"provider":"openai-codex","limits":[{"label":"7-day","scope":{"tier":"-"},"amount":{"usedFraction":0.25},"window":{"durationMs":604800000}}]}
+		]}`,
+	)
+	rows := collectHerdrUsageRows([]vault{{
+		ID: "mine", Label: "Mine", BrokerURL: broker.server.URL, TokenFile: herdrUsageTokenFile(t),
+	}}, nil, time.Unix(1_700_000_000, 0), io.Discard)
+	if len(rows) != 3 || rows[0].Bar == nil || rows[2].Bar == nil {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if rows[0].Bar.Title != "al* 5h" || rows[0].Bar.TitleColor != "#ff9f52" {
+		t.Fatalf("claude row = %+v", rows[0].Bar)
+	}
+	if rows[2].Bar.Title != "al* 7d" || rows[2].Bar.TitleColor != "#62a7ff" {
+		t.Fatalf("codex row = %+v", rows[2].Bar)
+	}
+}
