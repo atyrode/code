@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type herdrUsageBroker struct {
@@ -192,13 +193,57 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 		request.Params.TTLMillis != herdrUsageTTLMillis {
 		t.Fatalf("socket envelope = method %q params %+v", request.Method, request.Params)
 	}
-	const wantRows = `[{"bar":{"fraction":0.45,"title":"ad* 5h","title_color":"#ff9f52","label":"45% ↻1h30m","fill":"#e1c846","empty":"#78829b"}},{"bar":{"fraction":0.12,"title":"ad* 7d","title_color":"#ff9f52","label":"12% ↻8d5h","fill":"#7ec846","empty":"#78829b"}},{"bar":{"fraction":0.67,"title":"ad* fa","title_color":"#ff9f52","label":"67%","fill":"#eb9546","empty":"#78829b"}},{"bar":{"fraction":0.25,"title":"ad* sp 5h","title_color":"#ff9f52","label":"25% ↻0m","fill":"#a5c846","empty":"#78829b"}},{"bar":{"fraction":0.75,"title":"ad* sp 7d","title_color":"#ff9f52","label":"75% ↻1d2h","fill":"#eb7d46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.5,"title":"be* 7d","title_color":"#ff9f52","label":"50% ↻1h0m","fill":"#ebc846","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":1,"title":"cy* 5h","title_color":"#ff9f52","label":"100% ↻59m","fill":"#eb3c46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.2,"title":"op* 5h","title_color":"#62a7ff","label":"20% ↻30m","fill":"#96c846","empty":"#78829b"}},{"bar":{"fraction":0.45,"title":"op* 7d","title_color":"#62a7ff","label":"45% ↻7d0h","fill":"#e1c846","empty":"#78829b"}}]`
+	const wantRows = `[{"bar":{"fraction":0.45,"title":"ad* 5h","title_color":"#ff9f52","label":" 45% ↻ 1h30m","fill":"#e1c846","empty":"#78829b"}},{"bar":{"fraction":0.12,"title":"ad* 7d","title_color":"#ff9f52","label":" 12% ↻  8d5h","fill":"#7ec846","empty":"#78829b"}},{"bar":{"fraction":0.67,"title":"ad* fa","title_color":"#ff9f52","label":" 67%        ","fill":"#eb9546","empty":"#78829b"}},{"bar":{"fraction":0.25,"title":"ad* sp 5h","title_color":"#ff9f52","label":" 25% ↻    0m","fill":"#a5c846","empty":"#78829b"}},{"bar":{"fraction":0.75,"title":"ad* sp 7d","title_color":"#ff9f52","label":" 75% ↻  1d2h","fill":"#eb7d46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.5,"title":"be* 7d","title_color":"#ff9f52","label":" 50% ↻  1h0m","fill":"#ebc846","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":1,"title":"cy* 5h","title_color":"#ff9f52","label":"100% ↻   59m","fill":"#eb3c46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.2,"title":"op* 5h","title_color":"#62a7ff","label":" 20% ↻   30m","fill":"#96c846","empty":"#78829b"}},{"bar":{"fraction":0.45,"title":"op* 7d","title_color":"#62a7ff","label":" 45% ↻  7d0h","fill":"#e1c846","empty":"#78829b"}}]`
 	if got := string(request.Params.Rows); got != wantRows {
 		t.Fatalf("rows JSON:\n got %s\nwant %s", got, wantRows)
 	}
 	if first.requests.Load() != 2 || second.requests.Load() != 2 || third.requests.Load() != 2 {
 		t.Fatalf("broker calls = first %d second %d third %d, want snapshot+usage each",
 			first.requests.Load(), second.requests.Load(), third.requests.Load())
+	}
+}
+
+func TestHerdrUsageLabelsShareDisplayWidth(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	tokenFile := herdrUsageTokenFile(t)
+	broker := newHerdrUsageBroker(t,
+		`{"credentials":[{"provider":"anthropic","identityKey":"grid","credential":{"email":"grid@example.test"}}]}`,
+		fmt.Sprintf(`{"reports":[{"provider":"anthropic","limits":[
+			{"label":"5 hours","amount":{"usedFraction":0.05},"window":{"durationMs":18000000,"resetsAt":%d}},
+			{"label":"7 days","amount":{"usedFraction":0.42},"window":{"durationMs":604800000,"resetsAt":%d}},
+			{"label":"Fable 7 days","amount":{"usedFraction":1},"window":{"durationMs":604800000,"resetsAt":%d}},
+			{"label":"Spark 5 hours","amount":{"usedFraction":0.08},"window":{"durationMs":18000000}}
+		]}]}`,
+			now.Add(30*time.Minute).UnixMilli(),
+			now.Add(4*time.Hour+29*time.Minute).UnixMilli(),
+			now.Add(13*time.Hour+39*time.Minute).UnixMilli(),
+		),
+	)
+
+	rows := collectHerdrUsageRows([]vault{{
+		ID: "grid", Label: "Grid", BrokerURL: broker.server.URL, TokenFile: tokenFile,
+	}}, nil, now, io.Discard)
+	want := []string{
+		"  5% \u21bb    30m",
+		" 42% \u21bb  4h29m",
+		"100% \u21bb 13h39m",
+		"  8%\x20\x20\x20\x20\x20\x20\x20\x20\x20",
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("row count = %d, want %d", len(rows), len(want))
+	}
+	const wantDisplayWidth = 13
+	for i, expected := range want {
+		if rows[i].Bar == nil {
+			t.Fatalf("row %d = %#v, want bar", i, rows[i])
+		}
+		if got := rows[i].Bar.Label; got != expected {
+			t.Errorf("label %d = %q, want %q", i, got, expected)
+		}
+		// Labels contain ASCII plus one-cell ↻, so rune count is terminal width.
+		if got := utf8.RuneCountInString(rows[i].Bar.Label); got != wantDisplayWidth {
+			t.Errorf("label %d display width = %d, want %d", i, got, wantDisplayWidth)
+		}
 	}
 }
 
