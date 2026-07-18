@@ -54,6 +54,57 @@ func readHerdrCapture(t *testing.T, captured <-chan herdrTestCapture) herdrTestC
 	return got
 }
 
+type herdrTestSequenceCapture struct {
+	lines [][]byte
+	err   error
+}
+
+func serveHerdrResponses(t *testing.T, responses ...string) (string, <-chan herdrTestSequenceCapture) {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "herdr-sequence.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+
+	captured := make(chan herdrTestSequenceCapture, 1)
+	go func() {
+		lines := make([][]byte, 0, len(responses))
+		for _, response := range responses {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				captured <- herdrTestSequenceCapture{lines: lines, err: acceptErr}
+				return
+			}
+			line, readErr := bufio.NewReader(conn).ReadBytes('\n')
+			if readErr != nil {
+				conn.Close()
+				captured <- herdrTestSequenceCapture{lines: lines, err: readErr}
+				return
+			}
+			lines = append(lines, line)
+			_, writeErr := io.WriteString(conn, response+"\n")
+			conn.Close()
+			if writeErr != nil {
+				captured <- herdrTestSequenceCapture{lines: lines, err: writeErr}
+				return
+			}
+		}
+		captured <- herdrTestSequenceCapture{lines: lines}
+	}()
+	return socketPath, captured
+}
+
+func readHerdrSequence(t *testing.T, captured <-chan herdrTestSequenceCapture) herdrTestSequenceCapture {
+	t.Helper()
+	got := <-captured
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	return got
+}
+
 func fakeHerdrExecutable(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "omp")
@@ -68,6 +119,7 @@ func TestHerdrAgentStartRequest(t *testing.T) {
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
 	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "")
 	t.Setenv("HERDR_WORKSPACE_ID", "")
+	t.Setenv("HERDR_ACTIVE_PANE_CWD", "/work/checkout")
 
 	argv := []string{"/bin/omp", "--profile", "default", "--resume", "hello"}
 	env := herdrEnvMap([]string{
@@ -97,7 +149,8 @@ func TestHerdrAgentStartRequest(t *testing.T) {
 		ID:     got.ID,
 		Method: "agent.start",
 		Params: herdrAgentStartParams{
-			Name:  "omp",
+			Name:  "omp @checkout",
+			CWD:   "/work/checkout",
 			Argv:  argv,
 			Env:   map[string]string{"OMP_AUTH_BROKER_URL": "http://broker.test", "OMP_AUTH_BROKER_TOKEN": "secret=part"},
 			Focus: true,
@@ -123,6 +176,10 @@ func TestHerdrAgentStartRequest(t *testing.T) {
 }
 
 func TestHerdrAgentStartWorkspacePlacement(t *testing.T) {
+	processCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name            string
 		activeWorkspace string
@@ -139,6 +196,7 @@ func TestHerdrAgentStartWorkspacePlacement(t *testing.T) {
 			t.Setenv("HERDR_SOCKET_PATH", socketPath)
 			t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", tt.activeWorkspace)
 			t.Setenv("HERDR_WORKSPACE_ID", tt.workspace)
+			t.Setenv("HERDR_ACTIVE_PANE_CWD", "")
 
 			if err := herdrAgentStart("omp", []string{"/bin/omp"}, nil); err != nil {
 				t.Fatal(err)
@@ -149,6 +207,17 @@ func TestHerdrAgentStartWorkspacePlacement(t *testing.T) {
 			}
 			if err := json.Unmarshal(wire, &envelope); err != nil {
 				t.Fatal(err)
+			}
+			rawCWD, present := envelope.Params["cwd"]
+			if !present {
+				t.Fatalf("cwd missing from request: %s", wire)
+			}
+			var cwd string
+			if err := json.Unmarshal(rawCWD, &cwd); err != nil {
+				t.Fatal(err)
+			}
+			if cwd != processCWD {
+				t.Fatalf("cwd = %q, want process cwd %q", cwd, processCWD)
 			}
 			rawWorkspace, present := envelope.Params["workspace_id"]
 			if tt.want == "" {
@@ -172,11 +241,15 @@ func TestHerdrAgentStartWorkspacePlacement(t *testing.T) {
 }
 
 func TestHerdrAgentStartErrorResponse(t *testing.T) {
-	socketPath, captured := serveHerdrResponse(t, `{"id":"x","error":{"code":"bad","message":"nope"}}`)
+	socketPath, captured := serveHerdrResponses(t, `{"id":"x","error":{"code":"bad","message":"nope"}}`)
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("HERDR_ACTIVE_PANE_CWD", "/work/code")
 
 	err := herdrAgentStart("omp", []string{"/bin/omp"}, nil)
-	readHerdrCapture(t, captured)
+	exchange := readHerdrSequence(t, captured)
+	if len(exchange.lines) != 1 {
+		t.Fatalf("non-duplicate error sent %d requests, want 1", len(exchange.lines))
+	}
 	if err == nil {
 		t.Fatal("error response was accepted")
 	}
@@ -184,6 +257,76 @@ func TestHerdrAgentStartErrorResponse(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not contain %q", err, want)
 		}
+	}
+}
+
+func TestHerdrAgentStartRetriesDuplicateName(t *testing.T) {
+	socketPath, captured := serveHerdrResponses(t,
+		`{"id":"x","error":{"code":"agent_name_taken","message":"duplicate"}}`,
+		`{"id":"y","result":{"type":"agent_started"}}`,
+	)
+	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("HERDR_ACTIVE_PANE_CWD", "/work/code")
+	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_WORKSPACE_ID", "")
+
+	argv := []string{"/bin/omp", "--profile", "default"}
+	env := map[string]string{"OMP_AUTH_BROKER_TOKEN": "secret"}
+	if err := herdrAgentStart("omp", argv, env); err != nil {
+		t.Fatal(err)
+	}
+	exchange := readHerdrSequence(t, captured)
+	if len(exchange.lines) != 2 {
+		t.Fatalf("agent.start sent %d requests, want 2", len(exchange.lines))
+	}
+	var first, second herdrAgentStartRequest
+	if err := json.Unmarshal(exchange.lines[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(exchange.lines[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	wantFirst := herdrAgentStartParams{
+		Name:        "omp @code",
+		CWD:         "/work/code",
+		Argv:        argv,
+		Env:         env,
+		Focus:       true,
+		WorkspaceID: "w1",
+	}
+	if !reflect.DeepEqual(first.Params, wantFirst) {
+		t.Fatalf("first params = %#v, want %#v", first.Params, wantFirst)
+	}
+	wantSecond := wantFirst
+	wantSecond.Name = "omp @code (2)"
+	if !reflect.DeepEqual(second.Params, wantSecond) {
+		t.Fatalf("retry params = %#v, want %#v", second.Params, wantSecond)
+	}
+}
+
+func TestHerdrAgentStartStopsAfterNinthDuplicate(t *testing.T) {
+	responses := make([]string, 9)
+	for i := range responses {
+		responses[i] = `{"id":"x","error":{"code":"agent_name_taken","message":"duplicate"}}`
+	}
+	socketPath, captured := serveHerdrResponses(t, responses...)
+	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("HERDR_ACTIVE_PANE_CWD", "/work/code")
+
+	err := herdrAgentStart("omp", []string{"/bin/omp"}, nil)
+	exchange := readHerdrSequence(t, captured)
+	if err == nil || !strings.Contains(err.Error(), "agent_name_taken") {
+		t.Fatalf("ninth duplicate error = %v, want agent_name_taken", err)
+	}
+	if len(exchange.lines) != 9 {
+		t.Fatalf("agent.start sent %d requests, want 9", len(exchange.lines))
+	}
+	var last herdrAgentStartRequest
+	if err := json.Unmarshal(exchange.lines[8], &last); err != nil {
+		t.Fatal(err)
+	}
+	if last.Params.Name != "omp @code (9)" {
+		t.Fatalf("ninth request name = %q, want %q", last.Params.Name, "omp @code (9)")
 	}
 }
 

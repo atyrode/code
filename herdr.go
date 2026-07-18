@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -14,6 +15,7 @@ const herdrRequestTimeout = 3 * time.Second
 
 type herdrAgentStartParams struct {
 	Name        string            `json:"name"`
+	CWD         string            `json:"cwd"`
 	Argv        []string          `json:"argv"`
 	Env         map[string]string `json:"env,omitempty"`
 	Focus       bool              `json:"focus"`
@@ -58,48 +60,83 @@ func herdrWorkspaceID() string {
 	return os.Getenv("HERDR_WORKSPACE_ID")
 }
 
-// herdrAgentStart sends exactly one agent.start request and reads exactly one
-// response line. The deadline bounds the whole socket exchange.
-func herdrAgentStart(name string, argv []string, env map[string]string) error {
+func herdrCWD() (string, error) {
+	if cwd := os.Getenv("HERDR_ACTIVE_PANE_CWD"); cwd != "" {
+		return cwd, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("herdr agent.start: current working directory: %w", err)
+	}
+	return cwd, nil
+}
+
+func herdrAgentStartAttempt(req herdrAgentStartRequest, deadline time.Time) (herdrAgentStartResponse, error) {
+	var response herdrAgentStartResponse
 	conn, err := net.Dial("unix", os.Getenv("HERDR_SOCKET_PATH"))
 	if err != nil {
-		return fmt.Errorf("herdr agent.start: connect: %w", err)
+		return response, fmt.Errorf("herdr agent.start: connect: %w", err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(herdrRequestTimeout)); err != nil {
-		return fmt.Errorf("herdr agent.start: deadline: %w", err)
-	}
-
-	req := herdrAgentStartRequest{
-		ID:     fmt.Sprintf("code:agent:start:%d", time.Now().UnixNano()),
-		Method: "agent.start",
-		Params: herdrAgentStartParams{
-			Name:        name,
-			Argv:        argv,
-			Env:         env,
-			Focus:       true,
-			WorkspaceID: herdrWorkspaceID(),
-		},
+	if err := conn.SetDeadline(deadline); err != nil {
+		return response, fmt.Errorf("herdr agent.start: deadline: %w", err)
 	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return fmt.Errorf("herdr agent.start: write request: %w", err)
+		return response, fmt.Errorf("herdr agent.start: write request: %w", err)
 	}
-
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		return fmt.Errorf("herdr agent.start: read response: %w", err)
+		return response, fmt.Errorf("herdr agent.start: read response: %w", err)
 	}
-	var response herdrAgentStartResponse
 	if err := json.Unmarshal(line, &response); err != nil {
-		return fmt.Errorf("herdr agent.start: decode response: %w", err)
+		return response, fmt.Errorf("herdr agent.start: decode response: %w", err)
 	}
-	if response.Error != nil {
-		return fmt.Errorf("herdr agent.start: %s: %s", response.Error.Code, response.Error.Message)
+	return response, nil
+}
+
+// herdrAgentStart exchanges one request and response line per connection. A
+// name collision retries through a fresh API connection with readable numeric
+// suffixes; all other socket and protocol failures remain terminal.
+func herdrAgentStart(name string, argv []string, env map[string]string) error {
+	cwd, err := herdrCWD()
+	if err != nil {
+		return err
 	}
-	if response.Result != nil {
-		return nil
+	baseName := fmt.Sprintf("%s @%s", name, filepath.Base(cwd))
+	params := herdrAgentStartParams{
+		CWD:         cwd,
+		Argv:        argv,
+		Env:         env,
+		Focus:       true,
+		WorkspaceID: herdrWorkspaceID(),
 	}
-	return fmt.Errorf("herdr agent.start: response missing result or error")
+	deadline := time.Now().Add(herdrRequestTimeout)
+	for attempt := 1; attempt <= 9; attempt++ {
+		params.Name = baseName
+		if attempt > 1 {
+			params.Name = fmt.Sprintf("%s (%d)", baseName, attempt)
+		}
+		req := herdrAgentStartRequest{
+			ID:     fmt.Sprintf("code:agent:start:%d", time.Now().UnixNano()),
+			Method: "agent.start",
+			Params: params,
+		}
+		response, err := herdrAgentStartAttempt(req, deadline)
+		if err != nil {
+			return err
+		}
+		if response.Error != nil {
+			if response.Error.Code == "agent_name_taken" && attempt < 9 {
+				continue
+			}
+			return fmt.Errorf("herdr agent.start: %s: %s", response.Error.Code, response.Error.Message)
+		}
+		if response.Result != nil {
+			return nil
+		}
+		return fmt.Errorf("herdr agent.start: response missing result or error")
+	}
+	return fmt.Errorf("herdr agent.start: exhausted name attempts")
 }
 
 // herdrEnvMap converts brokerEnv's KEY=VALUE entries to herdr's JSON env map.
