@@ -182,6 +182,12 @@ func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) her
 		fmt.Fprintf(stderr, "code herdr-usage: discover sessions: %v\n", err)
 		return result
 	}
+	// The default session's socket lives beside the sessions directory
+	// (~/.config/herdr/herdr.sock), not inside it.
+	rootSocket := filepath.Join(filepath.Dir(sessionsDir), "herdr.sock")
+	if info, err := os.Stat(rootSocket); err == nil && info.Mode()&os.ModeSocket != 0 {
+		sockets = append(sockets, rootSocket)
+	}
 	params := struct {
 		SectionID string          `json:"section_id"`
 		Source    string          `json:"source"`
@@ -191,7 +197,7 @@ func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) her
 	}{
 		SectionID: "usage",
 		Source:    "atyrode:usage",
-		Seq:       now.Unix(),
+		Seq:       now.UnixMilli(),
 		TTLMillis: herdrUsageTTLMillis,
 		Rows:      rows,
 	}
