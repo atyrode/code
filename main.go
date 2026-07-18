@@ -2830,6 +2830,9 @@ func defaultGlyphs() map[string]string {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "herdr-usage" {
+		os.Exit(runHerdrUsage(os.Args[2:]))
+	}
 	// `code generate [...]` is the catalog generator, not a TUI session (any
 	// other argv is forwarded to the launched omp session as before).
 	if len(os.Args) > 1 && os.Args[1] == "generate" {
