@@ -13,10 +13,11 @@ import (
 const herdrRequestTimeout = 3 * time.Second
 
 type herdrAgentStartParams struct {
-	Name  string            `json:"name"`
-	Argv  []string          `json:"argv"`
-	Env   map[string]string `json:"env,omitempty"`
-	Focus bool              `json:"focus"`
+	Name        string            `json:"name"`
+	Argv        []string          `json:"argv"`
+	Env         map[string]string `json:"env,omitempty"`
+	Focus       bool              `json:"focus"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
 }
 
 type herdrAgentStartRequest struct {
@@ -36,20 +37,25 @@ type herdrAgentStartResponse struct {
 }
 
 // herdrSpawnEnabled reports whether launches should use the active herdr
-// session. CODE_HERDR=0 is an escape hatch; CODE_HERDR=1 permits callers that
-// have the socket but not HERDR_ENV in their inherited environment.
+// session. Custom command popups carry HERDR_ACTIVE_* rather than HERDR_ENV;
+// CODE_HERDR=0 is the escape hatch and CODE_HERDR=1 forces socket use.
 func herdrSpawnEnabled() bool {
-	if os.Getenv("HERDR_SOCKET_PATH") == "" {
+	if os.Getenv("CODE_HERDR") == "0" || os.Getenv("HERDR_SOCKET_PATH") == "" {
 		return false
 	}
-	switch os.Getenv("CODE_HERDR") {
-	case "0":
-		return false
-	case "1":
+	if os.Getenv("CODE_HERDR") == "1" {
 		return true
-	default:
-		return os.Getenv("HERDR_ENV") == "1"
 	}
+	return os.Getenv("HERDR_ENV") == "1" ||
+		os.Getenv("HERDR_ACTIVE_PANE_ID") != "" ||
+		os.Getenv("HERDR_ACTIVE_WORKSPACE_ID") != ""
+}
+
+func herdrWorkspaceID() string {
+	if workspaceID := os.Getenv("HERDR_ACTIVE_WORKSPACE_ID"); workspaceID != "" {
+		return workspaceID
+	}
+	return os.Getenv("HERDR_WORKSPACE_ID")
 }
 
 // herdrAgentStart sends exactly one agent.start request and reads exactly one
@@ -68,10 +74,11 @@ func herdrAgentStart(name string, argv []string, env map[string]string) error {
 		ID:     fmt.Sprintf("code:agent:start:%d", time.Now().UnixNano()),
 		Method: "agent.start",
 		Params: herdrAgentStartParams{
-			Name:  name,
-			Argv:  argv,
-			Env:   env,
-			Focus: true,
+			Name:        name,
+			Argv:        argv,
+			Env:         env,
+			Focus:       true,
+			WorkspaceID: herdrWorkspaceID(),
 		},
 	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {

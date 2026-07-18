@@ -66,6 +66,8 @@ func fakeHerdrExecutable(t *testing.T) string {
 func TestHerdrAgentStartRequest(t *testing.T) {
 	socketPath, captured := serveHerdrResponse(t, `{"id":"x","result":{"type":"agent_started"}}`)
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "")
+	t.Setenv("HERDR_WORKSPACE_ID", "")
 
 	argv := []string{"/bin/omp", "--profile", "default", "--resume", "hello"}
 	env := herdrEnvMap([]string{
@@ -120,6 +122,55 @@ func TestHerdrAgentStartRequest(t *testing.T) {
 	}
 }
 
+func TestHerdrAgentStartWorkspacePlacement(t *testing.T) {
+	tests := []struct {
+		name            string
+		activeWorkspace string
+		workspace       string
+		want            string
+	}{
+		{name: "popup workspace", activeWorkspace: "w-popup", workspace: "w-pane", want: "w-popup"},
+		{name: "regular pane workspace", workspace: "w-pane", want: "w-pane"},
+		{name: "no workspace omits field"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			socketPath, captured := serveHerdrResponse(t, `{"id":"x","result":{}}`)
+			t.Setenv("HERDR_SOCKET_PATH", socketPath)
+			t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", tt.activeWorkspace)
+			t.Setenv("HERDR_WORKSPACE_ID", tt.workspace)
+
+			if err := herdrAgentStart("omp", []string{"/bin/omp"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			wire := readHerdrCapture(t, captured).line
+			var envelope struct {
+				Params map[string]json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal(wire, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			rawWorkspace, present := envelope.Params["workspace_id"]
+			if tt.want == "" {
+				if present {
+					t.Fatalf("workspace_id must be omitted without workspace context: %s", wire)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("workspace_id missing from request: %s", wire)
+			}
+			var workspace string
+			if err := json.Unmarshal(rawWorkspace, &workspace); err != nil {
+				t.Fatal(err)
+			}
+			if workspace != tt.want {
+				t.Fatalf("workspace_id = %q, want %q", workspace, tt.want)
+			}
+		})
+	}
+}
+
 func TestHerdrAgentStartErrorResponse(t *testing.T) {
 	socketPath, captured := serveHerdrResponse(t, `{"id":"x","error":{"code":"bad","message":"nope"}}`)
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
@@ -139,10 +190,13 @@ func TestHerdrAgentStartErrorResponse(t *testing.T) {
 func TestTryHerdrLaunchReturnsAttemptError(t *testing.T) {
 	socketPath, captured := serveHerdrResponse(t, `{"id":"x","error":{"code":"busy","message":"pane unavailable"}}`)
 	executable := fakeHerdrExecutable(t)
-	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_ENV", "")
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
 	t.Setenv("CODE_HERDR", "")
 	t.Setenv("CODE_OMP", executable)
+	t.Setenv("HERDR_ACTIVE_PANE_ID", "w1:p1")
+	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_WORKSPACE_ID", "")
 
 	attempted, err := tryHerdrLaunch("CODE_OMP", []string{"omp"}, func(path string) []string {
 		return managedLaunchArgv(path, nil, "")
@@ -163,26 +217,37 @@ func TestTryHerdrLaunchReturnsAttemptError(t *testing.T) {
 
 func TestHerdrSpawnEnabled(t *testing.T) {
 	tests := []struct {
-		name     string
-		herdrEnv string
-		socket   string
-		override string
-		want     bool
+		name            string
+		herdrEnv        string
+		socket          string
+		override        string
+		activePane      string
+		activeWorkspace string
+		workspace       string
+		want            bool
 	}{
-		{name: "inside session", herdrEnv: "1", socket: "/tmp/herdr.sock", want: true},
+		{name: "inside regular pane", herdrEnv: "1", socket: "/tmp/herdr.sock", want: true},
+		{name: "popup active pane", socket: "/tmp/herdr.sock", activePane: "w1:p1", want: true},
+		{name: "popup active workspace", socket: "/tmp/herdr.sock", activeWorkspace: "w1", want: true},
 		{name: "outside session", herdrEnv: "0", socket: "/tmp/herdr.sock", want: false},
-		{name: "missing session marker", socket: "/tmp/herdr.sock", want: false},
-		{name: "missing socket", herdrEnv: "1", want: false},
-		{name: "forced off", herdrEnv: "1", socket: "/tmp/herdr.sock", override: "0", want: false},
+		{name: "missing session markers", socket: "/tmp/herdr.sock", want: false},
+		{name: "regular workspace alone is not a gate", socket: "/tmp/herdr.sock", workspace: "w1", want: false},
+		{name: "missing socket", herdrEnv: "1", activePane: "w1:p1", want: false},
+		{name: "forced off regular pane", herdrEnv: "1", socket: "/tmp/herdr.sock", override: "0", want: false},
+		{name: "forced off popup", socket: "/tmp/herdr.sock", override: "0", activeWorkspace: "w1", want: false},
 		{name: "forced on", socket: "/tmp/herdr.sock", override: "1", want: true},
-		{name: "forced on still needs socket", herdrEnv: "1", override: "1", want: false},
-		{name: "unknown override uses session gate", herdrEnv: "1", socket: "/tmp/herdr.sock", override: "other", want: true},
+		{name: "forced on still needs socket", override: "1", want: false},
+		{name: "unknown override uses popup gate", socket: "/tmp/herdr.sock", override: "other", activePane: "w1:p1", want: true},
+		{name: "unknown override without marker", socket: "/tmp/herdr.sock", override: "other", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("HERDR_ENV", tt.herdrEnv)
 			t.Setenv("HERDR_SOCKET_PATH", tt.socket)
 			t.Setenv("CODE_HERDR", tt.override)
+			t.Setenv("HERDR_ACTIVE_PANE_ID", tt.activePane)
+			t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", tt.activeWorkspace)
+			t.Setenv("HERDR_WORKSPACE_ID", tt.workspace)
 			if got := herdrSpawnEnabled(); got != tt.want {
 				t.Fatalf("herdrSpawnEnabled() = %v, want %v", got, tt.want)
 			}
