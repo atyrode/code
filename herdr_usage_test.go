@@ -188,7 +188,7 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 		t.Errorf("request id = %q", request.ID)
 	}
 	if request.Method != "sidebar.report_section" || request.Params.SectionID != "usage" ||
-		request.Params.Source != "atyrode:usage" || request.Params.Seq != now.Unix() ||
+		request.Params.Source != "atyrode:usage" || request.Params.Seq != now.UnixMilli() ||
 		request.Params.TTLMillis != herdrUsageTTLMillis {
 		t.Fatalf("socket envelope = method %q params %+v", request.Method, request.Params)
 	}
@@ -388,5 +388,101 @@ func TestHerdrUsageIntervalJitter(t *testing.T) {
 		if _, err := parseHerdrUsageInterval(invalid); err == nil {
 			t.Errorf("interval %q was accepted", invalid)
 		}
+	}
+}
+
+func serveHerdrSocketAt(t *testing.T, dir, response string) <-chan herdrTestCapture {
+	t.Helper()
+	listener, err := net.Listen("unix", filepath.Join(dir, "herdr.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	captured := make(chan herdrTestCapture, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			captured <- herdrTestCapture{err: err}
+			return
+		}
+		defer conn.Close()
+		line, err := bufio.NewReader(conn).ReadBytes('\n')
+		if err == nil {
+			_, err = io.WriteString(conn, response+"\n")
+		}
+		captured <- herdrTestCapture{line: line, err: err}
+	}()
+	return captured
+}
+
+func TestHerdrUsageDiscoversDefaultRootSocket(t *testing.T) {
+	broker := newHerdrUsageBroker(t,
+		`{"credentials":[{"provider":"anthropic","identityKey":"id-only","credential":{"email":"only@example.com"}}]}`,
+		`{"reports":[{"provider":"anthropic","limits":[{"label":"5-hour","scope":{"tier":"-"},"amount":{"usedFraction":0.5},"window":{"durationMs":18000000}}]}]}`,
+	)
+	configureHerdrUsageVaults(t, []vault{{
+		ID:        "only",
+		Label:     "Only",
+		BrokerURL: broker.server.URL,
+		TokenFile: herdrUsageTokenFile(t),
+	}}, `{"selected":"only","disabled":[]}`)
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	named := serveHerdrUsageSocket(t, sessionsDir, "named", `{"id":"a","result":{}}`)
+	defaultRoot := serveHerdrSocketAt(t, root, `{"id":"b","result":{}}`)
+	result := runHerdrUsageCycle(time.Unix(1_700_000_000, 0), sessionsDir, io.Discard)
+	if result.Attempts != 2 || result.Successes != 2 {
+		t.Fatalf("expected both the named and default root sockets to be published to, got %+v", result)
+	}
+	for name, captured := range map[string]<-chan herdrTestCapture{"named": named, "root": defaultRoot} {
+		capture := <-captured
+		if capture.err != nil || len(capture.line) == 0 {
+			t.Fatalf("%s socket capture failed: %+v", name, capture)
+		}
+	}
+}
+
+func TestHerdrUsageSeqAdvancesWithinOneSecond(t *testing.T) {
+	// Herdr rejects seq <= last as a silent no-op, so two cycles inside the
+	// same wall-clock second (rapid restart, manual --once) must still carry
+	// strictly increasing sequence numbers.
+	broker := newHerdrUsageBroker(t,
+		`{"credentials":[{"provider":"anthropic","identityKey":"id-seq","credential":{"email":"seq@example.com"}}]}`,
+		`{"reports":[{"provider":"anthropic","limits":[{"label":"5-hour","scope":{"tier":"-"},"amount":{"usedFraction":0.5},"window":{"durationMs":18000000}}]}]}`,
+	)
+	configureHerdrUsageVaults(t, []vault{{
+		ID:        "seq",
+		Label:     "Seq",
+		BrokerURL: broker.server.URL,
+		TokenFile: herdrUsageTokenFile(t),
+	}}, `{"selected":"seq","disabled":[]}`)
+	sessionsDir := t.TempDir()
+	base := time.Unix(1_700_000_000, 0)
+	var seqs []int64
+	for cycle, offset := range []time.Duration{0, 250 * time.Millisecond} {
+		captured := serveHerdrUsageSocket(t, sessionsDir, fmt.Sprintf("cycle-%d", cycle), `{"id":"a","result":{}}`)
+		result := runHerdrUsageCycle(base.Add(offset), sessionsDir, io.Discard)
+		if result.Successes == 0 {
+			t.Fatalf("cycle %d did not publish: %+v", cycle, result)
+		}
+		capture := <-captured
+		if capture.err != nil {
+			t.Fatal(capture.err)
+		}
+		var request struct {
+			Params struct {
+				Seq int64 `json:"seq"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(capture.line, &request); err != nil {
+			t.Fatal(err)
+		}
+		seqs = append(seqs, request.Params.Seq)
+	}
+	if seqs[1] <= seqs[0] {
+		t.Fatalf("seq must advance within one second: %v", seqs)
 	}
 }
