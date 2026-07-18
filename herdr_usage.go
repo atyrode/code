@@ -68,8 +68,9 @@ type herdrUsageLimit struct {
 }
 
 type herdrUsageWindow struct {
-	Fraction float64
-	ResetsAt *int64
+	Fraction  float64
+	ResetsAt  *int64
+	Countdown string
 }
 
 type herdrUsageAccount struct {
@@ -218,6 +219,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 		"openai-codex": {},
 	}
 	byIdentity := map[string]*herdrUsageAccount{}
+	maxCountdownWidth := 0
 
 	for _, v := range vaults {
 		if disabled[v.ID] || v.BrokerURL == "" || v.TokenFile == "" {
@@ -286,10 +288,15 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 				if _, exists := account.Windows[token]; exists {
 					continue
 				}
-				account.Windows[token] = herdrUsageWindow{
+				window := herdrUsageWindow{
 					Fraction: *limit.Amount.UsedFraction,
 					ResetsAt: limit.Window.ResetsAt,
 				}
+				if window.ResetsAt != nil {
+					window.Countdown = herdrUsageCountdown(*window.ResetsAt, now)
+					maxCountdownWidth = max(maxCountdownWidth, len(window.Countdown))
+				}
+				account.Windows[token] = window
 			}
 		}
 	}
@@ -316,7 +323,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 	rows := make([]herdrUsageRow, 0)
 	for _, provider := range []string{"anthropic", "openai-codex"} {
 		for _, account := range accounts[provider] {
-			group := herdrUsageAccountRows(account, now)
+			group := herdrUsageAccountRows(account, maxCountdownWidth)
 			if len(group) == 0 {
 				continue
 			}
@@ -403,7 +410,7 @@ func herdrUsageBucketMarker(value string) string {
 	return ""
 }
 
-func herdrUsageAccountRows(account *herdrUsageAccount, now time.Time) []herdrUsageRow {
+func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []herdrUsageRow {
 	rows := make([]herdrUsageRow, 0, len(account.Windows))
 	for _, token := range []string{"5h", "7d", "fa", "sp 5h", "sp 7d"} {
 		window, ok := account.Windows[token]
@@ -417,9 +424,16 @@ func herdrUsageAccountRows(account *herdrUsageAccount, now time.Time) []herdrUsa
 			fraction = 1
 		}
 		pct := int(math.Floor(fraction*100 + 0.5))
-		label := fmt.Sprintf("%d%%", pct)
-		if window.ResetsAt != nil {
-			label += " ↻" + herdrUsageCountdown(*window.ResetsAt, now)
+		var label string
+		switch {
+		case window.ResetsAt != nil:
+			label = fmt.Sprintf("%3d%% \u21bb %*s", pct, maxCountdownWidth, window.Countdown)
+		case maxCountdownWidth > 0:
+			// " \u21bb " occupies three terminal cells: the reset-bearing and
+			// absent-reset labels therefore have identical display widths.
+			label = fmt.Sprintf("%3d%%%s", pct, strings.Repeat(" ", 3+maxCountdownWidth))
+		default:
+			label = fmt.Sprintf("%3d%%", pct)
 		}
 		color := "#ff9f52"
 		if account.Provider == "openai-codex" {
