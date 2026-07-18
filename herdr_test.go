@@ -136,6 +136,31 @@ func TestHerdrAgentStartErrorResponse(t *testing.T) {
 	}
 }
 
+func TestTryHerdrLaunchReturnsAttemptError(t *testing.T) {
+	socketPath, captured := serveHerdrResponse(t, `{"id":"x","error":{"code":"busy","message":"pane unavailable"}}`)
+	executable := fakeHerdrExecutable(t)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("CODE_HERDR", "")
+	t.Setenv("CODE_OMP", executable)
+
+	attempted, err := tryHerdrLaunch("CODE_OMP", []string{"omp"}, func(path string) []string {
+		return managedLaunchArgv(path, nil, "")
+	}, nil)
+	readHerdrCapture(t, captured)
+	if !attempted {
+		t.Fatal("enabled herdr mode must remain selected after agent.start fails")
+	}
+	if err == nil {
+		t.Fatal("agent.start failure must be returned instead of exposing the exec path")
+	}
+	for _, want := range []string{"busy", "pane unavailable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
 func TestHerdrSpawnEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -217,10 +242,14 @@ func TestHerdrLaunchArgvParity(t *testing.T) {
 			oldArgs := os.Args
 			os.Args = append([]string{"code"}, forwarded...)
 			t.Cleanup(func() { os.Args = oldArgs })
-			if ok := tryHerdrLaunch(tt.envVar, tt.fallbacks, func(path string) []string {
+			attempted, err := tryHerdrLaunch(tt.envVar, tt.fallbacks, func(path string) []string {
 				return tt.build(path, os.Args[1:], prompt)
-			}, tt.extraEnv); !ok {
-				t.Fatal("herdr launch failed")
+			}, tt.extraEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !attempted {
+				t.Fatal("herdr launch was not attempted")
 			}
 
 			wire := readHerdrCapture(t, captured).line

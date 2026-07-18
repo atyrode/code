@@ -117,19 +117,30 @@ func herdrEnvMap(entries []string) map[string]string {
 
 // tryHerdrLaunch resolves the executable with the same rules as runExec, then
 // sends the already-built argv and broker overlay through herdr's unix socket.
-// A socket or protocol failure is non-fatal: the caller retains the exec path.
-func tryHerdrLaunch(envVar string, fallbacks []string, argv func(string) []string, extraEnv []string) bool {
+// Once herdr mode is selected, an error remains a herdr launch error: callers
+// must not turn the invoking popup into an exec-replaced omp session.
+func tryHerdrLaunch(envVar string, fallbacks []string, argv func(string) []string, extraEnv []string) (bool, error) {
 	if !herdrSpawnEnabled() {
-		return false
+		return false, nil
 	}
 	path, err := resolveLaunchPath(envVar, fallbacks)
-	if err == nil {
-		err = herdrAgentStart("omp", argv(path), herdrEnvMap(extraEnv))
-	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "code: herdr launch: %v; falling back to exec\n", err)
-		return false
+		return true, err
 	}
-	fmt.Fprintln(os.Stdout, "code: launched omp via herdr")
-	return true
+	return true, herdrAgentStart("omp", argv(path), herdrEnvMap(extraEnv))
+}
+
+// launchHerdrOrExit is the post-TUI boundary: disabled herdr mode leaves the
+// normal exec path available, while an attempted herdr launch either succeeds
+// or terminates with an error.
+func launchHerdrOrExit(envVar string, fallbacks []string, argv func(string) []string, extraEnv []string) bool {
+	attempted, err := tryHerdrLaunch(envVar, fallbacks, argv, extraEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "code: herdr launch failed:", err)
+		os.Exit(1)
+	}
+	if attempted {
+		fmt.Fprintln(os.Stdout, "code: launched omp via herdr")
+	}
+	return attempted
 }

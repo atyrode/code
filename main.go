@@ -2918,7 +2918,7 @@ func main() {
 		// The sandbox owns its own fixed profile and must never inherit the
 		// selected vault's broker env — no forced default, no broker vars.
 		// No fallback past ompu: substituting plain omp would run unsandboxed.
-		if tryHerdrLaunch("CODE_OMP_UNTRUSTED", []string{"ompu"}, func(path string) []string {
+		if launchHerdrOrExit("CODE_OMP_UNTRUSTED", []string{"ompu"}, func(path string) []string {
 			return sandboxLaunchArgv(path, os.Args[1:], fm.firstPrompt)
 		}, nil) {
 			return
@@ -2928,7 +2928,7 @@ func main() {
 		// m — omp-managed on the managed defaults, no generated overlay, on the
 		// shared default client profile with the selected vault's broker env.
 		extraEnv := mustBrokerEnv(fm)
-		if tryHerdrLaunch("CODE_OMP", []string{"omp-managed", "omp"}, func(path string) []string {
+		if launchHerdrOrExit("CODE_OMP", []string{"omp-managed", "omp"}, func(path string) []string {
 			return managedLaunchArgv(path, os.Args[1:], fm.firstPrompt)
 		}, extraEnv) {
 			return
@@ -3024,7 +3024,7 @@ func launchGenerated(cfg, prompt string, extraEnv []string) {
 	}
 	tmp.WriteString(cfg)
 	tmp.Close()
-	if tryHerdrLaunch("CODE_OMP", []string{"omp"}, func(path string) []string {
+	if launchHerdrOrExit("CODE_OMP", []string{"omp"}, func(path string) []string {
 		return generatedLaunchArgv(path, tmp.Name(), os.Args[1:], prompt)
 	}, extraEnv) {
 		return
