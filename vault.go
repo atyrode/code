@@ -190,6 +190,9 @@ func parseVaults(raw string) []vault {
 		v.Profile = strings.TrimSpace(v.Profile)
 		v.Claude = strings.TrimSpace(v.Claude)
 		v.Codex = strings.TrimSpace(v.Codex)
+		v.BrokerURL = strings.TrimSpace(v.BrokerURL)
+		v.TokenFile = strings.TrimSpace(v.TokenFile)
+		v.SnapshotCache = strings.TrimSpace(v.SnapshotCache)
 		if !validVaultID.MatchString(v.ID) || strings.HasSuffix(v.ID, ".") || seen[v.ID] {
 			continue
 		}
