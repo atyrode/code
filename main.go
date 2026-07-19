@@ -2918,11 +2918,22 @@ func main() {
 		// The sandbox owns its own fixed profile and must never inherit the
 		// selected vault's broker env — no forced default, no broker vars.
 		// No fallback past ompu: substituting plain omp would run unsandboxed.
+		if launchHerdrOrExit("CODE_OMP_UNTRUSTED", []string{"ompu"}, func(path string) []string {
+			return sandboxLaunchArgv(path, os.Args[1:], fm.firstPrompt)
+		}, nil) {
+			return
+		}
 		runExec("CODE_OMP_UNTRUSTED", []string{"ompu"}, sandboxLaunchArgv, fm.firstPrompt, nil)
 	case fm.launchManaged:
 		// m — omp-managed on the managed defaults, no generated overlay, on the
 		// shared default client profile with the selected vault's broker env.
-		runExec("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv, fm.firstPrompt, mustBrokerEnv(fm))
+		extraEnv := mustBrokerEnv(fm)
+		if launchHerdrOrExit("CODE_OMP", []string{"omp-managed", "omp"}, func(path string) []string {
+			return managedLaunchArgv(path, os.Args[1:], fm.firstPrompt)
+		}, extraEnv) {
+			return
+		}
+		runExec("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv, fm.firstPrompt, extraEnv)
 	case fm.genConfig != "":
 		launchGenerated(fm.genConfig, fm.firstPrompt, mustBrokerEnv(fm))
 	}
@@ -2968,24 +2979,27 @@ func generatedLaunchArgv(path, cfgPath string, forwarded []string, prompt string
 	return forwardArgv(path, "default", args, prompt)
 }
 
+// resolveLaunchPath applies the shared executable override and fallback rules.
+// An explicit override is operator configuration and never falls through.
+func resolveLaunchPath(env string, fallbacks []string) (string, error) {
+	if cmd := os.Getenv(env); cmd != "" {
+		return exec.LookPath(cmd)
+	}
+	var path string
+	var err error
+	for _, fallback := range fallbacks {
+		if path, err = exec.LookPath(fallback); err == nil {
+			return path, nil
+		}
+	}
+	return path, err
+}
+
 // runExec execs the launcher named by env (falling back to a bare command name
 // on PATH), forwarding this process's args via argv and overlaying extraEnv (the
 // vault broker environment) onto the inherited environment.
 func runExec(env string, fallbacks []string, argv func(string, []string, string) []string, prompt string, extraEnv []string) {
-	var path string
-	var err error
-	if cmd := os.Getenv(env); cmd != "" {
-		// An explicit binary is operator config: fail loudly, never substitute.
-		path, err = exec.LookPath(cmd)
-	} else {
-		// Fallback chain: e.g. the managed launch prefers a wrapper named
-		// omp-managed but degrades to plain omp for setups that have no wrapper.
-		for _, fb := range fallbacks {
-			if path, err = exec.LookPath(fb); err == nil {
-				break
-			}
-		}
-	}
+	path, err := resolveLaunchPath(env, fallbacks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: not found:", err)
 		os.Exit(1)
@@ -3010,11 +3024,12 @@ func launchGenerated(cfg, prompt string, extraEnv []string) {
 	}
 	tmp.WriteString(cfg)
 	tmp.Close()
-	omp := os.Getenv("CODE_OMP")
-	if omp == "" {
-		omp = "omp"
+	if launchHerdrOrExit("CODE_OMP", []string{"omp"}, func(path string) []string {
+		return generatedLaunchArgv(path, tmp.Name(), os.Args[1:], prompt)
+	}, extraEnv) {
+		return
 	}
-	path, err := exec.LookPath(omp)
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: omp not found:", err)
 		os.Exit(1)
