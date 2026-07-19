@@ -193,7 +193,20 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 		request.Params.TTLMillis != herdrUsageTTLMillis {
 		t.Fatalf("socket envelope = method %q params %+v", request.Method, request.Params)
 	}
-	const wantRows = `[{"bar":{"fraction":0.45,"title":"ad* 5h","title_color":"#ff9f52","label":" 45% ↻ 1h30m","fill":"#e1c846","empty":"#78829b"}},{"bar":{"fraction":0.12,"title":"ad* 7d","title_color":"#ff9f52","label":" 12% ↻  8d5h","fill":"#7ec846","empty":"#78829b"}},{"bar":{"fraction":0.67,"title":"ad* fa","title_color":"#ff9f52","label":" 67%        ","fill":"#eb9546","empty":"#78829b"}},{"bar":{"fraction":0.25,"title":"ad* sp 5h","title_color":"#ff9f52","label":" 25% ↻    0m","fill":"#a5c846","empty":"#78829b"}},{"bar":{"fraction":0.75,"title":"ad* sp 7d","title_color":"#ff9f52","label":" 75% ↻  1d2h","fill":"#eb7d46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.5,"title":"be* 7d","title_color":"#ff9f52","label":" 50% ↻  1h0m","fill":"#ebc846","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":1,"title":"cy* 5h","title_color":"#ff9f52","label":"100% ↻   59m","fill":"#eb3c46","empty":"#78829b"}},{"spans":[]},{"bar":{"fraction":0.2,"title":"op* 5h","title_color":"#62a7ff","label":" 20% ↻   30m","fill":"#96c846","empty":"#78829b"}},{"bar":{"fraction":0.45,"title":"op* 7d","title_color":"#62a7ff","label":" 45% ↻  7d0h","fill":"#e1c846","empty":"#78829b"}}]`
+	const wantRows = `[` +
+		`{"bar":{"fraction":0.2,"title":"op* 5h","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"5h","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 20% ↻   30m","fill":"#96c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.45,"title":"op* 7d","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"7d","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 45% ↻  7d0h","fill":"#e1c846","empty":"#78829b"}},` +
+		`{"spans":[]},` +
+		`{"bar":{"fraction":0.45,"title":"ad* 5h","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 45% ↻ 1h30m","fill":"#e1c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.12,"title":"ad* 7d","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 12% ↻  8d5h","fill":"#7ec846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.67,"title":"ad* 7d fa","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d fa","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 67%        ","fill":"#eb9546","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.25,"title":"ad* 5h sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 25% ↻    0m","fill":"#a5c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.75,"title":"ad* 7d sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 75% ↻  1d2h","fill":"#eb7d46","empty":"#78829b"}},` +
+		`{"spans":[]},` +
+		`{"bar":{"fraction":0.5,"title":"be* 7d","title_spans":[{"text":"be* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 50% ↻  1h0m","fill":"#ebc846","empty":"#78829b"}},` +
+		`{"spans":[]},` +
+		`{"bar":{"fraction":1,"title":"cy* 5h","title_spans":[{"text":"cy* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":"100% ↻   59m","fill":"#eb3c46","empty":"#78829b"}}` +
+		`]`
 	if got := string(request.Params.Rows); got != wantRows {
 		t.Fatalf("rows JSON:\n got %s\nwant %s", got, wantRows)
 	}
@@ -223,27 +236,69 @@ func TestHerdrUsageLabelsShareDisplayWidth(t *testing.T) {
 	rows := collectHerdrUsageRows([]vault{{
 		ID: "grid", Label: "Grid", BrokerURL: broker.server.URL, TokenFile: tokenFile,
 	}}, nil, now, io.Discard)
-	want := []string{
+	wantLabels := []string{
 		"  5% \u21bb    30m",
 		" 42% \u21bb  4h29m",
 		"100% \u21bb 13h39m",
 		"  8%\x20\x20\x20\x20\x20\x20\x20\x20\x20",
 	}
-	if len(rows) != len(want) {
-		t.Fatalf("row count = %d, want %d", len(rows), len(want))
+	wantTitles := []string{"gr* 5h", "gr* 7d", "gr* 7d fa", "gr* 5h sp"}
+	if len(rows) != len(wantLabels) {
+		t.Fatalf("row count = %d, want %d", len(rows), len(wantLabels))
 	}
 	const wantDisplayWidth = 13
-	for i, expected := range want {
+	for i, expected := range wantLabels {
 		if rows[i].Bar == nil {
 			t.Fatalf("row %d = %#v, want bar", i, rows[i])
 		}
 		if got := rows[i].Bar.Label; got != expected {
 			t.Errorf("label %d = %q, want %q", i, got, expected)
 		}
+		if got := rows[i].Bar.Title; got != wantTitles[i] {
+			t.Errorf("title %d = %q, want %q", i, got, wantTitles[i])
+		}
+		spans := rows[i].Bar.TitleSpans
+		if len(spans) != 2 {
+			t.Fatalf("title spans %d = %#v, want account + window", i, spans)
+		}
+		accountTitle := "gr* "
+		windowTitle := strings.TrimPrefix(wantTitles[i], accountTitle)
+		if spans[0] != (herdrUsageSpan{
+			Text: accountTitle, Color: "#ff9f52", Dim: true,
+		}) || spans[1] != (herdrUsageSpan{
+			Text: windowTitle, Color: "#ff9f52",
+		}) {
+			t.Errorf("title spans %d = %#v", i, spans)
+		}
 		// Labels contain ASCII plus one-cell ↻, so rune count is terminal width.
 		if got := utf8.RuneCountInString(rows[i].Bar.Label); got != wantDisplayWidth {
 			t.Errorf("label %d display width = %d, want %d", i, got, wantDisplayWidth)
 		}
+	}
+}
+
+func TestHerdrUsageWindowTokensAreDurationFirst(t *testing.T) {
+	tests := []struct {
+		label      string
+		durationMs int64
+		want       string
+	}{
+		{label: "Claude 5 Hour", durationMs: 18_000_000, want: "5h"},
+		{label: "Claude 7 Day", durationMs: 604_800_000, want: "7d"},
+		{label: "Fable 7 Day", durationMs: 604_800_000, want: "7d fa"},
+		{label: "Spark 7 Day", durationMs: 604_800_000, want: "7d sp"},
+		{label: "Spark 5 Hour", durationMs: 18_000_000, want: "5h sp"},
+	}
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			var limit herdrUsageLimit
+			limit.Label = test.label
+			limit.Window.DurationMs = test.durationMs
+			got, ok := herdrUsageWindowToken(limit)
+			if !ok || got != test.want {
+				t.Fatalf("window token = %q, %v; want %q, true", got, ok, test.want)
+			}
+		})
 	}
 }
 
@@ -532,9 +587,9 @@ func TestHerdrUsageSeqAdvancesWithinOneSecond(t *testing.T) {
 	}
 }
 
-func TestHerdrUsageCrossProviderTagsShareAndKeepStar(t *testing.T) {
-	// The same human's Claude and Codex accounts share `al*` — provider
-	// color distinguishes them; only same-provider collisions widen.
+func TestHerdrUsageCodexFirstCrossProviderTagsShareAndKeepStar(t *testing.T) {
+	// The same human's Codex and Claude accounts share `al*`; provider color
+	// distinguishes them, and the Codex provider block renders first.
 	broker := newHerdrUsageBroker(t,
 		`{"credentials":[
 			{"provider":"anthropic","identityKey":"id-claude","credential":{"email":"alex@example.com"}},
@@ -551,11 +606,11 @@ func TestHerdrUsageCrossProviderTagsShareAndKeepStar(t *testing.T) {
 	if len(rows) != 3 || rows[0].Bar == nil || rows[2].Bar == nil {
 		t.Fatalf("rows = %#v", rows)
 	}
-	if rows[0].Bar.Title != "al* 5h" || rows[0].Bar.TitleColor != "#ff9f52" {
-		t.Fatalf("claude row = %+v", rows[0].Bar)
+	if rows[0].Bar.Title != "al* 7d" || rows[0].Bar.TitleColor != "#62a7ff" {
+		t.Fatalf("codex row = %+v", rows[0].Bar)
 	}
-	if rows[2].Bar.Title != "al* 7d" || rows[2].Bar.TitleColor != "#62a7ff" {
-		t.Fatalf("codex row = %+v", rows[2].Bar)
+	if rows[2].Bar.Title != "al* 5h" || rows[2].Bar.TitleColor != "#ff9f52" {
+		t.Fatalf("claude row = %+v", rows[2].Bar)
 	}
 }
 
