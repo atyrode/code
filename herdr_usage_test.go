@@ -827,20 +827,14 @@ func TestHerdrUsageStatusRowStates(t *testing.T) {
 			fetchedAt:   now,
 			nextFetchAt: now.Add(5 * time.Minute),
 			refreshHint: "^a u",
-		}, []herdrUsageSpan{
-			{Text: "↻ 5m", Color: "#78829b", Dim: true},
-			{Text: " · ^a u", Color: "#78829b", Dim: true},
-		}},
+		}, []herdrUsageSpan{{Text: "↻ 5m · ^a u", Color: "#78829b", Dim: true}}},
 		{"failure outranks the countdown", &herdrUsageState{
 			accounts:    accounts,
 			fetchedAt:   now.Add(-3 * time.Minute),
 			fetchFailed: true,
 			nextFetchAt: now.Add(5 * time.Minute),
 			refreshHint: "^a u",
-		}, []herdrUsageSpan{
-			{Text: "cached 3m ago", Color: "#e1c846"},
-			{Text: " · ^a u", Color: "#78829b", Dim: true},
-		}},
+		}, []herdrUsageSpan{{Text: "cached 3m ago · ^a u", Color: "#e1c846"}}},
 		{"aged-out data is stale without a failure", &herdrUsageState{
 			accounts:    accounts,
 			fetchedAt:   now.Add(-16 * time.Minute),
@@ -912,7 +906,7 @@ func TestHerdrUsageFetchFailureRetainsCachedRows(t *testing.T) {
 	if len(rows) != 2 || rows[1].Bar == nil || rows[1].Bar.Title != "ac* 5h" {
 		t.Fatalf("retained rows = %#v", rows)
 	}
-	if len(rows[0].Right) != 2 || rows[0].Right[0].Text != "cached 5m ago" || rows[0].Right[0].Color != "#e1c846" {
+	if len(rows[0].Right) != 1 || rows[0].Right[0].Text != "cached 5m ago · ^a u" || rows[0].Right[0].Color != "#e1c846" {
 		t.Fatalf("status row = %#v", rows[0].Right)
 	}
 }

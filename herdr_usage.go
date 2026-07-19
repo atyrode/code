@@ -152,23 +152,25 @@ func herdrUsageStatusRow(state *herdrUsageState, now time.Time) herdrUsageRow {
 		return row
 	}
 	stale := state.fetchFailed || now.Sub(state.fetchedAt) > herdrUsageStaleAfter
-	var right []herdrUsageSpan
+	// One span per state: the renderer normalizes leading whitespace on
+	// each right-cluster span, so the " · " separator must stay internal.
+	span := herdrUsageSpan{Color: "#78829b", Dim: true}
 	switch {
 	case stale:
-		right = []herdrUsageSpan{{Text: "cached " + herdrUsageAge(now.Sub(state.fetchedAt)), Color: "#e1c846"}}
+		span = herdrUsageSpan{Text: "cached " + herdrUsageAge(now.Sub(state.fetchedAt)), Color: "#e1c846"}
 	case state.nextFetchAt.After(now):
 		text := herdrUsageCountdown(state.nextFetchAt.UnixMilli(), now)
 		if text == "0m" {
 			text = "<1m"
 		}
-		right = []herdrUsageSpan{{Text: "\u21bb " + text, Color: "#78829b", Dim: true}}
+		span.Text = "\u21bb " + text
 	default:
 		return row
 	}
 	if state.refreshHint != "" {
-		right = append(right, herdrUsageSpan{Text: " \u00b7 " + state.refreshHint, Color: "#78829b", Dim: true})
+		span.Text += " \u00b7 " + state.refreshHint
 	}
-	row.Right = right
+	row.Right = []herdrUsageSpan{span}
 	return row
 }
 
