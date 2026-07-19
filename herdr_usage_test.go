@@ -194,21 +194,26 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 		t.Fatalf("socket envelope = method %q params %+v", request.Method, request.Params)
 	}
 	const wantRows = `[` +
-		`{"bar":{"fraction":0.2,"title":"op* 5h","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"5h","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 20% ↻   30m","fill":"#96c846","empty":"#78829b"}},` +
-		`{"bar":{"fraction":0.45,"title":"op* 7d","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"7d","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 45% ↻  7d0h","fill":"#e1c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.2,"title":"op* 5h","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"5h","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 20% ↻   30m","label_spans":[{"text":" 20%","color":"subtext0"},{"text":" ↻   30m","color":"#c8d0dc"}],"match_values":["broker:first","broker:second"],"fill":"#96c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.45,"title":"op* 7d","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"7d","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 45% ↻  7d0h","label_spans":[{"text":" 45%","color":"subtext0"},{"text":" ↻  7d0h","color":"#78829b","dim":true}],"match_values":["broker:first","broker:second"],"fill":"#e1c846","empty":"#78829b"}},` +
 		`{"spans":[]},` +
-		`{"bar":{"fraction":0.45,"title":"ad* 5h","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 45% ↻ 1h30m","fill":"#e1c846","empty":"#78829b"}},` +
-		`{"bar":{"fraction":0.12,"title":"ad* 7d","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 12% ↻  8d5h","fill":"#7ec846","empty":"#78829b"}},` +
-		`{"bar":{"fraction":0.67,"title":"ad* 7d fa","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d fa","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 67%        ","fill":"#eb9546","empty":"#78829b"}},` +
-		`{"bar":{"fraction":0.25,"title":"ad* 5h sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 25% ↻    0m","fill":"#a5c846","empty":"#78829b"}},` +
-		`{"bar":{"fraction":0.75,"title":"ad* 7d sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 75% ↻  1d2h","fill":"#eb7d46","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.45,"title":"ad* 5h","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 45% ↻ 1h30m","label_spans":[{"text":" 45%","color":"subtext0"},{"text":" ↻ 1h30m","color":"#78829b","dim":true}],"match_values":["broker:first"],"fill":"#e1c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.12,"title":"ad* 7d","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 12% ↻  8d5h","label_spans":[{"text":" 12%","color":"subtext0"},{"text":" ↻  8d5h","color":"#78829b","dim":true}],"match_values":["broker:first"],"fill":"#7ec846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.67,"title":"ad* 7d fa","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d fa","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 67%        ","label_spans":[{"text":" 67%        ","color":"subtext0"}],"match_values":["broker:first"],"fill":"#eb9546","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.25,"title":"ad* 5h sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"5h sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 25% ↻    0m","label_spans":[{"text":" 25%","color":"subtext0"},{"text":" ↻    0m","color":"#c8d0dc","bold":true}],"match_values":["broker:first"],"fill":"#a5c846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.75,"title":"ad* 7d sp","title_spans":[{"text":"ad* ","color":"#ff9f52","dim":true},{"text":"7d sp","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 75% ↻  1d2h","label_spans":[{"text":" 75%","color":"subtext0"},{"text":" ↻  1d2h","color":"#78829b","dim":true}],"match_values":["broker:first"],"fill":"#eb7d46","empty":"#78829b"}},` +
 		`{"spans":[]},` +
-		`{"bar":{"fraction":0.5,"title":"be* 7d","title_spans":[{"text":"be* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 50% ↻  1h0m","fill":"#ebc846","empty":"#78829b"}},` +
+		`{"bar":{"fraction":0.5,"title":"be* 7d","title_spans":[{"text":"be* ","color":"#ff9f52","dim":true},{"text":"7d","color":"#ff9f52"}],"title_color":"#ff9f52","label":" 50% ↻  1h0m","label_spans":[{"text":" 50%","color":"subtext0"},{"text":" ↻  1h0m","color":"#c8d0dc","bold":true}],"match_values":["broker:second"],"fill":"#ebc846","empty":"#78829b"}},` +
 		`{"spans":[]},` +
-		`{"bar":{"fraction":1,"title":"cy* 5h","title_spans":[{"text":"cy* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":"100% ↻   59m","fill":"#eb3c46","empty":"#78829b"}}` +
+		`{"bar":{"fraction":1,"title":"cy* 5h","title_spans":[{"text":"cy* ","color":"#ff9f52","dim":true},{"text":"5h","color":"#ff9f52"}],"title_color":"#ff9f52","label":"100% ↻   59m","label_spans":[{"text":"100%","color":"subtext0"},{"text":" ↻   59m","color":"#c8d0dc"}],"match_values":["broker:third"],"fill":"#eb3c46","empty":"#78829b"}}` +
 		`]`
-	if got := string(request.Params.Rows); got != wantRows {
-		t.Fatalf("rows JSON:\n got %s\nwant %s", got, wantRows)
+	gotRows := strings.NewReplacer(
+		first.server.URL, "broker:first",
+		second.server.URL, "broker:second",
+		third.server.URL, "broker:third",
+	).Replace(string(request.Params.Rows))
+	if gotRows != wantRows {
+		t.Fatalf("rows JSON:\n got %s\nwant %s", gotRows, wantRows)
 	}
 	if first.requests.Load() != 2 || second.requests.Load() != 2 || third.requests.Load() != 2 {
 		t.Fatalf("broker calls = first %d second %d third %d, want snapshot+usage each",
@@ -243,6 +248,21 @@ func TestHerdrUsageLabelsShareDisplayWidth(t *testing.T) {
 		"  8%\x20\x20\x20\x20\x20\x20\x20\x20\x20",
 	}
 	wantTitles := []string{"gr* 5h", "gr* 7d", "gr* 7d fa", "gr* 5h sp"}
+	wantLabelSpans := [][]herdrUsageSpan{
+		{
+			{Text: "  5%", Color: "subtext0"},
+			{Text: " \u21bb    30m", Color: "#c8d0dc"},
+		},
+		{
+			{Text: " 42%", Color: "subtext0"},
+			{Text: " \u21bb  4h29m", Color: "#c8d0dc", Bold: true},
+		},
+		{
+			{Text: "100%", Color: "subtext0"},
+			{Text: " \u21bb 13h39m", Color: "#c8d0dc", Bold: true},
+		},
+		{{Text: wantLabels[3], Color: "subtext0"}},
+	}
 	if len(rows) != len(wantLabels) {
 		t.Fatalf("row count = %d, want %d", len(rows), len(wantLabels))
 	}
@@ -270,10 +290,73 @@ func TestHerdrUsageLabelsShareDisplayWidth(t *testing.T) {
 		}) {
 			t.Errorf("title spans %d = %#v", i, spans)
 		}
+		labelSpans := rows[i].Bar.LabelSpans
+		if len(labelSpans) != len(wantLabelSpans[i]) {
+			t.Fatalf("label spans %d = %#v, want %#v", i, labelSpans, wantLabelSpans[i])
+		}
+		for spanIndex, want := range wantLabelSpans[i] {
+			if got := labelSpans[spanIndex]; got != want {
+				t.Errorf("label span %d:%d = %#v, want %#v", i, spanIndex, got, want)
+			}
+		}
+		var joined strings.Builder
+		for _, span := range labelSpans {
+			joined.WriteString(span.Text)
+		}
+		if got := joined.String(); got != expected {
+			t.Errorf("joined label spans %d = %q, want %q", i, got, expected)
+		}
+		if got := rows[i].Bar.MatchValues; len(got) != 1 || got[0] != broker.server.URL {
+			t.Errorf("match values %d = %#v, want broker URL", i, got)
+		}
 		// Labels contain ASCII plus one-cell ↻, so rune count is terminal width.
 		if got := utf8.RuneCountInString(rows[i].Bar.Label); got != wantDisplayWidth {
 			t.Errorf("label %d display width = %d, want %d", i, got, wantDisplayWidth)
 		}
+	}
+}
+
+func TestHerdrUsageResetSpanUrgency(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	duration := int64((5 * time.Hour) / time.Millisecond)
+	tests := []struct {
+		name      string
+		remaining time.Duration
+		duration  int64
+		want      herdrUsageSpan
+	}{
+		{
+			name:      "unknown duration remains dim",
+			remaining: 30 * time.Minute,
+			want:      herdrUsageSpan{Text: " \u21bb 30m", Color: "#78829b", Dim: true},
+		},
+		{
+			name:      "far reset remains dim",
+			remaining: 3 * time.Hour,
+			duration:  duration,
+			want:      herdrUsageSpan{Text: " \u21bb 3h0m", Color: "#78829b", Dim: true},
+		},
+		{
+			name:      "reset under quarter window is bright",
+			remaining: time.Hour,
+			duration:  duration,
+			want:      herdrUsageSpan{Text: " \u21bb 1h0m", Color: "#c8d0dc"},
+		},
+		{
+			name:      "reset under tenth window is bright and bold",
+			remaining: 20 * time.Minute,
+			duration:  duration,
+			want:      herdrUsageSpan{Text: " \u21bb 20m", Color: "#c8d0dc", Bold: true},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resetsAt := now.Add(test.remaining).UnixMilli()
+			window := herdrUsageWindow{ResetsAt: &resetsAt, DurationMs: test.duration}
+			if got := herdrUsageResetSpan(test.want.Text, window, now); got != test.want {
+				t.Errorf("reset span = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 

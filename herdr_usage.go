@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,13 +41,15 @@ type herdrUsageSpan struct {
 }
 
 type herdrUsageBar struct {
-	Fraction   float64          `json:"fraction"`
-	Title      string           `json:"title"`
-	TitleSpans []herdrUsageSpan `json:"title_spans"`
-	TitleColor string           `json:"title_color"`
-	Label      string           `json:"label"`
-	Fill       string           `json:"fill"`
-	Empty      string           `json:"empty"`
+	Fraction    float64          `json:"fraction"`
+	Title       string           `json:"title"`
+	TitleSpans  []herdrUsageSpan `json:"title_spans"`
+	TitleColor  string           `json:"title_color"`
+	Label       string           `json:"label"`
+	LabelSpans  []herdrUsageSpan `json:"label_spans,omitempty"`
+	MatchValues []string         `json:"match_values,omitempty"`
+	Fill        string           `json:"fill"`
+	Empty       string           `json:"empty"`
 }
 
 type herdrUsageRow struct {
@@ -80,9 +83,10 @@ type herdrUsageLimit struct {
 }
 
 type herdrUsageWindow struct {
-	Fraction  float64
-	ResetsAt  *int64
-	Countdown string
+	Fraction   float64
+	ResetsAt   *int64
+	DurationMs int64
+	Countdown  string
 }
 
 type herdrUsageAccount struct {
@@ -91,6 +95,7 @@ type herdrUsageAccount struct {
 	Email       string
 	VaultLabel  string
 	Name        string
+	BrokerURLs  []string
 	Windows     map[string]herdrUsageWindow
 }
 
@@ -285,12 +290,16 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 					IdentityKey: credential.IdentityKey,
 					Email:       credential.Credential.Email,
 					VaultLabel:  v.Label,
+					BrokerURLs:  nil,
 					Windows:     map[string]herdrUsageWindow{},
 				}
 				byIdentity[key] = account
 				accounts[credential.Provider] = append(accounts[credential.Provider], account)
 			} else if account.Email == "" && credential.Credential.Email != "" {
 				account.Email = credential.Credential.Email
+			}
+			if !slices.Contains(account.BrokerURLs, v.BrokerURL) {
+				account.BrokerURLs = append(account.BrokerURLs, v.BrokerURL)
 			}
 			for _, limit := range reports[credential.Provider] {
 				token, ok := herdrUsageWindowToken(limit)
@@ -301,8 +310,9 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 					continue
 				}
 				window := herdrUsageWindow{
-					Fraction: *limit.Amount.UsedFraction,
-					ResetsAt: limit.Window.ResetsAt,
+					Fraction:   *limit.Amount.UsedFraction,
+					ResetsAt:   limit.Window.ResetsAt,
+					DurationMs: limit.Window.DurationMs,
 				}
 				if window.ResetsAt != nil {
 					window.Countdown = herdrUsageCountdown(*window.ResetsAt, now)
@@ -335,7 +345,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 	rows := make([]herdrUsageRow, 0)
 	for _, provider := range herdrUsageProviderOrder {
 		for _, account := range accounts[provider] {
-			group := herdrUsageAccountRows(account, maxCountdownWidth)
+			group := herdrUsageAccountRows(account, maxCountdownWidth, now)
 			if len(group) == 0 {
 				continue
 			}
@@ -422,7 +432,7 @@ func herdrUsageBucketMarker(value string) string {
 	return ""
 }
 
-func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []herdrUsageRow {
+func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int, now time.Time) []herdrUsageRow {
 	rows := make([]herdrUsageRow, 0, len(account.Windows))
 	for _, token := range herdrUsageWindowOrder {
 		window, ok := account.Windows[token]
@@ -437,15 +447,20 @@ func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []
 		}
 		pct := int(math.Floor(fraction*100 + 0.5))
 		var label string
+		labelSpans := []herdrUsageSpan{{Text: fmt.Sprintf("%3d%%", pct), Color: "subtext0"}}
 		switch {
 		case window.ResetsAt != nil:
 			label = fmt.Sprintf("%3d%% \u21bb %*s", pct, maxCountdownWidth, window.Countdown)
+			resetText := fmt.Sprintf(" \u21bb %*s", maxCountdownWidth, window.Countdown)
+			labelSpans = append(labelSpans, herdrUsageResetSpan(resetText, window, now))
 		case maxCountdownWidth > 0:
 			// " \u21bb " occupies three terminal cells: the reset-bearing and
 			// absent-reset labels therefore have identical display widths.
 			label = fmt.Sprintf("%3d%%%s", pct, strings.Repeat(" ", 3+maxCountdownWidth))
+			labelSpans[0].Text = label
 		default:
 			label = fmt.Sprintf("%3d%%", pct)
+			labelSpans[0].Text = label
 		}
 		color := "#ff9f52"
 		if account.Provider == "openai-codex" {
@@ -459,13 +474,32 @@ func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []
 				{Text: accountTitle, Color: color, Dim: true},
 				{Text: token, Color: color},
 			},
-			TitleColor: color,
-			Label:      label,
-			Fill:       herdrUsageFill(pct),
-			Empty:      "#78829b",
+			TitleColor:  color,
+			Label:       label,
+			LabelSpans:  labelSpans,
+			MatchValues: account.BrokerURLs,
+			Fill:        herdrUsageFill(pct),
+			Empty:       "#78829b",
 		}})
 	}
 	return rows
+}
+
+func herdrUsageResetSpan(text string, window herdrUsageWindow, now time.Time) herdrUsageSpan {
+	span := herdrUsageSpan{Text: text, Color: "#78829b", Dim: true}
+	if window.DurationMs <= 0 || window.ResetsAt == nil {
+		return span
+	}
+	remaining := *window.ResetsAt - now.UnixMilli()
+	if remaining*10 < window.DurationMs {
+		span.Color = "#c8d0dc"
+		span.Bold = true
+		span.Dim = false
+	} else if remaining*4 < window.DurationMs {
+		span.Color = "#c8d0dc"
+		span.Dim = false
+	}
+	return span
 }
 
 func herdrUsageCountdown(resetsAtMillis int64, now time.Time) string {
