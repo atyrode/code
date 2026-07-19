@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -28,14 +29,24 @@ type herdrAgentStartRequest struct {
 	Params herdrAgentStartParams `json:"params"`
 }
 
-type herdrAgentStartError struct {
+type herdrResponseError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-type herdrAgentStartResponse struct {
-	Result json.RawMessage       `json:"result"`
-	Error  *herdrAgentStartError `json:"error"`
+type herdrResponse struct {
+	Result json.RawMessage     `json:"result"`
+	Error  *herdrResponseError `json:"error"`
+}
+
+type herdrRequestError struct {
+	Method  string
+	Code    string
+	Message string
+}
+
+func (e *herdrRequestError) Error() string {
+	return fmt.Sprintf("herdr %s: %s: %s", e.Method, e.Code, e.Message)
 }
 
 // herdrSpawnEnabled reports whether launches should use the active herdr
@@ -71,27 +82,44 @@ func herdrCWD() (string, error) {
 	return cwd, nil
 }
 
-func herdrAgentStartAttempt(req herdrAgentStartRequest, deadline time.Time) (herdrAgentStartResponse, error) {
-	var response herdrAgentStartResponse
-	conn, err := net.Dial("unix", os.Getenv("HERDR_SOCKET_PATH"))
+// herdrRequest exchanges exactly one newline-terminated JSON request and
+// response on a fresh Unix-socket connection.
+func herdrRequest(socketPath string, method string, params any) error {
+	request := struct {
+		ID     string `json:"id"`
+		Method string `json:"method"`
+		Params any    `json:"params"`
+	}{
+		ID:     fmt.Sprintf("code:%s:%d", strings.ReplaceAll(method, ".", ":"), time.Now().UnixNano()),
+		Method: method,
+		Params: params,
+	}
+	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return response, fmt.Errorf("herdr agent.start: connect: %w", err)
+		return fmt.Errorf("herdr %s: connect: %w", method, err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(deadline); err != nil {
-		return response, fmt.Errorf("herdr agent.start: deadline: %w", err)
+	if err := conn.SetDeadline(time.Now().Add(herdrRequestTimeout)); err != nil {
+		return fmt.Errorf("herdr %s: deadline: %w", method, err)
 	}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return response, fmt.Errorf("herdr agent.start: write request: %w", err)
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return fmt.Errorf("herdr %s: write request: %w", method, err)
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		return response, fmt.Errorf("herdr agent.start: read response: %w", err)
+		return fmt.Errorf("herdr %s: read response: %w", method, err)
 	}
+	var response herdrResponse
 	if err := json.Unmarshal(line, &response); err != nil {
-		return response, fmt.Errorf("herdr agent.start: decode response: %w", err)
+		return fmt.Errorf("herdr %s: decode response: %w", method, err)
 	}
-	return response, nil
+	if response.Error != nil {
+		return &herdrRequestError{Method: method, Code: response.Error.Code, Message: response.Error.Message}
+	}
+	if response.Result == nil {
+		return fmt.Errorf("herdr %s: response missing result or error", method)
+	}
+	return nil
 }
 
 // herdrAgentStart exchanges one request and response line per connection. A
@@ -110,31 +138,20 @@ func herdrAgentStart(name string, argv []string, env map[string]string) error {
 		Focus:       true,
 		WorkspaceID: herdrWorkspaceID(),
 	}
-	deadline := time.Now().Add(herdrRequestTimeout)
 	for attempt := 1; attempt <= 9; attempt++ {
 		params.Name = baseName
 		if attempt > 1 {
 			params.Name = fmt.Sprintf("%s (%d)", baseName, attempt)
 		}
-		req := herdrAgentStartRequest{
-			ID:     fmt.Sprintf("code:agent:start:%d", time.Now().UnixNano()),
-			Method: "agent.start",
-			Params: params,
-		}
-		response, err := herdrAgentStartAttempt(req, deadline)
-		if err != nil {
-			return err
-		}
-		if response.Error != nil {
-			if response.Error.Code == "agent_name_taken" && attempt < 9 {
-				continue
-			}
-			return fmt.Errorf("herdr agent.start: %s: %s", response.Error.Code, response.Error.Message)
-		}
-		if response.Result != nil {
+		err := herdrRequest(os.Getenv("HERDR_SOCKET_PATH"), "agent.start", params)
+		if err == nil {
 			return nil
 		}
-		return fmt.Errorf("herdr agent.start: response missing result or error")
+		var responseErr *herdrRequestError
+		if errors.As(err, &responseErr) && responseErr.Code == "agent_name_taken" && attempt < 9 {
+			continue
+		}
+		return err
 	}
 	return fmt.Errorf("herdr agent.start: exhausted name attempts")
 }
