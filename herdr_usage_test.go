@@ -748,3 +748,54 @@ func TestHerdrUsageSurvivesBrokerRestartWithinOneProcess(t *testing.T) {
 		t.Fatal("second cycle after broker restart produced no rows")
 	}
 }
+
+func TestHerdrUsageMatchValuesEqualLauncherBrokerEnv(t *testing.T) {
+	// The focused-pane mark joins on exact string equality between the pane
+	// token (the extension republishes OMP_AUTH_BROKER_URL from the launcher
+	// env, trimmed) and a row's match_values (this daemon). Both must carry
+	// the manifest's brokerUrl byte-identically, so whitespace is normalized
+	// once at parseVaults; slash forms flow verbatim through both paths and
+	// cannot diverge by construction.
+	broker := newHerdrUsageBroker(t,
+		`{"credentials":[{"provider":"anthropic","identityKey":"id-a","credential":{"email":"alex@example.com"}}]}`,
+		`{"reports":[{"provider":"anthropic","limits":[{"label":"5-hour","scope":{"tier":"-"},"amount":{"usedFraction":0.5},"window":{"durationMs":18000000}}]}]}`,
+	)
+	raw := fmt.Sprintf(
+		`[{"id":"mine","label":"Mine","brokerUrl":"  %s  ","tokenFile":"  %s  "}]`,
+		broker.server.URL, herdrUsageTokenFile(t),
+	)
+	vaults := loadVaults(raw, "")
+	if len(vaults) != 1 || vaults[0].BrokerURL != broker.server.URL {
+		t.Fatalf("normalized vaults = %#v", vaults)
+	}
+	env, err := brokerEnv(vaults[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launched string
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "OMP_AUTH_BROKER_URL="); ok {
+			launched = value
+		}
+	}
+	if launched == "" {
+		t.Fatalf("launcher env missing broker URL: %v", env)
+	}
+	if strings.TrimSpace(launched) != launched {
+		t.Fatalf("extension trim must be a no-op, got %q", launched)
+	}
+	rows := collectHerdrUsageRows(vaults, nil, time.Unix(1_700_000_000, 0), io.Discard)
+	var matched bool
+	for _, row := range rows {
+		if row.Bar == nil {
+			continue
+		}
+		if len(row.Bar.MatchValues) != 1 || row.Bar.MatchValues[0] != launched {
+			t.Fatalf("match_values = %#v, want exactly [%q]", row.Bar.MatchValues, launched)
+		}
+		matched = true
+	}
+	if !matched {
+		t.Fatal("no bar rows emitted")
+	}
+}
