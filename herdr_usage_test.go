@@ -473,13 +473,13 @@ func TestHerdrUsageRowCapWarns(t *testing.T) {
 	rows := collectHerdrUsageRows([]vault{{
 		ID: "accounts", Label: "Accounts", BrokerURL: broker.server.URL, TokenFile: tokenFile,
 	}}, nil, now, &stderr)
-	if len(rows) != herdrUsageMaxRows-1 {
-		t.Fatalf("row count = %d, want %d", len(rows), herdrUsageMaxRows-1)
+	if len(rows) != herdrUsageMaxRows-2 {
+		t.Fatalf("row count = %d, want %d", len(rows), herdrUsageMaxRows-2)
 	}
 	if rows[len(rows)-1].Bar == nil {
-		t.Fatal("cap must keep the literal first 23 rows, even mid-group")
+		t.Fatal("cap must keep the literal first 22 rows, even mid-group")
 	}
-	if got := stderr.String(); !strings.Contains(got, "truncated from 29 to 23") {
+	if got := stderr.String(); !strings.Contains(got, "truncated from 29 to 22") {
 		t.Fatalf("truncation warning = %q", got)
 	}
 }
@@ -878,7 +878,7 @@ func TestHerdrUsageFetchFailureRetainsCachedRows(t *testing.T) {
 	state := &herdrUsageState{refreshHint: "^a u", nextFetchAt: now.Add(5 * time.Minute)}
 	firstDir := t.TempDir()
 	first := serveHerdrUsageSocket(t, firstDir, "one", `{"id":"a","result":{}}`)
-	if result := runHerdrUsageFetch(state, now, firstDir, io.Discard); result != (herdrUsageCycleResult{Rows: 2, Attempts: 1, Successes: 1}) {
+	if result := runHerdrUsageFetch(state, now, firstDir, io.Discard); result != (herdrUsageCycleResult{Rows: 3, Attempts: 1, Successes: 1}) {
 		t.Fatalf("healthy fetch result = %+v", result)
 	}
 	readHerdrCapture(t, first)
@@ -888,7 +888,7 @@ func TestHerdrUsageFetchFailureRetainsCachedRows(t *testing.T) {
 	state.nextFetchAt = later.Add(5 * time.Minute)
 	secondDir := t.TempDir()
 	second := serveHerdrUsageSocket(t, secondDir, "two", `{"id":"b","result":{}}`)
-	if result := runHerdrUsageFetch(state, later, secondDir, io.Discard); result != (herdrUsageCycleResult{Rows: 2, Attempts: 1, Successes: 1}) {
+	if result := runHerdrUsageFetch(state, later, secondDir, io.Discard); result != (herdrUsageCycleResult{Rows: 3, Attempts: 1, Successes: 1}) {
 		t.Fatalf("degraded fetch result = %+v", result)
 	}
 	if !state.fetchFailed {
@@ -903,7 +903,8 @@ func TestHerdrUsageFetchFailureRetainsCachedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := request.Params.Rows
-	if len(rows) != 2 || rows[1].Bar == nil || rows[1].Bar.Title != "ac* 5h" {
+	if len(rows) != 3 || rows[1].Spans == nil || len(*rows[1].Spans) != 0 || rows[1].Right != nil ||
+		rows[2].Bar == nil || rows[2].Bar.Title != "ac* 5h" {
 		t.Fatalf("retained rows = %#v", rows)
 	}
 	if len(rows[0].Right) != 1 || rows[0].Right[0].Text != "cached 5m ago · ^a u" || rows[0].Right[0].Color != "#e1c846" {

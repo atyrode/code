@@ -369,7 +369,9 @@ func TestHerdrSpawnEnabled(t *testing.T) {
 		workspace       string
 		want            bool
 	}{
-		{name: "inside regular pane", herdrEnv: "1", socket: "/tmp/herdr.sock", want: true},
+		{name: "regular pane execs in place", herdrEnv: "1", socket: "/tmp/herdr.sock", want: false},
+		{name: "popup markers with pane env stay in pane", herdrEnv: "1", socket: "/tmp/herdr.sock", activePane: "w1:p1", want: false},
+		{name: "forced on overrides pane exec", herdrEnv: "1", socket: "/tmp/herdr.sock", override: "1", want: true},
 		{name: "popup active pane", socket: "/tmp/herdr.sock", activePane: "w1:p1", want: true},
 		{name: "popup active workspace", socket: "/tmp/herdr.sock", activeWorkspace: "w1", want: true},
 		{name: "outside session", herdrEnv: "0", socket: "/tmp/herdr.sock", want: false},
@@ -440,7 +442,9 @@ func TestHerdrLaunchArgvParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			socketPath, captured := serveHerdrResponse(t, `{"id":"x","result":{}}`)
 			executable := fakeHerdrExecutable(t)
-			t.Setenv("HERDR_ENV", "1")
+			t.Setenv("HERDR_ENV", "")
+			t.Setenv("HERDR_ACTIVE_PANE_ID", "w1:p1")
+			t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "")
 			t.Setenv("HERDR_SOCKET_PATH", socketPath)
 			t.Setenv("CODE_HERDR", "")
 			t.Setenv("CODE_OMP", "")
@@ -486,10 +490,37 @@ func TestHerdrLaunchArgvParity(t *testing.T) {
 	}
 }
 
-func TestLaunchGeneratedWritesConfigBeforeHerdrStart(t *testing.T) {
+func TestRegularPaneLaunchStaysInPane(t *testing.T) {
 	socketPath, captured := serveHerdrResponse(t, `{"id":"x","result":{}}`)
 	executable := fakeHerdrExecutable(t)
 	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SOCKET_PATH", socketPath)
+	t.Setenv("CODE_HERDR", "")
+	t.Setenv("HERDR_ACTIVE_PANE_ID", "")
+	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "")
+	t.Setenv("CODE_OMP", executable)
+
+	attempted, err := tryHerdrLaunch("CODE_OMP", []string{"omp"}, func(path string) []string {
+		return []string{path}
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempted {
+		t.Fatal("regular pane launch must leave the exec path selected")
+	}
+	select {
+	case capture := <-captured:
+		t.Fatalf("regular pane launch sent a socket request: %s", capture.line)
+	default:
+	}
+}
+
+func TestLaunchGeneratedWritesConfigBeforeHerdrStart(t *testing.T) {
+	socketPath, captured := serveHerdrResponse(t, `{"id":"x","result":{}}`)
+	executable := fakeHerdrExecutable(t)
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_ACTIVE_PANE_ID", "w1:p1")
 	t.Setenv("HERDR_SOCKET_PATH", socketPath)
 	t.Setenv("CODE_HERDR", "")
 	t.Setenv("CODE_OMP", executable)
