@@ -49,8 +49,11 @@ func (e *herdrRequestError) Error() string {
 	return fmt.Sprintf("herdr %s: %s: %s", e.Method, e.Code, e.Message)
 }
 
-// herdrSpawnEnabled reports whether launches should use the active herdr
-// session. Custom command popups carry HERDR_ACTIVE_* rather than HERDR_ENV;
+// herdrSpawnEnabled reports whether launches should go through agent.start on
+// the active herdr session instead of exec-replacing this process. Only
+// transient custom-command popups need that (they carry HERDR_ACTIVE_* rather
+// than HERDR_ENV; an exec inside a closing overlay would strand the session).
+// In-pane launches (HERDR_ENV=1) exec omp in place like any terminal.
 // CODE_HERDR=0 is the escape hatch and CODE_HERDR=1 forces socket use.
 func herdrSpawnEnabled() bool {
 	if os.Getenv("CODE_HERDR") == "0" || os.Getenv("HERDR_SOCKET_PATH") == "" {
@@ -59,8 +62,10 @@ func herdrSpawnEnabled() bool {
 	if os.Getenv("CODE_HERDR") == "1" {
 		return true
 	}
-	return os.Getenv("HERDR_ENV") == "1" ||
-		os.Getenv("HERDR_ACTIVE_PANE_ID") != "" ||
+	if os.Getenv("HERDR_ENV") == "1" {
+		return false
+	}
+	return os.Getenv("HERDR_ACTIVE_PANE_ID") != "" ||
 		os.Getenv("HERDR_ACTIVE_WORKSPACE_ID") != ""
 }
 

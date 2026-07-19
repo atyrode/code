@@ -141,10 +141,12 @@ func (s *herdrUsageState) seq(now time.Time) int64 {
 	return seq
 }
 
-// herdrUsageStatusRow renders the section's first row: an empty left
-// cluster (the breathing-room line under the section header) carrying a
-// right-aligned refresh status. Staleness outranks the countdown,
-// mirroring the OMP vault-usage footer's suffix grammar.
+// herdrUsageStatusRow renders the section's leading status row: an empty
+// left cluster carrying a right-aligned refresh status. Herdr hoists a
+// leading right-only row onto the section's title line, so this row
+// decorates the header instead of spending a body line. Staleness
+// outranks the countdown, mirroring the OMP vault-usage footer's suffix
+// grammar.
 func herdrUsageStatusRow(state *herdrUsageState, now time.Time) herdrUsageRow {
 	empty := []any{}
 	row := herdrUsageRow{Spans: &empty}
@@ -363,7 +365,14 @@ func publishHerdrUsage(state *herdrUsageState, now time.Time, sessionsDir string
 	if len(usage) == 0 {
 		return result
 	}
-	rows := append([]herdrUsageRow{herdrUsageStatusRow(state, now)}, usage...)
+	lead := []herdrUsageRow{herdrUsageStatusRow(state, now)}
+	if len(lead[0].Right) > 0 {
+		// The populated status row hoists onto the title line; an explicit
+		// blank row supplies the breathing room under the header.
+		empty := []any{}
+		lead = append(lead, herdrUsageRow{Spans: &empty})
+	}
+	rows := append(lead, usage...)
 	result.Rows = len(rows)
 
 	sockets, err := filepath.Glob(filepath.Join(sessionsDir, "*", "herdr.sock"))
@@ -525,7 +534,7 @@ func fetchHerdrUsageAccounts(vaults []vault, disabled map[string]bool, stderr io
 // renderHerdrUsageRows builds the bar rows from a fetched (possibly
 // cached) account snapshot. Reset countdowns are recomputed here with the
 // caller's clock, so minute ticks refresh them without a broker fetch.
-// The cap reserves one slot for the leading status/spacer row.
+// The cap reserves two slots for the leading status and spacer rows.
 func renderHerdrUsageRows(accounts map[string][]*herdrUsageAccount, now time.Time, stderr io.Writer) []herdrUsageRow {
 	maxCountdownWidth := 0
 	for _, provider := range accounts {
@@ -557,9 +566,9 @@ func renderHerdrUsageRows(accounts map[string][]*herdrUsageAccount, now time.Tim
 			rows = append(rows, group...)
 		}
 	}
-	if len(rows) > herdrUsageMaxRows-1 {
-		fmt.Fprintf(stderr, "code herdr-usage: usage rows truncated from %d to %d\n", len(rows), herdrUsageMaxRows-1)
-		rows = rows[:herdrUsageMaxRows-1]
+	if len(rows) > herdrUsageMaxRows-2 {
+		fmt.Fprintf(stderr, "code herdr-usage: usage rows truncated from %d to %d\n", len(rows), herdrUsageMaxRows-2)
+		rows = rows[:herdrUsageMaxRows-2]
 	}
 	return rows
 }
