@@ -28,13 +28,25 @@ Publish auth-broker usage bars to every active herdr session.
   --interval <seconds>  seconds between cycles (default 300, with ±10% jitter)
 `
 
+var herdrUsageProviderOrder = [...]string{"openai-codex", "anthropic"}
+
+var herdrUsageWindowOrder = [...]string{"5h", "7d", "5h fa", "7d fa", "5h sp", "7d sp"}
+
+type herdrUsageSpan struct {
+	Text  string `json:"text"`
+	Color string `json:"color,omitempty"`
+	Bold  bool   `json:"bold,omitempty"`
+	Dim   bool   `json:"dim,omitempty"`
+}
+
 type herdrUsageBar struct {
-	Fraction   float64 `json:"fraction"`
-	Title      string  `json:"title"`
-	TitleColor string  `json:"title_color"`
-	Label      string  `json:"label"`
-	Fill       string  `json:"fill"`
-	Empty      string  `json:"empty"`
+	Fraction   float64          `json:"fraction"`
+	Title      string           `json:"title"`
+	TitleSpans []herdrUsageSpan `json:"title_spans"`
+	TitleColor string           `json:"title_color"`
+	Label      string           `json:"label"`
+	Fill       string           `json:"fill"`
+	Empty      string           `json:"empty"`
 }
 
 type herdrUsageRow struct {
@@ -305,7 +317,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 	// is two letters + `*` with provider color carrying the Claude/Codex
 	// distinction, so the same person's accounts may share a tag across
 	// providers while same-provider neighbors widen to three letters.
-	for _, provider := range []string{"anthropic", "openai-codex"} {
+	for _, provider := range herdrUsageProviderOrder {
 		namePrefixes := map[string]int{}
 		for _, account := range accounts[provider] {
 			namePrefixes[firstRunes(herdrUsageNameSource(account), 2)]++
@@ -321,7 +333,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 	}
 
 	rows := make([]herdrUsageRow, 0)
-	for _, provider := range []string{"anthropic", "openai-codex"} {
+	for _, provider := range herdrUsageProviderOrder {
 		for _, account := range accounts[provider] {
 			group := herdrUsageAccountRows(account, maxCountdownWidth)
 			if len(group) == 0 {
@@ -391,9 +403,9 @@ func herdrUsageWindowToken(limit herdrUsageLimit) (string, bool) {
 
 	switch kind {
 	case "fable":
-		return "fa", true
+		return bucket + " fa", true
 	case "spark":
-		return "sp " + bucket, true
+		return bucket + " sp", true
 	default:
 		return bucket, true
 	}
@@ -412,7 +424,7 @@ func herdrUsageBucketMarker(value string) string {
 
 func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []herdrUsageRow {
 	rows := make([]herdrUsageRow, 0, len(account.Windows))
-	for _, token := range []string{"5h", "7d", "fa", "sp 5h", "sp 7d"} {
+	for _, token := range herdrUsageWindowOrder {
 		window, ok := account.Windows[token]
 		if !ok {
 			continue
@@ -439,9 +451,14 @@ func herdrUsageAccountRows(account *herdrUsageAccount, maxCountdownWidth int) []
 		if account.Provider == "openai-codex" {
 			color = "#62a7ff"
 		}
+		accountTitle := account.Name + " "
 		rows = append(rows, herdrUsageRow{Bar: &herdrUsageBar{
-			Fraction:   fraction,
-			Title:      account.Name + " " + token,
+			Fraction: fraction,
+			Title:    accountTitle + token,
+			TitleSpans: []herdrUsageSpan{
+				{Text: accountTitle, Color: color, Dim: true},
+				{Text: token, Color: color},
+			},
 			TitleColor: color,
 			Label:      label,
 			Fill:       herdrUsageFill(pct),
