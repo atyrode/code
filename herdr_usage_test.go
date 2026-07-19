@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -164,7 +165,7 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 	sessionsDir := t.TempDir()
 	captured := serveHerdrUsageSocket(t, sessionsDir, "fixture", `{"id":"accepted","result":{}}`)
 	result := runHerdrUsageCycle(now, sessionsDir, io.Discard)
-	if result != (herdrUsageCycleResult{Rows: 12, Attempts: 1, Successes: 1}) {
+	if result != (herdrUsageCycleResult{Rows: 13, Attempts: 1, Successes: 1}) {
 		t.Fatalf("cycle result = %+v", result)
 	}
 	wire := readHerdrCapture(t, captured).line
@@ -194,6 +195,7 @@ func TestHerdrUsageGoldenRows(t *testing.T) {
 		t.Fatalf("socket envelope = method %q params %+v", request.Method, request.Params)
 	}
 	const wantRows = `[` +
+		`{"spans":[]},` +
 		`{"bar":{"fraction":0.2,"title":"op* 5h","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"5h","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 20% ↻   30m","label_spans":[{"text":" 20%","color":"subtext0"},{"text":" ↻   30m","color":"#c8d0dc"}],"match_values":["broker:first","broker:second"],"fill":"#96c846","empty":"#78829b"}},` +
 		`{"bar":{"fraction":0.45,"title":"op* 7d","title_spans":[{"text":"op* ","color":"#62a7ff","dim":true},{"text":"7d","color":"#62a7ff"}],"title_color":"#62a7ff","label":" 45% ↻  7d0h","label_spans":[{"text":" 45%","color":"subtext0"},{"text":" ↻  7d0h","color":"#78829b","dim":true}],"match_values":["broker:first","broker:second"],"fill":"#e1c846","empty":"#78829b"}},` +
 		`{"spans":[]},` +
@@ -430,7 +432,7 @@ func TestHerdrUsageDisabledVaultAndAbsentWindows(t *testing.T) {
 	sessionsDir := t.TempDir()
 	captured := serveHerdrUsageSocket(t, sessionsDir, "only", `{"id":"accepted","result":{}}`)
 	result := runHerdrUsageCycle(now, sessionsDir, io.Discard)
-	if result != (herdrUsageCycleResult{Rows: 1, Attempts: 1, Successes: 1}) {
+	if result != (herdrUsageCycleResult{Rows: 2, Attempts: 1, Successes: 1}) {
 		t.Fatalf("cycle result = %+v", result)
 	}
 	var request struct {
@@ -441,7 +443,8 @@ func TestHerdrUsageDisabledVaultAndAbsentWindows(t *testing.T) {
 	if err := json.Unmarshal(readHerdrCapture(t, captured).line, &request); err != nil {
 		t.Fatal(err)
 	}
-	if len(request.Params.Rows) != 1 || request.Params.Rows[0].Bar == nil || request.Params.Rows[0].Bar.Title != "en* 5h" {
+	if len(request.Params.Rows) != 2 || request.Params.Rows[0].Spans == nil || request.Params.Rows[0].Bar != nil ||
+		request.Params.Rows[1].Bar == nil || request.Params.Rows[1].Bar.Title != "en* 5h" {
 		t.Fatalf("reported-only rows = %#v", request.Params.Rows)
 	}
 	if disabled.requests.Load() != 0 {
@@ -470,13 +473,13 @@ func TestHerdrUsageRowCapWarns(t *testing.T) {
 	rows := collectHerdrUsageRows([]vault{{
 		ID: "accounts", Label: "Accounts", BrokerURL: broker.server.URL, TokenFile: tokenFile,
 	}}, nil, now, &stderr)
-	if len(rows) != herdrUsageMaxRows {
-		t.Fatalf("row count = %d, want %d", len(rows), herdrUsageMaxRows)
+	if len(rows) != herdrUsageMaxRows-1 {
+		t.Fatalf("row count = %d, want %d", len(rows), herdrUsageMaxRows-1)
 	}
-	if rows[len(rows)-1].Spans == nil {
-		t.Fatal("cap must keep the literal first 24 rows, including the trailing separator")
+	if rows[len(rows)-1].Bar == nil {
+		t.Fatal("cap must keep the literal first 23 rows, even mid-group")
 	}
-	if got := stderr.String(); !strings.Contains(got, "truncated from 29 to 24") {
+	if got := stderr.String(); !strings.Contains(got, "truncated from 29 to 23") {
 		t.Fatalf("truncation warning = %q", got)
 	}
 }
@@ -518,7 +521,7 @@ func TestHerdrUsageEverySocketFailureIsTerminal(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	result := runHerdrUsageCycle(time.Unix(1_700_000_000, 0), sessionsDir, &stderr)
-	if result != (herdrUsageCycleResult{Rows: 1, Attempts: 2}) || !result.allPublishesFailed() {
+	if result != (herdrUsageCycleResult{Rows: 2, Attempts: 2}) || !result.allPublishesFailed() {
 		t.Fatalf("failed publish result = %+v", result)
 	}
 	if got := strings.Count(stderr.String(), "code herdr-usage: publish "); got != 2 {
@@ -797,5 +800,133 @@ func TestHerdrUsageMatchValuesEqualLauncherBrokerEnv(t *testing.T) {
 	}
 	if !matched {
 		t.Fatal("no bar rows emitted")
+	}
+}
+
+func TestHerdrUsageStatusRowStates(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	accounts := map[string][]*herdrUsageAccount{"anthropic": {{}}}
+	tests := []struct {
+		name  string
+		state *herdrUsageState
+		want  []herdrUsageSpan
+	}{
+		{"zero state renders a pure spacer", &herdrUsageState{}, nil},
+		{"healthy schedule counts down", &herdrUsageState{
+			accounts:    accounts,
+			fetchedAt:   now.Add(-time.Minute),
+			nextFetchAt: now.Add(4*time.Minute + 30*time.Second),
+		}, []herdrUsageSpan{{Text: "↻ 4m", Color: "#78829b", Dim: true}}},
+		{"imminent fetch renders <1m", &herdrUsageState{
+			accounts:    accounts,
+			fetchedAt:   now,
+			nextFetchAt: now.Add(20 * time.Second),
+		}, []herdrUsageSpan{{Text: "↻ <1m", Color: "#78829b", Dim: true}}},
+		{"hint decorates the countdown", &herdrUsageState{
+			accounts:    accounts,
+			fetchedAt:   now,
+			nextFetchAt: now.Add(5 * time.Minute),
+			refreshHint: "^a u",
+		}, []herdrUsageSpan{
+			{Text: "↻ 5m", Color: "#78829b", Dim: true},
+			{Text: " · ^a u", Color: "#78829b", Dim: true},
+		}},
+		{"failure outranks the countdown", &herdrUsageState{
+			accounts:    accounts,
+			fetchedAt:   now.Add(-3 * time.Minute),
+			fetchFailed: true,
+			nextFetchAt: now.Add(5 * time.Minute),
+			refreshHint: "^a u",
+		}, []herdrUsageSpan{
+			{Text: "cached 3m ago", Color: "#e1c846"},
+			{Text: " · ^a u", Color: "#78829b", Dim: true},
+		}},
+		{"aged-out data is stale without a failure", &herdrUsageState{
+			accounts:    accounts,
+			fetchedAt:   now.Add(-16 * time.Minute),
+			nextFetchAt: now.Add(5 * time.Minute),
+		}, []herdrUsageSpan{{Text: "cached 16m ago", Color: "#e1c846"}}},
+	}
+	for _, test := range tests {
+		row := herdrUsageStatusRow(test.state, now)
+		if row.Bar != nil || row.Spans == nil || len(*row.Spans) != 0 {
+			t.Errorf("%s: left cluster = %#v, want empty spans", test.name, row)
+		}
+		if !slices.Equal(row.Right, test.want) {
+			t.Errorf("%s: right cluster = %#v, want %#v", test.name, row.Right, test.want)
+		}
+	}
+}
+
+func TestHerdrUsageFetchFailureRetainsCachedRows(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	tokenFile := herdrUsageTokenFile(t)
+	healthy := true
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !healthy {
+			http.Error(w, "broker draining", http.StatusServiceUnavailable)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/snapshot":
+			fmt.Fprint(w, `{"credentials":[{"provider":"anthropic","identityKey":"acct","credential":{"email":"acct@example.test"}}]}`)
+		case "/v1/usage":
+			fmt.Fprint(w, `{"reports":[{"provider":"anthropic","limits":[{"label":"5 hours","amount":{"usedFraction":0.4},"window":{"durationMs":18000000}}]}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(broker.Close)
+	configureHerdrUsageVaults(t, []vault{{
+		ID: "acct", Label: "Acct", BrokerURL: broker.URL, TokenFile: tokenFile,
+	}}, `{"selected":"acct","disabled":[]}`)
+
+	state := &herdrUsageState{refreshHint: "^a u", nextFetchAt: now.Add(5 * time.Minute)}
+	firstDir := t.TempDir()
+	first := serveHerdrUsageSocket(t, firstDir, "one", `{"id":"a","result":{}}`)
+	if result := runHerdrUsageFetch(state, now, firstDir, io.Discard); result != (herdrUsageCycleResult{Rows: 2, Attempts: 1, Successes: 1}) {
+		t.Fatalf("healthy fetch result = %+v", result)
+	}
+	readHerdrCapture(t, first)
+
+	healthy = false
+	later := now.Add(5 * time.Minute)
+	state.nextFetchAt = later.Add(5 * time.Minute)
+	secondDir := t.TempDir()
+	second := serveHerdrUsageSocket(t, secondDir, "two", `{"id":"b","result":{}}`)
+	if result := runHerdrUsageFetch(state, later, secondDir, io.Discard); result != (herdrUsageCycleResult{Rows: 2, Attempts: 1, Successes: 1}) {
+		t.Fatalf("degraded fetch result = %+v", result)
+	}
+	if !state.fetchFailed {
+		t.Fatal("errorful fetch must mark retained data stale")
+	}
+	var request struct {
+		Params struct {
+			Rows []herdrUsageRow `json:"rows"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(readHerdrCapture(t, second).line, &request); err != nil {
+		t.Fatal(err)
+	}
+	rows := request.Params.Rows
+	if len(rows) != 2 || rows[1].Bar == nil || rows[1].Bar.Title != "ac* 5h" {
+		t.Fatalf("retained rows = %#v", rows)
+	}
+	if len(rows[0].Right) != 2 || rows[0].Right[0].Text != "cached 5m ago" || rows[0].Right[0].Color != "#e1c846" {
+		t.Fatalf("status row = %#v", rows[0].Right)
+	}
+}
+
+func TestHerdrUsageStateSeqAdvancesWithinOneMilli(t *testing.T) {
+	state := &herdrUsageState{}
+	now := time.Unix(1_700_000_000, 0)
+	if first, second := state.seq(now), state.seq(now); second <= first {
+		t.Fatalf("same-milli publishes must advance seq: %d then %d", first, second)
+	}
+}
+
+func TestHerdrUsageRefreshHintFlagNeedsLabel(t *testing.T) {
+	if got := runHerdrUsage([]string{"--refresh-hint"}); got != 2 {
+		t.Fatalf("bare --refresh-hint exit = %d, want 2", got)
 	}
 }

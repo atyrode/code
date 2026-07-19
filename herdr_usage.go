@@ -7,26 +7,32 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
 
 const (
 	herdrUsageDefaultInterval = 300 * time.Second
+	herdrUsageTickInterval    = 60 * time.Second
+	herdrUsageStaleAfter      = 15 * time.Minute
 	herdrUsageTTLMillis       = 720000
 	herdrUsageMaxRows         = 24
 )
 
-const herdrUsageHelp = `usage: code herdr-usage [--once] [--interval <seconds>]
+const herdrUsageHelp = `usage: code herdr-usage [--once] [--interval <seconds>] [--refresh-hint <label>]
 
 Publish auth-broker usage bars to every active herdr session.
 
-  --once                publish one cycle and exit
-  --interval <seconds>  seconds between cycles (default 300, with ±10% jitter)
+  --once                  publish one cycle and exit
+  --interval <seconds>    seconds between fetches (default 300, with ±10% jitter)
+  --refresh-hint <label>  keybind label shown beside the refresh countdown
+                          (SIGUSR1 forces a fetch now)
 `
 
 var herdrUsageProviderOrder = [...]string{"openai-codex", "anthropic"}
@@ -53,8 +59,9 @@ type herdrUsageBar struct {
 }
 
 type herdrUsageRow struct {
-	Bar   *herdrUsageBar `json:"bar,omitempty"`
-	Spans *[]any         `json:"spans,omitempty"`
+	Bar   *herdrUsageBar   `json:"bar,omitempty"`
+	Spans *[]any           `json:"spans,omitempty"`
+	Right []herdrUsageSpan `json:"right,omitempty"`
 }
 
 type herdrUsageCredential struct {
@@ -109,6 +116,76 @@ func (r herdrUsageCycleResult) allPublishesFailed() bool {
 	return r.Rows > 0 && r.Attempts > 0 && r.Successes == 0
 }
 
+// herdrUsageState is the daemon's cross-cycle cache: the last successful
+// account fetch plus the scheduling metadata behind the status row. A
+// zero state (--once, tests) schedules nothing and renders a blank
+// spacer instead of a countdown.
+type herdrUsageState struct {
+	accounts    map[string][]*herdrUsageAccount
+	fetchedAt   time.Time
+	fetchFailed bool
+	nextFetchAt time.Time
+	refreshHint string
+	lastSeq     int64
+}
+
+// seq returns a strictly increasing sequence number even when two
+// publishes (minute tick + manual SIGUSR1) land in the same millisecond;
+// herdr silently drops seq <= last.
+func (s *herdrUsageState) seq(now time.Time) int64 {
+	seq := now.UnixMilli()
+	if seq <= s.lastSeq {
+		seq = s.lastSeq + 1
+	}
+	s.lastSeq = seq
+	return seq
+}
+
+// herdrUsageStatusRow renders the section's first row: an empty left
+// cluster (the breathing-room line under the section header) carrying a
+// right-aligned refresh status. Staleness outranks the countdown,
+// mirroring the OMP vault-usage footer's suffix grammar.
+func herdrUsageStatusRow(state *herdrUsageState, now time.Time) herdrUsageRow {
+	empty := []any{}
+	row := herdrUsageRow{Spans: &empty}
+	if state == nil || state.accounts == nil {
+		return row
+	}
+	stale := state.fetchFailed || now.Sub(state.fetchedAt) > herdrUsageStaleAfter
+	var right []herdrUsageSpan
+	switch {
+	case stale:
+		right = []herdrUsageSpan{{Text: "cached " + herdrUsageAge(now.Sub(state.fetchedAt)), Color: "#e1c846"}}
+	case state.nextFetchAt.After(now):
+		text := herdrUsageCountdown(state.nextFetchAt.UnixMilli(), now)
+		if text == "0m" {
+			text = "<1m"
+		}
+		right = []herdrUsageSpan{{Text: "\u21bb " + text, Color: "#78829b", Dim: true}}
+	default:
+		return row
+	}
+	if state.refreshHint != "" {
+		right = append(right, herdrUsageSpan{Text: " \u00b7 " + state.refreshHint, Color: "#78829b", Dim: true})
+	}
+	row.Right = right
+	return row
+}
+
+func herdrUsageAge(age time.Duration) string {
+	minutes := int64(age / time.Minute)
+	switch {
+	case minutes < 1:
+		return "<1m ago"
+	case minutes < 60:
+		return fmt.Sprintf("%dm ago", minutes)
+	case minutes < 24*60:
+		return fmt.Sprintf("%dh%dm ago", minutes/60, minutes%60)
+	default:
+		return fmt.Sprintf("%dd%dh ago", minutes/(24*60), (minutes/60)%24)
+	}
+}
+
 func defaultHerdrSessionsDir() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -138,6 +215,7 @@ func jitterHerdrUsageInterval(interval time.Duration) time.Duration {
 func runHerdrUsage(args []string) int {
 	once := false
 	interval := herdrUsageDefaultInterval
+	refreshHint := ""
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--once":
@@ -161,6 +239,15 @@ func runHerdrUsage(args []string) int {
 				fmt.Fprintf(os.Stderr, "code herdr-usage: --interval: %v\n", err)
 				return 2
 			}
+		case args[i] == "--refresh-hint":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "code herdr-usage: --refresh-hint needs a label")
+				return 2
+			}
+			refreshHint = args[i]
+		case strings.HasPrefix(args[i], "--refresh-hint="):
+			refreshHint = strings.TrimPrefix(args[i], "--refresh-hint=")
 		case args[i] == "-h" || args[i] == "--help":
 			fmt.Print(herdrUsageHelp)
 			return 0
@@ -174,26 +261,108 @@ func runHerdrUsage(args []string) int {
 	if override := os.Getenv("HERDR_SESSIONS_DIR"); override != "" {
 		sessionsDir = override
 	}
-	for {
+	if once {
 		result := runHerdrUsageCycle(time.Now(), sessionsDir, os.Stderr)
 		if result.allPublishesFailed() {
 			return 1
 		}
-		if once {
-			return 0
+		return 0
+	}
+
+	// One event loop owns scheduled fetches, minute re-renders, and the
+	// manual SIGUSR1 refresh: a keypress can never race the schedule into
+	// overlapping fetches. Ticks re-render cached data (fresh reset and
+	// next-fetch countdowns) without touching the brokers.
+	state := &herdrUsageState{refreshHint: refreshHint}
+	refreshC := make(chan os.Signal, 1)
+	signal.Notify(refreshC, syscall.SIGUSR1)
+	defer signal.Stop(refreshC)
+	tick := time.NewTicker(herdrUsageTickInterval)
+	defer tick.Stop()
+	fetchTimer := time.NewTimer(0)
+	defer fetchTimer.Stop()
+	for {
+		fetch := false
+		select {
+		case <-fetchTimer.C:
+			fetch = true
+		case <-refreshC:
+			if !fetchTimer.Stop() {
+				select {
+				case <-fetchTimer.C:
+				default:
+				}
+			}
+			fetch = true
+		case <-tick.C:
 		}
-		time.Sleep(jitterHerdrUsageInterval(interval))
+		now := time.Now()
+		var result herdrUsageCycleResult
+		if fetch {
+			delay := jitterHerdrUsageInterval(interval)
+			state.nextFetchAt = now.Add(delay)
+			fetchTimer.Reset(delay)
+			result = runHerdrUsageFetch(state, now, sessionsDir, os.Stderr)
+		} else {
+			result = publishHerdrUsage(state, now, sessionsDir, os.Stderr)
+		}
+		if result.allPublishesFailed() {
+			return 1
+		}
 	}
 }
 
-func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) herdrUsageCycleResult {
+// runHerdrUsageFetch refreshes the account cache from the brokers and
+// publishes. A healthy fetch adopts the new snapshot (or clears the cache
+// when the manifest is legitimately empty); a fetch that hit any endpoint
+// or parse error keeps the cached rows and flips the status row to its
+// stale "cached <age> ago" form instead of blanking or shrinking the
+// section with partial data.
+func runHerdrUsageFetch(state *herdrUsageState, now time.Time, sessionsDir string, stderr io.Writer) herdrUsageCycleResult {
 	vaults, _ := resolveVaults(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	_, disabled := loadVaultState(vaults, os.Getenv("CODE_AUTH_STATE"))
-	rows := collectHerdrUsageRows(vaults, disabled, now, stderr)
-	result := herdrUsageCycleResult{Rows: len(rows)}
-	if len(rows) == 0 {
+	accounts, healthy := fetchHerdrUsageAccounts(vaults, disabled, stderr)
+	count := 0
+	for _, provider := range accounts {
+		count += len(provider)
+	}
+	switch {
+	case healthy && count > 0:
+		state.accounts = accounts
+		state.fetchedAt = now
+		state.fetchFailed = false
+	case healthy:
+		state.accounts = nil
+		state.fetchFailed = false
+	case state.accounts != nil:
+		state.fetchFailed = true
+	case count > 0:
+		// Errorful but partial data beats an empty cache.
+		state.accounts = accounts
+		state.fetchedAt = now
+		state.fetchFailed = false
+	}
+	return publishHerdrUsage(state, now, sessionsDir, stderr)
+}
+
+// runHerdrUsageCycle is the stateless single-shot cycle (--once, tests):
+// fetch, publish, forget. Its section carries the blank spacer row but
+// no refresh status, because a one-shot process schedules nothing.
+func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) herdrUsageCycleResult {
+	return runHerdrUsageFetch(&herdrUsageState{}, now, sessionsDir, stderr)
+}
+
+func publishHerdrUsage(state *herdrUsageState, now time.Time, sessionsDir string, stderr io.Writer) herdrUsageCycleResult {
+	result := herdrUsageCycleResult{}
+	if state.accounts == nil {
 		return result
 	}
+	usage := renderHerdrUsageRows(state.accounts, now, stderr)
+	if len(usage) == 0 {
+		return result
+	}
+	rows := append([]herdrUsageRow{herdrUsageStatusRow(state, now)}, usage...)
+	result.Rows = len(rows)
 
 	sockets, err := filepath.Glob(filepath.Join(sessionsDir, "*", "herdr.sock"))
 	if err != nil {
@@ -215,7 +384,7 @@ func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) her
 	}{
 		SectionID: "usage",
 		Source:    "atyrode:usage",
-		Seq:       now.UnixMilli(),
+		Seq:       state.seq(now),
 		TTLMillis: herdrUsageTTLMillis,
 		Rows:      rows,
 	}
@@ -231,12 +400,20 @@ func runHerdrUsageCycle(now time.Time, sessionsDir string, stderr io.Writer) her
 }
 
 func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Time, stderr io.Writer) []herdrUsageRow {
-	accounts := map[string][]*herdrUsageAccount{
+	accounts, _ := fetchHerdrUsageAccounts(vaults, disabled, stderr)
+	return renderHerdrUsageRows(accounts, now, stderr)
+}
+
+// fetchHerdrUsageAccounts sweeps the enabled vaults. healthy reports a
+// clean sweep: any endpoint or parse error flips it false so callers can
+// prefer retained data over a shrunken snapshot.
+func fetchHerdrUsageAccounts(vaults []vault, disabled map[string]bool, stderr io.Writer) (accounts map[string][]*herdrUsageAccount, healthy bool) {
+	accounts = map[string][]*herdrUsageAccount{
 		"anthropic":    {},
 		"openai-codex": {},
 	}
+	healthy = true
 	byIdentity := map[string]*herdrUsageAccount{}
-	maxCountdownWidth := 0
 
 	for _, v := range vaults {
 		if disabled[v.ID] || v.BrokerURL == "" || v.TokenFile == "" {
@@ -245,9 +422,11 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 		snapshotBody, snapshotErr := fetchVaultEndpoint(v, "/v1/snapshot")
 		usageBody, usageErr := fetchVaultEndpoint(v, "/v1/usage")
 		if snapshotErr != nil {
+			healthy = false
 			fmt.Fprintf(stderr, "code herdr-usage: vault %s snapshot: %v\n", v.ID, snapshotErr)
 		}
 		if usageErr != nil {
+			healthy = false
 			fmt.Fprintf(stderr, "code herdr-usage: vault %s usage: %v\n", v.ID, usageErr)
 		}
 		if snapshotErr != nil {
@@ -258,6 +437,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 			Credentials []herdrUsageCredential `json:"credentials"`
 		}
 		if err := json.Unmarshal(snapshotBody, &snapshot); err != nil {
+			healthy = false
 			fmt.Fprintf(stderr, "code herdr-usage: vault %s snapshot: %v\n", v.ID, err)
 			continue
 		}
@@ -270,6 +450,7 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 				} `json:"reports"`
 			}
 			if err := json.Unmarshal(usageBody, &usage); err != nil {
+				healthy = false
 				fmt.Fprintf(stderr, "code herdr-usage: vault %s usage: %v\n", v.ID, err)
 			} else {
 				for _, report := range usage.Reports {
@@ -309,16 +490,11 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 				if _, exists := account.Windows[token]; exists {
 					continue
 				}
-				window := herdrUsageWindow{
+				account.Windows[token] = herdrUsageWindow{
 					Fraction:   *limit.Amount.UsedFraction,
 					ResetsAt:   limit.Window.ResetsAt,
 					DurationMs: limit.Window.DurationMs,
 				}
-				if window.ResetsAt != nil {
-					window.Countdown = herdrUsageCountdown(*window.ResetsAt, now)
-					maxCountdownWidth = max(maxCountdownWidth, len(window.Countdown))
-				}
-				account.Windows[token] = window
 			}
 		}
 	}
@@ -341,6 +517,29 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 			}
 		}
 	}
+	return accounts, healthy
+}
+
+// renderHerdrUsageRows builds the bar rows from a fetched (possibly
+// cached) account snapshot. Reset countdowns are recomputed here with the
+// caller's clock, so minute ticks refresh them without a broker fetch.
+// The cap reserves one slot for the leading status/spacer row.
+func renderHerdrUsageRows(accounts map[string][]*herdrUsageAccount, now time.Time, stderr io.Writer) []herdrUsageRow {
+	maxCountdownWidth := 0
+	for _, provider := range accounts {
+		for _, account := range provider {
+			for token, window := range account.Windows {
+				if window.ResetsAt == nil {
+					window.Countdown = ""
+					account.Windows[token] = window
+					continue
+				}
+				window.Countdown = herdrUsageCountdown(*window.ResetsAt, now)
+				maxCountdownWidth = max(maxCountdownWidth, len(window.Countdown))
+				account.Windows[token] = window
+			}
+		}
+	}
 
 	rows := make([]herdrUsageRow, 0)
 	for _, provider := range herdrUsageProviderOrder {
@@ -356,9 +555,9 @@ func collectHerdrUsageRows(vaults []vault, disabled map[string]bool, now time.Ti
 			rows = append(rows, group...)
 		}
 	}
-	if len(rows) > herdrUsageMaxRows {
-		fmt.Fprintf(stderr, "code herdr-usage: usage rows truncated from %d to %d\n", len(rows), herdrUsageMaxRows)
-		rows = rows[:herdrUsageMaxRows]
+	if len(rows) > herdrUsageMaxRows-1 {
+		fmt.Fprintf(stderr, "code herdr-usage: usage rows truncated from %d to %d\n", len(rows), herdrUsageMaxRows-1)
+		rows = rows[:herdrUsageMaxRows-1]
 	}
 	return rows
 }
