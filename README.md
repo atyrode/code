@@ -67,18 +67,6 @@ a forwarded `--profile` is replaced).
   interactively; `code generate` scripts the same thing.
 - **Argument passthrough** — `code <anything omp understands>` just works.
 
-## herdr integration
-
-`code herdr-usage` publishes a live usage section — one bar per account and
-rate window, provider-tinted, with reset countdowns — to every local
-[herdr](https://github.com/ogulcancelik/herdr) session that exposes the
-sidebar-sections API:
-
-![usage section rendered in a herdr sidebar](docs/usage-section.png)
-
-Run it once (`--once`) or as a daemon (`--interval <seconds>`, default 300
-with jitter). See `code herdr-usage --help`.
-
 ## Install
 
 **Grab a [release binary](https://github.com/atyrode/code/releases)** — one
