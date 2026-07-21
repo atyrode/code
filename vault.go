@@ -57,18 +57,7 @@ func fetchVaultEndpoint(v vault, endpoint string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	// Brokers are loopback daemons that restart independently of this process
-	// (Home Manager reconciliation, manifest edits). Never trust a pooled
-	// keep-alive connection across calls — a long-lived poller wedged on the
-	// shared default transport after broker restarts — and never route
-	// loopback traffic through ambient proxy configuration.
-	client := http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			Proxy:             nil,
-			DisableKeepAlives: true,
-		},
-	}
+	client := http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -190,9 +179,6 @@ func parseVaults(raw string) []vault {
 		v.Profile = strings.TrimSpace(v.Profile)
 		v.Claude = strings.TrimSpace(v.Claude)
 		v.Codex = strings.TrimSpace(v.Codex)
-		v.BrokerURL = strings.TrimSpace(v.BrokerURL)
-		v.TokenFile = strings.TrimSpace(v.TokenFile)
-		v.SnapshotCache = strings.TrimSpace(v.SnapshotCache)
 		if !validVaultID.MatchString(v.ID) || strings.HasSuffix(v.ID, ".") || seen[v.ID] {
 			continue
 		}
