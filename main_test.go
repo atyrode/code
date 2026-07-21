@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	clikit "github.com/atyrode/cli-kit"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -2123,6 +2124,19 @@ func TestUsageRowsAllocateEverySafeCellToTheBar(t *testing.T) {
 	}
 }
 
+func TestUsageRowsReserveResetValueWidthBeforeStatus(t *testing.T) {
+	m := layoutModel()
+	rows := renderUsageRows(100, []usageRowSpec{
+		m.usageRowSpec(usageWin{label: "7 days", pct: 89, secs: 3*day + 12*3600, dur: 7 * day}, "  "),
+		m.usageRowSpec(usageWin{label: "7 days", pct: 82, secs: 2*day + 9*3600, dur: 7 * day}, "  "),
+	})
+	first, second := stripAnsi(rows[0]), stripAnsi(rows[1])
+	if firstTight, secondTight := strings.Index(first, "tight"), strings.Index(second, "tight"); firstTight != secondTight {
+		t.Errorf("status suffixes lost reset-column alignment: first=%d second=%d\n%s\n%s",
+			firstTight, secondTight, first, second)
+	}
+}
+
 func TestUsageProviderColumnsReceiveWidthBeforeBars(t *testing.T) {
 	m := layoutModel()
 	left := usageRenderGroup{
@@ -2875,6 +2889,56 @@ func TestLoadAvailabilityMatchesReportMetadataToAccounts(t *testing.T) {
 	}
 	if _, matched := got.accountCredits[accountKey{Provider: "openai-codex", IdentityKey: "unmatched-key"}]; matched {
 		t.Fatal("unmatched reset credits must not be attributed")
+	}
+}
+
+func TestUsageCacheRetainsPerAccountRowsAcrossProcesses(t *testing.T) {
+	server := testAccountBroker(t, `{"reports":[{
+		"provider":"anthropic","metadata":{"email":"claude@example.test"},"limits":[
+			{"label":"Claude 7 Day","scope":{"tier":"-"},"amount":{"usedFraction":0.42},"window":{"resetsAt":4102444800000,"durationMs":604800000}}
+		]}]}`)
+	fresh := loadAvailability(brokerConfig{URL: server.URL, Token: "secret"})
+	cachePath := filepath.Join(t.TempDir(), "usage.json")
+	saveUsageCache(cachePath, fresh)
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("usage cache mode = %o, want 600", info.Mode().Perm())
+	}
+
+	body, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached usageCacheFile
+	if err := json.Unmarshal(body, &cached); err != nil {
+		t.Fatal(err)
+	}
+	cached.Usage[0].Wins[0].Observed = time.Now().Add(-2 * time.Hour).Unix()
+	body, err = json.Marshal(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicPrivateWrite(cachePath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := loadUsageCache(cachePath)
+	key := accountKey{Provider: "anthropic", IdentityKey: "anthropic-key"}
+	wins := loaded.accountUsage[key]
+	if len(wins) != 1 || !wins[0].stale {
+		t.Fatalf("persisted per-account usage was not restored stale: %+v", wins)
+	}
+	if age := formatCachedAge(wins[0].observed, time.Now()); age != "2h ago" {
+		t.Fatalf("persisted observation age = %q, want 2h ago", age)
+	}
+
+	withoutClaude := parseAvailability(fresh.accounts, true, []byte(`{"reports":[]}`), 0)
+	merged, _ := reconcileUsage(loaded, withoutClaude)
+	if retained := merged.accountUsage[key]; len(retained) != 1 || !retained[0].stale {
+		t.Fatalf("fresh omission discarded persisted account usage: %+v", retained)
 	}
 }
 

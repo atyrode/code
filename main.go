@@ -286,23 +286,42 @@ func fetchBrokerUsage(broker brokerConfig) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// loadAvailability reads one central snapshot and one aggregate usage report.
-// Report metadata is associated with an account only when its email or account
-// id matches an identity in that same provider's snapshot.
-func loadAvailability(broker brokerConfig) availability {
-	a := availability{
+type usageCacheWin struct {
+	Label    string `json:"label"`
+	Pct      int    `json:"pct"`
+	Tier     string `json:"tier,omitempty"`
+	ResetsAt int64  `json:"resetsAt"`
+	Dur      int64  `json:"dur"`
+	Provider string `json:"provider"`
+	Observed int64  `json:"observed"`
+}
+
+type usageCacheAccount struct {
+	Provider    string          `json:"provider"`
+	IdentityKey string          `json:"identityKey"`
+	Wins        []usageCacheWin `json:"wins"`
+}
+
+type usageCacheFile struct {
+	SavedAt  int64                `json:"savedAt"`
+	Accounts map[string][]account `json:"accounts"`
+	Usage    []usageCacheAccount  `json:"usage"`
+}
+
+func emptyAvailability() availability {
+	return availability{
 		bucket: map[string]string{}, reset: map[string]int64{},
 		accounts: map[string][]account{}, accountUsage: map[accountKey][]usageWin{},
 		accountCredits: map[accountKey]resetCredits{},
 	}
-	accounts, accountsErr := loadAccounts(broker)
-	if accountsErr == nil {
-		a.accounts, a.accountsOK = accounts, true
-	}
-	out, err := fetchBrokerUsage(broker)
-	if err != nil || len(out) == 0 {
-		return a
-	}
+}
+
+// parseAvailability associates broker usage with stable identities from the
+// same snapshot. observedAt is the cache observation time; reset countdowns
+// remain relative to now because the broker payload stores absolute deadlines.
+func parseAvailability(accounts map[string][]account, accountsOK bool, out []byte, observedAt int64) availability {
+	a := emptyAvailability()
+	a.accounts, a.accountsOK = accounts, accountsOK
 	type limit struct {
 		Label string `json:"label"`
 		Scope struct {
@@ -335,12 +354,15 @@ func loadAvailability(broker brokerConfig) availability {
 			} `json:"resetCredits"`
 		} `json:"reports"`
 	}
-	if json.Unmarshal(out, &doc) != nil {
+	if len(out) == 0 || json.Unmarshal(out, &doc) != nil {
 		return a
 	}
 	a.ok = true
 	provSeen := map[string]bool{}
 	now := time.Now().Unix()
+	if observedAt <= 0 {
+		observedAt = now
+	}
 	for _, r := range doc.Reports {
 		provSeen[r.Provider] = true
 		reportWins := make([]usageWin, 0, len(r.Limits))
@@ -348,7 +370,7 @@ func loadAvailability(broker brokerConfig) availability {
 			pct := int(l.Amount.UsedFraction*100 + 0.5)
 			win := usageWin{label: l.Label, pct: pct, tier: l.Scope.Tier,
 				secs: l.Window.ResetsAt/1000 - now, dur: l.Window.DurationMs / 1000,
-				prov: r.Provider, observed: now}
+				prov: r.Provider, observed: observedAt}
 			reportWins = append(reportWins, win)
 			a.wins = append(a.wins, win)
 			bkt := bucketForProviderTier(r.Provider, l.Scope.Tier)
@@ -412,6 +434,114 @@ func loadAvailability(broker brokerConfig) availability {
 		}
 	}
 	return a
+}
+
+// loadAvailability reads one central snapshot and one aggregate usage report.
+func loadAvailability(broker brokerConfig) availability {
+	accounts, err := loadAccounts(broker)
+	accountsOK := err == nil
+	if !accountsOK {
+		accounts = map[string][]account{}
+	}
+	out, err := fetchBrokerUsage(broker)
+	if err != nil {
+		out = nil
+	}
+	return parseAvailability(accounts, accountsOK, out, 0)
+}
+
+func loadUsageCache(path string) availability {
+	a := emptyAvailability()
+	if path == "" {
+		return a
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return a
+	}
+	var cached usageCacheFile
+	if json.Unmarshal(body, &cached) != nil || cached.SavedAt <= 0 || len(cached.Usage) == 0 {
+		return a
+	}
+	a.accounts, a.accountsOK, a.ok = cached.Accounts, true, true
+	provSeen := map[string]bool{}
+	for _, entry := range cached.Usage {
+		key := accountKey{Provider: entry.Provider, IdentityKey: entry.IdentityKey}
+		for _, cachedWin := range entry.Wins {
+			win := usageWin{
+				label: cachedWin.Label, pct: cachedWin.Pct, tier: cachedWin.Tier,
+				secs: cachedWin.ResetsAt - time.Now().Unix(), dur: cachedWin.Dur, prov: cachedWin.Provider,
+				observed: cachedWin.Observed, stale: true,
+			}
+			a.accountUsage[key] = append(a.accountUsage[key], win)
+			a.wins = append(a.wins, win)
+			provSeen[win.prov] = true
+			bucket := bucketForProviderTier(win.prov, win.tier)
+			if bucket == "" {
+				continue
+			}
+			if win.pct >= 100 {
+				a.bucket[bucket], a.reset[bucket] = "maxed", win.secs
+			} else if a.bucket[bucket] != "maxed" {
+				a.bucket[bucket] = "ok"
+			}
+		}
+	}
+	for _, bucket := range []string{"codex-main", "codex-spark", "claude-main", "claude-fable"} {
+		provider := openAIProvider
+		if strings.HasPrefix(bucket, "claude") {
+			provider = anthropicProvider
+		}
+		if !provSeen[provider] {
+			a.bucket[bucket] = "unauthed"
+		} else if _, ok := a.bucket[bucket]; !ok {
+			a.bucket[bucket] = "ok"
+		}
+	}
+	return a
+}
+
+func saveUsageCache(path string, a availability) {
+	if path == "" || !a.ok {
+		return
+	}
+	now := time.Now().Unix()
+	cached := usageCacheFile{SavedAt: now, Accounts: a.accounts}
+	for key, wins := range a.accountUsage {
+		entry := usageCacheAccount{Provider: key.Provider, IdentityKey: key.IdentityKey}
+		for _, win := range wins {
+			if win.missing {
+				continue
+			}
+			observed := win.observed
+			if observed <= 0 {
+				observed = now
+			}
+			entry.Wins = append(entry.Wins, usageCacheWin{
+				Label: win.label, Pct: win.pct, Tier: win.tier,
+				ResetsAt: observed + win.secs, Dur: win.dur,
+				Provider: win.prov, Observed: observed,
+			})
+		}
+		if len(entry.Wins) > 0 {
+			cached.Usage = append(cached.Usage, entry)
+		}
+	}
+	if len(cached.Usage) == 0 {
+		return
+	}
+	sort.Slice(cached.Usage, func(i, j int) bool {
+		if cached.Usage[i].Provider != cached.Usage[j].Provider {
+			return cached.Usage[i].Provider < cached.Usage[j].Provider
+		}
+		return cached.Usage[i].IdentityKey < cached.Usage[j].IdentityKey
+	})
+	body, err := json.Marshal(cached)
+	if err != nil {
+		return
+	}
+	body = append(body, '\n')
+	_ = atomicPrivateWrite(path, body)
 }
 
 func bucketForProviderTier(prov, tier string) string {
@@ -1578,6 +1708,7 @@ type model struct {
 	rdy  bool
 
 	broker            brokerConfig
+	usageCache        string
 	accountState      string
 	accountSelections accountSelectionState
 	accountErr        string
@@ -2181,6 +2312,13 @@ func usageRowsNoteWidth(rows []usageRowSpec) int {
 	return width
 }
 
+const usageResetValueWidth = 6
+
+func paddedUsageReset(reset string) string {
+	width := lipgloss.Width(gReset) + 1 + usageResetValueWidth
+	return reset + strings.Repeat(" ", max(0, width-lipgloss.Width(reset)))
+}
+
 func (r usageRowSpec) render(barWidth, noteWidth int) string {
 	note := ""
 	if r.note != "" {
@@ -2189,7 +2327,7 @@ func (r usageRowSpec) render(barWidth, noteWidth int) string {
 		note = strings.Repeat(" ", 2+noteWidth)
 	}
 	return fmt.Sprintf("%s%-9s %s %s used  %s%s",
-		r.indent, r.label, barStr(r.barPct, barWidth), r.percentage, r.reset, note)
+		r.indent, r.label, barStr(r.barPct, barWidth), r.percentage, paddedUsageReset(r.reset), note)
 }
 
 func (r usageRowSpec) reservedWidth(noteWidth int) int {
@@ -2653,6 +2791,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.avail, m.usageStale = scoped, scopedStale
 		m.hadUsage = m.hadUsage || msg.avail.ok
 		m.fetching = false
+		if msg.avail.ok {
+			saveUsageCache(m.usageCache, scoped)
+		}
 		m.nextRefresh = refreshAt
 		m.relayout()
 		if first {
@@ -3187,15 +3328,19 @@ func main() {
 	if !hasSandbox {
 		keys.Untrusted.SetEnabled(false)
 	}
+	usageCache := os.Getenv("CODE_USAGE_CACHE")
+	cachedAvailability := loadUsageCache(usageCache)
 	m := model{
 		generated:         generated,
 		advisors:          parseAdvisors(generated["__advisors__"]),
 		facts:             parseFacts(generated["__models__"]),
-		avail:             availability{bucket: map[string]string{}, reset: map[string]int64{}, accounts: map[string][]account{}, accountUsage: map[accountKey][]usageWin{}},
+		avail:             cachedAvailability,
 		broker:            broker,
+		usageCache:        usageCache,
 		accountState:      accountState,
 		accountSelections: accountSelections,
 		fetching:          broker.URL != "" && broker.Token != "",
+		hadUsage:          cachedAvailability.ok,
 		spin:              sp,
 		help:              clikit.NewHelp(),
 		glyphs:            glyphs,
