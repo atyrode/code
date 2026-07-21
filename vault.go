@@ -1,104 +1,166 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// vault is one selectable auth-broker identity from the CODE_AUTH_VAULTS
-// manifest. Every vault is backed by a profile-local broker store (Profile),
-// but trusted `code` launches and usage calls all run on the shared `default`
-// OMP client profile — the vault only swaps which broker (and token) serves the
-// upstream credentials, never the client profile itself. Profile is used solely
-// for the login handoff, which reaches the vault's own profile store directly.
-type vault struct {
-	ID            string `json:"id"`
-	Label         string `json:"label"`
-	Profile       string `json:"profile"`
-	Claude        string `json:"claude"`
-	Codex         string `json:"codex"`
-	BrokerURL     string `json:"brokerUrl"`
-	TokenFile     string `json:"tokenFile"`
-	SnapshotCache string `json:"snapshotCache"`
-}
+const (
+	anthropicProvider = "anthropic"
+	openAIProvider    = "openai-codex"
+)
 
-// vaultAccount is the non-secret identity metadata exposed by the broker's
-// redacted snapshot. Access and refresh material are deliberately not decoded.
-type vaultAccount struct {
+type account struct {
 	Provider    string
 	IdentityKey string
 	Email       string
 }
 
-// fetchVaultEndpoint performs one read-only broker request with the vault's
-// mutable token. It is the sole path used for identity and usage discovery.
-func fetchVaultEndpoint(v vault, endpoint string) ([]byte, error) {
-	if v.BrokerURL == "" || v.TokenFile == "" {
-		return nil, errors.New("vault broker discovery is not configured")
+type accountKey struct {
+	Provider    string
+	IdentityKey string
+}
+
+type brokerConfig struct {
+	URL           string
+	Token         string
+	SnapshotCache string
+}
+
+// resolveBroker uses the inherited central broker whenever any central broker
+// variable is set. The legacy manifest is consulted only as a staged fallback
+// for installations which have not yet exported the central variables.
+func resolveBroker(legacyRaw, legacyPath string) brokerConfig {
+	broker := brokerConfig{
+		URL:           os.Getenv("OMP_AUTH_BROKER_URL"),
+		Token:         os.Getenv("OMP_AUTH_BROKER_TOKEN"),
+		SnapshotCache: os.Getenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE"),
 	}
-	token, err := os.ReadFile(v.TokenFile)
-	if err != nil {
-		return nil, err
+	if broker.URL != "" || broker.Token != "" || broker.SnapshotCache != "" {
+		return broker
 	}
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(v.BrokerURL, "/")+endpoint, nil)
-	if err != nil {
-		return nil, err
+	return legacyManifestFirstBroker(legacyRaw, legacyPath)
+}
+
+// legacyManifestFirstBroker is deliberately the only remaining parser for the
+// retired vault manifest. It reads only the first entry and exposes no vault UI.
+func legacyManifestFirstBroker(raw, path string) brokerConfig {
+	if raw == "" && path != "" {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return brokerConfig{}
+		}
+		raw = string(body)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	client := http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(req)
+	var entries []struct {
+		BrokerURL     string `json:"brokerUrl"`
+		TokenFile     string `json:"tokenFile"`
+		SnapshotCache string `json:"snapshotCache"`
+	}
+	if raw == "" || json.Unmarshal([]byte(raw), &entries) != nil || len(entries) == 0 {
+		return brokerConfig{}
+	}
+	broker := brokerConfig{URL: entries[0].BrokerURL, SnapshotCache: entries[0].SnapshotCache}
+	if entries[0].TokenFile != "" {
+		if token, err := os.ReadFile(entries[0].TokenFile); err == nil {
+			broker.Token = strings.TrimSpace(string(token))
+		}
+	}
+	return broker
+}
+
+func loadAccounts(broker brokerConfig) (map[string][]account, error) {
+	accounts := emptyAccounts()
+	if strings.TrimSpace(broker.URL) == "" || strings.TrimSpace(broker.Token) == "" {
+		return accounts, errors.New("central auth broker is not configured")
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(broker.URL, "/")+"/v1/snapshot", nil)
 	if err != nil {
-		return nil, err
+		return accounts, err
+	}
+	req.Header.Set("Authorization", "Bearer "+broker.Token)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return accounts, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("vault broker endpoint unavailable")
+		return accounts, fmt.Errorf("central auth broker snapshot returned %s", resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil {
+		return accounts, err
+	}
+	if len(body) > 1<<20 {
+		return accounts, errors.New("central auth broker snapshot exceeds 1 MiB")
+	}
+	return parseAccountSnapshot(body)
 }
 
-// loadVaultAccounts reads only redacted identity metadata from a vault. It
-// never opens or mutates OMP's credential database and never decodes token
-// fields from the response.
-func loadVaultAccounts(v vault) (map[string][]vaultAccount, error) {
-	body, err := fetchVaultEndpoint(v, "/v1/snapshot")
-	if err != nil {
-		return nil, err
-	}
+func emptyAccounts() map[string][]account {
+	return map[string][]account{anthropicProvider: {}, openAIProvider: {}}
+}
+
+func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 	var snapshot struct {
-		Credentials []struct {
-			Provider    string `json:"provider"`
-			IdentityKey string `json:"identityKey"`
-			Credential  struct {
-				Email string `json:"email"`
-			} `json:"credential"`
+		Credentials *[]struct {
+			Provider    string          `json:"provider"`
+			IdentityKey string          `json:"identityKey"`
+			Credential  json.RawMessage `json:"credential"`
 		} `json:"credentials"`
 	}
-	if err := json.Unmarshal(body, &snapshot); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(&snapshot); err != nil {
+		return nil, fmt.Errorf("invalid broker snapshot: %w", err)
+	}
+	if err := requireJSONEOF(dec); err != nil {
 		return nil, err
 	}
-	accounts := map[string][]vaultAccount{}
-	for _, c := range snapshot.Credentials {
-		if c.Provider != "anthropic" && c.Provider != "openai-codex" {
+	if snapshot.Credentials == nil {
+		return nil, errors.New("broker snapshot has no credentials array")
+	}
+	accounts := emptyAccounts()
+	seen := make(map[accountKey]bool)
+	for _, item := range *snapshot.Credentials {
+		if item.Provider != anthropicProvider && item.Provider != openAIProvider {
 			continue
 		}
-		accounts[c.Provider] = append(accounts[c.Provider], vaultAccount{
-			Provider: c.Provider, IdentityKey: c.IdentityKey, Email: c.Credential.Email,
+		var credential struct {
+			Type  string `json:"type"`
+			Email string `json:"email"`
+		}
+		if len(item.Credential) == 0 || bytes.Equal(item.Credential, []byte("null")) {
+			return nil, fmt.Errorf("broker snapshot account %s/%s has no credential metadata", item.Provider, item.IdentityKey)
+		}
+		if err := json.Unmarshal(item.Credential, &credential); err != nil {
+			return nil, fmt.Errorf("invalid credential metadata for %s/%s: %w", item.Provider, item.IdentityKey, err)
+		}
+		if credential.Type != "oauth" {
+			continue
+		}
+		if strings.TrimSpace(item.IdentityKey) == "" {
+			return nil, fmt.Errorf("broker snapshot contains %s OAuth account without identityKey", item.Provider)
+		}
+		key := accountKey{Provider: item.Provider, IdentityKey: item.IdentityKey}
+		if seen[key] {
+			return nil, fmt.Errorf("broker snapshot contains duplicate account %s/%s", item.Provider, item.IdentityKey)
+		}
+		seen[key] = true
+		accounts[item.Provider] = append(accounts[item.Provider], account{
+			Provider: item.Provider, IdentityKey: item.IdentityKey, Email: credential.Email,
 		})
 	}
-	for provider := range accounts {
+	for _, provider := range []string{anthropicProvider, openAIProvider} {
 		sort.Slice(accounts[provider], func(i, j int) bool {
 			return accounts[provider][i].IdentityKey < accounts[provider][j].IdentityKey
 		})
@@ -106,244 +168,286 @@ func loadVaultAccounts(v vault) (map[string][]vaultAccount, error) {
 	return accounts, nil
 }
 
-var (
-	validVaultID      = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	validVaultProfile = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-	unsafeVaultSlug   = regexp.MustCompile(`[^a-z0-9]+`)
-	repeatedVaultDash = regexp.MustCompile(`-+`)
-)
-
-func machineLocalPath(path string) bool {
-	path = filepath.Clean(path)
-	if !filepath.IsAbs(path) || path == "/nix/store" || strings.HasPrefix(path, "/nix/store/") {
-		return false
+func requireJSONEOF(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err == io.EOF {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("invalid trailing broker snapshot data: %w", err)
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		if rel, err := filepath.Rel(cwd, path); err == nil &&
-			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return false
-		}
-	}
-	return true
+	return errors.New("broker snapshot contains multiple JSON values")
 }
 
-// resolveVaults retains the resolved manifest path alongside its entries.
-// Raw JSON is deliberately read-only: it has no safe machine-local persistence
-// target. A missing file at a resolved XDG path remains editable and starts
-// with the neutral fallback until the first manifest write.
-func resolveVaults(raw, path string) ([]vault, string) {
-	if raw != "" {
-		return parseVaults(raw), ""
+const accountSelectionManualName = "Manual"
+
+type accountSelectionPreset struct {
+	Name     string
+	Disabled map[accountKey]bool
+}
+
+type accountSelectionState struct {
+	active         string
+	manualDisabled map[accountKey]bool
+	presets        []accountSelectionPreset
+}
+
+type accountSelectionFile struct {
+	Active  any                          `json:"active"`
+	Manual  accountSelectionFileManual   `json:"manual"`
+	Presets []accountSelectionFilePreset `json:"presets"`
+}
+
+type accountSelectionFileManual struct {
+	Disabled []accountStateEntry `json:"disabled"`
+}
+
+type accountSelectionFilePreset struct {
+	Name     string              `json:"name"`
+	Disabled []accountStateEntry `json:"disabled"`
+}
+
+type accountStateEntry struct {
+	Provider    string `json:"provider"`
+	IdentityKey string `json:"identityKey"`
+}
+
+func defaultAccountSelectionState() accountSelectionState {
+	return accountSelectionState{
+		active:         accountSelectionManualName,
+		manualDisabled: make(map[accountKey]bool),
+		presets:        []accountSelectionPreset{},
 	}
-	if path == "" {
-		configHome := os.Getenv("XDG_CONFIG_HOME")
-		if configHome == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				configHome = filepath.Join(home, ".config")
+}
+
+func (state accountSelectionState) ActiveName() string {
+	if strings.TrimSpace(state.active) == "" {
+		return accountSelectionManualName
+	}
+	return state.active
+}
+
+func (state accountSelectionState) ManualDisabled() map[accountKey]bool {
+	return copyDisabledAccounts(state.manualDisabled)
+}
+
+func (state accountSelectionState) CurrentDisabled() map[accountKey]bool {
+	if strings.EqualFold(state.ActiveName(), accountSelectionManualName) {
+		return state.ManualDisabled()
+	}
+	if preset, ok := state.Preset(state.ActiveName()); ok {
+		return preset.Disabled
+	}
+	return state.ManualDisabled()
+}
+
+func (state accountSelectionState) Presets() []accountSelectionPreset {
+	presets := make([]accountSelectionPreset, len(state.presets))
+	for i, preset := range state.presets {
+		presets[i] = accountSelectionPreset{Name: preset.Name, Disabled: copyDisabledAccounts(preset.Disabled)}
+	}
+	return presets
+}
+
+func (state accountSelectionState) Preset(name string) (accountSelectionPreset, bool) {
+	name = strings.TrimSpace(name)
+	for _, preset := range state.presets {
+		if strings.EqualFold(preset.Name, name) {
+			return accountSelectionPreset{Name: preset.Name, Disabled: copyDisabledAccounts(preset.Disabled)}, true
+		}
+	}
+	return accountSelectionPreset{}, false
+}
+
+func (state *accountSelectionState) SetManualDisabled(disabled map[accountKey]bool) {
+	state.manualDisabled = copyDisabledAccounts(disabled)
+}
+
+func (state *accountSelectionState) UpsertPreset(name string, disabled map[accountKey]bool) error {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, accountSelectionManualName) {
+		return fmt.Errorf("invalid account preset name %q", name)
+	}
+	for i := range state.presets {
+		if strings.EqualFold(state.presets[i].Name, name) {
+			state.presets[i].Disabled = copyDisabledAccounts(disabled)
+			if strings.EqualFold(state.active, name) {
+				state.active = state.presets[i].Name
 			}
-		}
-		if configHome != "" {
-			path = filepath.Join(configHome, "code", "auth-vaults.json")
+			return nil
 		}
 	}
-	if path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			raw = string(data)
-		}
-	}
-	if !machineLocalPath(path) {
-		path = ""
-	}
-	return parseVaults(raw), path
+	state.presets = append(state.presets, accountSelectionPreset{Name: name, Disabled: copyDisabledAccounts(disabled)})
+	return nil
 }
 
-func loadVaults(raw, path string) []vault {
-	vaults, _ := resolveVaults(raw, path)
-	return vaults
-}
-
-// parseVaults decodes the non-secret CODE_AUTH_VAULTS JSON manifest, dropping
-// entries with an unsafe or duplicate id and filling the display defaults. An
-// empty or unparsable manifest degrades to a single default vault so the UI is
-// always usable.
-func parseVaults(raw string) []vault {
-	var vaults []vault
-	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &vaults)
-	}
-	valid := vaults[:0]
-	seen := map[string]bool{}
-	for _, v := range vaults {
-		v.ID = strings.TrimSpace(v.ID)
-		v.Label = strings.TrimSpace(v.Label)
-		v.Profile = strings.TrimSpace(v.Profile)
-		v.Claude = strings.TrimSpace(v.Claude)
-		v.Codex = strings.TrimSpace(v.Codex)
-		if !validVaultID.MatchString(v.ID) || strings.HasSuffix(v.ID, ".") || seen[v.ID] {
+func (state *accountSelectionState) DeletePreset(name string) bool {
+	name = strings.TrimSpace(name)
+	for i, preset := range state.presets {
+		if !strings.EqualFold(preset.Name, name) {
 			continue
 		}
-		if v.Label == "" {
-			v.Label = v.ID
+		state.presets = append(state.presets[:i], state.presets[i+1:]...)
+		if strings.EqualFold(state.active, preset.Name) {
+			state.active = accountSelectionManualName
 		}
-		if v.Profile == "" {
-			v.Profile = v.ID
-		}
-		if v.Claude == "" {
-			v.Claude = v.Label
-		}
-		if v.Codex == "" {
-			v.Codex = v.Label
-		}
-		seen[v.ID] = true
-		valid = append(valid, v)
+		return true
 	}
-	if len(valid) == 0 {
-		return []vault{{ID: "default", Label: "default", Profile: "default", Claude: "current", Codex: "current"}}
-	}
-	return valid
+	return false
 }
 
-// vaultSlug converts a display name into the safe stable base used for both
-// the manifest id and backing OMP profile. Uniquification is deterministic
-// against the current manifest and never renames an existing entry.
-func vaultSlug(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = unsafeVaultSlug.ReplaceAllString(s, "-")
-	s = repeatedVaultDash.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-.")
-	if s == "" {
-		s = "vault"
+func (state *accountSelectionState) Activate(name string) bool {
+	name = strings.TrimSpace(name)
+	if strings.EqualFold(name, accountSelectionManualName) {
+		state.active = accountSelectionManualName
+		return true
 	}
-	if len(s) > 64 {
-		s = strings.TrimRight(s[:64], "-.")
+	for _, preset := range state.presets {
+		if strings.EqualFold(preset.Name, name) {
+			state.active = preset.Name
+			return true
+		}
 	}
-	return s
+	state.active = accountSelectionManualName
+	return false
 }
 
-func uniqueVaultName(base string, used map[string]bool) string {
-	if !used[base] {
-		return base
-	}
-	for n := 2; ; n++ {
-		suffix := "-" + strconv.Itoa(n)
-		stem := strings.TrimRight(base, "-.")
-		if len(stem)+len(suffix) > 64 {
-			stem = strings.TrimRight(stem[:64-len(suffix)], "-.")
-		}
-		candidate := stem + suffix
-		if !used[candidate] {
-			return candidate
+func copyDisabledAccounts(disabled map[accountKey]bool) map[accountKey]bool {
+	copied := make(map[accountKey]bool, len(disabled))
+	for key, isDisabled := range disabled {
+		if isDisabled {
+			copied[key] = true
 		}
 	}
+	return copied
 }
 
-func xdgLocalHome(env, fallback string) (string, error) {
-	path := os.Getenv(env)
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return "", fmt.Errorf("%s is unavailable", env)
-		}
-		path = filepath.Join(home, fallback)
-	}
-	path = filepath.Clean(path)
-	if !machineLocalPath(path) {
-		return "", fmt.Errorf("%s must be an absolute mutable path outside the repository and Nix store", env)
-	}
-	return path, nil
-}
-
-// newVault derives only machine-local metadata. It never opens an OMP profile,
-// auth database, token file, or snapshot. Asking the kernel for an ephemeral
-// loopback port avoids both manifest collisions and ports already in use.
-func newVault(name string, existing []vault) (vault, error) {
-	label := strings.TrimSpace(name)
-	if label == "" {
-		return vault{}, errors.New("vault name cannot be empty")
-	}
-	ids, profiles, ports := map[string]bool{}, map[string]bool{}, map[int]bool{}
-	for _, v := range existing {
-		ids[v.ID], profiles[v.Profile] = true, true
-		if u, err := url.Parse(v.BrokerURL); err == nil {
-			if port, err := strconv.Atoi(u.Port()); err == nil {
-				ports[port] = true
-			}
-		}
-	}
-	base := vaultSlug(label)
-	id := uniqueVaultName(base, ids)
-	profile := uniqueVaultName(base, profiles)
-
-	port := 0
-	for port == 0 {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return vault{}, fmt.Errorf("allocate broker port: %w", err)
-		}
-		candidate := listener.Addr().(*net.TCPAddr).Port
-		if err := listener.Close(); err != nil {
-			return vault{}, fmt.Errorf("release broker port: %w", err)
-		}
-		if !ports[candidate] {
-			port = candidate
-		}
-	}
-	stateHome, err := xdgLocalHome("XDG_STATE_HOME", filepath.Join(".local", "state"))
+func loadAccountSelectionState(path string) accountSelectionState {
+	state := defaultAccountSelectionState()
+	body, err := os.ReadFile(path)
 	if err != nil {
-		return vault{}, err
+		return state
 	}
-	cacheHome, err := xdgLocalHome("XDG_CACHE_HOME", ".cache")
-	if err != nil {
-		return vault{}, err
+	var persisted accountSelectionFile
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&persisted); err != nil || requireJSONEOF(dec) != nil {
+		return state
 	}
-	return vault{
-		ID:            id,
-		Label:         label,
-		Profile:       profile,
-		BrokerURL:     fmt.Sprintf("http://127.0.0.1:%d", port),
-		TokenFile:     filepath.Join(stateHome, "code", "auth-vaults", id, "broker.token"),
-		SnapshotCache: filepath.Join(cacheHome, "code", "auth-vaults", id, "snapshot.json"),
-	}, nil
+	if disabled, ok := decodeAccountStateEntries(persisted.Manual.Disabled); ok {
+		state.manualDisabled = disabled
+	}
+	for _, persistedPreset := range persisted.Presets {
+		name := strings.TrimSpace(persistedPreset.Name)
+		if name == "" || strings.EqualFold(name, accountSelectionManualName) || containsPresetName(state.presets, name) {
+			continue
+		}
+		disabled, ok := decodeAccountStateEntries(persistedPreset.Disabled)
+		if !ok {
+			continue
+		}
+		state.presets = append(state.presets, accountSelectionPreset{Name: name, Disabled: disabled})
+	}
+	active, _ := persisted.Active.(string)
+	state.Activate(active)
+	return state
 }
 
-// writeVaultManifest validates and atomically replaces the complete
-// machine-local manifest. Parent directories are private and the final file is
-// always 0600. No credential path is read or written.
-func writeVaultManifest(path string, vaults []vault) error {
+func containsPresetName(presets []accountSelectionPreset, name string) bool {
+	for _, preset := range presets {
+		if strings.EqualFold(preset.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeAccountStateEntries(entries []accountStateEntry) (map[accountKey]bool, bool) {
+	if entries == nil {
+		return nil, false
+	}
+	disabled := make(map[accountKey]bool, len(entries))
+	for _, entry := range entries {
+		if (entry.Provider != anthropicProvider && entry.Provider != openAIProvider) || entry.IdentityKey == "" {
+			return nil, false
+		}
+		key := accountKey{Provider: entry.Provider, IdentityKey: entry.IdentityKey}
+		if disabled[key] {
+			return nil, false
+		}
+		disabled[key] = true
+	}
+	return disabled, true
+}
+
+func encodeAccountStateEntries(disabled map[accountKey]bool) ([]accountStateEntry, error) {
+	entries := make([]accountStateEntry, 0, len(disabled))
+	for key, isDisabled := range disabled {
+		if !isDisabled {
+			continue
+		}
+		if (key.Provider != anthropicProvider && key.Provider != openAIProvider) || key.IdentityKey == "" {
+			return nil, fmt.Errorf("invalid disabled account %q/%q", key.Provider, key.IdentityKey)
+		}
+		entries = append(entries, accountStateEntry{Provider: key.Provider, IdentityKey: key.IdentityKey})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Provider != entries[j].Provider {
+			return entries[i].Provider < entries[j].Provider
+		}
+		return entries[i].IdentityKey < entries[j].IdentityKey
+	})
+	return entries, nil
+}
+
+func writeAccountSelectionState(path string, state accountSelectionState) error {
 	if path == "" {
-		return errors.New("vault editing is disabled: no writable machine-local manifest path")
+		return errors.New("account state path is empty")
 	}
-	if len(vaults) == 0 {
-		return errors.New("vault manifest cannot be empty")
-	}
-	seenIDs, seenProfiles, seenURLs := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	for _, v := range vaults {
-		if !validVaultID.MatchString(v.ID) || strings.HasSuffix(v.ID, ".") || seenIDs[v.ID] {
-			return fmt.Errorf("invalid or duplicate vault id %q", v.ID)
-		}
-		if strings.TrimSpace(v.Label) == "" {
-			return fmt.Errorf("vault %q has an empty label", v.ID)
-		}
-		if !validVaultProfile.MatchString(v.Profile) || seenProfiles[v.Profile] {
-			return fmt.Errorf("vault %q has an invalid or duplicate profile", v.ID)
-		}
-		if !filepath.IsAbs(v.TokenFile) || !filepath.IsAbs(v.SnapshotCache) {
-			return fmt.Errorf("vault %q must use absolute XDG-local runtime paths", v.ID)
-		}
-		u, err := url.Parse(v.BrokerURL)
-		port, portErr := strconv.Atoi(u.Port())
-		if err != nil || portErr != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" ||
-			u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
-			port < 1 || port > 65535 || seenURLs[v.BrokerURL] {
-			return fmt.Errorf("vault %q has an unsafe or duplicate broker URL", v.ID)
-		}
-		seenIDs[v.ID], seenProfiles[v.Profile], seenURLs[v.BrokerURL] = true, true, true
-	}
-	data, err := json.MarshalIndent(vaults, "", "  ")
+	manual, err := encodeAccountStateEntries(state.manualDisabled)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
+	persisted := accountSelectionFile{
+		Active:  accountSelectionManualName,
+		Manual:  accountSelectionFileManual{Disabled: manual},
+		Presets: make([]accountSelectionFilePreset, 0, len(state.presets)),
+	}
+	for _, preset := range state.presets {
+		name := strings.TrimSpace(preset.Name)
+		if name == "" || strings.EqualFold(name, accountSelectionManualName) || containsPersistedPresetName(persisted.Presets, name) {
+			return fmt.Errorf("invalid or duplicate account preset name %q", preset.Name)
+		}
+		disabled, err := encodeAccountStateEntries(preset.Disabled)
+		if err != nil {
+			return fmt.Errorf("account preset %q: %w", name, err)
+		}
+		persisted.Presets = append(persisted.Presets, accountSelectionFilePreset{Name: name, Disabled: disabled})
+	}
+	if !strings.EqualFold(state.ActiveName(), accountSelectionManualName) {
+		preset, ok := state.Preset(state.ActiveName())
+		if !ok {
+			return fmt.Errorf("unknown active account preset %q", state.ActiveName())
+		}
+		persisted.Active = preset.Name
+	}
+	body, err := json.Marshal(persisted)
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	return atomicPrivateWrite(path, body)
+}
+
+func containsPersistedPresetName(presets []accountSelectionFilePreset, name string) bool {
+	for _, preset := range presets {
+		if strings.EqualFold(preset.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func atomicPrivateWrite(path string, body []byte) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -351,17 +455,22 @@ func writeVaultManifest(path string, vaults []vault) error {
 	if err := os.Chmod(parent, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(parent, ".code-auth-vaults.*")
+	tmp, err := os.CreateTemp(parent, ".account-state-*")
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -372,323 +481,116 @@ func writeVaultManifest(path string, vaults []vault) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	committed = true
+	return nil
 }
 
-// vaultStateFile is the persisted CODE_AUTH_STATE payload: the selected vault id
-// and the set of disabled vault ids. Written non-secret (the id is not the
-// token) but 0600, as it is mutable per-user auth state.
-type vaultStateFile struct {
-	Selected string   `json:"selected"`
-	Disabled []string `json:"disabled"`
-}
-
-// loadVaultState reads CODE_AUTH_STATE, migrating the pre-vault format (a plain
-// selected-id line) to the {selected,disabled} model. The first vault is the
-// non-disableable safe fallback: it can never be disabled, and an unknown or
-// disabled selection collapses onto it, so at least one vault always stays
-// enabled and selectable.
-func loadVaultState(vaults []vault, path string) (string, map[string]bool) {
-	disabled := map[string]bool{}
-	ids := map[string]bool{}
-	for _, v := range vaults {
-		ids[v.ID] = true
-	}
-	selected := ""
-	if path != "" {
-		if b, err := os.ReadFile(path); err == nil {
-			trimmed := strings.TrimSpace(string(b))
-			if strings.HasPrefix(trimmed, "{") {
-				var sf vaultStateFile
-				if json.Unmarshal([]byte(trimmed), &sf) == nil {
-					selected = strings.TrimSpace(sf.Selected)
-					for _, id := range sf.Disabled {
-						if ids[id] {
-							disabled[id] = true
-						}
-					}
-				}
-			} else {
-				selected = trimmed // migrate the old plain selected-id file
+func buildAccountAllowlist(accounts map[string][]account, disabled map[accountKey]bool) map[string][]string {
+	allowlist := map[string][]string{anthropicProvider: {}, openAIProvider: {}}
+	for _, provider := range []string{anthropicProvider, openAIProvider} {
+		for _, acct := range accounts[provider] {
+			key := accountKey{Provider: provider, IdentityKey: acct.IdentityKey}
+			if acct.Provider == provider && acct.IdentityKey != "" && !disabled[key] {
+				allowlist[provider] = append(allowlist[provider], acct.IdentityKey)
 			}
 		}
+		sort.Strings(allowlist[provider])
 	}
-	if len(vaults) > 0 {
-		delete(disabled, vaults[0].ID) // the fallback vault is never disabled
-	}
-	if !ids[selected] || disabled[selected] {
-		if len(vaults) > 0 {
-			selected = vaults[0].ID
-		} else {
-			selected = ""
-		}
-	}
-	return selected, disabled
+	return allowlist
 }
 
-// writeVaultState commits {selected,disabled} atomically at 0600.
-func writeVaultState(path, selected string, disabled map[string]bool) error {
-	if path == "" {
-		return nil
-	}
-	ids := make([]string, 0, len(disabled))
-	for id := range disabled {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	b, err := json.Marshal(vaultStateFile{Selected: selected, Disabled: ids})
+func writeAccountAllowlist(accounts map[string][]account, disabled map[accountKey]bool) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "code-auth-allowlist-*")
 	if err != nil {
-		return err
+		return "", func() {}, err
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	var once sync.Once
+	cleanup := func() { once.Do(func() { _ = os.RemoveAll(dir) }) }
+	if err := os.Chmod(dir, 0o700); err != nil {
+		cleanup()
+		return "", cleanup, err
 	}
-	tmp, err := os.CreateTemp(dir, ".code-vault-state-*")
+	body, err := json.Marshal(buildAccountAllowlist(accounts, disabled))
 	if err != nil {
-		return err
+		cleanup()
+		return "", cleanup, err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
+	body = append(body, '\n')
+	path := filepath.Join(dir, "allowlist.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		cleanup()
+		return "", cleanup, err
 	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
-		tmp.Close()
-		return err
+	if err := os.Chmod(path, 0o600); err != nil {
+		cleanup()
+		return "", cleanup, err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return path, cleanup, nil
 }
 
-// brokerEnv builds the per-launch broker environment for a vault, reading the
-// mutable 0600 token file fresh on every call so a rotated token takes effect
-// without restarting the UI. A missing or unreadable token file is a hard error
-// (the caller must not launch or fetch with stale/absent credentials).
-func brokerEnv(v vault) ([]string, error) {
-	var env []string
-	if v.BrokerURL != "" {
-		env = append(env, "OMP_AUTH_BROKER_URL="+v.BrokerURL)
-	}
-	if v.SnapshotCache != "" {
-		env = append(env, "OMP_AUTH_BROKER_SNAPSHOT_CACHE="+v.SnapshotCache)
-	}
-	if v.TokenFile != "" {
-		b, err := os.ReadFile(v.TokenFile)
-		if err != nil {
-			return nil, err
-		}
-		env = append(env, "OMP_AUTH_BROKER_TOKEN="+strings.TrimSpace(string(b)))
-	}
-	return env, nil
+var authEnvKeys = map[string]bool{
+	"OMP_AUTH_BROKER_URL":             true,
+	"OMP_AUTH_BROKER_TOKEN":           true,
+	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":  true,
+	"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE": true,
 }
 
-// withBrokerEnv overlays add over base, replacing any base entries whose keys
-// add also sets, so a stale ambient OMP_AUTH_BROKER_* never shadows the vault's.
-func withBrokerEnv(base, add []string) []string {
-	if len(add) == 0 {
-		return base
-	}
-	keys := map[string]bool{}
-	for _, e := range add {
-		if i := strings.IndexByte(e, '='); i >= 0 {
-			keys[e[:i]] = true
-		}
-	}
-	out := make([]string, 0, len(base)+len(add))
-	for _, e := range base {
-		if i := strings.IndexByte(e, '='); i >= 0 && keys[e[:i]] {
+var sandboxAuthEnvKeys = map[string]bool{
+	"OMP_AUTH_BROKER_URL":             true,
+	"OMP_AUTH_BROKER_TOKEN":           true,
+	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":  true,
+	"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE": true,
+	"CODE_AUTH_ACCOUNT_STATE":         true,
+}
+
+func withAuthEnv(base []string, broker brokerConfig, allowlistPath string) []string {
+	out := removeEnvKeys(base, authEnvKeys)
+	return append(out,
+		"OMP_AUTH_BROKER_URL="+broker.URL,
+		"OMP_AUTH_BROKER_TOKEN="+broker.Token,
+		"OMP_AUTH_BROKER_SNAPSHOT_CACHE="+broker.SnapshotCache,
+		"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE="+allowlistPath,
+	)
+}
+
+func withoutAuthEnv(base []string) []string {
+	return removeEnvKeys(base, sandboxAuthEnvKeys)
+}
+
+func removeEnvKeys(base []string, keys map[string]bool) []string {
+	out := make([]string, 0, len(base))
+	for _, entry := range base {
+		key, _, found := strings.Cut(entry, "=")
+		if found && keys[key] {
 			continue
 		}
-		out = append(out, e)
+		out = append(out, entry)
 	}
-	return append(out, add...)
+	return out
 }
 
-// loginArgv is the exact argument vector for the vault login handoff: the
-// vault's own profile (never the shared default) plus the broker login verb for
-// one provider. Pure so the contract is testable without spawning a process.
-func loginArgv(profile, provider string) []string {
-	return []string{"--profile", profile, "auth-broker", "login", provider}
-}
-
-// withOMPProfile makes the given profile authoritative for a forwarded command
-// line. Any forwarded profile flag is stripped before the chosen flag is
-// inserted, so the client profile OMP launches cannot diverge from the one the
-// UI intends (always `default` for trusted launches; "" for the sandbox, which
-// owns its own fixed profile). Arguments after `--` are messages, untouched.
-func withOMPProfile(profile string, args ...string) []string {
+// stripProfileArgs removes OMP profile options before --. Arguments following
+// -- are prompt text and are preserved verbatim.
+func stripProfileArgs(args []string) []string {
 	clean := make([]string, 0, len(args))
-	skipValue := false
-scan:
-	for i, arg := range args {
-		if skipValue {
-			skipValue = false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return append(clean, args[i:]...)
+		}
+		if arg == "--profile" {
+			if i+1 < len(args) {
+				i++
+			}
 			continue
 		}
-		switch {
-		case arg == "--":
-			clean = append(clean, args[i:]...)
-			break scan
-		case arg == "--profile":
-			skipValue = true
-		case strings.HasPrefix(arg, "--profile="):
-			continue
-		default:
-			clean = append(clean, arg)
-		}
-	}
-	if profile == "" {
-		return clean
-	}
-	out := make([]string, 0, len(clean)+2)
-	out = append(out, "--profile", profile)
-	return append(out, clean...)
-}
-
-func (m model) activeIndex() int {
-	for i, v := range m.vaults {
-		if v.ID == m.selected {
-			return i
-		}
-	}
-	return 0
-}
-
-func (m model) activeVault() vault {
-	if len(m.vaults) == 0 {
-		return vault{ID: "default", Label: "default", Profile: "default", Claude: "current", Codex: "current"}
-	}
-	return m.vaults[m.activeIndex()]
-}
-
-// isEnabled reports whether the vault at index i may be selected. The first
-// vault is the protected fallback and is always enabled.
-func (m model) isEnabled(i int) bool {
-	if i == 0 {
-		return true
-	}
-	if i < 0 || i >= len(m.vaults) {
-		return false
-	}
-	return !m.disabled[m.vaults[i].ID]
-}
-
-func (m model) enabledCount() int {
-	c := 0
-	for i := range m.vaults {
-		if m.isEnabled(i) {
-			c++
-		}
-	}
-	return c
-}
-
-// restoreCachedUsage swaps the detailed panel to an already-fetched vault
-// snapshot without network work. Each vault carries its own deadline and stale
-// state, so switching cannot inherit another account's countdown or warning.
-func (m *model) restoreCachedUsage(id string) bool {
-	cached, ok := m.vaultUsage[id]
-	if !ok {
-		return false
-	}
-	m.avail = cached
-	m.hadUsage = cached.ok
-	m.usageStale = m.vaultUsageStale[id]
-	m.nextRefresh = m.vaultUsageNext[id]
-	m.fetching = m.vaultFetching[id]
-	m.barAnim = 0
-	return true
-}
-
-// selectVault points the active selection at index i and immediately restores
-// its cached detailed Usage state when available. It reports whether selection
-// moved; re-selecting the active vault preserves the current panel.
-func (m *model) selectVault(i int) bool {
-	if i < 0 || i >= len(m.vaults) {
-		return false
-	}
-	id := m.vaults[i].ID
-	if m.selected == id {
-		return false
-	}
-	m.selected = id
-	if m.restoreCachedUsage(id) {
-		return true
-	}
-	m.hadUsage = false
-	m.barAnim = 0
-	m.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
-	m.nextRefresh = time.Time{}
-	m.usageStale = false
-	return true
-}
-
-func (m model) persistVaultState() error {
-	return writeVaultState(m.vaultState, m.selected, m.disabled)
-}
-
-// cycleVault advances the selection to the next enabled vault, wrapping and
-// skipping disabled ones. It reports whether the selection changed.
-func (m *model) cycleVault() (bool, error) {
-	n := len(m.vaults)
-	if n < 2 {
-		return false, nil
-	}
-	cur := m.activeIndex()
-	for step := 1; step <= n; step++ {
-		j := (cur + step) % n
-		if j == cur || !m.isEnabled(j) {
+		if strings.HasPrefix(arg, "--profile=") {
 			continue
 		}
-		if !m.selectVault(j) {
-			return false, nil
-		}
-		return true, m.persistVaultState()
+		clean = append(clean, arg)
 	}
-	return false, nil
-}
-
-// activateVault selects the vault at index i, enabling it first if it was
-// disabled so the active vault is always enabled. It reports whether the
-// selection changed.
-func (m *model) activateVault(i int) (bool, error) {
-	if i < 0 || i >= len(m.vaults) {
-		return false, nil
-	}
-	if i != 0 {
-		delete(m.disabled, m.vaults[i].ID)
-	}
-	changed := m.selectVault(i)
-	return changed, m.persistVaultState()
-}
-
-// toggleVault flips the enabled state of the vault at index i. The first vault
-// (the safe fallback) can never be disabled. Disabling the active vault falls
-// the selection back to the fallback so the shown usage stays coherent. It
-// reports whether the selection changed.
-func (m *model) toggleVault(i int) (bool, error) {
-	if i <= 0 || i >= len(m.vaults) {
-		return false, nil
-	}
-	if m.disabled == nil {
-		m.disabled = map[string]bool{}
-	}
-	id := m.vaults[i].ID
-	selChanged := false
-	if m.disabled[id] {
-		delete(m.disabled, id)
-	} else {
-		m.disabled[id] = true
-		if m.selected == id {
-			selChanged = m.selectVault(0)
-		}
-	}
-	return selChanged, m.persistVaultState()
+	return clean
 }
