@@ -8,6 +8,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -25,6 +28,7 @@ func stripAnsi(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 // A realistic full-name routing row: renderRoute shortens the names for display.
 const sampleRow = "  default    gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium"
+const day int64 = 24 * 60 * 60
 
 // labelWidth mirrors how renderRoute derives the role label (everything before
 // the first model match) so tests assert against the real alignment column.
@@ -495,9 +499,25 @@ func layoutModel() model {
 	return model{
 		generated: map[string][]string{id: rows},
 		avail: availability{
-			ok:     true,
-			bucket: map[string]string{},
-			reset:  map[string]int64{},
+			ok:         true,
+			accountsOK: true,
+			bucket:     map[string]string{},
+			reset:      map[string]int64{},
+			accounts: map[string][]account{
+				"openai-codex": {{Provider: "openai-codex", IdentityKey: "codex", Email: "codex@example.test"}},
+				"anthropic":    {{Provider: "anthropic", IdentityKey: "claude", Email: "claude@example.test"}},
+			},
+			accountUsage: map[accountKey][]usageWin{
+				{Provider: "openai-codex", IdentityKey: "codex"}: {
+					{label: "5 hours", pct: 12, secs: 3 * 3600, dur: 5 * 3600, prov: "openai-codex"},
+					{label: "7 days", pct: 33, secs: 6 * day, dur: 7 * day, prov: "openai-codex"},
+				},
+				{Provider: "anthropic", IdentityKey: "claude"}: {
+					{label: "5 hours", pct: 55, secs: 2 * 3600, dur: 5 * 3600, prov: "anthropic"},
+					{label: "7 days", pct: 61, secs: 5 * day, dur: 7 * day, prov: "anthropic"},
+				},
+			},
+			accountCredits: map[accountKey]resetCredits{},
 			wins: []usageWin{
 				{label: "5 hours", pct: 12, secs: 3 * 3600, dur: 5 * 3600, prov: "openai-codex"},
 				{label: "7 days", pct: 33, secs: 6 * day, dur: 7 * day, prov: "openai-codex"},
@@ -505,8 +525,7 @@ func layoutModel() model {
 				{label: "7 days", pct: 61, secs: 5 * day, dur: 7 * day, prov: "anthropic"},
 			},
 		},
-		usageCmd:    "omp usage --json",
-		vaults:      []vault{{ID: "default", Label: "primary", Claude: "Operator", Codex: "Operator"}},
+		broker:      brokerConfig{URL: "http://broker.test", Token: "token"},
 		spin:        spinner.New(),
 		help:        clikit.NewHelp(),
 		glyphs:      glyphs,
@@ -795,8 +814,8 @@ func TestRepeatedResizeCrossingsPreserveState(t *testing.T) {
 			if m.fetching || !m.nextRefresh.Equal(wantNext) {
 				t.Fatalf("%s: usage fetch state mutated: fetching=%v nextRefresh moved=%v", label, m.fetching, !m.nextRefresh.Equal(wantNext))
 			}
-			if m.activeVault().ID != "default" {
-				t.Fatalf("%s: active vault mutated: %q", label, m.activeVault().ID)
+			if m.broker.URL != "http://broker.test" {
+				t.Fatalf("%s: central broker mutated: %q", label, m.broker.URL)
 			}
 			maxOff := m.vp.TotalLineCount() - m.vp.Height
 			if maxOff < 0 {
@@ -1070,7 +1089,7 @@ func TestRawMouseBurstRemainsResponsive(t *testing.T) {
 	m := layoutModel()
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
-	m.usageCmd = "" // keep unrelated fetch/ticks out of the program
+	m.broker = brokerConfig{} // keep unrelated fetch/ticks out of the program
 	var views atomic.Int64
 	keySeen := make(chan burstKeyState, 1)
 	filter := wheelInputFilter{}
@@ -1145,15 +1164,9 @@ func press(t *testing.T, m model, k string) (model, tea.Cmd) {
 	return nm.(model), cmd
 }
 
-// multiProfileModel is layoutModel with a second (mixed) auth profile, so the
-// switch cue and profile-dependent help rules engage.
-func multiProfileModel() model {
-	m := layoutModel()
-	m.vaults = []vault{
-		{ID: "default", Label: "primary", Claude: "Operator", Codex: "Operator"},
-		{ID: "secondary", Label: "secondary", Claude: "Collaborator", Codex: "Operator"},
-	}
-	return m
+// accountModel is the central broker fixture used by account and help tests.
+func accountModel() model {
+	return layoutModel()
 }
 
 // shortDescs returns the compact help line's action descriptions — the
@@ -1175,92 +1188,211 @@ func hasDesc(descs []string, want string) bool {
 	return false
 }
 
-// TestUsageProviderAccountsComeFromSnapshot locks the identity boundary:
-// headings name only providers, while account emails come from the broker's
-// redacted snapshot in deterministic order. Configured owner labels are never
-// rendered as provider identity.
-func TestUsageProviderAccountsComeFromSnapshot(t *testing.T) {
+func TestShortWinProviderLabels(t *testing.T) {
+	tests := map[string]string{
+		"5 hours":               "5h",
+		"Claude 5 Hour":         "5h",
+		"Codex 5 Hour":          "5h",
+		"OpenAI 5 Hour":         "5h",
+		"7 days":                "7d",
+		"Claude 7 Day":          "7d",
+		"Codex 7 Day":           "7d",
+		"OpenAI 7 Day":          "7d",
+		"5 hours (Spark)":       "5h spark",
+		"Codex 5 Hour (Spark)":  "5h spark",
+		"OpenAI 5 Hour (Spark)": "5h spark",
+		"7 days (Spark)":        "7d spark",
+		"Codex 7 Day (Spark)":   "7d spark",
+		"OpenAI 7 Day (Spark)":  "7d spark",
+		"Claude 7 Day (Fable)":  "7d fable",
+		"unrecognized upstream": "unrecognized upstream",
+	}
+	for label, want := range tests {
+		if got := shortWin(label); got != want {
+			t.Errorf("shortWin(%q) = %q, want %q", label, got, want)
+		}
+	}
+}
+
+func TestUsageHasOneAccountManagerCue(t *testing.T) {
 	m := layoutModel()
-	m.vaults = []vault{{
-		ID: "p", Label: "custom vault", Claude: "owner-claude-label", Codex: "owner-codex-a + owner-codex-b",
-	}}
+	panel := stripAnsi(m.usagePanel())
+	if got := strings.Count(panel, "v accounts"); got != 1 {
+		t.Errorf("account-manager cue count = %d, want 1:\n%s", got, panel)
+	}
+	if strings.Contains(panel, "v · accounts") {
+		t.Errorf("Usage title repeats the bottom account-manager cue:\n%s", panel)
+	}
+}
+
+func TestCompactDisplayIdentity(t *testing.T) {
+	tests := []struct {
+		name, identity, want string
+	}{
+		{name: "normalized email", identity: " ALEX@Example.DEV ", want: "al*"},
+		{name: "short local", identity: "a@example.fr", want: "a*"},
+		{name: "unicode local", identity: "λ@example.世界", want: "λ*"},
+		{name: "two rune local", identity: "🙂x@example.com", want: "🙂x*"},
+		{name: "opaque fallback", identity: "01234567-89ab-cdef", want: "01*"},
+		{name: "missing domain suffix", identity: "a@example", want: "a@*"},
+		{name: "missing local", identity: "@example.dev", want: "@e*"},
+		{name: "trailing dot", identity: "a@example.", want: "a@*"},
+		{name: "empty", identity: "", want: "id unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := compactDisplayIdentity(test.identity); got != test.want {
+				t.Errorf("compactDisplayIdentity(%q) = %q, want %q", test.identity, got, test.want)
+			}
+		})
+	}
+}
+
+func TestUsageProviderAccountsCompactIntoHeading(t *testing.T) {
+	m := layoutModel()
 	m.avail.accountsOK = true
-	m.avail.accounts = map[string][]vaultAccount{
+	m.avail.accounts = map[string][]account{
 		"openai-codex": {
-			{Provider: "openai-codex", IdentityKey: "opaque-z", Email: "z@example.test"},
-			{Provider: "openai-codex", IdentityKey: "opaque-a", Email: "a@example.test"},
+			{Provider: "openai-codex", IdentityKey: "codex-z", Email: "z@example.test"},
+			{Provider: "openai-codex", IdentityKey: "codex-a", Email: "a@example.test"},
 		},
 		"anthropic": {
-			{Provider: "anthropic", IdentityKey: "do-not-render", Email: "claude@example.test"},
+			{Provider: "anthropic", IdentityKey: "claude", Email: "claude@example.test"},
+		},
+	}
+	m.avail.accountUsage = map[accountKey][]usageWin{
+		{Provider: "openai-codex", IdentityKey: "codex-a"}: {
+			{label: "7 days", pct: 33, dur: 7 * day, prov: "openai-codex"},
+		},
+		{Provider: "anthropic", IdentityKey: "claude"}: {
+			{label: "Claude 7 Day (Fable)", tier: "fable", dur: 7 * day, prov: "anthropic", missing: true},
 		},
 	}
 
 	panel := stripAnsi(m.usagePanel())
-	lines := strings.Split(panel, "\n")
-	for _, provider := range []string{"Codex", "Claude"} {
-		idx := lineIndex(lines, provider)
-		if idx < 0 || strings.TrimSpace(lines[idx]) != provider {
-			t.Fatalf("%s must be a provider-only heading:\n%s", provider, panel)
-		}
+	if claude, codex := strings.Index(panel, "Claude"), strings.Index(panel, "Codex"); claude < 0 || codex < 0 || claude > codex {
+		t.Fatalf("account groups must be Anthropic then OpenAI:\n%s", panel)
 	}
-	for _, forbidden := range []string{"owner-claude-label", "owner-codex-a + owner-codex-b", "opaque-z", "opaque-a", "do-not-render"} {
-		if strings.Contains(panel, forbidden) {
-			t.Errorf("rendered configured or opaque identity %q:\n%s", forbidden, panel)
-		}
+	if !strings.Contains(panel, "Codex (z* + a*)") {
+		t.Errorf("heading must preserve stable broker snapshot order:\n%s", panel)
 	}
-	a, z := strings.Index(panel, "a@example.test"), strings.Index(panel, "z@example.test")
-	if a < 0 || z < 0 || a > z {
-		t.Errorf("multiple snapshot emails must render deterministically: a=%d z=%d\n%s", a, z, panel)
+	if !strings.Contains(panel, "Claude (cl*)") {
+		t.Errorf("single account must compact into the provider heading:\n%s", panel)
 	}
-	if claude := strings.Index(panel, "claude@example.test"); claude < 0 {
-		t.Errorf("single snapshot email missing:\n%s", panel)
+	if strings.Contains(panel, "a@example.test") || strings.Count(panel, "z*") != 1 ||
+		strings.Count(panel, "a*") != 1 || strings.Count(panel, "cl*") != 1 {
+		t.Errorf("account identities must appear only in provider headings:\n%s", panel)
 	}
-	if used := strings.Index(panel, "% used"); used < z {
-		t.Errorf("usage rows must follow the provider/account list:\n%s", panel)
-	}
-
-	m.avail.accounts["anthropic"] = []vaultAccount{{
-		Provider: "anthropic", IdentityKey: "email:snapshot-identity@example.test",
-	}}
-	if panel := stripAnsi(m.usagePanel()); !strings.Contains(panel, "email:snapshot-identity@example.test") {
-		t.Errorf("snapshot identity must identify an account without an email:\n%s", panel)
+	if got := strings.Count(panel, "usage unavailable"); got != 2 {
+		t.Errorf("unmatched provider coverage rows = %d, want 2 without repeated identities:\n%s", got, panel)
 	}
 }
 
-// TestUsageSwitchCue: `a switch profile` sits after `r now` in the control
-// row when an alternate profile exists, and disappears everywhere when only
-// one auth profile is configured.
-func TestUsageSwitchCue(t *testing.T) {
-	m := multiProfileModel()
-	wide, _, _, _ := layoutSizes(t, m)
-	m = resize(t, m, wide.w, wide.h)
-	lines := strings.Split(stripAnsi(m.usagePanel()), "\n")
-	ctrl := lineIndex(lines, "next refresh", "r now", "a switch vault")
-	if ctrl < 0 {
-		t.Fatalf("refresh and switch must share the usage control row:\n%s", strings.Join(lines, "\n"))
+func TestUsageCompactIdentityCollisionsAndDuplicateAccounts(t *testing.T) {
+	first := account{Provider: "openai-codex", IdentityKey: "first", Email: "alice@example.dev"}
+	duplicate := account{Provider: "openai-codex", IdentityKey: "first", Email: "changed@example.dev"}
+	second := account{Provider: "openai-codex", IdentityKey: "second", Email: "albert@example.dev"}
+	a := availability{
+		accountsOK: true,
+		accounts: map[string][]account{
+			"openai-codex": {first, duplicate, second},
+		},
+		accountUsage: map[accountKey][]usageWin{
+			{Provider: first.Provider, IdentityKey: first.IdentityKey}: {
+				{label: "5 hours", dur: 5 * 3600, prov: first.Provider},
+			},
+		},
 	}
-	row := lines[ctrl]
-	if strings.Index(row, "r now") > strings.Index(row, "a switch vault") {
-		t.Errorf("switch cue must come after the refresh cue: %q", row)
+	panel := stripAnsi(identityLinesFor(a))
+	if !strings.Contains(panel, "Codex (al* + al*)") {
+		t.Fatalf("compact identity collisions may remain deliberately ambiguous:\n%s", panel)
 	}
+	if strings.Contains(panel, "ch*") || strings.Count(panel, "al*") != 2 {
+		t.Errorf("duplicate stable account must collapse without repeating unavailable identities:\n%s", panel)
+	}
+	if !strings.Contains(panel, "usage unavailable") {
+		t.Errorf("unavailable collision must retain explicit provider coverage:\n%s", panel)
+	}
+}
 
-	single := layoutModel()
-	single = resize(t, single, wide.w, wide.h)
-	if view := stripAnsi(single.View()); strings.Contains(view, "switch vault") {
-		t.Errorf("single-profile: the switch cue must be omitted everywhere:\n%s", view)
+func TestUsageIdentityShortcutExpandsAndCollapsesAddresses(t *testing.T) {
+	m := layoutModel()
+	compact := stripAnsi(m.usagePanel())
+	if !strings.Contains(compact, "Codex (co*)") || strings.Contains(compact, "codex@example.test") ||
+		!strings.Contains(compact, "i full ids") {
+		t.Fatalf("Usage did not default to compact identities:\n%s", compact)
+	}
+	next, cmd := press(t, m, "i")
+	if cmd != nil {
+		t.Fatal("identity shortcut unexpectedly launched a command")
+	}
+	full := stripAnsi(next.usagePanel())
+	if !strings.Contains(full, "Codex (codex@example.test)") || !strings.Contains(full, "i short ids") {
+		t.Fatalf("identity shortcut did not reveal full addresses:\n%s", full)
+	}
+	collapsed, cmd := press(t, next, "i")
+	if cmd != nil || !strings.Contains(stripAnsi(collapsed.usagePanel()), "Codex (co*)") {
+		t.Fatal("second identity shortcut did not restore compact labels")
+	}
+	collapsed.manager = true
+	managed, cmd := press(t, collapsed, "i")
+	if cmd != nil || !strings.Contains(stripAnsi(managed.usagePanel()), "Codex (codex@example.test)") {
+		t.Fatal("account manager did not share the identity shortcut")
+	}
+}
+
+func TestUsageHeadingStyleAndManagerIdentityBoundary(t *testing.T) {
+	identities := []compactProviderIdentity{{label: "al*"}, {label: "po*"}}
+	want := lipgloss.NewStyle().Foreground(lipgloss.Color("#62a7ff")).Bold(true).Render("Codex") +
+		" " + stDim.Render("(al* + po*)")
+	if got := providerHeading("openai-codex", identities); got != want {
+		t.Errorf("provider heading style changed:\ngot  %q\nwant %q", got, want)
+	}
+	const full = "alexander.operator@example.dev"
+	if got := managerAccountLabel(account{Email: full, IdentityKey: "opaque-key"}); got != full {
+		t.Errorf("Accounts label = %q, want full email %q", got, full)
+	}
+}
+
+func TestNoGlobalVaultCycle(t *testing.T) {
+	m := layoutModel()
+	before := m
+	next, cmd := press(t, m, "a")
+	if cmd != nil || next.manager || !reflect.DeepEqual(next.accountSelections, before.accountSelections) {
+		t.Fatalf("global a must be inert: cmd=%v manager=%v", cmd != nil, next.manager)
+	}
+	view := stripAnsi(next.View())
+	for _, forbidden := range []string{"switch vault", "manage vaults", "profile"} {
+		if strings.Contains(strings.ToLower(view), forbidden) {
+			t.Errorf("central account UI leaked %q:\n%s", forbidden, view)
+		}
 	}
 }
 
 // TestUsageLoadingErrorStates: loading, refreshing, and unavailable states keep
-// provider-only headings and explicit broker account status visible.
+// compact provider headings and explicit broker account status visible.
 func TestUsageLoadingErrorStates(t *testing.T) {
 	m := layoutModel()
 
 	loading := m
-	loading.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
+	loading.avail = availability{
+		bucket:     map[string]string{},
+		reset:      map[string]int64{},
+		accountsOK: true,
+		accounts: map[string][]account{
+			"openai-codex": {
+				{Provider: "openai-codex", IdentityKey: "codex", Email: "skeleton.codex@example.dev"},
+				{Provider: "openai-codex", IdentityKey: "hidden", Email: "hidden@example.io"},
+			},
+			"anthropic": {{Provider: "anthropic", IdentityKey: "claude", Email: "skeleton.claude@example.fr"}},
+		},
+	}
+	loading.accountSelections.manualDisabled = map[accountKey]bool{
+		{Provider: "openai-codex", IdentityKey: "hidden"}: true,
+	}
 	loading.fetching = true
 	panel := stripAnsi(loading.usagePanel())
-	for _, want := range []string{"fetching usage…", "Codex", "Claude", "checking account…"} {
+	for _, want := range []string{"fetching usage…", "Codex (sk*)", "Claude (sk*)"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("loading: panel missing %q:\n%s", want, panel)
 		}
@@ -1268,16 +1400,22 @@ func TestUsageLoadingErrorStates(t *testing.T) {
 	if strings.Contains(panel, "usage unavailable") {
 		t.Errorf("loading must not read as an error:\n%s", panel)
 	}
+	if strings.Contains(panel, "skeleton.codex@example.dev") || strings.Contains(panel, "skeleton.claude@example.fr") {
+		t.Errorf("loading skeleton leaked full account identities:\n%s", panel)
+	}
+	if strings.Contains(panel, "hi*") {
+		t.Errorf("loading skeleton included a disabled account:\n%s", panel)
+	}
 
 	refreshing := m
 	refreshing.fetching = true
 	refreshing.avail.accountsOK = true
-	refreshing.avail.accounts = map[string][]vaultAccount{
-		"openai-codex": {{Provider: "openai-codex", Email: "operator.codex@example.test"}},
-		"anthropic":    {{Provider: "anthropic", Email: "operator.claude@example.test"}},
+	refreshing.avail.accounts = map[string][]account{
+		"openai-codex": {{Provider: "openai-codex", IdentityKey: "codex", Email: "operator.codex@example.test"}},
+		"anthropic":    {{Provider: "anthropic", IdentityKey: "claude", Email: "operator.claude@example.test"}},
 	}
 	panel = stripAnsi(refreshing.usagePanel())
-	for _, want := range []string{"refreshing…", "Codex", "Claude", "operator.codex@example.test", "operator.claude@example.test", "% used"} {
+	for _, want := range []string{"refreshing…", "Codex (op*)", "Claude (op*)", "% used"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("refreshing: panel missing %q:\n%s", want, panel)
 		}
@@ -1289,17 +1427,17 @@ func TestUsageLoadingErrorStates(t *testing.T) {
 	failed := m
 	failed.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
 	panel = stripAnsi(failed.usagePanel())
-	for _, want := range []string{"usage unavailable · press v to manage vaults", "Codex", "Claude", "account status unavailable"} {
+	for _, want := range []string{"usage unavailable · press v to manage accounts", "Codex", "Claude", "account status unavailable"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("unavailable: panel missing %q:\n%s", want, panel)
 		}
 	}
 
-	switchErr := multiProfileModel()
-	switchErr.vaultErr = "state write denied"
-	panel = stripAnsi(switchErr.usagePanel())
-	if !strings.Contains(panel, "vault switch failed: state write denied") {
-		t.Errorf("a switch failure must stay attached to the usage section:\n%s", panel)
+	accountErr := accountModel()
+	accountErr.accountErr = "state write denied"
+	panel = stripAnsi(accountErr.usagePanel())
+	if !strings.Contains(panel, "account update failed: state write denied") {
+		t.Errorf("an account persistence failure must stay attached to the usage section:\n%s", panel)
 	}
 }
 
@@ -1309,7 +1447,7 @@ func TestUsageLoadingErrorStates(t *testing.T) {
 // toggle ever triggers a fetch, and every combination keeps the frame
 // invariants.
 func TestSectionToggleCombinations(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	availBefore := m.avail
@@ -1334,8 +1472,8 @@ func TestSectionToggleCombinations(t *testing.T) {
 		if got := hasDesc(descs, "show usage"); got == wantUsage {
 			t.Errorf("%s: compact help offers show usage = %v with usage visible = %v", label, got, wantUsage)
 		}
-		if got := hasDesc(descs, "switch vault"); got == wantUsage {
-			t.Errorf("%s: compact help repeats/misses switch vault (got %v) with usage visible = %v", label, got, wantUsage)
+		if got := hasDesc(descs, "manage accounts"); got == wantUsage {
+			t.Errorf("%s: compact help repeats/misses account manager (got %v) with usage visible = %v", label, got, wantUsage)
 		}
 		if m.fetching || !reflect.DeepEqual(m.avail, availBefore) {
 			t.Errorf("%s: a display toggle mutated fetch state", label)
@@ -1371,12 +1509,12 @@ func TestSectionToggleCombinations(t *testing.T) {
 // launch trio surfaces only when the generator's launch footer is off screen,
 // and narrow terminals advertise the dedicated full-screen Usage view.
 func TestCompactHelpDerivation(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, _, narrow, _ := layoutSizes(t, m)
 
 	m = resize(t, m, wide.w, wide.h)
 	descs := shortDescs(m)
-	for _, d := range []string{"move", "change", gReset + " defaults", "switch vault", "refresh usage", "managed omp", "sandbox", "launch", "show routing", "show usage"} {
+	for _, d := range []string{"move", "change", gReset + " defaults", "manage accounts", "refresh usage", "managed omp", "sandbox", "launch", "show routing", "show usage"} {
 		got := hasDesc(descs, d)
 		want := d == "move" || d == "change"
 		if got != want {
@@ -1389,13 +1527,13 @@ func TestCompactHelpDerivation(t *testing.T) {
 
 	m = resize(t, m, narrow.w, narrow.h)
 	descs = shortDescs(m)
-	for _, d := range []string{"show routing", "show usage", "switch vault", "refresh usage"} {
+	for _, d := range []string{"show routing", "show usage", "manage accounts", "refresh usage"} {
 		if !hasDesc(descs, d) {
 			t.Errorf("narrow compact help missing %q: %v", d, descs)
 		}
 	}
 	ordered := strings.Join(descs, "|")
-	for _, optional := range []string{"switch vault", "refresh usage"} {
+	for _, optional := range []string{"manage accounts", "refresh usage"} {
 		if strings.Index(ordered, "more") > strings.Index(ordered, optional) ||
 			strings.Index(ordered, "quit") > strings.Index(ordered, optional) {
 			t.Errorf("narrow compact help must prioritize more/quit before %q: %v", optional, descs)
@@ -1408,9 +1546,9 @@ func TestCompactHelpDerivation(t *testing.T) {
 		t.Error("refresh must hide from compact help while a fetch is in flight")
 	}
 	noCmd := m
-	noCmd.usageCmd = ""
+	noCmd.broker = brokerConfig{}
 	if hasDesc(shortDescs(noCmd), "refresh usage") {
-		t.Error("refresh must hide from compact help when no usage command exists")
+		t.Error("refresh must hide from compact help when no broker exists")
 	}
 
 	// narrow + p: routing full-screen hides the generator launch footer.
@@ -1426,7 +1564,7 @@ func TestCompactHelpDerivation(t *testing.T) {
 	}
 
 	// A terminal too narrow to ever seat usage must not advertise its restore.
-	tiny := multiProfileModel()
+	tiny := accountModel()
 	tiny.hideUsage = true
 	tiny = resize(t, tiny, routingMinW-3, 40)
 	if hasDesc(shortDescs(tiny), "show usage") {
@@ -1438,14 +1576,14 @@ func TestCompactHelpDerivation(t *testing.T) {
 // section toggles — regardless of what the compact footer dropped, and the
 // full keymap stays conflict-free (u keeps the sandbox; s is the usage key).
 func TestFullHelpComplete(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	m.hideUsage = true
 	m.collapse = true
 	m.help.ShowAll = true
 	foot := stripAnsi(m.footer())
-	for _, d := range []string{"move", "change", "defaults", "primary ⇄ full chains", "refresh usage", "switch vault", "show/hide routing", "show/hide usage", "launch", "managed omp", "sandbox", "quit"} {
+	for _, d := range []string{"move", "change", "defaults", "primary ⇄ full chains", "refresh usage", "manage accounts", "show/hide routing", "show/hide usage", "launch", "managed omp", "sandbox", "quit"} {
 		if !strings.Contains(foot, d) {
 			t.Errorf("full help missing %q:\n%s", d, foot)
 		}
@@ -1462,6 +1600,9 @@ func TestFullHelpComplete(t *testing.T) {
 			}
 		}
 	}
+	if desc, exists := seen["a"]; exists {
+		t.Fatalf("global a binding survived as %q", desc)
+	}
 	if got := keys.Usage.Keys(); len(got) != 1 || got[0] != "s" {
 		t.Errorf("usage toggle key = %v, want [s]", got)
 	}
@@ -1473,15 +1614,15 @@ func TestFullHelpComplete(t *testing.T) {
 	}
 }
 
-// TestLongAccountEmailsWidthInvariant: a long broker-reported email widens the
-// measured usage column instead of overflowing or truncating the identity.
+// TestLongAccountEmailsWidthInvariant: a long broker-reported email compacts in
+// Usage instead of widening its measured column or leaking the full identity.
 func TestLongAccountEmailsWidthInvariant(t *testing.T) {
 	const longEmail = "alexander-maximilian-extremely-long-name@example.test"
 	m := layoutModel()
 	m.avail.accountsOK = true
-	m.avail.accounts = map[string][]vaultAccount{
-		"openai-codex": {{Provider: "openai-codex", Email: longEmail}},
-		"anthropic":    {{Provider: "anthropic", Email: "claude@example.test"}},
+	m.avail.accounts = map[string][]account{
+		"openai-codex": {{Provider: "openai-codex", IdentityKey: "codex", Email: longEmail}},
+		"anthropic":    {{Provider: "anthropic", IdentityKey: "claude", Email: "claude@example.test"}},
 	}
 	wideW := m.genRowWidth() + routingMinW
 	sizes := []termSize{
@@ -1496,19 +1637,18 @@ func TestLongAccountEmailsWidthInvariant(t *testing.T) {
 		label := fmt.Sprintf("long email %dx%d", s.w, s.h)
 		assertLayoutInvariants(t, m, label)
 		view := stripAnsi(m.View())
-		if strings.Contains(view, "% used") && !strings.Contains(view, longEmail) {
-			t.Errorf("%s: visible usage must keep the full snapshot email:\n%s", label, view)
+		if strings.Contains(view, "% used") &&
+			(!strings.Contains(view, "Codex (al*)") || strings.Contains(view, longEmail)) {
+			t.Errorf("%s: visible usage must keep the identity compact:\n%s", label, view)
 		}
 	}
 }
 
 // TestSectionStatePreservation: routing/usage visibility survives resizes,
-// background refreshes, auth switches, and PromptBox proposal round-trips;
-// restoring routing recovers its prior scroll; restoring usage refetches
-// nothing.
+// central background refreshes, and PromptBox proposal round-trips; restoring
+// routing recovers its prior scroll and restoring usage refetches nothing.
 func TestSectionStatePreservation(t *testing.T) {
-	m := multiProfileModel()
-	m.vaultState = filepath.Join(t.TempDir(), "nested", "selected")
+	m := accountModel()
 	wide, medium, narrow, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	m.hideUsage = true
@@ -1522,26 +1662,10 @@ func TestSectionStatePreservation(t *testing.T) {
 		assertLayoutInvariants(t, m, fmt.Sprintf("hidden sections %dx%d", s.w, s.h))
 	}
 
-	nm, _ := m.Update(usageMsg{vault: "default", avail: m.avail})
+	nm, _ := m.Update(usageMsg{avail: m.avail})
 	m = nm.(model)
 	if !m.hideUsage || !m.collapse {
 		t.Fatal("a background refresh mutated section visibility")
-	}
-
-	m, cmd := press(t, m, "a")
-	if cmd == nil {
-		t.Fatal("an auth switch must trigger a usage fetch")
-	}
-	if !m.hideUsage || !m.collapse {
-		t.Fatal("an auth switch mutated section visibility")
-	}
-	if m.activeVault().ID != "secondary" {
-		t.Fatalf("vault switch did not advance the selection: %q", m.activeVault().ID)
-	}
-	m.fetching = false
-	m.avail = multiProfileModel().avail
-	if panel := stripAnsi(m.usagePanel()); strings.Contains(panel, "Collaborator") {
-		t.Errorf("switching vaults must not expose configured owner labels:\n%s", panel)
 	}
 
 	nm, _ = m.Update(clikit.ActionsProposedMsg{})
@@ -1572,7 +1696,7 @@ func TestSectionStatePreservation(t *testing.T) {
 	u := layoutModel()
 	u = resize(t, u, wide.w, wide.h)
 	before := stripAnsi(u.View())
-	u, cmd = press(t, u, "s")
+	u, cmd := press(t, u, "s")
 	if cmd != nil {
 		t.Fatal("hiding usage must not produce a command")
 	}
@@ -1729,13 +1853,13 @@ func TestRoutingFallbackCuePinned(t *testing.T) {
 // switch-failure variants keep that ordering (the error stays attached under
 // the control that caused it).
 func TestUsageCtrlRowPinned(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, medium, _, _ := layoutSizes(t, m)
 
 	assertCtrlLast := func(label, panel string) {
 		t.Helper()
 		lines := strings.Split(panel, "\n")
-		ctrl := lineIndex(lines, "r now", "a switch vault")
+		ctrl := lineIndex(lines, "r now", "v accounts")
 		if ctrl < 0 {
 			t.Fatalf("%s: control row missing:\n%s", label, panel)
 		}
@@ -1756,7 +1880,7 @@ func TestUsageCtrlRowPinned(t *testing.T) {
 
 	// The full medium view keeps the ordering: control row under every bar.
 	lines := strings.Split(stripAnsi(m.View()), "\n")
-	ctrl := lineIndex(lines, "r now", "a switch vault")
+	ctrl := lineIndex(lines, "r now", "v accounts")
 	lastUsed := -1
 	for i, l := range lines {
 		if strings.Contains(l, "% used") {
@@ -1768,7 +1892,7 @@ func TestUsageCtrlRowPinned(t *testing.T) {
 	}
 
 	// Loading: the status row replaces the countdown but stays pinned last.
-	loading := multiProfileModel()
+	loading := accountModel()
 	loading.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
 	loading.fetching = true
 	llines := strings.Split(stripAnsi(loading.usagePanel()), "\n")
@@ -1776,14 +1900,14 @@ func TestUsageCtrlRowPinned(t *testing.T) {
 		t.Errorf("loading: status row on line %d of %d, want last:\n%s", status, len(llines)-1, strings.Join(llines, "\n"))
 	}
 
-	// Switch failure: the error attaches directly under the control row.
-	failed := multiProfileModel()
-	failed.vaultErr = "state write denied"
+	// Account persistence failure attaches directly under the control row.
+	failed := accountModel()
+	failed.accountErr = "state write denied"
 	flines := strings.Split(stripAnsi(failed.usagePanel()), "\n")
-	errLine := lineIndex(flines, "vault switch failed: state write denied")
-	fctrl := lineIndex(flines, "r now", "a switch vault")
+	errLine := lineIndex(flines, "account update failed: state write denied")
+	fctrl := lineIndex(flines, "r now", "v accounts")
 	if errLine != len(flines)-1 || fctrl != errLine-1 {
-		t.Errorf("switch failure must sit directly under the bottom control row (ctrl %d, err %d of %d):\n%s",
+		t.Errorf("account failure must sit directly under the bottom control row (ctrl %d, err %d of %d):\n%s",
 			fctrl, errLine, len(flines)-1, strings.Join(flines, "\n"))
 	}
 }
@@ -1843,7 +1967,7 @@ func TestMediumSecondarySeparator(t *testing.T) {
 // (Generator hidden) restores the action to the compact line, and the full
 // help always lists the binding.
 func TestGeneratorDefaultsCue(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, medium, narrow, _ := layoutSizes(t, m)
 	for _, tc := range []struct {
 		label string
@@ -1945,10 +2069,175 @@ func TestCreditExpiryUrgency(t *testing.T) {
 
 	// Text sufficiency: the stripped line carries count and ascending days.
 	m := layoutModel()
-	m.avail.credits = resetCredits{avail: 2, exp: []int64{30 * day, 2 * day, 8 * day}}
+	m.avail.accountCredits[accountKey{Provider: "openai-codex", IdentityKey: "codex"}] = resetCredits{
+		avail: 2, exp: []int64{30 * day, 2 * day, 8 * day},
+	}
 	line := stripAnsi(m.creditLine())
 	if !strings.Contains(line, "2 resets") || !strings.Contains(line, "expiring in 2d, 8d, 30d") {
 		t.Errorf("credit line text must stay sufficient without color: %q", line)
+	}
+}
+
+func TestUsageRowsAllocateEverySafeCellToTheBar(t *testing.T) {
+	m := layoutModel()
+	specs := []usageRowSpec{
+		m.usageRowSpec(usageWin{label: "5 hours", pct: 37, secs: 2 * 3600, dur: 5 * 3600}, "  "),
+		m.usageRowSpec(usageWin{label: "7 days", pct: 100, secs: 30 * 60, dur: 7 * day}, "  "),
+	}
+
+	natural := renderUsageRows(0, specs)
+	for i, row := range natural {
+		if got := strings.Count(stripAnsi(row), "█") + strings.Count(stripAnsi(row), "░"); got != usageBarNaturalW {
+			t.Fatalf("natural row %d bar width = %d, want %d: %q", i, got, usageBarNaturalW, stripAnsi(row))
+		}
+	}
+
+	const width = 84
+	rows := renderUsageRows(width, specs)
+	barWidth := usageRowsBarWidth(width, specs)
+	if barWidth <= usageBarNaturalW {
+		t.Fatalf("wide bar width = %d, want growth beyond %d", barWidth, usageBarNaturalW)
+	}
+	for i, row := range rows {
+		plain := stripAnsi(row)
+		if got := strings.Count(plain, "█") + strings.Count(plain, "░"); got != barWidth {
+			t.Errorf("row %d rendered %d bar cells, want shared width %d: %q", i, got, barWidth, plain)
+		}
+		if got := strings.Index(plain, "% used"); got != strings.Index(stripAnsi(rows[0]), "% used") {
+			t.Errorf("row %d percentage column = %d, want %d: %q", i, got, strings.Index(stripAnsi(rows[0]), "% used"), plain)
+		}
+		if got := strings.Index(plain, gReset); got != strings.Index(stripAnsi(rows[0]), gReset) {
+			t.Errorf("row %d reset column = %d, want %d: %q", i, got, strings.Index(stripAnsi(rows[0]), gReset), plain)
+		}
+		if lipgloss.Width(row) > width {
+			t.Errorf("row %d width = %d, assigned %d: %q", i, lipgloss.Width(row), width, plain)
+		}
+	}
+	if got := lipgloss.Width(rows[1]); got != width {
+		t.Errorf("widest reserved suffix consumed %d cells, want exact assigned width %d", got, width)
+	}
+	if plain := stripAnsi(rows[1]); !strings.Contains(plain, "100% used") ||
+		!strings.Contains(plain, gReset+" "+pad(fmtReset(30*60), 4)) ||
+		!strings.Contains(plain, "maxed") {
+		t.Errorf("wide composition changed percentage/reset/note grammar: %q", plain)
+	}
+}
+
+func TestUsageProviderColumnsReceiveWidthBeforeBars(t *testing.T) {
+	m := layoutModel()
+	left := usageRenderGroup{
+		prefix: []string{"  Claude", "  usage unavailable"},
+		rows: []usageRowSpec{
+			m.usageRowSpec(usageWin{label: "5 hours", pct: 20, secs: 2 * 3600, dur: 5 * 3600}, "  "),
+			m.usageRowSpec(usageWin{label: "7 days", pct: 100, secs: 30 * 60, dur: 7 * day}, "  "),
+		},
+	}
+	right := usageRenderGroup{
+		prefix: []string{"  Codex"},
+		rows: []usageRowSpec{
+			m.usageRowSpec(usageWin{label: "5 hours", pct: 40, secs: 2 * 3600, dur: 5 * 3600}, "  "),
+			m.usageRowSpec(usageWin{label: "7 days", pct: 60, secs: 5 * day, dur: 7 * day}, "  "),
+		},
+	}
+	blocks := map[string]usageRenderGroup{"left": left, "right": right}
+	order := []string{"left", "right"}
+
+	stacked := layoutGroups(80, order, blocks, true)
+	if got := lipgloss.Width(stacked); got != 80 {
+		t.Fatalf("stacked groups width = %d, want the available section width 80", got)
+	}
+	sideBySide := layoutGroups(120, order, blocks, false)
+	if got := lipgloss.Width(sideBySide); got != 120 {
+		t.Fatalf("side-by-side groups width = %d, want exact panel width 120", got)
+	}
+	if lipgloss.Height(sideBySide) >= lipgloss.Height(stacked) {
+		t.Fatalf("120 cells did not switch provider groups side by side: stacked=%d rows side=%d rows",
+			lipgloss.Height(stacked), lipgloss.Height(sideBySide))
+	}
+	sideLines := strings.Split(stripAnsi(sideBySide), "\n")
+	if len(sideLines) < 3 || !strings.Contains(sideLines[1], "usage unavailable") ||
+		strings.Contains(sideLines[1], "% used") || strings.Count(sideLines[2], "% used") != 2 {
+		t.Fatalf("uneven provider status rows did not align the first usage bars:\n%s", stripAnsi(sideBySide))
+	}
+	for name, panel := range map[string]string{"stacked": stacked, "side-by-side": sideBySide} {
+		barWidth := -1
+		for _, line := range strings.Split(stripAnsi(panel), "\n") {
+			width := strings.Count(line, "█") + strings.Count(line, "░")
+			if width == 0 {
+				continue
+			}
+			if barWidth < 0 {
+				barWidth = width
+			} else if width != barWidth {
+				t.Errorf("%s provider bars have divergent widths: first=%d row=%d: %q", name, barWidth, width, line)
+			}
+		}
+		if barWidth <= usageBarNaturalW {
+			t.Errorf("%s provider bars did not grow beyond %d cells: %d", name, usageBarNaturalW, barWidth)
+		}
+	}
+}
+
+func TestUsageLoadingAndRealRowsFillTheSameAssignedGeometry(t *testing.T) {
+	loading := layoutModel()
+	loading.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
+	loading.fetching = true
+	loaded := layoutModel()
+	loaded.avail, _ = reconcileUsage(availability{bucket: map[string]string{}, reset: map[string]int64{}}, loaded.avail)
+
+	for _, width := range []int{80, 120} {
+		loadingBody := loading.usageBodyFor(width)
+		loadedBody := loaded.usageBodyFor(width)
+		if got := lipgloss.Width(loadingBody); got != width {
+			t.Errorf("loading body at %d cells uses %d", width, got)
+		}
+		if got := lipgloss.Width(loadedBody); got != width {
+			t.Errorf("real body at %d cells uses %d", width, got)
+		}
+		for state, body := range map[string]string{"loading": loadingBody, "real": loadedBody} {
+			for _, line := range strings.Split(body, "\n") {
+				if lipgloss.Width(line) > width {
+					t.Errorf("%s line overflows %d cells at width %d: %q", state, lipgloss.Width(line), width, stripAnsi(line))
+				}
+			}
+		}
+	}
+
+	skeleton := renderUsageRows(80, []usageRowSpec{skeletonUsageRowSpec("7d fable", "  ")})[0]
+	missing := renderUsageRows(80, []usageRowSpec{loaded.usageRowSpec(usageWin{
+		label: "Claude 7 Day (Fable)", tier: "fable", missing: true,
+	}, "  ")})[0]
+	skeletonPlain, missingPlain := stripAnsi(skeleton), stripAnsi(missing)
+	if lipgloss.Width(skeleton) != lipgloss.Width(missing) ||
+		strings.Index(skeletonPlain, "% used") != strings.Index(missingPlain, "% used") ||
+		strings.Index(skeletonPlain, gReset) != strings.Index(missingPlain, gReset) {
+		t.Errorf("skeleton/missing geometry diverged:\nskeleton %q\nmissing  %q", skeletonPlain, missingPlain)
+	}
+}
+
+func TestUsageAnimationFillScalesWithDynamicBarWidth(t *testing.T) {
+	m := layoutModel()
+	win := usageWin{label: "5 hours", pct: 55, secs: 2 * 3600, dur: 5 * 3600}
+	const width = 90
+	fullSpec := m.usageRowSpec(win, "  ")
+	barWidth := usageRowsBarWidth(width, []usageRowSpec{fullSpec})
+	if barWidth <= usageBarNaturalW {
+		t.Fatalf("fixture bar width = %d, want dynamic growth", barWidth)
+	}
+	for _, step := range []int{1, barAnimSteps / 2, barAnimSteps - 1} {
+		m.barAnim = step
+		spec := m.usageRowSpec(win, "  ")
+		row := stripAnsi(renderUsageRows(width, []usageRowSpec{spec})[0])
+		wantFill := (spec.barPct*barWidth + 50) / 100
+		if got := strings.Count(row, "█"); got != wantFill {
+			t.Errorf("step %d fill = %d, want %d of dynamic %d-cell bar: %q", step, got, wantFill, barWidth, row)
+		}
+		if got := strings.Count(row, "█") + strings.Count(row, "░"); got != barWidth {
+			t.Errorf("step %d bar width = %d, want stable %d", step, got, barWidth)
+		}
+		if lipgloss.Width(row) != width {
+			t.Errorf("step %d row width = %d, want %d", step, lipgloss.Width(row), width)
+		}
 	}
 }
 
@@ -1997,19 +2286,16 @@ func TestUsageSkeleton(t *testing.T) {
 	assertLayoutInvariants(t, loading, "skeleton medium")
 
 	bare := layoutModel()
-	bare.usageCmd = ""
+	bare.broker = brokerConfig{}
 	bare.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
 	if p := stripAnsi(bare.usagePanel()); strings.Contains(p, "··% used") {
-		t.Errorf("standalone runs (no usage command) must stay neutral, not show the skeleton:\n%s", p)
+		t.Errorf("runs without a broker must stay neutral, not show the skeleton:\n%s", p)
 	}
 }
 
-// TestFirstLoadBarFill locks the one-time fill: the first successful usageMsg
-// starts a bounded 150–250ms tick sequence that grows only the bar fill
-// (labels and numbers real from frame one, monotonic, never overshooting),
-// the sequence self-terminates at full value, a mid-fill frame keeps every
-// layout invariant, refreshes never re-animate, and a stale-profile result
-// neither lands nor starts the fill.
+// TestFirstLoadBarFill locks the one-time central fill: the first successful
+// usageMsg starts a bounded 150–250ms tick sequence, preserves layout, and
+// subsequent refreshes never re-animate.
 func TestFirstLoadBarFill(t *testing.T) {
 	if d := time.Duration(barAnimSteps) * barAnimInterval; d < 150*time.Millisecond || d > 250*time.Millisecond {
 		t.Fatalf("first-load fill runs %v, want 150–250ms", d)
@@ -2022,13 +2308,7 @@ func TestFirstLoadBarFill(t *testing.T) {
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 
-	nm, cmd := m.Update(usageMsg{vault: "other", avail: loaded})
-	m = nm.(model)
-	if cmd != nil || m.barAnim != 0 || m.avail.ok || m.hadUsage {
-		t.Fatal("a stale-profile result must be dropped entirely — no data, no fill")
-	}
-
-	nm, cmd = m.Update(usageMsg{vault: "default", avail: loaded})
+	nm, cmd := m.Update(usageMsg{avail: loaded})
 	m = nm.(model)
 	if m.barAnim != 1 || cmd == nil {
 		t.Fatalf("the first successful result must start the fill: step %d, cmd nil = %v", m.barAnim, cmd == nil)
@@ -2080,7 +2360,7 @@ func TestFirstLoadBarFill(t *testing.T) {
 	mid.barAnim = barAnimSteps / 2
 	assertLayoutInvariants(t, mid, "mid-fill wide")
 
-	nm, cmd = m.Update(usageMsg{vault: "default", avail: loaded})
+	nm, cmd = m.Update(usageMsg{avail: loaded})
 	m = nm.(model)
 	if cmd != nil || m.barAnim != 0 {
 		t.Error("refreshes must never re-run the fill")
@@ -2211,8 +2491,9 @@ func TestMediumFavoredUsageShare(t *testing.T) {
 // content — including a present fable window — from the bottom refresh/hotkey
 // control line, in the wide band and medium's stacked column alike.
 func TestUsageCtrlBlankRow(t *testing.T) {
-	m := multiProfileModel()
-	m.avail.wins = append(m.avail.wins,
+	m := accountModel()
+	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	m.avail.accountUsage[key] = append(m.avail.accountUsage[key],
 		usageWin{label: "Claude 7 Day (Fable)", pct: 40, tier: "fable", secs: 4 * day, dur: 7 * day, prov: "anthropic"})
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
@@ -2431,14 +2712,14 @@ func TestFableSkeletonAndUnavailableStatusStayStable(t *testing.T) {
 // the next successful refresh clears the warning. Without any prior success
 // a failure still reads unavailable (nothing is fabricated).
 func TestUsageRefreshFailureRetention(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	m.hadUsage = true
 	before := m.avail
 	failed := availability{bucket: map[string]string{}, reset: map[string]int64{}}
 
-	nm, cmd := m.Update(usageMsg{vault: "default", avail: failed})
+	nm, cmd := m.Update(usageMsg{avail: failed})
 	m = nm.(model)
 	if cmd != nil || m.barAnim != 0 {
 		t.Fatal("a failed refresh must not start the first-load fill")
@@ -2469,7 +2750,7 @@ func TestUsageRefreshFailureRetention(t *testing.T) {
 	assertLayoutInvariants(t, m, "medium stale usage")
 
 	// The next successful refresh clears the warning.
-	nm, _ = m.Update(usageMsg{vault: "default", avail: before})
+	nm, _ = m.Update(usageMsg{avail: before})
 	m = nm.(model)
 	if m.usageStale {
 		t.Fatal("a successful refresh must clear the stale flag")
@@ -2479,9 +2760,9 @@ func TestUsageRefreshFailureRetention(t *testing.T) {
 	}
 
 	// Without any prior success a failure keeps the honest unavailable state.
-	fresh := multiProfileModel()
+	fresh := accountModel()
 	fresh.avail = availability{bucket: map[string]string{}, reset: map[string]int64{}}
-	nm, _ = fresh.Update(usageMsg{vault: "default", avail: failed})
+	nm, _ = fresh.Update(usageMsg{avail: failed})
 	f := nm.(model)
 	if f.avail.ok || f.usageStale {
 		t.Errorf("no prior success → no retention, no stale flag (ok %v, stale %v)", f.avail.ok, f.usageStale)
@@ -2492,7 +2773,7 @@ func TestUsageRefreshFailureRetention(t *testing.T) {
 // row of the multi-line ? full help — carries the shared gut indentation, not
 // just the first one, and no footer line overflows the terminal.
 func TestFooterHelpGutter(t *testing.T) {
-	m := multiProfileModel()
+	m := accountModel()
 	wide, medium, _, _ := layoutSizes(t, m)
 	for _, tc := range []struct {
 		label string
@@ -2526,5 +2807,636 @@ func TestFooterHelpGutter(t *testing.T) {
 			}
 		}
 		m.help.ShowAll = false
+	}
+}
+
+func TestTrustedArgvNeverForcesOrForwardsProfile(t *testing.T) {
+	for name, argv := range map[string][]string{
+		"managed":   managedLaunchArgv("/omp", []string{"--profile", "old", "hello", "--profile=other"}, "prompt"),
+		"generated": generatedLaunchArgv("/omp", "/tmp/generated.yml", []string{"--profile=old", "hello"}, "prompt"),
+	} {
+		joined := strings.Join(argv, " ")
+		if strings.Contains(joined, "--profile") || strings.Contains(joined, " default") {
+			t.Errorf("%s argv contains a trusted profile override: %q", name, argv)
+		}
+	}
+}
+
+func testAccountBroker(t *testing.T, usage string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/snapshot":
+			_, _ = io.WriteString(w, `{"credentials":[
+				{"provider":"anthropic","identityKey":"anthropic-key","credential":{"type":"oauth","email":"claude@example.test"}},
+				{"provider":"openai-codex","identityKey":"codex-key","credential":{"type":"oauth","email":"codex@example.test"}},
+				{"provider":"openai-codex","identityKey":"unmatched-key","credential":{"type":"oauth","email":"unmatched@example.test"}}
+			]}`)
+		case "/v1/usage":
+			_, _ = io.WriteString(w, usage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestLoadAvailabilityMatchesReportMetadataToAccounts(t *testing.T) {
+	server := testAccountBroker(t, `{"reports":[
+		{"provider":"anthropic","metadata":{"email":"claude@example.test"},"limits":[
+			{"label":"Claude 5 Hour","scope":{"tier":"-"},"amount":{"usedFraction":0.42},"window":{"resetsAt":4102444800000,"durationMs":18000000}}
+		]},
+		{"provider":"openai-codex","metadata":{"accountId":"codex-key"},
+		 "resetCredits":{"availableCount":2,"credits":[{"expiresAt":"2099-01-01T00:00:00Z","status":"available"}]},"limits":[
+			{"label":"7 days","scope":{"tier":"-"},"amount":{"usedFraction":0.31},"window":{"resetsAt":4102444800000,"durationMs":604800000}}
+		]},
+		{"provider":"openai-codex",
+		 "resetCredits":{"availableCount":9,"credits":[{"expiresAt":"2099-02-01T00:00:00Z","status":"available"}]},"limits":[
+			{"label":"unattributed aggregate","scope":{"tier":"-"},"amount":{"usedFraction":0.12},"window":{"resetsAt":4102444800000,"durationMs":3600000}}
+		]}
+	]}`)
+	got := loadAvailability(brokerConfig{URL: server.URL, Token: "secret"})
+	if !got.ok || !got.accountsOK || len(got.wins) != 3 {
+		t.Fatalf("central fetch incomplete: ok=%v accountsOK=%v wins=%d", got.ok, got.accountsOK, len(got.wins))
+	}
+	if len(got.accountUsage[accountKey{Provider: "anthropic", IdentityKey: "anthropic-key"}]) != 1 {
+		t.Errorf("email metadata did not match Anthropic snapshot identity: %+v", got.accountUsage)
+	}
+	if len(got.accountUsage[accountKey{Provider: "openai-codex", IdentityKey: "codex-key"}]) != 1 {
+		t.Errorf("accountId metadata did not match OpenAI snapshot identity: %+v", got.accountUsage)
+	}
+	if _, matched := got.accountUsage[accountKey{Provider: "openai-codex", IdentityKey: "unmatched-key"}]; matched {
+		t.Fatal("a report without matching metadata must remain explicitly unavailable")
+	}
+	credits := got.accountCredits[accountKey{Provider: "openai-codex", IdentityKey: "codex-key"}]
+	if credits.avail != 2 || len(credits.exp) != 1 {
+		t.Errorf("matched reset credits were not attributed: %+v", credits)
+	}
+	if _, matched := got.accountCredits[accountKey{Provider: "openai-codex", IdentityKey: "unmatched-key"}]; matched {
+		t.Fatal("unmatched reset credits must not be attributed")
+	}
+}
+
+func TestSelectedAvailabilityAggregatesEnabledMatchedAccounts(t *testing.T) {
+	codexA := accountKey{Provider: "openai-codex", IdentityKey: "a"}
+	codexB := accountKey{Provider: "openai-codex", IdentityKey: "b"}
+	codexMissing := accountKey{Provider: "openai-codex", IdentityKey: "missing"}
+	codexDisabled := accountKey{Provider: "openai-codex", IdentityKey: "disabled"}
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	a := availability{
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: map[string][]account{
+			"openai-codex": {
+				{Provider: codexA.Provider, IdentityKey: codexA.IdentityKey, Email: "a@example.test"},
+				{Provider: codexB.Provider, IdentityKey: codexB.IdentityKey, Email: "b@example.test"},
+				{Provider: codexMissing.Provider, IdentityKey: codexMissing.IdentityKey, Email: "missing@example.test"},
+				{Provider: codexDisabled.Provider, IdentityKey: codexDisabled.IdentityKey, Email: "disabled@example.test"},
+			},
+			"anthropic": {{Provider: claude.Provider, IdentityKey: claude.IdentityKey, Email: "claude@example.test"}},
+		},
+		accountUsage: map[accountKey][]usageWin{
+			codexA: {
+				{label: "5 hours", pct: 10, secs: 100, dur: 5 * 3600, prov: "openai-codex", observed: 300},
+				{label: "7 days", pct: 20, secs: 600, dur: 7 * day, prov: "openai-codex"},
+				{label: "5 hours (Spark)", pct: 90, tier: "spark", secs: 50, dur: 5 * 3600, prov: "openai-codex"},
+			},
+			codexB: {
+				{label: "Codex 5 Hour", pct: 11, secs: 101, dur: 5 * 3600, prov: "openai-codex", stale: true, observed: 200},
+				{label: "7 days", pct: 40, secs: 700, dur: 6 * day, prov: "openai-codex"},
+				{label: "wrong provider", pct: 100, secs: 1, dur: 5 * 3600, prov: "anthropic"},
+				{label: "unknown tier", pct: 100, tier: "other", secs: 1, dur: 5 * 3600, prov: "openai-codex"},
+				{label: "mystery window", pct: 100, secs: 1, dur: 5 * 3600, prov: "openai-codex"},
+			},
+			codexDisabled: {{label: "5 hours", pct: 100, secs: 0, dur: 5 * 3600, prov: "openai-codex"}},
+			claude:        {{label: "Claude 7 Day (Fable)", pct: 31, tier: "fable", secs: 2 * day, dur: 7 * day, prov: "anthropic"}},
+		},
+		accountCredits: map[accountKey]resetCredits{
+			codexA:        {avail: 1, exp: []int64{day}},
+			codexB:        {avail: 2, exp: []int64{2 * day}},
+			codexDisabled: {avail: 9, exp: []int64{9 * day}},
+		},
+		// Flat and unattributed report rows must never cross the selection seam.
+		wins: []usageWin{{label: "5 hours", pct: 99, secs: 0, dur: 5 * 3600, prov: "openai-codex"}},
+	}
+	got := selectedAvailability(a, map[accountKey]bool{codexDisabled: true})
+	var main5 usageWin
+	foundMain := false
+	for _, win := range got.wins {
+		if win.prov == "openai-codex" && win.tier == "" && win.dur == 5*3600 && win.label == "5h" {
+			main5, foundMain = win, true
+		}
+		if win.label == "wrong provider" || win.label == "unknown tier" || win.label == "mystery window" || win.pct == 99 || win.pct == 100 {
+			t.Errorf("excluded report contributed an aggregate row: %+v", win)
+		}
+	}
+	if !foundMain || main5.pct != 11 || main5.secs != 101 {
+		t.Fatalf("half-up aggregate = %+v, want 11%% and 101s", main5)
+	}
+	if !main5.stale || main5.observed != 200 {
+		t.Errorf("aggregate stale/oldest observation = %+v, want stale at 200", main5)
+	}
+	if len(got.wins) != 5 {
+		t.Errorf("provider/tier/duration groups collapsed incorrectly: %+v", got.wins)
+	}
+	if got.credits.avail != 3 || !reflect.DeepEqual(got.credits.exp, []int64{day, 2 * day}) {
+		t.Errorf("enabled reset credits = %+v, want sum/concatenation from a+b only", got.credits)
+	}
+
+	m := layoutModel()
+	m.avail = a
+	m.accountSelections.manualDisabled = map[accountKey]bool{codexDisabled: true}
+	panel := stripAnsi(m.usagePanel())
+	for _, want := range []string{"Codex (a* + b* + mi*)", "usage unavailable", "Claude (cl*)", "11% used", "a* ·", "b* ·", "1 reset", "2 resets"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("selected Usage missing %q:\n%s", want, panel)
+		}
+	}
+	if strings.Contains(panel, "di*") || strings.Contains(panel, "99% used") || strings.Contains(panel, "3 resets") {
+		t.Errorf("disabled or unattributed data leaked into selected Usage:\n%s", panel)
+	}
+
+	allDisabled := map[accountKey]bool{codexA: true, codexB: true, codexMissing: true, codexDisabled: true, claude: true}
+	empty := selectedAvailability(a, allDisabled)
+	if len(empty.wins) != 0 || empty.credits.avail != 0 || len(empty.credits.exp) != 0 {
+		t.Errorf("all-disabled selection fabricated aggregate data: %+v", empty)
+	}
+}
+
+func TestSelectedAvailabilityRebuildsRoutingBuckets(t *testing.T) {
+	maxed := accountKey{Provider: "openai-codex", IdentityKey: "maxed"}
+	remaining := accountKey{Provider: "openai-codex", IdentityKey: "remaining"}
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	base := availability{
+		ok: true,
+		// These aggregate fields deliberately disagree with the enabled
+		// identities. selectedAvailability must never inherit them.
+		bucket: map[string]string{"codex-main": "maxed", "codex-spark": "maxed", "claude-main": "unauthed"},
+		reset:  map[string]int64{"codex-main": 999, "codex-spark": 999},
+		accounts: map[string][]account{
+			"openai-codex": {
+				{Provider: maxed.Provider, IdentityKey: maxed.IdentityKey},
+				{Provider: remaining.Provider, IdentityKey: remaining.IdentityKey},
+			},
+			"anthropic": {{Provider: claude.Provider, IdentityKey: claude.IdentityKey}},
+		},
+		accountUsage: map[accountKey][]usageWin{
+			maxed: {
+				{label: "5 hours", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"},
+				{label: "5 hours (Spark)", tier: "spark", pct: 100, secs: 80, dur: 5 * 3600, prov: "openai-codex"},
+			},
+			remaining: {
+				{label: "5 hours", pct: 20, secs: 200, dur: 5 * 3600, prov: "openai-codex"},
+				{label: "5 hours (Spark)", tier: "spark", pct: 40, secs: 120, dur: 5 * 3600, prov: "openai-codex"},
+			},
+		},
+	}
+
+	t.Run("disabled maxed account is excluded", func(t *testing.T) {
+		got := selectedAvailability(base, map[accountKey]bool{maxed: true})
+		if got.bucket["codex-main"] != "ok" || got.bucket["codex-spark"] != "ok" {
+			t.Fatalf("disabled maxed account struck selected routes: %+v", got.bucket)
+		}
+		if _, ok := got.reset["codex-main"]; ok {
+			t.Fatalf("disabled reset leaked into selected availability: %+v", got.reset)
+		}
+	})
+
+	t.Run("all disabled provider is unavailable", func(t *testing.T) {
+		got := selectedAvailability(base, map[accountKey]bool{maxed: true, remaining: true})
+		if got.bucket["codex-main"] != "unauthed" || got.bucket["codex-spark"] != "unauthed" {
+			t.Fatalf("provider with no enabled identities remained available: %+v", got.bucket)
+		}
+		if got.bucket["claude-main"] != "ok" || got.bucket["claude-fable"] != "ok" {
+			t.Fatalf("enabled provider without a real observation must stay unknown/non-down: %+v", got.bucket)
+		}
+	})
+
+	t.Run("mixed selected accounts retain capacity", func(t *testing.T) {
+		got := selectedAvailability(base, nil)
+		if got.bucket["codex-main"] != "ok" || got.bucket["codex-spark"] != "ok" {
+			t.Fatalf("one maxed identity overrode selected aggregate capacity: %+v", got.bucket)
+		}
+	})
+
+	t.Run("all selected maxed uses aggregate reset", func(t *testing.T) {
+		allMaxed := base
+		allMaxed.accountUsage = map[accountKey][]usageWin{
+			maxed:     {{label: "5 hours", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"}},
+			remaining: {{label: "5 hours", pct: 100, secs: 200, dur: 5 * 3600, prov: "openai-codex"}},
+		}
+		got := selectedAvailability(allMaxed, nil)
+		if got.bucket["codex-main"] != "maxed" || got.reset["codex-main"] != 150 {
+			t.Fatalf("selected aggregate bucket/reset = %q/%d, want maxed/150", got.bucket["codex-main"], got.reset["codex-main"])
+		}
+	})
+}
+
+func TestRoutingAndFacetAdvisoriesUseCommittedSelection(t *testing.T) {
+	m := layoutModel()
+	maxed := accountKey{Provider: "openai-codex", IdentityKey: "maxed"}
+	remaining := accountKey{Provider: "openai-codex", IdentityKey: "remaining"}
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	m.avail.bucket = map[string]string{"codex-main": "maxed", "codex-spark": "maxed"}
+	m.avail.reset = map[string]int64{"codex-main": 999, "codex-spark": 999}
+	m.avail.accounts = map[string][]account{
+		"openai-codex": {
+			{Provider: maxed.Provider, IdentityKey: maxed.IdentityKey, Email: "maxed@example.test"},
+			{Provider: remaining.Provider, IdentityKey: remaining.IdentityKey, Email: "remaining@example.test"},
+		},
+		"anthropic": {{Provider: claude.Provider, IdentityKey: claude.IdentityKey, Email: "claude@example.test"}},
+	}
+	m.avail.accountUsage = map[accountKey][]usageWin{
+		maxed: {
+			{label: "5 hours", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"},
+			{label: "5 hours (Spark)", tier: "spark", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"},
+		},
+		remaining: {
+			{label: "5 hours", pct: 20, secs: 200, dur: 5 * 3600, prov: "openai-codex"},
+			{label: "5 hours (Spark)", tier: "spark", pct: 20, secs: 200, dur: 5 * 3600, prov: "openai-codex"},
+		},
+		claude: {{label: "5 hours", pct: 10, secs: 300, dur: 5 * 3600, prov: "anthropic"}},
+	}
+	m.accountSelections.SetManualDisabled(map[accountKey]bool{maxed: true})
+	m.rdy, m.depth = true, 0
+	m.vp = viewport.New(120, 20)
+	m.syncPreview()
+	first := routeLines(stripAnsi(m.vp.View()))[0]
+	if strings.Contains(first, "→") {
+		t.Fatalf("disabled maxed account caused lead route fallback:\n%s", first)
+	}
+	lines, _ := m.genLines()
+	if text := stripAnsi(strings.Join(lines, "\n")); strings.Contains(text, "no usage left") {
+		t.Fatalf("disabled maxed account produced facet warning:\n%s", text)
+	}
+
+	if err := m.accountSelections.UpsertPreset("Maxed only", map[accountKey]bool{remaining: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.accountSelections.Activate("Maxed only") {
+		t.Fatal("named preset did not activate")
+	}
+	if !m.selectedLaunchAvailability().down("codex-main") {
+		t.Fatal("named preset change did not update launch-visible availability")
+	}
+	m.syncPreview()
+	first = routeLines(stripAnsi(m.vp.View()))[0]
+	if !strings.Contains(first, "→") {
+		t.Fatalf("selected maxed account did not advance lead route:\n%s", first)
+	}
+	lines, _ = m.genLines()
+	if text := stripAnsi(strings.Join(lines, "\n")); !strings.Contains(text, "Spark maxed") || !strings.Contains(text, "no usage left") {
+		t.Fatalf("facet advisory did not follow named preset:\n%s", text)
+	}
+
+	m.manager = true
+	m.managerPreset = managerPresetState{editing: true, draft: map[accountKey]bool{maxed: true}}
+	if m.selectedUsageAvailability().down("codex-main") {
+		t.Fatal("manager Usage draft did not preview the remaining-capacity identity")
+	}
+	if !m.selectedLaunchAvailability().down("codex-main") {
+		t.Fatal("manager draft became launch-visible")
+	}
+	lines, _ = m.genLines()
+	if text := stripAnsi(strings.Join(lines, "\n")); !strings.Contains(text, "Spark maxed") {
+		t.Fatalf("facet advisory consumed manager draft instead of committed selection:\n%s", text)
+	}
+	m.manager = false
+	if !m.selectedLaunchAvailability().down("codex-main") {
+		t.Fatal("leaving manager committed its unsaved draft")
+	}
+
+	if err := m.accountSelections.UpsertPreset("No providers", map[accountKey]bool{
+		maxed: true, remaining: true, claude: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.accountSelections.Activate("No providers") {
+		t.Fatal("all-disabled named preset did not activate")
+	}
+	m.sel["fable"] = "on"
+	lines, _ = m.genLines()
+	text := stripAnsi(strings.Join(lines, "\n"))
+	for _, want := range []string{"Spark unavailable", "Fable unavailable"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("all-disabled selection missing %q advisory:\n%s", want, text)
+		}
+	}
+}
+
+func TestReconcileUsageRetainsFablePerAccountIdentity(t *testing.T) {
+	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	prevFable := usageWin{label: "Claude 7 Day (Fable)", pct: 72, tier: "fable", secs: 3 * day, dur: 7 * day, prov: "anthropic", observed: 123}
+	prev := availability{
+		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
+		wins: []usageWin{{label: "Claude 5 Hour", pct: 10, secs: 1, dur: 5 * 3600, prov: "anthropic"}, prevFable},
+		accountUsage: map[accountKey][]usageWin{key: {
+			{label: "Claude 5 Hour", pct: 10, secs: 1, dur: 5 * 3600, prov: "anthropic"},
+			prevFable,
+		}},
+	}
+	next := availability{
+		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
+		wins: []usageWin{{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"}},
+		accountUsage: map[accountKey][]usageWin{key: {
+			{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"},
+		}},
+	}
+	got, _ := reconcileUsage(prev, next)
+	accountWins := got.accountUsage[key]
+	if len(accountWins) != 2 || !accountWins[1].stale || accountWins[1].missing ||
+		accountWins[1].pct != 72 || accountWins[1].observed != 123 {
+		t.Fatalf("per-account Fable retention = %+v", accountWins)
+	}
+
+	freshNext := availability{
+		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
+		wins: []usageWin{{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"}},
+		accountUsage: map[accountKey][]usageWin{key: {
+			{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"},
+		}},
+	}
+	first, _ := reconcileUsage(availability{bucket: map[string]string{}, reset: map[string]int64{}}, freshNext)
+	firstWins := first.accountUsage[key]
+	if len(firstWins) != 2 || !firstWins[1].missing {
+		t.Fatalf("first missing per-account Fable must be explicit, got %+v", firstWins)
+	}
+}
+
+func TestReconcileUsageRetainsMissingAccountWithCachedAge(t *testing.T) {
+	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	acct := account{Provider: key.Provider, IdentityKey: key.IdentityKey, Email: "alex@example.test"}
+	observed := time.Now().Add(-2 * time.Hour).Unix()
+	prev := availability{
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: map[string][]account{"anthropic": {acct}},
+		accountUsage: map[accountKey][]usageWin{key: {
+			{label: "Claude 7 Day", pct: 42, secs: 2 * day, dur: 7 * day, prov: "anthropic", observed: observed},
+		}},
+	}
+	next := availability{
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts:     map[string][]account{"anthropic": {acct}},
+		accountUsage: map[accountKey][]usageWin{},
+	}
+	got, stale := reconcileUsage(prev, next)
+	if stale {
+		t.Fatal("one omitted account must not mark the whole Usage fetch stale")
+	}
+	wins := got.accountUsage[key]
+	if len(wins) != 1 || !wins[0].stale || wins[0].pct != 42 || wins[0].observed != observed {
+		t.Fatalf("cached account usage = %+v", wins)
+	}
+	m := layoutModel()
+	m.avail = got
+	panel := stripAnsi(m.usagePanel())
+	for _, want := range []string{"42% used", "cached 2h ago"} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("cached Usage missing %q:\n%s", want, panel)
+		}
+	}
+	if strings.Contains(panel, "usage unavailable") {
+		t.Errorf("cached Usage also claimed the account was unavailable:\n%s", panel)
+	}
+}
+
+func TestSelectedUsageUsesCommittedSelectionAndManagerDraft(t *testing.T) {
+	m := layoutModel()
+	codex := accountKey{Provider: "openai-codex", IdentityKey: "codex"}
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	m.accountSelections = accountSelectionState{
+		active:  "Focus",
+		presets: []accountSelectionPreset{{Name: "Focus", Disabled: map[accountKey]bool{codex: true}}},
+	}
+
+	generator := stripAnsi(m.usagePanel())
+	if strings.Contains(generator, "Codex (co*)") || !strings.Contains(generator, "Claude (cl*)") {
+		t.Fatalf("generator Usage did not use committed selection:\n%s", generator)
+	}
+	m.manager = true
+	m.managerPreset = managerPresetState{editing: true, draft: map[accountKey]bool{claude: true}}
+	manager := stripAnsi(m.usagePanel())
+	if strings.Contains(manager, "Claude (cl*)") || !strings.Contains(manager, "Codex (co*)") {
+		t.Fatalf("manager Usage did not preview its explicit draft:\n%s", manager)
+	}
+	m.manager = false
+	again := stripAnsi(m.usagePanel())
+	if again != generator {
+		t.Fatal("manager draft became launch-visible after leaving manager")
+	}
+	if m.fetching {
+		t.Fatal("selection-only derivation started a usage fetch")
+	}
+}
+
+func TestGeneratedTrustedLaunchLifecycle(t *testing.T) {
+	server := testAccountBroker(t, `{"reports":[]}`)
+	broker := brokerConfig{URL: server.URL, Token: "secret", SnapshotCache: "/tmp/code-snapshot-cache"}
+	for _, tc := range []struct {
+		name string
+		exit int
+	}{{name: "success", exit: 0}, {name: "failure", exit: 23}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "capture")
+			allowlistCopy := filepath.Join(dir, "allowlist-copy")
+			script := filepath.Join(dir, "omp")
+			body := fmt.Sprintf(`#!/bin/sh
+cfg=
+take_cfg=
+for arg in "$@"; do
+  if [ "$take_cfg" = yes ]; then cfg="$arg"; take_cfg=; fi
+  if [ "$arg" = --config ]; then take_cfg=yes; fi
+done
+[ -f "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" ] || exit 97
+[ -f "$cfg" ] || exit 98
+printf '%%s\n%%s\n%%s\n%%s\n%%s\n%%s\n' "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" "$cfg" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" "$OMP_AUTH_BROKER_SNAPSHOT_CACHE" "$*" > "$CAPTURE"
+cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
+exit %d
+`, tc.exit)
+			if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CODE_OMP", script)
+			t.Setenv("CAPTURE", capture)
+			t.Setenv("ALLOWLIST_COPY", allowlistCopy)
+			oldArgs := os.Args
+			os.Args = []string{"code", "--profile", "forwarded", "--profile=also-forwarded", "hello"}
+			defer func() { os.Args = oldArgs }()
+
+			selections := defaultAccountSelectionState()
+			selections.SetManualDisabled(map[accountKey]bool{
+				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
+			})
+			status := launchGenerated("models: {}\n", "prompt", broker, selections)
+			if status != tc.exit {
+				t.Fatalf("exit status = %d, want %d", status, tc.exit)
+			}
+			raw, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+			if len(lines) != 6 {
+				t.Fatalf("capture lines = %q", lines)
+			}
+			if _, err := os.Stat(lines[0]); !os.IsNotExist(err) {
+				t.Errorf("allowlist survived child exit: %q err=%v", lines[0], err)
+			}
+			if _, err := os.Stat(lines[1]); !os.IsNotExist(err) {
+				t.Errorf("generated config survived child exit: %q err=%v", lines[1], err)
+			}
+			if lines[2] != broker.URL || lines[3] != broker.Token || lines[4] != broker.SnapshotCache {
+				t.Errorf("trusted auth env = %q, want broker overlay", lines[2:5])
+			}
+			allowlistBody, err := os.ReadFile(allowlistCopy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(allowlistBody), "unmatched-key") ||
+				!strings.Contains(string(allowlistBody), "anthropic-key") ||
+				!strings.Contains(string(allowlistBody), "codex-key") {
+				t.Errorf("launch allowlist ignored immutable account selection: %s", allowlistBody)
+			}
+			if strings.Contains(lines[5], "--profile") {
+				t.Errorf("trusted argv forwarded a profile: %q", lines[5])
+			}
+			if !strings.Contains(lines[5], "--config") || !strings.Contains(lines[5], "hello prompt") {
+				t.Errorf("generated argv lost config/forwarded/prompt args: %q", lines[5])
+			}
+		})
+	}
+}
+
+func TestTrustedLaunchUsesActiveSelectionSnapshots(t *testing.T) {
+	server := testAccountBroker(t, `{"reports":[]}`)
+	broker := brokerConfig{URL: server.URL, Token: "secret"}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "omp")
+	body := `#!/bin/sh
+printf '%s|%s|%s' "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" > "$ENV_COPY"
+cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
+`
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", script)
+
+	anthropic := accountKey{Provider: "anthropic", IdentityKey: "anthropic-key"}
+	codex := accountKey{Provider: "openai-codex", IdentityKey: "codex-key"}
+	selections := defaultAccountSelectionState()
+	selections.SetManualDisabled(map[accountKey]bool{anthropic: true})
+	if err := selections.UpsertPreset("Codex off", map[accountKey]bool{codex: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	launch := func(label string) (string, string) {
+		t.Helper()
+		envCopy := filepath.Join(dir, label+"-env")
+		allowlistCopy := filepath.Join(dir, label+"-allowlist")
+		t.Setenv("ENV_COPY", envCopy)
+		t.Setenv("ALLOWLIST_COPY", allowlistCopy)
+		if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", broker, selections); status != 0 {
+			t.Fatalf("%s launch status = %d", label, status)
+		}
+		envBody, err := os.ReadFile(envCopy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowlistBody, err := os.ReadFile(allowlistCopy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(envBody), string(allowlistBody)
+	}
+
+	manualEnv, manualAllowlist := launch("manual")
+	const wantManual = "{\"anthropic\":[],\"openai-codex\":[\"codex-key\",\"unmatched-key\"]}\n"
+	if manualAllowlist != wantManual {
+		t.Fatalf("Manual allowlist = %q, want %q", manualAllowlist, wantManual)
+	}
+	manualEnvParts := strings.Split(manualEnv, "|")
+	if len(manualEnvParts) != 3 || manualEnvParts[1] != broker.URL || manualEnvParts[2] != broker.Token {
+		t.Fatalf("Manual child env = %q", manualEnv)
+	}
+	if _, err := os.Stat(manualEnvParts[0]); !os.IsNotExist(err) {
+		t.Fatalf("Manual child's captured allowlist remains mutable after exit: %v", err)
+	}
+
+	if !selections.Activate("Codex off") {
+		t.Fatal("named preset did not activate")
+	}
+	namedEnv, namedAllowlist := launch("named")
+	const wantNamed = "{\"anthropic\":[\"anthropic-key\"],\"openai-codex\":[\"unmatched-key\"]}\n"
+	if namedAllowlist != wantNamed {
+		t.Fatalf("named allowlist = %q, want %q", namedAllowlist, wantNamed)
+	}
+	manualAllowlistAfter, err := os.ReadFile(filepath.Join(dir, "manual-allowlist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualEnvAfter, err := os.ReadFile(filepath.Join(dir, "manual-env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(manualAllowlistAfter) != wantManual || string(manualEnvAfter) != manualEnv {
+		t.Fatal("preset switch mutated already-captured Manual child inputs")
+	}
+	namedEnvParts := strings.Split(namedEnv, "|")
+	if len(namedEnvParts) != 3 || namedEnvParts[0] == manualEnvParts[0] {
+		t.Fatalf("future launch did not receive a fresh immutable allowlist: manual=%q named=%q", manualEnv, namedEnv)
+	}
+	if _, err := os.Stat(namedEnvParts[0]); !os.IsNotExist(err) {
+		t.Fatalf("named child's captured allowlist remains mutable after exit: %v", err)
+	}
+}
+
+func TestTrustedLaunchAbortsWithoutSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "started")
+	script := filepath.Join(dir, "omp")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n: > \"$MARKER\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", script)
+	t.Setenv("MARKER", marker)
+	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState()); status == 0 {
+		t.Fatal("trusted launch without a snapshot unexpectedly succeeded")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("trusted child started without a snapshot: %v", err)
+	}
+}
+
+func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "env")
+	script := filepath.Join(dir, "ompu")
+	body := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"${OMP_AUTH_BROKER_URL+set}\" \"${OMP_AUTH_BROKER_TOKEN+set}\" \"${OMP_AUTH_BROKER_SNAPSHOT_CACHE+set}\" \"${OMP_AUTH_ACCOUNT_ALLOWLIST_FILE+set}\" \"${CODE_AUTH_ACCOUNT_STATE+set}\" > \"$CAPTURE\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP_UNTRUSTED", script)
+	t.Setenv("CAPTURE", capture)
+	t.Setenv("OMP_AUTH_BROKER_URL", "http://ambient")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "ambient-secret")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "/tmp/ambient")
+	t.Setenv("OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "/tmp/ambient-allowlist")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", "/tmp/ambient-state")
+	oldArgs := os.Args
+	os.Args = []string{"code", "--profile", "ambient"}
+	defer func() { os.Args = oldArgs }()
+	if status := runSandbox("CODE_OMP_UNTRUSTED", nil, ""); status != 0 {
+		t.Fatalf("sandbox status = %d", status)
+	}
+	raw, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "||||" {
+		t.Errorf("sandbox inherited auth routing: %q", got)
 	}
 }

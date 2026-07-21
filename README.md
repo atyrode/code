@@ -61,7 +61,7 @@ a forwarded `--profile` is replaced).
   [ollama](https://ollama.com); the prompt is forwarded into the session).
 - **Usage at a glance** — quota bars and reset countdowns per provider,
   before you spend the scarce bucket.
-- **Auth vaults** — cycle isolated provider identities (`a` / `v`).
+- **Account presets** — choose broker accounts and save reusable selections (`v`).
 - **Cost & speed meters** — every dial change reprices the session.
 - **Guided first run** — no catalog? `code` builds one from your omp,
   interactively; `code generate` scripts the same thing.
@@ -89,8 +89,8 @@ nix run github:atyrode/code#with-omp   # code + a pinned omp on PATH
 
 Unless you took `#with-omp`, you need
 [oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed — `code`
-launches it, it doesn't replace it. (Either way, omp still needs your
-provider logins: `omp login`.)
+launches it, it doesn't replace it. Authenticate providers directly with OMP
+using `omp auth-broker login` before running `code`.
 
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you

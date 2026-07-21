@@ -2,31 +2,31 @@
   fetchurl,
   lib,
   makeWrapper,
+  patchelf,
   stdenv,
 }:
 
-# oh-my-pi's official release binaries, pinned for the `with-omp` bundle.
-# The Linux assets are dynamically linked Bun builds, so they run through the
-# platform's dynamic linker explicitly (same packaging the author's dotfiles
-# use in production).
+# atyrode's OMP fork release binaries, pinned for the `with-omp` bundle.
+# Linux assets are Bun single-file executables. Patch PT_INTERP in place so
+# process.execPath remains the OMP binary when it re-execs subprocess workers.
 let
-  version = "17.0.1";
+  version = "17.0.6-atyrode.1";
   sources = {
     "x86_64-linux" = {
       asset = "omp-linux-x64";
-      hash = "sha256-QnqHQ7C073AcxKDGa/HwuRzsBigOjfYilKEU4H+zghU=";
+      hash = "sha256-NASJMAsKhGsRvljHMuRicURE5S5tg8KX/h8sIzXnAAw=";
     };
     "aarch64-linux" = {
       asset = "omp-linux-arm64";
-      hash = "sha256-jOcwYeAvbU4H36FND1k9CJSYcFb3A7GMGxUY1WHupQk=";
+      hash = "sha256-xKj46OTI9zAxU4AKb4HnLkuuhqqCVCJQFjN/pJ6eEwg=";
     };
     "x86_64-darwin" = {
       asset = "omp-darwin-x64";
-      hash = "sha256-FjGg7Y4vc0zoZ7tEvNuh/W3Os12KtMIKE3Yp69zWy0Y=";
+      hash = "sha256-lNXlnkFDbOUCahBsjoSpO/8TWNLHGvOodkFOkXlnN3M=";
     };
     "aarch64-darwin" = {
       asset = "omp-darwin-arm64";
-      hash = "sha256-73v/zOUjOlogosd77hfgpY7uTYaoysxed9BaPO6VTPg=";
+      hash = "sha256-SeEzTxt/jVR63+Ep6ICqj0TfuvK3ix1W0rlHfwZzRYE=";
     };
   };
   source =
@@ -38,7 +38,7 @@ stdenv.mkDerivation {
   inherit version;
 
   src = fetchurl {
-    url = "https://github.com/can1357/oh-my-pi/releases/download/v${version}/${source.asset}";
+    url = "https://github.com/atyrode/omp/releases/download/v${version}/${source.asset}";
     inherit (source) hash;
   };
 
@@ -46,7 +46,10 @@ stdenv.mkDerivation {
   dontPatchELF = true;
   dontStrip = true;
 
-  nativeBuildInputs = lib.optionals stdenv.hostPlatform.isLinux [ makeWrapper ];
+  nativeBuildInputs = lib.optionals stdenv.hostPlatform.isLinux [
+    makeWrapper
+    patchelf
+  ];
 
   installPhase = ''
     runHook preInstall
@@ -55,8 +58,9 @@ stdenv.mkDerivation {
       if stdenv.hostPlatform.isLinux then
         ''
           install -Dm755 "$src" "$out/libexec/omp"
-          makeWrapper ${stdenv.cc.bintools.dynamicLinker} "$out/bin/omp" \
-            --add-flags "$out/libexec/omp"
+          patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} "$out/libexec/omp"
+          makeWrapper "$out/libexec/omp" "$out/bin/omp" \
+            --suffix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ stdenv.cc.cc.lib ]}
         ''
       else
         ''
@@ -69,7 +73,7 @@ stdenv.mkDerivation {
 
   meta = {
     description = "AI coding agent for the terminal";
-    homepage = "https://github.com/can1357/oh-my-pi";
+    homepage = "https://github.com/atyrode/omp";
     license = lib.licenses.mit;
     mainProgram = "omp";
     platforms = builtins.attrNames sources;

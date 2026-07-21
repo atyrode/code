@@ -9,112 +9,291 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
-const day = int64(86400)
+func TestLoadAccountsValidatesFiltersAndSortsCentralSnapshot(t *testing.T) {
+	const snapshot = `{"credentials":[
+		{"provider":"openai-codex","identityKey":"z-codex","credential":{"type":"oauth","email":"z@example.com","accessToken":"redacted"}},
+		{"provider":"anthropic","identityKey":"c-claude","credential":{"type":"oauth","email":"c@example.com"}},
+		{"provider":"other","identityKey":"ignored","credential":{"type":"oauth","email":"ignored@example.com"}},
+		{"provider":"anthropic","identityKey":"api-key","credential":{"type":"api_key"}},
+		{"provider":"anthropic","identityKey":"a-claude","credential":{"type":"oauth","email":"a@example.com"}},
+		{"provider":"openai-codex","identityKey":"a-codex","credential":{"type":"oauth","email":"oa@example.com"}},
+		{"provider":"anthropic","identityKey":"b-claude","credential":{"type":"oauth","email":"b@example.com"}}
+	]}`
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		if r.URL.Path != "/v1/snapshot" {
+			t.Fatalf("snapshot path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(snapshot))
+	}))
+	defer server.Close()
 
-func TestParseVaults(t *testing.T) {
-	got := parseVaults(`[
-		{"id":"primary","label":"primary","profile":"default","claude":"Operator","codex":"Operator","brokerUrl":"u1","tokenFile":"t1","snapshotCache":"c1"},
-		{"id":"secondary","profile":"secondary","claude":"Collaborator"},
-		{"id":"../bad","label":"bad"},
-		{"id":"primary","label":"duplicate"}
-	]`)
-	want := []vault{
-		{ID: "primary", Label: "primary", Profile: "default", Claude: "Operator", Codex: "Operator", BrokerURL: "u1", TokenFile: "t1", SnapshotCache: "c1"},
-		{ID: "secondary", Label: "secondary", Profile: "secondary", Claude: "Collaborator", Codex: "secondary"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("vaults = %#v, want %#v", got, want)
-	}
-}
-
-func TestParseVaultsEmptyFallback(t *testing.T) {
-	got := parseVaults("")
-	if len(got) != 1 || got[0].ID != "default" || got[0].Profile != "default" {
-		t.Fatalf("empty manifest must degrade to a single default vault, got %#v", got)
-	}
-}
-
-func TestLoadVaultsFromMachineLocalFile(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	path := filepath.Join(configHome, "code", "auth-vaults.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`[
-		{"id":"local","profile":"local-profile","claude":"Owner A","codex":"Owner B"}
-	]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got := loadVaults("", "")
-	if len(got) != 1 || got[0].ID != "local" || got[0].Profile != "local-profile" {
-		t.Fatalf("XDG-local vault manifest was not loaded: %#v", got)
-	}
-
-	override := loadVaults(`[{"id":"override","profile":"one-shot"}]`, path)
-	if len(override) != 1 || override[0].ID != "override" {
-		t.Fatalf("explicit JSON must override the local file: %#v", override)
-	}
-}
-
-func TestResolveVaultsRetainsOnlyWritableManifestPath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vaults.json")
-	_, gotPath := resolveVaults("", path)
-	if gotPath != path {
-		t.Fatalf("resolved manifest path = %q, want %q", gotPath, path)
-	}
-	_, gotPath = resolveVaults(`[{"id":"raw"}]`, path)
-	if gotPath != "" {
-		t.Fatalf("raw JSON override must disable editing, path=%q", gotPath)
-	}
-	_, gotPath = resolveVaults("", "vaults-in-repository.json")
-	if gotPath != "" {
-		t.Fatalf("repository-relative manifest must disable editing, path=%q", gotPath)
-	}
-}
-
-func TestNewVaultSlugCollisionAndLocalPaths(t *testing.T) {
-	state, cache := t.TempDir(), t.TempDir()
-	t.Setenv("XDG_STATE_HOME", state)
-	t.Setenv("XDG_CACHE_HOME", cache)
-	existing := []vault{{
-		ID: "team-vault", Profile: "team-vault", BrokerURL: "http://127.0.0.1:43123",
-	}}
-	got, err := newVault("  Team Vault!  ", existing)
+	got, err := loadAccounts(brokerConfig{URL: server.URL, Token: "central-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "team-vault-2" || got.Profile != "team-vault-2" || got.Label != "Team Vault!" {
-		t.Fatalf("collision-safe identity = %+v", got)
+	if authorization != "Bearer central-secret" {
+		t.Fatalf("authorization = %q", authorization)
 	}
-	if !strings.HasPrefix(got.BrokerURL, "http://127.0.0.1:") || got.BrokerURL == existing[0].BrokerURL {
-		t.Fatalf("broker URL is not unique loopback: %q", got.BrokerURL)
+	if len(got) != 2 || len(got[anthropicProvider]) != 3 || len(got[openAIProvider]) != 2 {
+		t.Fatalf("account groups = %#v", got)
 	}
-	if got.TokenFile != filepath.Join(state, "code", "auth-vaults", got.ID, "broker.token") {
-		t.Fatalf("token path = %q", got.TokenFile)
+	if keys := accountKeys(got[anthropicProvider]); !reflect.DeepEqual(keys, []string{"a-claude", "b-claude", "c-claude"}) {
+		t.Fatalf("anthropic sort = %#v", keys)
 	}
-	if got.SnapshotCache != filepath.Join(cache, "code", "auth-vaults", got.ID, "snapshot.json") {
-		t.Fatalf("snapshot path = %q", got.SnapshotCache)
+	if keys := accountKeys(got[openAIProvider]); !reflect.DeepEqual(keys, []string{"a-codex", "z-codex"}) {
+		t.Fatalf("OpenAI sort = %#v", keys)
 	}
 }
 
-func TestWriteVaultManifestAtomicPrivateAndPreservesEntries(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "private")
-	path := filepath.Join(parent, "vaults.json")
-	first := vault{
-		ID: "primary", Label: "Primary", Profile: "default", Claude: "configured owner",
-		Codex: "configured owner", BrokerURL: "http://127.0.0.1:43123",
-		TokenFile: "/state/primary/token", SnapshotCache: "/cache/primary/snapshot.json",
+func TestLoadAccountsRejectsMalformedRelevantIdentities(t *testing.T) {
+	for name, snapshot := range map[string]string{
+		"missing key":      `{"credentials":[{"provider":"anthropic","credential":{"type":"oauth","email":"x"}}]}`,
+		"duplicate":        `{"credentials":[{"provider":"anthropic","identityKey":"x","credential":{"type":"oauth"}},{"provider":"anthropic","identityKey":"x","credential":{"type":"oauth"}}]}`,
+		"missing metadata": `{"credentials":[{"provider":"openai-codex","identityKey":"x","credential":null}]}`,
+		"trailing JSON":    `{"credentials":[]} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(snapshot)) }))
+			defer server.Close()
+			if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "token"}); err == nil {
+				t.Fatal("malformed snapshot accepted")
+			}
+		})
 	}
-	second := vault{
-		ID: "secondary", Label: "Secondary", Profile: "secondary",
-		BrokerURL: "http://127.0.0.1:43124", TokenFile: "/state/secondary/token",
-		SnapshotCache: "/cache/secondary/snapshot.json",
+}
+
+func TestAccountSelectionStateDefaultManualAndDefensiveCopies(t *testing.T) {
+	state := defaultAccountSelectionState()
+	if state.ActiveName() != accountSelectionManualName || len(state.CurrentDisabled()) != 0 || len(state.Presets()) != 0 {
+		t.Fatalf("default state = active %q, disabled %#v, presets %#v", state.ActiveName(), state.CurrentDisabled(), state.Presets())
 	}
-	if err := writeVaultManifest(path, []vault{first, second}); err != nil {
+
+	manual := map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "manual"}: true}
+	state.SetManualDisabled(manual)
+	manual[accountKey{Provider: openAIProvider, IdentityKey: "mutated-input"}] = true
+	gotManual := state.ManualDisabled()
+	gotManual[accountKey{Provider: openAIProvider, IdentityKey: "mutated-output"}] = true
+	if !reflect.DeepEqual(state.CurrentDisabled(), map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "manual"}: true}) {
+		t.Fatalf("manual selection was not defensively copied: %#v", state.CurrentDisabled())
+	}
+
+	presetDisabled := map[accountKey]bool{{Provider: openAIProvider, IdentityKey: "preset"}: true}
+	if err := state.UpsertPreset("  Focus  ", presetDisabled); err != nil {
+		t.Fatal(err)
+	}
+	presetDisabled[accountKey{Provider: anthropicProvider, IdentityKey: "mutated-input"}] = true
+	if !state.Activate("focus") || state.ActiveName() != "Focus" {
+		t.Fatalf("case-insensitive activation did not canonicalize name: %q", state.ActiveName())
+	}
+	gotPreset, ok := state.Preset(" FOCUS ")
+	if !ok {
+		t.Fatal("preset lookup failed")
+	}
+	gotPreset.Disabled[accountKey{Provider: anthropicProvider, IdentityKey: "mutated-output"}] = true
+	presets := state.Presets()
+	presets[0].Name = "mutated"
+	presets[0].Disabled[accountKey{Provider: anthropicProvider, IdentityKey: "mutated-slice"}] = true
+	if !reflect.DeepEqual(state.CurrentDisabled(), map[accountKey]bool{{Provider: openAIProvider, IdentityKey: "preset"}: true}) {
+		t.Fatalf("named selection was not defensively copied: %#v", state.CurrentDisabled())
+	}
+	if err := state.UpsertPreset("FOCUS", map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "updated"}: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Presets()) != 1 || state.ActiveName() != "Focus" {
+		t.Fatalf("case-insensitive update created or renamed preset: %#v / %q", state.Presets(), state.ActiveName())
+	}
+	if !state.DeletePreset("fOcUs") || state.ActiveName() != accountSelectionManualName || len(state.Presets()) != 0 {
+		t.Fatalf("deleting active preset did not fall back to Manual: %#v / %q", state.Presets(), state.ActiveName())
+	}
+}
+
+func TestAccountSelectionStateRejectsInvalidPresetNames(t *testing.T) {
+	state := defaultAccountSelectionState()
+	for _, name := range []string{"", "   ", "manual", " MANUAL "} {
+		if err := state.UpsertPreset(name, nil); err == nil {
+			t.Fatalf("accepted reserved or empty preset name %q", name)
+		}
+	}
+	if state.Activate("missing") || state.ActiveName() != accountSelectionManualName {
+		t.Fatalf("unknown activation did not fall back to Manual: %q", state.ActiveName())
+	}
+}
+
+func TestAccountSelectionUnknownAccountsDefaultEnabledAndProviderKeysAreIsolated(t *testing.T) {
+	state := defaultAccountSelectionState()
+	state.SetManualDisabled(map[accountKey]bool{
+		{Provider: anthropicProvider, IdentityKey: "shared"}:            true,
+		{Provider: anthropicProvider, IdentityKey: "no-longer-present"}: true,
+	})
+	accounts := map[string][]account{
+		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "shared"}, {Provider: anthropicProvider, IdentityKey: "new"}},
+		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "shared"}},
+	}
+	got := buildAccountAllowlist(accounts, state.CurrentDisabled())
+	if !reflect.DeepEqual(got[anthropicProvider], []string{"new"}) {
+		t.Fatalf("anthropic allowlist = %#v", got[anthropicProvider])
+	}
+	if !reflect.DeepEqual(got[openAIProvider], []string{"shared"}) {
+		t.Fatalf("same identityKey in another provider must remain enabled: %#v", got[openAIProvider])
+	}
+}
+
+func TestBuildAccountAllowlistAllOffKeepsExactProviderArrays(t *testing.T) {
+	accounts := map[string][]account{
+		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
+		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
+	}
+	disabled := map[accountKey]bool{
+		{Provider: anthropicProvider, IdentityKey: "a"}: true,
+		{Provider: openAIProvider, IdentityKey: "o"}:    true,
+	}
+	got := buildAccountAllowlist(accounts, disabled)
+	if len(got) != 2 || got[anthropicProvider] == nil || got[openAIProvider] == nil || len(got[anthropicProvider]) != 0 || len(got[openAIProvider]) != 0 {
+		t.Fatalf("all-off allowlist must contain two empty arrays: %#v", got)
+	}
+}
+
+func TestLoadAccountSelectionStateNormalizesPresetsAndUnknownActive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	body := `{"active":"missing","manual":{"disabled":[{"provider":"anthropic","identityKey":"manual"}]},"presets":[` +
+		`{"name":"  First  ","disabled":[{"provider":"openai-codex","identityKey":"one"}]},` +
+		`{"name":"first","disabled":[{"provider":"anthropic","identityKey":"duplicate"}]},` +
+		`{"name":"Manual","disabled":[]},` +
+		`{"name":"Broken","disabled":[{"provider":"other","identityKey":"bad"}]},` +
+		`{"name":"Second","disabled":[]}]}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := loadAccountSelectionState(path)
+	if state.ActiveName() != accountSelectionManualName {
+		t.Fatalf("unknown active selection = %q", state.ActiveName())
+	}
+	if !reflect.DeepEqual(state.ManualDisabled(), map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "manual"}: true}) {
+		t.Fatalf("manual disabled = %#v", state.ManualDisabled())
+	}
+	presets := state.Presets()
+	if len(presets) != 2 || presets[0].Name != "First" || presets[1].Name != "Second" {
+		t.Fatalf("normalized presets = %#v", presets)
+	}
+}
+
+func TestLoadAccountSelectionStateActiveNamedAndMalformedDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	valid := `{"active":"night","manual":{"disabled":[]},"presets":[{"name":"Night","disabled":[{"provider":"anthropic","identityKey":"n"}]}]}`
+	if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := loadAccountSelectionState(path)
+	if state.ActiveName() != "Night" || !reflect.DeepEqual(state.CurrentDisabled(), map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "n"}: true}) {
+		t.Fatalf("active named state = %q / %#v", state.ActiveName(), state.CurrentDisabled())
+	}
+	malformedActive := `{"active":42,"manual":{"disabled":[]},"presets":[{"name":"Kept","disabled":[]}]}`
+	if err := os.WriteFile(path, []byte(malformedActive), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state = loadAccountSelectionState(path)
+	if state.ActiveName() != accountSelectionManualName || len(state.Presets()) != 1 || state.Presets()[0].Name != "Kept" {
+		t.Fatalf("malformed active discarded valid presets: %q / %#v", state.ActiveName(), state.Presets())
+	}
+	if err := os.WriteFile(path, []byte(`{"active":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state = loadAccountSelectionState(path)
+	if state.ActiveName() != accountSelectionManualName || len(state.ManualDisabled()) != 0 || len(state.Presets()) != 0 {
+		t.Fatalf("malformed state did not default safely: %#v", state)
+	}
+}
+
+func TestWriteAccountSelectionStateAtomicPrivateAndDeterministic(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "account-state")
+	path := filepath.Join(parent, "state.json")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := defaultAccountSelectionState()
+	state.SetManualDisabled(map[accountKey]bool{
+		{Provider: openAIProvider, IdentityKey: "z"}:           true,
+		{Provider: anthropicProvider, IdentityKey: "b"}:        true,
+		{Provider: anthropicProvider, IdentityKey: "a"}:        true,
+		{Provider: openAIProvider, IdentityKey: "false-entry"}: false,
+	})
+	if err := state.UpsertPreset("Work", map[accountKey]bool{{Provider: openAIProvider, IdentityKey: "x"}: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.UpsertPreset("Quiet", map[accountKey]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Activate("work") {
+		t.Fatal("could not activate preset")
+	}
+	if err := writeAccountSelectionState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	parentInfo, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentInfo.Mode().Perm() != 0o700 || fileInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions parent=%#o file=%#o", parentInfo.Mode().Perm(), fileInfo.Mode().Perm())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"active":"Work","manual":{"disabled":[{"provider":"anthropic","identityKey":"a"},{"provider":"anthropic","identityKey":"b"},{"provider":"openai-codex","identityKey":"z"}]},"presets":[{"name":"Work","disabled":[{"provider":"openai-codex","identityKey":"x"}]},{"name":"Quiet","disabled":[]}]}` + "\n"
+	if string(body) != want {
+		t.Fatalf("state JSON = %q, want %q", body, want)
+	}
+	loaded := loadAccountSelectionState(path)
+	if loaded.ActiveName() != "Work" || !reflect.DeepEqual(loaded.CurrentDisabled(), state.CurrentDisabled()) {
+		t.Fatalf("atomic replacement did not round trip: %q / %#v", loaded.ActiveName(), loaded.CurrentDisabled())
+	}
+	matches, err := filepath.Glob(filepath.Join(parent, ".account-state-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("atomic temporary files remain: %#v (%v)", matches, err)
+	}
+}
+
+func TestWriteAccountSelectionStateRejectsDuplicateNamesAndCleansFailedTemporaryFile(t *testing.T) {
+	parent := t.TempDir()
+	state := defaultAccountSelectionState()
+	state.presets = []accountSelectionPreset{{Name: "One"}, {Name: " one "}}
+	if err := writeAccountSelectionState(filepath.Join(parent, "state"), state); err == nil {
+		t.Fatal("case-insensitive duplicate preset names were accepted")
+	}
+
+	state = defaultAccountSelectionState()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAccountSelectionState(target, state); err == nil {
+		t.Fatal("atomic replacement over directory unexpectedly succeeded")
+	}
+	matches, err := filepath.Glob(filepath.Join(parent, ".account-state-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("failed write left temporary files: %#v (%v)", matches, err)
+	}
+}
+
+func TestWriteAccountAllowlistContentsPermissionsAndIdempotentCleanup(t *testing.T) {
+	accounts := map[string][]account{
+		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "b"}, {Provider: anthropicProvider, IdentityKey: "a"}},
+		openAIProvider:    {},
+	}
+	path, cleanup, err := writeAccountAllowlist(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true})
+	if err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -122,570 +301,139 @@ func TestWriteVaultManifestAtomicPrivateAndPreservesEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("manifest mode = %o, want 600", info.Mode().Perm())
+		t.Fatalf("allowlist mode = %#o", info.Mode().Perm())
 	}
-	parentInfo, err := os.Stat(parent)
+	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parentInfo.Mode().Perm() != 0o700 {
-		t.Fatalf("manifest parent mode = %o, want 700", parentInfo.Mode().Perm())
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var got map[string][]string
+	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	var roundTrip []vault
-	if err := json.Unmarshal(data, &roundTrip); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(roundTrip, []vault{first, second}) {
-		t.Fatalf("manifest round trip changed entries: %#v", roundTrip)
-	}
-}
-
-func TestLoadVaultAccountsReadsOnlyRedactedIdentityMetadata(t *testing.T) {
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("vault-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if r.Method != http.MethodGet || r.URL.Path != "/v1/snapshot" {
-			t.Fatalf("identity discovery request = %s %s", r.Method, r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer vault-secret" {
-			t.Fatal("identity discovery omitted the vault bearer token")
-		}
-		_, _ = w.Write([]byte(`{"credentials":[
-			{"provider":"anthropic","identityKey":"email:collaborator@example.test","credential":{"email":"collaborator@example.test","access":"must-not-decode","refresh":"must-not-decode"}},
-			{"provider":"openai-codex","identityKey":"email:operator@example.test","credential":{"email":"operator@example.test","access":"must-not-decode"}},
-			{"provider":"cerebras","identityKey":"key:ignored","credential":{}}
-		]}`))
-	}))
-	defer server.Close()
-
-	accounts, err := loadVaultAccounts(vault{BrokerURL: server.URL, TokenFile: tokenPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requests != 1 {
-		t.Fatalf("snapshot requests = %d, want 1", requests)
-	}
-	if got := accounts["anthropic"]; len(got) != 1 || got[0].Email != "collaborator@example.test" {
-		t.Fatalf("Claude identity = %#v", got)
-	}
-	if got := accounts["openai-codex"]; len(got) != 1 || got[0].IdentityKey != "email:operator@example.test" {
-		t.Fatalf("Codex identity = %#v", got)
-	}
-	if _, ok := accounts["cerebras"]; ok {
-		t.Fatal("unmanaged provider leaked into vault identity display")
-	}
-	if got, err := os.ReadFile(tokenPath); err != nil || string(got) != "vault-secret\n" {
-		t.Fatal("identity discovery mutated the token file")
-	}
-}
-
-func TestLoadAvailabilityUsesReadOnlyBrokerUsage(t *testing.T) {
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("vault-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var methods []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		methods = append(methods, r.Method+" "+r.URL.Path)
-		switch r.URL.Path {
-		case "/v1/snapshot":
-			_, _ = w.Write([]byte(`{"credentials":[
-				{"provider":"anthropic","identityKey":"email:collaborator@example.test","credential":{"email":"collaborator@example.test"}}
-			]}`))
-		case "/v1/usage":
-			_, _ = w.Write([]byte(`{"reports":[
-				{"provider":"anthropic","limits":[
-					{"label":"Claude 5 Hour","scope":{"tier":"-"},"amount":{"usedFraction":0.42},"window":{"resetsAt":4102444800000,"durationMs":18000000}}
-				]}
-			]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	v := vault{BrokerURL: server.URL, TokenFile: tokenPath}
-	got := loadAvailability("/definitely/not/a/command usage --json", v)
-	if !got.ok || !got.accountsOK {
-		t.Fatalf("broker availability was not loaded: %+v", got)
-	}
-	if len(got.wins) != 1 || got.wins[0].pct != 42 || got.wins[0].prov != "anthropic" {
-		t.Fatalf("broker usage = %+v", got.wins)
-	}
-	wantMethods := []string{"GET /v1/snapshot", "GET /v1/usage"}
-	if !reflect.DeepEqual(methods, wantMethods) {
-		t.Fatalf("broker discovery requests = %v, want read-only %v", methods, wantMethods)
-	}
-}
-
-func TestLoadAvailabilitySupplementsMissingFableFromVaultProfile(t *testing.T) {
-	dir := t.TempDir()
-	tokenPath := filepath.Join(dir, "token")
-	argsPath := filepath.Join(dir, "args")
-	envPath := filepath.Join(dir, "env")
-	if err := os.WriteFile(tokenPath, []byte("vault-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join(dir, "usage")
-	body := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$@\" > \"$ARGS_PATH\"\n" +
-		"printf '%s|%s|%s\\n' \"${OMP_AUTH_BROKER_URL+set}\" \"${OMP_AUTH_BROKER_TOKEN+set}\" \"${OMP_AUTH_BROKER_SNAPSHOT_CACHE+set}\" > \"$ENV_PATH\"\n" +
-		"printf '%s\\n' '{\"reports\":[{\"provider\":\"anthropic\",\"limits\":[{\"id\":\"anthropic:5h\",\"label\":\"Claude 5 Hour\",\"scope\":{\"provider\":\"anthropic\",\"windowId\":\"5h\",\"shared\":true},\"amount\":{\"usedFraction\":0.12},\"window\":{\"resetsAt\":4102444800000,\"durationMs\":18000000}},{\"id\":\"anthropic:7d:fable\",\"label\":\"Claude 7 Day (Fable)\",\"scope\":{\"provider\":\"anthropic\",\"windowId\":\"7d\",\"tier\":\"fable\"},\"amount\":{\"usedFraction\":0.27},\"window\":{\"resetsAt\":4102444800000,\"durationMs\":604800000}}]}]}'\n"
-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ARGS_PATH", argsPath)
-	t.Setenv("ENV_PATH", envPath)
-	t.Setenv("OMP_AUTH_BROKER_URL", "http://ambient.invalid")
-	t.Setenv("OMP_AUTH_BROKER_TOKEN", "ambient-secret")
-	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "/ambient/cache")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/snapshot":
-			_, _ = w.Write([]byte(`{"credentials":[]}`))
-		case "/v1/usage":
-			_, _ = w.Write([]byte(`{"reports":[
-				{"provider":"openai-codex","limits":[
-					{"id":"openai-codex:primary","label":"7 days","scope":{"tier":"-"},"amount":{"usedFraction":0.31},"window":{"resetsAt":4102444800000,"durationMs":604800000}}
-				]},
-				{"provider":"anthropic","limits":[
-					{"id":"anthropic:5h","label":"Claude 5 Hour","scope":{"tier":"-"},"amount":{"usedFraction":0.42},"window":{"resetsAt":4102444800000,"durationMs":18000000}}
-				]}
-			]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	v := vault{ID: "mine", Profile: "mine", BrokerURL: server.URL, TokenFile: tokenPath}
-	got := loadAvailability(script+" --profile default usage --json", v)
-	var codex, fable *usageWin
-	for i := range got.wins {
-		switch {
-		case got.wins[i].prov == "openai-codex":
-			codex = &got.wins[i]
-		case got.wins[i].tier == "fable":
-			fable = &got.wins[i]
-		}
-	}
-	if codex == nil || codex.pct != 31 {
-		t.Fatalf("broker Codex usage was not preserved: %+v", got.wins)
-	}
-	if fable == nil || fable.pct != 27 || got.bucket["claude-fable"] != "ok" {
-		t.Fatalf("profile-local Fable usage was not supplemented: wins=%+v buckets=%+v", got.wins, got.bucket)
-	}
-	args, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "--profile\nmine\nusage\n--json\n--provider\nanthropic\n"; string(args) != want {
-		t.Fatalf("Fable supplement argv = %q, want %q", args, want)
-	}
-	env, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(env) != "||\n" {
-		t.Fatalf("Fable supplement inherited broker routing: %q", env)
-	}
-}
-
-func TestLoadVaultStateMigratesPlainFile(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "state")
-	if err := os.WriteFile(p, []byte("secondary\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	vaults := []vault{{ID: "primary"}, {ID: "secondary"}, {ID: "tertiary"}}
-	sel, dis := loadVaultState(vaults, p)
-	if sel != "secondary" {
-		t.Fatalf("plain selected-id file must migrate to selected=secondary, got %q", sel)
-	}
-	if len(dis) != 0 {
-		t.Fatalf("migration must leave no disabled vaults, got %#v", dis)
-	}
-}
-
-func TestLoadVaultStateJSON(t *testing.T) {
-	vaults := []vault{{ID: "primary"}, {ID: "secondary"}, {ID: "tertiary"}}
-	p := filepath.Join(t.TempDir(), "state")
-
-	// The first entry can never be disabled; unknown ids are dropped.
-	if err := os.WriteFile(p, []byte(`{"selected":"tertiary","disabled":["secondary","primary","ghost"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sel, dis := loadVaultState(vaults, p)
-	if sel != "tertiary" {
-		t.Fatalf("selected = %q, want tertiary", sel)
-	}
-	if !dis["secondary"] || dis["primary"] || dis["ghost"] {
-		t.Fatalf("disabled must keep secondary, strip primary, drop ghost, got %#v", dis)
-	}
-
-	// A selection that is itself disabled collapses onto the fallback vault.
-	if err := os.WriteFile(p, []byte(`{"selected":"secondary","disabled":["secondary"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sel, _ = loadVaultState(vaults, p)
-	if sel != "primary" {
-		t.Fatalf("a disabled selection must fall back to the first vault, got %q", sel)
-	}
-}
-
-func TestVaultStatePersistRoundTrip(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "nested", "state")
-	if err := writeVaultState(p, "tertiary", map[string]bool{"secondary": true}); err != nil {
-		t.Fatal(err)
-	}
-	vaults := []vault{{ID: "primary"}, {ID: "secondary"}, {ID: "tertiary"}}
-	sel, dis := loadVaultState(vaults, p)
-	if sel != "tertiary" || !dis["secondary"] {
-		t.Fatalf("round trip lost state: selected=%q disabled=%#v", sel, dis)
-	}
-	info, err := os.Stat(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("state mode = %o, want 600", info.Mode().Perm())
-	}
-}
-
-func TestCycleVaultSkipsDisabled(t *testing.T) {
-	m := model{
-		vaults:   []vault{{ID: "primary"}, {ID: "secondary"}, {ID: "tertiary"}},
-		disabled: map[string]bool{"secondary": true},
-		avail:    availability{bucket: map[string]string{}, reset: map[string]int64{}},
-	}
-	changed, err := m.cycleVault()
-	if err != nil || !changed {
-		t.Fatalf("cycle from the fallback must advance: changed=%v err=%v", changed, err)
-	}
-	if got := m.activeVault().ID; got != "tertiary" {
-		t.Fatalf("cycle skipped the disabled secondary but landed on %q, want tertiary", got)
-	}
-	changed, _ = m.cycleVault()
-	if !changed || m.activeVault().ID != "primary" {
-		t.Fatalf("cycle from tertiary must wrap past disabled secondary to primary, got %q", m.activeVault().ID)
-	}
-}
-
-func TestSelectVaultRestoresIndependentUsageCache(t *testing.T) {
-	deadline := time.Now().Add(2 * time.Minute)
-	cached := availability{
-		ok:         true,
-		accountsOK: true,
-		bucket:     map[string]string{"claude-main": "ok"},
-		reset:      map[string]int64{"claude-main": 120},
-		wins:       []usageWin{{label: "Claude 5 Hour", pct: 37}},
-	}
-	m := model{
-		vaults:          []vault{{ID: "primary"}, {ID: "secondary"}},
-		selected:        "primary",
-		vaultUsage:      map[string]availability{"secondary": cached},
-		vaultUsageNext:  map[string]time.Time{"secondary": deadline},
-		vaultUsageStale: map[string]bool{"secondary": true},
-		vaultFetching:   map[string]bool{"secondary": true},
-	}
-
-	if !m.selectVault(1) {
-		t.Fatal("selectVault must move to secondary")
-	}
-	if !reflect.DeepEqual(m.avail, cached) {
-		t.Fatalf("cached Usage was not restored: got %+v want %+v", m.avail, cached)
-	}
-	if m.nextRefresh != deadline || !m.usageStale || !m.fetching || !m.hadUsage {
-		t.Fatalf("per-vault cache metadata was not restored: deadline=%v stale=%v fetching=%v had=%v",
-			m.nextRefresh, m.usageStale, m.fetching, m.hadUsage)
-	}
-}
-
-func TestCycleVaultSingleEnabledIsNoop(t *testing.T) {
-	m := model{
-		vaults:   []vault{{ID: "primary"}, {ID: "secondary"}},
-		disabled: map[string]bool{"secondary": true},
-		avail:    availability{bucket: map[string]string{}, reset: map[string]int64{}},
-	}
-	changed, err := m.cycleVault()
-	if err != nil || changed {
-		t.Fatalf("with only the fallback enabled, cycle must be a no-op: changed=%v err=%v", changed, err)
-	}
-	if m.activeVault().ID != "primary" {
-		t.Fatalf("active vault moved off the fallback: %q", m.activeVault().ID)
-	}
-}
-
-func TestFallbackProtection(t *testing.T) {
-	m := model{
-		vaults:   []vault{{ID: "primary"}, {ID: "secondary"}},
-		disabled: map[string]bool{},
-		avail:    availability{bucket: map[string]string{}, reset: map[string]int64{}},
-	}
-	if changed, err := m.toggleVault(0); changed || err != nil {
-		t.Fatalf("toggling the fallback vault must be a no-op: changed=%v err=%v", changed, err)
-	}
-	if m.disabled["primary"] || !m.isEnabled(0) {
-		t.Fatal("the fallback vault must never become disabled")
-	}
-
-	// Disabling the active vault falls the selection back to the fallback.
-	m.selected = "secondary"
-	changed, err := m.toggleVault(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !m.disabled["secondary"] {
-		t.Fatal("secondary must be disabled after toggle")
-	}
-	if !changed || m.activeVault().ID != "primary" {
-		t.Fatalf("disabling the active vault must fall back to primary (changed=%v active=%q)", changed, m.activeVault().ID)
-	}
-	if m.enabledCount() != 1 {
-		t.Fatalf("at least one vault must stay enabled, enabledCount=%d", m.enabledCount())
-	}
-}
-
-func TestBrokerEnv(t *testing.T) {
-	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte("s3cr3t\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	v := vault{BrokerURL: "http://127.0.0.1:9", TokenFile: tokenPath, SnapshotCache: "/cache/secondary"}
-	env, err := brokerEnv(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"OMP_AUTH_BROKER_URL=http://127.0.0.1:9",
-		"OMP_AUTH_BROKER_SNAPSHOT_CACHE=/cache/secondary",
-		"OMP_AUTH_BROKER_TOKEN=s3cr3t",
-	}
-	if !reflect.DeepEqual(env, want) {
-		t.Fatalf("broker env = %#v, want %#v", env, want)
-	}
-}
-
-func TestBrokerEnvTokenFailure(t *testing.T) {
-	v := vault{BrokerURL: "u", TokenFile: filepath.Join(t.TempDir(), "missing")}
-	if _, err := brokerEnv(v); err == nil {
-		t.Fatal("a missing token file must be a hard error")
-	}
-	// The failure must surface as an unavailable usage result, never a launch.
-	if got := loadAvailability("true usage --json", v); got.ok {
-		t.Fatal("a token failure must yield unavailable usage")
-	}
-}
-
-func TestLoadAvailabilityStandaloneForcesDefaultProfile(t *testing.T) {
-	dir := t.TempDir()
-	argsPath := filepath.Join(dir, "args")
-	script := filepath.Join(dir, "usage")
-	body := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$@\" > \"$ARGS_PATH\"\n" +
-		"printf '%s\\n' '{\"reports\":[]}'\n"
-	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ARGS_PATH", argsPath)
-
-	got := loadAvailability(script+" --profile secondary usage --json", vault{ID: "standalone"})
-	if !got.ok {
-		t.Fatal("standalone usage response was not accepted")
-	}
-	args, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "--profile\ndefault\nusage\n--json\n"; string(args) != want {
-		t.Fatalf("standalone usage must force the shared default profile: args = %q, want %q", args, want)
-	}
-}
-
-func TestTrustedLaunchForcesDefaultProfile(t *testing.T) {
-	// Both trusted launch paths force --profile default and strip any forwarded
-	// profile, regardless of the selected vault's own profile.
-	forwarded := []string{"--config", "/tmp/x.yml", "--profile", "secondary", "--resume"}
-	managed := managedLaunchArgv("/bin/omp", forwarded, "hello")
-	wantManaged := []string{"/bin/omp", "--profile", "default", "--config", "/tmp/x.yml", "--resume", "hello"}
-	if !reflect.DeepEqual(managed, wantManaged) {
-		t.Fatalf("managed launch argv = %#v, want %#v", managed, wantManaged)
-	}
-
-	gen := generatedLaunchArgv("/bin/omp", "/tmp/gen.yml", []string{"--profile", "secondary", "--resume"}, "")
-	wantGen := []string{"/bin/omp", "--profile", "default", "--config", "/tmp/gen.yml", "--resume"}
-	if !reflect.DeepEqual(gen, wantGen) {
-		t.Fatalf("generated launch argv = %#v, want %#v", gen, wantGen)
-	}
-}
-
-func TestSandboxLaunchStripsProfile(t *testing.T) {
-	got := sandboxLaunchArgv("/bin/ompu", []string{"--profile", "secondary", "--resume"}, "")
-	want := []string{"/bin/ompu", "--resume"}
+	want := map[string][]string{anthropicProvider: {"a"}, openAIProvider: {}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("sandbox launch argv = %#v, want %#v (profile must be stripped, none forced)", got, want)
+		t.Fatalf("allowlist = %#v, want %#v", got, want)
+	}
+	parent := filepath.Dir(path)
+	cleanup()
+	cleanup()
+	if _, err := os.Stat(parent); !os.IsNotExist(err) {
+		t.Fatalf("allowlist parent remains after cleanup: %v", err)
 	}
 }
 
-func TestLoginArgv(t *testing.T) {
-	if got := loginArgv("tertiary", "anthropic"); !reflect.DeepEqual(got, []string{"--profile", "tertiary", "auth-broker", "login", "anthropic"}) {
-		t.Fatalf("anthropic login argv = %#v", got)
+func TestAuthEnvironmentReplacementAndSandboxRemoval(t *testing.T) {
+	base := []string{
+		"HOME=/home/test",
+		"OMP_AUTH_BROKER_URL=stale-url",
+		"OMP_AUTH_BROKER_TOKEN=stale-token",
+		"OMP_AUTH_BROKER_SNAPSHOT_CACHE=stale-cache",
+		"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE=stale-list",
+		"CODE_AUTH_ACCOUNT_STATE=/state",
 	}
-	if got := loginArgv("secondary", "openai-codex"); !reflect.DeepEqual(got, []string{"--profile", "secondary", "auth-broker", "login", "openai-codex"}) {
-		t.Fatalf("openai-codex login argv = %#v", got)
+	got := withAuthEnv(base, brokerConfig{URL: "central-url", Token: "central-token", SnapshotCache: "central-cache"}, "/new-list")
+	assertSingleEnv(t, got, "OMP_AUTH_BROKER_URL", "central-url")
+	assertSingleEnv(t, got, "OMP_AUTH_BROKER_TOKEN", "central-token")
+	assertSingleEnv(t, got, "OMP_AUTH_BROKER_SNAPSHOT_CACHE", "central-cache")
+	assertSingleEnv(t, got, "OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "/new-list")
+	if !containsEnv(got, "CODE_AUTH_ACCOUNT_STATE", "/state") {
+		t.Fatal("trusted auth overlay must preserve account manager state path")
+	}
+	stripped := withoutAuthEnv(got)
+	for _, key := range []string{"OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN", "OMP_AUTH_BROKER_SNAPSHOT_CACHE", "OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "CODE_AUTH_ACCOUNT_STATE"} {
+		if hasEnvKey(stripped, key) {
+			t.Fatalf("sandbox env retained %s: %#v", key, stripped)
+		}
+	}
+	if !containsEnv(stripped, "HOME", "/home/test") {
+		t.Fatal("sandbox stripping removed unrelated env")
 	}
 }
 
-func TestWithBrokerEnvOverridesAmbient(t *testing.T) {
-	base := []string{"PATH=/bin", "OMP_AUTH_BROKER_TOKEN=stale", "HOME=/root"}
-	add := []string{"OMP_AUTH_BROKER_TOKEN=fresh", "OMP_AUTH_BROKER_URL=u"}
-	got := withBrokerEnv(base, add)
-	want := []string{"PATH=/bin", "HOME=/root", "OMP_AUTH_BROKER_TOKEN=fresh", "OMP_AUTH_BROKER_URL=u"}
+func TestStripProfileArgs(t *testing.T) {
+	got := stripProfileArgs([]string{"--config", "x", "--profile", "work", "--profile=other", "--resume", "--", "--profile", "prompt"})
+	want := []string{"--config", "x", "--resume", "--", "--profile", "prompt"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("withBrokerEnv = %#v, want %#v", got, want)
+		t.Fatalf("stripped argv = %#v, want %#v", got, want)
 	}
 }
 
-func TestWithOMPProfileOverridesForwardedProfile(t *testing.T) {
-	tests := []struct {
-		name    string
-		profile string
-		args    []string
-		want    []string
-	}{
-		{
-			name:    "no override",
-			profile: "default",
-			args:    []string{"--config", "/tmp/generated.yml", "--resume"},
-			want:    []string{"--profile", "default", "--config", "/tmp/generated.yml", "--resume"},
-		},
-		{
-			name:    "separate override",
-			profile: "default",
-			args:    []string{"--config", "/tmp/generated.yml", "--profile", "secondary", "--resume"},
-			want:    []string{"--profile", "default", "--config", "/tmp/generated.yml", "--resume"},
-		},
-		{
-			name:    "equals override",
-			profile: "default",
-			args:    []string{"--profile=secondary", "--resume"},
-			want:    []string{"--profile", "default", "--resume"},
-		},
-		{
-			name:    "message after terminator",
-			profile: "default",
-			args:    []string{"--resume", "--", "--profile", "literal message"},
-			want:    []string{"--profile", "default", "--resume", "--", "--profile", "literal message"},
-		},
-		{
-			name:    "sandbox strips override",
-			profile: "",
-			args:    []string{"--profile", "secondary", "--resume"},
-			want:    []string{"--resume"},
-		},
+func TestResolveBrokerPrefersCentralEnvironmentAndFallsBackToFirstLegacyEntry(t *testing.T) {
+	dir := t.TempDir()
+	firstToken := filepath.Join(dir, "first-token")
+	secondToken := filepath.Join(dir, "second-token")
+	if err := os.WriteFile(firstToken, []byte("first-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := withOMPProfile(tt.profile, tt.args...)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("args = %#v, want %#v", got, tt.want)
+	if err := os.WriteFile(secondToken, []byte("second-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `[{"brokerUrl":"first-url","tokenFile":` + strconvQuote(firstToken) + `,"snapshotCache":"first-cache"},{"brokerUrl":"second-url","tokenFile":` + strconvQuote(secondToken) + `}]`
+	t.Setenv("OMP_AUTH_BROKER_URL", "")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "")
+	if got := resolveBroker(manifest, ""); got != (brokerConfig{URL: "first-url", Token: "first-secret", SnapshotCache: "first-cache"}) {
+		t.Fatalf("legacy fallback = %#v", got)
+	}
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveBroker("", manifestPath); got.URL != "first-url" || got.Token != "first-secret" {
+		t.Fatalf("legacy file fallback = %#v", got)
+	}
+	t.Setenv("OMP_AUTH_BROKER_URL", "central-url")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "central-secret")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "central-cache")
+	if got := resolveBroker(`not JSON`, filepath.Join(dir, "missing")); got != (brokerConfig{URL: "central-url", Token: "central-secret", SnapshotCache: "central-cache"}) {
+		t.Fatalf("central environment must bypass legacy data: %#v", got)
+	}
+}
+
+func accountKeys(accounts []account) []string {
+	keys := make([]string, len(accounts))
+	for i := range accounts {
+		keys[i] = accounts[i].IdentityKey
+	}
+	return keys
+}
+
+func assertSingleEnv(t *testing.T, env []string, key, value string) {
+	t.Helper()
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, key+"=") {
+			count++
+			if entry != key+"="+value {
+				t.Fatalf("%s entry = %q", key, entry)
 			}
-		})
-	}
-}
-
-// TestUsagePanelNamesActiveVaultAndBrokerAccounts locks the identity boundary:
-// the title names the custom vault, provider headings stay provider-only, and
-// account identity never comes from configured login-owner labels.
-func TestUsagePanelNamesActiveVaultAndBrokerAccounts(t *testing.T) {
-	m := model{
-		vaults: []vault{
-			{ID: "primary", Label: "primary", Profile: "default", Claude: "Operator", Codex: "Operator"},
-			{ID: "secondary", Label: "secondary", Profile: "secondary", Claude: "Collaborator", Codex: "Operator"},
-		},
-		selected: "secondary",
-		avail:    availability{bucket: map[string]string{}, reset: map[string]int64{}},
-	}
-	panel := stripAnsi(m.usagePanel())
-	for _, text := range []string{"usage", "secondary", "Codex", "Claude", "account status unavailable", "a switch vault"} {
-		if !strings.Contains(panel, text) {
-			t.Fatalf("usage panel missing %q: %q", text, panel)
 		}
 	}
-	for _, configuredOwner := range []string{"Collaborator", "Operator", "Claude (", "Codex ("} {
-		if strings.Contains(panel, configuredOwner) {
-			t.Fatalf("usage panel leaked configured owner %q: %q", configuredOwner, panel)
+	if count != 1 {
+		t.Fatalf("%s count = %d in %#v", key, count, env)
+	}
+}
+
+func containsEnv(env []string, key, value string) bool {
+	for _, entry := range env {
+		if entry == key+"="+value {
+			return true
 		}
 	}
+	return false
 }
 
-func TestCreditLine(t *testing.T) {
-	tests := []struct {
-		name    string
-		credits resetCredits
-		want    string
-	}{
-		{"absent", resetCredits{}, ""},
-		{"count only", resetCredits{avail: 2}, "2 resets"},
-		{"singular", resetCredits{avail: 1, exp: []int64{3 * day}}, "1 reset · expiring in 3d"},
-		{"sorted ascending", resetCredits{avail: 3, exp: []int64{28 * day, 11 * day, 16 * day}}, "3 resets · expiring in 11d, 16d, 28d"},
-		{"capped at three soonest", resetCredits{avail: 5, exp: []int64{40 * day, 2 * day, 30 * day, 9 * day, 20 * day}}, "5 resets · expiring in 2d, 9d, 20d"},
-		{"rounds up to whole days", resetCredits{avail: 3, exp: []int64{1, day, day + 1}}, "3 resets · expiring in 1d, 1d, 2d"},
-		{"expired reads zero", resetCredits{avail: 0, exp: []int64{-5}}, "0 resets · expiring in 0d"},
+func hasEnvKey(env []string, key string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, key+"=") {
+			return true
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := model{avail: availability{credits: tt.credits}}
-			got := m.creditLine()
-			if tt.want == "" {
-				if got != "" {
-					t.Fatalf("creditLine() = %q, want empty", got)
-				}
-				return
-			}
-			if !strings.Contains(got, tt.want) {
-				t.Fatalf("creditLine() = %q, want it to contain %q", got, tt.want)
-			}
-		})
-	}
+	return false
 }
 
-func TestUsagePanelShowsOpenAIResetCredits(t *testing.T) {
-	m := model{
-		vaults: []vault{{ID: "primary", Label: "primary", Profile: "default", Claude: "Operator", Codex: "Operator"}},
-		avail: availability{
-			ok:      true,
-			bucket:  map[string]string{},
-			reset:   map[string]int64{},
-			wins:    []usageWin{{label: "7 days", pct: 33, secs: 6 * day, dur: 7 * day, prov: "openai-codex"}},
-			credits: resetCredits{avail: 3, exp: []int64{28 * day, 11 * day, 16 * day}},
-		},
-	}
-	panel := m.usagePanel()
-	if !strings.Contains(panel, "3 resets · expiring in 11d, 16d, 28d") {
-		t.Fatalf("usage panel missing reset credits: %q", panel)
-	}
-}
-
-func TestUsagePanelWithoutResetCredits(t *testing.T) {
-	m := model{
-		vaults: []vault{{ID: "primary", Label: "primary", Profile: "default", Claude: "Operator", Codex: "Operator"}},
-		avail: availability{
-			ok:     true,
-			bucket: map[string]string{},
-			reset:  map[string]int64{},
-			wins:   []usageWin{{label: "7 days", pct: 33, secs: 6 * day, dur: 7 * day, prov: "openai-codex"}},
-		},
-	}
-	if panel := m.usagePanel(); strings.Contains(panel, "expiring") || strings.Contains(panel, "resets") {
-		t.Fatalf("usage panel unexpectedly mentions reset credits: %q", panel)
-	}
+func strconvQuote(value string) string {
+	body, _ := json.Marshal(value)
+	return string(body)
 }
