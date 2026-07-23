@@ -3306,7 +3306,7 @@ func TestGeneratedTrustedLaunchLifecycle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			capture := filepath.Join(dir, "capture")
-			allowlistCopy := filepath.Join(dir, "allowlist-copy")
+			accountPoolCopy := filepath.Join(dir, "account-pool-copy")
 			script := filepath.Join(dir, "omp")
 			body := fmt.Sprintf(`#!/bin/sh
 cfg=
@@ -3315,10 +3315,10 @@ for arg in "$@"; do
   if [ "$take_cfg" = yes ]; then cfg="$arg"; take_cfg=; fi
   if [ "$arg" = --config ]; then take_cfg=yes; fi
 done
-[ -f "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" ] || exit 97
+[ -f "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" ] || exit 97
 [ -f "$cfg" ] || exit 98
-printf '%%s\n%%s\n%%s\n%%s\n%%s\n%%s\n' "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" "$cfg" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" "$OMP_AUTH_BROKER_SNAPSHOT_CACHE" "$*" > "$CAPTURE"
-cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
+printf '%%s\n%%s\n%%s\n%%s\n%%s\n%%s\n' "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" "$cfg" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" "$OMP_AUTH_BROKER_SNAPSHOT_CACHE" "$*" > "$CAPTURE"
+cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 exit %d
 `, tc.exit)
 			if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
@@ -3326,7 +3326,7 @@ exit %d
 			}
 			t.Setenv("CODE_OMP", script)
 			t.Setenv("CAPTURE", capture)
-			t.Setenv("ALLOWLIST_COPY", allowlistCopy)
+			t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
 			oldArgs := os.Args
 			os.Args = []string{"code", "--profile", "forwarded", "--profile=also-forwarded", "hello"}
 			defer func() { os.Args = oldArgs }()
@@ -3348,7 +3348,7 @@ exit %d
 				t.Fatalf("capture lines = %q", lines)
 			}
 			if _, err := os.Stat(lines[0]); !os.IsNotExist(err) {
-				t.Errorf("allowlist survived child exit: %q err=%v", lines[0], err)
+				t.Errorf("account pool survived child exit: %q err=%v", lines[0], err)
 			}
 			if _, err := os.Stat(lines[1]); !os.IsNotExist(err) {
 				t.Errorf("generated config survived child exit: %q err=%v", lines[1], err)
@@ -3356,14 +3356,14 @@ exit %d
 			if lines[2] != broker.URL || lines[3] != broker.Token || lines[4] != broker.SnapshotCache {
 				t.Errorf("trusted auth env = %q, want broker overlay", lines[2:5])
 			}
-			allowlistBody, err := os.ReadFile(allowlistCopy)
+			accountPoolBody, err := os.ReadFile(accountPoolCopy)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(allowlistBody), "unmatched-key") ||
-				!strings.Contains(string(allowlistBody), "anthropic-key") ||
-				!strings.Contains(string(allowlistBody), "codex-key") {
-				t.Errorf("launch allowlist ignored immutable account selection: %s", allowlistBody)
+			if strings.Contains(string(accountPoolBody), "unmatched-key") ||
+				!strings.Contains(string(accountPoolBody), "anthropic-key") ||
+				!strings.Contains(string(accountPoolBody), "codex-key") {
+				t.Errorf("launch account pool ignored immutable account selection: %s", accountPoolBody)
 			}
 			if strings.Contains(lines[5], "--profile") {
 				t.Errorf("trusted argv forwarded a profile: %q", lines[5])
@@ -3381,8 +3381,8 @@ func TestTrustedLaunchUsesActiveSelectionSnapshots(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "omp")
 	body := `#!/bin/sh
-printf '%s|%s|%s' "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" > "$ENV_COPY"
-cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
+printf '%s|%s|%s' "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" "$OMP_AUTH_BROKER_URL" "$OMP_AUTH_BROKER_TOKEN" > "$ENV_COPY"
+cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 `
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
@@ -3400,9 +3400,9 @@ cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
 	launch := func(label string) (string, string) {
 		t.Helper()
 		envCopy := filepath.Join(dir, label+"-env")
-		allowlistCopy := filepath.Join(dir, label+"-allowlist")
+		accountPoolCopy := filepath.Join(dir, label+"-account-pool")
 		t.Setenv("ENV_COPY", envCopy)
-		t.Setenv("ALLOWLIST_COPY", allowlistCopy)
+		t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
 		if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", broker, selections); status != 0 {
 			t.Fatalf("%s launch status = %d", label, status)
 		}
@@ -3410,35 +3410,35 @@ cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
 		if err != nil {
 			t.Fatal(err)
 		}
-		allowlistBody, err := os.ReadFile(allowlistCopy)
+		accountPoolBody, err := os.ReadFile(accountPoolCopy)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(envBody), string(allowlistBody)
+		return string(envBody), string(accountPoolBody)
 	}
 
-	manualEnv, manualAllowlist := launch("manual")
+	manualEnv, manualAccountPool := launch("manual")
 	const wantManual = "{\"anthropic\":[],\"openai-codex\":[\"codex-key\",\"unmatched-key\"]}\n"
-	if manualAllowlist != wantManual {
-		t.Fatalf("Manual allowlist = %q, want %q", manualAllowlist, wantManual)
+	if manualAccountPool != wantManual {
+		t.Fatalf("Manual account pool = %q, want %q", manualAccountPool, wantManual)
 	}
 	manualEnvParts := strings.Split(manualEnv, "|")
 	if len(manualEnvParts) != 3 || manualEnvParts[1] != broker.URL || manualEnvParts[2] != broker.Token {
 		t.Fatalf("Manual child env = %q", manualEnv)
 	}
 	if _, err := os.Stat(manualEnvParts[0]); !os.IsNotExist(err) {
-		t.Fatalf("Manual child's captured allowlist remains mutable after exit: %v", err)
+		t.Fatalf("Manual child's captured account pool remains mutable after exit: %v", err)
 	}
 
 	if !selections.Activate("Codex off") {
 		t.Fatal("named preset did not activate")
 	}
-	namedEnv, namedAllowlist := launch("named")
+	namedEnv, namedAccountPool := launch("named")
 	const wantNamed = "{\"anthropic\":[\"anthropic-key\"],\"openai-codex\":[\"unmatched-key\"]}\n"
-	if namedAllowlist != wantNamed {
-		t.Fatalf("named allowlist = %q, want %q", namedAllowlist, wantNamed)
+	if namedAccountPool != wantNamed {
+		t.Fatalf("named account pool = %q, want %q", namedAccountPool, wantNamed)
 	}
-	manualAllowlistAfter, err := os.ReadFile(filepath.Join(dir, "manual-allowlist"))
+	manualAccountPoolAfter, err := os.ReadFile(filepath.Join(dir, "manual-account-pool"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3446,15 +3446,15 @@ cat "$OMP_AUTH_ACCOUNT_ALLOWLIST_FILE" > "$ALLOWLIST_COPY"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(manualAllowlistAfter) != wantManual || string(manualEnvAfter) != manualEnv {
+	if string(manualAccountPoolAfter) != wantManual || string(manualEnvAfter) != manualEnv {
 		t.Fatal("preset switch mutated already-captured Manual child inputs")
 	}
 	namedEnvParts := strings.Split(namedEnv, "|")
 	if len(namedEnvParts) != 3 || namedEnvParts[0] == manualEnvParts[0] {
-		t.Fatalf("future launch did not receive a fresh immutable allowlist: manual=%q named=%q", manualEnv, namedEnv)
+		t.Fatalf("future launch did not receive a fresh immutable account pool: manual=%q named=%q", manualEnv, namedEnv)
 	}
 	if _, err := os.Stat(namedEnvParts[0]); !os.IsNotExist(err) {
-		t.Fatalf("named child's captured allowlist remains mutable after exit: %v", err)
+		t.Fatalf("named child's captured account pool remains mutable after exit: %v", err)
 	}
 }
 
@@ -3479,7 +3479,7 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "env")
 	script := filepath.Join(dir, "ompu")
-	body := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"${OMP_AUTH_BROKER_URL+set}\" \"${OMP_AUTH_BROKER_TOKEN+set}\" \"${OMP_AUTH_BROKER_SNAPSHOT_CACHE+set}\" \"${OMP_AUTH_ACCOUNT_ALLOWLIST_FILE+set}\" \"${CODE_AUTH_ACCOUNT_STATE+set}\" > \"$CAPTURE\"\n"
+	body := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' \"${OMP_AUTH_BROKER_URL+set}\" \"${OMP_AUTH_BROKER_TOKEN+set}\" \"${OMP_AUTH_BROKER_SNAPSHOT_CACHE+set}\" \"${OMP_AUTH_BROKER_ACCOUNT_POOL_FILE+set}\" \"${CODE_AUTH_ACCOUNT_STATE+set}\" > \"$CAPTURE\"\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -3488,7 +3488,7 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	t.Setenv("OMP_AUTH_BROKER_URL", "http://ambient")
 	t.Setenv("OMP_AUTH_BROKER_TOKEN", "ambient-secret")
 	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "/tmp/ambient")
-	t.Setenv("OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "/tmp/ambient-allowlist")
+	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/ambient-account-pool")
 	t.Setenv("CODE_AUTH_ACCOUNT_STATE", "/tmp/ambient-state")
 	oldArgs := os.Args
 	os.Args = []string{"code", "--profile", "ambient"}
