@@ -3474,13 +3474,13 @@ func runTrusted(envName string, fallbacks []string,
 		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch:", err)
 		return 1
 	}
-	allowlistPath, cleanup, err := writeAccountAllowlist(accounts, disabled)
+	accountPoolPath, cleanup, err := writeAccountPool(accounts, disabled)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "code: account allowlist unavailable; refusing unrestricted launch:", err)
+		fmt.Fprintln(os.Stderr, "code: account pool unavailable; refusing unrestricted launch:", err)
 		return 1
 	}
 	defer cleanup()
-	childEnv := withAuthEnv(os.Environ(), broker, allowlistPath)
+	childEnv := withAuthEnv(os.Environ(), broker, accountPoolPath)
 	err = runChild(path, argv(path, os.Args[1:], prompt), childEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: trusted child:", err)

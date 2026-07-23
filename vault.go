@@ -488,22 +488,22 @@ func atomicPrivateWrite(path string, body []byte) error {
 	return nil
 }
 
-func buildAccountAllowlist(accounts map[string][]account, disabled map[accountKey]bool) map[string][]string {
-	allowlist := map[string][]string{anthropicProvider: {}, openAIProvider: {}}
+func buildAccountPool(accounts map[string][]account, disabled map[accountKey]bool) map[string][]string {
+	pool := map[string][]string{anthropicProvider: {}, openAIProvider: {}}
 	for _, provider := range []string{anthropicProvider, openAIProvider} {
 		for _, acct := range accounts[provider] {
 			key := accountKey{Provider: provider, IdentityKey: acct.IdentityKey}
 			if acct.Provider == provider && acct.IdentityKey != "" && !disabled[key] {
-				allowlist[provider] = append(allowlist[provider], acct.IdentityKey)
+				pool[provider] = append(pool[provider], acct.IdentityKey)
 			}
 		}
-		sort.Strings(allowlist[provider])
+		sort.Strings(pool[provider])
 	}
-	return allowlist
+	return pool
 }
 
-func writeAccountAllowlist(accounts map[string][]account, disabled map[accountKey]bool) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "code-auth-allowlist-*")
+func writeAccountPool(accounts map[string][]account, disabled map[accountKey]bool) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "code-auth-account-pool-*")
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -513,13 +513,13 @@ func writeAccountAllowlist(accounts map[string][]account, disabled map[accountKe
 		cleanup()
 		return "", cleanup, err
 	}
-	body, err := json.Marshal(buildAccountAllowlist(accounts, disabled))
+	body, err := json.Marshal(buildAccountPool(accounts, disabled))
 	if err != nil {
 		cleanup()
 		return "", cleanup, err
 	}
 	body = append(body, '\n')
-	path := filepath.Join(dir, "allowlist.json")
+	path := filepath.Join(dir, "account-pool.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		cleanup()
 		return "", cleanup, err
@@ -532,27 +532,27 @@ func writeAccountAllowlist(accounts map[string][]account, disabled map[accountKe
 }
 
 var authEnvKeys = map[string]bool{
-	"OMP_AUTH_BROKER_URL":             true,
-	"OMP_AUTH_BROKER_TOKEN":           true,
-	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":  true,
-	"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE": true,
+	"OMP_AUTH_BROKER_URL":               true,
+	"OMP_AUTH_BROKER_TOKEN":             true,
+	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":    true,
+	"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE": true,
 }
 
 var sandboxAuthEnvKeys = map[string]bool{
-	"OMP_AUTH_BROKER_URL":             true,
-	"OMP_AUTH_BROKER_TOKEN":           true,
-	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":  true,
-	"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE": true,
-	"CODE_AUTH_ACCOUNT_STATE":         true,
+	"OMP_AUTH_BROKER_URL":               true,
+	"OMP_AUTH_BROKER_TOKEN":             true,
+	"OMP_AUTH_BROKER_SNAPSHOT_CACHE":    true,
+	"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE": true,
+	"CODE_AUTH_ACCOUNT_STATE":           true,
 }
 
-func withAuthEnv(base []string, broker brokerConfig, allowlistPath string) []string {
+func withAuthEnv(base []string, broker brokerConfig, accountPoolPath string) []string {
 	out := removeEnvKeys(base, authEnvKeys)
 	return append(out,
 		"OMP_AUTH_BROKER_URL="+broker.URL,
 		"OMP_AUTH_BROKER_TOKEN="+broker.Token,
 		"OMP_AUTH_BROKER_SNAPSHOT_CACHE="+broker.SnapshotCache,
-		"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE="+allowlistPath,
+		"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE="+accountPoolPath,
 	)
 }
 

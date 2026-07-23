@@ -133,16 +133,16 @@ func TestAccountSelectionUnknownAccountsDefaultEnabledAndProviderKeysAreIsolated
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "shared"}, {Provider: anthropicProvider, IdentityKey: "new"}},
 		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "shared"}},
 	}
-	got := buildAccountAllowlist(accounts, state.CurrentDisabled())
+	got := buildAccountPool(accounts, state.CurrentDisabled())
 	if !reflect.DeepEqual(got[anthropicProvider], []string{"new"}) {
-		t.Fatalf("anthropic allowlist = %#v", got[anthropicProvider])
+		t.Fatalf("anthropic account pool = %#v", got[anthropicProvider])
 	}
 	if !reflect.DeepEqual(got[openAIProvider], []string{"shared"}) {
 		t.Fatalf("same identityKey in another provider must remain enabled: %#v", got[openAIProvider])
 	}
 }
 
-func TestBuildAccountAllowlistAllOffKeepsExactProviderArrays(t *testing.T) {
+func TestBuildAccountPoolAllOffKeepsExactProviderArrays(t *testing.T) {
 	accounts := map[string][]account{
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
 		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
@@ -151,9 +151,9 @@ func TestBuildAccountAllowlistAllOffKeepsExactProviderArrays(t *testing.T) {
 		{Provider: anthropicProvider, IdentityKey: "a"}: true,
 		{Provider: openAIProvider, IdentityKey: "o"}:    true,
 	}
-	got := buildAccountAllowlist(accounts, disabled)
+	got := buildAccountPool(accounts, disabled)
 	if len(got) != 2 || got[anthropicProvider] == nil || got[openAIProvider] == nil || len(got[anthropicProvider]) != 0 || len(got[openAIProvider]) != 0 {
-		t.Fatalf("all-off allowlist must contain two empty arrays: %#v", got)
+		t.Fatalf("all-off account pool must contain two empty arrays: %#v", got)
 	}
 }
 
@@ -287,12 +287,12 @@ func TestWriteAccountSelectionStateRejectsDuplicateNamesAndCleansFailedTemporary
 	}
 }
 
-func TestWriteAccountAllowlistContentsPermissionsAndIdempotentCleanup(t *testing.T) {
+func TestWriteAccountPoolContentsPermissionsAndIdempotentCleanup(t *testing.T) {
 	accounts := map[string][]account{
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "b"}, {Provider: anthropicProvider, IdentityKey: "a"}},
 		openAIProvider:    {},
 	}
-	path, cleanup, err := writeAccountAllowlist(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true})
+	path, cleanup, err := writeAccountPool(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestWriteAccountAllowlistContentsPermissionsAndIdempotentCleanup(t *testing
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("allowlist mode = %#o", info.Mode().Perm())
+		t.Fatalf("account pool mode = %#o", info.Mode().Perm())
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -313,13 +313,13 @@ func TestWriteAccountAllowlistContentsPermissionsAndIdempotentCleanup(t *testing
 	}
 	want := map[string][]string{anthropicProvider: {"a"}, openAIProvider: {}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("allowlist = %#v, want %#v", got, want)
+		t.Fatalf("account pool = %#v, want %#v", got, want)
 	}
 	parent := filepath.Dir(path)
 	cleanup()
 	cleanup()
 	if _, err := os.Stat(parent); !os.IsNotExist(err) {
-		t.Fatalf("allowlist parent remains after cleanup: %v", err)
+		t.Fatalf("account pool parent remains after cleanup: %v", err)
 	}
 }
 
@@ -329,19 +329,19 @@ func TestAuthEnvironmentReplacementAndSandboxRemoval(t *testing.T) {
 		"OMP_AUTH_BROKER_URL=stale-url",
 		"OMP_AUTH_BROKER_TOKEN=stale-token",
 		"OMP_AUTH_BROKER_SNAPSHOT_CACHE=stale-cache",
-		"OMP_AUTH_ACCOUNT_ALLOWLIST_FILE=stale-list",
+		"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE=stale-pool",
 		"CODE_AUTH_ACCOUNT_STATE=/state",
 	}
-	got := withAuthEnv(base, brokerConfig{URL: "central-url", Token: "central-token", SnapshotCache: "central-cache"}, "/new-list")
+	got := withAuthEnv(base, brokerConfig{URL: "central-url", Token: "central-token", SnapshotCache: "central-cache"}, "/new-pool")
 	assertSingleEnv(t, got, "OMP_AUTH_BROKER_URL", "central-url")
 	assertSingleEnv(t, got, "OMP_AUTH_BROKER_TOKEN", "central-token")
 	assertSingleEnv(t, got, "OMP_AUTH_BROKER_SNAPSHOT_CACHE", "central-cache")
-	assertSingleEnv(t, got, "OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "/new-list")
+	assertSingleEnv(t, got, "OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/new-pool")
 	if !containsEnv(got, "CODE_AUTH_ACCOUNT_STATE", "/state") {
 		t.Fatal("trusted auth overlay must preserve account manager state path")
 	}
 	stripped := withoutAuthEnv(got)
-	for _, key := range []string{"OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN", "OMP_AUTH_BROKER_SNAPSHOT_CACHE", "OMP_AUTH_ACCOUNT_ALLOWLIST_FILE", "CODE_AUTH_ACCOUNT_STATE"} {
+	for _, key := range []string{"OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN", "OMP_AUTH_BROKER_SNAPSHOT_CACHE", "OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "CODE_AUTH_ACCOUNT_STATE"} {
 		if hasEnvKey(stripped, key) {
 			t.Fatalf("sandbox env retained %s: %#v", key, stripped)
 		}
