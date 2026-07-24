@@ -43,9 +43,22 @@ code "fix the failing tests"   # launches omp with that as its first message
 code --continue                # dial, then pick up your last omp session
 ```
 
-Two words `code` keeps for itself: `generate` (the [catalog
-subcommand](docs/configuration.md)) and `--profile` (routing is code's job —
-a forwarded `--profile` is replaced).
+A few words `code` keeps for itself: `generate` (the [catalog
+subcommand](docs/configuration.md)), `session` and its `ls` shorthand (below),
+and `--profile` (routing is code's job — a forwarded `--profile` is replaced).
+
+Every session you launch is recorded while it runs, so the ones you walked away
+from are findable rather than merely suspected:
+
+```bash
+code ls                                 # live sessions: age, launcher, directory
+code session reap --superseded          # dry run: what is on a stale build
+code session reap --older-than 3d --yes # retire them, whole process tree
+```
+
+`reap` prints and exits unless you pass `--yes`, and always takes the session's
+whole process tree — language servers, browsers, and workers included, so they
+are not orphaned onto init while still holding their memory.
 
 ## Features
 

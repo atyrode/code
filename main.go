@@ -3292,10 +3292,17 @@ func defaultGlyphs() map[string]string {
 }
 
 func main() {
-	// `code generate [...]` is the catalog generator, not a TUI session (any
-	// other argv is forwarded to the launched omp session as before).
-	if len(os.Args) > 1 && os.Args[1] == "generate" {
-		os.Exit(runGenerate(os.Args[2:]))
+	// Subcommands are not TUI sessions; any other argv is still forwarded to
+	// the launched omp session as before.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "generate":
+			os.Exit(runGenerate(os.Args[2:]))
+		case "session", "sessions":
+			os.Exit(runSession(os.Args[2:]))
+		case "ls":
+			os.Exit(runSession(append([]string{"list"}, os.Args[2:]...)))
+		}
 	}
 	glyphs := defaultGlyphs()
 	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
@@ -3370,12 +3377,18 @@ func main() {
 	status := 0
 	switch {
 	case fm.launchUntrusted:
-		status = runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt)
+		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, func() int {
+			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt)
+		})
 	case fm.launchManaged:
-		status = runTrusted("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
-			fm.firstPrompt, fm.broker, fm.accountSelections)
+		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, func() int {
+			return runTrusted("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
+				fm.firstPrompt, fm.broker, fm.accountSelections)
+		})
 	case fm.genConfig != "":
-		status = launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections)
+		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, func() int {
+			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections)
+		})
 	}
 	if status != 0 {
 		os.Exit(status)

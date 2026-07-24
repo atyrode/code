@@ -30,6 +30,7 @@ environment variable with a sane fallback.
 | `CODE_GENERATED` | path to the generated facet catalog (the routing blocks behind the dials) | `$XDG_DATA_HOME/code/generated.plain`, where `code generate` writes; if that's missing too, the TUI opens the guided first-run that builds it |
 | `CODE_USAGE` | command printing `omp usage --json` for the usage panel | panel hidden |
 | `CODE_SELECTION_STATE` | file persisting your dial choices | choices reset each run |
+| `CODE_SESSION_STATE` | directory recording live sessions for `code ls` / `code session reap`; `off` disables recording | `$XDG_STATE_HOME/code/sessions` — note this one defaults to a path rather than to disabled, so the registry works without wrapper changes |
 | `CODE_OMP` | omp binary for trusted launches (`m` and `enter`) | `omp-managed`, then `omp` on PATH |
 | `CODE_OMP_UNTRUSTED` | sandboxed omp for the `u` key | `ompu` on PATH, else the key is hidden and inert |
 | `CODE_EVAL_MODEL` | ollama model tag for `ctrl+o` | `qwen2.5:3b` |
