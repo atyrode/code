@@ -90,15 +90,25 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 	if len(doc.Content) == 0 {
 		return nil, fmt.Errorf("%s: empty document", path)
 	}
-	var modelsNode *yaml.Node
+	var modelsNode, probedNode *yaml.Node
 	root := doc.Content[0]
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "models" {
+		switch root.Content[i].Value {
+		case "models":
 			modelsNode = root.Content[i+1]
+		case "probed":
+			probedNode = root.Content[i+1]
 		}
 	}
 	if modelsNode == nil {
 		return nil, fmt.Errorf("%s: no `models:` mapping", path)
+	}
+	// Reachability is a property of the file, not of the renderer. omp lists
+	// models an account cannot actually call and nothing in their metadata says
+	// so, and a rung that 404s breaks every profile it leads. `code generate
+	// init` sets this once it has probed; an offline scaffold leaves it false.
+	if probedNode == nil || probedNode.Value != "true" {
+		return nil, fmt.Errorf("%s: missing `probed: true` — these models were never verified as callable by your account. Re-run `code generate init --refresh`, which probes every model, or set `probed: true` yourself once you have confirmed each one", path)
 	}
 	c := &catalog{models: map[string]catModel{}, levels: map[string][]int{}, ladder: map[string][5]string{"O": {}, "A": {}}}
 	for i := 0; i+1 < len(modelsNode.Content); i += 2 {
@@ -752,9 +762,21 @@ func runGenerate(args []string) int {
 
 const generateHelp = `code generate — render the facet-grid catalog the TUI browses
 
-  code generate init [--from-json FILE] [--models-file OUT]
-      Scaffold a models file from your omp instance (runs 'omp models --json',
-      or reads FILE). Auto-guesses the pool/tier assignments — review them!
+  code generate init [--models-file OUT] [--refresh] [--from-json FILE]
+      Scaffold a models file from your omp instance. Reads 'omp models --json'
+      and 'omp usage --json', then probes every candidate with 'omp bench' to
+      confirm your account can actually call it — omp lists models it cannot,
+      and nothing in their metadata says so. Only verified models become rungs,
+      and the file is marked 'probed: true' so 'code generate' will accept it.
+      The probe makes one real request per model, so this takes a minute.
+      Derives the pool/tier assignments — review them!
+
+      --refresh    re-derive the tiers over an existing models file. Without it
+                   init refuses to touch one, so a months-old scaffold keeps
+                   naming models your providers have since retired.
+      --from-json  read the model list from FILE instead of omp, and skip the
+                   probe. Offline inspection only: the result is marked
+                   'probed: false' and 'code generate' will refuse to render it.
 
   code generate [--models-file FILE] [--out FILE|-]
       Render the catalog. Defaults: models file at

@@ -16,22 +16,25 @@ The dials map to pre-generated routing blocks. `code generate init` scaffolds
 a models file from your own omp instance (`omp models --json`, plus
 `omp usage --json` to spot the tier-scoped quota buckets that mark the spark
 and elite models) and `code generate` renders the catalog from it — see the
-README quickstart. Two
-honest limits: the tier assignments `init` derives (newest model per family,
-then ranked by thinking ceiling, context and price) deserve a human look, and
-the speed/ttft numbers it writes are placeholders unless you ask for
-measured ones. `code generate init --bench` fills both from `omp bench --json`
-— time to first token and output tok/s, one real API call per model, live
-credentials required — and drops any model whose probe fails, which is the only
-check that catches a model omp lists but your account cannot actually call.
-Without it every model carries the identical placeholder pair, so the speed
-meter those numbers drive is model-invariant: it moves with the thinking dial
-and nothing else.
+README quickstart. The tier assignments `init` derives (newest model per family,
+then ranked by thinking ceiling, context and price) still deserve a human look.
+
+What no longer needs a caveat: `init` probes every candidate with `omp bench`
+before it can become a rung, and that is mandatory rather than a flag. omp lists
+models an account cannot actually call and nothing in the metadata says so —
+`claude-mythos-5` reports `claude-fable-5`'s exact price, context window and
+thinking range, and 404s here — so anything that does not come back with a clean
+probe is dropped, as is anything missing from the report. The same pass supplies
+the real speed/ttft, which used to be an identical placeholder pair on every
+model, making the speed meter move with the thinking dial and nothing else. It
+is one timed request per model, so `init` takes a minute and the figures are a
+single sample rather than a steady benchmark. A verified file is marked
+`probed: true`; `generate` refuses one that is not.
 
 ## Other honest caveats
 
 - oh-my-pi releases near-daily, and the `omp models --json` / `omp usage --json`
-  (and, with `--bench`, `omp bench --json`) schemas the generator reads carry no
+  / `omp bench --json` schemas the generator reads carry no
   stability guarantee — nor does the auth broker's snapshot/usage API the
   panel draws from. A scheduled compatibility check is planned:
   [#3](https://github.com/atyrode/code/issues/3).

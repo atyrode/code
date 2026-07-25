@@ -29,6 +29,7 @@ func TestOnboardingScanFlow(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "cfg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "data"))
 	stubOmp(t, initUsage)
+	stubBench(t) // obScan now probes every candidate; keep it offline and instant
 	orig := ompModelsJSON
 	ompModelsJSON = func() ([]byte, error) { return []byte(initJSON), nil }
 	defer func() { ompModelsJSON = orig }()
@@ -120,6 +121,8 @@ func TestOnboardingExistingModelsFile(t *testing.T) {
 func TestOnboardingErrorAndRetry(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "cfg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "data"))
+	stubOmp(t, initUsage)
+	stubBench(t) // the retry reaches obScan, which probes; keep it offline
 	calls := 0
 	orig := ompModelsJSON
 	ompModelsJSON = func() ([]byte, error) {

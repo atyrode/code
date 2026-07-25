@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,8 @@ import (
 // optional spark/elite tiers present, an explicit quota bucket per model, and a
 // text-only model (the codex spark variants really are text-only) so the vision
 // role has something to route around.
-const fixtureYML = `models:
+const fixtureYML = `probed: true
+models:
   luna:
     id: gpt-5.6-luna
     pool: O
@@ -364,7 +366,7 @@ func TestCatalogWithoutOptionalTiers(t *testing.T) {
 
 func TestLoadCatalogValidation(t *testing.T) {
 	cases := map[string]string{
-		"missing ladder": "models:\n  a:\n    id: x\n    pool: A\n    tier: 1\n    thinking: low→max\n",
+		"missing ladder": "probed: true\nmodels:\n  a:\n    id: x\n    pool: A\n    tier: 1\n    thinking: low→max\n",
 		"bad pool":       strings.Replace(fixtureYML, "pool: O", "pool: X", 1),
 		"dup tier":       strings.Replace(fixtureYML, "tier: 2", "tier: 1", 1),
 		"bad thinking":   strings.Replace(fixtureYML, "low→max", "low-max", 1),
@@ -569,15 +571,85 @@ func stubOmp(t *testing.T, usage string) {
 	t.Cleanup(func() { ompUsageJSON = prev })
 }
 
-func scaffoldTo(t *testing.T, args ...string) (*catalog, string) {
+// stubModels points the scaffolder's model-list probe at a fixed payload for
+// the duration of a test, so the live init path never shells out to omp.
+func stubModels(t *testing.T, models string) {
 	t.Helper()
-	dir := t.TempDir()
-	src := filepath.Join(dir, "omp.json")
-	out := filepath.Join(dir, "models.yml")
-	if err := os.WriteFile(src, []byte(initJSON), 0o644); err != nil {
+	prev := ompModelsJSON
+	ompModelsJSON = func() ([]byte, error) { return []byte(models), nil }
+	t.Cleanup(func() { ompModelsJSON = prev })
+}
+
+// benchProbe records what stubBench was asked to measure, so a test can prove
+// the reachability probe actually fired rather than being skipped.
+type benchProbe struct {
+	calls int
+	sels  []string
+}
+
+// stubBench points ompBenchJSON at a synthetic report that passes every
+// selector it is handed, except those named in fail (matched on the whole
+// selector or the bare id after the "provider/" prefix), which report the 404
+// not-found shape — the one failure runBench may read as unreachable and drop.
+// It asserts benchSelectors' contract that every selector is provider-qualified
+// (omp fuzzy-matches a bare id otherwise) and records the calls it served.
+func stubBench(t *testing.T, fail ...string) *benchProbe {
+	t.Helper()
+	failSet := map[string]bool{}
+	for _, f := range fail {
+		failSet[f] = true
+	}
+	rec := &benchProbe{}
+	prev := ompBenchJSON
+	ompBenchJSON = func(sels []string) ([]byte, error) {
+		rec.calls++
+		rec.sels = append(rec.sels, sels...)
+		rows := make([]string, 0, len(sels))
+		for _, s := range sels {
+			if !strings.Contains(s, "/") {
+				t.Errorf("benchSelectors must hand omp provider-qualified selectors, got %q", s)
+			}
+			id := s[strings.LastIndexByte(s, '/')+1:]
+			if failSet[s] || failSet[id] {
+				// The 404 not-found shape: the provider disowns the model. That is
+				// the only failure runBench may read as unreachable, so these drop.
+				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: %s\"}}"}],"failures":1,"average":null}`, s, id))
+				continue
+			}
+			// A clean pass: every run ok, zero failures, a measured average.
+			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`, s))
+		}
+		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
+	}
+	t.Cleanup(func() { ompBenchJSON = prev })
+	return rec
+}
+
+// passingProbe builds the reachability map a live bench would return when every
+// listed model answers — the all-clear scaffoldModels gates rungs on.
+func passingProbe(t *testing.T, modelsJSON string) map[string]benchFact {
+	t.Helper()
+	var models ompModels
+	if err := json.Unmarshal([]byte(modelsJSON), &models); err != nil {
 		t.Fatal(err)
 	}
-	if code := runGenerateInit(append([]string{"--from-json", src, "--models-file", out}, args...)); code != 0 {
+	probe := map[string]benchFact{}
+	for _, m := range models.Models {
+		probe[strings.ToLower(m.ID)] = benchFact{speed: 48.9, ttft: 1.4, reachable: true}
+	}
+	return probe
+}
+
+func scaffoldTo(t *testing.T, args ...string) (*catalog, string) {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "models.yml")
+	// The scaffolder's live path is mandatory-probe now. Stub the model list
+	// and a bench that passes every model, so init writes probed: true and the
+	// file loads back cleanly — all without a real API call. (--from-json is no
+	// longer usable here: it stamps probed: false, which loadCatalog rejects.)
+	stubModels(t, initJSON)
+	stubBench(t)
+	if code := runGenerateInit(append([]string{"--models-file", out}, args...)); code != 0 {
 		t.Fatalf("runGenerateInit exit %d", code)
 	}
 	c, err := loadCatalog(out)
@@ -654,35 +726,37 @@ func TestGenerateInitWithoutUsageProbe(t *testing.T) {
 	}
 }
 
-// --bench doubles as a reachability probe: omp lists claude-mythos-5 at
-// claude-fable-5's exact price, but it 404s on accounts that do not have it,
-// and no metadata distinguishes the two.
+// The reachability probe is what stops omp's catalog quirks from becoming live
+// routing: omp lists claude-mythos-5 at claude-fable-5's exact price, but mythos
+// answers a 404 not-found on accounts that lack it and no metadata tells the two
+// apart. A model the provider disowns must be dropped, and the scaffold that
+// remains must still certify as probed.
 func TestGenerateInitBenchDropsUnreachableModels(t *testing.T) {
 	stubOmp(t, "")
-	prev := ompBenchJSON
-	ompBenchJSON = func(sels []string) ([]byte, error) {
-		var rows []string
-		for _, s := range sels {
-			id := s[strings.LastIndexByte(s, '/')+1:]
-			if id == "claude-mythos-5" {
-				rows = append(rows, fmt.Sprintf(`{"model":%q,"average":null}`, s))
-				continue
-			}
-			rows = append(rows, fmt.Sprintf(`{"model":%q,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`, s))
-		}
-		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
+	stubModels(t, initJSON)
+	stubBench(t, "claude-mythos-5")
+	out := filepath.Join(t.TempDir(), "models.yml")
+	if code := runGenerateInit([]string{"--models-file", out}); code != 0 {
+		t.Fatalf("runGenerateInit exit %d", code)
 	}
-	t.Cleanup(func() { ompBenchJSON = prev })
-
-	c, out := scaffoldTo(t, "--bench")
+	c, err := loadCatalog(out)
+	if err != nil {
+		body, _ := os.ReadFile(out)
+		t.Fatalf("scaffold does not load back: %v\n%s", err, body)
+	}
 	for _, k := range c.keys {
 		if c.models[k].ID == "claude-mythos-5" {
-			t.Error("a model whose bench probe failed must not reach the ladder")
+			t.Error("a model the provider 404s must not reach the ladder")
 		}
 	}
 	body, _ := os.ReadFile(out)
+	// A not-found drop is not a partial probe: every survivor answered, so the
+	// file is certified rather than left unprobed.
+	if !strings.Contains(string(body), "probed: true") {
+		t.Errorf("dropping a 404 model must still yield a certified scaffold:\n%s", body)
+	}
 	if strings.Contains(string(body), "placeholder") {
-		t.Error("--bench should replace the placeholder speed/ttft, not annotate them")
+		t.Error("a live probe should replace the placeholder speed/ttft, not annotate them")
 	}
 	if !strings.Contains(string(body), "speed: 48.9") || !strings.Contains(string(body), "ttft: 1.4") {
 		t.Errorf("measured figures missing from scaffold:\n%s", body)
@@ -691,13 +765,10 @@ func TestGenerateInitBenchDropsUnreachableModels(t *testing.T) {
 
 func TestGenerateInitRefresh(t *testing.T) {
 	stubOmp(t, initUsage)
-	dir := t.TempDir()
-	src := filepath.Join(dir, "omp.json")
-	out := filepath.Join(dir, "models.yml")
-	if err := os.WriteFile(src, []byte(initJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	base := []string{"--from-json", src, "--models-file", out}
+	stubModels(t, initJSON)
+	stubBench(t)
+	out := filepath.Join(t.TempDir(), "models.yml")
+	base := []string{"--models-file", out}
 	if code := runGenerateInit(base); code != 0 {
 		t.Fatalf("first init exit %d", code)
 	}
@@ -718,5 +789,254 @@ func TestGenerateInitRefresh(t *testing.T) {
 	}
 	if c.models[c.ladder["A"][3]].ID != "claude-opus-5" {
 		t.Error("--refresh should re-derive the tiers from the current model list")
+	}
+}
+
+// The probe marker is a hard gate: `code generate` must refuse a models file
+// that was never verified as callable, and the rejection must name the
+// remediation so the user is not left guessing. The remediation string is
+// user-facing contract.
+func TestLoadCatalogRequiresProbedMarker(t *testing.T) {
+	// fixtureYML is a healthy ladder carrying `probed: true`; strip or flip the
+	// marker to model the two unverified shapes a pre-gate scaffold produced.
+	body := strings.TrimPrefix(fixtureYML, "probed: true\n")
+	for _, tc := range []struct{ name, yml string }{
+		{"no probed key", body},
+		{"probed false", "probed: false\n" + body},
+	} {
+		_, err := catalogFrom(t, tc.yml)
+		if err == nil {
+			t.Errorf("%s: an unverified models file must be rejected", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "probed: true") {
+			t.Errorf("%s: rejection must name the `probed: true` remedy, got %v", tc.name, err)
+		}
+	}
+	// The marker present and true is the whole point: that file must load.
+	if _, err := catalogFrom(t, fixtureYML); err != nil {
+		t.Errorf("probed: true file rejected: %v", err)
+	}
+}
+
+// A model the provider 404s is the one probe failure scaffoldModels may act on
+// unilaterally: it drops the model and certifies the rest. claude-mythos-5 is
+// the live trap — omp lists it at claude-fable-5's exact price, context and
+// thinking, it 404s on accounts that lack it, and nothing in the metadata tells
+// them apart, so only the probe can.
+func TestScaffoldDropsNotFoundModels(t *testing.T) {
+	stubOmp(t, "") // scaffoldModels reads the usage report; keep it offline
+	probe := passingProbe(t, initJSON)
+	probe["claude-mythos-5"] = benchFact{notFound: true, why: "not_found_error"}
+	yml, err := scaffoldModels([]byte(initJSON), probe)
+	if err != nil {
+		t.Fatalf("a not-found model should drop cleanly, not error: %v", err)
+	}
+	if strings.Contains(yml, "claude-mythos-5") {
+		t.Errorf("a 404 model must be dropped from the scaffold:\n%s", yml)
+	}
+	if !strings.Contains(yml, "probed: true") {
+		t.Errorf("dropping a 404 model must still certify the scaffold:\n%s", yml)
+	}
+}
+
+// The fable incident: omp's bundled bench prompt trips Anthropic's safety layer,
+// so a perfectly callable claude-fable-5 comes back "Refusal (cyber)…". A
+// refusal is evidence of nothing about entitlement, so it must NOT be collapsed
+// into "unreachable" and silently delete the user's chosen elite. It has to
+// surface as an unresolved error, while a genuine 404 (mythos) is still dropped
+// — so the error names fable and never mentions mythos.
+func TestScaffoldRefusalSurfacesNotDropped(t *testing.T) {
+	stubOmp(t, "")
+	probe := passingProbe(t, initJSON)
+	probe["claude-fable-5"] = benchFact{why: "Refusal (cyber): This request triggered restrictions"}
+	probe["claude-mythos-5"] = benchFact{notFound: true, why: "not_found_error"}
+	_, err := scaffoldModels([]byte(initJSON), probe)
+	if err == nil {
+		t.Fatal("a refused (unresolved) probe must not certify a ladder")
+	}
+	if !strings.Contains(err.Error(), "claude-fable-5") || !strings.Contains(err.Error(), "Refusal") {
+		t.Errorf("the refusal must surface, naming the model and reason: %v", err)
+	}
+	if strings.Contains(err.Error(), "claude-mythos-5") {
+		t.Errorf("a genuine 404 is dropped, not reported as unresolved: %v", err)
+	}
+}
+
+// Anything the probe cannot resolve — a candidate missing from the report, or
+// one that failed for a reason other than 404 — must refuse the whole scaffold
+// rather than guess. Dropping silently would write probed: true over a partial
+// answer; keeping would crown a model that never replied.
+func TestScaffoldUnresolvedProbeRefuses(t *testing.T) {
+	stubOmp(t, "")
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]benchFact)
+		want   string
+	}{
+		{"missing from report", func(p map[string]benchFact) { delete(p, "claude-opus-5") }, "missing from the probe report"},
+		{"failed but not 404", func(p map[string]benchFact) { p["claude-opus-5"] = benchFact{why: "rate_limited"} }, "rate_limited"},
+	} {
+		probe := passingProbe(t, initJSON)
+		tc.mutate(probe)
+		_, err := scaffoldModels([]byte(initJSON), probe)
+		if err == nil {
+			t.Fatalf("%s: an unresolved probe must refuse the scaffold", tc.name)
+		}
+		if !strings.Contains(err.Error(), "claude-opus-5") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error must name the model and reason, got %v", tc.name, err)
+		}
+	}
+}
+
+// The --from-json offline path (probe nil) is the one way to scaffold without a
+// probe, so it must not become a bypass: it takes every listed model on faith
+// yet stamps the file probed: false, and loadCatalog then refuses it. Both
+// halves matter — retention keeps the path useful, the marker keeps it safe.
+func TestScaffoldOfflineRetainsButMarksUnprobed(t *testing.T) {
+	stubOmp(t, initUsage)
+	yml, err := scaffoldModels([]byte(initJSON), nil)
+	if err != nil {
+		t.Fatalf("offline scaffold: %v", err)
+	}
+	// Retention: nothing is filtered on reachability, so the full ladder still
+	// scaffolds — the models a live probe would keep when everything passes.
+	for _, id := range []string{"claude-opus-5", "claude-fable-5", "gpt-5.6-sol"} {
+		if !strings.Contains(yml, id) {
+			t.Errorf("probe==nil must retain models; %s missing:\n%s", id, yml)
+		}
+	}
+	// Marking: yet the file is stamped unverified.
+	if !strings.Contains(yml, "probed: false") {
+		t.Errorf("offline scaffold must stamp probed: false:\n%s", yml)
+	}
+	// Bypass closure: an unverified file must not load.
+	p := filepath.Join(t.TempDir(), "models.yml")
+	if err := os.WriteFile(p, []byte(yml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCatalog(p); err == nil {
+		t.Error("loadCatalog must refuse a probed: false scaffold")
+	} else if !strings.Contains(err.Error(), "probed: true") {
+		t.Errorf("rejection should point at the remediation, got %v", err)
+	}
+}
+
+// The live path must actually invoke the probe, not merely be capable of
+// filtering. A unit test of scaffoldModels alone would miss an accidental nil
+// facts at the call site, so assert through the stub that init handed omp
+// provider-qualified selectors covering the models that can become rungs.
+func TestGenerateInitLiveProbesModels(t *testing.T) {
+	stubOmp(t, initUsage)
+	stubModels(t, initJSON)
+	probe := stubBench(t)
+	out := filepath.Join(t.TempDir(), "models.yml")
+	if code := runGenerateInit([]string{"--models-file", out}); code != 0 {
+		t.Fatalf("runGenerateInit exit %d", code)
+	}
+	if probe.calls == 0 {
+		t.Fatal("live init must run the reachability probe")
+	}
+	// The probe has to reach the trap models, or an unreachable one slips
+	// through. Spot-check both pools, the elite, and the mythos look-alike.
+	for _, id := range []string{"claude-opus-5", "claude-fable-5", "claude-mythos-5", "gpt-5.6-sol"} {
+		found := false
+		for _, s := range probe.sels {
+			if strings.HasSuffix(s, "/"+id) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("probe selectors did not cover %s: %v", id, probe.sels)
+		}
+	}
+	// And the facts reached the file: a live scaffold is stamped probed: true.
+	body, _ := os.ReadFile(out)
+	if !strings.Contains(string(body), "probed: true") {
+		t.Errorf("live init must stamp probed: true:\n%s", body)
+	}
+}
+
+// runBench sorts each probe row into exactly one of three outcomes, and the
+// distinction is load-bearing: only the provider's 404 (notFound) may drop a
+// model, a clean run makes it reachable, and everything else — refusals, rate
+// limits, incomplete rows — is unresolved and must be neither dropped nor
+// trusted. Collapsing a refusal into "unreachable" is what would have deleted
+// claude-fable-5 from a real user's ladder.
+func TestRunBenchClassifiesOutcomes(t *testing.T) {
+	prev := ompBenchJSON
+	t.Cleanup(func() { ompBenchJSON = prev })
+	stub := func(row string) {
+		ompBenchJSON = func([]string) ([]byte, error) { return []byte(`{"models":[` + row + `]}`), nil }
+	}
+
+	// Reachable: every run answered, so the measured figures come through.
+	stub(`{"model":"anthropic/x","results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`)
+	facts, err := runBench([]string{"anthropic/x"})
+	if err != nil {
+		t.Fatalf("reachable: runBench: %v", err)
+	}
+	if f := facts["x"]; !f.reachable || f.notFound || f.speed != 48.9 || f.ttft != 1.4 {
+		t.Errorf("clean row should be reachable with measured figures, got %+v", f)
+	}
+
+	// Not found: the provider disowns the model — the one droppable failure.
+	stub(`{"model":"anthropic/x","results":[{"ok":false,"error":"404 not_found_error: model does not exist"}],"failures":1,"average":null}`)
+	facts, err = runBench([]string{"anthropic/x"})
+	if err != nil {
+		t.Fatalf("notFound: runBench: %v", err)
+	}
+	if f := facts["x"]; !f.notFound || f.reachable {
+		t.Errorf("a 404 row should be notFound, got %+v", f)
+	}
+
+	// Unresolved: a refusal or an incomplete row says nothing about entitlement,
+	// so it is neither reachable nor notFound.
+	for _, tc := range []struct{ name, row string }{
+		{"refusal", `{"model":"anthropic/x","results":[{"ok":false,"error":"Refusal (cyber): This request triggered restrictions"}],"failures":1,"average":null}`},
+		{"failed run", `{"model":"anthropic/x","results":[{"ok":true},{"ok":false,"error":"stream closed"}],"failures":0,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
+		{"nonzero failures", `{"model":"anthropic/x","results":[{"ok":true}],"failures":2,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
+		{"no results", `{"model":"anthropic/x","results":[],"failures":0,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
+		{"null average", `{"model":"anthropic/x","results":[{"ok":true}],"failures":0,"average":null}`},
+	} {
+		stub(tc.row)
+		facts, err := runBench([]string{"anthropic/x"})
+		if err != nil {
+			t.Fatalf("%s: runBench: %v", tc.name, err)
+		}
+		if f := facts["x"]; f.reachable || f.notFound {
+			t.Errorf("%s: must be unresolved (neither reachable nor notFound), got %+v", tc.name, f)
+		}
+	}
+}
+
+// End to end, the live path must refuse rather than certify a partial probe: a
+// refusal (the fable case) leaves no models file behind, so an unverified ladder
+// can never reach `code generate`.
+func TestGenerateInitRefusesUnresolvedProbe(t *testing.T) {
+	stubOmp(t, "")
+	stubModels(t, initJSON)
+	prev := ompBenchJSON
+	t.Cleanup(func() { ompBenchJSON = prev })
+	ompBenchJSON = func(sels []string) ([]byte, error) {
+		rows := make([]string, 0, len(sels))
+		for _, s := range sels {
+			// claude-fable-5 is callable, but omp's prompt trips a refusal;
+			// every other model answers cleanly.
+			if strings.HasSuffix(s, "/claude-fable-5") {
+				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"Refusal (cyber): blocked under Anthropic's Usage Policy"}],"failures":1,"average":null}`, s))
+				continue
+			}
+			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`, s))
+		}
+		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
+	}
+	out := filepath.Join(t.TempDir(), "models.yml")
+	if code := runGenerateInit([]string{"--models-file", out}); code == 0 {
+		t.Error("init must fail when the probe is inconclusive")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Errorf("no models file may be written from an unresolved probe (stat err: %v)", err)
 	}
 }

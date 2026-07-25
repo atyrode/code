@@ -362,25 +362,44 @@ func thinkingField(levels []string) string {
 	return strings.Join(names, ",")
 }
 
-// benchFact is one model's measured throughput, or a recorded probe failure.
+// benchFact is one model's probe outcome. reachable means it answered; notFound
+// means the provider says it does not exist for this account; anything else is
+// unresolved — a transport, auth or rate failure that says nothing either way
+// about entitlement, and so must not be guessed in either direction.
 type benchFact struct {
 	speed, ttft float64
-	ok          bool
+	reachable   bool
+	notFound    bool
+	why         string
 }
 
-// ompBenchJSON measures models with omp's own benchmark; a var so tests can
-// stub it. Three runs is enough to smooth a cold start without turning
-// `--bench` into a coffee break.
+// notFoundProbe matches the one failure that is genuinely disqualifying: the
+// provider denying the model exists. claude-mythos-5 answers exactly this way
+// while listing at claude-fable-5's price, context and thinking range.
+var notFoundProbe = regexp.MustCompile(`(?i)not_found|model_not_found|no such model|unknown model|does not exist`)
+
+// ompBenchJSON probes models with omp's own benchmark; a var so tests can stub
+// it. One short run per model: this is mandatory on every init and every
+// first-run onboarding, and reachability is binary — extra runs or tokens would
+// only steady a throughput figure at the cost of a longer wait.
+//
+// The prompt is overridden deliberately. omp's bundled bench prompt reads as
+// cyber content to Anthropic's safety layer, and claude-fable-5 refuses it —
+// which would have deleted a perfectly callable elite from the ladder. A probe
+// that decides eligibility has to ask something nothing can object to.
 var ompBenchJSON = func(selectors []string) ([]byte, error) {
 	args := append([]string{"bench"}, selectors...)
-	return exec.Command("omp", append(args, "--json", "--runs", "3")...).Output()
+	return exec.Command("omp", append(args,
+		"--json", "--runs", "1", "--max-tokens", "4",
+		"--prompt", "Reply with the single word: ok")...).Output()
 }
 
-// runBench fills in speed and ttft, and doubles as a reachability probe. omp's
-// catalog lists models the account cannot actually call — claude-mythos-5 is
-// priced identically to claude-fable-5 and 404s here — and no metadata
-// distinguishes them, so a model whose probe fails is recorded as unreachable
-// and dropped from the ladder rather than merely left unmeasured.
+// runBench sorts each model into the three outcomes benchFact describes and
+// records throughput for the ones that answered. It deliberately does not
+// collapse "refused" or "rate limited" into "unreachable": omp lists models an
+// account cannot call (claude-mythos-5, at claude-fable-5's exact price), but a
+// failed request is evidence of that only when the provider says the model does
+// not exist. Everything else is unresolved, and the caller must not guess.
 func runBench(selectors []string) (map[string]benchFact, error) {
 	raw, err := ompBenchJSON(selectors)
 	if len(raw) == 0 {
@@ -392,7 +411,12 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 	var parsed struct {
 		Models []struct {
 			Model   string `json:"model"`
-			Average *struct {
+			Results []struct {
+				OK    bool   `json:"ok"`
+				Error string `json:"error"`
+			} `json:"results"`
+			Failures float64 `json:"failures"`
+			Average  *struct {
 				TTFTMs          float64 `json:"ttftMs"`
 				TokensPerSecond float64 `json:"tokensPerSecond"`
 			} `json:"average"`
@@ -410,27 +434,46 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 		// omp is not consistent about id casing across surfaces (usage scopes
 		// report "GPT-5.3-Codex-Spark"), so key on a folded id at both ends.
 		id = strings.ToLower(id)
-		if m.Average == nil {
-			out[id] = benchFact{}
-			continue
+		why := ""
+		for _, r := range m.Results {
+			if !r.OK {
+				if why = r.Error; why == "" {
+					why = "run failed without an error message"
+				}
+				break
+			}
 		}
-		out[id] = benchFact{
-			speed: math.Round(m.Average.TokensPerSecond*10) / 10,
-			ttft:  math.Round(m.Average.TTFTMs/10) / 100,
-			ok:    true,
+		switch {
+		case why == "" && m.Failures == 0 && len(m.Results) > 0 && m.Average != nil:
+			out[id] = benchFact{
+				speed:     math.Round(m.Average.TokensPerSecond*10) / 10,
+				ttft:      math.Round(m.Average.TTFTMs/10) / 100,
+				reachable: true,
+			}
+		case notFoundProbe.MatchString(why):
+			out[id] = benchFact{notFound: true, why: why}
+		default:
+			if why == "" {
+				why = "incomplete probe report — no average or no runs recorded"
+			}
+			out[id] = benchFact{why: why}
 		}
 	}
 	return out, nil
 }
 
 // scaffoldModels turns an `omp models --json` payload into models.yml content.
-// Pure but for the optional quota probe, so the CLI and the first-run
-// onboarding share it. bench, when non-nil, supplies measured speed/ttft.
-func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
+// Pure but for the quota probe, so the CLI and the first-run onboarding share
+// it. probe, when non-nil, is a reachability report: it supplies measured
+// speed/ttft and decides which models may become rungs. nil means no probe ran
+// (the --from-json path), and every listed model is taken on faith — output from
+// that path is marked unprobed and `code generate` refuses it.
+func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	var parsed ompModels
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", fmt.Errorf("parsing model list: %w", err)
 	}
+	var unresolved []string
 	byPool := map[string][]ompModel{}
 	for _, m := range parsed.Models {
 		pool := poolOf(m.Provider)
@@ -438,11 +481,25 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 			m.Cost.Input <= 0 || datedID.MatchString(m.ID) {
 			continue
 		}
-		// A model omp listed but could not actually call is worse than useless
-		// on the ladder: it looks top-spec and fails at launch. Only --bench
-		// knows, so only --bench can filter.
-		if f, probed := bench[strings.ToLower(m.ID)]; probed && !f.ok {
-			continue
+		// A model omp lists but the account cannot call is worse than useless on
+		// the ladder: it looks top-spec and 404s at launch, and no metadata
+		// distinguishes it (claude-mythos-5 lists at claude-fable-5's exact
+		// price, context and thinking range). Only a live probe knows, and only
+		// its verdict is actionable: a model the provider says does not exist is
+		// dropped, while a model that merely failed to answer is unresolved and
+		// must not be silently treated as either fine or absent.
+		if probe != nil {
+			f, seen := probe[strings.ToLower(m.ID)]
+			switch {
+			case f.notFound:
+				continue
+			case !seen:
+				unresolved = append(unresolved, m.ID+": missing from the probe report")
+				continue
+			case !f.reachable:
+				unresolved = append(unresolved, m.ID+": "+f.why)
+				continue
+			}
 		}
 		// Keep only thinking levels the generator's scale knows (omp can expose
 		// provider-specific extras like "off"); without this the scaffold would
@@ -458,6 +515,17 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 		}
 		m.Thinking = levels
 		byPool[pool] = append(byPool[pool], m)
+	}
+
+	// An unresolved probe is not a licence to proceed. Dropping these silently
+	// would write `probed: true` over a partial answer, and keeping them could
+	// crown a model that never replied — so refuse, name each one, and let the
+	// operator decide. Models the provider explicitly disowned are already gone
+	// above and deliberately absent from this list.
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		return "", fmt.Errorf("the reachability probe came back inconclusive for %d model(s), so the ladder cannot be certified:\n  %s\nre-run once the provider is answering, or pass --from-json to scaffold offline without a probe",
+			len(unresolved), strings.Join(unresolved, "\n  "))
 	}
 
 	specials := readSpecialTiers()
@@ -515,6 +583,42 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 				specialTierNo = 0
 			}
 		}
+		// Fallback when no bucket named an elite. The quota report is not always
+		// there to ask — it turns out to vary with the ambient auth environment,
+		// and the failure is silent and expensive: with the elite left on the
+		// ordinary ladder it becomes tier 3, so every routine "smart" request
+		// drains the scarce bucket that exists precisely to be spent on purpose.
+		// Price is legitimate evidence here. It says nothing about entitlement,
+		// which is why the reachability probe exists, but a model in its own
+		// price class is by definition not the everyday workhorse.
+		if specialTierNo < 0 && pool == "A" && len(cands) > 1 {
+			lead, next := cands[0], 0.0
+			for _, m := range cands {
+				if m.Cost.Input > lead.Cost.Input {
+					lead = m
+				}
+			}
+			for _, m := range cands {
+				if m.ID != lead.ID && m.Cost.Input > next {
+					next = m.Cost.Input
+				}
+			}
+			if next > 0 && lead.Cost.Input >= 2*next {
+				specialTierNo, pickID = 4, lead.ID
+			}
+		}
+		// The bucket label comes from the quota scope when one named this lead.
+		// The price fallback has no scope to read, so it names the bucket after
+		// the tier it inferred — tier 4 is the elite window by construction.
+		specialBucket := ""
+		switch {
+		case pick != nil:
+			specialBucket = bucketName(pool, pick.tier)
+		case specialTierNo == 4:
+			specialBucket = bucketName(pool, "fable")
+		case specialTierNo == 0:
+			specialBucket = bucketName(pool, "spark")
+		}
 		var elite ompModel
 		var ladderCands []ompModel
 		for _, m := range cands {
@@ -525,7 +629,7 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 			if specialTierNo == 4 {
 				elite = m
 			}
-			rungs[pool] = append(rungs[pool], rung{m, specialTierNo, bucketName(pool, pick.tier)})
+			rungs[pool] = append(rungs[pool], rung{m, specialTierNo, specialBucket})
 		}
 		// An elite defines the scarce, expensive class. Anything priced at or
 		// above it is a sibling elite rather than a tier-3 workhorse, and must
@@ -546,7 +650,11 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 			if pool == "A" {
 				name = "Anthropic"
 			}
-			return "", fmt.Errorf("found %d usable %s model(s), need 3 (cheap/regular/smart) — code assumes both Anthropic and OpenAI are set up in omp", len(ladder), name)
+			hint := "code assumes both Anthropic and OpenAI are set up in omp"
+			if probe != nil {
+				hint += "; models the provider reported as non-existent were dropped by the probe"
+			}
+			return "", fmt.Errorf("found %d usable %s model(s), need 3 (cheap/regular/smart) — %s", len(ladder), name, hint)
 		}
 		for i, m := range ladder {
 			rungs[pool] = append(rungs[pool], rung{m, i + 1, bucketName(pool, "")})
@@ -572,8 +680,23 @@ func scaffoldModels(raw []byte, bench map[string]benchFact) (string, error) {
 #
 # Re-render the catalog after any edit:  code generate
 # Re-derive the tiers after a provider ships new models:  code generate init --refresh
-models:
 `)
+	// The marker is the whole point of probing: without it `code generate`
+	// refuses the file, so an offline scaffold can never quietly become live
+	// routing that names a model this account cannot call.
+	if probe != nil {
+		b.WriteString(`# Every model below answered a live probe, so 'code generate' will render it.
+probed: true
+`)
+	} else {
+		b.WriteString(`# NOT PROBED — scaffolded offline from --from-json, so no model here has been
+# confirmed callable on your account and 'code generate' will refuse this file.
+# Re-run 'code generate init --refresh' live, or flip this to true once you have
+# checked each id yourself.
+probed: false
+`)
+	}
+	b.WriteString("models:\n")
 	used := map[string]bool{}
 	for _, pool := range []string{"O", "A"} {
 		for _, r := range rungs[pool] {
@@ -586,8 +709,8 @@ models:
 			}
 			used[key] = true
 			speed, ttft := "50", "2.0"
-			note := "    # placeholder — run `code generate init --refresh --bench` to measure"
-			if f, ok := bench[strings.ToLower(r.m.ID)]; ok {
+			note := "    # placeholder — no probe ran (--from-json); re-run `code generate init` live to measure"
+			if f, ok := probe[strings.ToLower(r.m.ID)]; ok {
 				speed, ttft, note = trimFloat(f.speed), trimFloat(f.ttft), ""
 			}
 			b.WriteString(fmt.Sprintf(`  %s:
@@ -628,7 +751,7 @@ func imageCapable(m ompModel) bool {
 
 func runGenerateInit(args []string) int {
 	fromJSON, out := "", defaultModelsPath()
-	bench, refresh := false, false
+	refresh := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from-json":
@@ -645,8 +768,6 @@ func runGenerateInit(args []string) int {
 				return 2
 			}
 			out = args[i]
-		case "--bench":
-			bench = true
 		case "--refresh":
 			refresh = true
 		case "-h", "--help":
@@ -674,17 +795,21 @@ func runGenerateInit(args []string) int {
 		return 1
 	}
 
+	// Reachability is not optional: omp lists models an account cannot call and
+	// nothing in the metadata marks them, so a scaffold that skipped the probe
+	// can crown a model that 404s on every launch. The live path always probes;
+	// --from-json is an offline inspection path and labels its output as such.
 	var facts map[string]benchFact
-	if bench {
+	if fromJSON == "" {
 		sels, err := benchSelectors(raw)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "benchmarking %d models — this makes real API calls and takes a while…\n", len(sels))
+		fmt.Fprintf(os.Stderr, "probing %d models for reachability and speed — real API calls, takes a minute…\n", len(sels))
 		facts, err = runBench(sels)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "code generate init: %v\n", err)
+			fmt.Fprintf(os.Stderr, "code generate init: the reachability probe failed (%v) — refusing to write a ladder that may name models your account cannot call; fix the provider credentials, or pass --from-json to scaffold offline\n", err)
 			return 1
 		}
 	}

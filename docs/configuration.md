@@ -56,29 +56,50 @@ The dials are backed by a pre-rendered catalog. Building it is two steps, both
 scriptable:
 
 ```
-code generate init [--from-json FILE] [--models-file OUT] [--bench] [--refresh]
+code generate init [--models-file OUT] [--refresh] [--from-json FILE]
 code generate      [--models-file FILE] [--out FILE|-]
 ```
 
-`init` scaffolds a models file from your own omp (`omp models --json`, or
-`FILE`), keeping the newest model per family and ranking it by thinking
-ceiling, context and price — review what it derived. It also reads
-`omp usage --json`: a quota bucket scoped to a model tier is how the spark and
-elite rungs are identified, and without that report they are simply left empty.
-`generate`
-renders that file into the catalog the TUI reads. Paths default to
+`init` scaffolds a models file from your own omp (`omp models --json`), keeping
+the newest model per family and ranking it by thinking ceiling, context and
+price — review what it derived. It also reads `omp usage --json`: a quota bucket
+scoped to a model tier is how the spark and elite rungs are identified, and
+without that report they are simply left empty. `generate` renders that file
+into the catalog the TUI reads. Paths default to
 `$XDG_CONFIG_HOME/code/models.yml` and `$XDG_DATA_HOME/code/generated.plain`
 (`~/.config` and `~/.local/share` when those are unset); `--out -` prints the
 catalog to stdout.
 
+Every candidate is probed with `omp bench` before it can become a rung. This is
+not optional and not a benchmark: omp lists models your account cannot actually
+call, and no field distinguishes them — `claude-mythos-5` reports
+`claude-fable-5`'s exact price, context window and thinking range, and 404s.
+A model that does not return a passing probe is dropped, and a model missing
+from the probe report entirely is dropped too, because unverified is not the
+same as fine. One request per model, so expect `init` to take a minute. The
+probe also supplies the real `speed`/`ttft` the meter reads.
+
+A file whose models were all verified is marked `probed: true`, and `generate`
+refuses to render one that is not — that marker is the only thing standing
+between an unverified scaffold and live routing. Treat it as your attestation
+rather than a permanent certificate: it describes the ids as they were written,
+so if you edit an `id` by hand, re-run `init --refresh` (or satisfy yourself the
+new one is callable) instead of leaving the old `true` in place.
+
 | Flag | Effect |
 |---|---|
-| `--bench` | measure `speed` and `ttft` per model with `omp bench --json` instead of writing placeholders. It doubles as a reachability probe: omp lists models your account cannot actually call, and any model whose probe fails is dropped from the ladder — nothing else catches that class of error. Slow (one real API call per model) and needs live credentials |
-| `--refresh` | re-derive the tiers over an existing models file instead of refusing to touch it. Without it `init` stops when the file already exists, so a scaffold from months ago keeps naming retired models. Pair the two — `code generate init --refresh --bench` — when a provider ships new models; that is the exact line the scaffolder leaves in its own placeholder comment |
+| `--refresh` | re-derive the tiers over an existing models file instead of refusing to touch it. Without it `init` stops when the file already exists, so a scaffold from months ago keeps naming retired models. This is the line to run when a provider ships new models |
+| `--from-json` | read the model list from a file instead of omp, and skip the probe. Offline inspection only: the output is marked `probed: false`, which `generate` rejects |
 
 ### The models file
 
-`models:` maps a short key to one model:
+Two top-level keys: `probed`, and `models:` mapping a short key to one model.
+
+| Top-level field | Meaning |
+|---|---|
+| `probed` | must be `true` or `generate` refuses the file. `init` sets it after every model passed a live probe; an offline `--from-json` scaffold writes `false` |
+
+Each entry under `models:`:
 
 | Field | Meaning |
 |---|---|
@@ -87,7 +108,7 @@ catalog to stdout.
 | `tier` | `1` cheap · `2` regular · `3` smart — the per-pool fallback ladder. `0` (a fast idle-bucket model the `spark` toggle drains) and `4` (a scarce elite the `fable` toggle leads with) are optional |
 | `bucket` | the quota window this model draws from (`claude-main`, `claude-fable`, `codex-main`, `codex-spark`). The TUI prefers it over guessing from the model family |
 | `cost_in` / `cost_out` | dollars per 1M tokens; drives the cost meter |
-| `speed` / `ttft` | output tok/s and seconds to first token; drives the speed meter. Placeholders unless you ran `--bench` or filled them in yourself |
+| `speed` / `ttft` | output tok/s and seconds to first token; drives the speed meter. Measured by `init`'s probe — a single timed request each, so treat them as one sample rather than a stable benchmark |
 | `context` | context window, in tokens |
 | `thinking` | the levels the model really offers (see below) |
 | `image` | omitted for image-capable models, which is most of them. `init` writes `image: false` only for a model omp reports as text-only, and the `vision` role then avoids it |
