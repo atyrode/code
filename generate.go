@@ -657,7 +657,16 @@ func (c *catalog) renderAdvisors() string {
 func (c *catalog) renderCatalog() string {
 	var b strings.Builder
 	b.WriteString("OMP generated routing — first-principles facet grid\n")
-	b.WriteString("bundled agents: designer librarian reviewer sonic task — ● marks an agent-backed role\n\n")
+	// Derived, not retyped: this legend named five agents while genAgentRoles
+	// carried six, so the grid marked a scout row the header denied existed.
+	var agents []string
+	for _, r := range genRoleOrder {
+		if genAgentRoles[r] {
+			agents = append(agents, r)
+		}
+	}
+	b.WriteString("bundled agents: " + strings.Join(agents, " ") +
+		" — ● marks an agent-backed role\n\n")
 	b.WriteString(c.renderAdvisors() + "\n")
 	b.WriteString(c.renderModelFacts() + "\n")
 	hasSpark := c.ladder["O"][0] != ""

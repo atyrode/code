@@ -315,6 +315,51 @@ func TestScoutIsAgentBacked(t *testing.T) {
 	}
 }
 
+// The header legend tells the reader which roles the ● marker can appear on.
+// It used to be a hand-typed list beside genAgentRoles, so adding scout marked
+// a row the header denied existed. Derive-or-drift: the legend must name
+// exactly the roles the grid actually marks.
+func TestAgentLegendMatchesMarkedRoles(t *testing.T) {
+	c := fixtureCatalog(t)
+	out := c.renderCatalog()
+	var legend string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "bundled agents: ") {
+			legend = strings.TrimPrefix(l, "bundled agents: ")
+			break
+		}
+	}
+	if legend == "" {
+		t.Fatal("catalog header must carry a bundled-agents legend")
+	}
+	named := map[string]bool{}
+	for _, f := range strings.Fields(legend) {
+		if f == "—" {
+			break
+		}
+		named[f] = true
+	}
+	marked := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) > 1 && f[0] == "●" {
+			marked[f[1]] = true
+		}
+	}
+	if len(marked) == 0 {
+		t.Fatal("no ● rows rendered - the marker or the fixture regressed")
+	}
+	for r := range marked {
+		if !named[r] {
+			t.Errorf("role %q renders with ● but the legend omits it", r)
+		}
+	}
+	for r := range named {
+		if !marked[r] {
+			t.Errorf("legend names %q but no row carries the marker", r)
+		}
+	}
+}
+
 // The vision role feeds omp's image-describe fallback, so it must never lead on
 // a text-only model even when that model is the cheapest rung available.
 func TestVisionSkipsTextOnlyModels(t *testing.T) {
