@@ -68,13 +68,26 @@ type obScanDoneMsg struct {
 
 type obGeneratedMsg struct{ err error }
 
-// obScan reads the user's omp model list and scaffolds a models file from it.
+// obScan reads the user's omp model list, verifies every candidate is actually
+// callable on this account, and scaffolds a models file from the survivors. The
+// probe is the slow part (a real request per model) but it is not optional: omp
+// lists models an account cannot call, so skipping it can crown a rung that
+// 404s on every launch. It runs here, inside the Tea command, so the spinner
+// keeps painting.
 func obScan() tea.Msg {
 	raw, err := ompModelsJSON()
 	if err != nil {
 		return obScanDoneMsg{err: fmt.Errorf("running `omp models --json`: %w", err)}
 	}
-	yml, err := scaffoldModels(raw)
+	sels, err := benchSelectors(raw)
+	if err != nil {
+		return obScanDoneMsg{err: err}
+	}
+	facts, err := runBench(sels)
+	if err != nil {
+		return obScanDoneMsg{err: fmt.Errorf("probing %d models for reachability: %w", len(sels), err)}
+	}
+	yml, err := scaffoldModels(raw, facts)
 	return obScanDoneMsg{scaffold: yml, err: err}
 }
 
@@ -166,6 +179,11 @@ func (o onboarding) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		o.m.generated = blocks
 		o.m.advisors = parseAdvisors(blocks["__advisors__"])
 		o.m.facts = parseFacts(blocks["__models__"])
+		// A freshly scaffolded catalog may have no tier-0 or tier-4 model, in
+		// which case it ships no spark/fable combos at all — drop those dials
+		// before the real TUI paints, or the default selection lands on a
+		// combination that was never generated.
+		o.m.applyCatalog()
 		o.m.syncPreview()
 		return o.m, o.m.Init()
 	case tea.KeyMsg:
@@ -230,9 +248,9 @@ func (o onboarding) View() string {
 			clikit.StHead.Render("enter") + " continue · " + clikit.StHead.Render("q") + " quit",
 		}
 	case obScanning:
-		body = []string{o.spin.View() + " reading your omp model list…"}
+		body = []string{o.spin.View() + " reading your omp model list, then checking which models your account can actually call…"}
 	case obReview:
-		verb := "guessed from price — sanity-check it"
+		verb := "derived from your model list — sanity-check it"
 		if o.existing {
 			verb = "from your models file"
 		}

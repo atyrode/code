@@ -108,6 +108,10 @@ using `omp auth-broker login` before running `code`.
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you
 which model it picked for each rung, you sanity-check, press enter, done.
+That guided run is for plain installs: the
+[dotfiles](https://github.com/atyrode/dotfiles) wrapper always exports
+`CODE_GENERATED` at a pre-baked catalog, so `code` never offers to build one
+there — you re-render with `code generate` instead.
 
 The same machinery is scriptable as `code generate init` (scaffold the models
 file) and `code generate` (re-render the catalog after you edit it).

@@ -55,7 +55,7 @@ func TestRenderRouteHangingIndent(t *testing.T) {
 	indent := strings.Repeat(" ", lw)
 	// The sample chain is ~70 cols on one line; these widths force it to wrap.
 	for _, width := range []int{40, 52, 64} {
-		out := renderRoute([]string{sampleRow}, 1, availability{}, width)
+		out := model{}.renderRoute([]string{sampleRow}, 1, availability{}, width)
 		lines := routeLines(out)
 		if len(lines) < 2 {
 			t.Fatalf("width=%d: expected the chain to wrap onto multiple lines, got %d", width, len(lines))
@@ -77,7 +77,7 @@ func TestRenderRouteHangingIndent(t *testing.T) {
 // 2-col reserve for the trailing arrow must keep even break lines in bounds.
 func TestRenderRouteWidthInvariant(t *testing.T) {
 	for _, width := range []int{40, 56, 72, 100} {
-		out := renderRoute([]string{sampleRow}, 1, availability{}, width)
+		out := model{}.renderRoute([]string{sampleRow}, 1, availability{}, width)
 		for i, ln := range routeLines(out) {
 			if w := lipgloss.Width(ln); w > width {
 				t.Errorf("width=%d: line %d overflows (%d cols): %q", width, i, w, ln)
@@ -88,7 +88,7 @@ func TestRenderRouteWidthInvariant(t *testing.T) {
 
 // TestRenderRouteLeadDepth: at depth 0 only the primary (first live) model shows.
 func TestRenderRouteLeadDepth(t *testing.T) {
-	out := renderRoute([]string{sampleRow}, 0, availability{}, 120)
+	out := model{}.renderRoute([]string{sampleRow}, 0, availability{}, 120)
 	if lines := routeLines(out); len(lines) != 1 {
 		t.Fatalf("lead depth should be a single line, got %d:\n%s", len(lines), out)
 	}
@@ -103,9 +103,65 @@ func TestRenderRouteLeadDepth(t *testing.T) {
 // TestRenderRoutePassThrough: a line with no models is emitted unchanged (modulo
 // colourisation), not dropped.
 func TestRenderRoutePassThrough(t *testing.T) {
-	out := renderRoute([]string{"  advisor    (disabled)"}, 1, availability{}, 80)
+	out := model{}.renderRoute([]string{"  advisor    (disabled)"}, 1, availability{}, 80)
 	if !strings.Contains(out, "advisor") || !strings.Contains(out, "(disabled)") {
 		t.Errorf("note line should pass through, got: %q", out)
+	}
+}
+
+// TestParseFactsBucketColumn: the __models__ bucket column is optional — a
+// catalog that declares no bucket for any model omits it entirely — so both row
+// widths must parse, while anything short of the five numeric facts is dropped.
+func TestParseFactsBucketColumn(t *testing.T) {
+	facts := parseFacts([]string{
+		"  gpt-5.6-luna 1 6 52.3 1.18 codex-main",
+		"  gpt-5.6-terra 2.5 15 41 1.4",
+		"  claude-mythos-5 5 25 30 2 claude-fable",
+		"  truncated 1 2 3",
+		"  unparseable 1 2 3 later codex-main",
+	})
+	if len(facts) != 3 {
+		t.Fatalf("parsed %d rows, want 3: %v", len(facts), facts)
+	}
+	want := map[string]modelFact{
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "codex-main"},
+		"gpt-5.6-terra":   {2.5, 15, 41, 1.4, ""},
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
+	}
+	for id, w := range want {
+		if got := facts[id]; got != w {
+			t.Errorf("parseFacts[%q] = %+v, want %+v", id, got, w)
+		}
+	}
+}
+
+// TestBucketForPrefersCatalog: the catalog's bucket column beats the name guess.
+// claude-mythos-5 prices like fable and drains fable's quota, but every
+// substring arm in bucketOf reads it as plain claude-main — the routing preview
+// would then strike models through against the wrong window.
+func TestBucketForPrefersCatalog(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, ""},
+	}}
+	if got := bucketOf("claude-mythos-5"); got != "claude-main" {
+		t.Fatalf("guess baseline moved: bucketOf(claude-mythos-5) = %q", got)
+	}
+	if got := m.bucketFor("claude-mythos-5:high"); got != "claude-fable" {
+		t.Errorf("catalog bucket ignored: bucketFor(claude-mythos-5:high) = %q", got)
+	}
+	// An undeclared bucket, and a model the catalog never mentions: both guess.
+	if got := m.bucketFor("gpt-5.6-luna:low"); got != "codex-main" {
+		t.Errorf("empty bucket must fall back to the guess, got %q", got)
+	}
+	if got := m.bucketFor("claude-fable-5:max"); got != "claude-fable" {
+		t.Errorf("unknown model must fall back to the guess, got %q", got)
+	}
+	// The suggest box asks about bare facet names, which are never catalog ids.
+	for name, want := range map[string]string{"fable": "claude-fable", "spark": "codex-spark"} {
+		if got := m.bucketFor(name); got != want {
+			t.Errorf("bucketFor(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -115,7 +171,7 @@ func TestShortModel(t *testing.T) {
 		"gpt-5.6-luna":        "luna",
 		"gpt-5.6-sol":         "sol",
 		"gpt-5.3-codex-spark": "spark",
-		"claude-opus-4-8":     "opus",
+		"claude-opus-5":       "opus",
 		"claude-sonnet-5":     "sonnet",
 		"claude-haiku-4-5":    "haiku",
 		"claude-fable-5":      "fable",
@@ -221,6 +277,68 @@ func TestMainFacetVisibility(t *testing.T) {
 	}
 }
 
+// TestCatalogCapabilityGatesDials: spark and fable must never point at a combo
+// the catalog cannot serve. A models file with no tier-0 model generates zero
+// _sp_ ids, so the shipped default (spark on) would open the TUI on a combo that
+// was never written. The segment check must not be fooled by the "nosp"/"nofa"
+// ids that spell the very substrings it looks for.
+func TestCatalogCapabilityGatesDials(t *testing.T) {
+	visible := func(m model) map[string]bool {
+		out := map[string]bool{}
+		for _, f := range m.visibleFacets() {
+			out[f.key] = true
+		}
+		return out
+	}
+
+	full := model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
+		generated: map[string][]string{
+			"mixed_smart_medium_sp_fa":     nil,
+			"mixed_smart_medium_nosp_nofa": nil,
+		}}
+	full.applyCatalog()
+	if full.noSpark || full.noFable {
+		t.Fatalf("a catalog serving both dials disabled one: noSpark=%v noFable=%v", full.noSpark, full.noFable)
+	}
+	if full.sel["spark"] != "on" {
+		t.Errorf("spark must survive a catalog that serves it, got %q", full.sel["spark"])
+	}
+
+	bare := model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
+		generated: map[string][]string{
+			"mixed_smart_medium_nosp_nofa": nil,
+			"gpt-only_fast_low_nosp_nofa":  nil,
+			"__models__":                   nil,
+		}}
+	bare.sel["fable"], bare.sel["main"] = "on", "on"
+	bare.applyCatalog()
+	if !bare.noSpark || !bare.noFable {
+		t.Fatalf(`"nosp"/"nofa" ids read as capability: noSpark=%v noFable=%v`, bare.noSpark, bare.noFable)
+	}
+	for key, want := range map[string]string{"spark": "off", "fable": "off", "main": "off"} {
+		if got := bare.sel[key]; got != want {
+			t.Errorf("%s stayed %q on a catalog that cannot serve it, want %q", key, got, want)
+		}
+	}
+	if v := visible(bare); v["spark"] || v["fable"] || v["main"] {
+		t.Errorf("unusable dials stayed on screen: %v", v)
+	}
+
+	// The reset key restores defaults, which assume a full catalog.
+	reset, _ := bare.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if got := reset.(model).sel["spark"]; got != "off" {
+		t.Errorf("d reset resurrected the dead spark dial: %q", got)
+	}
+
+	// No catalog at all is the onboarding shell, not a restriction.
+	empty := model{facets: facetDefs(map[string]string{}), sel: defaultSel()}
+	empty.applyCatalog()
+	if empty.noSpark || empty.noFable || empty.sel["spark"] != "on" {
+		t.Errorf("an unread catalog must leave every dial alone: noSpark=%v noFable=%v spark=%q",
+			empty.noSpark, empty.noFable, empty.sel["spark"])
+	}
+}
+
 // TestCycleFacetClearsMain: manually toggling fable off must clear fable-as-main
 // too, so a later fable re-enable never silently resurrects the escalation.
 func TestCycleFacetClearsMain(t *testing.T) {
@@ -282,6 +400,20 @@ func TestLaunchKeys(t *testing.T) {
 	m = next.(model)
 	if !m.launchManaged || m.genConfig != "" {
 		t.Errorf("m must request the managed defaults with no overlay, got genConfig=%q launchManaged=%v", m.genConfig, m.launchManaged)
+	}
+}
+
+// TestEnterRefusesMissingCombo: Enter must not launch facets the catalog carries
+// no block for. genConfigYAML walks a nil block and emits an overlay whose
+// modelRoles map is empty, which would hand omp a session with no routing at
+// all — while the preview says "no profile for this combination".
+func TestEnterRefusesMissingCombo(t *testing.T) {
+	m := model{sel: defaultSel(), generated: map[string][]string{}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := next.(model)
+	if got.genConfig != "" || cmd != nil {
+		t.Fatalf("Enter launched a combo with no generated block: genConfig=%q quit=%v",
+			got.genConfig, cmd != nil)
 	}
 }
 
@@ -494,7 +626,7 @@ func layoutModel() model {
 		"    default    gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium",
 		"  ● task       gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium",
 		"  ● scout      gpt-5.6-luna:low → claude-haiku-4-5:low",
-		"    advisor    claude-opus-4-5:high",
+		"    advisor    claude-opus-5:high",
 		"    commit     gpt-5.6-luna:minimal",
 	}
 	return model{
@@ -1823,7 +1955,7 @@ func TestRoutingFallbackCuePinned(t *testing.T) {
 		lines := strings.Split(stripAnsi(m.View()), "\n")
 		cue := lineIndex(lines, "f · show fallback chains")
 		title := lineIndex(lines, "routing", "p · hide")
-		route := lineIndex(lines, "scout") // a routing role row — generator has none
+		route := lineIndex(lines, "scout") // an agent-backed routing role row
 		if cue < 0 || title < 0 || route < 0 {
 			t.Fatalf("%s: missing cue (%d), title (%d), or route content (%d):\n%s",
 				label, cue, title, route, strings.Join(lines, "\n"))
