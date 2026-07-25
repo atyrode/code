@@ -181,7 +181,10 @@ func paintModel(tok string) string {
 
 func colorizeRoute(line string) string { return modelRe.ReplaceAllStringFunc(line, paintModel) }
 
-// providerOf maps a short/long model name to its quota bucket.
+// bucketOf guesses a quota bucket from a model name. It is the fallback for
+// catalogs that declare no bucket column, and the only resolver for the bare
+// facet names ("fable", "spark") the suggest box asks about — prefer
+// model.bucketFor wherever a receiver is in reach.
 func bucketOf(model string) string {
 	m := model
 	if i := strings.IndexByte(m, ':'); i >= 0 {
@@ -197,6 +200,23 @@ func bucketOf(model string) string {
 		return "claude-main"
 	}
 	return "codex-main"
+}
+
+// bucketFor resolves a routing token's quota bucket from the catalog, falling
+// back to the name guess only when the catalog declares none. The catalog wins
+// because names are not a taxonomy: claude-mythos-5 sits in omp's catalog at
+// claude-fable-5's price yet 404s on this account, and every model omp adds
+// would otherwise need one more substring arm here before it could be struck
+// through correctly.
+func (m model) bucketFor(name string) string {
+	id := name
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[:i]
+	}
+	if f, ok := m.facts[id]; ok && f.bucket != "" {
+		return f.bucket
+	}
+	return bucketOf(id)
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────
@@ -852,8 +872,9 @@ func selectedAvailability(a availability, disabled map[accountKey]bool) availabi
 // renderRoute lays out each role's chain, wrapping cleanly at `width`: when a
 // chain doesn't fit, it breaks after an arrow and the continuation is indented
 // to align under the first model, so it reads as one hanging block rather than a
-// ragged wrap. Down (maxed/unauthed) models are struck through.
-func renderRoute(rows []string, depth int, a availability, width int) string {
+// ragged wrap. Down (maxed/unauthed) models are struck through — which bucket a
+// model draws from is a catalog fact, hence the receiver.
+func (m model) renderRoute(rows []string, depth int, a availability, width int) string {
 	if width < 24 {
 		width = 24
 	}
@@ -876,7 +897,7 @@ func renderRoute(rows []string, depth int, a availability, width int) string {
 		var toks []tok
 		for _, loc := range locs {
 			mt := r[loc[0]:loc[1]]
-			toks = append(toks, tok{mt, a.ok && a.down(bucketOf(mt))})
+			toks = append(toks, tok{mt, a.ok && a.down(m.bucketFor(mt))})
 		}
 		// how many to show: full → all; lead → primary, or up to the first live
 		// model when the lead is down (the one that actually runs).
@@ -984,9 +1005,11 @@ func parseAdvisors(rows []string) map[string][]string {
 }
 
 // modelFact is a model's measured facts from omp (via the catalog): pricing
-// ($/1M tokens), output throughput (tok/s), and time-to-first-token (seconds).
+// ($/1M tokens), output throughput (tok/s), time-to-first-token (seconds), and
+// the quota bucket it draws from ("" when the catalog declares none).
 type modelFact struct {
 	in, out, speed, ttft float64
+	bucket               string
 }
 
 // effTPS folds ttft into throughput — the effective tok/s for a representative
@@ -1001,8 +1024,10 @@ func (f modelFact) effTPS() float64 {
 	return effTokens / (f.ttft + effTokens/f.speed)
 }
 
-// parseFacts reads the __models__ block (rows: "<id> <in> <out> <speed> <ttft>")
-// into a per-model table, sourced from the catalog so meters and routing agree.
+// parseFacts reads the __models__ block (rows: "<id> <in> <out> <speed> <ttft>
+// [<bucket>]") into a per-model table, sourced from the catalog so meters and
+// routing agree. The bucket column is optional — a catalog that declares none
+// for any model omits it entirely, and the name guess covers those rows.
 func parseFacts(rows []string) map[string]modelFact {
 	out := map[string]modelFact{}
 	for _, r := range rows {
@@ -1014,8 +1039,12 @@ func parseFacts(rows []string) map[string]modelFact {
 		outc, e2 := strconv.ParseFloat(f[2], 64)
 		sp, e3 := strconv.ParseFloat(f[3], 64)
 		tt, e4 := strconv.ParseFloat(f[4], 64)
+		bucket := ""
+		if len(f) >= 6 {
+			bucket = f[5]
+		}
 		if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
-			out[f[0]] = modelFact{in, outc, sp, tt}
+			out[f[0]] = modelFact{in, outc, sp, tt, bucket}
 		}
 	}
 	return out
@@ -1031,10 +1060,12 @@ func parseFacts(rows []string) map[string]modelFact {
 // scale with thinking effort (more reasoning = pricier + slower) and take OpenAI's
 // priority tier under fast mode (pricier but quicker). The weighted averages map
 // onto 1..5 log scales (both perceived multiplicatively), calibrated across every
-// valid facet × advisor × fast combination.
+// valid facet × advisor × fast combination. Every role the generator emits must
+// appear here: weightedModels silently skips a role it cannot weigh, so an
+// omission drops that model out of both meters with no trace.
 var roleWeight = map[string]float64{
-	"default": 10, "task": 6, "reviewer": 3, "sonic": 3, "plan": 3, "advisor": 4,
-	"slow": 2, "designer": 2, "librarian": 2, "smol": 1, "tiny": 0.5, "commit": 0.5,
+	"default": 10, "task": 6, "reviewer": 3, "sonic": 3, "plan": 3, "advisor": 4, "slow": 2,
+	"designer": 2, "librarian": 2, "scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
 }
 var thinkMult = map[string]float64{ // reasoning tokens grow with effort → pricier
 	"minimal": 0.6, "low": 0.8, "medium": 1.0, "high": 1.3, "xhigh": 1.6, "max": 2.0,
@@ -1218,7 +1249,8 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // visibleFacets drops facets that don't apply to the current lane, so the
 // generator only ever shows actionable options: no spark/fast on a Claude-only
 // pool, no fable on a GPT-only pool. main is fable's sub-setting, so it only
-// shows while fable is on (and the lane can host it at all).
+// shows while fable is on (and the lane can host it at all). A dial this catalog
+// generated no combo for is dropped the same way — it is not a choice.
 func (m model) visibleFacets() []facet {
 	lane := m.sel["lane"]
 	var out []facet
@@ -1227,6 +1259,12 @@ func (m model) visibleFacets() []facet {
 			continue
 		}
 		if lane == "gpt-only" && (f.key == "fable" || f.key == "main") {
+			continue
+		}
+		if f.key == "spark" && m.noSpark {
+			continue
+		}
+		if (f.key == "fable" || f.key == "main") && m.noFable {
 			continue
 		}
 		if f.key == "main" && m.sel["fable"] != "on" {
@@ -1257,6 +1295,43 @@ func comboID(sel map[string]string) string {
 		}
 	}
 	return fmt.Sprintf("%s_%s_%s_%s_%s", lane, sel["model"], sel["thinking"], spid, faid)
+}
+
+// applyCatalog records which dials this catalog can actually serve, then forces
+// the rest off. A models file with no tier-0 model yields no _sp_ combos at all,
+// so the shipped default (spark on) would open the TUI on a combo that was never
+// written — and a selection persisted against a richer catalog does the same.
+// Ids are <lane>_<mtier>_<thinking>_<sp|nosp>_<fa|famain|nofa>, so match whole
+// segments: "nosp" and "nofa" contain the very substrings being looked for.
+func (m *model) applyCatalog() {
+	if len(m.generated) == 0 {
+		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
+	}
+	spark, fable := false, false
+	for id := range m.generated {
+		for _, seg := range strings.Split(id, "_") {
+			switch seg {
+			case "sp":
+				spark = true
+			case "fa", "famain":
+				fable = true
+			}
+		}
+	}
+	m.noSpark, m.noFable = !spark, !fable
+	m.clampSel()
+}
+
+// clampSel turns off every dial the catalog cannot serve. main is fable's
+// sub-setting and never outlives it.
+func (m *model) clampSel() {
+	if m.noSpark {
+		m.sel["spark"] = "off"
+	}
+	if m.noFable {
+		m.sel["fable"] = "off"
+		m.sel["main"] = "off"
+	}
 }
 
 func laneColor(lane string) string {
@@ -1688,6 +1763,12 @@ type model struct {
 	facts     map[string]modelFact // model id → cost ($/1M) + curated speed (tok/s)
 	avail     availability
 	glyphs    map[string]string
+
+	// Catalog capability, phrased as absence so the zero value keeps every dial:
+	// a model with no catalog yet (the onboarding shell, tests) must behave as it
+	// always did. applyCatalog sets these only from a catalog it actually read.
+	noSpark bool // no _sp_ combos exist — hide the spark dial and force it off
+	noFable bool // no _fa_/_famain_ combos — same for fable and its main child
 
 	depth        int  // 0 lead · 1 full
 	collapse     bool // p: hide the Routing section
@@ -2619,7 +2700,7 @@ func (m *model) syncPreviewAt(yoff int) {
 	if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
 		roles = m.applyAdvisor(roles, m.sel["advisor"])
-		b.WriteString(renderRoute(roles, m.depth, m.selectedLaunchAvailability(), rw))
+		b.WriteString(m.renderRoute(roles, m.depth, m.selectedLaunchAvailability(), rw))
 	} else {
 		b.WriteString(stDim.Render("no profile for this combination") + "\n")
 	}
@@ -2895,6 +2976,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout() // the taller/shorter footer changes the body height
 		case "d":
 			m.sel = defaultSel()
+			m.clampSel() // the defaults assume a full catalog; this one may not be
 			m.persistSelection()
 			m.syncPreview()
 		case "f":
@@ -2938,6 +3020,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// Enter always launches the generated profile for the current facets —
 			// the untouched default combo is a generated profile like any other.
+			// Never for a combo the catalog doesn't carry, though: genConfigYAML
+			// would walk a nil block and emit an overlay whose modelRoles map is
+			// empty, handing omp a session with no routing at all. The preview
+			// already says "no profile for this combination", so the key does
+			// nothing rather than launching something broken.
+			if _, ok := m.generated[comboID(m.sel)]; !ok {
+				return m, nil
+			}
 			m.genConfig = m.genConfigYAML()
 			return m, tea.Quit
 		}
@@ -2953,6 +3043,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.savedSel[k] = v
 		}
 		m.applyActions(msg.Actions)
+		// applyActions' repair rules know lanes and quota, not catalog contents:
+		// a "critical" proposal switches fable on even where no fable combo was
+		// generated. Clamp and re-render before reporting what was applied.
+		m.clampSel()
+		m.syncPreview()
 		return m, func() tea.Msg { return clikit.AppliedActionsMsg{Actions: m.appliedDiff()} }
 
 	case clikit.ActionsConfirmedMsg:
@@ -3356,6 +3451,9 @@ func main() {
 		selectionState:    selectionState,
 		hasSandbox:        hasSandbox,
 	}
+	// The catalog decides which dials exist at all; a persisted or default
+	// selection must not open on a combo it never generated.
+	m.applyCatalog()
 	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
 	// TUI in the guided onboarding that builds one (an explicit but broken
 	// CODE_GENERATED is an operator config error and is left visible as the
