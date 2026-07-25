@@ -4,7 +4,7 @@ package main
 // browses (see loadBlocks) from a models file, and `code generate init`
 // scaffolds that models file from the user's own omp instance.
 //
-// This is the Go port of the dotfiles' generate-profiles.py (atyrode/dotfiles,
+// This began as a Go port of the dotfiles' generate-profiles.py (atyrode/dotfiles,
 // pkgs/omp-configured), generalised from that setup's hard-coded model keys to
 // pure pool/tier logic so it works against anyone's catalog:
 //
@@ -13,16 +13,16 @@ package main
 //     providers are present; generation fails loudly otherwise.
 //   - tier 0 (an idle-bucket speed model, "spark") and tier 4 (a scarce elite,
 //     "fable") are optional; without them the corresponding facet combos are
-//     simply not generated and the TUI reports "no profile for this
-//     combination" when dialed there.
+//     simply not generated and the TUI hides the dial.
 //
-// The output format is byte-compatible with the Python generator so a catalog
-// produced by either renders identically in the TUI.
+// The dotfiles build now invokes this binary rather than keeping its own copy
+// of the renderer, so this file is the single source of the catalog format.
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -31,19 +31,29 @@ import (
 // ── model catalog ─────────────────────────────────────────────────────────────
 
 type catModel struct {
-	ID       string  `yaml:"id"`
-	Pool     string  `yaml:"pool"`
-	Tier     int     `yaml:"tier"`
-	CostIn   float64 `yaml:"cost_in"`
-	CostOut  float64 `yaml:"cost_out"`
-	Speed    float64 `yaml:"speed"`
-	TTFT     float64 `yaml:"ttft"`
-	Thinking string  `yaml:"thinking"`
+	ID      string  `yaml:"id"`
+	Pool    string  `yaml:"pool"`
+	Tier    int     `yaml:"tier"`
+	Bucket  string  `yaml:"bucket"`
+	CostIn  float64 `yaml:"cost_in"`
+	CostOut float64 `yaml:"cost_out"`
+	Speed   float64 `yaml:"speed"`
+	TTFT    float64 `yaml:"ttft"`
+	Context int     `yaml:"context"`
+	// "lo→hi" for the usual contiguous case, or a comma list when the model
+	// has a hole in the scale (see parseThinkingLevels).
+	Thinking string `yaml:"thinking"`
+	// Absent means "accepts images" — true of every model in both pools today
+	// except the codex spark variants, which `generate init` marks explicitly.
+	Image *bool `yaml:"image"`
 }
+
+func (m catModel) multimodal() bool { return m.Image == nil || *m.Image }
 
 type catalog struct {
 	keys   []string            // declaration order (drives __models__ rows)
 	models map[string]catModel // short key -> model
+	levels map[string][]int    // short key -> thinking levels it truly offers
 	ladder map[string][5]string
 	// ladder[pool][tier] for tiers 0..4; "" = absent. Tiers 1..3 are the
 	// fallback ladder; 0 is the drain/speed lead, 4 the elite lead.
@@ -90,7 +100,7 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 	if modelsNode == nil {
 		return nil, fmt.Errorf("%s: no `models:` mapping", path)
 	}
-	c := &catalog{models: map[string]catModel{}, ladder: map[string][5]string{"O": {}, "A": {}}}
+	c := &catalog{models: map[string]catModel{}, levels: map[string][]int{}, ladder: map[string][5]string{"O": {}, "A": {}}}
 	for i := 0; i+1 < len(modelsNode.Content); i += 2 {
 		key := modelsNode.Content[i].Value
 		var m catModel
@@ -103,11 +113,13 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 		if m.Tier < 0 || m.Tier > 4 {
 			return nil, fmt.Errorf("%s: model %q: tier must be 0..4, got %d", path, key, m.Tier)
 		}
-		if _, _, err := parseThinkingRange(m.Thinking); err != nil {
+		levels, err := parseThinkingLevels(m.Thinking)
+		if err != nil {
 			return nil, fmt.Errorf("%s: model %q: %w", path, key, err)
 		}
 		c.keys = append(c.keys, key)
 		c.models[key] = m
+		c.levels[key] = levels
 		l := c.ladder[m.Pool]
 		if l[m.Tier] != "" {
 			return nil, fmt.Errorf("%s: pool %s tier %d claimed by both %q and %q", path, m.Pool, m.Tier, l[m.Tier], key)
@@ -122,33 +134,104 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 			}
 		}
 	}
+	if err := c.checkLadder(path); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
-func parseThinkingRange(s string) (lo, hi int, err error) {
+// checkLadder rejects a ladder whose rungs are out of order. Input price used
+// to be a fair proxy for capability, so the scaffolder ranked by it — then
+// providers started repricing new models below predecessors they never
+// delisted, and a $15 claude-opus-4-1 (200k context, no max thinking) outranked
+// a $5 claude-opus-5 (1M, max) on price alone. Rather than trust the ranking,
+// assert the property it is supposed to produce: a dearer rung must not offer
+// less. Only tiers 1..3 are the capability ladder — tier 0 is a bucket-drain
+// lead and tier 4 an elite lead, both deliberately off it.
+func (c *catalog) checkLadder(path string) error {
+	for _, pool := range []string{"O", "A"} {
+		for lo := 1; lo <= 3; lo++ {
+			for hi := lo + 1; hi <= 3; hi++ {
+				a, b := c.ladder[pool][lo], c.ladder[pool][hi]
+				if a == "" || b == "" {
+					continue
+				}
+				if why := c.regression(a, b); why != "" {
+					return fmt.Errorf("%s: pool %s tier %d (%s) is a regression on tier %d (%s): %s — reorder the tiers, or drop the superseded model and re-run `code generate init --refresh`",
+						path, pool, hi, c.models[b].ID, lo, c.models[a].ID, why)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// regression reports why rung hi is worse than the cheaper rung lo, or "" when
+// it isn't. A pricier model with more context and more thinking headroom is the
+// ladder working; a pricier model with less of either is a stale pick.
+func (c *catalog) regression(lo, hi string) string {
+	l, h := c.models[lo], c.models[hi]
+	if h.CostIn < l.CostIn {
+		return "" // cheaper up the ladder is odd but not a capability loss
+	}
+	if l.Context > 0 && h.Context > 0 && h.Context < l.Context {
+		return fmt.Sprintf("%d context at $%s/1M vs %d at $%s", h.Context, trimFloat(h.CostIn), l.Context, trimFloat(l.CostIn))
+	}
+	ll, hl := c.levels[lo], c.levels[hi]
+	if hl[len(hl)-1] < ll[len(ll)-1] {
+		return fmt.Sprintf("thinking tops out at %s vs %s, and costs $%s/1M vs $%s", thScale[hl[len(hl)-1]], thScale[ll[len(ll)-1]], trimFloat(h.CostIn), trimFloat(l.CostIn))
+	}
+	return ""
+}
+
+// parseThinkingLevels resolves a thinking declaration to the sorted set of
+// levels the model truly offers. Two forms: "lo→hi" for the usual contiguous
+// run, and a comma list for a model with a hole in the scale — claude-opus-4-6
+// offers low/medium/high/max but not xhigh, and a range would claim a level the
+// API rejects.
+func parseThinkingLevels(s string) ([]int, error) {
+	if strings.Contains(s, ",") {
+		var out []int
+		for _, part := range strings.Split(s, ",") {
+			name := strings.TrimSpace(part)
+			i, ok := thIdx(name)
+			if !ok {
+				return nil, fmt.Errorf("unknown thinking level %q in %q", name, s)
+			}
+			out = append(out, i)
+		}
+		sort.Ints(out)
+		return out, nil
+	}
 	parts := strings.Split(s, "→")
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("thinking must be \"lo→hi\" (e.g. low→max), got %q", s)
+		return nil, fmt.Errorf("thinking must be \"lo→hi\" or a comma list (e.g. low→max, or low,medium,high,max), got %q", s)
 	}
 	lo, okLo := thIdx(strings.TrimSpace(parts[0]))
 	hi, okHi := thIdx(strings.TrimSpace(parts[1]))
 	if !okLo || !okHi || lo > hi {
-		return 0, 0, fmt.Errorf("invalid thinking range %q", s)
+		return nil, fmt.Errorf("invalid thinking range %q", s)
 	}
-	return lo, hi, nil
+	out := make([]int, 0, hi-lo+1)
+	for i := lo; i <= hi; i++ {
+		out = append(out, i)
+	}
+	return out, nil
 }
 
-// clampTh resolves a requested level to one the model actually offers.
+// clampTh resolves a requested level to the nearest one the model actually
+// offers, rounding down so a dial never buys more thinking than was asked for.
+// A request below the model's floor takes the floor.
 func (c *catalog) clampTh(key, level string) string {
-	lo, hi, _ := parseThinkingRange(c.models[key].Thinking)
+	levels := c.levels[key]
 	i, _ := thIdx(level)
-	if i < lo {
-		i = lo
+	best := levels[0]
+	for _, l := range levels {
+		if l <= i {
+			best = l
+		}
 	}
-	if i > hi {
-		i = hi
-	}
-	return thScale[i]
+	return thScale[best]
 }
 
 func otherPool(p string) string {
@@ -214,18 +297,32 @@ func (c *catalog) buildChain(lead string, isPure bool) []string {
 	return dedup([]string{sib, cr, c.sibDown(cr)}, lead)
 }
 
+// visionLead is the cheapest rung on a pool that accepts image input. The
+// codex spark variants are text-only, so the cheapest rung is not always it.
+func (c *catalog) visionLead(pool string) string {
+	for t := 1; t <= 3; t++ {
+		if k := c.ladder[pool][t]; k != "" && c.models[k].multimodal() {
+			return k
+		}
+	}
+	return ""
+}
+
 // ── the facet grid ────────────────────────────────────────────────────────────
 
 var (
 	genRoleOrder = []string{"default", "task", "plan", "slow", "designer", "reviewer",
-		"librarian", "sonic", "advisor", "smol", "tiny", "commit"}
-	genAgentRoles = map[string]bool{"designer": true, "librarian": true, "reviewer": true, "sonic": true, "task": true}
-	genDelib      = map[string]bool{"plan": true, "slow": true, "designer": true, "reviewer": true}
+		"librarian", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit"}
+	// The six agents omp bundles. scout was the one this grid never routed, so
+	// it silently inherited @smol and never appeared in the preview.
+	genAgentRoles = map[string]bool{"designer": true, "librarian": true, "reviewer": true,
+		"scout": true, "sonic": true, "task": true}
+	genDelib = map[string]bool{"plan": true, "slow": true, "designer": true, "reviewer": true}
 	// Anti-tunnel-vision: on a *-led lane the reviewer crosses to the opposite
 	// provider so the output always gets an independent second eye (the advisor
 	// crosses too, in its own branch).
 	genCrossLed = map[string]bool{"reviewer": true}
-	genUtil     = map[string]bool{"sonic": true, "smol": true, "tiny": true, "commit": true}
+	genUtil     = map[string]bool{"scout": true, "sonic": true, "smol": true, "tiny": true, "commit": true}
 	// Utility roles respond to the dials but are tier-capped so none can ever
 	// become expensive.
 	genUtilModel = map[string]map[string]int{
@@ -233,12 +330,16 @@ var (
 		"tiny":   {"fast": 1, "normal": 1, "smart": 2},
 		"smol":   {"fast": 1, "normal": 2, "smart": 2},
 		"sonic":  {"fast": 1, "normal": 2, "smart": 2},
+		"scout":  {"fast": 1, "normal": 2, "smart": 2},
 	}
 	genUtilThink = map[string]map[string]string{
 		"commit": {"low": "minimal", "medium": "minimal", "high": "minimal", "xhigh": "low"},
 		"tiny":   {"low": "minimal", "medium": "low", "high": "low", "xhigh": "low"},
 		"smol":   {"low": "low", "medium": "low", "high": "medium", "xhigh": "medium"},
 		"sonic":  {"low": "low", "medium": "medium", "high": "medium", "xhigh": "medium"},
+		// omp's bundled scout runs at medium; it reads broadly, so it keeps a
+		// step more thinking than smol at the same rung.
+		"scout": {"low": "low", "medium": "medium", "high": "medium", "xhigh": "medium"},
 	}
 	genTierMap  = map[string]int{"fast": 1, "normal": 2, "smart": 3}
 	genBump     = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
@@ -312,13 +413,42 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 				fb = []string{c.ladder[rp][t]}
 			} else {
 				lead = c.ladder[rp][t]
-				if r == "sonic" { // only sonic keeps a net
+				// scout and sonic are spawned constantly and block their caller,
+				// so they keep a net; the rest are cheap enough to just retry.
+				if r == "sonic" || r == "scout" {
 					if sd := c.sibDown(lead); sd != "" {
 						fb = []string{sd}
 					}
 				}
 			}
 			chain := dedup(fb, lead)
+			out[r] = roleRoute{lead, th, chain, repeatLvl(th, len(chain))}
+			continue
+		}
+		if r == "vision" {
+			// omp falls back @vision → @default → active model when it needs an
+			// image described, and describeForTextModels is on by default — so
+			// this rung must be a model that actually accepts images.
+			lead := c.visionLead(p)
+			if lead == "" && !isPure {
+				lead = c.visionLead(otherPool(p))
+			}
+			if lead == "" {
+				out[r] = roleRoute{}
+				continue
+			}
+			// Describing an image is not a reasoning task; keep it cheap unless
+			// the dial sits at an extreme, where the operator asked for uniformity.
+			th := "low"
+			if extreme {
+				th = thinking
+			}
+			var chain []string
+			for _, k := range c.buildChain(lead, isPure) {
+				if c.models[k].multimodal() {
+					chain = append(chain, k)
+				}
+			}
 			out[r] = roleRoute{lead, th, chain, repeatLvl(th, len(chain))}
 			continue
 		}
@@ -455,12 +585,19 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 	return strings.Join(lines, "\n")
 }
 
+// renderModelFacts emits the per-model table the TUI's meters read. The bucket
+// is a trailing optional column: the consumer falls back to guessing from the
+// model family when a catalog omits it, so old catalogs keep working.
 func (c *catalog) renderModelFacts() string {
-	lines := []string{"__models__  model facts (id in out speed ttft — $/1M in·out, tok/s, s)"}
+	lines := []string{"__models__  model facts (id in out speed ttft bucket — $/1M in·out, tok/s, s)"}
 	for _, k := range c.keys {
 		m := c.models[k]
-		lines = append(lines, fmt.Sprintf("  %s %s %s %s %s",
-			m.ID, trimFloat(m.CostIn), trimFloat(m.CostOut), trimFloat(m.Speed), trimFloat(m.TTFT)))
+		row := fmt.Sprintf("  %s %s %s %s %s",
+			m.ID, trimFloat(m.CostIn), trimFloat(m.CostOut), trimFloat(m.Speed), trimFloat(m.TTFT))
+		if m.Bucket != "" {
+			row += " " + m.Bucket
+		}
+		lines = append(lines, row)
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")

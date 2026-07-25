@@ -74,7 +74,7 @@ func obScan() tea.Msg {
 	if err != nil {
 		return obScanDoneMsg{err: fmt.Errorf("running `omp models --json`: %w", err)}
 	}
-	yml, err := scaffoldModels(raw)
+	yml, err := scaffoldModels(raw, nil)
 	return obScanDoneMsg{scaffold: yml, err: err}
 }
 
@@ -166,6 +166,11 @@ func (o onboarding) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		o.m.generated = blocks
 		o.m.advisors = parseAdvisors(blocks["__advisors__"])
 		o.m.facts = parseFacts(blocks["__models__"])
+		// A freshly scaffolded catalog may have no tier-0 or tier-4 model, in
+		// which case it ships no spark/fable combos at all — drop those dials
+		// before the real TUI paints, or the default selection lands on a
+		// combination that was never generated.
+		o.m.applyCatalog()
 		o.m.syncPreview()
 		return o.m, o.m.Init()
 	case tea.KeyMsg:
@@ -232,7 +237,7 @@ func (o onboarding) View() string {
 	case obScanning:
 		body = []string{o.spin.View() + " reading your omp model list…"}
 	case obReview:
-		verb := "guessed from price — sanity-check it"
+		verb := "derived from your model list — sanity-check it"
 		if o.existing {
 			verb = "from your models file"
 		}

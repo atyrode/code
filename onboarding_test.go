@@ -28,6 +28,7 @@ func enter() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
 func TestOnboardingScanFlow(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "cfg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "data"))
+	stubOmp(t, initUsage)
 	orig := ompModelsJSON
 	ompModelsJSON = func() ([]byte, error) { return []byte(initJSON), nil }
 	defer func() { ompModelsJSON = orig }()
@@ -52,7 +53,7 @@ func TestOnboardingScanFlow(t *testing.T) {
 		t.Fatalf("after scan: step=%v cat=%v", o.step, o.cat)
 	}
 	view := o.View()
-	for _, want := range []string{"claude-opus-4-8", "gpt-5.6-sol", "sanity-check"} {
+	for _, want := range []string{"claude-opus-5", "gpt-5.6-sol", "sanity-check"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("review view missing %q", want)
 		}
