@@ -307,10 +307,17 @@ func (c *catalog) buildChain(lead string, isPure bool) []string {
 	return dedup([]string{sib, cr, c.sibDown(cr)}, lead)
 }
 
-// visionLead is the cheapest rung on a pool that accepts image input. The
-// codex spark variants are text-only, so the cheapest rung is not always it.
-func (c *catalog) visionLead(pool string) string {
-	for t := 1; t <= 3; t++ {
+// visionLead returns the requested capability rung when it accepts images.
+// If that rung is text-only, prefer a more capable rung before stepping down;
+// the model dial must still influence vision without ever routing images to a
+// model that cannot consume them.
+func (c *catalog) visionLead(pool string, tier int) string {
+	for t := tier; t <= 3; t++ {
+		if k := c.ladder[pool][t]; k != "" && c.models[k].multimodal() {
+			return k
+		}
+	}
+	for t := tier - 1; t >= 1; t-- {
 		if k := c.ladder[pool][t]; k != "" && c.models[k].multimodal() {
 			return k
 		}
@@ -438,10 +445,15 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 		if r == "vision" {
 			// omp falls back @vision → @default → active model when it needs an
 			// image described, and describeForTextModels is on by default — so
-			// this rung must be a model that actually accepts images.
-			lead := c.visionLead(p)
+			// this rung must be a model that actually accepts images. Vision
+			// follows the model tier; mixed smart prefers Claude's smart rung.
+			vp := p
+			if lane == "mixed" && mtier == "smart" {
+				vp = "A"
+			}
+			lead := c.visionLead(vp, base)
 			if lead == "" && !isPure {
-				lead = c.visionLead(otherPool(p))
+				lead = c.visionLead(otherPool(vp), base)
 			}
 			if lead == "" {
 				out[r] = roleRoute{}
