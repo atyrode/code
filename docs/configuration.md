@@ -113,6 +113,11 @@ Each entry under `models:`:
 | `thinking` | the levels the model really offers (see below) |
 | `image` | omitted for image-capable models, which is most of them. `init` writes `image: false` only for a model omp reports as text-only, and the `vision` role then avoids it |
 
+The `vision` lead follows the model dial: `fast`, `normal`, and `smart` select
+tiers 1, 2, and 3 respectively. Mixed routing keeps GPT for fast and normal,
+then prefers Claude's tier-3 model for smart, with the GPT tier-3 model in its
+fallback chain. Any text-only rung is skipped.
+
 The thinking scale is `minimal · low · medium · high · xhigh · max`. Write
 `low→max` for a contiguous run, or a comma list when the model skips a level:
 claude-opus-4-6 offers `low,medium,high,max` but not `xhigh`, and a range there

@@ -157,7 +157,7 @@ const goldenMixedSmart = `mixed_smart_medium_sp_fa  mixed · smart · medium · 
   ● scout      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● sonic      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
-    vision     gpt-5.6-luna:low         → claude-haiku-4-5:low
+    vision     claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     smol       gpt-5.6-terra:low
     tiny       gpt-5.3-codex-spark:low  → gpt-5.6-terra:low
     commit     gpt-5.3-codex-spark:low  → gpt-5.6-luna:low
@@ -175,7 +175,7 @@ const goldenClaudeMax = `claude-only_normal_max_nosp_famain  claude-only · norm
   ● scout      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● sonic      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     advisor    claude-haiku-4-5:xhigh
-    vision     claude-haiku-4-5:xhigh
+    vision     claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     smol       claude-sonnet-5:max
     tiny       claude-haiku-4-5:xhigh
     commit     claude-haiku-4-5:xhigh
@@ -197,7 +197,7 @@ const goldenClaudeSmart = `claude-only_smart_medium_nosp_nofa  claude-only · sm
   ● scout      claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● sonic      claude-sonnet-5:medium   → claude-haiku-4-5:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low
-    vision     claude-haiku-4-5:low
+    vision     claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:low
     smol       claude-sonnet-5:low
     tiny       claude-sonnet-5:low
     commit     claude-haiku-4-5:minimal
@@ -370,14 +370,38 @@ func TestVisionSkipsTextOnlyModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCatalog: %v", err)
 	}
-	if lead := c.visionLead("O"); lead == "" || c.models[lead].ID != "gpt-5.6-terra" {
-		t.Errorf("visionLead(O) = %q, want the cheapest image-capable rung (terra)", lead)
+	if lead := c.visionLead("O", 1); lead == "" || c.models[lead].ID != "gpt-5.6-terra" {
+		t.Errorf("visionLead(O, 1) = %q, want the next image-capable rung (terra)", lead)
 	}
 	block := c.renderCombo("gpt-only", "fast", "medium", false, false, false)
 	for _, l := range strings.Split(block, "\n") {
 		if strings.Contains(l, " vision ") && strings.Contains(l, "codex-spark") {
 			t.Errorf("vision must not route to a text-only model: %s", l)
 		}
+	}
+}
+
+func TestVisionFollowsModelTier(t *testing.T) {
+	c := fixtureCatalog(t)
+	for _, tc := range []struct {
+		lane, tier, want string
+	}{
+		{"gpt-only", "fast", "gpt-5.6-luna"},
+		{"gpt-only", "normal", "gpt-5.6-terra"},
+		{"gpt-only", "smart", "gpt-5.6-sol"},
+		{"claude-only", "fast", "claude-haiku-4-5"},
+		{"claude-only", "normal", "claude-sonnet-5"},
+		{"claude-only", "smart", "claude-opus-5"},
+		{"mixed", "fast", "gpt-5.6-luna"},
+		{"mixed", "normal", "gpt-5.6-terra"},
+		{"mixed", "smart", "claude-opus-5"},
+	} {
+		t.Run(tc.lane+"/"+tc.tier, func(t *testing.T) {
+			route := c.genCombo(tc.lane, tc.tier, "medium", false, false, false)["vision"]
+			if got := c.models[route.lead].ID; got != tc.want {
+				t.Errorf("vision lead = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
