@@ -330,8 +330,13 @@ func (c *catalog) visionLead(pool string, tier int) string {
 var (
 	genRoleOrder = []string{"default", "task", "plan", "slow", "designer", "reviewer",
 		"librarian", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit"}
-	// The six agents omp bundles. scout was the one this grid never routed, so
-	// it silently inherited @smol and never appeared in the preview.
+	// The bundled agents this grid routes: every ●-marked role is mirrored
+	// into task.agentModelOverrides. omp bundles a seventh since 17.2.1,
+	// security-reviewer, deliberately unrouted: security scans inject the
+	// scan's own model into task.agentModelOverrides per session, so a
+	// generated route would only skew ad-hoc spawns. scout was the one this
+	// grid never routed, so it silently inherited @smol and never appeared
+	// in the preview.
 	genAgentRoles = map[string]bool{"designer": true, "librarian": true, "reviewer": true,
 		"scout": true, "sonic": true, "task": true}
 	genDelib = map[string]bool{"plan": true, "slow": true, "designer": true, "reviewer": true}
@@ -677,8 +682,8 @@ func (c *catalog) renderCatalog() string {
 			agents = append(agents, r)
 		}
 	}
-	b.WriteString("bundled agents: " + strings.Join(agents, " ") +
-		" — ● marks an agent-backed role\n\n")
+	b.WriteString("agent-backed roles: " + strings.Join(agents, " ") +
+		" — ● marks a role mirrored into task.agentModelOverrides\n\n")
 	b.WriteString(c.renderAdvisors() + "\n")
 	b.WriteString(c.renderModelFacts() + "\n")
 	hasSpark := c.ladder["O"][0] != ""
