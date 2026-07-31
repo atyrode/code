@@ -10,23 +10,23 @@
 # Linux assets are Bun single-file executables. Patch PT_INTERP in place so
 # process.execPath remains the OMP binary when it re-execs subprocess workers.
 let
-  version = "17.0.6-atyrode.1";
+  version = "17.2.1-atyrode.1";
   sources = {
     "x86_64-linux" = {
       asset = "omp-linux-x64";
-      hash = "sha256-NASJMAsKhGsRvljHMuRicURE5S5tg8KX/h8sIzXnAAw=";
+      hash = "sha256-KqBaxXNTY/ZONsjCfTf+Dc1AWclDPohLFR16ldkrp5s=";
     };
     "aarch64-linux" = {
       asset = "omp-linux-arm64";
-      hash = "sha256-xKj46OTI9zAxU4AKb4HnLkuuhqqCVCJQFjN/pJ6eEwg=";
+      hash = "sha256-E64/ssBc7tsBeVLedEXEUlbiAIUWZz/9YxhNKIKryFE=";
     };
     "x86_64-darwin" = {
       asset = "omp-darwin-x64";
-      hash = "sha256-lNXlnkFDbOUCahBsjoSpO/8TWNLHGvOodkFOkXlnN3M=";
+      hash = "sha256-vEvSdtZISOlCkGMvCxA/iYuE5FbdW5QabDkqiVI5cfM=";
     };
     "aarch64-darwin" = {
       asset = "omp-darwin-arm64";
-      hash = "sha256-SeEzTxt/jVR63+Ep6ICqj0TfuvK3ix1W0rlHfwZzRYE=";
+      hash = "sha256-6+zlSbtzBB/sJJlsWqcJIRmO0H0HhGCYrwTPSZFDFEE=";
     };
   };
   source =

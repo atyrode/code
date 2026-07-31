@@ -305,7 +305,7 @@ func TestEveryEmittedRoleIsWeighted(t *testing.T) {
 	}
 }
 
-// scout is one of omp's six bundled agents; it must carry the agent marker so
+// scout is an agent-backed role; it must carry the agent marker so
 // genConfigYAML mirrors it into task.agentModelOverrides.
 func TestScoutIsAgentBacked(t *testing.T) {
 	c := fixtureCatalog(t)
@@ -324,13 +324,13 @@ func TestAgentLegendMatchesMarkedRoles(t *testing.T) {
 	out := c.renderCatalog()
 	var legend string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "bundled agents: ") {
-			legend = strings.TrimPrefix(l, "bundled agents: ")
+		if strings.HasPrefix(l, "agent-backed roles: ") {
+			legend = strings.TrimPrefix(l, "agent-backed roles: ")
 			break
 		}
 	}
 	if legend == "" {
-		t.Fatal("catalog header must carry a bundled-agents legend")
+		t.Fatal("catalog header must carry an agent-backed-roles legend")
 	}
 	named := map[string]bool{}
 	for _, f := range strings.Fields(legend) {
