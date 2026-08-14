@@ -52,12 +52,22 @@ func facetValues(facets []facet) map[string]map[string]bool {
 	return valid
 }
 
-// repairPersistedSelection prevents a hidden fable/main choice from being
-// resurrected after loading. Other hidden facets retain their ordinary model
-// semantics; only main is a subordinate choice that must be explicitly remade.
+// repairPersistedSelection prevents a hidden special-tier choice from being
+// resurrected after loading: spark/fable are forced off when the persisted
+// lane's pool-set cannot host them, and main (a subordinate choice that must
+// be explicitly remade) never outlives fable.
 func repairPersistedSelection(sel map[string]string) {
-	if sel["lane"] == "gpt-only" {
-		sel["fable"] = "off"
+	repairSelectionSpecials(sel)
+}
+
+// repairSelectionSpecials is the one lane-validity rule shared by persisted
+// loads and live suggestions: a special-tier facet is forced off iff its
+// provider's pool is outside the selected lane's pool-set.
+func repairSelectionSpecials(sel map[string]string) {
+	for _, facet := range []string{"spark", "fable"} {
+		if !laneHostsSpecial(sel["lane"], facet) {
+			sel[facet] = "off"
+		}
 	}
 	if sel["fable"] != "on" {
 		sel["main"] = "off"

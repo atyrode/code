@@ -1486,7 +1486,14 @@ func TestManagerUsageInlineRequiresExactMeasuredFit(t *testing.T) {
 	footer := clikit.SeparatedSections(m.w, usage, controls)
 	unspacedExact := lipgloss.Height(strings.Repeat("\n", topGap)+unspacedAccounts) +
 		lipgloss.Height(footer)
-	if got, want := exact-unspacedExact, len(m.managerAccounts())-len(managerProviders); got != want {
+	rendered := 0
+	for _, provider := range managerProviders {
+		if p := providerByID(provider); p != nil && !p.Metered && len(m.avail.accounts[provider]) == 0 {
+			continue // unmetered provider with no accounts renders no group
+		}
+		rendered++
+	}
+	if got, want := exact-unspacedExact, len(m.managerAccounts())-rendered; got != want {
 		t.Fatalf("exact-fit geometry counted %d inter-account breathing rows, want %d", got, want)
 	}
 

@@ -10,7 +10,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var managerProviders = []string{"anthropic", "openai-codex"}
+// managerProviders is the account manager's provider order — registry order,
+// so it can never disagree with the Usage panel again.
+var managerProviders = func() []string {
+	ids := make([]string, len(providerRegistry))
+	for i := range providerRegistry {
+		ids[i] = providerRegistry[i].ID
+	}
+	return ids
+}()
 
 // managerPresetState holds only transient account-manager UI state. Persisted
 // selections live in model.accountSelections; a draft is never launch-visible.
@@ -382,11 +390,17 @@ type managerProviderRange struct {
 const (
 	managerProviderBoxBorderWidth = 2
 	managerProviderBoxFrameWidth  = 4
-	managerAnthropicColor         = "#ff9f52"
-	managerOpenAIColor            = "#62a7ff"
 )
 
 func managerAccountLabel(a account) string {
+	if a.apiKey != "" {
+		// API-key credentials carry no broker identity; account-pool routing
+		// is OAuth-only, so this row is display-only.
+		if a.credentialID != "" {
+			return "API key · credential #" + a.credentialID
+		}
+		return "API key"
+	}
 	if a.Email != "" {
 		return a.Email
 	}
@@ -397,16 +411,16 @@ func managerAccountLabel(a account) string {
 }
 
 func managerProviderColor(provider string) string {
-	if provider == "openai-codex" {
-		return managerOpenAIColor
+	if p := providerByID(provider); p != nil {
+		return p.Color
 	}
-	return managerAnthropicColor
+	return "#8a93a6"
 }
 
 func managerProviderHeading(provider string) string {
-	label := "Anthropic"
-	if provider == "openai-codex" {
-		label = "OpenAI"
+	label := provider
+	if p := providerByID(provider); p != nil {
+		label = p.AccountLabel
 	}
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(managerProviderColor(provider))).
@@ -566,10 +580,15 @@ func (m model) managerLines(width int) []managerLine {
 	selectable := 0
 	group := 0
 	for _, provider := range managerProviders {
+		accounts := m.avail.accounts[provider]
+		if p := providerByID(provider); p != nil && !p.Metered && len(accounts) == 0 {
+			// An absent API key is the normal state for an unmetered provider
+			// — no heading, no "not authenticated" noise.
+			continue
+		}
 		lines = append(lines, managerLine{
 			text: managerProviderHeading(provider), selectable: -1, group: -1, provider: provider,
 		})
-		accounts := m.avail.accounts[provider]
 		switch {
 		case !m.avail.accountsOK:
 			lines = append(lines, managerLine{
@@ -591,6 +610,8 @@ func (m model) managerLines(width int) []managerLine {
 				status := "enabled"
 				if disabled {
 					status = "off"
+				} else if a.apiKey != "" {
+					status = "api key"
 				} else if a.IdentityKey == "" {
 					status = "unavailable"
 				}
@@ -648,7 +669,7 @@ func (m model) managerLines(width int) []managerLine {
 						provider:   provider,
 					})
 				}
-				if len(usageSpecs) == 0 {
+				if len(usageSpecs) == 0 && a.apiKey == "" {
 					unavailable := "      " + stWarn.Render("usage unavailable")
 					if m.avail.accountsStale {
 						unavailable += "  " + stWarn.Render("cached")

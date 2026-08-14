@@ -104,9 +104,9 @@ Each entry under `models:`:
 | Field | Meaning |
 |---|---|
 | `id` | the model id omp routes to |
-| `pool` | `O` (OpenAI/Codex) or `A` (Anthropic) |
+| `pool` | `O` (OpenAI/Codex), `A` (Anthropic), or `D` (DeepSeek). `O` and `A` must fill tiers 1..3; `D` is optional — one verified model is enough, missing tiers borrow the nearest rung |
 | `tier` | `1` cheap · `2` regular · `3` smart — the per-pool fallback ladder. `0` (a fast idle-bucket model the `spark` toggle drains) and `4` (a scarce elite the `fable` toggle leads with) are optional |
-| `bucket` | the quota window this model draws from (`claude-main`, `claude-fable`, `codex-main`, `codex-spark`). The TUI prefers it over guessing from the model family |
+| `bucket` | the quota window this model draws from (`claude-main`, `claude-fable`, `codex-main`, `codex-spark`, `deepseek-main`). The TUI prefers it over guessing from the model family |
 | `cost_in` / `cost_out` | dollars per 1M tokens; drives the cost meter |
 | `speed` / `ttft` | output tok/s and seconds to first token; drives the speed meter. Measured by `init`'s probe — a single timed request each, so treat them as one sample rather than a stable benchmark |
 | `context` | context window, in tokens |

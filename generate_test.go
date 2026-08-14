@@ -134,15 +134,15 @@ const goldenAdvisors = `__advisors__  advisor dial (level context → chain)
 `
 
 // goldenFacts pins the trailing bucket column the TUI's quota meter reads.
-const goldenFacts = `__models__  model facts (id in out speed ttft bucket — $/1M in·out, tok/s, s)
-  gpt-5.6-luna 1 6 52.3 1.18 codex-main
-  gpt-5.6-terra 2.5 15 51.8 1.74 codex-main
-  gpt-5.6-sol 5 30 31.5 4.59 codex-main
-  gpt-5.3-codex-spark 1.75 14 286.7 5.56 codex-spark
-  claude-haiku-4-5 1 5 48.9 1.7 claude-main
-  claude-sonnet-5 2 10 35.2 3.84 claude-main
-  claude-opus-5 5 25 46.6 1.77 claude-main
-  claude-fable-5 10 50 54 6.9 claude-fable
+const goldenFacts = `__models__  model facts (id in out speed ttft bucket provider — $/1M in·out, tok/s, s)
+  gpt-5.6-luna 1 6 52.3 1.18 codex-main openai-codex
+  gpt-5.6-terra 2.5 15 51.8 1.74 codex-main openai-codex
+  gpt-5.6-sol 5 30 31.5 4.59 codex-main openai-codex
+  gpt-5.3-codex-spark 1.75 14 286.7 5.56 codex-spark openai-codex
+  claude-haiku-4-5 1 5 48.9 1.7 claude-main anthropic
+  claude-sonnet-5 2 10 35.2 3.84 claude-main anthropic
+  claude-opus-5 5 25 46.6 1.77 claude-main anthropic
+  claude-fable-5 10 50 54 6.9 claude-fable anthropic
 `
 
 const goldenMixedSmart = `mixed_smart_medium_sp_fa  mixed · smart · medium · spark · fable
@@ -153,6 +153,7 @@ const goldenMixedSmart = `mixed_smart_medium_sp_fa  mixed · smart · medium · 
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
+  ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● scout      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● sonic      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
@@ -171,6 +172,7 @@ const goldenClaudeMax = `claude-only_normal_max_nosp_famain  claude-only · norm
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● designer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
+  ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● scout      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● sonic      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
@@ -193,6 +195,7 @@ const goldenClaudeSmart = `claude-only_smart_medium_nosp_nofa  claude-only · sm
     slow       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● designer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
+  ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● scout      claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● sonic      claude-sonnet-5:medium   → claude-haiku-4-5:medium
@@ -217,15 +220,16 @@ func TestGoldenModelFacts(t *testing.T) {
 	}
 }
 
-// A catalog that declares no buckets keeps the old five-column rows, so the
-// consumer's fallback path stays exercised.
+// A catalog that declares no bucket for a model still renders all seven
+// columns: the pool's main window is the derived bucket, so the TUI never has
+// to guess from the model family for a freshly generated catalog.
 func TestModelFactsWithoutBuckets(t *testing.T) {
 	c, err := catalogFrom(t, strings.ReplaceAll(fixtureYML, "    bucket: codex-main\n", ""))
 	if err != nil {
 		t.Fatalf("loadCatalog: %v", err)
 	}
-	if !strings.Contains(c.renderModelFacts(), "  gpt-5.6-luna 1 6 52.3 1.18\n") {
-		t.Errorf("bucketless model row should stop after ttft:\n%s", c.renderModelFacts())
+	if !strings.Contains(c.renderModelFacts(), "  gpt-5.6-luna 1 6 52.3 1.18 codex-main openai-codex\n") {
+		t.Errorf("bucketless model row should derive the pool's main bucket:\n%s", c.renderModelFacts())
 	}
 }
 
@@ -1107,5 +1111,209 @@ func TestGenerateInitRefusesUnresolvedProbe(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Errorf("no models file may be written from an unresolved probe (stat err: %v)", err)
+	}
+}
+
+// fixtureYMLDeepSeek extends the two-pool fixture with a full DeepSeek pool
+// (three text-only rungs) — the three-pool grid the ds lanes are generated
+// from.
+const fixtureYMLDeepSeek = fixtureYML + `  lite:
+    id: deepseek-v4-lite
+    pool: D
+    tier: 1
+    bucket: deepseek-main
+    cost_in: 0.1
+    cost_out: 0.4
+    speed: 60
+    ttft: 1.5
+    context: 128000
+    thinking: low→high
+    image: false
+  v4:
+    id: deepseek-v4
+    pool: D
+    tier: 2
+    bucket: deepseek-main
+    cost_in: 0.3
+    cost_out: 1.2
+    speed: 45
+    ttft: 2.1
+    context: 128000
+    thinking: low→high
+    image: false
+  pro:
+    id: deepseek-v4-pro
+    pool: D
+    tier: 3
+    bucket: deepseek-main
+    cost_in: 0.6
+    cost_out: 2.4
+    speed: 38
+    ttft: 2.8
+    context: 128000
+    thinking: low→high
+    image: false
+`
+
+// fixtureYMLDeepSeekOneRung brings a single DeepSeek model: the optional-pool
+// fill must complete tiers 1..3 from it, and chain dedupe must collapse the
+// duplicates.
+const fixtureYMLDeepSeekOneRung = fixtureYML + `  v4:
+    id: deepseek-v4
+    pool: D
+    tier: 2
+    bucket: deepseek-main
+    cost_in: 0.3
+    cost_out: 1.2
+    speed: 45
+    ttft: 2.1
+    context: 128000
+    thinking: low→high
+    image: false
+`
+
+// TestGoldenCatalogTwoPool is the byte-compat contract of the N-pool
+// generalisation: a two-pool models file renders the exact catalog the old
+// binary-pool renderer produced (modulo the reviewed additions the golden
+// carries: the __models__ bucket+provider columns and the security-reviewer
+// role).
+func TestGoldenCatalogTwoPool(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("testdata", "two-pool-golden.plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := fixtureCatalog(t)
+	if got := c.renderCatalog(); got != string(want) {
+		t.Errorf("two-pool catalog is no longer byte-identical to the golden (diff it against testdata/two-pool-golden.plain to review)\ngot %d bytes, want %d", len(got), len(want))
+	}
+}
+
+// TestThreePoolCatalog locks the DeepSeek pool's grid semantics: the two new
+// lanes, special-tier validity, relief tails on led/mixed heavyweight chains
+// (and only there), the vision purity exception, and the ds advisor contexts.
+func TestThreePoolCatalog(t *testing.T) {
+	c, err := catalogFrom(t, fixtureYMLDeepSeek)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	out := c.renderCatalog()
+
+	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"} {
+		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa  ") {
+			t.Errorf("lane %s missing from the three-pool grid", lane)
+		}
+	}
+	// Special tiers follow their pool: none on ds-only, both on ds-led.
+	if strings.Contains(out, "\nds-only_normal_medium_sp_") || strings.Contains(out, "_medium_nosp_fa\nds-only") ||
+		strings.Contains(out, "\nds-only_normal_medium_nosp_fa") {
+		t.Error("ds-only generated spark/fable combos it cannot host")
+	}
+	for _, id := range []string{"ds-led_normal_medium_sp_nofa", "ds-led_normal_medium_nosp_fa", "ds-led_normal_medium_nosp_famain"} {
+		if !strings.Contains(out, "\n"+id+"  ") {
+			t.Errorf("ds-led combo %s missing", id)
+		}
+	}
+
+	block := func(id string) string {
+		i := strings.Index(out, "\n"+id+"  ")
+		if i < 0 {
+			t.Fatalf("combo %s missing", id)
+		}
+		rest := out[i+1:]
+		if j := strings.Index(rest, "\n\n"); j >= 0 {
+			rest = rest[:j]
+		}
+		return rest
+	}
+	row := func(blk, role string) string {
+		for _, ln := range strings.Split(blk, "\n") {
+			f := strings.Fields(ln)
+			if len(f) > 1 && f[0] == "●" {
+				f = f[1:]
+			}
+			if len(f) > 0 && f[0] == role {
+				return ln
+			}
+		}
+		t.Fatalf("role %s missing from block:\n%s", role, blk)
+		return ""
+	}
+
+	// Relief tails: led/mixed heavyweight chains end on the DeepSeek regular
+	// rung; pure lanes stay pure.
+	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
+		blk := block(lane + "_normal_medium_nosp_nofa")
+		for _, role := range []string{"default", "task", "plan", "slow"} {
+			if r := row(blk, role); !strings.HasSuffix(r, "→ deepseek-v4:medium") && !strings.HasSuffix(r, "→ deepseek-v4:high") {
+				t.Errorf("%s %s chain lacks the DeepSeek relief tail: %q", lane, role, r)
+			}
+		}
+		if r := row(blk, "reviewer"); strings.Contains(r, "deepseek") {
+			t.Errorf("%s reviewer must not gain a relief tail: %q", lane, r)
+		}
+	}
+	for _, lane := range []string{"gpt-only", "claude-only"} {
+		if blk := block(lane + "_normal_medium_nosp_nofa"); strings.Contains(blk, "deepseek") {
+			t.Errorf("pure lane %s crossed into the DeepSeek pool:\n%s", lane, blk)
+		}
+	}
+
+	// Vision purity exception: every DeepSeek rung is text-only, so ds-only's
+	// vision role must cross pools rather than route images to a text model.
+	dsOnly := block("ds-only_smart_medium_nosp_nofa")
+	if r := row(dsOnly, "vision"); strings.Contains(r, "deepseek") || !strings.Contains(r, "gpt-5.6-sol:low") {
+		t.Errorf("ds-only vision must cross to an image-capable pool: %q", r)
+	}
+	// …and every other ds-only role stays on DeepSeek.
+	for _, role := range []string{"default", "task", "plan", "reviewer", "advisor", "commit"} {
+		if r := row(dsOnly, role); strings.Contains(r, "gpt") || strings.Contains(r, "claude") {
+			t.Errorf("ds-only %s left the pool: %q", role, r)
+		}
+	}
+
+	// The advisor dial gains one context per pool.
+	for _, want := range []string{
+		"  glance ds deepseek-v4-lite:low",
+		"  review ds deepseek-v4:medium → deepseek-v4-lite:low",
+		"  audit ds deepseek-v4-pro:high → deepseek-v4:high → deepseek-v4-lite:low",
+	} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("advisors block lacks %q", want)
+		}
+	}
+
+	// The facts table carries the provider column for every pool.
+	if !strings.Contains(out, "  deepseek-v4 0.3 1.2 45 2.1 deepseek-main deepseek\n") {
+		t.Error("facts table lacks the deepseek provider row")
+	}
+}
+
+// TestOneRungOptionalPool: a single verified DeepSeek model is enough to grow
+// the ds lanes — the fill borrows it for every ladder tier and dedupe keeps
+// the chains single-entry.
+func TestOneRungOptionalPool(t *testing.T) {
+	c, err := catalogFrom(t, fixtureYMLDeepSeekOneRung)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	for tier := 1; tier <= 3; tier++ {
+		if got := c.ladder["D"][tier]; got != "v4" {
+			t.Fatalf("optional-pool fill: ladder[D][%d] = %q, want v4", tier, got)
+		}
+	}
+	out := c.renderCatalog()
+	blkStart := strings.Index(out, "\nds-only_smart_medium_nosp_nofa  ")
+	if blkStart < 0 {
+		t.Fatal("one-rung D pool generated no ds-only lane")
+	}
+	blk := out[blkStart:]
+	if i := strings.Index(blk[1:], "\n\n"); i >= 0 {
+		blk = blk[:i+1]
+	}
+	if strings.Contains(blk, "deepseek-v4:medium → deepseek-v4:medium") {
+		t.Errorf("borrowed rungs must dedupe out of the chains:\n%s", blk)
+	}
+	if !strings.Contains(blk, "    default    deepseek-v4:medium\n") {
+		t.Errorf("one-rung ds-only default should be the single model, got:\n%s", blk)
 	}
 }

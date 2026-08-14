@@ -96,18 +96,13 @@ func (m model) Commander() clikit.Commander {
 }
 
 // repairConstraints enforces the deterministic rules a suggestion (or selection)
-// must never violate — mirroring generate-profiles.py's `valid` plus live quota:
-// spark is an OpenAI model, so it can't run on a pure-Claude lane; fable is an
-// Anthropic elite, so it can't run on a pure-GPT lane; and neither may be left on
-// when its quota bucket is maxed or unauthed. Runs after an applied proposal, so
-// the generator can't land on an impossible or unavailable combo.
+// must never violate — mirroring the generator's `genValid` plus live quota:
+// a special-tier facet (spark, fable) can only run on a lane whose pool-set
+// contains its provider's pool, and neither may be left on when its quota
+// bucket is maxed or unauthed. Runs after an applied proposal, so the
+// generator can't land on an impossible or unavailable combo.
 func (m *model) repairConstraints() {
-	switch m.sel["lane"] {
-	case "claude-only":
-		m.sel["spark"] = "off"
-	case "gpt-only":
-		m.sel["fable"] = "off"
-	}
+	repairSelectionSpecials(m.sel)
 	if m.avail.down(bucketOf("fable")) {
 		m.sel["fable"] = "off"
 	}
@@ -193,8 +188,8 @@ func (m model) appliedDiff() []clikit.Action {
 func (m *model) deriveToggles() {
 	tier := m.sel["thinking"]
 	critical := m.sel["model"] == "smart" && (tier == "xhigh" || tier == "max")
-	claudeLane := m.sel["lane"] != "gpt-only"
-	if critical && claudeLane && !m.avail.down(bucketOf("fable")) {
+	fableLane := laneHostsSpecial(m.sel["lane"], "fable")
+	if critical && fableLane && !m.avail.down(bucketOf("fable")) {
 		m.sel["fable"] = "on"
 	} else {
 		m.sel["fable"] = "off"

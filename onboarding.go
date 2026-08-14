@@ -112,7 +112,7 @@ func (o onboarding) fail(err error) onboarding {
 	case strings.Contains(o.errMsg, "omp models"):
 		o.remedy = "Install oh-my-pi (omp) and make sure it is on PATH, then press enter to retry."
 	case strings.Contains(o.errMsg, "need 3"):
-		o.remedy = "code assumes omp has BOTH Anthropic and OpenAI providers set up. Add the missing provider (or hand-write " + o.modelsPath + "), then press enter to retry."
+		o.remedy = "code assumes omp has " + requiredProviderNames() + " set up. Add the missing provider (or hand-write " + o.modelsPath + "), then press enter to retry."
 	default:
 		o.remedy = "Fix the above (the models file lives at " + o.modelsPath + "), then press enter to retry."
 	}

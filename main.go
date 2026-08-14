@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -123,7 +124,9 @@ var (
 	pad        = clikit.Pad
 	windowList = clikit.WindowList
 
-	modelRe = regexp.MustCompile(`(gpt|claude)[A-Za-z0-9._-]*:(minimal|low|medium|high|xhigh|max)`)
+	// Any id-shaped token with a thinking level is a routing token; which
+	// provider owns it (and its tint) is the registry's call, not the regex's.
+	modelRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9._-]*:(minimal|low|medium|high|xhigh|max)`)
 )
 
 // ── colourisers ──────────────────────────────────────────────────────────────
@@ -168,12 +171,11 @@ func clampByte(x float64) int {
 func paintModel(tok string) string {
 	i := strings.LastIndex(tok, ":")
 	name, level := tok[:i], tok[i+1:]
-	var br, bg, bb float64
-	if strings.HasPrefix(tok, "gpt") {
-		br, bg, bb = 110, 170, 240
-	} else {
-		br, bg, bb = 240, 160, 105
+	p := providerByModel(name)
+	if p == nil {
+		return shortModel(name) + ":" + level // unknown provider: uncoloured
 	}
+	br, bg, bb := p.PaintRGB[0], p.PaintRGB[1], p.PaintRGB[2]
 	f := 0.60 + float64(lvl(level))*0.088
 	col := lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", clampByte(br*f), clampByte(bg*f), clampByte(bb*f)))
 	return lipgloss.NewStyle().Foreground(col).Render(shortModel(name) + ":" + level)
@@ -184,22 +186,31 @@ func colorizeRoute(line string) string { return modelRe.ReplaceAllStringFunc(lin
 // bucketOf guesses a quota bucket from a model name. It is the fallback for
 // catalogs that declare no bucket column, and the only resolver for the bare
 // facet names ("fable", "spark") the suggest box asks about — prefer
-// model.bucketFor wherever a receiver is in reach.
+// model.bucketFor wherever a receiver is in reach. An unknown name maps to no
+// bucket at all rather than someone else's quota window.
 func bucketOf(model string) string {
 	m := model
 	if i := strings.IndexByte(m, ':'); i >= 0 {
 		m = m[:i]
 	}
-	switch {
-	case strings.Contains(m, "fable"):
-		return "claude-fable"
-	case strings.Contains(m, "spark"):
-		return "codex-spark"
-	case strings.Contains(m, "claude"), strings.Contains(m, "sonnet"),
-		strings.Contains(m, "haiku"), strings.Contains(m, "opus"):
-		return "claude-main"
+	for _, p := range providerRegistry {
+		for _, s := range p.Special {
+			if strings.Contains(m, s.Bucket) {
+				return p.BucketBase + "-" + s.Bucket
+			}
+		}
 	}
-	return "codex-main"
+	if p := providerByModel(m); p != nil {
+		return p.mainBucket()
+	}
+	for _, p := range providerRegistry {
+		for _, pre := range p.ModelPrefixes {
+			if strings.Contains(m, pre) {
+				return p.mainBucket()
+			}
+		}
+	}
+	return ""
 }
 
 // bucketFor resolves a routing token's quota bucket from the catalog, falling
@@ -213,8 +224,13 @@ func (m model) bucketFor(name string) string {
 	if i := strings.IndexByte(id, ':'); i >= 0 {
 		id = id[:i]
 	}
-	if f, ok := m.facts[id]; ok && f.bucket != "" {
-		return f.bucket
+	if f, ok := m.facts[id]; ok {
+		if f.bucket != "" {
+			return f.bucket
+		}
+		if p := providerByID(f.provider); p != nil {
+			return p.mainBucket()
+		}
 	}
 	return bucketOf(id)
 }
@@ -283,6 +299,10 @@ type availability struct {
 	accountsOK       bool
 	selectionApplied bool
 	accountsStale    bool
+	// deepseek is the DeepSeek prepaid balance: nil when the snapshot carries
+	// no DeepSeek credential (the group is hidden entirely — an absent API key
+	// is the normal state, unlike a metered subscription).
+	deepseek *deepseekBalance
 }
 
 func fetchBrokerUsage(broker brokerConfig) ([]byte, error) {
@@ -325,7 +345,15 @@ type usageCacheAccount struct {
 type usageCacheFile struct {
 	SavedAt  int64                `json:"savedAt"`
 	Accounts map[string][]account `json:"accounts"`
+	Deepseek *usageCacheBalance   `json:"deepseekBalance,omitempty"`
 	Usage    []usageCacheAccount  `json:"usage"`
+}
+
+// usageCacheBalance caches the DeepSeek balance VALUE only — never the key.
+type usageCacheBalance struct {
+	Currency  string `json:"currency"`
+	Total     string `json:"totalBalance"`
+	FetchedAt int64  `json:"fetchedAt"`
 }
 
 func emptyAvailability() availability {
@@ -422,7 +450,7 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 				break
 			}
 		}
-		if r.Provider == "openai-codex" {
+		if r.Provider == openAIProvider {
 			credits := resetCredits{avail: r.ResetCredits.AvailableCount}
 			for _, c := range r.ResetCredits.Credits {
 				if c.Status != "available" {
@@ -442,32 +470,53 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 			}
 		}
 	}
-	for _, b := range []string{"codex-main", "codex-spark", "claude-main", "claude-fable"} {
-		p := "openai-codex"
-		if strings.HasPrefix(b, "claude") {
-			p = "anthropic"
+	for _, prov := range providerRegistry {
+		if !prov.Metered {
+			continue
 		}
-		if !provSeen[p] {
-			a.bucket[b] = "unauthed"
-		} else if _, ok := a.bucket[b]; !ok {
-			a.bucket[b] = "ok"
+		for _, b := range prov.buckets() {
+			if !provSeen[prov.ID] {
+				a.bucket[b] = "unauthed"
+			} else if _, ok := a.bucket[b]; !ok {
+				a.bucket[b] = "ok"
+			}
 		}
 	}
 	return a
 }
 
-// loadAvailability reads one central snapshot and one aggregate usage report.
+// loadAvailability reads one central snapshot and one aggregate usage report,
+// plus — when the snapshot carries a DeepSeek api_key — the upstream prepaid
+// balance, fetched concurrently so neither request delays the other.
 func loadAvailability(broker brokerConfig) availability {
 	accounts, err := loadAccounts(broker)
 	accountsOK := err == nil
 	if !accountsOK {
 		accounts = map[string][]account{}
 	}
+	var ds *deepseekBalance
+	var wg sync.WaitGroup
+	if key := deepseekAPIKey(accounts); key != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bal, err := fetchDeepSeekBalance(key)
+			if err != nil {
+				// Degrade to an explicit "unavailable" row; other providers
+				// are unaffected.
+				bal = deepseekBalance{fetchedAt: time.Now().Unix()}
+			}
+			ds = &bal
+		}()
+	}
 	out, err := fetchBrokerUsage(broker)
 	if err != nil {
 		out = nil
 	}
-	return parseAvailability(accounts, accountsOK, out, 0)
+	wg.Wait()
+	a := parseAvailability(accounts, accountsOK, out, 0)
+	a.deepseek = ds
+	return a
 }
 
 func loadUsageCache(path string) availability {
@@ -507,15 +556,22 @@ func loadUsageCache(path string) availability {
 			}
 		}
 	}
-	for _, bucket := range []string{"codex-main", "codex-spark", "claude-main", "claude-fable"} {
-		provider := openAIProvider
-		if strings.HasPrefix(bucket, "claude") {
-			provider = anthropicProvider
+	if cached.Deepseek != nil {
+		a.deepseek = &deepseekBalance{
+			ok: true, currency: cached.Deepseek.Currency, total: cached.Deepseek.Total,
+			fetchedAt: cached.Deepseek.FetchedAt, stale: true,
 		}
-		if !provSeen[provider] {
-			a.bucket[bucket] = "unauthed"
-		} else if _, ok := a.bucket[bucket]; !ok {
-			a.bucket[bucket] = "ok"
+	}
+	for _, prov := range providerRegistry {
+		if !prov.Metered {
+			continue
+		}
+		for _, bucket := range prov.buckets() {
+			if !provSeen[prov.ID] {
+				a.bucket[bucket] = "unauthed"
+			} else if _, ok := a.bucket[bucket]; !ok {
+				a.bucket[bucket] = "ok"
+			}
 		}
 	}
 	return a
@@ -527,6 +583,11 @@ func saveUsageCache(path string, a availability) {
 	}
 	now := time.Now().Unix()
 	cached := usageCacheFile{SavedAt: now, Accounts: a.accounts}
+	if a.deepseek != nil && a.deepseek.ok {
+		cached.Deepseek = &usageCacheBalance{
+			Currency: a.deepseek.currency, Total: a.deepseek.total, FetchedAt: a.deepseek.fetchedAt,
+		}
+	}
 	for key, wins := range a.accountUsage {
 		entry := usageCacheAccount{Provider: key.Provider, IdentityKey: key.IdentityKey}
 		for _, win := range wins {
@@ -564,21 +625,20 @@ func saveUsageCache(path string, a availability) {
 	_ = atomicPrivateWrite(path, body)
 }
 
+// bucketForProviderTier maps a usage report's (provider, tier) scope onto the
+// quota bucket it constrains: the provider's main window, or a special tier's
+// dedicated window. Unmetered and unknown providers own no buckets.
 func bucketForProviderTier(prov, tier string) string {
-	if prov == "openai-codex" {
-		if tier == "spark" {
-			return "codex-spark"
-		}
-		if tier == "" || tier == "-" {
-			return "codex-main"
-		}
+	p := providerByID(prov)
+	if p == nil || !p.Metered {
+		return ""
 	}
-	if prov == "anthropic" {
-		if tier == "fable" {
-			return "claude-fable"
-		}
-		if tier == "" || tier == "-" {
-			return "claude-main"
+	if tier == "" || tier == "-" {
+		return p.mainBucket()
+	}
+	for _, s := range p.Special {
+		if s.Bucket == tier {
+			return p.BucketBase + "-" + s.Bucket
 		}
 	}
 	return ""
@@ -616,9 +676,16 @@ func reconcileUsage(prev, next availability) (availability, bool) {
 		next.accounts, next.accountsOK, next.accountsStale = prev.accounts, true, true
 	}
 	next.accountUsage = reconcileAccountUsage(prev.accountUsage, next.accountUsage, next.accounts)
+	if next.deepseek != nil && !next.deepseek.ok && prev.deepseek != nil && prev.deepseek.ok {
+		// A failed balance refresh keeps the last known value, visibly stale —
+		// same retention contract as the metered windows.
+		retained := *prev.deepseek
+		retained.stale = true
+		next.deepseek = &retained
+	}
 	hasClaude, hasFable := false, false
 	for _, w := range next.wins {
-		if w.prov != "anthropic" {
+		if w.prov != anthropicProvider {
 			continue
 		}
 		hasClaude = true
@@ -630,7 +697,7 @@ func reconcileUsage(prev, next availability) (availability, bool) {
 		return next, false
 	}
 	for _, w := range prev.wins {
-		if w.prov == "anthropic" && w.tier == "fable" && !w.missing {
+		if w.prov == anthropicProvider && w.tier == "fable" && !w.missing {
 			w.stale = true
 			next.wins = append(next.wins, w)
 			// Carry the bucket/reset state observed with the retained window:
@@ -687,12 +754,12 @@ func reconcileAccountUsage(prev, next map[accountKey][]usageWin, accounts map[st
 			}
 			continue
 		}
-		if key.Provider != "anthropic" {
+		if key.Provider != anthropicProvider {
 			continue
 		}
 		hasClaude, hasFable := false, false
 		for _, w := range wins {
-			if w.prov != "anthropic" {
+			if w.prov != anthropicProvider {
 				continue
 			}
 			if !w.missing {
@@ -707,7 +774,7 @@ func reconcileAccountUsage(prev, next map[accountKey][]usageWin, accounts map[st
 		}
 		retained := false
 		for _, w := range prev[key] {
-			if w.prov == "anthropic" && w.tier == "fable" && !w.missing {
+			if w.prov == anthropicProvider && w.tier == "fable" && !w.missing {
 				w.stale = true
 				next[key] = append(next[key], w)
 				retained = true
@@ -724,7 +791,7 @@ func reconcileAccountUsage(prev, next map[accountKey][]usageWin, accounts map[st
 // fablePlaceholder is the never-observed fable window's deterministic
 // stand-in: the real payload label (so shortWin renders the same "7d fable"
 // tag) and window length, with no usage numbers to fabricate.
-var fablePlaceholder = usageWin{label: "Claude 7 Day (Fable)", tier: "fable", dur: 7 * 24 * 3600, prov: "anthropic", missing: true}
+var fablePlaceholder = usageWin{label: "Claude 7 Day (Fable)", tier: "fable", dur: 7 * 24 * 3600, prov: anthropicProvider, missing: true}
 
 type usageGroupKey struct {
 	prov  string
@@ -743,16 +810,16 @@ type usageGroup struct {
 
 func knownUsageWindow(w usageWin) bool {
 	label := shortWin(w.label)
-	switch bucketForProviderTier(w.prov, w.tier) {
-	case "codex-main", "claude-main":
-		return label == "5h" || label == "7d"
-	case "codex-spark":
-		return label == "5h spark" || label == "7d spark"
-	case "claude-fable":
-		return label == "7d fable"
-	default:
+	bucket := bucketForProviderTier(w.prov, w.tier)
+	p := providerByID(w.prov)
+	if bucket == "" || p == nil {
 		return false
 	}
+	if bucket == p.mainBucket() {
+		return label == "5h" || label == "7d"
+	}
+	suffix := strings.TrimPrefix(bucket, p.BucketBase+"-")
+	return label == "5h "+suffix || label == "7d "+suffix
 }
 
 // selectedAvailability derives account-sensitive usage and routing availability
@@ -841,15 +908,16 @@ func selectedAvailability(a availability, disabled map[accountKey]bool) availabi
 			selected.wins = append(selected.wins, missing[key])
 		}
 	}
-	for _, bucket := range []string{"codex-main", "codex-spark", "claude-main", "claude-fable"} {
-		provider := "openai-codex"
-		if strings.HasPrefix(bucket, "claude") {
-			provider = "anthropic"
+	for _, prov := range providerRegistry {
+		if !prov.Metered {
+			continue
 		}
-		if enabledProviders[provider] {
-			selected.bucket[bucket] = "ok"
-		} else {
-			selected.bucket[bucket] = "unauthed"
+		for _, bucket := range prov.buckets() {
+			if enabledProviders[prov.ID] {
+				selected.bucket[bucket] = "ok"
+			} else {
+				selected.bucket[bucket] = "unauthed"
+			}
 		}
 	}
 	for _, win := range selected.wins {
@@ -963,9 +1031,16 @@ type facet struct {
 	glyph  string
 }
 
+// facetDefs seeds the facet dials. The lane facet starts empty: its values are
+// catalog-driven (applyCatalog collects the lanes the catalog actually
+// generated), so a two-pool catalog shows exactly the classic five lanes and a
+// richer one adds its own.
 func facetDefs(glyphs map[string]string) []facet {
 	return []facet{
-		{"lane", []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}, glyphs["lane"]},
+		// Seeded with the required pools' lanes so a catalog-less run (the
+		// onboarding shell, a broken CODE_GENERATED) keeps a working dial;
+		// applyCatalog replaces the list with the lanes the catalog generated.
+		{"lane", requiredPoolLanes(), glyphs["lane"]},
 		{"model", []string{"fast", "normal", "smart"}, glyphs["model"]},
 		{"thinking", []string{"minimal", "low", "medium", "high", "xhigh", "max"}, glyphs["thinking"]},
 		// advisor as a power/cost dial: a quick glance, a proper review, or a
@@ -1010,6 +1085,7 @@ func parseAdvisors(rows []string) map[string][]string {
 type modelFact struct {
 	in, out, speed, ttft float64
 	bucket               string
+	provider             string // registry provider id ("" in legacy catalogs)
 }
 
 // effTPS folds ttft into throughput — the effective tok/s for a representative
@@ -1025,9 +1101,10 @@ func (f modelFact) effTPS() float64 {
 }
 
 // parseFacts reads the __models__ block (rows: "<id> <in> <out> <speed> <ttft>
-// [<bucket>]") into a per-model table, sourced from the catalog so meters and
-// routing agree. The bucket column is optional — a catalog that declares none
-// for any model omits it entirely, and the name guess covers those rows.
+// [<bucket> [<provider>]]") into a per-model table, sourced from the catalog
+// so meters and routing agree. The bucket and provider columns are trailing
+// optionals so legacy five- and six-token catalogs keep working; the name
+// guess covers their rows.
 func parseFacts(rows []string) map[string]modelFact {
 	out := map[string]modelFact{}
 	for _, r := range rows {
@@ -1039,12 +1116,15 @@ func parseFacts(rows []string) map[string]modelFact {
 		outc, e2 := strconv.ParseFloat(f[2], 64)
 		sp, e3 := strconv.ParseFloat(f[3], 64)
 		tt, e4 := strconv.ParseFloat(f[4], 64)
-		bucket := ""
+		bucket, provider := "", ""
 		if len(f) >= 6 {
 			bucket = f[5]
 		}
+		if len(f) >= 7 {
+			provider = f[6]
+		}
 		if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
-			out[f[0]] = modelFact{in, outc, sp, tt, bucket}
+			out[f[0]] = modelFact{in, outc, sp, tt, bucket, provider}
 		}
 	}
 	return out
@@ -1066,6 +1146,9 @@ func parseFacts(rows []string) map[string]modelFact {
 var roleWeight = map[string]float64{
 	"default": 10, "task": 6, "reviewer": 3, "sonic": 3, "plan": 3, "advisor": 4, "slow": 2,
 	"designer": 2, "librarian": 2, "scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
+	// security-reviewer routes like reviewer but is spawned far more rarely
+	// (ad-hoc scans), so it barely moves the needle.
+	"security-reviewer": 1,
 }
 var thinkMult = map[string]float64{ // reasoning tokens grow with effort → pricier
 	"minimal": 0.6, "low": 0.8, "medium": 1.0, "high": 1.3, "xhigh": 1.6, "max": 2.0,
@@ -1129,7 +1212,7 @@ func logScore(idx, lnLo, lnHi float64) int {
 
 // costScore rates the current config from 1 (cheap) to 5 (dear).
 func (m model) costScore() int {
-	fast := m.sel["fast"] == "on" && m.sel["lane"] != "claude-only"
+	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
 		c, ok := m.facts[id]
@@ -1141,7 +1224,7 @@ func (m model) costScore() int {
 			mult = 1
 		}
 		cost := (0.25*c.in + 0.75*c.out) * mult
-		if fast && strings.HasPrefix(id, "gpt-") {
+		if fast && m.poolOfModel(id) == "O" {
 			cost *= priorityMult
 		}
 		num += w * cost
@@ -1155,7 +1238,7 @@ func (m model) costScore() int {
 
 // speedScore rates the current config from 1 (slow) to 5 (fast).
 func (m model) speedScore() int {
-	fast := m.sel["fast"] == "on" && m.sel["lane"] != "claude-only"
+	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
 		c, ok := m.facts[id]
@@ -1167,7 +1250,7 @@ func (m model) speedScore() int {
 			mult = 1
 		}
 		sp := c.effTPS() * mult
-		if fast && strings.HasPrefix(id, "gpt-") {
+		if fast && m.poolOfModel(id) == "O" {
 			sp *= fastSpeed
 		}
 		num += w * sp
@@ -1188,23 +1271,32 @@ func (m model) meter(label, glyph, fill string, n int) string {
 
 // advisorChain returns the advisor role's model chain for an intensity, sourced
 // from the baked __advisors__ table. The advisor is the independent second
-// opinion, so it uses the opposite provider to whoever leads the session: GPT
-// when the lead is Claude — a Claude-led (or pure-GPT) lane, or fable-as-main
-// handing the default role to Fable — and Claude otherwise. Only the pure lanes
-// stay on their own provider (gpt-only keeps GPT; claude-only keeps Claude).
+// opinion, so it crosses to another provider whenever the lane allows it: the
+// first advisorPoolOrder pool that is not the lead's (fable-as-main hands the
+// default role to the elite, so the lead becomes the elite's pool). Only the
+// pure lanes stay on their own provider.
 func (m model) advisorChain(level string) []string {
 	lane := m.sel["lane"]
-	ctx := "claude"
-	if lane == "gpt-only" || lane == "claude-led" {
-		ctx = "gpt"
+	if p := providerByLane(lane); p != nil && lanePure(lane) {
+		return m.advisors[level+"/"+p.Lane]
 	}
-	// fable-as-main puts Claude Fable in the default seat, so the second
-	// opinion flips to GPT — except on claude-only, where the pure-lane rule
-	// keeps the whole pool (advisor included) on Claude.
-	if lane != "claude-only" && m.sel["fable"] == "on" && m.sel["main"] == "on" {
-		ctx = "gpt"
+	lead := lanePrimary(lane)
+	if fb := providerBySpecial("fable"); fb != nil && m.sel["fable"] == "on" && m.sel["main"] == "on" {
+		// fable-as-main puts the elite in the default seat, so the second
+		// opinion flips away from the elite's own pool.
+		lead = fb.Pool
 	}
-	return m.advisors[level+"/"+ctx]
+	for _, pool := range advisorPoolOrder {
+		if pool == lead {
+			continue
+		}
+		if p := providerByPool(pool); p != nil {
+			if chain := m.advisors[level+"/"+p.Lane]; len(chain) > 0 {
+				return chain
+			}
+		}
+	}
+	return nil
 }
 
 // roleOf returns the role name of a routing row ("● task" → "task").
@@ -1247,28 +1339,33 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 }
 
 // visibleFacets drops facets that don't apply to the current lane, so the
-// generator only ever shows actionable options: no spark/fast on a Claude-only
-// pool, no fable on a GPT-only pool. main is fable's sub-setting, so it only
-// shows while fable is on (and the lane can host it at all). A dial this catalog
-// generated no combo for is dropped the same way — it is not a choice.
+// generator only ever shows actionable options: no spark/fast on a pure lane
+// of another pool, no fable outside its pool's lanes. main is fable's
+// sub-setting, so it only shows while fable is on (and the lane can host it at
+// all). A dial this catalog generated no combo for is dropped the same way —
+// it is not a choice.
 func (m model) visibleFacets() []facet {
 	lane := m.sel["lane"]
 	var out []facet
 	for _, f := range m.facets {
-		if lane == "claude-only" && (f.key == "spark" || f.key == "fast") {
-			continue
-		}
-		if lane == "gpt-only" && (f.key == "fable" || f.key == "main") {
-			continue
-		}
-		if f.key == "spark" && m.noSpark {
-			continue
-		}
-		if (f.key == "fable" || f.key == "main") && m.noFable {
-			continue
-		}
-		if f.key == "main" && m.sel["fable"] != "on" {
-			continue
+		switch f.key {
+		case "spark":
+			if !laneHostsSpecial(lane, "spark") || m.noSpark {
+				continue
+			}
+		case "fast":
+			// The fast dial is the priority service tier — an OpenAI pool
+			// feature, meaningless on a pure lane of any other pool.
+			if p := providerByLane(lane); lanePure(lane) && p != nil && p.ServiceTier[0] == "" {
+				continue
+			}
+		case "fable", "main":
+			if !laneHostsSpecial(lane, "fable") || m.noFable {
+				continue
+			}
+			if f.key == "main" && m.sel["fable"] != "on" {
+				continue
+			}
 		}
 		out = append(out, f)
 	}
@@ -1278,10 +1375,10 @@ func (m model) visibleFacets() []facet {
 func comboID(sel map[string]string) string {
 	lane := sel["lane"]
 	sp, fb := sel["spark"], sel["fable"]
-	if lane == "gpt-only" {
+	if !laneHostsSpecial(lane, "fable") {
 		fb = "off"
 	}
-	if lane == "claude-only" {
+	if !laneHostsSpecial(lane, "spark") {
 		sp = "off"
 	}
 	spid, faid := "nosp", "nofa"
@@ -1303,6 +1400,10 @@ func comboID(sel map[string]string) string {
 // written — and a selection persisted against a richer catalog does the same.
 // Ids are <lane>_<mtier>_<thinking>_<sp|nosp>_<fa|famain|nofa>, so match whole
 // segments: "nosp" and "nofa" contain the very substrings being looked for.
+// The lane facet's value list is the catalog's too: the distinct lane segments
+// of the combo ids, ordered canonically (laneOrderForPools), so a catalog with
+// a DeepSeek pool grows ds-led/ds-only dials and an old one shows exactly the
+// classic five.
 func (m *model) applyCatalog() {
 	if len(m.generated) == 0 {
 		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
@@ -1319,7 +1420,47 @@ func (m *model) applyCatalog() {
 		}
 	}
 	m.noSpark, m.noFable = !spark, !fable
+	if lanes := catalogLanes(m.generated); len(lanes) > 0 {
+		for i := range m.facets {
+			if m.facets[i].key == "lane" {
+				m.facets[i].values = lanes
+			}
+		}
+	}
 	m.clampSel()
+}
+
+// catalogLanes collects the distinct lane values the catalog generated, in
+// canonical dial order; unknown lane names (a newer catalog) trail sorted so
+// they are still reachable.
+func catalogLanes(generated map[string][]string) []string {
+	seen := map[string]bool{}
+	for id := range generated {
+		if strings.HasPrefix(id, "__") {
+			continue
+		}
+		lane, rest, ok := strings.Cut(id, "_")
+		if !ok || lane == "" || rest == "" {
+			continue
+		}
+		seen[lane] = true
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	var lanes []string
+	for _, lane := range laneOrderForPools(fallbackPoolOrder) {
+		if seen[lane] {
+			lanes = append(lanes, lane)
+			delete(seen, lane)
+		}
+	}
+	var extra []string
+	for lane := range seen {
+		extra = append(extra, lane)
+	}
+	sort.Strings(extra)
+	return append(lanes, extra...)
 }
 
 // clampSel turns off every dial the catalog cannot serve. main is fable's
@@ -1332,29 +1473,68 @@ func (m *model) clampSel() {
 		m.sel["fable"] = "off"
 		m.sel["main"] = "off"
 	}
+	// A persisted lane the applied catalog no longer generates (or one from a
+	// richer catalog) resets to the dial's first lane.
+	for _, f := range m.facets {
+		if f.key != "lane" || len(f.values) == 0 {
+			continue
+		}
+		known := false
+		for _, v := range f.values {
+			if v == m.sel["lane"] {
+				known = true
+				break
+			}
+		}
+		if !known {
+			m.sel["lane"] = f.values[0]
+		}
+	}
 }
 
+// laneColor tints the accent by lane: each provider carries a deeper shade for
+// its pure lane and a lighter one for its led lane; mixed keeps its purple.
 func laneColor(lane string) string {
-	switch lane {
-	case "gpt-only":
-		return "#3f8ef0" // deeper blue — pure pool
-	case "gpt-led":
-		return "#7ab6ff" // lighter blue — leans GPT
-	case "mixed":
+	if lane == "mixed" {
 		return "#aa96e1"
-	case "claude-led":
-		return "#ffb277" // lighter orange — leans Claude
-	case "claude-only":
-		return "#ff8534" // deeper orange — pure pool
+	}
+	if p := providerByLane(lane); p != nil {
+		if lanePure(lane) {
+			return p.LaneOnly
+		}
+		return p.LaneLed
 	}
 	return "#ff9f52"
 }
 
-func prefixed(model string) string {
-	if strings.HasPrefix(model, "claude") {
-		return "anthropic/" + model
+// prefixed qualifies a model id with its omp provider: the catalog's provider
+// column when present, else the registry's prefix guess. The unknown-model
+// fallback stays openai-codex so a legacy catalog launches exactly as before.
+func (m model) prefixed(model string) string {
+	id, _, _ := strings.Cut(model, ":")
+	if f, ok := m.facts[id]; ok && f.provider != "" {
+		if p := providerByID(f.provider); p != nil {
+			return p.ID + "/" + model
+		}
 	}
-	return "openai-codex/" + model
+	if p := providerByModel(model); p != nil {
+		return p.ID + "/" + model
+	}
+	return openAIProvider + "/" + model
+}
+
+// poolOfModel is the model's registry pool letter, catalog provider column
+// first, prefix guess second; "" when nobody claims it.
+func (m model) poolOfModel(id string) string {
+	if f, ok := m.facts[id]; ok && f.provider != "" {
+		if p := providerByID(f.provider); p != nil {
+			return p.Pool
+		}
+	}
+	if p := providerByModel(id); p != nil {
+		return p.Pool
+	}
+	return ""
 }
 
 // genConfigYAML reconstructs an omp config (modelRoles, task-agent model
@@ -1393,13 +1573,13 @@ func (m model) genConfigYAML() string {
 		if i == 1 && role != "advisor" {
 			// ●-marked agent-backed role: mirror its lead route as the task-agent
 			// model override so spawned agents follow the generated profile.
-			ao.WriteString("    " + role + ": " + prefixed(models[0]) + "\n")
+			ao.WriteString("    " + role + ": " + m.prefixed(models[0]) + "\n")
 		}
-		mr.WriteString("  " + role + ": " + prefixed(models[0]) + "\n")
+		mr.WriteString("  " + role + ": " + m.prefixed(models[0]) + "\n")
 		if len(models) > 1 {
 			var fbs []string
 			for _, x := range models[1:] {
-				fbs = append(fbs, prefixed(x))
+				fbs = append(fbs, m.prefixed(x))
 			}
 			fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
 		}
@@ -1407,8 +1587,20 @@ func (m model) genConfigYAML() string {
 	var b strings.Builder
 	b.WriteString("modelRoles:\n" + mr.String())
 	b.WriteString("retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" + fc.String())
-	if ao.Len() > 0 {
-		b.WriteString("task:\n  agentModelOverrides:\n" + ao.String())
+	// task.agentAdvisor (omp ≥ 17.3; earlier omps hard-error on the unknown
+	// key, and CODE_OMP wrappers can lag the store during a dotfiles rollout,
+	// so the probed version gates the emission): at the audit dial, spawned
+	// task agents get their own advisor. Merged into the one task: block —
+	// overlays are strict YAML and two task: keys would be invalid.
+	agentAdvisor := m.sel["advisor"] == "audit" && m.ompVersionAtLeast(17, 3)
+	if ao.Len() > 0 || agentAdvisor {
+		b.WriteString("task:\n")
+		if ao.Len() > 0 {
+			b.WriteString("  agentModelOverrides:\n" + ao.String())
+		}
+		if agentAdvisor {
+			b.WriteString("  agentAdvisor:\n    task: \"on\"\n")
+		}
 	}
 	b.WriteString("defaultThinkingLevel: " + m.sel["thinking"] + "\n")
 	if advisorOn {
@@ -1416,8 +1608,10 @@ func (m model) genConfigYAML() string {
 	} else {
 		b.WriteString("advisor:\n  enabled: false\n")
 	}
-	if m.sel["fast"] == "on" && m.sel["lane"] != "claude-only" {
-		b.WriteString("tier:\n  openai: priority\n")
+	if m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O") {
+		if p := providerByPool("O"); p != nil && p.ServiceTier[0] != "" {
+			b.WriteString("tier:\n  " + p.ServiceTier[0] + ": " + p.ServiceTier[1] + "\n")
+		}
 	}
 	return b.String()
 }
@@ -1809,6 +2003,10 @@ type model struct {
 	genConfig       string            // generated config YAML to launch omp with (generator Enter)
 	firstPrompt     string            // prompt from the suggest box, forwarded as omp's first message
 	savedSel        map[string]string // selection snapshot before a live suggest preview (for revert)
+	// The probed omp version (omp/<semver> from `omp --version`), fetched
+	// async at startup. Zero = unknown: 17.3-only overlay keys are omitted so
+	// a lagging CODE_OMP wrapper never hard-errors at launch.
+	ompMajor, ompMinor int
 }
 
 // usage auto-refreshes on this cadence; a 1s tick drives the countdown.
@@ -1857,11 +2055,53 @@ func barAnimCmd(step int) tea.Cmd {
 	return tea.Tick(barAnimInterval, func(time.Time) tea.Msg { return barAnimMsg{step} })
 }
 
-func (m model) Init() tea.Cmd {
-	if m.broker.URL == "" || m.broker.Token == "" {
-		return nil
+// ompVersionMsg carries the probed omp version; ok=false leaves it unknown.
+type ompVersionMsg struct {
+	major, minor int
+	ok           bool
+}
+
+// ompVersionRe parses `omp/<major>.<minor>...` anywhere in --version output.
+var ompVersionRe = regexp.MustCompile(`omp/(\d+)\.(\d+)`)
+
+// probeOmpVersionCmd resolves the same binary Enter launches and asks it for
+// its version, off the main thread. A drift guard, not a feature flag: any
+// failure just reads as "unknown" and version-gated keys stay off.
+func probeOmpVersionCmd() tea.Cmd {
+	return func() tea.Msg {
+		path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+		if err != nil {
+			return ompVersionMsg{}
+		}
+		out, err := exec.Command(path, "--version").Output()
+		if err != nil {
+			return ompVersionMsg{}
+		}
+		match := ompVersionRe.FindSubmatch(out)
+		if match == nil {
+			return ompVersionMsg{}
+		}
+		major, _ := strconv.Atoi(string(match[1]))
+		minor, _ := strconv.Atoi(string(match[2]))
+		return ompVersionMsg{major: major, minor: minor, ok: true}
 	}
-	return tea.Batch(m.startUsageFetch(), m.spin.Tick, tickCmd())
+}
+
+// ompVersionAtLeast reports a probed version ≥ major.minor; unknown is never
+// "at least" anything.
+func (m model) ompVersionAtLeast(major, minor int) bool {
+	if m.ompMajor == 0 && m.ompMinor == 0 {
+		return false
+	}
+	return m.ompMajor > major || (m.ompMajor == major && m.ompMinor >= minor)
+}
+
+func (m model) Init() tea.Cmd {
+	cmds := []tea.Cmd{probeOmpVersionCmd()}
+	if m.broker.URL != "" && m.broker.Token != "" {
+		cmds = append(cmds, m.startUsageFetch(), m.spin.Tick, tickCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) listW() int {
@@ -2073,9 +2313,9 @@ func providerIdentities(a availability, prov string, full bool) []compactProvide
 // providerHeading keeps the provider's established color and puts compact,
 // enabled snapshot identities in a dim parenthetical suffix.
 func providerHeading(prov string, identities []compactProviderIdentity) string {
-	col, name := "#62a7ff", "Codex"
-	if prov == "anthropic" {
-		col, name = "#ff9f52", "Claude"
+	col, name := "#8a93a6", prov
+	if p := providerByID(prov); p != nil {
+		col, name = p.Color, p.Label
 	}
 	heading := lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Bold(true).Render(name)
 	if len(identities) == 0 {
@@ -2139,7 +2379,7 @@ func providerIdentityBlock(a availability, prov string, checking bool) []string 
 // when no usage rows exist.
 func identityLinesFor(a availability) string {
 	var lines []string
-	for i, prov := range []string{"anthropic", "openai-codex"} {
+	for i, prov := range meteredProviderIDs() {
 		if i > 0 {
 			lines = append(lines, "")
 		}
@@ -2248,13 +2488,12 @@ func (m *model) usageBodyLayout(w int, stacked bool) string {
 	}
 	wins := append([]usageWin(nil), a.wins...)
 	provOrder := func(p string) int {
-		switch p {
-		case "anthropic":
-			return 0
-		case "openai-codex":
-			return 1
+		for i := range providerRegistry {
+			if providerRegistry[i].ID == p {
+				return i
+			}
 		}
-		return 2
+		return len(providerRegistry)
 	}
 	tierOrder := func(t string) int {
 		if t == "" || t == "-" {
@@ -2273,7 +2512,7 @@ func (m *model) usageBodyLayout(w int, stacked bool) string {
 	})
 	blocks := map[string]usageRenderGroup{}
 	var order []string
-	for _, prov := range []string{"anthropic", "openai-codex"} {
+	for _, prov := range meteredProviderIDs() {
 		if len(a.accounts[prov]) > 0 {
 			order = append(order, prov)
 			blocks[prov] = usageRenderGroup{prefix: providerIdentityBlockFor(a, prov, false, m.fullUsageIDs)}
@@ -2288,15 +2527,22 @@ func (m *model) usageBodyLayout(w int, stacked bool) string {
 		block.rows = append(block.rows, m.usageRowSpec(win, "  "))
 		blocks[win.prov] = block
 	}
-	if block, ok := blocks["openai-codex"]; ok {
-		for _, acct := range a.accounts["openai-codex"] {
+	if block, ok := blocks[openAIProvider]; ok {
+		for _, acct := range a.accounts[openAIProvider] {
 			key := accountKey{Provider: acct.Provider, IdentityKey: acct.IdentityKey}
 			identity := usageDisplayIdentity(managerAccountLabel(acct), m.fullUsageIDs)
 			if cl := creditLineForAccount(identity, a.accountCredits[key]); cl != "" {
 				block.suffix = append(block.suffix, cl)
 			}
 		}
-		blocks["openai-codex"] = block
+		blocks[openAIProvider] = block
+	}
+	if a.deepseek != nil {
+		order = append(order, deepseekProvider)
+		blocks[deepseekProvider] = usageRenderGroup{
+			prefix: []string{padLeft(providerHeading(deepseekProvider, nil), gut)},
+			suffix: []string{m.deepseekBalanceRow(*a.deepseek)},
+		}
 	}
 	return layoutGroups(w, order, blocks, stacked)
 }
@@ -2362,10 +2608,15 @@ func (m *model) usageLoading() bool {
 
 // skeletonWinsByProvider mirrors each provider's stable usage shape. Anthropic
 // always reserves the Fable row, even before a first successful fetch.
-var skeletonWinsByProvider = map[string][]string{
-	"openai-codex": {"5h", "7d"},
-	"anthropic":    {"5h", "7d", "7d fable"},
-}
+var skeletonWinsByProvider = func() map[string][]string {
+	wins := map[string][]string{}
+	for _, p := range providerRegistry {
+		if p.Metered {
+			wins[p.ID] = p.SkeletonWins
+		}
+	}
+	return wins
+}()
 
 // usageRowSpec is the unrendered canonical Usage-row grammar. Every caller
 // supplies its indentation and group width, while this one seam reserves the
@@ -2467,7 +2718,7 @@ func (m *model) skeletonBody(w int) string {
 
 func (m *model) skeletonBodyLayout(w int, stacked bool) string {
 	a := m.selectedUsageAvailability()
-	order := []string{"openai-codex", "anthropic"}
+	order := meteredProviderIDs()
 	blocks := map[string]usageRenderGroup{}
 	for _, prov := range order {
 		block := usageRenderGroup{prefix: providerIdentityBlockFor(a, prov, true, m.fullUsageIDs)}
@@ -2527,6 +2778,22 @@ func formatCachedAge(observed int64, now time.Time) string {
 	}
 }
 
+// deepseekBalanceRow renders the DeepSeek group's single body row: the prepaid
+// balance — no bar, no window, no reset countdown, because none exist.
+func (m *model) deepseekBalanceRow(b deepseekBalance) string {
+	if !b.ok {
+		return "  " + stWarn.Render("balance unavailable")
+	}
+	row := "  balance  " + stHead.Render("$"+b.total+" "+b.currency) + stDim.Render(" · pay-as-you-go")
+	if b.stale {
+		cached := "cached"
+		if b.fetchedAt > 0 {
+			cached += " " + formatCachedAge(b.fetchedAt, time.Now())
+		}
+		row += "  " + stWarn.Render(cached)
+	}
+	return row
+}
 func (m *model) usageRowSpec(w usageWin, indent string) usageRowSpec {
 	if w.missing {
 		// Never-observed windows keep the exact row grammar with dotted values;
@@ -2865,6 +3132,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.relayout()
+	case ompVersionMsg:
+		if msg.ok {
+			m.ompMajor, m.ompMinor = msg.major, msg.minor
+		}
+		return m, nil
 	case usageMsg:
 		scoped, scopedStale := reconcileUsage(m.avail, msg.avail)
 		refreshAt := time.Now().Add(refreshEvery)

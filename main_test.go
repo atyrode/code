@@ -124,9 +124,9 @@ func TestParseFactsBucketColumn(t *testing.T) {
 		t.Fatalf("parsed %d rows, want 3: %v", len(facts), facts)
 	}
 	want := map[string]modelFact{
-		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "codex-main"},
-		"gpt-5.6-terra":   {2.5, 15, 41, 1.4, ""},
-		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "codex-main", ""},
+		"gpt-5.6-terra":   {2.5, 15, 41, 1.4, "", ""},
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable", ""},
 	}
 	for id, w := range want {
 		if got := facts[id]; got != w {
@@ -141,8 +141,8 @@ func TestParseFactsBucketColumn(t *testing.T) {
 // would then strike models through against the wrong window.
 func TestBucketForPrefersCatalog(t *testing.T) {
 	m := model{facts: map[string]modelFact{
-		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
-		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, ""},
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable", ""},
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "", ""},
 	}}
 	if got := bucketOf("claude-mythos-5"); got != "claude-main" {
 		t.Fatalf("guess baseline moved: bucketOf(claude-mythos-5) = %q", got)
@@ -3634,5 +3634,158 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(raw)); got != "||||" {
 		t.Errorf("sandbox inherited auth routing: %q", got)
+	}
+}
+
+// threePoolModel builds a TUI model over the rendered three-pool catalog —
+// the integration seam the launch overlay is generated from.
+func threePoolModel(t *testing.T) model {
+	t.Helper()
+	c, err := catalogFrom(t, fixtureYMLDeepSeek)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "generated.plain")
+	if err := os.WriteFile(path, []byte(c.renderCatalog()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generated := loadBlocks(path)
+	m := model{
+		generated: generated,
+		advisors:  parseAdvisors(generated["__advisors__"]),
+		facts:     parseFacts(generated["__models__"]),
+		facets:    facetDefs(defaultGlyphs()),
+		sel:       defaultSel(),
+	}
+	m.applyCatalog()
+	return m
+}
+
+// TestGenConfigYAMLDeepSeekLane: a ds-led selection launches deepseek-prefixed
+// roles, mirrors security-reviewer into the agent overrides, and version-gates
+// task.agentAdvisor on the probed omp (17.2 hard-errors on the unknown key).
+func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
+	m := threePoolModel(t)
+	m.sel["lane"] = "ds-led"
+	m.sel["spark"], m.sel["fable"], m.sel["fast"] = "off", "off", "off"
+	m.sel["advisor"] = "audit"
+
+	if _, ok := m.generated[comboID(m.sel)]; !ok {
+		t.Fatalf("no generated block for %s", comboID(m.sel))
+	}
+
+	m.ompMajor, m.ompMinor = 17, 3
+	got := m.genConfigYAML()
+	for _, want := range []string{
+		"  default: deepseek/deepseek-v4-pro:medium\n",
+		"    security-reviewer: ",
+		"  agentAdvisor:\n    task: \"on\"\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ds-led overlay lacks %q:\n%s", want, got)
+		}
+	}
+	// The relief-tail fallback and cross-pool chains must carry their own
+	// provider prefixes, never a mis-prefixed openai-codex/deepseek-….
+	if strings.Contains(got, "openai-codex/deepseek") || strings.Contains(got, "anthropic/deepseek") ||
+		strings.Contains(got, "deepseek/gpt") || strings.Contains(got, "deepseek/claude") {
+		t.Errorf("mis-prefixed model in overlay:\n%s", got)
+	}
+	// ds lanes have no OpenAI priority tier even with fast on.
+	m.sel["lane"] = "ds-only"
+	m.sel["fast"] = "on"
+	if only := m.genConfigYAML(); strings.Contains(only, "tier:") {
+		t.Errorf("ds-only must not emit the OpenAI priority tier:\n%s", only)
+	}
+
+	// Version gate: an unknown or 17.2 omp omits the 17.3-only key entirely.
+	m.sel["lane"] = "ds-led"
+	for _, v := range []struct{ major, minor int }{{0, 0}, {17, 2}} {
+		m.ompMajor, m.ompMinor = v.major, v.minor
+		if got := m.genConfigYAML(); strings.Contains(got, "agentAdvisor") {
+			t.Errorf("agentAdvisor emitted on omp %d.%d:\n%s", v.major, v.minor, got)
+		}
+	}
+}
+
+// TestApplyCatalogGrowsLaneDial: the lane facet's values are the catalog's;
+// a three-pool catalog grows ds-led/ds-only, an old two-pool one keeps the
+// classic five, and a persisted lane the catalog lacks resets to the first.
+func TestApplyCatalogGrowsLaneDial(t *testing.T) {
+	m := threePoolModel(t)
+	var lanes []string
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			lanes = f.values
+		}
+	}
+	want := []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"}
+	if !reflect.DeepEqual(lanes, want) {
+		t.Fatalf("three-pool lane dial = %v, want %v", lanes, want)
+	}
+
+	m.sel["lane"] = "ds-led"
+	if id := comboID(m.sel); m.generated[id] == nil {
+		t.Fatalf("ds-led selection resolves to no block: %s", id)
+	}
+
+	two := model{
+		generated: map[string][]string{"gpt-only_fast_low_nosp_nofa": {"    default gpt-5.6-luna:low"}},
+		facets:    facetDefs(defaultGlyphs()),
+		sel:       defaultSel(),
+	}
+	two.sel["lane"] = "ds-led" // persisted against a richer catalog
+	two.applyCatalog()
+	if two.sel["lane"] != "gpt-only" {
+		t.Fatalf("vanished lane must reset to the dial's first value, got %q", two.sel["lane"])
+	}
+}
+
+// TestUsageBodyDeepSeekBalanceGroup: the DeepSeek usage group renders only
+// when a credential exists (an absent API key is the normal state, not "not
+// authenticated"), shows the prepaid balance with no bar or reset, and
+// degrades to an explicit unavailable row on a failed fetch.
+func TestUsageBodyDeepSeekBalanceGroup(t *testing.T) {
+	m := &model{broker: brokerConfig{URL: "http://broker"}, hadUsage: true}
+	m.accountSelections = defaultAccountSelectionState()
+	a := emptyAvailability()
+	a.ok, a.accountsOK = true, true
+	a.accounts[anthropicProvider] = []account{{Provider: anthropicProvider, IdentityKey: "k", Email: "a@x.test"}}
+	a.wins = []usageWin{{label: "Claude 5 Hour", pct: 10, secs: 60, dur: 5 * 3600, prov: anthropicProvider}}
+	key := accountKey{Provider: anthropicProvider, IdentityKey: "k"}
+	a.accountUsage[key] = a.wins
+	m.avail = a
+
+	if body := stripAnsi(m.usageBodyFor(0)); strings.Contains(body, "DeepSeek") {
+		t.Fatalf("no credential: the DeepSeek group must be hidden entirely:\n%s", body)
+	}
+
+	m.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "12.34"}
+	body := stripAnsi(m.usageBodyFor(0))
+	if !strings.Contains(body, "DeepSeek") || !strings.Contains(body, "balance  $12.34 USD · pay-as-you-go") {
+		t.Fatalf("balance group missing or malformed:\n%s", body)
+	}
+	if strings.Contains(body, "$12.34 USD") && (strings.Contains(body, "% used") && strings.Count(body, "% used") > 1) {
+		t.Fatalf("the balance row must not grow bar/reset chrome:\n%s", body)
+	}
+
+	m.avail.deepseek = &deepseekBalance{}
+	if body := stripAnsi(m.usageBodyFor(0)); !strings.Contains(body, "balance unavailable") {
+		t.Fatalf("failed fetch must degrade to an unavailable row:\n%s", body)
+	}
+
+	// A deepseek bucket can never gate a launch: unmetered providers own no
+	// buckets, so nothing in availability can mark one down.
+	if b := bucketForProviderTier(deepseekProvider, ""); b != "" {
+		t.Fatalf("unmetered provider grew a quota bucket: %q", b)
+	}
+	sel := selectedAvailability(m.avail, nil)
+	for bucket := range sel.bucket {
+		if strings.HasPrefix(bucket, "deepseek") {
+			t.Fatalf("selected availability seeded a deepseek bucket: %q", bucket)
+		}
+	}
+	if sel.deepseek == nil {
+		t.Fatal("selected availability dropped the deepseek balance")
 	}
 }

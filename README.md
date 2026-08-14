@@ -22,9 +22,12 @@ Press `enter` and `code` launches oh-my-pi with that setup, as a one-shot
 overlay — your omp config is never modified.
 
 It's made for people who run oh-my-pi with **both Anthropic and OpenAI**:
-the whole point is deciding, per task, how to blend the two pools and which
-quota to spend. With a single provider you can still launch, but the dials
-lose most of their meaning.
+the whole point is deciding, per task, how to blend the pools and which
+quota to spend. A DeepSeek API key adds a third, pay-as-you-go pool — its
+own `ds` lanes, a live balance readout in Usage, and a relief tail at the
+end of the heavyweight fallback chains for when the metered windows are
+drained. With a single provider you can still launch, but the dials lose
+most of their meaning.
 
 ## Usage
 
