@@ -230,6 +230,32 @@ func laneReliefApplies(lane string) bool {
 	return true
 }
 
+// laneSplit decomposes a lane into the two dials the TUI renders: the lead
+// (a provider's lane segment, or "mixed") and the blend ("led" | "only").
+// mixed has no blend of its own; it reports "led" so a later lead change
+// lands on the -led lane.
+func laneSplit(lane string) (lead, blend string) {
+	if lane == "mixed" {
+		return "mixed", "led"
+	}
+	blend = "led"
+	if lanePure(lane) {
+		blend = "only"
+	}
+	if p := providerByLane(lane); p != nil {
+		return p.Lane, blend
+	}
+	return lane, blend
+}
+
+// laneJoin is laneSplit's inverse: the canonical lane a lead+blend pair names.
+func laneJoin(lead, blend string) string {
+	if lead == "mixed" {
+		return "mixed"
+	}
+	return lead + "-" + blend
+}
+
 // laneHostsSpecial reports whether a special-tier facet ("spark", "fable") can
 // be on for the lane: its provider's pool must be in the lane's pool-set.
 func laneHostsSpecial(lane, facet string) bool {

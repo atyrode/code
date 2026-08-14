@@ -3869,50 +3869,100 @@ func TestDeepSeekBalanceRowNotes(t *testing.T) {
 	}
 }
 
-// TestThinkingGaugeRendersAsMeter: the thinking dial draws a level meter with
-// the selected word beside it, never the six-word list; the fill tracks the
-// selected depth so ←/→ reads as a slider.
-func TestThinkingGaugeRendersAsMeter(t *testing.T) {
+// TestSegmentGaugeRendersAsMeter: the thinking and model dials draw a notched
+// ▰▱ meter with the selected word beside it, never the word list; one cell per
+// step, filled to the selected depth, so ←/→ reads as a slider.
+func TestSegmentGaugeRendersAsMeter(t *testing.T) {
 	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
-	rowFor := func() string {
+	rowFor := func(key string) string {
 		lines, _ := m.genLines()
 		for _, ln := range lines {
-			if strings.Contains(stripAnsi(ln), "thinking") {
-				return ln
+			if strings.Contains(stripAnsi(ln), key) {
+				return stripAnsi(ln)
 			}
 		}
-		t.Fatal("no thinking row rendered")
+		t.Fatalf("no %s row rendered", key)
 		return ""
 	}
 
 	m.sel["thinking"] = "medium"
-	row := rowFor()
-	plain := stripAnsi(row)
-	for _, bar := range []string{"▁", "▂", "▃", "▅", "▇", "█"} {
-		if !strings.Contains(plain, bar) {
-			t.Fatalf("gauge missing bar %q: %q", bar, plain)
-		}
+	think := rowFor("thinking")
+	if got := strings.Count(think, "▰") + strings.Count(think, "▱"); got != 6 {
+		t.Fatalf("thinking gauge must keep one cell per level, got %d: %q", got, think)
 	}
-	if !strings.Contains(plain, " medium ") {
-		t.Errorf("gauge must carry the selected word: %q", plain)
+	if !strings.Contains(think, " medium ") {
+		t.Errorf("gauge must carry the selected word: %q", think)
 	}
 	for _, word := range []string{"minimal", "xhigh", "max"} {
-		if strings.Contains(plain, word) {
-			t.Errorf("gauge must replace the word list, still shows %q: %q", word, plain)
+		if strings.Contains(think, word) {
+			t.Errorf("gauge must replace the word list, still shows %q: %q", word, think)
 		}
 	}
 
-	// The fill is pure styling (invisible without a color profile); what must
-	// hold structurally is that the word tracks the dial and the meter keeps a
-	// constant six-cell width at every depth.
-	m.sel["thinking"] = "minimal"
-	minPlain := stripAnsi(rowFor())
-	m.sel["thinking"] = "max"
-	maxPlain := stripAnsi(rowFor())
-	if !strings.Contains(minPlain, " minimal ") || !strings.Contains(maxPlain, " max ") {
-		t.Errorf("gauge word must track the dial:\nmin %q\nmax %q", minPlain, maxPlain)
+	m.sel["model"] = "normal"
+	mdl := rowFor("model")
+	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 3 {
+		t.Fatalf("model gauge must keep one cell per step, got %d: %q", got, mdl)
 	}
-	if strings.Count(minPlain, "▁") != 1 || strings.Count(maxPlain, "█") != 1 {
-		t.Errorf("gauge must keep one cell per level:\nmin %q\nmax %q", minPlain, maxPlain)
+	if !strings.Contains(mdl, " normal ") || strings.Contains(mdl, "smart") {
+		t.Errorf("model gauge must show only the selected word: %q", mdl)
+	}
+}
+
+// TestLaneSplitDials: the lane facet renders as a lead row plus a blend child
+// (hidden for mixed); cycling either recomposes the canonical lane, and the
+// persisted state still stores only "lane".
+func TestLaneSplitDials(t *testing.T) {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+
+	// mixed: a single lead row, no blend child, no lane word list.
+	vf := m.visibleFacets()
+	if vf[0].key != "lead" {
+		t.Fatalf("first dial = %q, want lead", vf[0].key)
+	}
+	if vf[1].key == "blend" {
+		t.Fatal("mixed must not render a blend child")
+	}
+	wantLeads := []string{"gpt", "mixed", "claude"}
+	if !reflect.DeepEqual(vf[0].values, wantLeads) {
+		t.Fatalf("lead values = %v, want %v", vf[0].values, wantLeads)
+	}
+
+	// Cycling lead off mixed lands on the -led lane and grows the blend child.
+	m.cycleFacet(1) // mixed → claude (cursor starts on the lead row)
+	if m.sel["lane"] != "claude-led" {
+		t.Fatalf("lead change composed lane %q, want claude-led", m.sel["lane"])
+	}
+	vf = m.visibleFacets()
+	if vf[1].key != "blend" {
+		t.Fatalf("non-mixed lead must render the blend child, got %q", vf[1].key)
+	}
+
+	// Cycling blend led → only composes the pure lane.
+	m.fcur = 1
+	m.cycleFacet(1)
+	if m.sel["lane"] != "claude-only" {
+		t.Fatalf("blend change composed lane %q, want claude-only", m.sel["lane"])
+	}
+
+	// A three-pool dial grows a ds lead; lead/blend never persist.
+	for i := range m.facets {
+		if m.facets[i].key == "lane" {
+			m.facets[i].values = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"}
+		}
+	}
+	vf = m.visibleFacets()
+	if !reflect.DeepEqual(vf[0].values, []string{"gpt", "mixed", "claude", "ds"}) {
+		t.Fatalf("three-pool lead values = %v", vf[0].values)
+	}
+	choices := selectionChoices(m.sel, m.facets)
+	if _, ok := choices["lead"]; ok {
+		t.Error("lead is a derived dial and must not persist")
+	}
+	if _, ok := choices["blend"]; ok {
+		t.Error("blend is a derived dial and must not persist")
+	}
+	if choices["lane"] != "claude-only" {
+		t.Errorf("persisted lane = %q, want claude-only", choices["lane"])
 	}
 }

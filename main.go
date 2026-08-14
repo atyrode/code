@@ -1364,10 +1364,34 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // sub-setting, so it only shows while fable is on (and the lane can host it at
 // all). A dial this catalog generated no combo for is dropped the same way —
 // it is not a choice.
+//
+// The lane facet renders as two rows: lead (one segment per pool, plus mixed)
+// and blend (led | only, hidden for mixed). sel["lane"] stays the canonical
+// value — lead/blend are derived here and recomposed by cycleFacet, and are
+// never persisted (saveSelectionState filters on m.facets, which carries only
+// "lane").
 func (m model) visibleFacets() []facet {
 	lane := m.sel["lane"]
 	var out []facet
 	for _, f := range m.facets {
+		if f.key == "lane" {
+			lead, blend := laneSplit(lane)
+			m.sel["lead"], m.sel["blend"] = lead, blend
+			var leads []string
+			seen := map[string]bool{}
+			for _, v := range f.values {
+				l, _ := laneSplit(v)
+				if !seen[l] {
+					seen[l] = true
+					leads = append(leads, l)
+				}
+			}
+			out = append(out, facet{"lead", leads, f.glyph})
+			if lead != "mixed" {
+				out = append(out, facet{"blend", []string{"led", "only"}, f.glyph})
+			}
+			continue
+		}
 		switch f.key {
 		case "spark":
 			if !laneHostsSpecial(lane, "spark") || m.noSpark {
@@ -3479,6 +3503,11 @@ func (m *model) cycleFacet(dir int) {
 		return
 	}
 	m.sel[f.key] = f.values[next]
+	// lead/blend are lane's rendered halves: recompose the canonical value
+	// before anything re-derives them (visibleFacets syncs from lane).
+	if f.key == "lead" || f.key == "blend" {
+		m.sel["lane"] = laneJoin(m.sel["lead"], m.sel["blend"])
+	}
 	// main is fable's sub-setting: whenever fable leaves "on" it must clear too,
 	// so a later fable re-enable never silently resurrects the (expensive)
 	// fable-as-main escalation — it is re-chosen deliberately every time.
@@ -3656,16 +3685,21 @@ func (m model) genLines() ([]string, int) {
 			// tree-style L connector: reads as fable's child, like `tree`.
 			label, childPad, childW = "default", stDim.Render("└ "), 2
 		}
+		if f.key == "blend" {
+			// blend is lane's sub-setting: the lead row picks who drives,
+			// this child picks how exclusively.
+			childPad, childW = stDim.Render("└ "), 2
+		}
 		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, 9-childW)))
-		if f.key == "thinking" {
-			row += "  " + m.thinkingGauge(f, onRow, acc)
+		if f.key == "thinking" || f.key == "model" {
+			row += "  " + m.segmentGauge(f, onRow, acc)
 		} else {
 			for _, v := range f.values {
 				switch {
 				case v == m.sel[f.key]:
 					col := acc
-					if f.key == "lane" {
-						col = laneColor(v)
+					if f.key == "lead" {
+						col = laneColor(m.sel["lane"])
 					} else if (f.key == "spark" || f.key == "fable" || f.key == "main") && v == "on" {
 						col = cGreen
 					}
@@ -3700,12 +3734,11 @@ func (m model) genLines() ([]string, int) {
 	return lines, cursor
 }
 
-// thinkingGauge renders the thinking dial as a level meter instead of six
-// words: rising bars fill to the selected depth, the current word rides along
-// so the level still reads at a glance. ←/→ behave exactly as on a word dial —
-// only the rendering differs; the facet's value list is untouched.
-func (m model) thinkingGauge(f facet, onRow bool, acc string) string {
-	bars := []rune("▁▂▃▅▇█")
+// segmentGauge renders a stepped dial (thinking, model) as a notched meter:
+// one ▰ per step up to the selection, ▱ after, with the selected word riding
+// along so the level still reads at a glance. ←/→ behave exactly as on a word
+// dial — only the rendering differs; the facet's value list is untouched.
+func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 	sel := -1
 	for i, v := range f.values {
 		if v == m.sel[f.key] {
@@ -3715,11 +3748,10 @@ func (m model) thinkingGauge(f facet, onRow bool, acc string) string {
 	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
 	var b strings.Builder
 	for i := range f.values {
-		g := string(bars[i*len(bars)/max(1, len(f.values))])
 		if i <= sel {
-			b.WriteString(lit.Render(g))
+			b.WriteString(lit.Render("▰"))
 		} else {
-			b.WriteString(stDim.Render(g))
+			b.WriteString(stDim.Render("▱"))
 		}
 	}
 	word := lit

@@ -65,10 +65,12 @@ are not orphaned onto init while still holding their memory.
 
 ## Features
 
-- **Dials, not config files** — provider lane, model tier, a thinking-depth
-  slider, advisor level, plus the spark/fable toggles; every combination maps
-  to a pre-computed routing. With a DeepSeek pool, a **relief** dial decides
-  whether drained metered chains may spill into the pay-as-you-go pool.
+- **Dials, not config files** — a provider **lead** dial with a led/only
+  blend child (scales past two pools without overflowing), notched sliders
+  for model tier and thinking depth, advisor level, plus the spark/fable
+  toggles; every combination maps to a pre-computed routing. With a DeepSeek
+  pool, a **relief** dial decides whether drained metered chains may spill
+  into the pay-as-you-go pool.
 - **Live preview** — see which model leads every role, and its fallback
   chain, before anything runs.
 - **One-shot overlays** — each launch is an ephemeral `--config`; your omp
