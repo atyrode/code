@@ -240,13 +240,13 @@ func TestGoldenCombos(t *testing.T) {
 		render     func() string
 	}{
 		{"mixed_smart_medium_sp_fa", goldenMixedSmart, func() string {
-			return c.renderCombo("mixed", "smart", "medium", true, true, false)
+			return c.renderCombo("mixed", "smart", "medium", true, true, false, true, false)
 		}},
 		{"claude-only_normal_max_nosp_famain", goldenClaudeMax, func() string {
-			return c.renderCombo("claude-only", "normal", "max", false, true, true)
+			return c.renderCombo("claude-only", "normal", "max", false, true, true, true, false)
 		}},
 		{"claude-only_smart_medium_nosp_nofa", goldenClaudeSmart, func() string {
-			return c.renderCombo("claude-only", "smart", "medium", false, false, false)
+			return c.renderCombo("claude-only", "smart", "medium", false, false, false, true, false)
 		}},
 	} {
 		if got := tc.render(); got != tc.want {
@@ -282,7 +282,7 @@ func TestRenderCatalogStructure(t *testing.T) {
 	misses := 0
 	walk = func(i int) {
 		if i == len(facets) {
-			id := comboID(sel)
+			id := comboID(sel, false)
 			if !strings.Contains(out, "\n"+id+"  ") {
 				misses++
 				if misses < 5 {
@@ -313,7 +313,7 @@ func TestEveryEmittedRoleIsWeighted(t *testing.T) {
 // genConfigYAML mirrors it into task.agentModelOverrides.
 func TestScoutIsAgentBacked(t *testing.T) {
 	c := fixtureCatalog(t)
-	block := c.renderCombo("mixed", "normal", "medium", false, false, false)
+	block := c.renderCombo("mixed", "normal", "medium", false, false, false, true, false)
 	if !strings.Contains(block, "● scout ") {
 		t.Errorf("scout must render as an agent-backed role:\n%s", block)
 	}
@@ -377,7 +377,7 @@ func TestVisionSkipsTextOnlyModels(t *testing.T) {
 	if lead := c.visionLead("O", 1); lead == "" || c.models[lead].ID != "gpt-5.6-terra" {
 		t.Errorf("visionLead(O, 1) = %q, want the next image-capable rung (terra)", lead)
 	}
-	block := c.renderCombo("gpt-only", "fast", "medium", false, false, false)
+	block := c.renderCombo("gpt-only", "fast", "medium", false, false, false, true, false)
 	for _, l := range strings.Split(block, "\n") {
 		if strings.Contains(l, " vision ") && strings.Contains(l, "codex-spark") {
 			t.Errorf("vision must not route to a text-only model: %s", l)
@@ -401,7 +401,7 @@ func TestVisionFollowsModelTier(t *testing.T) {
 		{"mixed", "smart", "claude-opus-5"},
 	} {
 		t.Run(tc.lane+"/"+tc.tier, func(t *testing.T) {
-			route := c.genCombo(tc.lane, tc.tier, "medium", false, false, false)["vision"]
+			route := c.genCombo(tc.lane, tc.tier, "medium", false, false, false, true)["vision"]
 			if got := c.models[route.lead].ID; got != tc.want {
 				t.Errorf("vision lead = %q, want %q", got, tc.want)
 			}
@@ -1199,7 +1199,7 @@ func TestThreePoolCatalog(t *testing.T) {
 	out := c.renderCatalog()
 
 	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"} {
-		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa  ") {
+		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_rel  ") {
 			t.Errorf("lane %s missing from the three-pool grid", lane)
 		}
 	}
@@ -1208,7 +1208,7 @@ func TestThreePoolCatalog(t *testing.T) {
 		strings.Contains(out, "\nds-only_normal_medium_nosp_fa") {
 		t.Error("ds-only generated spark/fable combos it cannot host")
 	}
-	for _, id := range []string{"ds-led_normal_medium_sp_nofa", "ds-led_normal_medium_nosp_fa", "ds-led_normal_medium_nosp_famain"} {
+	for _, id := range []string{"ds-led_normal_medium_sp_nofa_rel", "ds-led_normal_medium_nosp_fa_rel", "ds-led_normal_medium_nosp_famain_rel"} {
 		if !strings.Contains(out, "\n"+id+"  ") {
 			t.Errorf("ds-led combo %s missing", id)
 		}
@@ -1242,7 +1242,7 @@ func TestThreePoolCatalog(t *testing.T) {
 	// Relief tails: led/mixed heavyweight chains end on the DeepSeek regular
 	// rung; pure lanes stay pure.
 	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
-		blk := block(lane + "_normal_medium_nosp_nofa")
+		blk := block(lane + "_normal_medium_nosp_nofa_rel")
 		for _, role := range []string{"default", "task", "plan", "slow"} {
 			if r := row(blk, role); !strings.HasSuffix(r, "→ deepseek-v4:medium") && !strings.HasSuffix(r, "→ deepseek-v4:high") {
 				t.Errorf("%s %s chain lacks the DeepSeek relief tail: %q", lane, role, r)
@@ -1253,14 +1253,14 @@ func TestThreePoolCatalog(t *testing.T) {
 		}
 	}
 	for _, lane := range []string{"gpt-only", "claude-only"} {
-		if blk := block(lane + "_normal_medium_nosp_nofa"); strings.Contains(blk, "deepseek") {
+		if blk := block(lane + "_normal_medium_nosp_nofa_rel"); strings.Contains(blk, "deepseek") {
 			t.Errorf("pure lane %s crossed into the DeepSeek pool:\n%s", lane, blk)
 		}
 	}
 
 	// Vision purity exception: every DeepSeek rung is text-only, so ds-only's
 	// vision role must cross pools rather than route images to a text model.
-	dsOnly := block("ds-only_smart_medium_nosp_nofa")
+	dsOnly := block("ds-only_smart_medium_nosp_nofa_rel")
 	if r := row(dsOnly, "vision"); strings.Contains(r, "deepseek") || !strings.Contains(r, "gpt-5.6-sol:low") {
 		t.Errorf("ds-only vision must cross to an image-capable pool: %q", r)
 	}
@@ -1302,7 +1302,7 @@ func TestOneRungOptionalPool(t *testing.T) {
 		}
 	}
 	out := c.renderCatalog()
-	blkStart := strings.Index(out, "\nds-only_smart_medium_nosp_nofa  ")
+	blkStart := strings.Index(out, "\nds-only_smart_medium_nosp_nofa_rel  ")
 	if blkStart < 0 {
 		t.Fatal("one-rung D pool generated no ds-only lane")
 	}
@@ -1315,5 +1315,44 @@ func TestOneRungOptionalPool(t *testing.T) {
 	}
 	if !strings.Contains(blk, "    default    deepseek-v4:medium\n") {
 		t.Errorf("one-rung ds-only default should be the single model, got:\n%s", blk)
+	}
+}
+
+// TestReliefToggle: _norel combos exist only on metered-led blends, and the
+// off variant strips exactly the DeepSeek tail while everything else in the
+// block stays identical.
+func TestReliefToggle(t *testing.T) {
+	c, err := catalogFrom(t, fixtureYMLDeepSeek)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	out := c.renderCatalog()
+	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
+		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_norel  ") {
+			t.Errorf("%s lacks a relief-off combo", lane)
+		}
+	}
+	for _, lane := range []string{"gpt-only", "claude-only", "ds-led", "ds-only"} {
+		if strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_norel  ") {
+			t.Errorf("%s generated a relief-off combo it cannot use", lane)
+		}
+	}
+	on := c.renderCombo("gpt-led", "normal", "medium", false, false, false, true, true)
+	off := c.renderCombo("gpt-led", "normal", "medium", false, false, false, false, true)
+	if !strings.Contains(on, "deepseek") {
+		t.Fatalf("relief-on block lost its tail:\n%s", on)
+	}
+	if strings.Contains(off, "deepseek") {
+		t.Errorf("relief-off block still spills into DeepSeek:\n%s", off)
+	}
+	strip := func(s string) string {
+		s = strings.ReplaceAll(s, " → deepseek-v4:medium", "")
+		s = strings.ReplaceAll(s, " → deepseek-v4:high", "")
+		s = strings.ReplaceAll(s, "_rel  ", "  ")
+		s = strings.ReplaceAll(s, "_norel  ", "  ")
+		return strings.ReplaceAll(s, " · no-relief", "")
+	}
+	if strip(on) != strip(off) {
+		t.Errorf("relief must only add/remove tails; blocks diverge:\n--- on ---\n%s\n--- off ---\n%s", on, off)
 	}
 }

@@ -216,6 +216,20 @@ func laneHasPool(lane, pool string) bool {
 	return p != nil && p.Pool == pool
 }
 
+// laneReliefApplies reports whether relief tails are a real choice on this
+// lane: a metered-led blend can spill into a pay-as-you-go pool, so the
+// relief dial exists there. Pure lanes never take tails, and a lane led by
+// the optional pool already spends it deliberately.
+func laneReliefApplies(lane string) bool {
+	if lanePure(lane) {
+		return false
+	}
+	if p := providerByLane(lane); p != nil && !p.Required {
+		return false
+	}
+	return true
+}
+
 // laneHostsSpecial reports whether a special-tier facet ("spark", "fable") can
 // be on for the lane: its provider's pool must be in the lane's pool-set.
 func laneHostsSpecial(lane, facet string) bool {

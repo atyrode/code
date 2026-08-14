@@ -65,9 +65,10 @@ are not orphaned onto init while still holding their memory.
 
 ## Features
 
-- **Dials, not config files** — provider lane, model tier, thinking depth,
-  advisor level, plus the spark/fable toggles; every combination maps to a
-  pre-computed routing.
+- **Dials, not config files** — provider lane, model tier, a thinking-depth
+  slider, advisor level, plus the spark/fable toggles; every combination maps
+  to a pre-computed routing. With a DeepSeek pool, a **relief** dial decides
+  whether drained metered chains may spill into the pay-as-you-go pool.
 - **Live preview** — see which model leads every role, and its fallback
   chain, before anything runs.
 - **One-shot overlays** — each launch is an ephemeral `--config`; your omp
@@ -75,10 +76,14 @@ are not orphaned onto init while still holding their memory.
 - **Prompt → profile** — `ctrl+o`, describe the task, a small local model
   rates its difficulty and sets the dials (optional, needs
   [ollama](https://ollama.com); the prompt is forwarded into the session).
+  Suggestions are quota-aware: a lane whose lead pool is maxed falls to a
+  sibling with headroom, and a low DeepSeek balance stops proposals from
+  spending it.
 - **Usage at a glance** — quota bars and reset countdowns per provider,
   before you spend the scarce bucket.
 - **Account presets** — choose broker accounts and save reusable selections (`v`).
-- **Cost & speed meters** — every dial change reprices the session.
+- **Cost & speed meters** — every dial change reprices the session; DeepSeek
+  rungs are priced by the clock during its off-peak discount window.
 - **Guided first run** — no catalog? `code` builds one from your omp,
   interactively; `code generate` scripts the same thing.
 - **Argument passthrough** — `code <anything omp understands>` just works.

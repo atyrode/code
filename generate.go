@@ -359,6 +359,17 @@ func (c *catalog) reliefRungs(lead string) []string {
 	return out
 }
 
+// hasOptionalPool reports whether the catalog carries any non-required pool —
+// the gate for the relief dial and its id segment.
+func (c *catalog) hasOptionalPool() bool {
+	for _, pool := range c.pools() {
+		if p := providerByPool(pool); p != nil && !p.Required {
+			return true
+		}
+	}
+	return false
+}
+
 // sibDown is the same-pool fallback rung below a lead: the elite (tier 4)
 // falls to its pool's smart tier, tiers 2..3 fall one rung, the rest have no
 // same-pool net.
@@ -518,7 +529,7 @@ type roleRoute struct {
 // genCombo computes {role -> route} for one facet combination. A direct port
 // of generate-profiles.py's gen(), with the hard-coded model keys generalised
 // to pool/tier lookups.
-func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain bool) map[string]roleRoute {
+func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain, relief bool) map[string]roleRoute {
 	p := lanePrimary(lane)
 	base := genTierMap[mtier]
 	isPure := lanePure(lane)
@@ -660,7 +671,7 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			lead = eliteKey
 		}
 		chain := c.buildChain(lead, isPure)
-		if !isPure && genRelief[r] {
+		if !isPure && relief && genRelief[r] {
 			// Relief tails: led/mixed lanes end their heavyweight chains on
 			// each optional pool's regular rung — pay-as-you-go capacity that
 			// keeps a session alive when every metered window is drained.
@@ -680,7 +691,7 @@ func repeatLvl(lvl string, n int) []string {
 	return out
 }
 
-func genComboID(lane, mtier, thinking string, spark, fable, fableMain bool) string {
+func genComboID(lane, mtier, thinking string, spark, fable, fableMain, relief, hasRelief bool) string {
 	sp, fa := "nosp", "nofa"
 	if spark {
 		sp = "sp"
@@ -691,13 +702,24 @@ func genComboID(lane, mtier, thinking string, spark, fable, fableMain bool) stri
 			fa = "famain"
 		}
 	}
-	return fmt.Sprintf("%s_%s_%s_%s_%s", lane, mtier, thinking, sp, fa)
+	id := fmt.Sprintf("%s_%s_%s_%s_%s", lane, mtier, thinking, sp, fa)
+	if hasRelief {
+		// The relief segment exists only in catalogs that carry an optional
+		// pool — two-pool ids stay byte-identical.
+		if relief {
+			id += "_rel"
+		} else {
+			id += "_norel"
+		}
+	}
+	return id
 }
 
 // genValid rejects facet combos the lane cannot host: a special-tier facet
 // (spark, fable) is valid only when its provider's pool is in the lane's
-// pool-set — a pure lane hosts only its own pool.
-func genValid(lane string, spark, fable, fableMain bool) bool {
+// pool-set — a pure lane hosts only its own pool. relief=off exists only
+// where relief tails could appear at all: a metered-led blend.
+func genValid(lane string, spark, fable, fableMain, relief bool) bool {
 	if fable && !laneHostsSpecial(lane, "fable") {
 		return false // no elite outside its pool's lanes
 	}
@@ -707,14 +729,17 @@ func genValid(lane string, spark, fable, fableMain bool) bool {
 	if fableMain && !fable {
 		return false // fable-as-main only exists on top of fable
 	}
+	if !relief && !laneReliefApplies(lane) {
+		return false // relief is not a choice where no tail is generated
+	}
 	return true
 }
 
 // ── rendering (byte-compatible with generate-profiles.py) ────────────────────
 
-func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableMain bool) string {
-	roles := c.genCombo(lane, mtier, thinking, spark, fable, fableMain)
-	cid := genComboID(lane, mtier, thinking, spark, fable, fableMain)
+func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableMain, relief, hasRelief bool) string {
+	roles := c.genCombo(lane, mtier, thinking, spark, fable, fableMain, relief)
+	cid := genComboID(lane, mtier, thinking, spark, fable, fableMain, relief, hasRelief)
 	desc := []string{lane, mtier, thinking}
 	if spark {
 		desc = append(desc, "spark")
@@ -724,6 +749,9 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 	}
 	if fable && fableMain {
 		desc = append(desc, "main")
+	}
+	if !relief {
+		desc = append(desc, "no-relief")
 	}
 	lines := []string{fmt.Sprintf("%s  %s", cid, strings.Join(desc, " · "))}
 	advOn := roles["advisor"].lead != ""
@@ -833,6 +861,7 @@ func (c *catalog) renderCatalog() string {
 	b.WriteString(c.renderModelFacts() + "\n")
 	hasSpark := c.specialKey("spark") != ""
 	hasElite := c.specialKey("fable") != ""
+	hasRelief := c.hasOptionalPool()
 	for _, lane := range laneOrderForPools(c.pools()) {
 		for _, mtier := range genMTiers {
 			for _, thinking := range genThinking {
@@ -845,8 +874,13 @@ func (c *catalog) renderCatalog() string {
 							continue
 						}
 						for _, fableMain := range []bool{false, true} {
-							if genValid(lane, spark, fable, fableMain) {
-								b.WriteString(c.renderCombo(lane, mtier, thinking, spark, fable, fableMain) + "\n")
+							for _, relief := range []bool{true, false} {
+								if !relief && !hasRelief {
+									continue
+								}
+								if genValid(lane, spark, fable, fableMain, relief) {
+									b.WriteString(c.renderCombo(lane, mtier, thinking, spark, fable, fableMain, relief, hasRelief) + "\n")
+								}
 							}
 						}
 					}

@@ -72,6 +72,11 @@ func repairSelectionSpecials(sel map[string]string) {
 	if sel["fable"] != "on" {
 		sel["main"] = "off"
 	}
+	// relief is only a choice on a metered-led blend; everywhere else the
+	// generator writes a single (on) variant, so the selection must match.
+	if !laneReliefApplies(sel["lane"]) {
+		sel["relief"] = "on"
+	}
 }
 
 func selectionChoices(sel map[string]string, facets []facet) map[string]string {

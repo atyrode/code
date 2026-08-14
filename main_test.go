@@ -213,7 +213,7 @@ func TestComboID(t *testing.T) {
 		{map[string]string{"lane": "gpt-only", "model": "smart", "thinking": "high", "spark": "on", "fable": "on", "main": "on"}, "gpt-only_smart_high_sp_nofa"},
 	}
 	for _, c := range cases {
-		if got := comboID(c.sel); got != c.want {
+		if got := comboID(c.sel, false); got != c.want {
 			t.Errorf("comboID(%v) = %q, want %q", c.sel, got, c.want)
 		}
 	}
@@ -387,7 +387,7 @@ func TestLaunchKeys(t *testing.T) {
 	}
 	base := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel()): rows},
+		generated: map[string][]string{comboID(defaultSel(), false): rows},
 	}
 
 	next, _ := base.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -436,7 +436,7 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	}
 	m := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel()): rows},
+		generated: map[string][]string{comboID(defaultSel(), false): rows},
 	}
 	m.sel["advisor"] = "off"
 	got := m.genConfigYAML()
@@ -468,6 +468,7 @@ func TestDefaultGlyphs(t *testing.T) {
 	want := map[string]rune{
 		"lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fable": 0xf02d, "main": 0xf140, "fast": 0xf0e7,
+		"relief": 0xf132,
 	}
 	g := defaultGlyphs()
 	if len(g) != len(want) {
@@ -581,7 +582,7 @@ func TestApplyAdvisorFableMain(t *testing.T) {
 // settings-summary line reaches the preview (the dials are visible on the
 // left).
 func TestPreviewColumn(t *testing.T) {
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	m := model{
 		generated: map[string][]string{id: {
 			"  thinking medium · fallback on · advisor on",
@@ -620,7 +621,7 @@ func TestPreviewColumn(t *testing.T) {
 // tests exercise the actual compositions rather than skeleton fixtures.
 func layoutModel() model {
 	glyphs := defaultGlyphs()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{
 		"  thinking medium · fallback on · advisor on",
 		"    default    gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium",
@@ -967,7 +968,7 @@ func TestRepeatedResizeCrossingsPreserveState(t *testing.T) {
 // shrinks the panel; a facet change still resets to the top.
 func TestResizeScrollClamp(t *testing.T) {
 	m := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -1811,7 +1812,7 @@ func TestSectionStatePreservation(t *testing.T) {
 
 	// Restoring routing recovers the prior scroll position.
 	sc := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -2522,7 +2523,7 @@ func TestFirstLoadBarFill(t *testing.T) {
 // facet selection.
 func TestRoutingWheelScroll(t *testing.T) {
 	long := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 60 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -3670,8 +3671,8 @@ func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 	m.sel["spark"], m.sel["fable"], m.sel["fast"] = "off", "off", "off"
 	m.sel["advisor"] = "audit"
 
-	if _, ok := m.generated[comboID(m.sel)]; !ok {
-		t.Fatalf("no generated block for %s", comboID(m.sel))
+	if _, ok := m.generated[comboID(m.sel, m.hasRelief)]; !ok {
+		t.Fatalf("no generated block for %s", comboID(m.sel, m.hasRelief))
 	}
 
 	m.ompMajor, m.ompMinor = 17, 3
@@ -3725,7 +3726,7 @@ func TestApplyCatalogGrowsLaneDial(t *testing.T) {
 	}
 
 	m.sel["lane"] = "ds-led"
-	if id := comboID(m.sel); m.generated[id] == nil {
+	if id := comboID(m.sel, m.hasRelief); m.generated[id] == nil {
 		t.Fatalf("ds-led selection resolves to no block: %s", id)
 	}
 
@@ -3787,5 +3788,131 @@ func TestUsageBodyDeepSeekBalanceGroup(t *testing.T) {
 	}
 	if sel.deepseek == nil {
 		t.Fatal("selected availability dropped the deepseek balance")
+	}
+}
+
+// TestDeepSeekOffPeakWindow pins the discount window edges (UTC 16:30-00:30)
+// and that the cost meter actually prices D rungs down inside it.
+func TestDeepSeekOffPeakWindow(t *testing.T) {
+	for _, tc := range []struct {
+		hhmm string
+		want bool
+	}{
+		{"16:29", false}, {"16:30", true}, {"23:59", true},
+		{"00:00", true}, {"00:29", true}, {"00:30", false}, {"12:00", false},
+	} {
+		ts, _ := time.Parse("15:04", tc.hhmm)
+		if got := deepseekOffPeak(ts); got != tc.want {
+			t.Errorf("deepseekOffPeak(%s) = %v, want %v", tc.hhmm, got, tc.want)
+		}
+	}
+
+	m := threePoolModel(t)
+	m.sel["lane"] = "ds-only"
+	prev := offPeakNow
+	defer func() { offPeakNow = prev }()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	peak := m.costScore()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC) }
+	if off := m.costScore(); off > peak {
+		t.Errorf("off-peak cost score %d must not exceed peak %d", off, peak)
+	}
+	// The discount must show up in the raw weighted index, even when logScore
+	// clamps both readings into the same 1..5 bucket for a cheap pool.
+	idx := func() float64 {
+		var num, den float64
+		m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
+			c, ok := m.facts[id]
+			if !ok {
+				return
+			}
+			cost := 0.25*c.in + 0.75*c.out
+			if m.poolOfModel(id) == "D" && deepseekOffPeak(offPeakNow().UTC()) {
+				cost *= deepseekOffPeakMult
+			}
+			num += w * cost
+			den += w
+		})
+		return num / den
+	}
+	offIdx := idx()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	peakIdx := idx()
+	if offIdx >= peakIdx {
+		t.Errorf("off-peak weighted cost %v must be under peak %v", offIdx, peakIdx)
+	}
+}
+
+// TestDeepSeekBalanceRowNotes: the low-balance cue appears exactly under the
+// suggestion floor, and the off-peak tag only inside the discount window.
+func TestDeepSeekBalanceRowNotes(t *testing.T) {
+	m := &model{}
+	prev := offPeakNow
+	defer func() { offPeakNow = prev }()
+
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	row := stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "1.99"}))
+	if !strings.Contains(row, "low") {
+		t.Errorf("balance under the floor must carry the low cue: %q", row)
+	}
+	if strings.Contains(row, "off-peak") {
+		t.Errorf("peak hours must not show the off-peak tag: %q", row)
+	}
+	row = stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "2.00"}))
+	if strings.Contains(row, "low") {
+		t.Errorf("balance at the floor is not low: %q", row)
+	}
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC) }
+	row = stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "18.03"}))
+	if !strings.Contains(row, "off-peak −50%") {
+		t.Errorf("off-peak window must surface the discount: %q", row)
+	}
+}
+
+// TestThinkingGaugeRendersAsMeter: the thinking dial draws a level meter with
+// the selected word beside it, never the six-word list; the fill tracks the
+// selected depth so ←/→ reads as a slider.
+func TestThinkingGaugeRendersAsMeter(t *testing.T) {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+	rowFor := func() string {
+		lines, _ := m.genLines()
+		for _, ln := range lines {
+			if strings.Contains(stripAnsi(ln), "thinking") {
+				return ln
+			}
+		}
+		t.Fatal("no thinking row rendered")
+		return ""
+	}
+
+	m.sel["thinking"] = "medium"
+	row := rowFor()
+	plain := stripAnsi(row)
+	for _, bar := range []string{"▁", "▂", "▃", "▅", "▇", "█"} {
+		if !strings.Contains(plain, bar) {
+			t.Fatalf("gauge missing bar %q: %q", bar, plain)
+		}
+	}
+	if !strings.Contains(plain, " medium ") {
+		t.Errorf("gauge must carry the selected word: %q", plain)
+	}
+	for _, word := range []string{"minimal", "xhigh", "max"} {
+		if strings.Contains(plain, word) {
+			t.Errorf("gauge must replace the word list, still shows %q: %q", word, plain)
+		}
+	}
+
+	// The fill is pure styling (invisible without a color profile); what must
+	// hold structurally is that the word tracks the dial and the meter keeps a
+	// constant six-cell width at every depth.
+	m.sel["thinking"] = "minimal"
+	minPlain := stripAnsi(rowFor())
+	m.sel["thinking"] = "max"
+	maxPlain := stripAnsi(rowFor())
+	if !strings.Contains(minPlain, " minimal ") || !strings.Contains(maxPlain, " max ") {
+		t.Errorf("gauge word must track the dial:\nmin %q\nmax %q", minPlain, maxPlain)
+	}
+	if strings.Count(minPlain, "▁") != 1 || strings.Count(maxPlain, "█") != 1 {
+		t.Errorf("gauge must keep one cell per level:\nmin %q\nmax %q", minPlain, maxPlain)
 	}
 }

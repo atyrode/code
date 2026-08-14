@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 
 	clikit "github.com/atyrode/cli-kit"
 	"github.com/atyrode/cli-kit/ollama"
@@ -186,6 +187,17 @@ func (m model) appliedDiff() []clikit.Action {
 //     task-specific, so it keeps its current value; repairConstraints still turns
 //     it off if its bucket is down or the lane is Claude-only.
 func (m *model) deriveToggles() {
+	// Quota-aware lane fallback: a suggestion must not land on a lane whose
+	// lead pool is drained when a sibling lane has live headroom.
+	if alt := m.quotaLane(); alt != "" {
+		m.sel["lane"] = alt
+	}
+	// Balance guard: when the pay-as-you-go pool is dry (or its balance is
+	// unknown), a suggestion stops routing relief tails into it. The manual
+	// dial stays free — this only shapes proposals.
+	if m.hasRelief && laneReliefApplies(m.sel["lane"]) && !m.optionalPoolUsable() {
+		m.sel["relief"] = "off"
+	}
 	tier := m.sel["thinking"]
 	critical := m.sel["model"] == "smart" && (tier == "xhigh" || tier == "max")
 	fableLane := laneHostsSpecial(m.sel["lane"], "fable")
@@ -199,4 +211,60 @@ func (m *model) deriveToggles() {
 	} else {
 		m.sel["fast"] = "off"
 	}
+}
+
+// deepseekLowBalanceUSD is the prepaid floor under which suggestions stop
+// spending the pay-as-you-go pool: below it, ds lanes are not proposed and
+// relief tails are suggested off.
+const deepseekLowBalanceUSD = 2.0
+
+// optionalPoolUsable reports whether the pay-as-you-go pool can absorb routed
+// traffic: a credential exists, the last balance fetch succeeded, and the
+// prepaid balance clears the floor. An unknown balance is not usable — the
+// guard's whole point is never to discover $0 mid-session.
+func (m *model) optionalPoolUsable() bool {
+	b := m.avail.deepseek
+	if b == nil || !b.ok {
+		return false
+	}
+	v, err := strconv.ParseFloat(b.total, 64)
+	return err == nil && v >= deepseekLowBalanceUSD
+}
+
+// quotaLane returns the led lane of the first pool with live headroom when the
+// current lane's lead pool is maxed or unauthenticated — the dial move a human
+// would make after glancing at the usage panel. "" means stay put: the lead
+// pool is fine, no alternative lane exists in this catalog, or none has quota.
+func (m *model) quotaLane() string {
+	lead := providerByPool(lanePrimary(m.sel["lane"]))
+	if lead == nil || !m.avail.down(lead.mainBucket()) {
+		return ""
+	}
+	lanes := map[string]bool{}
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			for _, v := range f.values {
+				lanes[v] = true
+			}
+		}
+	}
+	for _, pool := range fallbackPoolOrder {
+		p := providerByPool(pool)
+		if p == nil || p.Pool == lead.Pool {
+			continue
+		}
+		alt := p.Lane + "-led"
+		if !lanes[alt] {
+			continue
+		}
+		if p.Metered {
+			if m.avail.down(p.mainBucket()) {
+				continue
+			}
+		} else if !m.optionalPoolUsable() {
+			continue
+		}
+		return alt
+	}
+	return ""
 }

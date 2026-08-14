@@ -76,7 +76,7 @@ var keys = keyMap{
 // defaultSel returns a fresh copy of the generator's default facet selection —
 // used both to seed the model and to restore it via the reset key.
 func defaultSel() map[string]string {
-	return map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium", "advisor": "glance", "spark": "on", "fable": "off", "main": "off", "fast": "off"}
+	return map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium", "advisor": "glance", "spark": "on", "fable": "off", "main": "off", "fast": "off", "relief": "on"}
 }
 
 // ── palette ──────────────────────────────────────────────────────────────────
@@ -1053,6 +1053,10 @@ func facetDefs(glyphs map[string]string) []facet {
 		// A sub-setting of fable — only visible while fable is on (see
 		// visibleFacets) and never set by a suggestion (see validFacetActions).
 		{"main", []string{"on", "off"}, glyphs["main"]},
+		// relief: whether metered-led chains may spill into a pay-as-you-go
+		// pool's tail rung. Only rendered when the catalog carries an
+		// optional pool and the lane is a metered-led blend.
+		{"relief", []string{"on", "off"}, glyphs["relief"]},
 	}
 }
 
@@ -1174,7 +1178,7 @@ const (
 // currentRows is the routing block the cost/speed meters score: the generator's
 // facet combo with the advisor dial applied.
 func (m model) currentRows() []string {
-	return m.applyAdvisor(m.generated[comboID(m.sel)], m.sel["advisor"])
+	return m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"])
 }
 
 func (m model) weightedModels(rows []string, fn func(w float64, id, lvl string)) {
@@ -1210,6 +1214,19 @@ func logScore(idx, lnLo, lnHi float64) int {
 	return int(math.Round(math.Max(1, math.Min(5, s))))
 }
 
+// DeepSeek discounts the pay-as-you-go API during its off-peak window,
+// UTC 16:30–00:30 (deepseek.com/pricing). The meter prices D rungs by the
+// clock so a cheap window reads as the discount it is. offPeakNow is a var
+// for tests only.
+const deepseekOffPeakMult = 0.5
+
+var offPeakNow = time.Now
+
+func deepseekOffPeak(utc time.Time) bool {
+	m := utc.Hour()*60 + utc.Minute()
+	return m >= 16*60+30 || m < 30
+}
+
 // costScore rates the current config from 1 (cheap) to 5 (dear).
 func (m model) costScore() int {
 	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
@@ -1226,6 +1243,9 @@ func (m model) costScore() int {
 		cost := (0.25*c.in + 0.75*c.out) * mult
 		if fast && m.poolOfModel(id) == "O" {
 			cost *= priorityMult
+		}
+		if m.poolOfModel(id) == "D" && deepseekOffPeak(offPeakNow().UTC()) {
+			cost *= deepseekOffPeakMult
 		}
 		num += w * cost
 		den += w
@@ -1366,13 +1386,17 @@ func (m model) visibleFacets() []facet {
 			if f.key == "main" && m.sel["fable"] != "on" {
 				continue
 			}
+		case "relief":
+			if !m.hasRelief || !laneReliefApplies(lane) {
+				continue
+			}
 		}
 		out = append(out, f)
 	}
 	return out
 }
 
-func comboID(sel map[string]string) string {
+func comboID(sel map[string]string, hasRelief bool) string {
 	lane := sel["lane"]
 	sp, fb := sel["spark"], sel["fable"]
 	if !laneHostsSpecial(lane, "fable") {
@@ -1391,7 +1415,19 @@ func comboID(sel map[string]string) string {
 			faid = "famain"
 		}
 	}
-	return fmt.Sprintf("%s_%s_%s_%s_%s", lane, sel["model"], sel["thinking"], spid, faid)
+	id := fmt.Sprintf("%s_%s_%s_%s_%s", lane, sel["model"], sel["thinking"], spid, faid)
+	if hasRelief {
+		rel := sel["relief"]
+		if !laneReliefApplies(lane) {
+			rel = "on" // the only variant generated there
+		}
+		if rel == "off" {
+			id += "_norel"
+		} else {
+			id += "_rel"
+		}
+	}
+	return id
 }
 
 // applyCatalog records which dials this catalog can actually serve, then forces
@@ -1408,7 +1444,7 @@ func (m *model) applyCatalog() {
 	if len(m.generated) == 0 {
 		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
 	}
-	spark, fable := false, false
+	spark, fable, relief := false, false, false
 	for id := range m.generated {
 		for _, seg := range strings.Split(id, "_") {
 			switch seg {
@@ -1416,10 +1452,12 @@ func (m *model) applyCatalog() {
 				spark = true
 			case "fa", "famain":
 				fable = true
+			case "norel":
+				relief = true
 			}
 		}
 	}
-	m.noSpark, m.noFable = !spark, !fable
+	m.noSpark, m.noFable, m.hasRelief = !spark, !fable, relief
 	if lanes := catalogLanes(m.generated); len(lanes) > 0 {
 		for i := range m.facets {
 			if m.facets[i].key == "lane" {
@@ -1472,6 +1510,9 @@ func (m *model) clampSel() {
 	if m.noFable {
 		m.sel["fable"] = "off"
 		m.sel["main"] = "off"
+	}
+	if !m.hasRelief {
+		m.sel["relief"] = "on"
 	}
 	// A persisted lane the applied catalog no longer generates (or one from a
 	// richer catalog) resets to the dial's first lane.
@@ -1545,7 +1586,7 @@ func (m model) poolOfModel(id string) string {
 // would keep the five agent-backed types pinned regardless of the generated
 // profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
-	rows := m.applyAdvisor(m.generated[comboID(m.sel)], m.sel["advisor"])
+	rows := m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"])
 	var mr, fc, ao strings.Builder
 	advisorOn := false
 	for _, r := range rows {
@@ -1963,6 +2004,9 @@ type model struct {
 	// always did. applyCatalog sets these only from a catalog it actually read.
 	noSpark bool // no _sp_ combos exist — hide the spark dial and force it off
 	noFable bool // no _fa_/_famain_ combos — same for fable and its main child
+	// hasRelief is positive-polarity: the relief segment only exists in
+	// catalogs with an optional pool, so the zero value keeps old ids intact.
+	hasRelief bool // _rel_/_norel combos exist — show the relief dial
 
 	depth        int  // 0 lead · 1 full
 	collapse     bool // p: hide the Routing section
@@ -2779,12 +2823,21 @@ func formatCachedAge(observed int64, now time.Time) string {
 }
 
 // deepseekBalanceRow renders the DeepSeek group's single body row: the prepaid
-// balance — no bar, no window, no reset countdown, because none exist.
+// balance — no bar, no window, no reset countdown, because none exist. A
+// balance under the suggestion floor carries an explicit "low" cue (the same
+// threshold that stops proposals from spending the pool), and the off-peak
+// discount window is surfaced while it is live.
 func (m *model) deepseekBalanceRow(b deepseekBalance) string {
 	if !b.ok {
 		return "  " + stWarn.Render("balance unavailable")
 	}
 	row := "  balance  " + stHead.Render("$"+b.total+" "+b.currency) + stDim.Render(" · pay-as-you-go")
+	if v, err := strconv.ParseFloat(b.total, 64); err == nil && v < deepseekLowBalanceUSD {
+		row += "  " + stWarn.Render("low")
+	}
+	if deepseekOffPeak(offPeakNow().UTC()) {
+		row += "  " + stDim.Render("off-peak −50%")
+	}
 	if b.stale {
 		cached := "cached"
 		if b.fetchedAt > 0 {
@@ -2963,7 +3016,7 @@ func (m *model) syncPreviewAt(yoff int) {
 	// generator list on the left, so the preview shows only what that selection
 	// produces — the role → model routing itself.
 	var b strings.Builder
-	id := comboID(m.sel)
+	id := comboID(m.sel, m.hasRelief)
 	if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
 		roles = m.applyAdvisor(roles, m.sel["advisor"])
@@ -3297,7 +3350,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// empty, handing omp a session with no routing at all. The preview
 			// already says "no profile for this combination", so the key does
 			// nothing rather than launching something broken.
-			if _, ok := m.generated[comboID(m.sel)]; !ok {
+			if _, ok := m.generated[comboID(m.sel, m.hasRelief)]; !ok {
 				return m, nil
 			}
 			m.genConfig = m.genConfigYAML()
@@ -3604,22 +3657,26 @@ func (m model) genLines() ([]string, int) {
 			label, childPad, childW = "default", stDim.Render("└ "), 2
 		}
 		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, 9-childW)))
-		for _, v := range f.values {
-			switch {
-			case v == m.sel[f.key]:
-				col := acc
-				if f.key == "lane" {
-					col = laneColor(v)
-				} else if (f.key == "spark" || f.key == "fable" || f.key == "main") && v == "on" {
-					col = cGreen
+		if f.key == "thinking" {
+			row += "  " + m.thinkingGauge(f, onRow, acc)
+		} else {
+			for _, v := range f.values {
+				switch {
+				case v == m.sel[f.key]:
+					col := acc
+					if f.key == "lane" {
+						col = laneColor(v)
+					} else if (f.key == "spark" || f.key == "fable" || f.key == "main") && v == "on" {
+						col = cGreen
+					}
+					st := lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Bold(true)
+					if onRow { // the cursor sits on the selected value of the focused row
+						st = st.Background(lipgloss.Color(cSelBg))
+					}
+					row += "  " + st.Render(" "+v+" ")
+				default:
+					row += "   " + stDim.Render(v)
 				}
-				st := lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Bold(true)
-				if onRow { // the cursor sits on the selected value of the focused row
-					st = st.Background(lipgloss.Color(cSelBg))
-				}
-				row += "  " + st.Render(" "+v+" ")
-			default:
-				row += "   " + stDim.Render(v)
 			}
 		}
 		switch {
@@ -3643,6 +3700,39 @@ func (m model) genLines() ([]string, int) {
 	return lines, cursor
 }
 
+// thinkingGauge renders the thinking dial as a level meter instead of six
+// words: rising bars fill to the selected depth, the current word rides along
+// so the level still reads at a glance. ←/→ behave exactly as on a word dial —
+// only the rendering differs; the facet's value list is untouched.
+func (m model) thinkingGauge(f facet, onRow bool, acc string) string {
+	bars := []rune("▁▂▃▅▇█")
+	sel := -1
+	for i, v := range f.values {
+		if v == m.sel[f.key] {
+			sel = i
+		}
+	}
+	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
+	var b strings.Builder
+	for i := range f.values {
+		g := string(bars[i*len(bars)/max(1, len(f.values))])
+		if i <= sel {
+			b.WriteString(lit.Render(g))
+		} else {
+			b.WriteString(stDim.Render(g))
+		}
+	}
+	word := lit
+	if onRow {
+		word = word.Background(lipgloss.Color(cSelBg))
+	}
+	label := m.sel[f.key]
+	if sel < 0 && label == "" {
+		label = "?"
+	}
+	return b.String() + " " + word.Render(" "+label+" ")
+}
+
 // defaultGlyphs is the built-in facet-glyph set (Nerd Font, Font Awesome PUA
 // range), written as explicit \u escapes so the codepoints stay visible and
 // verifiable in source — a literal PUA glyph is invisible in most editors and
@@ -3655,6 +3745,7 @@ func defaultGlyphs() map[string]string {
 	return map[string]string{
 		"lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fable": "\uf02d", "main": "\uf140", "fast": "\uf0e7",
+		"relief": "\uf132",
 	}
 }
 
@@ -3756,7 +3847,7 @@ func main() {
 				fm.firstPrompt, fm.broker, fm.accountSelections)
 		})
 	case fm.genConfig != "":
-		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, func() int {
+		status = withSession(comboID(fm.sel, fm.hasRelief), "CODE_OMP", []string{"omp"}, func() int {
 			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections)
 		})
 	}
