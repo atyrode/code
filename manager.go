@@ -691,6 +691,16 @@ func (m model) managerLines(width int) []managerLine {
 						})
 					}
 				}
+				// The DeepSeek prepaid balance is the api-key row's only usage
+				// datum — mirror the Usage panel's row under the credential.
+				if a.apiKey != "" && provider == deepseekProvider && m.avail.deepseek != nil {
+					lines = append(lines, managerLine{
+						text:       managerClipCell("    "+m.deepseekBalanceRow(*m.avail.deepseek), lineWidth),
+						selectable: -1,
+						group:      group,
+						provider:   provider,
+					})
+				}
 				group++
 				if accountIndex+1 < len(accounts) {
 					lines = append(lines, managerLine{
