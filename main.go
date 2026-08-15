@@ -3718,7 +3718,7 @@ func (m model) genLines() ([]string, int) {
 			childPad, childW = stDim.Render("└ "), 2
 		}
 		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, 9-childW)))
-		if f.key == "thinking" || f.key == "model" {
+		if f.key == "thinking" || f.key == "model" || f.key == "advisor" {
 			row += "  " + m.segmentGauge(f, onRow, acc)
 		} else {
 			for _, v := range f.values {
@@ -3769,15 +3769,12 @@ func (m model) genLines() ([]string, int) {
 	return lines, cursor
 }
 
-// segmentGaugeWidth is the shared track width of every notched dial, so the
-// meters and the words after them line up in a column regardless of how many
-// steps a dial has (thinking: 6, model: 3 — each step spans width/len cells).
-const segmentGaugeWidth = 6
-
-// segmentGauge renders a stepped dial (thinking, model) as a notched meter:
-// cells fill up to the selection, with the selected word riding along so the
-// level still reads at a glance. ←/→ behave exactly as on a word dial — only
-// the rendering differs; the facet's value list is untouched.
+// segmentGauge renders a stepped dial (model, thinking, advisor) as a notched
+// meter: one cell per selectable option, filled to the selection, with the
+// selected word riding along so the level still reads at a glance. A leading
+// "off" value is the dial's zero — it takes no cell, so off renders an empty
+// track and the first real step lights exactly one. ←/→ behave exactly as on
+// a word dial — only the rendering differs; the facet's values are untouched.
 func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 	sel := -1
 	for i, v := range f.values {
@@ -3785,20 +3782,25 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 			sel = i
 		}
 	}
-	per := segmentGaugeWidth / len(f.values)
-	if per < 1 {
-		per = 1
+	steps := f.values
+	fill := sel + 1
+	if len(steps) > 0 && steps[0] == "off" {
+		steps = steps[1:]
+		fill = sel // off (sel 0) lights nothing
+	}
+	if fill < 0 {
+		fill = 0
 	}
 	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
 	var b strings.Builder
 	// The leading space mirrors the word dials' selected-cell padding, so the
 	// track starts on the same column the value words do.
 	b.WriteString(" ")
-	for i := range f.values {
-		if i <= sel {
-			b.WriteString(lit.Render(strings.Repeat("▰", per)))
+	for i := range steps {
+		if i < fill {
+			b.WriteString(lit.Render("▰"))
 		} else {
-			b.WriteString(stDim.Render(strings.Repeat("▱", per)))
+			b.WriteString(stDim.Render("▱"))
 		}
 	}
 	word := lit

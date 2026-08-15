@@ -3902,14 +3902,30 @@ func TestSegmentGaugeRendersAsMeter(t *testing.T) {
 
 	m.sel["model"] = "normal"
 	mdl := rowFor("model")
-	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 6 {
-		t.Fatalf("model gauge must match the shared track width, got %d cells: %q", got, mdl)
+	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 3 {
+		t.Fatalf("model gauge must keep one cell per option, got %d cells: %q", got, mdl)
 	}
-	if got := strings.Count(mdl, "▰"); got != 4 {
-		t.Fatalf("model step 2/3 must fill two-thirds of the track, got %d lit: %q", got, mdl)
+	if got := strings.Count(mdl, "▰"); got != 2 {
+		t.Fatalf("model step 2/3 must light two cells, got %d lit: %q", got, mdl)
 	}
 	if !strings.Contains(mdl, " normal ") || strings.Contains(mdl, "smart") {
 		t.Errorf("model gauge must show only the selected word: %q", mdl)
+	}
+
+	// advisor's leading "off" is the zero mark: no cell of its own, empty
+	// track when selected, and the levels light one cell each.
+	m.sel["advisor"] = "off"
+	adv := rowFor("advisor")
+	if strings.Count(adv, "▱") != 3 || strings.Count(adv, "▰") != 0 {
+		t.Fatalf("advisor off must render an empty three-cell track: %q", adv)
+	}
+	if !strings.Contains(adv, " off ") {
+		t.Errorf("advisor gauge must carry the selected word: %q", adv)
+	}
+	m.sel["advisor"] = "review"
+	adv = rowFor("advisor")
+	if strings.Count(adv, "▰") != 2 || strings.Count(adv, "▱") != 1 {
+		t.Fatalf("advisor review must light 2 of 3 cells: %q", adv)
 	}
 }
 
