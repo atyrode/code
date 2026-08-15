@@ -359,20 +359,21 @@ func TestCycleFacetClearsMain(t *testing.T) {
 	}
 }
 
+// TestCycleFacetClampsAtEndpoints: the lead dial (row 0) clamps rather than
+// wraps at either end — mixed is first, the last pool's lead is last.
 func TestCycleFacetClampsAtEndpoints(t *testing.T) {
 	m := &model{facets: facetDefs(map[string]string{}), sel: defaultSel()}
-	m.fcur = 0 // lane
+	m.fcur = 0 // lead
 
-	m.sel["lane"] = m.facets[0].values[0]
+	m.sel["lane"] = "mixed" // lead = mixed, the dial's first value
 	m.cycleFacet(-1)
-	if got := m.sel["lane"]; got != m.facets[0].values[0] {
+	if got := m.sel["lane"]; got != "mixed" {
 		t.Fatalf("left at first option wrapped to %q", got)
 	}
 
-	last := m.facets[0].values[len(m.facets[0].values)-1]
-	m.sel["lane"] = last
+	m.sel["lane"] = "claude-led" // lead = claude, the dial's last value
 	m.cycleFacet(1)
-	if got := m.sel["lane"]; got != last {
+	if got := m.sel["lane"]; got != "claude-led" {
 		t.Fatalf("right at last option wrapped to %q", got)
 	}
 }
@@ -1028,7 +1029,7 @@ func TestWheelStepsFacets(t *testing.T) {
 		t.Fatalf("fixture: lane = %q, want mixed", m.sel["lane"])
 	}
 	m.applyWheelStep(tea.MouseButtonWheelLeft)
-	if m.sel["lane"] != "claude-led" {
+	if m.sel["lane"] != "gpt-led" {
 		t.Fatalf("wheel LEFT must cycle to next option: lane = %q", m.sel["lane"])
 	}
 	m.applyWheelStep(tea.MouseButtonWheelRight)
@@ -1108,7 +1109,7 @@ func TestWheelInputFilterRequiresDeliberateBurst(t *testing.T) {
 	left := admit(tea.MouseButtonWheelLeft)
 	nm, _ = m.Update(left)
 	m = nm.(model)
-	if m.sel["lane"] != "claude-led" {
+	if m.sel["lane"] != "gpt-led" {
 		t.Fatalf("horizontal burst did not move lane: %q", m.sel["lane"])
 	}
 }
@@ -1132,8 +1133,8 @@ func TestFilteredWheelPreservesSelectionPersistence(t *testing.T) {
 	}
 	nm, _ := m.Update(msg)
 	m = nm.(model)
-	if got := loadSelectionState(m.selectionState, m.facets)["lane"]; got != "claude-led" {
-		t.Fatalf("persisted lane after wheel-left = %q, want claude-led", got)
+	if got := loadSelectionState(m.selectionState, m.facets)["lane"]; got != "gpt-led" {
+		t.Fatalf("persisted lane after wheel-left = %q, want gpt-led", got)
 	}
 
 	filter.last = time.Now().Add(-wheelGestureGap - time.Millisecond)
@@ -3901,8 +3902,11 @@ func TestSegmentGaugeRendersAsMeter(t *testing.T) {
 
 	m.sel["model"] = "normal"
 	mdl := rowFor("model")
-	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 3 {
-		t.Fatalf("model gauge must keep one cell per step, got %d: %q", got, mdl)
+	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 6 {
+		t.Fatalf("model gauge must match the shared track width, got %d cells: %q", got, mdl)
+	}
+	if got := strings.Count(mdl, "▰"); got != 4 {
+		t.Fatalf("model step 2/3 must fill two-thirds of the track, got %d lit: %q", got, mdl)
 	}
 	if !strings.Contains(mdl, " normal ") || strings.Contains(mdl, "smart") {
 		t.Errorf("model gauge must show only the selected word: %q", mdl)
@@ -3923,15 +3927,15 @@ func TestLaneSplitDials(t *testing.T) {
 	if vf[1].key == "blend" {
 		t.Fatal("mixed must not render a blend child")
 	}
-	wantLeads := []string{"gpt", "mixed", "claude"}
+	wantLeads := []string{"mixed", "gpt", "claude"}
 	if !reflect.DeepEqual(vf[0].values, wantLeads) {
 		t.Fatalf("lead values = %v, want %v", vf[0].values, wantLeads)
 	}
 
 	// Cycling lead off mixed lands on the -led lane and grows the blend child.
-	m.cycleFacet(1) // mixed → claude (cursor starts on the lead row)
-	if m.sel["lane"] != "claude-led" {
-		t.Fatalf("lead change composed lane %q, want claude-led", m.sel["lane"])
+	m.cycleFacet(1) // mixed → gpt (cursor starts on the lead row)
+	if m.sel["lane"] != "gpt-led" {
+		t.Fatalf("lead change composed lane %q, want gpt-led", m.sel["lane"])
 	}
 	vf = m.visibleFacets()
 	if vf[1].key != "blend" {
@@ -3941,8 +3945,8 @@ func TestLaneSplitDials(t *testing.T) {
 	// Cycling blend led → only composes the pure lane.
 	m.fcur = 1
 	m.cycleFacet(1)
-	if m.sel["lane"] != "claude-only" {
-		t.Fatalf("blend change composed lane %q, want claude-only", m.sel["lane"])
+	if m.sel["lane"] != "gpt-only" {
+		t.Fatalf("blend change composed lane %q, want gpt-only", m.sel["lane"])
 	}
 
 	// A three-pool dial grows a ds lead; lead/blend never persist.
@@ -3952,7 +3956,7 @@ func TestLaneSplitDials(t *testing.T) {
 		}
 	}
 	vf = m.visibleFacets()
-	if !reflect.DeepEqual(vf[0].values, []string{"gpt", "mixed", "claude", "ds"}) {
+	if !reflect.DeepEqual(vf[0].values, []string{"mixed", "gpt", "claude", "ds"}) {
 		t.Fatalf("three-pool lead values = %v", vf[0].values)
 	}
 	choices := selectionChoices(m.sel, m.facets)
@@ -3962,7 +3966,7 @@ func TestLaneSplitDials(t *testing.T) {
 	if _, ok := choices["blend"]; ok {
 		t.Error("blend is a derived dial and must not persist")
 	}
-	if choices["lane"] != "claude-only" {
-		t.Errorf("persisted lane = %q, want claude-only", choices["lane"])
+	if choices["lane"] != "gpt-only" {
+		t.Errorf("persisted lane = %q, want gpt-only", choices["lane"])
 	}
 }

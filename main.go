@@ -1377,8 +1377,10 @@ func (m model) visibleFacets() []facet {
 		if f.key == "lane" {
 			lead, blend := laneSplit(lane)
 			m.sel["lead"], m.sel["blend"] = lead, blend
-			var leads []string
-			seen := map[string]bool{}
+			// mixed leads the dial: it is the default and the only lead
+			// without a blend child, so it anchors the left edge.
+			leads := []string{"mixed"}
+			seen := map[string]bool{"mixed": true}
 			for _, v := range f.values {
 				l, _ := laneSplit(v)
 				if !seen[l] {
@@ -3734,10 +3736,15 @@ func (m model) genLines() ([]string, int) {
 	return lines, cursor
 }
 
+// segmentGaugeWidth is the shared track width of every notched dial, so the
+// meters and the words after them line up in a column regardless of how many
+// steps a dial has (thinking: 6, model: 3 — each step spans width/len cells).
+const segmentGaugeWidth = 6
+
 // segmentGauge renders a stepped dial (thinking, model) as a notched meter:
-// one ▰ per step up to the selection, ▱ after, with the selected word riding
-// along so the level still reads at a glance. ←/→ behave exactly as on a word
-// dial — only the rendering differs; the facet's value list is untouched.
+// cells fill up to the selection, with the selected word riding along so the
+// level still reads at a glance. ←/→ behave exactly as on a word dial — only
+// the rendering differs; the facet's value list is untouched.
 func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 	sel := -1
 	for i, v := range f.values {
@@ -3745,13 +3752,20 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 			sel = i
 		}
 	}
+	per := segmentGaugeWidth / len(f.values)
+	if per < 1 {
+		per = 1
+	}
 	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
 	var b strings.Builder
+	// The leading space mirrors the word dials' selected-cell padding, so the
+	// track starts on the same column the value words do.
+	b.WriteString(" ")
 	for i := range f.values {
 		if i <= sel {
-			b.WriteString(lit.Render("▰"))
+			b.WriteString(lit.Render(strings.Repeat("▰", per)))
 		} else {
-			b.WriteString(stDim.Render("▱"))
+			b.WriteString(stDim.Render(strings.Repeat("▱", per)))
 		}
 	}
 	word := lit
