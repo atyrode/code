@@ -176,6 +176,18 @@ func meteredProviderIDs() []string {
 	return out
 }
 
+// optionalPoolLabels names the pay-as-you-go pools ("DeepSeek"), joined for
+// display — the pools relief can spill into.
+func optionalPoolLabels() string {
+	var out []string
+	for i := range providerRegistry {
+		if !providerRegistry[i].Required {
+			out = append(out, providerRegistry[i].Label)
+		}
+	}
+	return strings.Join(out, "/")
+}
+
 // poolDeclaresSpecialTier reports whether the pool's provider declares a
 // special facet at the given ladder tier (O's spark at 0, A's fable at 4).
 func poolDeclaresSpecialTier(pool string, tier int) bool {

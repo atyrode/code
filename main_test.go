@@ -3970,3 +3970,36 @@ func TestLaneSplitDials(t *testing.T) {
 		t.Errorf("persisted lane = %q, want gpt-only", choices["lane"])
 	}
 }
+
+// TestAdvisorAuditReliefTail: audit is the advisor's heavyweight setting, so
+// it follows the same metered logic as the heavyweight roles — with relief on,
+// a metered-led blend's audit chain ends on the optional pool's audit rung;
+// relief off, lighter levels, and optional-led lanes stay untouched.
+func TestAdvisorAuditReliefTail(t *testing.T) {
+	m := threePoolModel(t)
+	m.sel["lane"] = "mixed"
+	m.sel["relief"] = "on"
+
+	audit := m.advisorChain("audit")
+	if len(audit) == 0 {
+		t.Fatal("no audit chain on mixed")
+	}
+	if !strings.HasPrefix(audit[len(audit)-1], "deepseek-") {
+		t.Fatalf("relief-on audit chain must tail into the optional pool: %v", audit)
+	}
+
+	m.sel["relief"] = "off"
+	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("relief-off audit chain must stay metered: %v", got)
+	}
+
+	m.sel["relief"] = "on"
+	if got := m.advisorChain("review"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("lighter advisor levels take no tail: %v", got)
+	}
+
+	m.sel["lane"] = "ds-led" // optional-led lane already spends DeepSeek deliberately
+	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("relief does not apply on an optional-led lane: %v", got)
+	}
+}

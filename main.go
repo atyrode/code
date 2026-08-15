@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1312,11 +1313,35 @@ func (m model) advisorChain(level string) []string {
 		}
 		if p := providerByPool(pool); p != nil {
 			if chain := m.advisors[level+"/"+p.Lane]; len(chain) > 0 {
-				return chain
+				return m.advisorRelief(level, chain)
 			}
 		}
 	}
 	return nil
+}
+
+// advisorRelief appends the relief tail to the audit chain: audit is the
+// advisor's heavyweight setting, so — exactly like the heavyweight roles —
+// its metered chain ends on each optional pool's own audit rung when relief
+// is on, and a drained day still gets its second opinion. Lighter levels
+// stay short: they are cheap enough that quota rarely blocks them.
+func (m model) advisorRelief(level string, chain []string) []string {
+	if level != "audit" || m.sel["relief"] != "on" || !laneReliefApplies(m.sel["lane"]) {
+		return chain
+	}
+	out := append([]string(nil), chain...)
+	for i := range providerRegistry {
+		p := &providerRegistry[i]
+		if p.Required {
+			continue
+		}
+		relief := m.advisors[level+"/"+p.Lane]
+		if len(relief) == 0 || slices.Contains(out, relief[0]) {
+			continue
+		}
+		out = append(out, relief[0])
+	}
+	return out
 }
 
 // roleOf returns the role name of a routing row ("● task" → "task").
@@ -3730,6 +3755,14 @@ func (m model) genLines() ([]string, int) {
 			}
 		case f.key == "fast" && m.sel["fast"] == "on":
 			row += "   " + stDim.Render("GPT only")
+		case f.key == "relief":
+			// relief is the least self-explanatory dial: say what it does,
+			// in the state it currently does it.
+			note := "drained chains wait for quota reset"
+			if m.sel["relief"] == "on" {
+				note = "drained chains spill into " + optionalPoolLabels()
+			}
+			row += "   " + stDim.Render(note)
 		}
 		lines = append(lines, row)
 	}
