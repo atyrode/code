@@ -11,7 +11,7 @@ environment variable with a sane fallback.
 | `←` `→` | change the selected dial |
 | `d` | reset all dials to defaults |
 | `ctrl+o` | describe the task, let a local model set the dials |
-| `enter` | launch oh-my-pi with the generated setup |
+| `enter` | launch oh-my-pi with the selected hosted profile or local runtime |
 | `m` | launch plain managed omp (no overlay) |
 | `u` | launch through a sandboxed omp, if you have one |
 | `v` | manage broker account selections and presets |
@@ -32,6 +32,7 @@ environment variable with a sane fallback.
 | `CODE_SESSION_STATE` | directory recording live sessions for `code ls` / `code session reap`; `off` disables recording | `$XDG_STATE_HOME/code/sessions` — note this one defaults to a path rather than to disabled, so the registry works without wrapper changes |
 | `CODE_OMP` | omp binary for trusted launches (`m` and `enter`) | `omp-managed`, then `omp` on PATH |
 | `CODE_OMP_UNTRUSTED` | sandboxed omp for the `u` key | `ompu` on PATH, else the key is hidden and inert |
+| `CODE_RUNTIME_BROKER` | executable implementing `runtime list --json` and `runtime run TARGET -- ...`; applicable targets become a runtime dial | no runtime dial; hosted behavior is unchanged |
 | `OMP_AUTH_BROKER_URL` | central auth broker behind the usage panel and the account picker (`v`); inherited from your omp environment | no fetch — the usage panel has nothing to show |
 | `OMP_AUTH_BROKER_TOKEN` | bearer token for that broker | same: `code` only fetches when both the URL and the token are set |
 | `OMP_AUTH_BROKER_SNAPSHOT_CACHE` | broker snapshot cache path; `code` never reads it, it only forwards it to the omp it launches | forwarded empty |
@@ -49,6 +50,13 @@ broker (`OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`).
 
 Provider authentication is owned by OMP, not `code`. Authenticate with
 `omp auth-broker login` before launching `code`.
+
+The runtime-broker boundary is deliberately narrow. `code` reads only
+schema-version-1 targets marked `applicable`, then delegates the selected
+target's complete lifecycle to the broker. It does not download weights,
+create credentials, or assume a container engine. Local launches receive the
+thinking dial and forwarded OMP arguments, but not cloud auth-broker variables;
+the runtime broker owns its OMP profile, routing config, and fallback policy.
 
 ## The `code generate` subcommand
 

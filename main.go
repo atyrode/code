@@ -1129,6 +1129,9 @@ func logScore(idx, lnLo, lnHi float64) int {
 
 // costScore rates the current config from 1 (cheap) to 5 (dear).
 func (m model) costScore() int {
+	if _, ok := m.selectedRuntime(); ok {
+		return 1
+	}
 	fast := m.sel["fast"] == "on" && m.sel["lane"] != "claude-only"
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
@@ -1155,6 +1158,9 @@ func (m model) costScore() int {
 
 // speedScore rates the current config from 1 (slow) to 5 (fast).
 func (m model) speedScore() int {
+	if _, ok := m.selectedRuntime(); ok {
+		return 3
+	}
 	fast := m.sel["fast"] == "on" && m.sel["lane"] != "claude-only"
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
@@ -1252,6 +1258,15 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // shows while fable is on (and the lane can host it at all). A dial this catalog
 // generated no combo for is dropped the same way — it is not a choice.
 func (m model) visibleFacets() []facet {
+	if _, local := m.selectedRuntime(); local {
+		var out []facet
+		for _, f := range m.facets {
+			if f.key == "runtime" || f.key == "thinking" {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
 	lane := m.sel["lane"]
 	var out []facet
 	for _, f := range m.facets {
@@ -1758,11 +1773,12 @@ func (f *wheelInputFilter) Filter(app tea.Model, msg tea.Msg) tea.Msg {
 }
 
 type model struct {
-	generated map[string][]string
-	advisors  map[string][]string  // "level/ctx" → advisor model chain
-	facts     map[string]modelFact // model id → cost ($/1M) + curated speed (tok/s)
-	avail     availability
-	glyphs    map[string]string
+	generated      map[string][]string
+	advisors       map[string][]string  // "level/ctx" → advisor model chain
+	facts          map[string]modelFact // model id → cost ($/1M) + curated speed (tok/s)
+	avail          availability
+	glyphs         map[string]string
+	runtimeTargets []runtimeTarget
 
 	// Catalog capability, phrased as absence so the zero value keeps every dial:
 	// a model with no catalog yet (the onboarding shell, tests) must behave as it
@@ -1805,6 +1821,7 @@ type model struct {
 
 	launchManaged   bool              // m: run CODE_OMP with no overlay (the managed defaults)
 	launchUntrusted bool              // u: run the CODE_OMP_UNTRUSTED sandbox
+	launchRuntime   string            // delegated local runtime target selected via CODE_RUNTIME_BROKER
 	hasSandbox      bool              // a sandbox binary exists; gates the u key
 	genConfig       string            // generated config YAML to launch omp with (generator Enter)
 	firstPrompt     string            // prompt from the suggest box, forwarded as omp's first message
@@ -2696,6 +2713,20 @@ func (m *model) syncPreviewAt(yoff int) {
 	// generator list on the left, so the preview shows only what that selection
 	// produces — the role → model routing itself.
 	var b strings.Builder
+	if target, local := m.selectedRuntime(); local {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render(target.Label) + "\n")
+		b.WriteString(stDim.Render(target.statusLine()) + "\n\n")
+		b.WriteString("model       " + target.Model + "\n")
+		if target.ContextWindow > 0 {
+			b.WriteString(fmt.Sprintf("context     %dk tokens\n", target.ContextWindow/1000))
+		}
+		b.WriteString("routing     every role stays local\n")
+		b.WriteString("fallbacks   disabled\n")
+		content := lipgloss.NewStyle().MaxWidth(m.vp.Width).Render(b.String())
+		m.vp.SetContent(content)
+		m.vp.SetYOffset(yoff)
+		return
+	}
 	id := comboID(m.sel)
 	if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
@@ -2976,6 +3007,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout() // the taller/shorter footer changes the body height
 		case "d":
 			m.sel = defaultSel()
+			if len(m.runtimeTargets) > 0 {
+				m.sel["runtime"] = "hosted"
+			}
 			m.clampSel() // the defaults assume a full catalog; this one may not be
 			m.persistSelection()
 			m.syncPreview()
@@ -3018,6 +3052,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launchManaged = true
 			return m, tea.Quit
 		case "enter":
+			if target, local := m.selectedRuntime(); local {
+				m.launchRuntime = target.Name
+				return m, tea.Quit
+			}
 			// Enter always launches the generated profile for the current facets —
 			// the untouched default combo is a generated profile like any other.
 			// Never for a combo the catalog doesn't carry, though: genConfigYAML
@@ -3185,6 +3223,9 @@ func (m model) previewPane(w, h int) string {
 // accent is the context colour — the selected lane in the generator.
 // Blue / purple / orange.
 func (m model) accent() string {
+	if _, local := m.selectedRuntime(); local {
+		return cGreen
+	}
 	return laneColor(m.sel["lane"])
 }
 
@@ -3333,6 +3374,10 @@ func (m model) genLines() ([]string, int) {
 		}
 		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, 9-childW)))
 		for _, v := range f.values {
+			display := v
+			if f.key == "runtime" {
+				display = m.runtimeValueLabel(v)
+			}
 			switch {
 			case v == m.sel[f.key]:
 				col := acc
@@ -3345,9 +3390,9 @@ func (m model) genLines() ([]string, int) {
 				if onRow { // the cursor sits on the selected value of the focused row
 					st = st.Background(lipgloss.Color(cSelBg))
 				}
-				row += "  " + st.Render(" "+v+" ")
+				row += "  " + st.Render(" "+display+" ")
 			default:
-				row += "   " + stDim.Render(v)
+				row += "   " + stDim.Render(display)
 			}
 		}
 		switch {
@@ -3377,11 +3422,11 @@ func (m model) genLines() ([]string, int) {
 // was once wiped by an edit exactly because of that. CODE_FACET_GLYPHS may
 // override any entry (see main).
 //
-//	lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
+//	runtime 🖥 (f108)  lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
 //	spark 🚀 (f135)  fable 📖 (f02d)  default 🎯 (f140)  fast ⚡ (f0e7)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
-		"lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
+		"runtime": "\uf108", "lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fable": "\uf02d", "main": "\uf140", "fast": "\uf0e7",
 	}
 }
@@ -3417,8 +3462,18 @@ func main() {
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
 	accountSelections := loadAccountSelectionState(accountState)
+	runtimeTargets := loadRuntimeTargets()
 	facets := facetDefs(glyphs)
+	if len(runtimeTargets) > 0 {
+		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
+	}
 	selectionState := os.Getenv("CODE_SELECTION_STATE")
+	selection := loadSelectionState(selectionState, facets)
+	if len(runtimeTargets) > 0 {
+		if _, ok := selection["runtime"]; !ok {
+			selection["runtime"] = "hosted"
+		}
+	}
 	// The u key only exists when a sandbox binary does — an explicit
 	// CODE_OMP_UNTRUSTED or an ompu on PATH; otherwise hide it from the help
 	// and ignore the keypress rather than dying on exec.
@@ -3446,8 +3501,9 @@ func main() {
 		spin:              sp,
 		help:              clikit.NewHelp(),
 		glyphs:            glyphs,
+		runtimeTargets:    runtimeTargets,
 		facets:            facets,
-		sel:               loadSelectionState(selectionState, facets),
+		sel:               selection,
 		selectionState:    selectionState,
 		hasSandbox:        hasSandbox,
 	}
@@ -3459,7 +3515,7 @@ func main() {
 	// CODE_GENERATED is an operator config error and is left visible as the
 	// usual empty routing panel instead).
 	app := tea.Model(m)
-	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" {
+	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 {
 		app = newOnboarding(m)
 	}
 	// Cell-motion mouse reporting carries wheel events. Filter rejected
@@ -3477,6 +3533,10 @@ func main() {
 	case fm.launchUntrusted:
 		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, func() int {
 			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt)
+		})
+	case fm.launchRuntime != "":
+		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, func() int {
+			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt)
 		})
 	case fm.launchManaged:
 		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, func() int {

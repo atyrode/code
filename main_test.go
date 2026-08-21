@@ -466,14 +466,14 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 // them all to empty strings without anything failing; this locks each value.
 func TestDefaultGlyphs(t *testing.T) {
 	want := map[string]rune{
-		"lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
+		"runtime": 0xf108, "lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fable": 0xf02d, "main": 0xf140, "fast": 0xf0e7,
 	}
 	g := defaultGlyphs()
 	if len(g) != len(want) {
 		t.Errorf("defaultGlyphs has %d entries, want %d", len(g), len(want))
 	}
-	for _, f := range facetDefs(g) {
+	for _, f := range append([]facet{runtimeFacet(g["runtime"], nil)}, facetDefs(g)...) {
 		r := []rune(g[f.key])
 		if len(r) != 1 {
 			t.Errorf("glyph for %q is %d runes, want exactly 1", f.key, len(r))
