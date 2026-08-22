@@ -989,7 +989,7 @@ func facetDefs(glyphs map[string]string) []facet {
 	return []facet{
 		// The ox values are trimmed away by applyCatalog unless the catalog
 		// serves them — presence in models.yml is what makes them appear.
-		{"lane", []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ox-only", "ox-led"}, glyphs["lane"]},
+		{"lane", []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ox-only", "ox-led", "ox-lean"}, glyphs["lane"]},
 		{"model", []string{"fast", "normal", "smart"}, glyphs["model"]},
 		{"thinking", []string{"minimal", "low", "medium", "high", "xhigh", "max"}, glyphs["thinking"]},
 		// advisor as a power/cost dial: a quick glance, a proper review, or a
@@ -1226,12 +1226,18 @@ func (m model) meter(label, glyph, fill string, n int) string {
 // from the baked __advisors__ table. The advisor is the independent second
 // opinion, so it uses the opposite provider to whoever leads the session: GPT
 // when the lead is Claude — a Claude-led (or pure-GPT) lane, or fable-as-main
-// handing the default role to Fable — and Claude otherwise. Only the pure lanes
-// stay on their own provider (gpt-only keeps GPT; claude-only keeps Claude).
+// handing the default role to Fable — and Claude otherwise. Pure lanes keep
+// their own provider, including the ox lane: ox-only's second opinion is Ox.
+//
+// On the mixed ox lanes the chain carries a cross-pool net in spend order —
+// the other paid pool's cheapest rung, then the free pool itself — so a dead
+// quota never leaves the second eye blind.
 func (m model) advisorChain(level string) []string {
 	lane := m.sel["lane"]
 	ctx := "claude"
-	if lane == "gpt-only" || lane == "claude-led" {
+	if lane == "ox-only" {
+		ctx = "ox"
+	} else if lane == "gpt-only" || lane == "claude-led" {
 		ctx = "gpt"
 	}
 	// fable-as-main puts Claude Fable in the default seat, so the second
@@ -1240,7 +1246,26 @@ func (m model) advisorChain(level string) []string {
 	if lane != "claude-only" && m.sel["fable"] == "on" && m.sel["main"] == "on" {
 		ctx = "gpt"
 	}
-	return m.advisors[level+"/"+ctx]
+	chain := m.advisors[level+"/"+ctx]
+	if lane == "ox-led" || lane == "ox-lean" {
+		tail := m.advisors["glance/gpt"]
+		if ctx == "gpt" {
+			tail = m.advisors["glance/claude"]
+		}
+		for _, t := range append(append([]string{}, tail...), m.advisors["glance/ox"]...) {
+			dup := false
+			for _, c := range chain {
+				if c == t {
+					dup = true
+					break
+				}
+			}
+			if !dup && t != "" {
+				chain = append(chain, t)
+			}
+		}
+	}
+	return chain
 }
 
 // roleOf returns the role name of a routing row ("● task" → "task").
@@ -1314,6 +1339,9 @@ func (m model) visibleFacets() []facet {
 		if lane == "ox-led" && (f.key == "spark" || f.key == "main" || f.key == "fast") {
 			continue
 		}
+		if lane == "ox-lean" && (f.key == "spark") {
+			continue
+		}
 		if f.key == "spark" && m.noSpark {
 			continue
 		}
@@ -1334,7 +1362,7 @@ func comboID(sel map[string]string) string {
 	if lane == "gpt-only" || lane == "ox-only" {
 		fb = "off"
 	}
-	if lane == "claude-only" || lane == "ox-only" || lane == "ox-led" {
+	if lane == "claude-only" || lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
 		sp = "off"
 	}
 	spid, faid := "nosp", "nofa"
@@ -1437,6 +1465,8 @@ func laneColor(lane string) string {
 		return "#1f9d5b" // deeper green — pure free pool
 	case "ox-led":
 		return "#5fce96" // lighter green — leans Ox Alpha
+	case "ox-lean":
+		return "#2dd4bf" // teal — paid work riding the free pool
 	case "gpt-only":
 		return "#3f8ef0" // deeper blue — pure pool
 	case "gpt-led":
@@ -1455,7 +1485,13 @@ func laneColor(lane string) string {
 // through. The catalog's pool column is authoritative; the name heuristic is
 // only for catalogs that predate it.
 func (m model) prefixed(model string) string {
-	if f, ok := m.facts[model]; ok && f.pool != "" {
+	// Routing tokens carry a thinking level ("id:level"); the catalog is
+	// keyed on the bare id. Qualify the full token either way.
+	id := model
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[:i]
+	}
+	if f, ok := m.facts[id]; ok && f.pool != "" {
 		switch f.pool {
 		case "O":
 			return "openai-codex/" + model
@@ -2000,8 +2036,8 @@ func (m model) listW() int {
 	}
 	// The ox lanes widen the lane row past this function's old 80-cell
 	// aesthetic cap; a wider list beats clipping dial options mid-value.
-	if w > 104 {
-		w = 104
+	if w > 116 {
+		w = 116
 	}
 	return w
 }

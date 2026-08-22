@@ -3705,3 +3705,54 @@ func TestTrimLanesResetsVanishedLane(t *testing.T) {
 		t.Errorf("selection left on vanished lane: %q", m.sel["lane"])
 	}
 }
+
+// The launch path prefixes tokens that still carry their thinking level
+// ("id:level"); the facts table is keyed on the bare id. This regresses the
+// bug where ox ids missed the pool lookup and fell to the two-provider name
+// heuristic — openai-codex/stealth/ox-alpha is not a model omp knows.
+func TestPrefixedLeveledTokens(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"stealth/ox-alpha": {pool: "R"},
+	}}
+	if got := m.prefixed("stealth/ox-alpha:high"); got != "openrouter/stealth/ox-alpha:high" {
+		t.Fatalf("prefixed(leveled) = %q, want openrouter/stealth/ox-alpha:high", got)
+	}
+}
+
+// End to end: the emitted config must qualify every reference with the
+// catalog's pool, and the ox-led advisor must carry its cross-pool net
+// (Claude lead, GPT glance rung, then the free pool) instead of a bare lead.
+func TestGenConfigYAMLOxLed(t *testing.T) {
+	blocks := loadBlocks("/tmp/grid-ox.plain")
+	if len(blocks) == 0 {
+		t.Skip("regeneration fixture /tmp/grid-ox.plain absent")
+	}
+	m := model{
+		generated: blocks,
+		advisors:  parseAdvisors(blocks["__advisors__"]),
+		facts:     parseFacts(blocks["__models__"]),
+		glyphs:    defaultGlyphs(),
+		facets:    facetDefs(defaultGlyphs()),
+		sel: map[string]string{"lane": "ox-led", "model": "smart", "thinking": "high",
+			"advisor": "glance", "spark": "off", "fable": "off", "main": "off", "fast": "off"},
+	}
+	cfg := m.genConfigYAML()
+	if strings.Contains(cfg, "openai-codex/stealth") || strings.Contains(cfg, "anthropic/stealth") {
+		t.Errorf("heuristic prefix leaked onto ox ids:\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "openrouter/stealth/ox-alpha:") {
+		t.Errorf("no pool-qualified ox reference:\n%s", cfg)
+	}
+	adv := m.applyAdvisor(m.generated[comboID(m.sel)], "glance")
+	advisorRow := ""
+	for _, r := range adv {
+		if roleOf(r) == "advisor" {
+			advisorRow = r
+		}
+	}
+	for _, want := range []string{"claude-haiku-4-5:low", "gpt-5.6-luna:low", "stealth/ox-alpha:low"} {
+		if !strings.Contains(advisorRow, want) {
+			t.Errorf("advisor net missing %s in %q", want, advisorRow)
+		}
+	}
+}
