@@ -194,3 +194,93 @@ func TestEvalSystemPromptIsSizerRole(t *testing.T) {
 		t.Errorf("evalSystemPrompt should pin the difficulty-rating, sizer-only role, got: %q", s)
 	}
 }
+
+// suggestModel builds a three-pool-shaped model for suggestion-path tests:
+// all seven lanes on the dial, a relief facet, and a controllable quota map.
+func suggestModel() model {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel(), hasRelief: true}
+	for i := range m.facets {
+		if m.facets[i].key == "lane" {
+			m.facets[i].values = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"}
+		}
+	}
+	m.avail = availability{ok: true, bucket: map[string]string{}, reset: map[string]int64{}}
+	return m
+}
+
+// TestQuotaLaneSuggestion: a suggestion never lands on a lane whose lead pool
+// is drained while a sibling lane has headroom - in fallbackPoolOrder, gated
+// by the prepaid balance for the pay-as-you-go pool.
+func TestQuotaLaneSuggestion(t *testing.T) {
+	m := suggestModel()
+	m.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "18.03"}
+
+	// Lead pool fine: stay put.
+	m.sel["lane"] = "gpt-led"
+	m.deriveToggles()
+	if m.sel["lane"] != "gpt-led" {
+		t.Fatalf("healthy lead pool must not move the lane, got %q", m.sel["lane"])
+	}
+
+	// Codex maxed: the first pool in fallbackPoolOrder with headroom leads.
+	m.avail.bucket["codex-main"] = "maxed"
+	m.deriveToggles()
+	if m.sel["lane"] != "claude-led" {
+		t.Fatalf("maxed lead pool should fall to claude-led, got %q", m.sel["lane"])
+	}
+
+	// Claude maxed too: DeepSeek is the last lane standing (balance is fine).
+	m.sel["lane"] = "gpt-led"
+	m.avail.bucket["claude-main"] = "maxed"
+	m.deriveToggles()
+	if m.sel["lane"] != "ds-led" {
+		t.Fatalf("both metered pools maxed should fall to ds-led, got %q", m.sel["lane"])
+	}
+
+	// ...but not when the balance is under the floor.
+	m.sel["lane"] = "gpt-led"
+	m.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "1.17"}
+	m.deriveToggles()
+	if m.sel["lane"] != "gpt-led" {
+		t.Fatalf("a dry prepaid pool must not be suggested, got %q", m.sel["lane"])
+	}
+
+	// A two-pool catalog (no ds lanes on the dial) never proposes one.
+	m2 := suggestModel()
+	for i := range m2.facets {
+		if m2.facets[i].key == "lane" {
+			m2.facets[i].values = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}
+		}
+	}
+	m2.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "50"}
+	m2.avail.bucket["codex-main"] = "maxed"
+	m2.avail.bucket["claude-main"] = "maxed"
+	m2.sel["lane"] = "gpt-led"
+	m2.deriveToggles()
+	if m2.sel["lane"] != "gpt-led" {
+		t.Fatalf("no alternative lane on the dial: stay put, got %q", m2.sel["lane"])
+	}
+}
+
+// TestBalanceGuardRelief: suggestions turn relief off when the prepaid pool is
+// dry or its balance unknown, and leave it alone when it is healthy.
+func TestBalanceGuardRelief(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bal  *deepseekBalance
+		want string
+	}{
+		{"healthy", &deepseekBalance{ok: true, currency: "USD", total: "18.03"}, "on"},
+		{"low", &deepseekBalance{ok: true, currency: "USD", total: "0.42"}, "off"},
+		{"fetch failed", &deepseekBalance{ok: false}, "off"},
+		{"no credential", nil, "off"},
+	} {
+		m := suggestModel()
+		m.sel["lane"] = "gpt-led"
+		m.avail.deepseek = tc.bal
+		m.deriveToggles()
+		if got := m.sel["relief"]; got != tc.want {
+			t.Errorf("%s: relief = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -3,11 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	clikit "github.com/atyrode/cli-kit"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +14,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	clikit "github.com/atyrode/cli-kit"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ansiRe strips SGR sequences so tests assert on visible text regardless of the
@@ -213,7 +214,7 @@ func TestComboID(t *testing.T) {
 		{map[string]string{"lane": "gpt-only", "model": "smart", "thinking": "high", "spark": "on", "fable": "on", "main": "on"}, "gpt-only_smart_high_sp_nofa"},
 	}
 	for _, c := range cases {
-		if got := comboID(c.sel); got != c.want {
+		if got := comboID(c.sel, false); got != c.want {
 			t.Errorf("comboID(%v) = %q, want %q", c.sel, got, c.want)
 		}
 	}
@@ -359,20 +360,21 @@ func TestCycleFacetClearsMain(t *testing.T) {
 	}
 }
 
+// TestCycleFacetClampsAtEndpoints: the lead dial (row 0) clamps rather than
+// wraps at either end — mixed is first, the last pool's lead is last.
 func TestCycleFacetClampsAtEndpoints(t *testing.T) {
 	m := &model{facets: facetDefs(map[string]string{}), sel: defaultSel()}
-	m.fcur = 0 // lane
+	m.fcur = 0 // lead
 
-	m.sel["lane"] = m.facets[0].values[0]
+	m.sel["lane"] = "mixed" // lead = mixed, the dial's first value
 	m.cycleFacet(-1)
-	if got := m.sel["lane"]; got != m.facets[0].values[0] {
+	if got := m.sel["lane"]; got != "mixed" {
 		t.Fatalf("left at first option wrapped to %q", got)
 	}
 
-	last := m.facets[0].values[len(m.facets[0].values)-1]
-	m.sel["lane"] = last
+	m.sel["lane"] = "claude-led" // lead = claude, the dial's last value
 	m.cycleFacet(1)
-	if got := m.sel["lane"]; got != last {
+	if got := m.sel["lane"]; got != "claude-led" {
 		t.Fatalf("right at last option wrapped to %q", got)
 	}
 }
@@ -387,7 +389,7 @@ func TestLaunchKeys(t *testing.T) {
 	}
 	base := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel()): rows},
+		generated: map[string][]string{comboID(defaultSel(), false): rows},
 	}
 
 	next, _ := base.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -436,7 +438,7 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	}
 	m := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel()): rows},
+		generated: map[string][]string{comboID(defaultSel(), false): rows},
 	}
 	m.sel["advisor"] = "off"
 	got := m.genConfigYAML()
@@ -468,6 +470,7 @@ func TestDefaultGlyphs(t *testing.T) {
 	want := map[string]rune{
 		"runtime": 0xf108, "lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fable": 0xf02d, "main": 0xf140, "fast": 0xf0e7,
+		"relief": 0xf132,
 	}
 	g := defaultGlyphs()
 	if len(g) != len(want) {
@@ -581,7 +584,7 @@ func TestApplyAdvisorFableMain(t *testing.T) {
 // settings-summary line reaches the preview (the dials are visible on the
 // left).
 func TestPreviewColumn(t *testing.T) {
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	m := model{
 		generated: map[string][]string{id: {
 			"  thinking medium · fallback on · advisor on",
@@ -620,7 +623,7 @@ func TestPreviewColumn(t *testing.T) {
 // tests exercise the actual compositions rather than skeleton fixtures.
 func layoutModel() model {
 	glyphs := defaultGlyphs()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{
 		"  thinking medium · fallback on · advisor on",
 		"    default    gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium",
@@ -967,7 +970,7 @@ func TestRepeatedResizeCrossingsPreserveState(t *testing.T) {
 // shrinks the panel; a facet change still resets to the top.
 func TestResizeScrollClamp(t *testing.T) {
 	m := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -1027,7 +1030,7 @@ func TestWheelStepsFacets(t *testing.T) {
 		t.Fatalf("fixture: lane = %q, want mixed", m.sel["lane"])
 	}
 	m.applyWheelStep(tea.MouseButtonWheelLeft)
-	if m.sel["lane"] != "claude-led" {
+	if m.sel["lane"] != "gpt-led" {
 		t.Fatalf("wheel LEFT must cycle to next option: lane = %q", m.sel["lane"])
 	}
 	m.applyWheelStep(tea.MouseButtonWheelRight)
@@ -1107,7 +1110,7 @@ func TestWheelInputFilterRequiresDeliberateBurst(t *testing.T) {
 	left := admit(tea.MouseButtonWheelLeft)
 	nm, _ = m.Update(left)
 	m = nm.(model)
-	if m.sel["lane"] != "claude-led" {
+	if m.sel["lane"] != "gpt-led" {
 		t.Fatalf("horizontal burst did not move lane: %q", m.sel["lane"])
 	}
 }
@@ -1131,8 +1134,8 @@ func TestFilteredWheelPreservesSelectionPersistence(t *testing.T) {
 	}
 	nm, _ := m.Update(msg)
 	m = nm.(model)
-	if got := loadSelectionState(m.selectionState, m.facets)["lane"]; got != "claude-led" {
-		t.Fatalf("persisted lane after wheel-left = %q, want claude-led", got)
+	if got := loadSelectionState(m.selectionState, m.facets)["lane"]; got != "gpt-led" {
+		t.Fatalf("persisted lane after wheel-left = %q, want gpt-led", got)
 	}
 
 	filter.last = time.Now().Add(-wheelGestureGap - time.Millisecond)
@@ -1811,7 +1814,7 @@ func TestSectionStatePreservation(t *testing.T) {
 
 	// Restoring routing recovers the prior scroll position.
 	sc := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -2522,7 +2525,7 @@ func TestFirstLoadBarFill(t *testing.T) {
 // facet selection.
 func TestRoutingWheelScroll(t *testing.T) {
 	long := layoutModel()
-	id := comboID(defaultSel())
+	id := comboID(defaultSel(), false)
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 60 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -3637,6 +3640,387 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	}
 }
 
+// threePoolModel builds a TUI model over the rendered three-pool catalog —
+// the integration seam the launch overlay is generated from.
+func threePoolModel(t *testing.T) model {
+	t.Helper()
+	c, err := catalogFrom(t, fixtureYMLDeepSeek)
+	if err != nil {
+		t.Fatalf("loadCatalog: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "generated.plain")
+	if err := os.WriteFile(path, []byte(c.renderCatalog()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generated := loadBlocks(path)
+	m := model{
+		generated: generated,
+		advisors:  parseAdvisors(generated["__advisors__"]),
+		facts:     parseFacts(generated["__models__"]),
+		facets:    facetDefs(defaultGlyphs()),
+		sel:       defaultSel(),
+	}
+	m.applyCatalog()
+	return m
+}
+
+// TestGenConfigYAMLDeepSeekLane: a ds-led selection launches deepseek-prefixed
+// roles, mirrors security-reviewer into the agent overrides, and version-gates
+// task.agentAdvisor on the probed omp (17.2 hard-errors on the unknown key).
+func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
+	m := threePoolModel(t)
+	m.sel["lane"] = "ds-led"
+	m.sel["spark"], m.sel["fable"], m.sel["fast"] = "off", "off", "off"
+	m.sel["advisor"] = "audit"
+
+	if _, ok := m.generated[comboID(m.sel, m.hasRelief)]; !ok {
+		t.Fatalf("no generated block for %s", comboID(m.sel, m.hasRelief))
+	}
+
+	m.ompMajor, m.ompMinor = 17, 3
+	got := m.genConfigYAML()
+	for _, want := range []string{
+		"  default: deepseek/deepseek-v4-pro:medium\n",
+		"    security-reviewer: ",
+		"  agentAdvisor:\n    task: \"on\"\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ds-led overlay lacks %q:\n%s", want, got)
+		}
+	}
+	// The relief-tail fallback and cross-pool chains must carry their own
+	// provider prefixes, never a mis-prefixed openai-codex/deepseek-….
+	if strings.Contains(got, "openai-codex/deepseek") || strings.Contains(got, "anthropic/deepseek") ||
+		strings.Contains(got, "deepseek/gpt") || strings.Contains(got, "deepseek/claude") {
+		t.Errorf("mis-prefixed model in overlay:\n%s", got)
+	}
+	// ds lanes have no OpenAI priority tier even with fast on.
+	m.sel["lane"] = "ds-only"
+	m.sel["fast"] = "on"
+	if only := m.genConfigYAML(); strings.Contains(only, "tier:") {
+		t.Errorf("ds-only must not emit the OpenAI priority tier:\n%s", only)
+	}
+
+	// Version gate: an unknown or 17.2 omp omits the 17.3-only key entirely.
+	m.sel["lane"] = "ds-led"
+	for _, v := range []struct{ major, minor int }{{0, 0}, {17, 2}} {
+		m.ompMajor, m.ompMinor = v.major, v.minor
+		if got := m.genConfigYAML(); strings.Contains(got, "agentAdvisor") {
+			t.Errorf("agentAdvisor emitted on omp %d.%d:\n%s", v.major, v.minor, got)
+		}
+	}
+}
+
+// TestApplyCatalogGrowsLaneDial: the lane facet's values are the catalog's;
+// a three-pool catalog grows ds-led/ds-only, an old two-pool one keeps the
+// classic five, and a persisted lane the catalog lacks resets to the first.
+func TestApplyCatalogGrowsLaneDial(t *testing.T) {
+	m := threePoolModel(t)
+	var lanes []string
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			lanes = f.values
+		}
+	}
+	want := []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"}
+	if !reflect.DeepEqual(lanes, want) {
+		t.Fatalf("three-pool lane dial = %v, want %v", lanes, want)
+	}
+
+	m.sel["lane"] = "ds-led"
+	if id := comboID(m.sel, m.hasRelief); m.generated[id] == nil {
+		t.Fatalf("ds-led selection resolves to no block: %s", id)
+	}
+
+	two := model{
+		generated: map[string][]string{"gpt-only_fast_low_nosp_nofa": {"    default gpt-5.6-luna:low"}},
+		facets:    facetDefs(defaultGlyphs()),
+		sel:       defaultSel(),
+	}
+	two.sel["lane"] = "ds-led" // persisted against a richer catalog
+	two.applyCatalog()
+	if two.sel["lane"] != "gpt-only" {
+		t.Fatalf("vanished lane must reset to the dial's first value, got %q", two.sel["lane"])
+	}
+}
+
+// TestUsageBodyDeepSeekBalanceGroup: the DeepSeek usage group renders only
+// when a credential exists (an absent API key is the normal state, not "not
+// authenticated"), shows the prepaid balance with no bar or reset, and
+// degrades to an explicit unavailable row on a failed fetch.
+func TestUsageBodyDeepSeekBalanceGroup(t *testing.T) {
+	m := &model{broker: brokerConfig{URL: "http://broker"}, hadUsage: true}
+	m.accountSelections = defaultAccountSelectionState()
+	a := emptyAvailability()
+	a.ok, a.accountsOK = true, true
+	a.accounts[anthropicProvider] = []account{{Provider: anthropicProvider, IdentityKey: "k", Email: "a@x.test"}}
+	a.wins = []usageWin{{label: "Claude 5 Hour", pct: 10, secs: 60, dur: 5 * 3600, prov: anthropicProvider}}
+	key := accountKey{Provider: anthropicProvider, IdentityKey: "k"}
+	a.accountUsage[key] = a.wins
+	m.avail = a
+
+	if body := stripAnsi(m.usageBodyFor(0)); strings.Contains(body, "DeepSeek") {
+		t.Fatalf("no credential: the DeepSeek group must be hidden entirely:\n%s", body)
+	}
+
+	m.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "12.34"}
+	body := stripAnsi(m.usageBodyFor(0))
+	if !strings.Contains(body, "DeepSeek") || !strings.Contains(body, "balance  $12.34 USD · pay-as-you-go") {
+		t.Fatalf("balance group missing or malformed:\n%s", body)
+	}
+	if strings.Contains(body, "$12.34 USD") && (strings.Contains(body, "% used") && strings.Count(body, "% used") > 1) {
+		t.Fatalf("the balance row must not grow bar/reset chrome:\n%s", body)
+	}
+
+	m.avail.deepseek = &deepseekBalance{}
+	if body := stripAnsi(m.usageBodyFor(0)); !strings.Contains(body, "balance unavailable") {
+		t.Fatalf("failed fetch must degrade to an unavailable row:\n%s", body)
+	}
+
+	// A deepseek bucket can never gate a launch: unmetered providers own no
+	// buckets, so nothing in availability can mark one down.
+	if b := bucketForProviderTier(deepseekProvider, ""); b != "" {
+		t.Fatalf("unmetered provider grew a quota bucket: %q", b)
+	}
+	sel := selectedAvailability(m.avail, nil)
+	for bucket := range sel.bucket {
+		if strings.HasPrefix(bucket, "deepseek") {
+			t.Fatalf("selected availability seeded a deepseek bucket: %q", bucket)
+		}
+	}
+	if sel.deepseek == nil {
+		t.Fatal("selected availability dropped the deepseek balance")
+	}
+}
+
+// TestDeepSeekOffPeakWindow pins the discount window edges (UTC 16:30-00:30)
+// and that the cost meter actually prices D rungs down inside it.
+func TestDeepSeekOffPeakWindow(t *testing.T) {
+	for _, tc := range []struct {
+		hhmm string
+		want bool
+	}{
+		{"16:29", false}, {"16:30", true}, {"23:59", true},
+		{"00:00", true}, {"00:29", true}, {"00:30", false}, {"12:00", false},
+	} {
+		ts, _ := time.Parse("15:04", tc.hhmm)
+		if got := deepseekOffPeak(ts); got != tc.want {
+			t.Errorf("deepseekOffPeak(%s) = %v, want %v", tc.hhmm, got, tc.want)
+		}
+	}
+
+	m := threePoolModel(t)
+	m.sel["lane"] = "ds-only"
+	prev := offPeakNow
+	defer func() { offPeakNow = prev }()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	peak := m.costScore()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC) }
+	if off := m.costScore(); off > peak {
+		t.Errorf("off-peak cost score %d must not exceed peak %d", off, peak)
+	}
+	// The discount must show up in the raw weighted index, even when logScore
+	// clamps both readings into the same 1..5 bucket for a cheap pool.
+	idx := func() float64 {
+		var num, den float64
+		m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
+			c, ok := m.facts[id]
+			if !ok {
+				return
+			}
+			cost := 0.25*c.in + 0.75*c.out
+			if m.poolOfModel(id) == "D" && deepseekOffPeak(offPeakNow().UTC()) {
+				cost *= deepseekOffPeakMult
+			}
+			num += w * cost
+			den += w
+		})
+		return num / den
+	}
+	offIdx := idx()
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	peakIdx := idx()
+	if offIdx >= peakIdx {
+		t.Errorf("off-peak weighted cost %v must be under peak %v", offIdx, peakIdx)
+	}
+}
+
+// TestDeepSeekBalanceRowNotes: the low-balance cue appears exactly under the
+// suggestion floor, and the off-peak tag only inside the discount window.
+func TestDeepSeekBalanceRowNotes(t *testing.T) {
+	m := &model{}
+	prev := offPeakNow
+	defer func() { offPeakNow = prev }()
+
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC) }
+	row := stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "1.99"}))
+	if !strings.Contains(row, "low") {
+		t.Errorf("balance under the floor must carry the low cue: %q", row)
+	}
+	if strings.Contains(row, "off-peak") {
+		t.Errorf("peak hours must not show the off-peak tag: %q", row)
+	}
+	row = stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "2.00"}))
+	if strings.Contains(row, "low") {
+		t.Errorf("balance at the floor is not low: %q", row)
+	}
+	offPeakNow = func() time.Time { return time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC) }
+	row = stripAnsi(m.deepseekBalanceRow(deepseekBalance{ok: true, currency: "USD", total: "18.03"}))
+	if !strings.Contains(row, "off-peak −50%") {
+		t.Errorf("off-peak window must surface the discount: %q", row)
+	}
+}
+
+// TestSegmentGaugeRendersAsMeter: the thinking and model dials draw a notched
+// ▰▱ meter with the selected word beside it, never the word list; one cell per
+// step, filled to the selected depth, so ←/→ reads as a slider.
+func TestSegmentGaugeRendersAsMeter(t *testing.T) {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+	rowFor := func(key string) string {
+		lines, _ := m.genLines()
+		for _, ln := range lines {
+			if strings.Contains(stripAnsi(ln), key) {
+				return stripAnsi(ln)
+			}
+		}
+		t.Fatalf("no %s row rendered", key)
+		return ""
+	}
+
+	m.sel["thinking"] = "medium"
+	think := rowFor("thinking")
+	if got := strings.Count(think, "▰") + strings.Count(think, "▱"); got != 6 {
+		t.Fatalf("thinking gauge must keep one cell per level, got %d: %q", got, think)
+	}
+	if !strings.Contains(think, " medium ") {
+		t.Errorf("gauge must carry the selected word: %q", think)
+	}
+	for _, word := range []string{"minimal", "xhigh", "max"} {
+		if strings.Contains(think, word) {
+			t.Errorf("gauge must replace the word list, still shows %q: %q", word, think)
+		}
+	}
+
+	m.sel["model"] = "normal"
+	mdl := rowFor("model")
+	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 3 {
+		t.Fatalf("model gauge must keep one cell per option, got %d cells: %q", got, mdl)
+	}
+	if got := strings.Count(mdl, "▰"); got != 2 {
+		t.Fatalf("model step 2/3 must light two cells, got %d lit: %q", got, mdl)
+	}
+	if !strings.Contains(mdl, " normal ") || strings.Contains(mdl, "smart") {
+		t.Errorf("model gauge must show only the selected word: %q", mdl)
+	}
+
+	// advisor's leading "off" is the zero mark: no cell of its own, empty
+	// track when selected, and the levels light one cell each.
+	m.sel["advisor"] = "off"
+	adv := rowFor("advisor")
+	if strings.Count(adv, "▱") != 3 || strings.Count(adv, "▰") != 0 {
+		t.Fatalf("advisor off must render an empty three-cell track: %q", adv)
+	}
+	if !strings.Contains(adv, " off ") {
+		t.Errorf("advisor gauge must carry the selected word: %q", adv)
+	}
+	m.sel["advisor"] = "review"
+	adv = rowFor("advisor")
+	if strings.Count(adv, "▰") != 2 || strings.Count(adv, "▱") != 1 {
+		t.Fatalf("advisor review must light 2 of 3 cells: %q", adv)
+	}
+}
+
+// TestLaneSplitDials: the lane facet renders as a lead row plus a blend child
+// (hidden for mixed); cycling either recomposes the canonical lane, and the
+// persisted state still stores only "lane".
+func TestLaneSplitDials(t *testing.T) {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+
+	// mixed: a single lead row, no blend child, no lane word list.
+	vf := m.visibleFacets()
+	if vf[0].key != "lead" {
+		t.Fatalf("first dial = %q, want lead", vf[0].key)
+	}
+	if vf[1].key == "blend" {
+		t.Fatal("mixed must not render a blend child")
+	}
+	wantLeads := []string{"mixed", "gpt", "claude"}
+	if !reflect.DeepEqual(vf[0].values, wantLeads) {
+		t.Fatalf("lead values = %v, want %v", vf[0].values, wantLeads)
+	}
+
+	// Cycling lead off mixed lands on the -led lane and grows the blend child.
+	m.cycleFacet(1) // mixed → gpt (cursor starts on the lead row)
+	if m.sel["lane"] != "gpt-led" {
+		t.Fatalf("lead change composed lane %q, want gpt-led", m.sel["lane"])
+	}
+	vf = m.visibleFacets()
+	if vf[1].key != "blend" {
+		t.Fatalf("non-mixed lead must render the blend child, got %q", vf[1].key)
+	}
+
+	// Cycling blend led → only composes the pure lane.
+	m.fcur = 1
+	m.cycleFacet(1)
+	if m.sel["lane"] != "gpt-only" {
+		t.Fatalf("blend change composed lane %q, want gpt-only", m.sel["lane"])
+	}
+
+	// A three-pool dial grows a ds lead; lead/blend never persist.
+	for i := range m.facets {
+		if m.facets[i].key == "lane" {
+			m.facets[i].values = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"}
+		}
+	}
+	vf = m.visibleFacets()
+	if !reflect.DeepEqual(vf[0].values, []string{"mixed", "gpt", "claude", "ds"}) {
+		t.Fatalf("three-pool lead values = %v", vf[0].values)
+	}
+	choices := selectionChoices(m.sel, m.facets)
+	if _, ok := choices["lead"]; ok {
+		t.Error("lead is a derived dial and must not persist")
+	}
+	if _, ok := choices["blend"]; ok {
+		t.Error("blend is a derived dial and must not persist")
+	}
+	if choices["lane"] != "gpt-only" {
+		t.Errorf("persisted lane = %q, want gpt-only", choices["lane"])
+	}
+}
+
+// TestAdvisorAuditReliefTail: audit is the advisor's heavyweight setting, so
+// it follows the same metered logic as the heavyweight roles — with relief on,
+// a metered-led blend's audit chain ends on the optional pool's audit rung;
+// relief off, lighter levels, and optional-led lanes stay untouched.
+func TestAdvisorAuditReliefTail(t *testing.T) {
+	m := threePoolModel(t)
+	m.sel["lane"] = "mixed"
+	m.sel["relief"] = "on"
+
+	audit := m.advisorChain("audit")
+	if len(audit) == 0 {
+		t.Fatal("no audit chain on mixed")
+	}
+	if !strings.HasPrefix(audit[len(audit)-1], "deepseek-") {
+		t.Fatalf("relief-on audit chain must tail into the optional pool: %v", audit)
+	}
+
+	m.sel["relief"] = "off"
+	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("relief-off audit chain must stay metered: %v", got)
+	}
+
+	m.sel["relief"] = "on"
+	if got := m.advisorChain("review"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("lighter advisor levels take no tail: %v", got)
+	}
+
+	m.sel["lane"] = "ds-led" // optional-led lane already spends DeepSeek deliberately
+	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
+		t.Fatalf("relief does not apply on an optional-led lane: %v", got)
+	}
+}
+
 // ── pool R surface ────────────────────────────────────────────────────────────
 
 func TestModelReMatchesProviderScopedIds(t *testing.T) {
@@ -3721,7 +4105,6 @@ func TestPrefixedLeveledTokens(t *testing.T) {
 
 // End to end: the emitted config must qualify every reference with the
 // catalog's pool, and the ox-led advisor must carry its cross-pool net
-// (Claude lead, GPT glance rung, then the free pool) instead of a bare lead.
 func TestGenConfigYAMLOxLed(t *testing.T) {
 	blocks := loadBlocks("/tmp/grid-ox.plain")
 	if len(blocks) == 0 {
@@ -3734,7 +4117,11 @@ func TestGenConfigYAMLOxLed(t *testing.T) {
 		glyphs:    defaultGlyphs(),
 		facets:    facetDefs(defaultGlyphs()),
 		sel: map[string]string{"lane": "ox-led", "model": "smart", "thinking": "high",
-			"advisor": "glance", "spark": "off", "fable": "off", "main": "off", "fast": "off"},
+			"advisor": "glance", "spark": "off", "fable": "off", "main": "off", "fast": "off",
+			"relief": "on"},
+		// An ox catalog carries an optional pool, so its rendered combos are
+		// relief-segmented — mirror what applyCatalog would derive.
+		hasRelief: true,
 	}
 	cfg := m.genConfigYAML()
 	if strings.Contains(cfg, "openai-codex/stealth") || strings.Contains(cfg, "anthropic/stealth") {
@@ -3743,7 +4130,7 @@ func TestGenConfigYAMLOxLed(t *testing.T) {
 	if !strings.Contains(cfg, "openrouter/stealth/ox-alpha:") {
 		t.Errorf("no pool-qualified ox reference:\n%s", cfg)
 	}
-	adv := m.applyAdvisor(m.generated[comboID(m.sel)], "glance")
+	adv := m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], "glance")
 	advisorRow := ""
 	for _, r := range adv {
 		if roleOf(r) == "advisor" {

@@ -45,7 +45,7 @@ func TestSelectionStateRoundTripStoresOnlyFacets(t *testing.T) {
 	}
 	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, map[string]string{
 		"lane": "claude-led", "model": "smart", "thinking": "xhigh", "advisor": "glance",
-		"spark": "on", "fable": "off", "main": "off", "fast": "off",
+		"spark": "on", "fable": "off", "main": "off", "fast": "off", "relief": "on",
 	}) {
 		t.Fatalf("round-trip selection = %v", got)
 	}
@@ -224,8 +224,10 @@ func TestFacetChangeAndResetPersistSelection(t *testing.T) {
 
 	changedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	changed := changedModel.(model)
-	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, changed.sel) {
-		t.Fatalf("facet change persisted %v, want %v", got, changed.sel)
+	// changed.sel also carries the transient lead/blend derivations of lane;
+	// what persists (and reloads) is the facet-only projection.
+	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, selectionChoices(changed.sel, testFacets())) {
+		t.Fatalf("facet change persisted %v, want %v", got, selectionChoices(changed.sel, testFacets()))
 	}
 
 	resetModel, _ := changed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})

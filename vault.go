@@ -15,15 +15,16 @@ import (
 	"time"
 )
 
-const (
-	anthropicProvider = "anthropic"
-	openAIProvider    = "openai-codex"
-)
-
+// account is one broker credential's identity. apiKey is deliberately
+// unexported: it exists only in memory for direct balance fetches (DeepSeek)
+// and must never reach any serialized artifact — usage cache, account state,
+// or the forwarded account pool.
 type account struct {
-	Provider    string
-	IdentityKey string
-	Email       string
+	Provider     string
+	IdentityKey  string
+	Email        string
+	apiKey       string
+	credentialID string
 }
 
 type accountKey struct {
@@ -108,12 +109,17 @@ func loadAccounts(broker brokerConfig) (map[string][]account, error) {
 }
 
 func emptyAccounts() map[string][]account {
-	return map[string][]account{anthropicProvider: {}, openAIProvider: {}}
+	accounts := make(map[string][]account, len(providerRegistry))
+	for _, p := range providerRegistry {
+		accounts[p.ID] = []account{}
+	}
+	return accounts
 }
 
 func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 	var snapshot struct {
 		Credentials *[]struct {
+			ID          json.RawMessage `json:"id"`
 			Provider    string          `json:"provider"`
 			IdentityKey string          `json:"identityKey"`
 			Credential  json.RawMessage `json:"credential"`
@@ -132,12 +138,13 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 	accounts := emptyAccounts()
 	seen := make(map[accountKey]bool)
 	for _, item := range *snapshot.Credentials {
-		if item.Provider != anthropicProvider && item.Provider != openAIProvider {
+		if providerByID(item.Provider) == nil {
 			continue
 		}
 		var credential struct {
 			Type  string `json:"type"`
 			Email string `json:"email"`
+			Key   string `json:"key"`
 		}
 		if len(item.Credential) == 0 || bytes.Equal(item.Credential, []byte("null")) {
 			return nil, fmt.Errorf("broker snapshot account %s/%s has no credential metadata", item.Provider, item.IdentityKey)
@@ -145,7 +152,22 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 		if err := json.Unmarshal(item.Credential, &credential); err != nil {
 			return nil, fmt.Errorf("invalid credential metadata for %s/%s: %w", item.Provider, item.IdentityKey, err)
 		}
-		if credential.Type != "oauth" {
+		switch credential.Type {
+		case "oauth":
+		case "api_key":
+			// API-key credentials have no broker identity (identityKey is
+			// null) and no account-pool routing. For unmetered providers
+			// (DeepSeek) they are display-only rows whose key is retained in
+			// memory for direct balance fetches; for metered providers they
+			// are skipped exactly as before — OAuth is the only usable shape.
+			if p := providerByID(item.Provider); !p.Metered {
+				accounts[item.Provider] = append(accounts[item.Provider], account{
+					Provider: item.Provider, IdentityKey: item.IdentityKey,
+					apiKey: credential.Key, credentialID: strings.Trim(string(item.ID), `"`),
+				})
+			}
+			continue
+		default:
 			continue
 		}
 		if strings.TrimSpace(item.IdentityKey) == "" {
@@ -160,7 +182,8 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			Provider: item.Provider, IdentityKey: item.IdentityKey, Email: credential.Email,
 		})
 	}
-	for _, provider := range []string{anthropicProvider, openAIProvider} {
+	for _, p := range providerRegistry {
+		provider := p.ID
 		sort.Slice(accounts[provider], func(i, j int) bool {
 			return accounts[provider][i].IdentityKey < accounts[provider][j].IdentityKey
 		})
@@ -367,7 +390,7 @@ func decodeAccountStateEntries(entries []accountStateEntry) (map[accountKey]bool
 	}
 	disabled := make(map[accountKey]bool, len(entries))
 	for _, entry := range entries {
-		if (entry.Provider != anthropicProvider && entry.Provider != openAIProvider) || entry.IdentityKey == "" {
+		if providerByID(entry.Provider) == nil || entry.IdentityKey == "" {
 			return nil, false
 		}
 		key := accountKey{Provider: entry.Provider, IdentityKey: entry.IdentityKey}
@@ -385,7 +408,7 @@ func encodeAccountStateEntries(disabled map[accountKey]bool) ([]accountStateEntr
 		if !isDisabled {
 			continue
 		}
-		if (key.Provider != anthropicProvider && key.Provider != openAIProvider) || key.IdentityKey == "" {
+		if providerByID(key.Provider) == nil || key.IdentityKey == "" {
 			return nil, fmt.Errorf("invalid disabled account %q/%q", key.Provider, key.IdentityKey)
 		}
 		entries = append(entries, accountStateEntry{Provider: key.Provider, IdentityKey: key.IdentityKey})
@@ -488,9 +511,17 @@ func atomicPrivateWrite(path string, body []byte) error {
 	return nil
 }
 
+// buildAccountPool seeds the account-pool file omp routes OAuth identities
+// through. Only metered (OAuth) providers belong: api_key providers have no
+// identity keys and no pool routing.
 func buildAccountPool(accounts map[string][]account, disabled map[accountKey]bool) map[string][]string {
-	pool := map[string][]string{anthropicProvider: {}, openAIProvider: {}}
-	for _, provider := range []string{anthropicProvider, openAIProvider} {
+	pool := make(map[string][]string, len(providerRegistry))
+	for _, p := range providerRegistry {
+		if !p.Metered {
+			continue
+		}
+		provider := p.ID
+		pool[provider] = []string{}
 		for _, acct := range accounts[provider] {
 			key := accountKey{Provider: provider, IdentityKey: acct.IdentityKey}
 			if acct.Provider == provider && acct.IdentityKey != "" && !disabled[key] {
@@ -593,4 +624,87 @@ func stripProfileArgs(args []string) []string {
 		clean = append(clean, arg)
 	}
 	return clean
+}
+
+// ── DeepSeek balance ──────────────────────────────────────────────────────────
+// DeepSeek publishes no rate-limit windows (prepaid pay-as-you-go), so omp's
+// usage report never carries it. The upstream balance endpoint is the only
+// quota-like surface; it is queried directly with the api_key retained from
+// the broker snapshot — the key lives in memory only and is never serialized.
+
+// deepseekBalanceURL is a package var so tests can point it at an httptest
+// server.
+var deepseekBalanceURL = "https://api.deepseek.com/user/balance"
+
+// deepseekBalance is the rendered state of the DeepSeek prepaid balance.
+// A nil *deepseekBalance means "no DeepSeek credential" (group hidden);
+// ok=false means the credential exists but the balance is unavailable.
+type deepseekBalance struct {
+	ok        bool
+	currency  string
+	total     string
+	fetchedAt int64
+	stale     bool // restored from cache or retained across a failed refresh
+}
+
+// fetchDeepSeekBalance queries the upstream balance endpoint with the
+// account's API key. Numeric fields arrive as JSON strings per the DeepSeek
+// docs; json.Number tolerates bare numbers too. The USD entry wins when
+// present, else the first one; an empty list or is_available=false degrades
+// to the unavailable state without error.
+func fetchDeepSeekBalance(key string) (deepseekBalance, error) {
+	req, err := http.NewRequest(http.MethodGet, deepseekBalanceURL, nil)
+	if err != nil {
+		return deepseekBalance{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return deepseekBalance{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return deepseekBalance{}, fmt.Errorf("balance endpoint returned %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return deepseekBalance{}, err
+	}
+	var doc struct {
+		IsAvailable  bool `json:"is_available"`
+		BalanceInfos []struct {
+			Currency     string      `json:"currency"`
+			TotalBalance json.Number `json:"total_balance"`
+		} `json:"balance_infos"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return deepseekBalance{}, fmt.Errorf("invalid balance payload: %w", err)
+	}
+	now := time.Now().Unix()
+	if !doc.IsAvailable || len(doc.BalanceInfos) == 0 {
+		return deepseekBalance{fetchedAt: now}, nil
+	}
+	pick := doc.BalanceInfos[0]
+	for _, info := range doc.BalanceInfos {
+		if strings.EqualFold(info.Currency, "USD") {
+			pick = info
+			break
+		}
+	}
+	return deepseekBalance{
+		ok: true, currency: strings.ToUpper(pick.Currency),
+		total: pick.TotalBalance.String(), fetchedAt: now,
+	}, nil
+}
+
+// deepseekAPIKey finds the in-memory DeepSeek api_key in a parsed snapshot;
+// "" when no such credential exists.
+func deepseekAPIKey(accounts map[string][]account) string {
+	for _, acct := range accounts[deepseekProvider] {
+		if acct.apiKey != "" {
+			return acct.apiKey
+		}
+	}
+	return ""
 }

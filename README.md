@@ -22,9 +22,12 @@ Press `enter` and `code` launches oh-my-pi with that setup, as a one-shot
 overlay — your omp config is never modified.
 
 It's made for people who run oh-my-pi with **both Anthropic and OpenAI**:
-the whole point is deciding, per task, how to blend the two pools and which
-quota to spend. With a single provider you can still launch, but the dials
-lose most of their meaning.
+the whole point is deciding, per task, how to blend the pools and which
+quota to spend. A DeepSeek API key adds a third, pay-as-you-go pool — its
+own `ds` lanes, a live balance readout in Usage, and a relief tail at the
+end of the heavyweight fallback chains for when the metered windows are
+drained. With a single provider you can still launch, but the dials lose
+most of their meaning.
 
 ## Usage
 
@@ -62,9 +65,12 @@ are not orphaned onto init while still holding their memory.
 
 ## Features
 
-- **Dials, not config files** — provider lane, model tier, thinking depth,
-  advisor level, plus the spark/fable toggles; every combination maps to a
-  pre-computed routing.
+- **Dials, not config files** — a provider **lead** dial with a led/only
+  blend child (scales past two pools without overflowing), notched sliders
+  for model tier and thinking depth, advisor level, plus the spark/fable
+  toggles; every combination maps to a pre-computed routing. Optional pools
+  plug in as their own lanes, and a **relief** dial decides whether drained
+  metered chains may spill into the pay-as-you-go pool.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
   launch without mixing cloud credentials into the session.
@@ -75,10 +81,14 @@ are not orphaned onto init while still holding their memory.
 - **Prompt → profile** — `ctrl+o`, describe the task, a small local model
   rates its difficulty and sets the dials (optional, needs
   [ollama](https://ollama.com); the prompt is forwarded into the session).
+  Suggestions are quota-aware: a lane whose lead pool is maxed falls to a
+  sibling with headroom, and a low DeepSeek balance stops proposals from
+  spending it.
 - **Usage at a glance** — quota bars and reset countdowns per provider,
   before you spend the scarce bucket.
 - **Account presets** — choose broker accounts and save reusable selections (`v`).
-- **Cost & speed meters** — every dial change reprices the session.
+- **Cost & speed meters** — every dial change reprices the session; DeepSeek
+  rungs are priced by the clock during its off-peak discount window.
 - **Guided first run** — no catalog? `code` builds one from your omp,
   interactively; `code generate` scripts the same thing.
 - **Argument passthrough** — `code <anything omp understands>` just works.

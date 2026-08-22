@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 
 	clikit "github.com/atyrode/cli-kit"
 	"github.com/atyrode/cli-kit/ollama"
@@ -96,17 +97,18 @@ func (m model) Commander() clikit.Commander {
 }
 
 // repairConstraints enforces the deterministic rules a suggestion (or selection)
-// must never violate — mirroring genValid plus live quota: spark is an OpenAI
-// model, so it can't run on a pure-Claude or an ox lane; fable is an Anthropic
-// elite, so it can't run on a pure-GPT or a pure-ox lane; fable-as-main would
-// defeat ox-led's free worker; and neither lead may be left on when its quota
-// bucket is maxed or unauthed. Runs after an applied proposal, so the generator
-// can't land on an impossible or unavailable combo.
+// must never violate — mirroring the generator's `genValid` plus live quota:
+// a special-tier facet (spark, fable) can only run on a lane whose pool-set
+// contains its provider's pool (and never on an ox lane); fable-as-main would
+// defeat ox-led's free worker; and neither may be left on when its quota
+// bucket is maxed or unauthed. Runs after an applied proposal, so the
+// generator can't land on an impossible or unavailable combo.
 func (m *model) repairConstraints() {
-	if lane := m.sel["lane"]; lane == "claude-only" || lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
+	repairSelectionSpecials(m.sel)
+	if lane := m.sel["lane"]; lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
 		m.sel["spark"] = "off"
 	}
-	if lane := m.sel["lane"]; lane == "gpt-only" || lane == "ox-only" {
+	if m.sel["lane"] == "ox-only" {
 		m.sel["fable"] = "off"
 	}
 	if m.sel["lane"] == "ox-led" {
@@ -195,10 +197,21 @@ func (m model) appliedDiff() []clikit.Action {
 //     task-specific, so it keeps its current value; repairConstraints still turns
 //     it off if its bucket is down or the lane is Claude-only.
 func (m *model) deriveToggles() {
+	// Quota-aware lane fallback: a suggestion must not land on a lane whose
+	// lead pool is drained when a sibling lane has live headroom.
+	if alt := m.quotaLane(); alt != "" {
+		m.sel["lane"] = alt
+	}
+	// Balance guard: when the pay-as-you-go pool is dry (or its balance is
+	// unknown), a suggestion stops routing relief tails into it. The manual
+	// dial stays free — this only shapes proposals.
+	if m.hasRelief && laneReliefApplies(m.sel["lane"]) && !m.optionalPoolUsable() {
+		m.sel["relief"] = "off"
+	}
 	tier := m.sel["thinking"]
 	critical := m.sel["model"] == "smart" && (tier == "xhigh" || tier == "max")
-	claudeLane := m.sel["lane"] != "gpt-only"
-	if critical && claudeLane && !m.avail.down(bucketOf("fable")) {
+	fableLane := laneHostsSpecial(m.sel["lane"], "fable")
+	if critical && fableLane && !m.avail.down(bucketOf("fable")) {
 		m.sel["fable"] = "on"
 	} else {
 		m.sel["fable"] = "off"
@@ -208,4 +221,60 @@ func (m *model) deriveToggles() {
 	} else {
 		m.sel["fast"] = "off"
 	}
+}
+
+// deepseekLowBalanceUSD is the prepaid floor under which suggestions stop
+// spending the pay-as-you-go pool: below it, ds lanes are not proposed and
+// relief tails are suggested off.
+const deepseekLowBalanceUSD = 2.0
+
+// optionalPoolUsable reports whether the pay-as-you-go pool can absorb routed
+// traffic: a credential exists, the last balance fetch succeeded, and the
+// prepaid balance clears the floor. An unknown balance is not usable — the
+// guard's whole point is never to discover $0 mid-session.
+func (m *model) optionalPoolUsable() bool {
+	b := m.avail.deepseek
+	if b == nil || !b.ok {
+		return false
+	}
+	v, err := strconv.ParseFloat(b.total, 64)
+	return err == nil && v >= deepseekLowBalanceUSD
+}
+
+// quotaLane returns the led lane of the first pool with live headroom when the
+// current lane's lead pool is maxed or unauthenticated — the dial move a human
+// would make after glancing at the usage panel. "" means stay put: the lead
+// pool is fine, no alternative lane exists in this catalog, or none has quota.
+func (m *model) quotaLane() string {
+	lead := providerByPool(genLanePolicies[m.sel["lane"]].primary)
+	if lead == nil || !m.avail.down(lead.mainBucket()) {
+		return ""
+	}
+	lanes := map[string]bool{}
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			for _, v := range f.values {
+				lanes[v] = true
+			}
+		}
+	}
+	for _, pool := range fallbackPoolOrder {
+		p := providerByPool(pool)
+		if p == nil || p.Pool == lead.Pool {
+			continue
+		}
+		alt := p.Lane + "-led"
+		if !lanes[alt] {
+			continue
+		}
+		if p.Metered {
+			if m.avail.down(p.mainBucket()) {
+				continue
+			}
+		} else if !m.optionalPoolUsable() {
+			continue
+		}
+		return alt
+	}
+	return ""
 }
