@@ -130,19 +130,24 @@ fallback chain. Any text-only rung is skipped.
 
 Pool `R` is optional, and its presence is its own switch: with no `R` models
 the generator serves only the five base lanes; with a full ladder it also
-serves `ox-only` (every role on the free pool) and `ox-led` (the free pool
-leads everything high-volume; plan/slow/designer/reviewer cross to Anthropic,
-and `fable` may still lead those). A half-declared R ladder is refused. A
-one-model family — Ox Alpha is exactly that — declares the same id once per
-tier with ascending thinking ceilings (`low→low`, then `low→high`, then
-`low→max`); the tier dial then means thinking depth. `code generate init`
-never scaffolds pool R: curate those entries by hand and re-confirm
-`probed: true` yourself.
+serves three ox lanes — `ox-only` (every role on the free pool),
+`ox-led` (the free pool leads everything high-volume while plan/slow/
+designer/reviewer cross to Anthropic, and `fable` may still lead those), and
+`ox-lean` (the mirror: paid providers answer for default/task/librarian while
+the free pool absorbs scout/sonic/smol/tiny/commit and vision; `fable` and
+fable-as-main stay available, so an elite can take the default seat). A
+half-declared R ladder is refused. A one-model family — Ox Alpha is exactly
+that — declares the same id once per tier with ascending thinking ceilings;
+the tier dial then means thinking depth. `code generate init` never scaffolds
+pool R: curate those entries by hand and re-confirm `probed: true` yourself.
 
 The thinking scale is `minimal · low · medium · high · xhigh · max`. Write
-`low→max` for a contiguous run, or a comma list when the model skips a level:
-claude-opus-4-6 offers `low,medium,high,max` but not `xhigh`, and a range there
-would claim a level the API rejects. A single-level model writes `low→low`.
+`low→max` ONLY for a genuinely contiguous run — a range claims every level in
+between, and requesting one the model doesn't offer sends a level the API may
+reject. A model that skips levels must be written as a comma list:
+claude-opus-4-6 offers `low,medium,high,max` but not `xhigh`; Ox Alpha offers
+only `low,high,max`, so its rungs declare `low→low`, `low,high`, and
+`low,high,max`. A single-level model writes `low→low`.
 
 ## The `ctrl+o` classifier
 

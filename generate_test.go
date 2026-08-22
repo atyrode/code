@@ -1150,7 +1150,7 @@ const oxEntries = `
     speed: 27.4
     ttft: 2.1
     context: 1048576
-    thinking: low→high
+    thinking: low,high
   oxmax:
     id: stealth/ox-alpha
     pool: R
@@ -1161,7 +1161,7 @@ const oxEntries = `
     speed: 27.4
     ttft: 2.1
     context: 1048576
-    thinking: low→max
+    thinking: low,high,max
 `
 
 func catalogWithOx(t *testing.T) *catalog {
@@ -1179,7 +1179,7 @@ func TestOxLadderGatesLanes(t *testing.T) {
 		t.Errorf("base catalog serves %d lanes, want %d: %v", len(got), len(genBaseLanes), got)
 	}
 	withOx := catalogWithOx(t)
-	want := append(append([]string{}, genBaseLanes...), "ox-only", "ox-led")
+	want := append(append([]string{}, genBaseLanes...), "ox-only", "ox-led", "ox-lean")
 	if got := withOx.lanes(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("ox catalog serves %v, want %v", got, want)
 	}
@@ -1203,9 +1203,11 @@ func TestGenValidOxLanes(t *testing.T) {
 		{"ox-only", true, false, false, false}, // no O drain bucket to lead with
 		{"ox-only", false, true, false, false}, // no A elite on a pure ox lane
 		{"ox-led", false, false, false, true},
-		{"ox-led", true, false, false, false}, // utility already lives on the free pool
-		{"ox-led", false, true, false, true},  // fable leads the deliberative roles
-		{"ox-led", false, true, true, false},  // fable-as-main defeats the free worker
+		{"ox-led", false, true, true, false}, // fable-as-main defeats the free worker
+		{"ox-lean", false, false, false, true},
+		{"ox-lean", true, false, false, false}, // utility is ox here; spark has nothing to drain
+		{"ox-lean", false, true, false, true},  // deliberative roles stay Claude; fable may lead them
+		{"ox-lean", false, true, true, true},   // fable-as-default is exactly what lean is for
 	} {
 		if got := genValid(tc.lane, tc.spark, tc.fable, tc.main_); got != tc.want {
 			t.Errorf("genValid(%s, sp=%v, fa=%v, famain=%v) = %v, want %v",
@@ -1246,6 +1248,41 @@ func TestOxLaneRoutingPolicy(t *testing.T) {
 		}
 		if id := c.models[rt.lead].ID; id != "stealth/ox-alpha" {
 			t.Errorf("ox-only %s lead = %s, want stealth/ox-alpha", r, id)
+		}
+	}
+}
+
+// ox-lean is ox-led's mirror: paid providers answer for the work, the free
+// pool absorbs the background. Fable-as-main is allowed — handing the default
+// seat to the elite is exactly what an operator on this lane may want.
+func TestOxLeanRoutingPolicy(t *testing.T) {
+	c := catalogWithOx(t)
+	combo := c.genCombo("ox-lean", "smart", "high", false, true, true)
+	// fable-as-main hands only the default seat to the elite; task and
+	// librarian follow the lane's OpenAI primary.
+	for _, r := range []string{"task", "librarian"} {
+		if pool := c.models[combo[r].lead].Pool; pool != "O" {
+			t.Errorf("ox-lean %s lead pool = %s, want O", r, pool)
+		}
+	}
+	if id := c.models[combo["default"].lead].ID; id != "claude-fable-5" {
+		t.Errorf("ox-lean famain default = %s, want claude-fable-5", id)
+	}
+	for _, r := range []string{"scout", "sonic", "smol", "tiny", "commit", "vision"} {
+		if id := c.models[combo[r].lead].ID; id != "stealth/ox-alpha" {
+			t.Errorf("ox-lean %s lead = %s, want stealth/ox-alpha", r, id)
+		}
+	}
+	for _, r := range []string{"plan", "slow", "designer", "reviewer"} {
+		if pool := c.models[combo[r].lead].Pool; pool != "A" {
+			t.Errorf("ox-lean deliberative %s pool = %s, want A", r, pool)
+		}
+	}
+	// Without fable, workers stay on the OpenAI primary.
+	base := c.genCombo("ox-lean", "normal", "medium", false, false, false)
+	for _, r := range []string{"default", "task"} {
+		if pool := c.models[base[r].lead].Pool; pool != "O" {
+			t.Errorf("ox-lean %s pool = %s, want O", r, pool)
 		}
 	}
 }

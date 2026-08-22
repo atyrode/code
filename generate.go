@@ -412,28 +412,66 @@ var (
 	genExtremes  = map[string]bool{"minimal": true, "max": true}
 )
 
-func lanePrimary(lane string) string {
-	if lane == "ox-only" || lane == "ox-led" {
-		return "R"
-	}
-	if lane == "gpt-only" || lane == "gpt-led" || lane == "mixed" {
-		return "O"
-	}
-	return "A"
+// lanePolicy is a lane's whole role-mapping, as data. primary answers for
+// default/task/librarian; delib hosts plan/slow/designer/reviewer ("" = the
+// primary); util hosts scout/sonic/smol/tiny/commit ("" = primary); vision is
+// the image rung's pool, with visionSmart overriding it when the model dial
+// sits on smart (mixed prefers Claude's tier-3 for that). pure lanes never
+// cross: reviewer and advisor stay in-primary.
+//
+// This table is the whole generator's sense of "a lane". A new setup — a new
+// pool pairing, a new emphasis — is a row here, not new branches in genCombo;
+// keep it that way. The reviewer always ends up off its lead pool unless the
+// lane is pure (the anti-tunnel-vision rule), and the advisor leads on the
+// minimum-diversity pool (delib when set, else the crossing target).
+type lanePolicy struct {
+	primary     string
+	delib       string
+	util        string
+	vision      string
+	visionSmart string
+	pure        bool
 }
 
-func lanePure(lane string) bool {
-	return lane == "gpt-only" || lane == "claude-only" || lane == "ox-only"
+var genLanePolicies = map[string]lanePolicy{
+	"gpt-only":    {primary: "O", pure: true},
+	"gpt-led":     {primary: "O"},
+	"mixed":       {primary: "O", delib: "A", visionSmart: "A"},
+	"claude-led":  {primary: "A"},
+	"claude-only": {primary: "A", pure: true},
+	"ox-only":     {primary: "R", pure: true},
+	"ox-led":      {primary: "R", delib: "A"},
+	// The mirror of ox-led: paid providers keep everything that answers for
+	// the work (default, task, librarian), while the free pool absorbs the
+	// high-volume background and image description.
+	"ox-lean": {primary: "O", delib: "A", util: "R", vision: "R"},
+}
+
+func (p lanePolicy) pool(role string) string {
+	if p.pure {
+		return p.primary
+	}
+	if genDelib[role] && p.delib != "" {
+		return p.delib
+	}
+	if genCrossLed[role] {
+		return otherPool(p.primary)
+	}
+	if genUtil[role] && p.util != "" {
+		return p.util
+	}
+	return p.primary
 }
 
 // lanes lists the lanes this catalog serves: the five base lanes always, plus
-// the ox pair only when the optional OpenRouter ladder is fully declared. This
-// is the generator side of the ox on/off switch.
+// the ox trio only when the optional OpenRouter ladder is fully declared.
+// This is the generator side of the ox on/off switch. Order follows the dial:
+// base lanes first, ox lanes appended.
 func (c *catalog) lanes() []string {
 	if !c.hasOxLadder() {
 		return genBaseLanes
 	}
-	return append(append([]string{}, genBaseLanes...), "ox-only", "ox-led")
+	return append(append([]string{}, genBaseLanes...), "ox-only", "ox-led", "ox-lean")
 }
 
 type roleRoute struct {
@@ -447,35 +485,16 @@ type roleRoute struct {
 // of generate-profiles.py's gen(), with the hard-coded model keys generalised
 // to pool/tier lookups.
 func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain bool) map[string]roleRoute {
-	p := lanePrimary(lane)
+	pol := genLanePolicies[lane]
+	p := pol.primary
 	base := genTierMap[mtier]
-	isPure := lanePure(lane)
+	isPure := pol.pure
 	extreme := genExtremes[thinking]
 	sparkKey := c.ladder["O"][0]
 	eliteKey := c.ladder["A"][4]
 
 	rprov := func(r string) string {
-		if isPure {
-			return p
-		}
-		if lane == "mixed" {
-			if genDelib[r] {
-				return "A"
-			}
-			return "O"
-		}
-		// ox-led keeps the free pool on everything high-volume (workers,
-		// utility, vision) and spends the paid judgment where it pays:
-		// deliberative roles cross to Anthropic. The reviewer crossing below
-		// lands there too, which still satisfies the anti-tunnel-vision rule —
-		// the second eye never shares the lead's pool.
-		if lane == "ox-led" && genDelib[r] {
-			return "A"
-		}
-		if genCrossLed[r] {
-			return otherPool(p)
-		}
-		return p
+		return pol.pool(r)
 	}
 
 	out := map[string]roleRoute{}
@@ -515,10 +534,12 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			// omp falls back @vision → @default → active model when it needs an
 			// image described, and describeForTextModels is on by default — so
 			// this rung must be a model that actually accepts images. Vision
-			// follows the model tier; mixed smart prefers Claude's smart rung.
 			vp := p
-			if lane == "mixed" && mtier == "smart" {
-				vp = "A"
+			if pol.vision != "" {
+				vp = pol.vision
+			}
+			if mtier == "smart" && pol.visionSmart != "" {
+				vp = pol.visionSmart
 			}
 			lead := c.visionLead(vp, base)
 			if lead == "" && !isPure {
@@ -633,6 +654,9 @@ func genValid(lane string, spark, fable, fableMain bool) bool {
 	}
 	if lane == "ox-led" && (spark || fableMain) {
 		return false // utility already lives on the free pool; fable-as-main would defeat the lane
+	}
+	if lane == "ox-lean" && spark {
+		return false // the drain bucket's leads are ox here; spark has nothing to drain
 	}
 	if fableMain && !fable {
 		return false // fable-as-main only exists on top of fable

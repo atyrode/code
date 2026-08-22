@@ -103,7 +103,7 @@ func (m model) Commander() clikit.Commander {
 // bucket is maxed or unauthed. Runs after an applied proposal, so the generator
 // can't land on an impossible or unavailable combo.
 func (m *model) repairConstraints() {
-	if lane := m.sel["lane"]; lane == "claude-only" || lane == "ox-only" || lane == "ox-led" {
+	if lane := m.sel["lane"]; lane == "claude-only" || lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
 		m.sel["spark"] = "off"
 	}
 	if lane := m.sel["lane"]; lane == "gpt-only" || lane == "ox-only" {
