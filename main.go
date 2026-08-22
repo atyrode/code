@@ -125,9 +125,11 @@ var (
 	pad        = clikit.Pad
 	windowList = clikit.WindowList
 
-	// Any id-shaped token with a thinking level is a routing token; which
-	// provider owns it (and its tint) is the registry's call, not the regex's.
-	modelRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9._-]*:(minimal|low|medium|high|xhigh|max)`)
+	// Provider-qualified ids: bare catalog ids today (gpt-…, claude-…) plus
+	// slash-scoped ones (stealth/ox-alpha, local-qwen/qwen3.8-27b). The level
+	// suffix with its colon is what keeps prose out; the word boundary keeps
+	// "maxed" from reading as a model.
+	modelRe = regexp.MustCompile(`([a-z][a-z0-9._/-]*):(minimal|low|medium|high|xhigh|max)\b`)
 )
 
 // ── colourisers ──────────────────────────────────────────────────────────────
@@ -151,6 +153,14 @@ func shortModel(name string) string {
 	if name == "gpt-5.4" {
 		return name
 	}
+	// Slash-scoped ids display without their provider path, and keep their
+	// full model part — the vendor's own naming is the recognizable bit.
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+		if !strings.HasPrefix(name, "claude") {
+			return name
+		}
+	}
 	p := strings.Split(name, "-")
 	if strings.HasPrefix(name, "claude") && len(p) > 1 {
 		return p[1]
@@ -173,10 +183,16 @@ func paintModel(tok string) string {
 	i := strings.LastIndex(tok, ":")
 	name, level := tok[:i], tok[i+1:]
 	p := providerByModel(name)
-	if p == nil {
+	var br, bg, bb float64
+	switch {
+	case p != nil:
+		br, bg, bb = p.PaintRGB[0], p.PaintRGB[1], p.PaintRGB[2]
+	case strings.Contains(name, "local-"):
+		// Free/local runtimes read green — the same family as the ox accents.
+		br, bg, bb = 96, 211, 150
+	default:
 		return shortModel(name) + ":" + level // unknown provider: uncoloured
 	}
-	br, bg, bb := p.PaintRGB[0], p.PaintRGB[1], p.PaintRGB[2]
 	f := 0.60 + float64(lvl(level))*0.088
 	col := lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", clampByte(br*f), clampByte(bg*f), clampByte(bb*f)))
 	return lipgloss.NewStyle().Foreground(col).Render(shortModel(name) + ":" + level)
@@ -193,6 +209,12 @@ func bucketOf(model string) string {
 	m := model
 	if i := strings.IndexByte(m, ':'); i >= 0 {
 		m = m[:i]
+	}
+	// Provider-scoped ids outside the subscription pools (OpenRouter,
+	// local runtimes) have no quota window code knows about. An empty bucket
+	// never reads as down, which is exactly right for a free or local model.
+	if strings.Contains(m, "/") {
+		return ""
 	}
 	for _, p := range providerRegistry {
 		for _, s := range p.Special {
@@ -229,7 +251,7 @@ func (m model) bucketFor(name string) string {
 		if f.bucket != "" {
 			return f.bucket
 		}
-		if p := providerByID(f.provider); p != nil {
+		if p := providerByPool(f.pool); p != nil {
 			return p.mainBucket()
 		}
 	}
@@ -1085,12 +1107,14 @@ func parseAdvisors(rows []string) map[string][]string {
 }
 
 // modelFact is a model's measured facts from omp (via the catalog): pricing
-// ($/1M tokens), output throughput (tok/s), time-to-first-token (seconds), and
-// the quota bucket it draws from ("" when the catalog declares none).
+// ($/1M tokens), output throughput (tok/s), time-to-first-token (seconds), the
+// quota bucket it draws from ("" when the catalog declares none), and the pool
+// it belongs to ("" in catalogs that predate the column — the provider-prefix
+// heuristic covers those).
 type modelFact struct {
 	in, out, speed, ttft float64
 	bucket               string
-	provider             string // registry provider id ("" in legacy catalogs)
+	pool                 string // catalog pool letter ("" in legacy catalogs — the family guess covers those)
 }
 
 // effTPS folds ttft into throughput — the effective tok/s for a representative
@@ -1107,9 +1131,31 @@ func (f modelFact) effTPS() float64 {
 
 // parseFacts reads the __models__ block (rows: "<id> <in> <out> <speed> <ttft>
 // [<bucket> [<provider>]]") into a per-model table, sourced from the catalog
-// so meters and routing agree. The bucket and provider columns are trailing
-// optionals so legacy five- and six-token catalogs keep working; the name
-// guess covers their rows.
+// so meters and routing agree. The trailing columns are optionals so legacy
+// five- and six-token catalogs keep working: column six is the quota bucket,
+// column seven the provider — accepted as the registry id (current renderer)
+// or the bare pool letter (older renderers), resolved to a pool either way;
+// unknown values fall back to the model-family guess.
+
+// catalogPool resolves the __models__ trailing column to a pool letter. The
+// current renderer writes the registry provider id there; an older one wrote
+// the bare pool letter. Either parses; anything unknown falls back to the
+// model-family guess so mixed-age catalogs keep working.
+func catalogPool(col, id string) string {
+	if len(col) == 1 {
+		if providerByPool(col) != nil {
+			return col
+		}
+	}
+	if p := providerByID(col); p != nil {
+		return p.Pool
+	}
+	if p := providerByModel(id); p != nil {
+		return p.Pool
+	}
+	return ""
+}
+
 func parseFacts(rows []string) map[string]modelFact {
 	out := map[string]modelFact{}
 	for _, r := range rows {
@@ -1121,15 +1167,15 @@ func parseFacts(rows []string) map[string]modelFact {
 		outc, e2 := strconv.ParseFloat(f[2], 64)
 		sp, e3 := strconv.ParseFloat(f[3], 64)
 		tt, e4 := strconv.ParseFloat(f[4], 64)
-		bucket, provider := "", ""
+		bucket, pool := "", ""
 		if len(f) >= 6 {
 			bucket = f[5]
 		}
 		if len(f) >= 7 {
-			provider = f[6]
+			pool = catalogPool(f[6], f[0])
 		}
 		if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
-			out[f[0]] = modelFact{in, outc, sp, tt, bucket, provider}
+			out[f[0]] = modelFact{in, outc, sp, tt, bucket, pool}
 		}
 	}
 	return out
@@ -1230,6 +1276,9 @@ func deepseekOffPeak(utc time.Time) bool {
 
 // costScore rates the current config from 1 (cheap) to 5 (dear).
 func (m model) costScore() int {
+	if _, ok := m.selectedRuntime(); ok {
+		return 1
+	}
 	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
@@ -1259,6 +1308,9 @@ func (m model) costScore() int {
 
 // speedScore rates the current config from 1 (slow) to 5 (fast).
 func (m model) speedScore() int {
+	if _, ok := m.selectedRuntime(); ok {
+		return 3
+	}
 	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
@@ -1295,13 +1347,17 @@ func (m model) meter(label, glyph, fill string, n int) string {
 // opinion, so it crosses to another provider whenever the lane allows it: the
 // first advisorPoolOrder pool that is not the lead's (fable-as-main hands the
 // default role to the elite, so the lead becomes the elite's pool). Only the
-// pure lanes stay on their own provider.
+// pure lanes stay on their own provider — ox-only's second opinion is Ox.
+//
+// On the mixed ox lanes the chain carries a cross-pool net in spend order —
+// the other paid pool's cheapest rung, then the free pool itself — so a dead
+// quota never leaves the second eye blind.
 func (m model) advisorChain(level string) []string {
 	lane := m.sel["lane"]
 	if p := providerByLane(lane); p != nil && lanePure(lane) {
 		return m.advisors[level+"/"+p.Lane]
 	}
-	lead := lanePrimary(lane)
+	lead := genLanePolicies[m.sel["lane"]].primary
 	if fb := providerBySpecial("fable"); fb != nil && m.sel["fable"] == "on" && m.sel["main"] == "on" {
 		// fable-as-main puts the elite in the default seat, so the second
 		// opinion flips away from the elite's own pool.
@@ -1311,13 +1367,37 @@ func (m model) advisorChain(level string) []string {
 		if pool == lead {
 			continue
 		}
-		if p := providerByPool(pool); p != nil {
-			if chain := m.advisors[level+"/"+p.Lane]; len(chain) > 0 {
-				return m.advisorRelief(level, chain)
-			}
+		p := providerByPool(pool)
+		if p == nil {
+			continue
 		}
+		chain := m.advisors[level+"/"+p.Lane]
+		if len(chain) == 0 {
+			continue
+		}
+		if lane == "ox-led" || lane == "ox-lean" {
+			chain = m.advisorSpendNet(chain, p.Lane)
+		}
+		return m.advisorRelief(level, chain)
 	}
 	return nil
+}
+
+// advisorSpendNet appends the mixed ox lanes' cross-pool net in spend order —
+// the other paid pool's cheapest rung, then the free pool itself — so a dead
+// quota never leaves the second eye blind.
+func (m model) advisorSpendNet(chain []string, ctx string) []string {
+	tail := m.advisors["glance/gpt"]
+	if ctx == "gpt" {
+		tail = m.advisors["glance/claude"]
+	}
+	out := append([]string(nil), chain...)
+	for _, t := range append(append([]string{}, tail...), m.advisors["glance/ox"]...) {
+		if t != "" && !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // advisorRelief appends the relief tail to the audit chain: audit is the
@@ -1396,6 +1476,15 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // never persisted (saveSelectionState filters on m.facets, which carries only
 // "lane").
 func (m model) visibleFacets() []facet {
+	if _, local := m.selectedRuntime(); local {
+		var out []facet
+		for _, f := range m.facets {
+			if f.key == "runtime" || f.key == "thinking" {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
 	lane := m.sel["lane"]
 	var out []facet
 	for _, f := range m.facets {
@@ -1421,20 +1510,29 @@ func (m model) visibleFacets() []facet {
 		}
 		switch f.key {
 		case "spark":
-			if !laneHostsSpecial(lane, "spark") || m.noSpark {
+			// genValid refuses every ox-lane spark combo (the drain bucket's
+			// leads are utility roles those lanes give to their own pools).
+			if !laneHostsSpecial(lane, "spark") || m.noSpark ||
+				lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
 				continue
 			}
 		case "fast":
 			// The fast dial is the priority service tier — an OpenAI pool
-			// feature, meaningless on a pure lane of any other pool.
+			// feature, meaningless on a pure lane of any other pool or where
+			// no OpenAI token leads the work.
 			if p := providerByLane(lane); lanePure(lane) && p != nil && p.ServiceTier[0] == "" {
+				continue
+			}
+			if lane == "ox-only" || lane == "ox-led" {
 				continue
 			}
 		case "fable", "main":
 			if !laneHostsSpecial(lane, "fable") || m.noFable {
 				continue
 			}
-			if f.key == "main" && m.sel["fable"] != "on" {
+			if f.key == "main" && (m.sel["fable"] != "on" || lane == "ox-led") {
+				// fable-as-main would defeat ox-led's free worker, and
+				// genValid refuses that combo outright.
 				continue
 			}
 		case "relief":
@@ -1453,7 +1551,7 @@ func comboID(sel map[string]string, hasRelief bool) string {
 	if !laneHostsSpecial(lane, "fable") {
 		fb = "off"
 	}
-	if !laneHostsSpecial(lane, "spark") {
+	if !laneHostsSpecial(lane, "spark") || lane == "ox-led" || lane == "ox-lean" {
 		sp = "off"
 	}
 	spid, faid := "nosp", "nofa"
@@ -1462,7 +1560,10 @@ func comboID(sel map[string]string, hasRelief bool) string {
 	}
 	if fb == "on" {
 		faid = "fa"
-		if sel["main"] == "on" {
+		// ox-led hosts the elite on deliberative roles only; promoting it to
+		// the default role would defeat the lane, and genValid refuses that
+		// combo outright.
+		if sel["main"] == "on" && lane != "ox-led" {
 			faid = "famain"
 		}
 	}
@@ -1496,7 +1597,13 @@ func (m *model) applyCatalog() {
 		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
 	}
 	spark, fable, relief := false, false, false
+	served := map[string]bool{}
 	for id := range m.generated {
+		lane := id
+		if i := strings.IndexByte(id, '_'); i >= 0 {
+			lane = id[:i]
+		}
+		served[lane] = true
 		for _, seg := range strings.Split(id, "_") {
 			switch seg {
 			case "sp":
@@ -1516,6 +1623,8 @@ func (m *model) applyCatalog() {
 			}
 		}
 	}
+	m.trimLanes(served)
+
 	m.clampSel()
 }
 
@@ -1550,6 +1659,40 @@ func catalogLanes(generated map[string][]string) []string {
 	}
 	sort.Strings(extra)
 	return append(lanes, extra...)
+}
+
+// trimLanes narrows the lane dial to the lanes this catalog actually serves,
+// and lands the selection on a served lane when a persisted or default choice
+// points at one that vanished (an older catalog without ox, say). This is the
+// consumer side of the optional-pool switches: no ox entries in models.yml
+// means no ox values on the dial at all.
+func (m *model) trimLanes(served map[string]bool) {
+	for i, f := range m.facets {
+		if f.key != "lane" {
+			continue
+		}
+		var values []string
+		for _, v := range f.values {
+			if served[v] {
+				values = append(values, v)
+			}
+		}
+		if len(values) == len(f.values) {
+			continue // nothing to trim
+		}
+		if len(values) > 0 {
+			m.facets[i].values = values
+		}
+		break
+	}
+	if !served[m.sel["lane"]] {
+		for _, fallback := range []string{"mixed", "gpt-only", "claude-only"} {
+			if served[fallback] {
+				m.sel["lane"] = fallback
+				break
+			}
+		}
+	}
 }
 
 // clampSel turns off every dial the catalog cannot serve. main is fable's
@@ -1590,6 +1733,9 @@ func laneColor(lane string) string {
 	if lane == "mixed" {
 		return "#aa96e1"
 	}
+	if lane == "ox-lean" {
+		return "#2dd4bf" // teal — paid work riding the free pool
+	}
 	if p := providerByLane(lane); p != nil {
 		if lanePure(lane) {
 			return p.LaneOnly
@@ -1599,13 +1745,18 @@ func laneColor(lane string) string {
 	return "#ff9f52"
 }
 
-// prefixed qualifies a model id with its omp provider: the catalog's provider
-// column when present, else the registry's prefix guess. The unknown-model
-// fallback stays openai-codex so a legacy catalog launches exactly as before.
+// prefixed qualifies a model id with its omp provider: the catalog column when
+// present, else the registry's family guess. The unknown-model fallback stays
+// openai-codex so a legacy catalog launches exactly as before.
 func (m model) prefixed(model string) string {
-	id, _, _ := strings.Cut(model, ":")
-	if f, ok := m.facts[id]; ok && f.provider != "" {
-		if p := providerByID(f.provider); p != nil {
+	// Routing tokens carry a thinking level ("id:level"); the catalog is
+	// keyed on the bare id. Qualify the full token either way.
+	id := model
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[:i]
+	}
+	if f, ok := m.facts[id]; ok {
+		if p := providerByPool(f.pool); p != nil {
 			return p.ID + "/" + model
 		}
 	}
@@ -1615,15 +1766,18 @@ func (m model) prefixed(model string) string {
 	return openAIProvider + "/" + model
 }
 
-// poolOfModel is the model's registry pool letter, catalog provider column
-// first, prefix guess second; "" when nobody claims it.
+// poolOfModel is the model's registry pool letter: the catalog column first
+// (leveled tokens are stripped before the lookup), the family guess second;
+// "" when nobody claims it.
 func (m model) poolOfModel(id string) string {
-	if f, ok := m.facts[id]; ok && f.provider != "" {
-		if p := providerByID(f.provider); p != nil {
-			return p.Pool
-		}
+	bare := id
+	if i := strings.IndexByte(bare, ':'); i >= 0 {
+		bare = bare[:i]
 	}
-	if p := providerByModel(id); p != nil {
+	if f, ok := m.facts[bare]; ok && f.pool != "" {
+		return f.pool
+	}
+	if p := providerByModel(bare); p != nil {
 		return p.Pool
 	}
 	return ""
@@ -1874,10 +2028,21 @@ func (m model) bodyLines() ([]string, int) {
 // costs, how fast it is, and how Enter will launch it. Enter always launches
 // the generated profile for the current facets (the untouched default combo is
 // a profile like any other); m runs omp-managed on the managed defaults with
-// no overlay, and the sandbox (u) key is always offered.
+// no overlay, and the sandbox (u) key is always offered. A selected runtime
+// target gets the same footer shape with an honest summary instead of meters:
+// its tokens are free and code has no measurement to quote.
 func (m model) launchFooter() []string {
-	cs, ss := m.costScore(), m.speedScore()
 	acc := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("  ⏎ launch")
+	if _, local := m.selectedRuntime(); local {
+		return []string{
+			"",
+			stDim.Render("  cost free · local inference"),
+			"",
+			"",
+			acc,
+		}
+	}
+	cs, ss := m.costScore(), m.speedScore()
 	return []string{
 		"",
 		m.meter("cost", "$", meterRamp[cs], cs), // dear → red, cheap → green
@@ -2044,11 +2209,12 @@ func (f *wheelInputFilter) Filter(app tea.Model, msg tea.Msg) tea.Msg {
 }
 
 type model struct {
-	generated map[string][]string
-	advisors  map[string][]string  // "level/ctx" → advisor model chain
-	facts     map[string]modelFact // model id → cost ($/1M) + curated speed (tok/s)
-	avail     availability
-	glyphs    map[string]string
+	generated      map[string][]string
+	advisors       map[string][]string  // "level/ctx" → advisor model chain
+	facts          map[string]modelFact // model id → cost ($/1M) + curated speed (tok/s)
+	avail          availability
+	glyphs         map[string]string
+	runtimeTargets []runtimeTarget
 
 	// Catalog capability, phrased as absence so the zero value keeps every dial:
 	// a model with no catalog yet (the onboarding shell, tests) must behave as it
@@ -2094,6 +2260,7 @@ type model struct {
 
 	launchManaged   bool              // m: run CODE_OMP with no overlay (the managed defaults)
 	launchUntrusted bool              // u: run the CODE_OMP_UNTRUSTED sandbox
+	launchRuntime   string            // delegated local runtime target selected via CODE_RUNTIME_BROKER
 	hasSandbox      bool              // a sandbox binary exists; gates the u key
 	genConfig       string            // generated config YAML to launch omp with (generator Enter)
 	firstPrompt     string            // prompt from the suggest box, forwarded as omp's first message
@@ -2206,8 +2373,10 @@ func (m model) listW() int {
 	if w > m.w-33 {
 		w = m.w - 33
 	}
-	if w > 80 {
-		w = 80
+	// The ox lanes widen the lane row past this function's old 80-cell
+	// aesthetic cap; a wider list beats clipping dial options mid-value.
+	if w > 116 {
+		w = 116
 	}
 	return w
 }
@@ -3067,6 +3236,34 @@ func (m *model) syncPreviewAt(yoff int) {
 	// generator list on the left, so the preview shows only what that selection
 	// produces — the role → model routing itself.
 	var b strings.Builder
+	if target, local := m.selectedRuntime(); local {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render(target.Label) + "\n")
+		b.WriteString(stDim.Render(target.statusLine()) + "\n\n")
+		if target.ContextWindow > 0 {
+			b.WriteString(fmt.Sprintf("context     %dk tokens\n\n", target.ContextWindow/1000))
+		}
+		// Same grammar as a hosted profile: every role the broker's generated
+		// profile routes (all of them but the advisor, which stays off), led by
+		// the one local model at the dialed thinking — the flag is forwarded
+		// verbatim and omp clamps it to what the model offers.
+		rows := []string{fmt.Sprintf("  thinking %s · fallback off · advisor off", m.sel["thinking"])}
+		for _, r := range genRoleOrder {
+			if r == "advisor" {
+				continue
+			}
+			marker := " "
+			if genAgentRoles[r] {
+				marker = "●"
+			}
+			rows = append(rows, fmt.Sprintf("  %s %-10s %s:%s", marker, r, target.Model, m.sel["thinking"]))
+		}
+		b.WriteString(m.renderRoute(rows, m.depth, m.selectedLaunchAvailability(), rw))
+		b.WriteString("\n" + stDim.Render("broker-owned profile · cloud auth excluded · weights provisioned by the runtime") + "\n")
+		content := lipgloss.NewStyle().MaxWidth(m.vp.Width).Render(b.String())
+		m.vp.SetContent(content)
+		m.vp.SetYOffset(yoff)
+		return
+	}
 	id := comboID(m.sel, m.hasRelief)
 	if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
@@ -3352,6 +3549,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout() // the taller/shorter footer changes the body height
 		case "d":
 			m.sel = defaultSel()
+			if len(m.runtimeTargets) > 0 {
+				m.sel["runtime"] = "hosted"
+			}
 			m.clampSel() // the defaults assume a full catalog; this one may not be
 			m.persistSelection()
 			m.syncPreview()
@@ -3394,6 +3594,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launchManaged = true
 			return m, tea.Quit
 		case "enter":
+			if target, local := m.selectedRuntime(); local {
+				m.launchRuntime = target.Name
+				return m, tea.Quit
+			}
 			// Enter always launches the generated profile for the current facets —
 			// the untouched default combo is a generated profile like any other.
 			// Never for a combo the catalog doesn't carry, though: genConfigYAML
@@ -3566,6 +3770,9 @@ func (m model) previewPane(w, h int) string {
 // accent is the context colour — the selected lane in the generator.
 // Blue / purple / orange.
 func (m model) accent() string {
+	if _, local := m.selectedRuntime(); local {
+		return cGreen
+	}
 	return laneColor(m.sel["lane"])
 }
 
@@ -3722,6 +3929,10 @@ func (m model) genLines() ([]string, int) {
 			row += "  " + m.segmentGauge(f, onRow, acc)
 		} else {
 			for _, v := range f.values {
+				display := v
+				if f.key == "runtime" {
+					display = m.runtimeValueLabel(v)
+				}
 				switch {
 				case v == m.sel[f.key]:
 					col := acc
@@ -3734,9 +3945,9 @@ func (m model) genLines() ([]string, int) {
 					if onRow { // the cursor sits on the selected value of the focused row
 						st = st.Background(lipgloss.Color(cSelBg))
 					}
-					row += "  " + st.Render(" "+v+" ")
+					row += "  " + st.Render(" "+display+" ")
 				default:
-					row += "   " + stDim.Render(v)
+					row += "   " + stDim.Render(display)
 				}
 			}
 		}
@@ -3820,11 +4031,11 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 // was once wiped by an edit exactly because of that. CODE_FACET_GLYPHS may
 // override any entry (see main).
 //
-//	lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
+//	runtime 🖥 (f108)  lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
 //	spark 🚀 (f135)  fable 📖 (f02d)  default 🎯 (f140)  fast ⚡ (f0e7)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
-		"lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
+		"runtime": "\uf108", "lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fable": "\uf02d", "main": "\uf140", "fast": "\uf0e7",
 		"relief": "\uf132",
 	}
@@ -3861,8 +4072,18 @@ func main() {
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
 	accountSelections := loadAccountSelectionState(accountState)
+	runtimeTargets := loadRuntimeTargets()
 	facets := facetDefs(glyphs)
+	if len(runtimeTargets) > 0 {
+		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
+	}
 	selectionState := os.Getenv("CODE_SELECTION_STATE")
+	selection := loadSelectionState(selectionState, facets)
+	if len(runtimeTargets) > 0 {
+		if _, ok := selection["runtime"]; !ok {
+			selection["runtime"] = "hosted"
+		}
+	}
 	// The u key only exists when a sandbox binary does — an explicit
 	// CODE_OMP_UNTRUSTED or an ompu on PATH; otherwise hide it from the help
 	// and ignore the keypress rather than dying on exec.
@@ -3890,8 +4111,9 @@ func main() {
 		spin:              sp,
 		help:              clikit.NewHelp(),
 		glyphs:            glyphs,
+		runtimeTargets:    runtimeTargets,
 		facets:            facets,
-		sel:               loadSelectionState(selectionState, facets),
+		sel:               selection,
 		selectionState:    selectionState,
 		hasSandbox:        hasSandbox,
 	}
@@ -3903,7 +4125,7 @@ func main() {
 	// CODE_GENERATED is an operator config error and is left visible as the
 	// usual empty routing panel instead).
 	app := tea.Model(m)
-	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" {
+	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 {
 		app = newOnboarding(m)
 	}
 	// Cell-motion mouse reporting carries wheel events. Filter rejected
@@ -3921,6 +4143,10 @@ func main() {
 	case fm.launchUntrusted:
 		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, func() int {
 			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt)
+		})
+	case fm.launchRuntime != "":
+		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, func() int {
+			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt)
 		})
 	case fm.launchManaged:
 		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, func() int {

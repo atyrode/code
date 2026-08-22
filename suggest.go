@@ -99,11 +99,21 @@ func (m model) Commander() clikit.Commander {
 // repairConstraints enforces the deterministic rules a suggestion (or selection)
 // must never violate — mirroring the generator's `genValid` plus live quota:
 // a special-tier facet (spark, fable) can only run on a lane whose pool-set
-// contains its provider's pool, and neither may be left on when its quota
+// contains its provider's pool (and never on an ox lane); fable-as-main would
+// defeat ox-led's free worker; and neither may be left on when its quota
 // bucket is maxed or unauthed. Runs after an applied proposal, so the
 // generator can't land on an impossible or unavailable combo.
 func (m *model) repairConstraints() {
 	repairSelectionSpecials(m.sel)
+	if lane := m.sel["lane"]; lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
+		m.sel["spark"] = "off"
+	}
+	if m.sel["lane"] == "ox-only" {
+		m.sel["fable"] = "off"
+	}
+	if m.sel["lane"] == "ox-led" {
+		m.sel["main"] = "off"
+	}
 	if m.avail.down(bucketOf("fable")) {
 		m.sel["fable"] = "off"
 	}
@@ -236,7 +246,7 @@ func (m *model) optionalPoolUsable() bool {
 // would make after glancing at the usage panel. "" means stay put: the lead
 // pool is fine, no alternative lane exists in this catalog, or none has quota.
 func (m *model) quotaLane() string {
-	lead := providerByPool(lanePrimary(m.sel["lane"]))
+	lead := providerByPool(genLanePolicies[m.sel["lane"]].primary)
 	if lead == nil || !m.avail.down(lead.mainBucket()) {
 		return ""
 	}

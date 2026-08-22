@@ -68,9 +68,12 @@ are not orphaned onto init while still holding their memory.
 - **Dials, not config files** — a provider **lead** dial with a led/only
   blend child (scales past two pools without overflowing), notched sliders
   for model tier and thinking depth, advisor level, plus the spark/fable
-  toggles; every combination maps to a pre-computed routing. With a DeepSeek
-  pool, a **relief** dial decides whether drained metered chains may spill
-  into the pay-as-you-go pool.
+  toggles; every combination maps to a pre-computed routing. Optional pools
+  plug in as their own lanes, and a **relief** dial decides whether drained
+  metered chains may spill into the pay-as-you-go pool.
+- **Hosted or local** — an optional runtime broker can advertise only the local
+  targets this machine supports; selecting one delegates first-use setup and
+  launch without mixing cloud credentials into the session.
 - **Live preview** — see which model leads every role, and its fallback
   chain, before anything runs.
 - **One-shot overlays** — each launch is an ephemeral `--config`; your omp

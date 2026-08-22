@@ -11,8 +11,13 @@ package main
 //   - required pools (see providerRegistry: O = OpenAI/Codex, A = Anthropic)
 //     must each fill tiers 1..3 — the per-pool fallback ladder (cheap,
 //     regular, smart); generation fails loudly otherwise. Optional pools
-//     (D = DeepSeek) participate when present: one verified rung is enough,
-//     missing tiers borrow the nearest existing rung.
+//     participate when present, each with its own strictness: D (DeepSeek,
+//     pay-as-you-go) needs one verified rung — missing tiers borrow the
+//     nearest existing one — while R (OpenRouter) is all-or-nothing: when any
+//     R model is declared, its tiers 1..3 must all be filled (a one-model
+//     family declares the same id three times with ascending thinking
+//     ceilings). An absent optional pool's lanes are simply not generated and
+//     the TUI never offers them; catalog presence is the whole on/off switch.
 //   - tier 0 (an idle-bucket speed model, "spark") and tier 4 (a scarce elite,
 //     "fable") are optional; without them the corresponding facet combos are
 //     simply not generated and the TUI hides the dial.
@@ -154,6 +159,28 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 			}
 		}
 	}
+	// Pool R is all-or-nothing: a half-declared ox ladder would generate lanes
+	// whose fallback rungs silently vanish. One-model families declare the same
+	// id at every tier with ascending thinking ceilings — that repetition is
+	// the encoding, not a mistake. Strictness is a registry property: other
+	// optional pools (DeepSeek) stay lenient via fillOptionalLadders below.
+	for _, p := range providerRegistry {
+		if p.Required || !p.StrictLadder {
+			continue
+		}
+		l := c.ladder[p.Pool]
+		part, full := false, true
+		for t := 1; t <= 3; t++ {
+			if l[t] != "" {
+				part = true
+			} else {
+				full = false
+			}
+		}
+		if part && !full {
+			return nil, fmt.Errorf("%s: pool %s must fill tiers 1..3 when present — declare the model once per tier with ascending thinking ceilings, or remove the pool entirely", path, p.Pool)
+		}
+	}
 	c.fillOptionalLadders()
 	if err := c.checkLadder(path); err != nil {
 		return nil, err
@@ -224,6 +251,8 @@ func (c *catalog) fillOptionalLadders() {
 // less. Only tiers 1..3 are the capability ladder — tier 0 is a bucket-drain
 // lead and tier 4 an elite lead, both deliberately off it.
 func (c *catalog) checkLadder(path string) error {
+	// Optional pools join only when declared; an absent pool has no rungs to
+	// compare and the empty-rung guard below skips it.
 	for _, pool := range fallbackPoolOrder {
 		for lo := 1; lo <= 3; lo++ {
 			for hi := lo + 1; hi <= 3; hi++ {
@@ -309,13 +338,14 @@ func (c *catalog) clampTh(key, level string) string {
 	return thScale[best]
 }
 
-// crossPool is the first non-lead pool the catalog can cross to, in
-// fallbackPoolOrder — the generalisation of the old binary O↔A flip.
-func (c *catalog) crossPool(pool string) string {
-	for _, p := range c.pools() {
-		if p != pool {
-			return p
-		}
+// otherPool is the crossing target for roles that must leave their lead pool:
+// the reviewer's independent second eye, the advisor's minimum diversity.
+// Declared per provider in the registry (providerDesc.CrossTo): O and A cross
+// to each other, D crosses to O, and R crosses to A — the strongest judgment
+// pool, which is what every crossing on an ox lane is for.
+func otherPool(p string) string {
+	if d := providerByPool(p); d != nil {
+		return d.CrossTo
 	}
 	return ""
 }
@@ -384,14 +414,15 @@ func (c *catalog) sibDown(key string) string {
 	return ""
 }
 
-// cross is the equivalent rung on the first other pool (elites cross to smart).
+// cross is the equivalent rung on the crossing target pool (elites cross to
+// smart).
 func (c *catalog) cross(key string) string {
 	m := c.models[key]
 	t := m.Tier
 	if t > 3 {
 		t = 3
 	}
-	cp := c.crossPool(m.Pool)
+	cp := otherPool(m.Pool)
 	if cp == "" {
 		return ""
 	}
@@ -500,23 +531,92 @@ var (
 		// step more thinking than smol at the same rung.
 		"scout": {"low": "low", "medium": "medium", "high": "medium", "xhigh": "medium"},
 	}
-	genTierMap  = map[string]int{"fast": 1, "normal": 2, "smart": 3}
-	genBump     = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
-	genMTiers   = []string{"fast", "normal", "smart"}
-	genThinking = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
-	genExtremes = map[string]bool{"minimal": true, "max": true}
+	genTierMap   = map[string]int{"fast": 1, "normal": 2, "smart": 3}
+	genBump      = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
+	genBaseLanes = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}
+	genMTiers    = []string{"fast", "normal", "smart"}
+	genThinking  = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	genExtremes  = map[string]bool{"minimal": true, "max": true}
 	// genRelief marks the heavyweight roles whose led/mixed chains gain a
 	// relief tail on each optional (unmetered, pay-as-you-go) pool.
 	genRelief = map[string]bool{"default": true, "task": true, "plan": true, "slow": true}
 )
 
-// lanePrimary is the lane's lead pool ("mixed" leads on O, deliberative roles
-// aside — see genCombo).
-func lanePrimary(lane string) string {
-	if p := providerByLane(lane); p != nil {
-		return p.Pool
+// lanePolicy is a lane's whole role-mapping, as data. primary answers for
+// default/task/librarian; delib hosts plan/slow/designer/reviewer ("" = the
+// primary); util hosts scout/sonic/smol/tiny/commit ("" = primary); vision is
+// the image rung's pool, with visionSmart overriding it when the model dial
+// sits on smart (mixed prefers Claude's tier-3 for that). pure lanes never
+// cross: reviewer and advisor stay in-primary.
+//
+// This table is the whole generator's sense of "a lane". A new setup — a new
+// pool pairing, a new emphasis — is a row here, not new branches in genCombo;
+// keep it that way. The reviewer always ends up off its lead pool unless the
+// lane is pure (the anti-tunnel-vision rule), and the advisor leads on the
+// minimum-diversity pool (delib when set, else the crossing target).
+type lanePolicy struct {
+	primary     string
+	delib       string
+	util        string
+	vision      string
+	visionSmart string
+	pure        bool
+}
+
+var genLanePolicies = map[string]lanePolicy{
+	"gpt-only":    {primary: "O", pure: true},
+	"gpt-led":     {primary: "O"},
+	"mixed":       {primary: "O", delib: "A", visionSmart: "A"},
+	"claude-led":  {primary: "A"},
+	"claude-only": {primary: "A", pure: true},
+	// DeepSeek lanes: pay-as-you-go capacity. The blend lane leads the work
+	// and lets reviewers cross to GPT; the pure lane is text-only end to end,
+	// so vision alone borrows an image-capable pool.
+	"ds-led":  {primary: "D"},
+	"ds-only": {primary: "D", pure: true},
+	"ox-only": {primary: "R", pure: true},
+	"ox-led":  {primary: "R", delib: "A"},
+	// The mirror of ox-led: paid providers keep everything that answers for
+	// the work (default, task, librarian), while the free pool absorbs the
+	// high-volume background and image description.
+	"ox-lean": {primary: "O", delib: "A", util: "R", vision: "R"},
+}
+
+func (p lanePolicy) pool(role string) string {
+	if p.pure {
+		return p.primary
 	}
-	return "O"
+	if genDelib[role] && p.delib != "" {
+		return p.delib
+	}
+	if genCrossLed[role] {
+		return otherPool(p.primary)
+	}
+	if genUtil[role] && p.util != "" {
+		return p.util
+	}
+	return p.primary
+}
+
+// lanes lists the lanes this catalog serves: the five base lanes always, plus
+// each optional pool's lanes once its ladder qualifies — the ds pair when a
+// DeepSeek ladder participates (one verified rung suffices), the ox trio only
+// when the OpenRouter ladder is fully declared. This is the generator side of
+// each optional pool's on/off switch. Order follows the dial: base lanes
+// first, optional-pool lanes appended.
+func (c *catalog) lanes() []string {
+	out := append([]string{}, genBaseLanes...)
+	present := map[string]bool{}
+	for _, p := range c.pools() {
+		present[p] = true
+	}
+	if present["D"] {
+		out = append(out, "ds-led", "ds-only")
+	}
+	if present["R"] {
+		out = append(out, "ox-only", "ox-led", "ox-lean")
+	}
+	return out
 }
 
 type roleRoute struct {
@@ -530,27 +630,16 @@ type roleRoute struct {
 // of generate-profiles.py's gen(), with the hard-coded model keys generalised
 // to pool/tier lookups.
 func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain, relief bool) map[string]roleRoute {
-	p := lanePrimary(lane)
+	pol := genLanePolicies[lane]
+	p := pol.primary
 	base := genTierMap[mtier]
-	isPure := lanePure(lane)
+	isPure := pol.pure
 	extreme := genExtremes[thinking]
 	sparkKey := c.specialKey("spark")
 	eliteKey := c.specialKey("fable")
 
 	rprov := func(r string) string {
-		if isPure {
-			return p
-		}
-		if lane == "mixed" {
-			if genDelib[r] {
-				return "A"
-			}
-			return "O"
-		}
-		if genCrossLed[r] {
-			return c.crossPool(p)
-		}
-		return p
+		return pol.pool(r)
 	}
 
 	out := map[string]roleRoute{}
@@ -590,10 +679,12 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			// omp falls back @vision → @default → active model when it needs an
 			// image described, and describeForTextModels is on by default — so
 			// this rung must be a model that actually accepts images. Vision
-			// follows the model tier; mixed smart prefers Claude's smart rung.
 			vp := p
-			if lane == "mixed" && mtier == "smart" {
-				vp = "A"
+			if pol.vision != "" {
+				vp = pol.vision
+			}
+			if mtier == "smart" && pol.visionSmart != "" {
+				vp = pol.visionSmart
 			}
 			lead := c.visionLead(vp, base)
 			if lead == "" {
@@ -726,6 +817,15 @@ func genValid(lane string, spark, fable, fableMain, relief bool) bool {
 	if spark && !laneHostsSpecial(lane, "spark") {
 		return false // no spark outside its pool's lanes
 	}
+	if lane == "ox-only" && (spark || fable) {
+		return false // a pure ox lane has no O drain bucket or A elite to lead with
+	}
+	if lane == "ox-led" && (spark || fableMain) {
+		return false // utility already lives on the free pool; fable-as-main would defeat the lane
+	}
+	if lane == "ox-lean" && spark {
+		return false // the drain bucket's leads are ox here; spark has nothing to drain
+	}
 	if fableMain && !fable {
 		return false // fable-as-main only exists on top of fable
 	}
@@ -771,8 +871,14 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 		}
 		model := fmt.Sprintf("%s:%s", c.models[rt.lead].ID, c.clampTh(rt.lead, rt.level))
 		row := fmt.Sprintf("  %s %-10s %-24s", marker, r, model)
+		prev := model
 		for i, m := range rt.chain {
-			row += fmt.Sprintf(" → %s:%s", c.models[m].ID, c.clampTh(m, rt.chLvl[i]))
+			tok := fmt.Sprintf("%s:%s", c.models[m].ID, c.clampTh(m, rt.chLvl[i]))
+			if tok == prev {
+				continue // sibling rungs of a one-model family can clamp to the same level
+			}
+			prev = tok
+			row += " → " + tok
 		}
 		lines = append(lines, strings.TrimRight(row, " "))
 	}
@@ -781,9 +887,11 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 }
 
 // renderModelFacts emits the per-model table the TUI's meters read: seven
-// fixed columns — id, pricing, speed, ttft, quota bucket, provider id. Old
-// catalogs with five- or six-column rows still parse; the consumer falls back
-// to guessing bucket and provider from the model family for those.
+// fixed columns — id, pricing, speed, ttft, quota bucket, provider id. The
+// provider column is the authoritative provider for launched configs,
+// replacing the name heuristic wherever present. Old catalogs with five- or
+// six-column rows still parse; the consumer falls back to guessing bucket and
+// provider from the model family for those.
 func (c *catalog) renderModelFacts() string {
 	lines := []string{"__models__  model facts (id in out speed ttft bucket provider — $/1M in·out, tok/s, s)"}
 	for _, k := range c.keys {
@@ -862,7 +970,7 @@ func (c *catalog) renderCatalog() string {
 	hasSpark := c.specialKey("spark") != ""
 	hasElite := c.specialKey("fable") != ""
 	hasRelief := c.hasOptionalPool()
-	for _, lane := range laneOrderForPools(c.pools()) {
+	for _, lane := range c.lanes() {
 		for _, mtier := range genMTiers {
 			for _, thinking := range genThinking {
 				for _, spark := range []bool{true, false} {

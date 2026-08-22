@@ -275,7 +275,16 @@ func TestRenderCatalogStructure(t *testing.T) {
 		}
 	}
 	// The TUI's comboID must find a block for every dial state its facets
-	// allow (lane-suppressed spark/fable included).
+	// allow — after applyCatalog trims the lane dial to the lanes this
+	// catalog serves (an ox-less catalog never offers ox lanes).
+	servedLanes := map[string]bool{}
+	for _, l := range strings.Split(out, "\n") {
+		if l != "" && l[0] != ' ' && !strings.HasPrefix(l, "__") {
+			if i := strings.IndexByte(l, '_'); i >= 0 {
+				servedLanes[l[:i]] = true
+			}
+		}
+	}
 	facets := facetDefs(defaultGlyphs())
 	sel := map[string]string{}
 	var walk func(i int)
@@ -292,6 +301,9 @@ func TestRenderCatalogStructure(t *testing.T) {
 			return
 		}
 		for _, v := range facets[i].values {
+			if facets[i].key == "lane" && !servedLanes[v] {
+				continue
+			}
 			sel[facets[i].key] = v
 			walk(i + 1)
 		}
@@ -1354,5 +1366,181 @@ func TestReliefToggle(t *testing.T) {
 	}
 	if strip(on) != strip(off) {
 		t.Errorf("relief must only add/remove tails; blocks diverge:\n--- on ---\n%s\n--- off ---\n%s", on, off)
+	}
+}
+
+// ── pool R (OpenRouter) ───────────────────────────────────────────────────────
+
+// oxEntries declares a one-model family the only way the loader accepts: once
+// per tier, with ascending thinking ceilings. Same id everywhere — the tiers
+// ARE the thinking variations.
+const oxEntries = `
+  oxfast:
+    id: stealth/ox-alpha
+    pool: R
+    tier: 1
+    bucket: openrouter-free
+    cost_in: 0
+    cost_out: 0
+    speed: 27.4
+    ttft: 2.1
+    context: 1048576
+    thinking: low→low
+  ox:
+    id: stealth/ox-alpha
+    pool: R
+    tier: 2
+    bucket: openrouter-free
+    cost_in: 0
+    cost_out: 0
+    speed: 27.4
+    ttft: 2.1
+    context: 1048576
+    thinking: low,high
+  oxmax:
+    id: stealth/ox-alpha
+    pool: R
+    tier: 3
+    bucket: openrouter-free
+    cost_in: 0
+    cost_out: 0
+    speed: 27.4
+    ttft: 2.1
+    context: 1048576
+    thinking: low,high,max
+`
+
+func catalogWithOx(t *testing.T) *catalog {
+	t.Helper()
+	c, err := catalogFrom(t, fixtureYML+oxEntries)
+	if err != nil {
+		t.Fatalf("loadCatalog with ox ladder: %v", err)
+	}
+	return c
+}
+
+func TestOxLadderGatesLanes(t *testing.T) {
+	base := fixtureCatalog(t)
+	if got := base.lanes(); len(got) != len(genBaseLanes) {
+		t.Errorf("base catalog serves %d lanes, want %d: %v", len(got), len(genBaseLanes), got)
+	}
+	withOx := catalogWithOx(t)
+	want := append(append([]string{}, genBaseLanes...), "ox-only", "ox-led", "ox-lean")
+	if got := withOx.lanes(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("ox catalog serves %v, want %v", got, want)
+	}
+}
+
+func TestOxLadderAllOrNothing(t *testing.T) {
+	// Drop the tier-3 entry: a two-of-three ladder must be refused outright.
+	partial := strings.Split(oxEntries, "  oxmax:")[0]
+	if _, err := catalogFrom(t, fixtureYML+partial); err == nil || !strings.Contains(err.Error(), "pool R must fill tiers 1..3") {
+		t.Errorf("partial ox ladder accepted (err: %v)", err)
+	}
+}
+
+func TestGenValidOxLanes(t *testing.T) {
+	for _, tc := range []struct {
+		lane                string
+		spark, fable, main_ bool
+		want                bool
+	}{
+		{"ox-only", false, false, false, true},
+		{"ox-only", true, false, false, false}, // no O drain bucket to lead with
+		{"ox-only", false, true, false, false}, // no A elite on a pure ox lane
+		{"ox-led", false, false, false, true},
+		{"ox-led", false, true, true, false}, // fable-as-main defeats the free worker
+		{"ox-lean", false, false, false, true},
+		{"ox-lean", true, false, false, false}, // utility is ox here; spark has nothing to drain
+		{"ox-lean", false, true, false, true},  // deliberative roles stay Claude; fable may lead them
+		{"ox-lean", false, true, true, true},   // fable-as-default is exactly what lean is for
+	} {
+		if got := genValid(tc.lane, tc.spark, tc.fable, tc.main_, true); got != tc.want {
+			t.Errorf("genValid(%s, sp=%v, fa=%v, famain=%v) = %v, want %v",
+				tc.lane, tc.spark, tc.fable, tc.main_, got, tc.want)
+		}
+	}
+}
+
+// The ox lanes route by policy, not price: everything high-volume stays on the
+// free pool; deliberative work crosses to Anthropic; the reviewer never shares
+// its lead's provider.
+func TestOxLaneRoutingPolicy(t *testing.T) {
+	c := catalogWithOx(t)
+	combo := c.genCombo("ox-led", "smart", "high", false, true, false, false)
+	for _, r := range []string{"default", "task", "scout", "sonic", "smol", "tiny", "commit", "vision"} {
+		if id := c.models[combo[r].lead].ID; id != "stealth/ox-alpha" {
+			t.Errorf("ox-led %s lead = %s, want stealth/ox-alpha", r, id)
+		}
+	}
+	for _, r := range []string{"plan", "slow", "designer", "reviewer"} {
+		pool := c.models[combo[r].lead].Pool
+		if pool != "A" {
+			t.Errorf("ox-led deliberative role %s routes to pool %s, want A", r, pool)
+		}
+	}
+	// Fable is on: it leads plan/slow/designer/reviewer outright.
+	for _, r := range []string{"plan", "slow", "designer", "reviewer"} {
+		if id := c.models[combo[r].lead].ID; id != "claude-fable-5" {
+			t.Errorf("ox-led smart + fable: %s lead = %s, want claude-fable-5", r, id)
+		}
+	}
+	// Pure ox: every role including advisor and reviewer stays on R.
+	pure := c.genCombo("ox-only", "normal", "medium", false, false, false, false)
+	for _, r := range genRoleOrder {
+		rt := pure[r]
+		if rt.lead == "" {
+			continue
+		}
+		if id := c.models[rt.lead].ID; id != "stealth/ox-alpha" {
+			t.Errorf("ox-only %s lead = %s, want stealth/ox-alpha", r, id)
+		}
+	}
+}
+
+// ox-lean is ox-led's mirror: paid providers answer for the work, the free
+// pool absorbs the background. Fable-as-main is allowed — handing the default
+// seat to the elite is exactly what an operator on this lane may want.
+func TestOxLeanRoutingPolicy(t *testing.T) {
+	c := catalogWithOx(t)
+	combo := c.genCombo("ox-lean", "smart", "high", false, true, true, false)
+	// fable-as-main hands only the default seat to the elite; task and
+	// librarian follow the lane's OpenAI primary.
+	for _, r := range []string{"task", "librarian"} {
+		if pool := c.models[combo[r].lead].Pool; pool != "O" {
+			t.Errorf("ox-lean %s lead pool = %s, want O", r, pool)
+		}
+	}
+	if id := c.models[combo["default"].lead].ID; id != "claude-fable-5" {
+		t.Errorf("ox-lean famain default = %s, want claude-fable-5", id)
+	}
+	for _, r := range []string{"scout", "sonic", "smol", "tiny", "commit", "vision"} {
+		if id := c.models[combo[r].lead].ID; id != "stealth/ox-alpha" {
+			t.Errorf("ox-lean %s lead = %s, want stealth/ox-alpha", r, id)
+		}
+	}
+	for _, r := range []string{"plan", "slow", "designer", "reviewer"} {
+		if pool := c.models[combo[r].lead].Pool; pool != "A" {
+			t.Errorf("ox-lean deliberative %s pool = %s, want A", r, pool)
+		}
+	}
+	// Without fable, workers stay on the OpenAI primary.
+	base := c.genCombo("ox-lean", "normal", "medium", false, false, false, false)
+	for _, r := range []string{"default", "task"} {
+		if pool := c.models[base[r].lead].Pool; pool != "O" {
+			t.Errorf("ox-lean %s pool = %s, want O", r, pool)
+		}
+	}
+}
+
+func TestAdvisorsIncludeOxContext(t *testing.T) {
+	withOx := catalogWithOx(t)
+	got := withOx.renderAdvisors()
+	if !strings.Contains(got, "glance ox stealth/ox-alpha:low") {
+		t.Errorf("advisor table missing ox context:\n%s", got)
+	}
+	base := fixtureCatalog(t)
+	if strings.Contains(base.renderAdvisors(), " ox ") {
+		t.Error("base catalog must not advertise an ox advisor context")
 	}
 }

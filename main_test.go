@@ -467,7 +467,7 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 // them all to empty strings without anything failing; this locks each value.
 func TestDefaultGlyphs(t *testing.T) {
 	want := map[string]rune{
-		"lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
+		"runtime": 0xf108, "lane": 0xf127, "model": 0xf085, "thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fable": 0xf02d, "main": 0xf140, "fast": 0xf0e7,
 		"relief": 0xf132,
 	}
@@ -475,7 +475,7 @@ func TestDefaultGlyphs(t *testing.T) {
 	if len(g) != len(want) {
 		t.Errorf("defaultGlyphs has %d entries, want %d", len(g), len(want))
 	}
-	for _, f := range facetDefs(g) {
+	for _, f := range append([]facet{runtimeFacet(g["runtime"], nil)}, facetDefs(g)...) {
 		r := []rune(g[f.key])
 		if len(r) != 1 {
 			t.Errorf("glyph for %q is %d runes, want exactly 1", f.key, len(r))
@@ -4017,5 +4017,128 @@ func TestAdvisorAuditReliefTail(t *testing.T) {
 	m.sel["lane"] = "ds-led" // optional-led lane already spends DeepSeek deliberately
 	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
 		t.Fatalf("relief does not apply on an optional-led lane: %v", got)
+	}
+}
+
+// ── pool R surface ────────────────────────────────────────────────────────────
+
+func TestModelReMatchesProviderScopedIds(t *testing.T) {
+	line := "  ● task  stealth/ox-alpha:high → claude-opus-5:high"
+	got := modelRe.FindAllString(line, -1)
+	want := []string{"stealth/ox-alpha:high", "claude-opus-5:high"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("modelRe matched %v, want %v", got, want)
+	}
+	// Prose and bucket states must never read as models.
+	for _, s := range []string{"thinking high · fallback on · advisor on", "codex-spark maxed"} {
+		if got := modelRe.FindAllString(s, -1); len(got) != 0 {
+			t.Errorf("modelRe matched prose %q → %v", s, got)
+		}
+	}
+}
+
+func TestShortModelStripsProviderPath(t *testing.T) {
+	if got := shortModel("stealth/ox-alpha"); got != "ox-alpha" {
+		t.Errorf("shortModel(stealth/ox-alpha) = %q, want ox-alpha", got)
+	}
+	if got := shortModel("claude-opus-5"); got != "opus" {
+		t.Errorf("shortModel baseline moved: %q", got)
+	}
+}
+
+func TestPrefixedUsesCatalogPool(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"stealth/ox-alpha": {pool: "R"},
+		"gpt-5.6-luna":     {pool: "O"},
+		"claude-opus-5":    {pool: "A"},
+	}}
+	for id, want := range map[string]string{
+		"stealth/ox-alpha": "openrouter/stealth/ox-alpha",
+		"gpt-5.6-luna":     "openai-codex/gpt-5.6-luna",
+		"claude-opus-5":    "anthropic/claude-opus-5",
+	} {
+		if got := m.prefixed(id); got != want {
+			t.Errorf("prefixed(%q) = %q, want %q", id, got, want)
+		}
+	}
+	// A catalog without the pool column falls back to the name heuristic.
+	var legacy model
+	if got := legacy.prefixed("claude-opus-5"); got != "anthropic/claude-opus-5" {
+		t.Errorf("legacy heuristic broken: prefixed = %q", got)
+	}
+}
+
+func TestTrimLanesResetsVanishedLane(t *testing.T) {
+	m := &model{
+		facets: []facet{
+			{key: "lane", values: []string{"gpt-only", "mixed", "ox-only", "ox-led"}},
+			{key: "thinking", values: []string{"medium"}},
+		},
+		sel: map[string]string{"lane": "ox-only", "thinking": "medium"},
+		generated: map[string][]string{
+			"gpt-only_smart_medium_nosp_nofa": nil,
+			"mixed_smart_medium_nosp_nofa":    nil,
+		},
+	}
+	m.applyCatalog()
+	if got := m.facets[0].values; strings.Join(got, ",") != "gpt-only,mixed" {
+		t.Errorf("lane dial not trimmed to served lanes: %v", got)
+	}
+	if m.sel["lane"] != "gpt-only" && m.sel["lane"] != "mixed" {
+		t.Errorf("selection left on vanished lane: %q", m.sel["lane"])
+	}
+}
+
+// The launch path prefixes tokens that still carry their thinking level
+// ("id:level"); the facts table is keyed on the bare id. This regresses the
+// bug where ox ids missed the pool lookup and fell to the two-provider name
+// heuristic — openai-codex/stealth/ox-alpha is not a model omp knows.
+func TestPrefixedLeveledTokens(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"stealth/ox-alpha": {pool: "R"},
+	}}
+	if got := m.prefixed("stealth/ox-alpha:high"); got != "openrouter/stealth/ox-alpha:high" {
+		t.Fatalf("prefixed(leveled) = %q, want openrouter/stealth/ox-alpha:high", got)
+	}
+}
+
+// End to end: the emitted config must qualify every reference with the
+// catalog's pool, and the ox-led advisor must carry its cross-pool net
+func TestGenConfigYAMLOxLed(t *testing.T) {
+	blocks := loadBlocks("/tmp/grid-ox.plain")
+	if len(blocks) == 0 {
+		t.Skip("regeneration fixture /tmp/grid-ox.plain absent")
+	}
+	m := model{
+		generated: blocks,
+		advisors:  parseAdvisors(blocks["__advisors__"]),
+		facts:     parseFacts(blocks["__models__"]),
+		glyphs:    defaultGlyphs(),
+		facets:    facetDefs(defaultGlyphs()),
+		sel: map[string]string{"lane": "ox-led", "model": "smart", "thinking": "high",
+			"advisor": "glance", "spark": "off", "fable": "off", "main": "off", "fast": "off",
+			"relief": "on"},
+		// An ox catalog carries an optional pool, so its rendered combos are
+		// relief-segmented — mirror what applyCatalog would derive.
+		hasRelief: true,
+	}
+	cfg := m.genConfigYAML()
+	if strings.Contains(cfg, "openai-codex/stealth") || strings.Contains(cfg, "anthropic/stealth") {
+		t.Errorf("heuristic prefix leaked onto ox ids:\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "openrouter/stealth/ox-alpha:") {
+		t.Errorf("no pool-qualified ox reference:\n%s", cfg)
+	}
+	adv := m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], "glance")
+	advisorRow := ""
+	for _, r := range adv {
+		if roleOf(r) == "advisor" {
+			advisorRow = r
+		}
+	}
+	for _, want := range []string{"claude-haiku-4-5:low", "gpt-5.6-luna:low", "stealth/ox-alpha:low"} {
+		if !strings.Contains(advisorRow, want) {
+			t.Errorf("advisor net missing %s in %q", want, advisorRow)
+		}
 	}
 }
