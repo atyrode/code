@@ -38,6 +38,10 @@ type brokerConfig struct {
 	SnapshotCache string
 }
 
+func (b brokerConfig) configured() bool {
+	return strings.TrimSpace(b.URL) != "" && strings.TrimSpace(b.Token) != ""
+}
+
 // resolveBroker uses the inherited central broker whenever any central broker
 // variable is set. The legacy manifest is consulted only as a staged fallback
 // for installations which have not yet exported the central variables.

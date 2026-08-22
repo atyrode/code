@@ -174,6 +174,15 @@ func (m model) bodyLines() ([]string, int) {
 // target gets the same footer shape with an honest summary instead of meters:
 // its tokens are free and code has no measurement to quote.
 func (m model) launchFooter() []string {
+	if m.noProviders {
+		return []string{
+			"",
+			stDim.Render("  no connected OMP providers"),
+			"",
+			"",
+			stDim.Render("  m open managed OMP to log in"),
+		}
+	}
 	acc := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("  ⏎ launch")
 	if _, local := m.selectedRuntime(); local {
 		return []string{

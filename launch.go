@@ -92,6 +92,13 @@ func runTrusted(envName string, fallbacks []string,
 		fmt.Fprintln(os.Stderr, "code: trusted launcher not found:", err)
 		return 1
 	}
+	if !broker.configured() {
+		err = runChild(path, argv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "code: trusted child:", err)
+		}
+		return childStatus(err)
+	}
 	accounts, err := loadAccounts(broker)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch:", err)
