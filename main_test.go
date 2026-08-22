@@ -124,9 +124,9 @@ func TestParseFactsBucketColumn(t *testing.T) {
 		t.Fatalf("parsed %d rows, want 3: %v", len(facts), facts)
 	}
 	want := map[string]modelFact{
-		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "codex-main"},
-		"gpt-5.6-terra":   {2.5, 15, 41, 1.4, ""},
-		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "codex-main", ""},
+		"gpt-5.6-terra":   {2.5, 15, 41, 1.4, "", ""},
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable", ""},
 	}
 	for id, w := range want {
 		if got := facts[id]; got != w {
@@ -141,8 +141,8 @@ func TestParseFactsBucketColumn(t *testing.T) {
 // would then strike models through against the wrong window.
 func TestBucketForPrefersCatalog(t *testing.T) {
 	m := model{facts: map[string]modelFact{
-		"claude-mythos-5": {5, 25, 30, 2, "claude-fable"},
-		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, ""},
+		"claude-mythos-5": {5, 25, 30, 2, "claude-fable", ""},
+		"gpt-5.6-luna":    {1, 6, 52.3, 1.18, "", ""},
 	}}
 	if got := bucketOf("claude-mythos-5"); got != "claude-main" {
 		t.Fatalf("guess baseline moved: bucketOf(claude-mythos-5) = %q", got)
@@ -3634,5 +3634,74 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(raw)); got != "||||" {
 		t.Errorf("sandbox inherited auth routing: %q", got)
+	}
+}
+
+// ── pool R surface ────────────────────────────────────────────────────────────
+
+func TestModelReMatchesProviderScopedIds(t *testing.T) {
+	line := "  ● task  stealth/ox-alpha:high → claude-opus-5:high"
+	got := modelRe.FindAllString(line, -1)
+	want := []string{"stealth/ox-alpha:high", "claude-opus-5:high"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("modelRe matched %v, want %v", got, want)
+	}
+	// Prose and bucket states must never read as models.
+	for _, s := range []string{"thinking high · fallback on · advisor on", "codex-spark maxed"} {
+		if got := modelRe.FindAllString(s, -1); len(got) != 0 {
+			t.Errorf("modelRe matched prose %q → %v", s, got)
+		}
+	}
+}
+
+func TestShortModelStripsProviderPath(t *testing.T) {
+	if got := shortModel("stealth/ox-alpha"); got != "ox-alpha" {
+		t.Errorf("shortModel(stealth/ox-alpha) = %q, want ox-alpha", got)
+	}
+	if got := shortModel("claude-opus-5"); got != "opus" {
+		t.Errorf("shortModel baseline moved: %q", got)
+	}
+}
+
+func TestPrefixedUsesCatalogPool(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"stealth/ox-alpha": {pool: "R"},
+		"gpt-5.6-luna":     {pool: "O"},
+		"claude-opus-5":    {pool: "A"},
+	}}
+	for id, want := range map[string]string{
+		"stealth/ox-alpha": "openrouter/stealth/ox-alpha",
+		"gpt-5.6-luna":     "openai-codex/gpt-5.6-luna",
+		"claude-opus-5":    "anthropic/claude-opus-5",
+	} {
+		if got := m.prefixed(id); got != want {
+			t.Errorf("prefixed(%q) = %q, want %q", id, got, want)
+		}
+	}
+	// A catalog without the pool column falls back to the name heuristic.
+	var legacy model
+	if got := legacy.prefixed("claude-opus-5"); got != "anthropic/claude-opus-5" {
+		t.Errorf("legacy heuristic broken: prefixed = %q", got)
+	}
+}
+
+func TestTrimLanesResetsVanishedLane(t *testing.T) {
+	m := &model{
+		facets: []facet{
+			{key: "lane", values: []string{"gpt-only", "mixed", "ox-only", "ox-led"}},
+			{key: "thinking", values: []string{"medium"}},
+		},
+		sel: map[string]string{"lane": "ox-only", "thinking": "medium"},
+		generated: map[string][]string{
+			"gpt-only_smart_medium_nosp_nofa": nil,
+			"mixed_smart_medium_nosp_nofa":    nil,
+		},
+	}
+	m.applyCatalog()
+	if got := m.facets[0].values; strings.Join(got, ",") != "gpt-only,mixed" {
+		t.Errorf("lane dial not trimmed to served lanes: %v", got)
+	}
+	if m.sel["lane"] != "gpt-only" && m.sel["lane"] != "mixed" {
+		t.Errorf("selection left on vanished lane: %q", m.sel["lane"])
 	}
 }
