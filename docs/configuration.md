@@ -112,7 +112,7 @@ Each entry under `models:`:
 | Field | Meaning |
 |---|---|
 | `id` | the model id omp routes to |
-| `pool` | `O` (OpenAI/Codex) or `A` (Anthropic) |
+| `pool` | `O` (OpenAI/Codex), `A` (Anthropic), or `R` (OpenRouter — optional, see below) |
 | `tier` | `1` cheap · `2` regular · `3` smart — the per-pool fallback ladder. `0` (a fast idle-bucket model the `spark` toggle drains) and `4` (a scarce elite the `fable` toggle leads with) are optional |
 | `bucket` | the quota window this model draws from (`claude-main`, `claude-fable`, `codex-main`, `codex-spark`). The TUI prefers it over guessing from the model family |
 | `cost_in` / `cost_out` | dollars per 1M tokens; drives the cost meter |
@@ -126,10 +126,23 @@ tiers 1, 2, and 3 respectively. Mixed routing keeps GPT for fast and normal,
 then prefers Claude's tier-3 model for smart, with the GPT tier-3 model in its
 fallback chain. Any text-only rung is skipped.
 
+### Pool R and the ox lanes
+
+Pool `R` is optional, and its presence is its own switch: with no `R` models
+the generator serves only the five base lanes; with a full ladder it also
+serves `ox-only` (every role on the free pool) and `ox-led` (the free pool
+leads everything high-volume; plan/slow/designer/reviewer cross to Anthropic,
+and `fable` may still lead those). A half-declared R ladder is refused. A
+one-model family — Ox Alpha is exactly that — declares the same id once per
+tier with ascending thinking ceilings (`low→low`, then `low→high`, then
+`low→max`); the tier dial then means thinking depth. `code generate init`
+never scaffolds pool R: curate those entries by hand and re-confirm
+`probed: true` yourself.
+
 The thinking scale is `minimal · low · medium · high · xhigh · max`. Write
 `low→max` for a contiguous run, or a comma list when the model skips a level:
 claude-opus-4-6 offers `low,medium,high,max` but not `xhigh`, and a range there
-would claim a level the API rejects.
+would claim a level the API rejects. A single-level model writes `low→low`.
 
 ## The `ctrl+o` classifier
 

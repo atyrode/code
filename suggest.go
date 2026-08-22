@@ -96,17 +96,21 @@ func (m model) Commander() clikit.Commander {
 }
 
 // repairConstraints enforces the deterministic rules a suggestion (or selection)
-// must never violate — mirroring generate-profiles.py's `valid` plus live quota:
-// spark is an OpenAI model, so it can't run on a pure-Claude lane; fable is an
-// Anthropic elite, so it can't run on a pure-GPT lane; and neither may be left on
-// when its quota bucket is maxed or unauthed. Runs after an applied proposal, so
-// the generator can't land on an impossible or unavailable combo.
+// must never violate — mirroring genValid plus live quota: spark is an OpenAI
+// model, so it can't run on a pure-Claude or an ox lane; fable is an Anthropic
+// elite, so it can't run on a pure-GPT or a pure-ox lane; fable-as-main would
+// defeat ox-led's free worker; and neither lead may be left on when its quota
+// bucket is maxed or unauthed. Runs after an applied proposal, so the generator
+// can't land on an impossible or unavailable combo.
 func (m *model) repairConstraints() {
-	switch m.sel["lane"] {
-	case "claude-only":
+	if lane := m.sel["lane"]; lane == "claude-only" || lane == "ox-only" || lane == "ox-led" {
 		m.sel["spark"] = "off"
-	case "gpt-only":
+	}
+	if lane := m.sel["lane"]; lane == "gpt-only" || lane == "ox-only" {
 		m.sel["fable"] = "off"
+	}
+	if m.sel["lane"] == "ox-led" {
+		m.sel["main"] = "off"
 	}
 	if m.avail.down(bucketOf("fable")) {
 		m.sel["fable"] = "off"

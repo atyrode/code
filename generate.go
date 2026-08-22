@@ -11,6 +11,11 @@ package main
 //   - pools O (OpenAI/Codex) and A (Anthropic) must each fill tiers 1..3 —
 //     the per-pool fallback ladder (cheap, regular, smart). code assumes both
 //     providers are present; generation fails loudly otherwise.
+//   - pool R (OpenRouter) is optional: a free/aggregator lane. When any R model
+//     is declared, its tiers 1..3 must all be filled (a one-model family
+//     declares the same id three times with ascending thinking ceilings); when
+//     none is, the ox lanes are simply not generated and the TUI never offers
+//     them. That presence is the whole on/off switch — no dial of its own.
 //   - tier 0 (an idle-bucket speed model, "spark") and tier 4 (a scarce elite,
 //     "fable") are optional; without them the corresponding facet combos are
 //     simply not generated and the TUI hides the dial.
@@ -110,15 +115,15 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 	if probedNode == nil || probedNode.Value != "true" {
 		return nil, fmt.Errorf("%s: missing `probed: true` — these models were never verified as callable by your account. Re-run `code generate init --refresh`, which probes every model, or set `probed: true` yourself once you have confirmed each one", path)
 	}
-	c := &catalog{models: map[string]catModel{}, levels: map[string][]int{}, ladder: map[string][5]string{"O": {}, "A": {}}}
+	c := &catalog{models: map[string]catModel{}, levels: map[string][]int{}, ladder: map[string][5]string{"O": {}, "A": {}, "R": {}}}
 	for i := 0; i+1 < len(modelsNode.Content); i += 2 {
 		key := modelsNode.Content[i].Value
 		var m catModel
 		if err := modelsNode.Content[i+1].Decode(&m); err != nil {
 			return nil, fmt.Errorf("%s: model %q: %w", path, key, err)
 		}
-		if m.Pool != "O" && m.Pool != "A" {
-			return nil, fmt.Errorf("%s: model %q: pool must be O or A, got %q", path, key, m.Pool)
+		if m.Pool != "O" && m.Pool != "A" && m.Pool != "R" {
+			return nil, fmt.Errorf("%s: model %q: pool must be O, A, or R (optional OpenRouter), got %q", path, key, m.Pool)
 		}
 		if m.Tier < 0 || m.Tier > 4 {
 			return nil, fmt.Errorf("%s: model %q: tier must be 0..4, got %d", path, key, m.Tier)
@@ -144,6 +149,13 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 			}
 		}
 	}
+	// Pool R is all-or-nothing: a half-declared ox ladder would generate lanes
+	// whose fallback rungs silently vanish. One-model families declare the same
+	// id at every tier with ascending thinking ceilings — that repetition is
+	// the encoding, not a mistake.
+	if c.hasOxLadderPart() && !c.hasOxLadder() {
+		return nil, fmt.Errorf("%s: pool R must fill tiers 1..3 when present — declare the model once per tier with ascending thinking ceilings, or remove the pool entirely", path)
+	}
 	if err := c.checkLadder(path); err != nil {
 		return nil, err
 	}
@@ -159,7 +171,9 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 // less. Only tiers 1..3 are the capability ladder — tier 0 is a bucket-drain
 // lead and tier 4 an elite lead, both deliberately off it.
 func (c *catalog) checkLadder(path string) error {
-	for _, pool := range []string{"O", "A"} {
+	// R joins only when declared; an absent pool has no rungs to compare and
+	// the empty-ladder guard below skips it.
+	for _, pool := range []string{"O", "A", "R"} {
 		for lo := 1; lo <= 3; lo++ {
 			for hi := lo + 1; hi <= 3; hi++ {
 				a, b := c.ladder[pool][lo], c.ladder[pool][hi]
@@ -174,6 +188,29 @@ func (c *catalog) checkLadder(path string) error {
 		}
 	}
 	return nil
+}
+
+// hasOxLadder reports whether the optional OpenRouter pool is fully declared.
+// The ox lanes exist exactly when this is true — catalog presence is their
+// on/off switch.
+func (c *catalog) hasOxLadder() bool {
+	for t := 1; t <= 3; t++ {
+		if c.ladder["R"][t] == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// hasOxLadderPart reports whether any R model is declared at all. The loader
+// pairs it with hasOxLadder to reject half-declared pools.
+func (c *catalog) hasOxLadderPart() bool {
+	for t := 0; t <= 4; t++ {
+		if c.ladder["R"][t] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // regression reports why rung hi is worse than the cheaper rung lo, or "" when
@@ -244,8 +281,12 @@ func (c *catalog) clampTh(key, level string) string {
 	return thScale[best]
 }
 
+// otherPool is the crossing target for roles that must leave their lead pool:
+// the reviewer's independent second eye, the advisor's minimum diversity. O
+// and A cross to each other; R crosses to A — the strongest judgment pool,
+// which is what every crossing on an ox lane is for.
 func otherPool(p string) string {
-	if p == "O" {
+	if p == "O" || p == "R" {
 		return "A"
 	}
 	return "O"
@@ -363,22 +404,37 @@ var (
 		// step more thinking than smol at the same rung.
 		"scout": {"low": "low", "medium": "medium", "high": "medium", "xhigh": "medium"},
 	}
-	genTierMap  = map[string]int{"fast": 1, "normal": 2, "smart": 3}
-	genBump     = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
-	genLanes    = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}
-	genMTiers   = []string{"fast", "normal", "smart"}
-	genThinking = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
-	genExtremes = map[string]bool{"minimal": true, "max": true}
+	genTierMap   = map[string]int{"fast": 1, "normal": 2, "smart": 3}
+	genBump      = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
+	genBaseLanes = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}
+	genMTiers    = []string{"fast", "normal", "smart"}
+	genThinking  = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+	genExtremes  = map[string]bool{"minimal": true, "max": true}
 )
 
 func lanePrimary(lane string) string {
+	if lane == "ox-only" || lane == "ox-led" {
+		return "R"
+	}
 	if lane == "gpt-only" || lane == "gpt-led" || lane == "mixed" {
 		return "O"
 	}
 	return "A"
 }
 
-func lanePure(lane string) bool { return lane == "gpt-only" || lane == "claude-only" }
+func lanePure(lane string) bool {
+	return lane == "gpt-only" || lane == "claude-only" || lane == "ox-only"
+}
+
+// lanes lists the lanes this catalog serves: the five base lanes always, plus
+// the ox pair only when the optional OpenRouter ladder is fully declared. This
+// is the generator side of the ox on/off switch.
+func (c *catalog) lanes() []string {
+	if !c.hasOxLadder() {
+		return genBaseLanes
+	}
+	return append(append([]string{}, genBaseLanes...), "ox-only", "ox-led")
+}
 
 type roleRoute struct {
 	lead  string // short key; "" = role omitted (advisor off)
@@ -407,6 +463,14 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 				return "A"
 			}
 			return "O"
+		}
+		// ox-led keeps the free pool on everything high-volume (workers,
+		// utility, vision) and spends the paid judgment where it pays:
+		// deliberative roles cross to Anthropic. The reviewer crossing below
+		// lands there too, which still satisfies the anti-tunnel-vision rule —
+		// the second eye never shares the lead's pool.
+		if lane == "ox-led" && genDelib[r] {
+			return "A"
 		}
 		if genCrossLed[r] {
 			return otherPool(p)
@@ -564,6 +628,12 @@ func genValid(lane string, spark, fable, fableMain bool) bool {
 	if lane == "claude-only" && spark {
 		return false // no spark on pure Claude
 	}
+	if lane == "ox-only" && (spark || fable) {
+		return false // a pure ox lane has no O drain bucket or A elite to lead with
+	}
+	if lane == "ox-led" && (spark || fableMain) {
+		return false // utility already lives on the free pool; fable-as-main would defeat the lane
+	}
 	if fableMain && !fable {
 		return false // fable-as-main only exists on top of fable
 	}
@@ -603,8 +673,14 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 		}
 		model := fmt.Sprintf("%s:%s", c.models[rt.lead].ID, c.clampTh(rt.lead, rt.level))
 		row := fmt.Sprintf("  %s %-10s %-24s", marker, r, model)
+		prev := model
 		for i, m := range rt.chain {
-			row += fmt.Sprintf(" → %s:%s", c.models[m].ID, c.clampTh(m, rt.chLvl[i]))
+			tok := fmt.Sprintf("%s:%s", c.models[m].ID, c.clampTh(m, rt.chLvl[i]))
+			if tok == prev {
+				continue // sibling rungs of a one-model family can clamp to the same level
+			}
+			prev = tok
+			row += " → " + tok
 		}
 		lines = append(lines, strings.TrimRight(row, " "))
 	}
@@ -614,9 +690,13 @@ func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableM
 
 // renderModelFacts emits the per-model table the TUI's meters read. The bucket
 // is a trailing optional column: the consumer falls back to guessing from the
-// model family when a catalog omits it, so old catalogs keep working.
+// model family when a catalog omits it. The pool column after it is the
+// authoritative provider prefix for launched configs, replacing that same
+// name heuristic wherever present — this renderer always writes it, but both
+// columns are optional on the parsing side, so catalogs and binaries of mixed
+// age keep working together.
 func (c *catalog) renderModelFacts() string {
-	lines := []string{"__models__  model facts (id in out speed ttft bucket — $/1M in·out, tok/s, s)"}
+	lines := []string{"__models__  model facts (id in out speed ttft [bucket] [pool] — $/1M in·out, tok/s, s)"}
 	for _, k := range c.keys {
 		m := c.models[k]
 		row := fmt.Sprintf("  %s %s %s %s %s",
@@ -624,6 +704,7 @@ func (c *catalog) renderModelFacts() string {
 		if m.Bucket != "" {
 			row += " " + m.Bucket
 		}
+		row += " " + m.Pool
 		lines = append(lines, row)
 	}
 	lines = append(lines, "")
@@ -656,7 +737,11 @@ func (c *catalog) renderAdvisors() string {
 		{"audit", []rung{{3, "high"}, {2, "high"}, {1, "low"}}},
 	}
 	lines := []string{"__advisors__  advisor dial (level context → chain)"}
-	for _, ctx := range []struct{ name, pool string }{{"gpt", "O"}, {"claude", "A"}} {
+	advisorContexts := []struct{ name, pool string }{{"gpt", "O"}, {"claude", "A"}}
+	if c.hasOxLadder() {
+		advisorContexts = append(advisorContexts, struct{ name, pool string }{"ox", "R"})
+	}
+	for _, ctx := range advisorContexts {
 		for _, d := range dial {
 			var parts []string
 			for _, rg := range d.chain {
@@ -688,7 +773,7 @@ func (c *catalog) renderCatalog() string {
 	b.WriteString(c.renderModelFacts() + "\n")
 	hasSpark := c.ladder["O"][0] != ""
 	hasElite := c.ladder["A"][4] != ""
-	for _, lane := range genLanes {
+	for _, lane := range c.lanes() {
 		for _, mtier := range genMTiers {
 			for _, thinking := range genThinking {
 				for _, spark := range []bool{true, false} {

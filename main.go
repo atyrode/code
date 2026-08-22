@@ -123,7 +123,11 @@ var (
 	pad        = clikit.Pad
 	windowList = clikit.WindowList
 
-	modelRe = regexp.MustCompile(`(gpt|claude)[A-Za-z0-9._-]*:(minimal|low|medium|high|xhigh|max)`)
+	// Provider-qualified ids: bare catalog ids today (gpt-…, claude-…) plus
+	// slash-scoped ones (stealth/ox-alpha, local-qwen/qwen3.8-27b). The level
+	// suffix with its colon is what keeps prose out; the word boundary keeps
+	// "maxed" from reading as a model.
+	modelRe = regexp.MustCompile(`([a-z][a-z0-9._/-]*):(minimal|low|medium|high|xhigh|max)\b`)
 )
 
 // ── colourisers ──────────────────────────────────────────────────────────────
@@ -147,6 +151,14 @@ func shortModel(name string) string {
 	if name == "gpt-5.4" {
 		return name
 	}
+	// Slash-scoped ids display without their provider path, and keep their
+	// full model part — the vendor's own naming is the recognizable bit.
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+		if !strings.HasPrefix(name, "claude") {
+			return name
+		}
+	}
 	p := strings.Split(name, "-")
 	if strings.HasPrefix(name, "claude") && len(p) > 1 {
 		return p[1]
@@ -169,9 +181,13 @@ func paintModel(tok string) string {
 	i := strings.LastIndex(tok, ":")
 	name, level := tok[:i], tok[i+1:]
 	var br, bg, bb float64
-	if strings.HasPrefix(tok, "gpt") {
+	switch {
+	case strings.HasPrefix(tok, "gpt"):
 		br, bg, bb = 110, 170, 240
-	} else {
+	case strings.Contains(tok, "ox-alpha"), strings.Contains(tok, "local-qwen"):
+		// Free/local pools read green — the same family as their lane accents.
+		br, bg, bb = 96, 211, 150
+	default:
 		br, bg, bb = 240, 160, 105
 	}
 	f := 0.60 + float64(lvl(level))*0.088
@@ -189,6 +205,12 @@ func bucketOf(model string) string {
 	m := model
 	if i := strings.IndexByte(m, ':'); i >= 0 {
 		m = m[:i]
+	}
+	// Provider-scoped ids outside the two subscription pools (OpenRouter,
+	// local runtimes) have no quota window code knows about. An empty bucket
+	// never reads as down, which is exactly right for a free or local model.
+	if strings.Contains(m, "/") {
+		return ""
 	}
 	switch {
 	case strings.Contains(m, "fable"):
@@ -965,7 +987,9 @@ type facet struct {
 
 func facetDefs(glyphs map[string]string) []facet {
 	return []facet{
-		{"lane", []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}, glyphs["lane"]},
+		// The ox values are trimmed away by applyCatalog unless the catalog
+		// serves them — presence in models.yml is what makes them appear.
+		{"lane", []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ox-only", "ox-led"}, glyphs["lane"]},
 		{"model", []string{"fast", "normal", "smart"}, glyphs["model"]},
 		{"thinking", []string{"minimal", "low", "medium", "high", "xhigh", "max"}, glyphs["thinking"]},
 		// advisor as a power/cost dial: a quick glance, a proper review, or a
@@ -1005,11 +1029,14 @@ func parseAdvisors(rows []string) map[string][]string {
 }
 
 // modelFact is a model's measured facts from omp (via the catalog): pricing
-// ($/1M tokens), output throughput (tok/s), time-to-first-token (seconds), and
-// the quota bucket it draws from ("" when the catalog declares none).
+// ($/1M tokens), output throughput (tok/s), time-to-first-token (seconds), the
+// quota bucket it draws from ("" when the catalog declares none), and the pool
+// it belongs to ("" in catalogs that predate the column — the provider-prefix
+// heuristic covers those).
 type modelFact struct {
 	in, out, speed, ttft float64
 	bucket               string
+	pool                 string
 }
 
 // effTPS folds ttft into throughput — the effective tok/s for a representative
@@ -1025,9 +1052,9 @@ func (f modelFact) effTPS() float64 {
 }
 
 // parseFacts reads the __models__ block (rows: "<id> <in> <out> <speed> <ttft>
-// [<bucket>]") into a per-model table, sourced from the catalog so meters and
-// routing agree. The bucket column is optional — a catalog that declares none
-// for any model omits it entirely, and the name guess covers those rows.
+// [<bucket>] [<pool>]") into a per-model table, sourced from the catalog so
+// meters and routing agree. Bucket and pool are trailing optional columns —
+// older catalogs carry neither, and the name heuristics cover those rows.
 func parseFacts(rows []string) map[string]modelFact {
 	out := map[string]modelFact{}
 	for _, r := range rows {
@@ -1039,12 +1066,15 @@ func parseFacts(rows []string) map[string]modelFact {
 		outc, e2 := strconv.ParseFloat(f[2], 64)
 		sp, e3 := strconv.ParseFloat(f[3], 64)
 		tt, e4 := strconv.ParseFloat(f[4], 64)
-		bucket := ""
+		bucket, pool := "", ""
 		if len(f) >= 6 {
 			bucket = f[5]
 		}
+		if len(f) >= 7 {
+			pool = f[6]
+		}
 		if e1 == nil && e2 == nil && e3 == nil && e4 == nil {
-			out[f[0]] = modelFact{in, outc, sp, tt, bucket}
+			out[f[0]] = modelFact{in, outc, sp, tt, bucket, pool}
 		}
 	}
 	return out
@@ -1254,9 +1284,11 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 
 // visibleFacets drops facets that don't apply to the current lane, so the
 // generator only ever shows actionable options: no spark/fast on a Claude-only
-// pool, no fable on a GPT-only pool. main is fable's sub-setting, so it only
-// shows while fable is on (and the lane can host it at all). A dial this catalog
-// generated no combo for is dropped the same way — it is not a choice.
+// pool, no fable on a GPT-only pool, and on the ox lanes only what an ox-led
+// session can actually use (fable stays: it leads the deliberative roles).
+// main is fable's sub-setting, so it only shows while fable is on (and the
+// lane can host it at all). A dial this catalog generated no combo for is
+// dropped the same way — it is not a choice.
 func (m model) visibleFacets() []facet {
 	if _, local := m.selectedRuntime(); local {
 		var out []facet
@@ -1276,6 +1308,12 @@ func (m model) visibleFacets() []facet {
 		if lane == "gpt-only" && (f.key == "fable" || f.key == "main") {
 			continue
 		}
+		if lane == "ox-only" && (f.key == "spark" || f.key == "fable" || f.key == "main" || f.key == "fast") {
+			continue
+		}
+		if lane == "ox-led" && (f.key == "spark" || f.key == "main" || f.key == "fast") {
+			continue
+		}
 		if f.key == "spark" && m.noSpark {
 			continue
 		}
@@ -1293,10 +1331,10 @@ func (m model) visibleFacets() []facet {
 func comboID(sel map[string]string) string {
 	lane := sel["lane"]
 	sp, fb := sel["spark"], sel["fable"]
-	if lane == "gpt-only" {
+	if lane == "gpt-only" || lane == "ox-only" {
 		fb = "off"
 	}
-	if lane == "claude-only" {
+	if lane == "claude-only" || lane == "ox-only" || lane == "ox-led" {
 		sp = "off"
 	}
 	spid, faid := "nosp", "nofa"
@@ -1305,7 +1343,10 @@ func comboID(sel map[string]string) string {
 	}
 	if fb == "on" {
 		faid = "fa"
-		if sel["main"] == "on" {
+		// ox-led hosts the elite on deliberative roles only; promoting it to
+		// the default role would defeat the lane, and genValid refuses that
+		// combo outright.
+		if sel["main"] == "on" && lane != "ox-led" {
 			faid = "famain"
 		}
 	}
@@ -1323,7 +1364,13 @@ func (m *model) applyCatalog() {
 		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
 	}
 	spark, fable := false, false
+	served := map[string]bool{}
 	for id := range m.generated {
+		lane := id
+		if i := strings.IndexByte(id, '_'); i >= 0 {
+			lane = id[:i]
+		}
+		served[lane] = true
 		for _, seg := range strings.Split(id, "_") {
 			switch seg {
 			case "sp":
@@ -1334,7 +1381,42 @@ func (m *model) applyCatalog() {
 		}
 	}
 	m.noSpark, m.noFable = !spark, !fable
+	m.trimLanes(served)
 	m.clampSel()
+}
+
+// trimLanes narrows the lane dial to the lanes this catalog actually serves,
+// and lands the selection on a served lane when a persisted or default choice
+// points at one that vanished (an older catalog without ox, say). This is the
+// consumer side of the ox on/off switch: no ox entries in models.yml means no
+// ox values on the dial at all.
+func (m *model) trimLanes(served map[string]bool) {
+	for i, f := range m.facets {
+		if f.key != "lane" {
+			continue
+		}
+		var values []string
+		for _, v := range f.values {
+			if served[v] {
+				values = append(values, v)
+			}
+		}
+		if len(values) == len(f.values) {
+			continue // nothing to trim
+		}
+		if len(values) > 0 {
+			m.facets[i].values = values
+		}
+		break
+	}
+	if !served[m.sel["lane"]] {
+		for _, fallback := range []string{"mixed", "gpt-only", "claude-only"} {
+			if served[fallback] {
+				m.sel["lane"] = fallback
+				break
+			}
+		}
+	}
 }
 
 // clampSel turns off every dial the catalog cannot serve. main is fable's
@@ -1351,6 +1433,10 @@ func (m *model) clampSel() {
 
 func laneColor(lane string) string {
 	switch lane {
+	case "ox-only":
+		return "#1f9d5b" // deeper green — pure free pool
+	case "ox-led":
+		return "#5fce96" // lighter green — leans Ox Alpha
 	case "gpt-only":
 		return "#3f8ef0" // deeper blue — pure pool
 	case "gpt-led":
@@ -1365,7 +1451,20 @@ func laneColor(lane string) string {
 	return "#ff9f52"
 }
 
-func prefixed(model string) string {
+// prefixed qualifies a bare catalog id with the omp provider omp routes
+// through. The catalog's pool column is authoritative; the name heuristic is
+// only for catalogs that predate it.
+func (m model) prefixed(model string) string {
+	if f, ok := m.facts[model]; ok && f.pool != "" {
+		switch f.pool {
+		case "O":
+			return "openai-codex/" + model
+		case "A":
+			return "anthropic/" + model
+		case "R":
+			return "openrouter/" + model
+		}
+	}
 	if strings.HasPrefix(model, "claude") {
 		return "anthropic/" + model
 	}
@@ -1408,13 +1507,13 @@ func (m model) genConfigYAML() string {
 		if i == 1 && role != "advisor" {
 			// ●-marked agent-backed role: mirror its lead route as the task-agent
 			// model override so spawned agents follow the generated profile.
-			ao.WriteString("    " + role + ": " + prefixed(models[0]) + "\n")
+			ao.WriteString("    " + role + ": " + m.prefixed(models[0]) + "\n")
 		}
-		mr.WriteString("  " + role + ": " + prefixed(models[0]) + "\n")
+		mr.WriteString("  " + role + ": " + m.prefixed(models[0]) + "\n")
 		if len(models) > 1 {
 			var fbs []string
 			for _, x := range models[1:] {
-				fbs = append(fbs, prefixed(x))
+				fbs = append(fbs, m.prefixed(x))
 			}
 			fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
 		}
@@ -1603,10 +1702,21 @@ func (m model) bodyLines() ([]string, int) {
 // costs, how fast it is, and how Enter will launch it. Enter always launches
 // the generated profile for the current facets (the untouched default combo is
 // a profile like any other); m runs omp-managed on the managed defaults with
-// no overlay, and the sandbox (u) key is always offered.
+// no overlay, and the sandbox (u) key is always offered. A selected runtime
+// target gets the same footer shape with an honest summary instead of meters:
+// its tokens are free and code has no measurement to quote.
 func (m model) launchFooter() []string {
-	cs, ss := m.costScore(), m.speedScore()
 	acc := lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("  ⏎ launch")
+	if _, local := m.selectedRuntime(); local {
+		return []string{
+			"",
+			stDim.Render("  cost free · local inference"),
+			"",
+			"",
+			acc,
+		}
+	}
+	cs, ss := m.costScore(), m.speedScore()
 	return []string{
 		"",
 		m.meter("cost", "$", meterRamp[cs], cs), // dear → red, cheap → green
@@ -1888,8 +1998,10 @@ func (m model) listW() int {
 	if w > m.w-33 {
 		w = m.w - 33
 	}
-	if w > 80 {
-		w = 80
+	// The ox lanes widen the lane row past this function's old 80-cell
+	// aesthetic cap; a wider list beats clipping dial options mid-value.
+	if w > 104 {
+		w = 104
 	}
 	return w
 }
@@ -2716,12 +2828,26 @@ func (m *model) syncPreviewAt(yoff int) {
 	if target, local := m.selectedRuntime(); local {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(target.Label) + "\n")
 		b.WriteString(stDim.Render(target.statusLine()) + "\n\n")
-		b.WriteString("model       " + target.Model + "\n")
 		if target.ContextWindow > 0 {
-			b.WriteString(fmt.Sprintf("context     %dk tokens\n", target.ContextWindow/1000))
+			b.WriteString(fmt.Sprintf("context     %dk tokens\n\n", target.ContextWindow/1000))
 		}
-		b.WriteString("routing     every role stays local\n")
-		b.WriteString("fallbacks   disabled\n")
+		// Same grammar as a hosted profile: every role the broker's generated
+		// profile routes (all of them but the advisor, which stays off), led by
+		// the one local model at the dialed thinking — the flag is forwarded
+		// verbatim and omp clamps it to what the model offers.
+		rows := []string{fmt.Sprintf("  thinking %s · fallback off · advisor off", m.sel["thinking"])}
+		for _, r := range genRoleOrder {
+			if r == "advisor" {
+				continue
+			}
+			marker := " "
+			if genAgentRoles[r] {
+				marker = "●"
+			}
+			rows = append(rows, fmt.Sprintf("  %s %-10s %s:%s", marker, r, target.Model, m.sel["thinking"]))
+		}
+		b.WriteString(m.renderRoute(rows, m.depth, m.selectedLaunchAvailability(), rw))
+		b.WriteString("\n" + stDim.Render("broker-owned profile · cloud auth excluded · weights provisioned by the runtime") + "\n")
 		content := lipgloss.NewStyle().MaxWidth(m.vp.Width).Render(b.String())
 		m.vp.SetContent(content)
 		m.vp.SetYOffset(yoff)
