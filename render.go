@@ -143,7 +143,9 @@ func (m *model) syncPreviewAt(yoff int) {
 		return
 	}
 	id := comboID(m.sel, m.hasRelief)
-	if base, ok := m.generated[id]; ok {
+	if m.noProviders {
+		b.WriteString(stDim.Render("no connected OMP providers") + "\n")
+	} else if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
 		roles = m.applyAdvisor(roles, m.sel["advisor"])
 		b.WriteString(m.renderRoute(roles, m.depth, m.selectedLaunchAvailability(), rw))

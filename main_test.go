@@ -1226,6 +1226,7 @@ func TestRawMouseBurstRemainsResponsive(t *testing.T) {
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	m.broker = brokerConfig{} // keep unrelated fetch/ticks out of the program
+	m.providersResolved = true
 	var views atomic.Int64
 	keySeen := make(chan burstKeyState, 1)
 	filter := wheelInputFilter{}
@@ -3593,20 +3594,27 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 	}
 }
 
-func TestTrustedLaunchAbortsWithoutSnapshot(t *testing.T) {
+func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "started")
+	capture := filepath.Join(dir, "env")
 	script := filepath.Join(dir, "omp")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n: > \"$MARKER\"\n"), 0o700); err != nil {
+	body := "#!/bin/sh\nprintf '%s|%s|%s\\n' \"${OMP_AUTH_BROKER_URL+set}\" \"${OMP_AUTH_BROKER_TOKEN+set}\" \"${OMP_AUTH_BROKER_ACCOUNT_POOL_FILE+set}\" > \"$CAPTURE\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CODE_OMP", script)
-	t.Setenv("MARKER", marker)
-	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState()); status == 0 {
-		t.Fatal("trusted launch without a snapshot unexpectedly succeeded")
+	t.Setenv("CAPTURE", capture)
+	t.Setenv("OMP_AUTH_BROKER_URL", "http://incomplete")
+	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/stale-pool")
+	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState()); status != 0 {
+		t.Fatalf("direct trusted launch status = %d", status)
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("trusted child started without a snapshot: %v", err)
+	raw, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "||" {
+		t.Fatalf("direct child retained broker environment: %q", got)
 	}
 }
 
@@ -3741,6 +3749,66 @@ func TestApplyCatalogGrowsLaneDial(t *testing.T) {
 	two.applyCatalog()
 	if two.sel["lane"] != "gpt-only" {
 		t.Fatalf("vanished lane must reset to the dial's first value, got %q", two.sel["lane"])
+	}
+}
+
+func TestProviderAvailabilityFiltersDisconnectedLanes(t *testing.T) {
+	m := model{
+		generated: map[string][]string{
+			"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
+			"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
+			"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
+			"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
+			"ox-only_fast_low_nosp_nofa":     {"    default ox:low"},
+		},
+		facets: facetDefs(defaultGlyphs()),
+		sel:    defaultSel(),
+	}
+	m.applyCatalog()
+	m.applyProviderAvailability(map[string]bool{"R": true})
+
+	var lanes []string
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			lanes = f.values
+		}
+	}
+	if !reflect.DeepEqual(lanes, []string{"ox-only"}) {
+		t.Fatalf("OpenRouter-only lanes = %v, want [ox-only]", lanes)
+	}
+	if m.sel["lane"] != "ox-only" || m.noProviders {
+		t.Fatalf("OpenRouter-only selection = %q noProviders=%v", m.sel["lane"], m.noProviders)
+	}
+	for _, f := range m.visibleFacets() {
+		if f.key == "blend" {
+			t.Fatalf("single available lane exposed an unavailable blend: %v", f.values)
+		}
+	}
+
+	m.applyProviderAvailability(nil)
+	if !m.noProviders || len(m.visibleFacets()) != 0 {
+		t.Fatalf("accountless generator remained actionable: noProviders=%v facets=%v", m.noProviders, m.visibleFacets())
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := next.(model); got.genConfig != "" || cmd != nil {
+		t.Fatalf("accountless Enter launched: config=%q cmd=%v", got.genConfig, cmd)
+	}
+	if footer := strings.Join(m.launchFooter(), "\n"); !strings.Contains(footer, "m open managed OMP to log in") {
+		t.Fatalf("accountless footer is not actionable: %q", footer)
+	}
+}
+
+func TestDirectProviderProbeUsesOMPToken(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "omp")
+	body := "#!/bin/sh\n[ \"$1\" = token ] && [ \"$2\" = openrouter ]\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", script)
+	msg := probeProviderAvailabilityCmd()().(providerAvailabilityMsg)
+	if !reflect.DeepEqual(msg.pools, map[string]bool{"R": true}) {
+		t.Fatalf("provider probe pools = %v, want R only", msg.pools)
 	}
 }
 

@@ -315,16 +315,24 @@ func (m model) visibleFacets() []facet {
 		}
 		return out
 	}
+	if m.noProviders {
+		return nil
+	}
 	lane := m.sel["lane"]
 	var out []facet
 	for _, f := range m.facets {
 		if f.key == "lane" {
 			lead, blend := laneSplit(lane)
 			m.sel["lead"], m.sel["blend"] = lead, blend
-			// mixed leads the dial: it is the default and the only lead
-			// without a blend child, so it anchors the left edge.
-			leads := []string{"mixed"}
-			seen := map[string]bool{"mixed": true}
+			var leads []string
+			seen := map[string]bool{}
+			for _, v := range f.values {
+				if v == "mixed" {
+					leads = append(leads, "mixed")
+					seen["mixed"] = true
+					break
+				}
+			}
 			for _, v := range f.values {
 				l, _ := laneSplit(v)
 				if !seen[l] {
@@ -334,7 +342,22 @@ func (m model) visibleFacets() []facet {
 			}
 			out = append(out, facet{"lead", leads, f.glyph})
 			if lead != "mixed" {
-				out = append(out, facet{"blend", []string{"led", "only"}, f.glyph})
+				availableBlends := map[string]bool{}
+				for _, v := range f.values {
+					l, b := laneSplit(v)
+					if l == lead {
+						availableBlends[b] = true
+					}
+				}
+				var blends []string
+				for _, b := range []string{"led", "only"} {
+					if availableBlends[b] {
+						blends = append(blends, b)
+					}
+				}
+				if len(blends) > 1 {
+					out = append(out, facet{"blend", blends, f.glyph})
+				}
 			}
 			continue
 		}
@@ -410,6 +433,71 @@ func comboID(sel map[string]string, hasRelief bool) string {
 		}
 	}
 	return id
+}
+
+func connectedPools(accounts map[string][]account) map[string]bool {
+	pools := map[string]bool{}
+	for providerID, providerAccounts := range accounts {
+		if len(providerAccounts) == 0 {
+			continue
+		}
+		if provider := providerByID(providerID); provider != nil {
+			pools[provider.Pool] = true
+		}
+	}
+	return pools
+}
+
+// applyProviderAvailability narrows the generated lane catalog to credentials
+// OMP can actually use. Pure lanes need only their own provider; blended lanes
+// need every provider represented by the catalog because their role and
+// fallback chains can cross the full pool set.
+func (m *model) applyProviderAvailability(connected map[string]bool) {
+	m.providersResolved = true
+	catalog := catalogLanes(m.generated)
+	catalogPools := map[string]bool{}
+	for _, lane := range catalog {
+		if lanePure(lane) {
+			if provider := providerByLane(lane); provider != nil {
+				catalogPools[provider.Pool] = true
+			}
+		}
+	}
+	var available []string
+	for _, lane := range catalog {
+		if provider := providerByLane(lane); lanePure(lane) && provider != nil {
+			if connected[provider.Pool] {
+				available = append(available, lane)
+			}
+			continue
+		}
+		usable := len(catalogPools) > 0
+		for pool := range catalogPools {
+			if !connected[pool] {
+				usable = false
+				break
+			}
+		}
+		if usable {
+			available = append(available, lane)
+		}
+	}
+	m.noProviders = len(available) == 0
+	if m.noProviders {
+		return
+	}
+	for i := range m.facets {
+		if m.facets[i].key == "lane" {
+			m.facets[i].values = available
+			break
+		}
+	}
+	served := make(map[string]bool, len(available))
+	for _, lane := range available {
+		served[lane] = true
+	}
+	m.trimLanes(served)
+	m.clampSel()
 }
 
 // applyCatalog records which dials this catalog can actually serve, then forces

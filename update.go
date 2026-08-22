@@ -19,6 +19,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ompMajor, m.ompMinor = msg.major, msg.minor
 		}
 		return m, nil
+	case providerAvailabilityMsg:
+		m.applyProviderAvailability(msg.pools)
+		m.relayout()
+		return m, nil
 	case usageMsg:
 		scoped, scopedStale := reconcileUsage(m.avail, msg.avail)
 		refreshAt := time.Now().Add(refreshEvery)
@@ -30,6 +34,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			saveUsageCache(m.usageCache, scoped)
 		}
 		m.nextRefresh = refreshAt
+		if msg.avail.accountsOK {
+			m.applyProviderAvailability(connectedPools(msg.avail.accounts))
+		}
 		m.relayout()
 		if first {
 			// The first real data replaces the skeleton: run the one-time
@@ -178,6 +185,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if target, local := m.selectedRuntime(); local {
 				m.launchRuntime = target.Name
 				return m, tea.Quit
+			}
+			if m.noProviders {
+				return m, nil
 			}
 			// Enter always launches the generated profile for the current facets —
 			// the untouched default combo is a generated profile like any other.

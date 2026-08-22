@@ -1,16 +1,17 @@
 package main
 
 import (
+	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type model struct {
@@ -28,7 +29,9 @@ type model struct {
 	noFable bool // no _fa_/_famain_ combos — same for fable and its main child
 	// hasRelief is positive-polarity: the relief segment only exists in
 	// catalogs with an optional pool, so the zero value keeps old ids intact.
-	hasRelief bool // _rel_/_norel combos exist — show the relief dial
+	hasRelief         bool // _rel_/_norel combos exist — show the relief dial
+	providersResolved bool // connected-provider discovery completed
+	noProviders       bool // discovery found no provider usable by this catalog
 
 	depth        int  // 0 lead · 1 full
 	collapse     bool // p: hide the Routing section
@@ -98,6 +101,32 @@ func fetchUsageCmd(broker brokerConfig) tea.Cmd {
 	return func() tea.Msg { return usageMsg{avail: loadAvailability(broker)} }
 }
 
+type providerAvailabilityMsg struct {
+	pools map[string]bool
+}
+
+// probeProviderAvailabilityCmd asks the same OMP binary Code launches which
+// providers have usable local credentials. Broker-backed installations get
+// this information from their account snapshot instead.
+func probeProviderAvailabilityCmd() tea.Cmd {
+	return func() tea.Msg {
+		pools := map[string]bool{}
+		path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+		if err != nil {
+			return providerAvailabilityMsg{pools: pools}
+		}
+		for _, provider := range providerRegistry {
+			cmd := exec.Command(path, "token", provider.ID)
+			cmd.Env = withoutAuthEnv(os.Environ())
+			cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+			if cmd.Run() == nil {
+				pools[provider.Pool] = true
+			}
+		}
+		return providerAvailabilityMsg{pools: pools}
+	}
+}
+
 func (m *model) startUsageFetch() tea.Cmd {
 	cmd := fetchUsageCmd(m.broker)
 	if cmd != nil {
@@ -165,8 +194,10 @@ func (m model) ompVersionAtLeast(major, minor int) bool {
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{probeOmpVersionCmd()}
-	if m.broker.URL != "" && m.broker.Token != "" {
+	if m.broker.configured() {
 		cmds = append(cmds, m.startUsageFetch(), m.spin.Tick, tickCmd())
+	} else if !m.providersResolved {
+		cmds = append(cmds, probeProviderAvailabilityCmd())
 	}
 	return tea.Batch(cmds...)
 }

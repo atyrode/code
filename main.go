@@ -100,6 +100,9 @@ func main() {
 	// The catalog decides which dials exist at all; a persisted or default
 	// selection must not open on a combo it never generated.
 	m.applyCatalog()
+	if cachedAvailability.accountsOK {
+		m.applyProviderAvailability(connectedPools(cachedAvailability.accounts))
+	}
 	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
 	// TUI in the guided onboarding that builds one (an explicit but broken
 	// CODE_GENERATED is an operator config error and is left visible as the
