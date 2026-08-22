@@ -44,12 +44,12 @@ var ompModelsJSON = func() ([]byte, error) {
 
 var datedID = regexp.MustCompile(`-\d{6,8}$`)
 
+// poolOf maps an omp provider id to its catalog pool letter via the registry;
+// providers outside the registry (google, groq, ollama, …) map to "" and are
+// dropped from the scaffold, as ever.
 func poolOf(provider string) string {
-	switch provider {
-	case "anthropic":
-		return "A"
-	case "openai-codex", "openai":
-		return "O"
+	if p := providerByID(provider); p != nil {
+		return p.Pool
 	}
 	return ""
 }
@@ -323,10 +323,7 @@ func matchSpecial(st specialTier, cands []ompModel) string {
 // bucketName follows the catalog's existing convention: the pool's own quota
 // window, or a tier-scoped one when the model draws a separate bucket.
 func bucketName(pool, tier string) string {
-	base := "codex"
-	if pool == "A" {
-		base = "claude"
-	}
+	base := providerByPool(pool).BucketBase
 	if tier == "" {
 		return base + "-main"
 	}
@@ -535,8 +532,14 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 		bucket string
 	}
 	rungs := map[string][]rung{}
-	for _, pool := range []string{"O", "A"} {
+	for _, pool := range fallbackPoolOrder {
+		required := providerByPool(pool).Required
 		cands := supersede(byPool[pool])
+		if !required && len(cands) == 0 {
+			// A missing optional provider is the normal state: the catalog
+			// simply grows no lanes for its pool.
+			continue
+		}
 		// Lift a tier-scoped model out before ranking: it is a lead, not a rung
 		// on the capability ladder. At most one per pool — two would both claim
 		// the same tier and loadCatalog would refuse the file — preferring the
@@ -577,9 +580,9 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 					c = m.Cost.Input
 				}
 			}
-			if pool == "A" && c >= top {
+			if poolDeclaresSpecialTier(pool, 4) && c >= top {
 				specialTierNo = 4
-			} else if pool == "O" && c < top {
+			} else if poolDeclaresSpecialTier(pool, 0) && c < top {
 				specialTierNo = 0
 			}
 		}
@@ -591,7 +594,7 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 		// Price is legitimate evidence here. It says nothing about entitlement,
 		// which is why the reachability probe exists, but a model in its own
 		// price class is by definition not the everyday workhorse.
-		if specialTierNo < 0 && pool == "A" && len(cands) > 1 {
+		if specialTierNo < 0 && poolDeclaresSpecialTier(pool, 4) && len(cands) > 1 {
 			lead, next := cands[0], 0.0
 			for _, m := range cands {
 				if m.Cost.Input > lead.Cost.Input {
@@ -645,12 +648,9 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 			ladderCands = kept
 		}
 		ladder := pickLadder(ladderCands)
-		if len(ladder) < 3 {
-			name := "OpenAI/Codex"
-			if pool == "A" {
-				name = "Anthropic"
-			}
-			hint := "code assumes both Anthropic and OpenAI are set up in omp"
+		if len(ladder) < 3 && required {
+			name := providerByPool(pool).Label
+			hint := "code assumes " + requiredProviderNames() + " are set up in omp"
 			if probe != nil {
 				hint += "; models the provider reported as non-existent were dropped by the probe"
 			}
@@ -669,7 +669,7 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 # omp; the tier assignments are derived (newest model per family, then ranked by
 # thinking ceiling, context and price) and worth a sanity check.
 #
-#   pool:   O = OpenAI/Codex   ·   A = Anthropic
+#   pool:   O = OpenAI/Codex   ·   A = Anthropic   ·   D = DeepSeek
 #   tier:   1 cheap · 2 regular · 3 smart  (the per-pool fallback ladder)
 #           tier 0 = a fast idle-bucket model the 'spark' toggle drains;
 #           tier 4 = a scarce elite the 'fable' toggle leads with. Both are
@@ -698,7 +698,7 @@ probed: false
 	}
 	b.WriteString("models:\n")
 	used := map[string]bool{}
-	for _, pool := range []string{"O", "A"} {
+	for _, pool := range fallbackPoolOrder {
 		for _, r := range rungs[pool] {
 			key := shortKey(r.m.ID)
 			if used[key] {

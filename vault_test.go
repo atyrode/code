@@ -38,7 +38,7 @@ func TestLoadAccountsValidatesFiltersAndSortsCentralSnapshot(t *testing.T) {
 	if authorization != "Bearer central-secret" {
 		t.Fatalf("authorization = %q", authorization)
 	}
-	if len(got) != 2 || len(got[anthropicProvider]) != 3 || len(got[openAIProvider]) != 2 {
+	if len(got) != len(providerRegistry) || len(got[anthropicProvider]) != 3 || len(got[openAIProvider]) != 2 || len(got[deepseekProvider]) != 0 {
 		t.Fatalf("account groups = %#v", got)
 	}
 	if keys := accountKeys(got[anthropicProvider]); !reflect.DeepEqual(keys, []string{"a-claude", "b-claude", "c-claude"}) {
@@ -436,4 +436,124 @@ func hasEnvKey(env []string, key string) bool {
 func strconvQuote(value string) string {
 	body, _ := json.Marshal(value)
 	return string(body)
+}
+
+// TestFetchDeepSeekBalance covers the upstream balance contract: numeric
+// fields as JSON strings, USD preferred over other currencies, and the
+// documented degrade paths (is_available=false, HTTP failure).
+func TestFetchDeepSeekBalance(t *testing.T) {
+	var authorization string
+	payload := `{"is_available":true,"balance_infos":[
+		{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"},
+		{"currency":"USD","total_balance":"12.34","granted_balance":"0.00","topped_up_balance":"12.34"}
+	]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer server.Close()
+	saved := deepseekBalanceURL
+	deepseekBalanceURL = server.URL
+	defer func() { deepseekBalanceURL = saved }()
+
+	got, err := fetchDeepSeekBalance("sk-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization != "Bearer sk-test" {
+		t.Fatalf("authorization = %q", authorization)
+	}
+	if !got.ok || got.currency != "USD" || got.total != "12.34" {
+		t.Fatalf("balance = %+v, want the USD entry", got)
+	}
+
+	payload = `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"7.5"}]}`
+	if got, err = fetchDeepSeekBalance("sk-test"); err != nil || !got.ok || got.currency != "CNY" || got.total != "7.5" {
+		t.Fatalf("no-USD fallback = %+v (err %v), want the first entry", got, err)
+	}
+
+	payload = `{"is_available":false,"balance_infos":[]}`
+	if got, err = fetchDeepSeekBalance("sk-test"); err != nil || got.ok {
+		t.Fatalf("unavailable account must degrade without error, got %+v (err %v)", got, err)
+	}
+
+	server.Close()
+	if _, err := fetchDeepSeekBalance("sk-test"); err == nil {
+		t.Fatal("transport failure must surface as an error")
+	}
+}
+
+// TestFetchDeepSeekBalanceHTTPError: a non-200 answer is an error, not a
+// zero balance.
+func TestFetchDeepSeekBalanceHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	saved := deepseekBalanceURL
+	deepseekBalanceURL = server.URL
+	defer func() { deepseekBalanceURL = saved }()
+	if _, err := fetchDeepSeekBalance("sk-test"); err == nil {
+		t.Fatal("HTTP 500 must surface as an error")
+	}
+}
+
+// TestDeepSeekKeyStaysInMemory is the security boundary of the balance
+// feature: the api_key parsed from the broker snapshot must exist only on the
+// in-memory account struct and never reach any serialized artifact — neither
+// the usage cache (which marshals the accounts map) nor the account state.
+func TestDeepSeekKeyStaysInMemory(t *testing.T) {
+	snapshot := []byte(`{"credentials":[
+		{"id":7,"provider":"deepseek","identityKey":null,"credential":{"type":"api_key","key":"sk-secret-x"}},
+		{"provider":"anthropic","identityKey":"a-claude","credential":{"type":"oauth","email":"a@example.com"}}
+	]}`)
+	accounts, err := parseAccountSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds := accounts[deepseekProvider]
+	if len(ds) != 1 || ds[0].apiKey != "sk-secret-x" || ds[0].credentialID != "7" {
+		t.Fatalf("deepseek account = %+v, want in-memory key and credential id", ds)
+	}
+	if got := deepseekAPIKey(accounts); got != "sk-secret-x" {
+		t.Fatalf("deepseekAPIKey = %q", got)
+	}
+
+	// The usage cache serializes the accounts map wholesale: the unexported
+	// key field must not survive the round trip.
+	body, err := json.Marshal(usageCacheFile{SavedAt: 1, Accounts: accounts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "sk-") {
+		t.Fatalf("api key leaked into the usage cache payload: %s", body)
+	}
+
+	// The forwarded account pool is OAuth-only; deepseek must not appear.
+	pool := buildAccountPool(accounts, nil)
+	if _, ok := pool[deepseekProvider]; ok {
+		t.Fatalf("account pool grew an api_key provider: %#v", pool)
+	}
+
+	// Account state persists only {provider, identityKey} pairs of known
+	// providers; a deepseek OAuth-style entry would be inventable only by
+	// hand and must round-trip (registry filter, not the old two-literal
+	// allow-list).
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	state := defaultAccountSelectionState()
+	state.SetManualDisabled(map[accountKey]bool{{Provider: deepseekProvider, IdentityKey: "k"}: true})
+	if err := writeAccountSelectionState(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "sk-") {
+		t.Fatalf("api key leaked into account state: %s", raw)
+	}
+	loaded := loadAccountSelectionState(statePath)
+	if !loaded.CurrentDisabled()[accountKey{Provider: deepseekProvider, IdentityKey: "k"}] {
+		t.Fatalf("registry-known provider entry did not round-trip: %#v", loaded.CurrentDisabled())
+	}
 }

@@ -1,0 +1,134 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ── colourisers ──────────────────────────────────────────────────────────────
+func lvl(s string) int {
+	switch s {
+	case "minimal":
+		return 0
+	case "low":
+		return 1
+	case "medium":
+		return 2
+	case "high":
+		return 3
+	case "xhigh":
+		return 4
+	}
+	return 5
+}
+
+func shortModel(name string) string {
+	if name == "gpt-5.4" {
+		return name
+	}
+	// Slash-scoped ids display without their provider path, and keep their
+	// full model part — the vendor's own naming is the recognizable bit.
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+		if !strings.HasPrefix(name, "claude") {
+			return name
+		}
+	}
+	p := strings.Split(name, "-")
+	if strings.HasPrefix(name, "claude") && len(p) > 1 {
+		return p[1]
+	}
+	return p[len(p)-1]
+}
+
+func clampByte(x float64) int {
+	v := int(x)
+	if v > 255 {
+		return 255
+	}
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func paintModel(tok string) string {
+	i := strings.LastIndex(tok, ":")
+	name, level := tok[:i], tok[i+1:]
+	p := providerByModel(name)
+	var br, bg, bb float64
+	switch {
+	case p != nil:
+		br, bg, bb = p.PaintRGB[0], p.PaintRGB[1], p.PaintRGB[2]
+	case strings.Contains(name, "local-"):
+		// Free/local runtimes read green — the same family as the ox accents.
+		br, bg, bb = 96, 211, 150
+	default:
+		return shortModel(name) + ":" + level // unknown provider: uncoloured
+	}
+	f := 0.60 + float64(lvl(level))*0.088
+	col := lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", clampByte(br*f), clampByte(bg*f), clampByte(bb*f)))
+	return lipgloss.NewStyle().Foreground(col).Render(shortModel(name) + ":" + level)
+}
+
+func colorizeRoute(line string) string { return modelRe.ReplaceAllStringFunc(line, paintModel) }
+
+// bucketOf guesses a quota bucket from a model name. It is the fallback for
+// catalogs that declare no bucket column, and the only resolver for the bare
+// facet names ("fable", "spark") the suggest box asks about — prefer
+// model.bucketFor wherever a receiver is in reach. An unknown name maps to no
+// bucket at all rather than someone else's quota window.
+func bucketOf(model string) string {
+	m := model
+	if i := strings.IndexByte(m, ':'); i >= 0 {
+		m = m[:i]
+	}
+	// Provider-scoped ids outside the subscription pools (OpenRouter,
+	// local runtimes) have no quota window code knows about. An empty bucket
+	// never reads as down, which is exactly right for a free or local model.
+	if strings.Contains(m, "/") {
+		return ""
+	}
+	for _, p := range providerRegistry {
+		for _, s := range p.Special {
+			if strings.Contains(m, s.Bucket) {
+				return p.BucketBase + "-" + s.Bucket
+			}
+		}
+	}
+	if p := providerByModel(m); p != nil {
+		return p.mainBucket()
+	}
+	for _, p := range providerRegistry {
+		for _, pre := range p.ModelPrefixes {
+			if strings.Contains(m, pre) {
+				return p.mainBucket()
+			}
+		}
+	}
+	return ""
+}
+
+// bucketFor resolves a routing token's quota bucket from the catalog, falling
+// back to the name guess only when the catalog declares none. The catalog wins
+// because names are not a taxonomy: claude-mythos-5 sits in omp's catalog at
+// claude-fable-5's price yet 404s on this account, and every model omp adds
+// would otherwise need one more substring arm here before it could be struck
+// through correctly.
+func (m model) bucketFor(name string) string {
+	id := name
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		id = id[:i]
+	}
+	if f, ok := m.facts[id]; ok {
+		if f.bucket != "" {
+			return f.bucket
+		}
+		if p := providerByPool(f.pool); p != nil {
+			return p.mainBucket()
+		}
+	}
+	return bucketOf(id)
+}

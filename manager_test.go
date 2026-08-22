@@ -1486,7 +1486,14 @@ func TestManagerUsageInlineRequiresExactMeasuredFit(t *testing.T) {
 	footer := clikit.SeparatedSections(m.w, usage, controls)
 	unspacedExact := lipgloss.Height(strings.Repeat("\n", topGap)+unspacedAccounts) +
 		lipgloss.Height(footer)
-	if got, want := exact-unspacedExact, len(m.managerAccounts())-len(managerProviders); got != want {
+	rendered := 0
+	for _, provider := range managerProviders {
+		if p := providerByID(provider); p != nil && !p.Metered && len(m.avail.accounts[provider]) == 0 {
+			continue // unmetered provider with no accounts renders no group
+		}
+		rendered++
+	}
+	if got, want := exact-unspacedExact, len(m.managerAccounts())-rendered; got != want {
 		t.Fatalf("exact-fit geometry counted %d inter-account breathing rows, want %d", got, want)
 	}
 
@@ -1779,5 +1786,39 @@ func TestManagerUsageControlsFollowContextWithoutPresetSaveCollision(t *testing.
 	naming := stripAnsi(m.managerControls(m.w - gut))
 	if strings.Contains(naming, "show usage") || strings.Contains(naming, "hide usage") {
 		t.Fatalf("naming modal leaked Usage controls: %s", naming)
+	}
+}
+
+// TestManagerDeepSeekBalanceRow: the DeepSeek box mirrors the Usage panel's
+// prepaid balance under the display-only credential row - and degrades to the
+// explicit unavailable text rather than dropping the row, so a flaky upstream
+// stays visible.
+func TestManagerDeepSeekBalanceRow(t *testing.T) {
+	m := managerTestModel(t)
+	m.avail.accounts[deepseekProvider] = []account{
+		{Provider: deepseekProvider, apiKey: "sk-test", credentialID: "19"},
+	}
+	m.avail.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "18.03"}
+
+	flat := func() string {
+		var b strings.Builder
+		for _, ln := range m.managerLines(100) {
+			b.WriteString(stripAnsi(ln.text))
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+
+	view := flat()
+	if !strings.Contains(view, "API key · credential #19") {
+		t.Fatalf("manager lost the DeepSeek credential row:\n%s", view)
+	}
+	if !strings.Contains(view, "balance  $18.03 USD · pay-as-you-go") {
+		t.Errorf("manager DeepSeek box lacks the balance row:\n%s", view)
+	}
+
+	m.avail.deepseek = &deepseekBalance{ok: false}
+	if view := flat(); !strings.Contains(view, "balance unavailable") {
+		t.Errorf("failed balance must render as unavailable, not vanish:\n%s", view)
 	}
 }
