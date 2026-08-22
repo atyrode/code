@@ -3,11 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	clikit "github.com/atyrode/cli-kit"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +14,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	clikit "github.com/atyrode/cli-kit"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ansiRe strips SGR sequences so tests assert on visible text regardless of the
