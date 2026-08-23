@@ -250,21 +250,13 @@ func (m *model) quotaLane() string {
 	if lead == nil || !m.avail.down(lead.mainBucket()) {
 		return ""
 	}
-	lanes := map[string]bool{}
-	for _, f := range m.facets {
-		if f.key == "lane" {
-			for _, v := range f.values {
-				lanes[v] = true
-			}
-		}
-	}
 	for _, pool := range fallbackPoolOrder {
 		p := providerByPool(pool)
 		if p == nil || p.Pool == lead.Pool {
 			continue
 		}
 		alt := p.Lane + "-led"
-		if !lanes[alt] {
+		if !m.laneUsable(alt) {
 			continue
 		}
 		if p.Metered {

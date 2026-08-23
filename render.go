@@ -147,7 +147,7 @@ func (m *model) syncPreviewAt(yoff int) {
 		b.WriteString(stDim.Render("no connected OMP providers") + "\n")
 	} else if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
-		roles = m.applyAdvisor(roles, m.sel["advisor"])
+		roles = m.filterRows(m.applyAdvisor(roles, m.sel["advisor"]))
 		b.WriteString(m.renderRoute(roles, m.depth, m.selectedLaunchAvailability(), rw))
 	} else {
 		b.WriteString(stDim.Render("no profile for this combination") + "\n")
