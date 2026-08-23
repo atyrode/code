@@ -249,22 +249,28 @@ func laneReliefApplies(lane string) bool {
 	return true
 }
 
+// laneBlends is the blend dial's canonical order: led (the lead pool drives
+// everything), lean (the lead pool keeps the deliberative work and drains the
+// rest elsewhere), only (pure). A lead offers the subset its catalog serves.
+var laneBlends = []string{"led", "lean", "only"}
+
 // laneSplit decomposes a lane into the two dials the TUI renders: the lead
-// (a provider's lane segment, or "mixed") and the blend ("led" | "only").
-// mixed has no blend of its own; it reports "led" so a later lead change
-// lands on the -led lane.
+// (a provider's lane segment, or "mixed") and the blend ("led" | "lean" |
+// "only" — the lane's suffix). mixed has no blend of its own; it reports
+// "led" so a later lead change lands on the -led lane.
 func laneSplit(lane string) (lead, blend string) {
 	if lane == "mixed" {
 		return "mixed", "led"
 	}
+	lead = lane
 	blend = "led"
-	if lanePure(lane) {
-		blend = "only"
+	if seg, suffix, ok := strings.Cut(lane, "-"); ok {
+		lead, blend = seg, suffix
 	}
 	if p := providerByLane(lane); p != nil {
-		return p.Lane, blend
+		lead = p.Lane
 	}
-	return lane, blend
+	return lead, blend
 }
 
 // laneJoin is laneSplit's inverse: the canonical lane a lead+blend pair names.
@@ -273,6 +279,42 @@ func laneJoin(lead, blend string) string {
 		return "mixed"
 	}
 	return lead + "-" + blend
+}
+
+// laneAvailable reports whether the connected credentials can serve the lane:
+// a pure lane needs only its own provider, every blend needs the pools its
+// policy leads roles on plus the Required pools its chains cross into. An
+// optional pool nobody logged into therefore blocks exactly its own lanes —
+// never the blends between the providers that are connected.
+func laneAvailable(lane string, connected map[string]bool) bool {
+	pol, known := genLanePolicies[lane]
+	if !known {
+		// A lane this binary predates: require its own provider (if named)
+		// and the Required pools — the conservative reading of a blend.
+		if p := providerByLane(lane); p != nil {
+			if lanePure(lane) {
+				return connected[p.Pool]
+			}
+			if !connected[p.Pool] {
+				return false
+			}
+		}
+	} else {
+		if pol.pure {
+			return connected[pol.primary]
+		}
+		for _, pool := range []string{pol.primary, pol.delib, pol.util, pol.vision, pol.visionSmart} {
+			if pool != "" && !connected[pool] {
+				return false
+			}
+		}
+	}
+	for i := range providerRegistry {
+		if providerRegistry[i].Required && !connected[providerRegistry[i].Pool] {
+			return false
+		}
+	}
+	return true
 }
 
 // laneHostsSpecial reports whether a special-tier facet ("spark", "fable") can

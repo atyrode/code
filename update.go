@@ -315,7 +315,28 @@ func (m *model) cycleFacet(dir int) {
 			idx = i
 		}
 	}
+	// lead/blend recompose the canonical lane; a value whose composed lane
+	// the connected credentials cannot run is visible but not a stop — keep
+	// stepping past it (and clamp at the ends like any other dial).
+	composed := func(i int) string {
+		switch f.key {
+		case "lead":
+			return m.composeLane(f.values[i], m.sel["blend"])
+		case "blend":
+			return laneJoin(m.sel["lead"], f.values[i])
+		}
+		return ""
+	}
 	next := idx + dir
+	for f.key == "lead" || f.key == "blend" {
+		if next < 0 || next >= len(f.values) {
+			return // every further stop is out of range or unusable
+		}
+		if m.laneUsable(composed(next)) {
+			break
+		}
+		next += dir
+	}
 	if next < 0 {
 		next = 0
 	} else if next >= len(f.values) {
@@ -327,7 +348,10 @@ func (m *model) cycleFacet(dir int) {
 	m.sel[f.key] = f.values[next]
 	// lead/blend are lane's rendered halves: recompose the canonical value
 	// before anything re-derives them (visibleFacets syncs from lane).
-	if f.key == "lead" || f.key == "blend" {
+	switch f.key {
+	case "lead":
+		m.sel["lane"] = composed(next)
+	case "blend":
 		m.sel["lane"] = laneJoin(m.sel["lead"], m.sel["blend"])
 	}
 	// main is fable's sub-setting: whenever fable leaves "on" it must clear too,

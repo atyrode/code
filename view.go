@@ -333,7 +333,19 @@ func (m model) genLines() ([]string, int) {
 				if f.key == "runtime" {
 					display = m.runtimeValueLabel(v)
 				}
+				// A lead/blend value whose composed lane the connected
+				// credentials cannot run stays visible — struck, unpickable —
+				// so a missing login reads as "log in", never as a gone dial.
+				usable := true
+				switch f.key {
+				case "lead":
+					usable = m.laneUsable(m.composeLane(v, m.sel["blend"]))
+				case "blend":
+					usable = m.laneUsable(laneJoin(m.sel["lead"], v))
+				}
 				switch {
+				case !usable && v != m.sel[f.key]:
+					row += "   " + stStruck.Render(display)
 				case v == m.sel[f.key]:
 					col := acc
 					if f.key == "lead" {
@@ -349,6 +361,11 @@ func (m model) genLines() ([]string, int) {
 				default:
 					row += "   " + stDim.Render(display)
 				}
+			}
+		}
+		if f.key == "lead" {
+			if missing := m.disconnectedLeads(f.values); missing != "" {
+				row += "   " + stDim.Render(missing+" — not logged in")
 			}
 		}
 		switch {
@@ -368,10 +385,15 @@ func (m model) genLines() ([]string, int) {
 			row += "   " + stDim.Render("GPT only")
 		case f.key == "relief":
 			// relief is the least self-explanatory dial: say what it does,
-			// in the state it currently does it.
+			// in the state it currently does it — naming only the spill
+			// pools a login actually backs.
 			note := "drained chains wait for quota reset"
 			if m.sel["relief"] == "on" {
-				note = "drained chains spill into " + optionalPoolLabels()
+				if spill := m.connectedOptionalLabels(); spill != "" {
+					note = "drained chains spill into " + spill
+				} else {
+					note = "no pay-as-you-go login — drained chains wait"
+				}
 			}
 			row += "   " + stDim.Render(note)
 		}

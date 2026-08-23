@@ -3752,36 +3752,59 @@ func TestApplyCatalogGrowsLaneDial(t *testing.T) {
 	}
 }
 
-func TestProviderAvailabilityFiltersDisconnectedLanes(t *testing.T) {
-	m := model{
-		generated: map[string][]string{
-			"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
-			"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
-			"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
-			"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
-			"ox-only_fast_low_nosp_nofa":     {"    default ox:low"},
-		},
-		facets: facetDefs(defaultGlyphs()),
-		sel:    defaultSel(),
+// TestProviderAvailabilityMarksDisconnectedLanes: credentials never shrink
+// the dial — every catalog lane stays listed; the connected set decides which
+// are usable (pickable) and the selection moves off an unusable lane. A
+// missing optional login blocks exactly its own lanes, never the blends
+// between connected providers.
+func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
+	catalog := map[string][]string{
+		"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
+		"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
+		"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
+		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
+		"ox-only_fast_low_nosp_nofa":     {"    default ox:low"},
 	}
+	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
-	m.applyProviderAvailability(map[string]bool{"R": true})
+	served := m.laneValues()
 
-	var lanes []string
-	for _, f := range m.facets {
-		if f.key == "lane" {
-			lanes = f.values
+	// The user's regression: O+A logged in, the catalog's optional R is not.
+	// Only the ox lane goes dark; every O/A lane and blend stays usable.
+	m.applyProviderAvailability(map[string]bool{"O": true, "A": true})
+	if !reflect.DeepEqual(m.laneValues(), served) {
+		t.Fatalf("availability trimmed the dial: %v, want %v", m.laneValues(), served)
+	}
+	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "claude-only"} {
+		if !m.laneUsable(lane) {
+			t.Fatalf("connected-provider lane %q went unusable", lane)
 		}
 	}
-	if !reflect.DeepEqual(lanes, []string{"ox-only"}) {
-		t.Fatalf("OpenRouter-only lanes = %v, want [ox-only]", lanes)
+	if m.laneUsable("ox-only") {
+		t.Fatal("ox-only usable without an OpenRouter credential")
+	}
+	if m.sel["lane"] != "mixed" || m.noProviders {
+		t.Fatalf("selection = %q noProviders=%v, want mixed/false", m.sel["lane"], m.noProviders)
+	}
+	if note := m.disconnectedLeads([]string{"mixed", "gpt", "claude", "ox"}); note != "OpenRouter" {
+		t.Fatalf("lead note = %q, want OpenRouter", note)
+	}
+
+	// The inverse setup: only OpenRouter is connected. The dial still shows
+	// everything; the selection lands on the one usable lane.
+	m.applyProviderAvailability(map[string]bool{"R": true})
+	if !reflect.DeepEqual(m.laneValues(), served) {
+		t.Fatalf("availability trimmed the dial: %v", m.laneValues())
 	}
 	if m.sel["lane"] != "ox-only" || m.noProviders {
 		t.Fatalf("OpenRouter-only selection = %q noProviders=%v", m.sel["lane"], m.noProviders)
 	}
+	if m.laneUsable("mixed") || m.laneUsable("gpt-only") {
+		t.Fatal("required-pool lanes usable without their credentials")
+	}
 	for _, f := range m.visibleFacets() {
 		if f.key == "blend" {
-			t.Fatalf("single available lane exposed an unavailable blend: %v", f.values)
+			t.Fatalf("single served blend exposed a blend dial: %v", f.values)
 		}
 	}
 
@@ -3795,6 +3818,100 @@ func TestProviderAvailabilityFiltersDisconnectedLanes(t *testing.T) {
 	}
 	if footer := strings.Join(m.launchFooter(), "\n"); !strings.Contains(footer, "m open managed OMP to log in") {
 		t.Fatalf("accountless footer is not actionable: %q", footer)
+	}
+}
+
+// TestCycleFacetSkipsUnusableLeads: an unconnected provider's lead is visible
+// but not a stop — cycling steps past it onto the next usable lead, and stops
+// at the edge when everything beyond is unusable.
+func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
+	catalog := map[string][]string{
+		"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
+		"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
+		"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
+		"claude-led_fast_low_nosp_nofa":  {"    default claude:low"},
+		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
+		"ds-led_fast_low_nosp_nofa":      {"    default ds:low"},
+		"ox-led_fast_low_nosp_nofa":      {"    default ox:low"},
+	}
+	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+	m.applyCatalog()
+	m.applyProviderAvailability(map[string]bool{"O": true, "A": true})
+	m.sel["lane"] = "claude-led"
+	m.visibleFacets() // sync lead/blend from lane
+	m.fcur = 0
+
+	// lead order: mixed gpt claude ds ox — right from claude must stop at
+	// claude (ds and ox are struck), not land on a dead lane.
+	m.cycleFacet(1)
+	if m.sel["lane"] != "claude-led" {
+		t.Fatalf("cycle onto unusable leads moved the lane: %q", m.sel["lane"])
+	}
+	m.cycleFacet(-1) // back toward gpt: usable, normal stop
+	if m.sel["lane"] != "gpt-led" {
+		t.Fatalf("cycle to a usable lead = %q, want gpt-led", m.sel["lane"])
+	}
+}
+
+// TestLaneLeanBlend: ox-lean is a first-class blend — laneSplit/laneJoin
+// round-trip it, the blend dial lists it between led and only, and a lead
+// switch to a pool without a lean lane lands on that pool's led lane.
+func TestLaneLeanBlend(t *testing.T) {
+	if lead, blend := laneSplit("ox-lean"); lead != "ox" || blend != "lean" {
+		t.Fatalf("laneSplit(ox-lean) = %q %q", lead, blend)
+	}
+	if lane := laneJoin("ox", "lean"); lane != "ox-lean" {
+		t.Fatalf("laneJoin(ox, lean) = %q", lane)
+	}
+	catalog := map[string][]string{
+		"gpt-led_fast_low_nosp_nofa":  {"    default gpt:low"},
+		"gpt-only_fast_low_nosp_nofa": {"    default gpt:low"},
+		"mixed_fast_low_nosp_nofa":    {"    default gpt:low"},
+		"ox-led_fast_low_nosp_nofa":   {"    default ox:low"},
+		"ox-lean_fast_low_nosp_nofa":  {"    default gpt:low"},
+		"ox-only_fast_low_nosp_nofa":  {"    default ox:low"},
+	}
+	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+	m.applyCatalog()
+	m.sel["lane"] = "ox-lean"
+	var blends []string
+	for _, f := range m.visibleFacets() {
+		if f.key == "blend" {
+			blends = f.values
+		}
+	}
+	if !reflect.DeepEqual(blends, []string{"led", "lean", "only"}) {
+		t.Fatalf("ox blends = %v, want [led lean only]", blends)
+	}
+	// A lead switch from ox-lean to gpt: gpt has no lean lane — land on led.
+	if lane := m.composeLane("gpt", "lean"); lane != "gpt-led" {
+		t.Fatalf("composeLane(gpt, lean) = %q, want gpt-led", lane)
+	}
+}
+
+// TestFilterRowsDropsDisconnectedRungs: fallback rungs on pools nobody logged
+// into vanish from routing rows (never the lead), so the preview and overlay
+// only name models OMP can route.
+func TestFilterRowsDropsDisconnectedRungs(t *testing.T) {
+	m := model{facts: map[string]modelFact{
+		"gpt-5.6-terra":   {pool: "O"},
+		"claude-sonnet-5": {pool: "A"},
+		"deepseek-v4":     {pool: "D"},
+	}}
+	m.providersResolved = true
+	m.connected = map[string]bool{"O": true, "A": true}
+	rows := []string{"  ● task       gpt-5.6-terra:medium → claude-sonnet-5:medium → deepseek-v4:medium"}
+	got := m.filterRows(rows)[0]
+	if strings.Contains(got, "deepseek") {
+		t.Fatalf("disconnected rung survived: %q", got)
+	}
+	if !strings.Contains(got, "gpt-5.6-terra:medium → claude-sonnet-5:medium") {
+		t.Fatalf("connected rungs mangled: %q", got)
+	}
+	// Before discovery resolves, rows pass through untouched.
+	m.providersResolved = false
+	if got := m.filterRows(rows)[0]; !strings.Contains(got, "deepseek-v4:medium") {
+		t.Fatalf("unresolved discovery must not filter: %q", got)
 	}
 }
 

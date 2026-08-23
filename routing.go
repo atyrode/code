@@ -55,7 +55,7 @@ const (
 // currentRows is the routing block the cost/speed meters score: the generator's
 // facet combo with the advisor dial applied.
 func (m model) currentRows() []string {
-	return m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"])
+	return m.filterRows(m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"]))
 }
 
 func (m model) weightedModels(rows []string, fn func(w float64, id, lvl string)) {
@@ -350,7 +350,7 @@ func (m model) visibleFacets() []facet {
 					}
 				}
 				var blends []string
-				for _, b := range []string{"led", "only"} {
+				for _, b := range laneBlends {
 					if availableBlends[b] {
 						blends = append(blends, b)
 					}
@@ -448,55 +448,133 @@ func connectedPools(accounts map[string][]account) map[string]bool {
 	return pools
 }
 
-// applyProviderAvailability narrows the generated lane catalog to credentials
-// OMP can actually use. Pure lanes need only their own provider; blended lanes
-// need every provider represented by the catalog because their role and
-// fallback chains can cross the full pool set.
-func (m *model) applyProviderAvailability(connected map[string]bool) {
-	m.providersResolved = true
-	catalog := catalogLanes(m.generated)
-	catalogPools := map[string]bool{}
-	for _, lane := range catalog {
-		if lanePure(lane) {
-			if provider := providerByLane(lane); provider != nil {
-				catalogPools[provider.Pool] = true
-			}
+// laneValues is the lane facet's current value list — the catalog's lanes.
+func (m model) laneValues() []string {
+	for _, f := range m.facets {
+		if f.key == "lane" {
+			return f.values
 		}
 	}
-	var available []string
-	for _, lane := range catalog {
-		if provider := providerByLane(lane); lanePure(lane) && provider != nil {
-			if connected[provider.Pool] {
-				available = append(available, lane)
-			}
+	return nil
+}
+
+// laneUsable reports whether a lane is a real stop on the dial right now: the
+// catalog serves it AND — once discovery has resolved — the connected
+// credentials can run it. Before discovery resolves, everything served is
+// usable, so the dial never flickers on startup.
+func (m model) laneUsable(lane string) bool {
+	if !slices.Contains(m.laneValues(), lane) {
+		return false
+	}
+	return !m.providersResolved || laneAvailable(lane, m.connected)
+}
+
+// disconnectedLeads names the lead-dial providers the credentials cannot run
+// ("DeepSeek, OpenRouter") — the lead row's "log in to unlock" note. Empty
+// before discovery resolves or when everything is connected.
+func (m model) disconnectedLeads(leads []string) string {
+	if !m.providersResolved {
+		return ""
+	}
+	var out []string
+	for _, lead := range leads {
+		if lead == "mixed" {
 			continue
 		}
-		usable := len(catalogPools) > 0
-		for pool := range catalogPools {
-			if !connected[pool] {
-				usable = false
-				break
-			}
-		}
-		if usable {
-			available = append(available, lane)
+		if p := providerByLane(lead + "-led"); p != nil && !m.connected[p.Pool] {
+			out = append(out, p.AccountLabel)
 		}
 	}
-	m.noProviders = len(available) == 0
+	return strings.Join(out, ", ")
+}
+
+// connectedOptionalLabels names the pay-as-you-go pools a login actually
+// backs — what relief can spill into right now. Before discovery resolves it
+// falls back to every optional pool (the catalog's own promise).
+func (m model) connectedOptionalLabels() string {
+	if !m.providersResolved {
+		return optionalPoolLabels()
+	}
+	var out []string
+	for i := range providerRegistry {
+		p := &providerRegistry[i]
+		if !p.Required && m.connected[p.Pool] {
+			out = append(out, p.Label)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// filterRows drops fallback rungs the connected credentials cannot serve from
+// routing rows (a relief tail into a pool nobody logged into, say), so the
+// preview and the launched overlay never name a model OMP cannot route. The
+// lead token always stays — an unusable lead means an unusable lane, which
+// laneUsable already keeps the selection off of.
+func (m model) filterRows(rows []string) []string {
+	if !m.providersResolved {
+		return rows
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		toks := strings.Split(r, " → ")
+		if len(toks) < 2 {
+			out = append(out, r)
+			continue
+		}
+		kept := toks[:1]
+		for _, t := range toks[1:] {
+			id := t
+			if i := strings.LastIndexByte(t, ':'); i >= 0 {
+				id = t[:i]
+			}
+			pool := m.poolOfModel(strings.TrimSpace(id))
+			if pool == "" || m.connected[pool] {
+				kept = append(kept, t)
+			}
+		}
+		out = append(out, strings.Join(kept, " → "))
+	}
+	return out
+}
+
+// composeLane joins a lead and a preferred blend into a lane the catalog
+// serves: the preferred blend when that lane exists, else the first served
+// blend for the lead (a lead switch from ox-lean to a pool without a lean
+// lane lands on its led lane, never on a combo that was never generated).
+func (m model) composeLane(lead, blend string) string {
+	if lead == "mixed" {
+		return "mixed"
+	}
+	served := m.laneValues()
+	if lane := laneJoin(lead, blend); slices.Contains(served, lane) {
+		return lane
+	}
+	for _, b := range laneBlends {
+		if lane := laneJoin(lead, b); slices.Contains(served, lane) {
+			return lane
+		}
+	}
+	return laneJoin(lead, blend)
+}
+
+// applyProviderAvailability records which credentials OMP can actually use.
+// The dial keeps every catalog lane — unavailable ones render struck and
+// unpickable (see laneUsable) instead of vanishing, so a missing optional
+// login never silently shrinks the dial; only the selection is moved off an
+// unusable lane, preferring the canonical defaults.
+func (m *model) applyProviderAvailability(connected map[string]bool) {
+	m.providersResolved = true
+	m.connected = connected
+	usable := false
+	for _, lane := range catalogLanes(m.generated) {
+		if laneAvailable(lane, connected) {
+			usable = true
+		}
+	}
+	m.noProviders = !usable
 	if m.noProviders {
 		return
 	}
-	for i := range m.facets {
-		if m.facets[i].key == "lane" {
-			m.facets[i].values = available
-			break
-		}
-	}
-	served := make(map[string]bool, len(available))
-	for _, lane := range available {
-		served[lane] = true
-	}
-	m.trimLanes(served)
 	m.clampSel()
 }
 
@@ -643,6 +721,17 @@ func (m *model) clampSel() {
 			m.sel["lane"] = f.values[0]
 		}
 	}
+	// A lane the connected credentials cannot run moves to the first usable
+	// one, preferring the canonical defaults — the dial keeps showing it,
+	// struck, but the selection never rests on it.
+	if m.providersResolved && !m.noProviders && !laneAvailable(m.sel["lane"], m.connected) {
+		for _, lane := range append([]string{"mixed", "gpt-only", "claude-only"}, m.laneValues()...) {
+			if m.laneUsable(lane) {
+				m.sel["lane"] = lane
+				break
+			}
+		}
+	}
 }
 
 // laneColor tints the accent by lane: each provider carries a deeper shade for
@@ -709,7 +798,7 @@ func (m model) poolOfModel(id string) string {
 // would keep the five agent-backed types pinned regardless of the generated
 // profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
-	rows := m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"])
+	rows := m.currentRows()
 	var mr, fc, ao strings.Builder
 	advisorOn := false
 	for _, r := range rows {

@@ -32,6 +32,9 @@ type model struct {
 	hasRelief         bool // _rel_/_norel combos exist — show the relief dial
 	providersResolved bool // connected-provider discovery completed
 	noProviders       bool // discovery found no provider usable by this catalog
+	// connected maps pool letters to "OMP holds a usable credential" — the
+	// probe result behind laneUsable and the struck lane rendering.
+	connected map[string]bool
 
 	depth        int  // 0 lead · 1 full
 	collapse     bool // p: hide the Routing section
