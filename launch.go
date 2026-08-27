@@ -49,10 +49,14 @@ func resolveLaunchPath(envName string, fallbacks []string) (string, error) {
 	return "", err
 }
 
-func runChild(path string, argv, env []string) error {
+func runChild(path string, argv, env []string, dir string) error {
 	cmd := exec.Command(path, argv[1:]...)
 	cmd.Args = argv
 	cmd.Env = env
+	if dir != "" {
+		cmd.Dir = dir
+		cmd.Env = append(env, "PWD="+dir)
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -70,13 +74,13 @@ func childStatus(err error) int {
 	return 1
 }
 
-func runSandbox(envName string, fallbacks []string, prompt string) int {
+func runSandbox(envName string, fallbacks []string, prompt, dir string) int {
 	path, err := resolveLaunchPath(envName, fallbacks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: sandbox not found:", err)
 		return 1
 	}
-	err = runChild(path, sandboxLaunchArgv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()))
+	err = runChild(path, sandboxLaunchArgv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: sandbox:", err)
 	}
@@ -85,7 +89,7 @@ func runSandbox(envName string, fallbacks []string, prompt string) int {
 
 func runTrusted(envName string, fallbacks []string,
 	argv func(string, []string, string) []string, prompt string,
-	broker brokerConfig, selections accountSelectionState) int {
+	broker brokerConfig, selections accountSelectionState, dir string) int {
 	disabled := selections.CurrentDisabled()
 	path, err := resolveLaunchPath(envName, fallbacks)
 	if err != nil {
@@ -93,7 +97,7 @@ func runTrusted(envName string, fallbacks []string,
 		return 1
 	}
 	if !broker.configured() {
-		err = runChild(path, argv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()))
+		err = runChild(path, argv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "code: trusted child:", err)
 		}
@@ -111,7 +115,7 @@ func runTrusted(envName string, fallbacks []string,
 	}
 	defer cleanup()
 	childEnv := withAuthEnv(os.Environ(), broker, accountPoolPath)
-	err = runChild(path, argv(path, os.Args[1:], prompt), childEnv)
+	err = runChild(path, argv(path, os.Args[1:], prompt), childEnv, dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: trusted child:", err)
 	}
@@ -119,7 +123,7 @@ func runTrusted(envName string, fallbacks []string,
 }
 
 // launchGenerated keeps both immutable launch inputs alive only for the child.
-func launchGenerated(cfg, prompt string, broker brokerConfig, selections accountSelectionState) int {
+func launchGenerated(cfg, prompt string, broker brokerConfig, selections accountSelectionState, dir string) int {
 	tmp, err := os.CreateTemp("", "code-gen-*.yml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
@@ -138,5 +142,5 @@ func launchGenerated(cfg, prompt string, broker brokerConfig, selections account
 	}
 	return runTrusted("CODE_OMP", []string{"omp"}, func(path string, forwarded []string, prompt string) []string {
 		return generatedLaunchArgv(path, cfgPath, forwarded, prompt)
-	}, prompt, broker, selections)
+	}, prompt, broker, selections, dir)
 }

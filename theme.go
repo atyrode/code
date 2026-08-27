@@ -35,7 +35,8 @@ var (
 
 	// stKey renders an inline key cue (r, a, s, p) — visually secondary but
 	// readable against the background, per the section-chrome convention.
-	stKey = lipgloss.NewStyle().Foreground(lipgloss.Color(cHead))
+	stKey  = lipgloss.NewStyle().Foreground(lipgloss.Color(cHead))
+	stWtOn = lipgloss.NewStyle().Foreground(lipgloss.Color(cGreen))
 
 	// Title-local hotkey cues (d · defaults, p · hide, s · hide) are quieter
 	// than the footer help: terminals have no portable alpha, so these are

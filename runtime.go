@@ -134,13 +134,13 @@ func stripRuntimeArgs(args []string) []string {
 	return clean
 }
 
-func runRuntimeTarget(target, thinking, prompt string) int {
+func runRuntimeTarget(target, thinking, prompt, dir string) int {
 	path, err := resolveLaunchPath("CODE_RUNTIME_BROKER", nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: runtime broker not found:", err)
 		return 1
 	}
-	err = runChild(path, runtimeLaunchArgv(path, target, thinking, os.Args[1:], prompt), withoutAuthEnv(os.Environ()))
+	err = runChild(path, runtimeLaunchArgv(path, target, thinking, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: local runtime:", err)
 	}

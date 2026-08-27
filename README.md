@@ -47,8 +47,9 @@ code --continue                # dial, then pick up your last omp session
 ```
 
 A few words `code` keeps for itself: `generate` (the [catalog
-subcommand](docs/configuration.md)), `session` and its `ls` shorthand (below),
-and `--profile` (routing is code's job — a forwarded `--profile` is replaced).
+subcommand](docs/configuration.md)), `session` and its `ls` shorthand,
+`worktree` and its `wt` shorthand, and `--profile` (routing is code's job — a
+forwarded `--profile` is replaced).
 
 Every session you launch is recorded while it runs, so the ones you walked away
 from are findable rather than merely suspected:
@@ -62,6 +63,17 @@ code session reap --older-than 3d --yes # retire them, whole process tree
 `reap` prints and exits unless you pass `--yes`, and always takes the session's
 whole process tree — language servers, browsers, and workers included, so they
 are not orphaned onto init while still holding their memory.
+
+Inside a repository, press `w` before launching to start the session on a fresh
+`code/<adj>-<color>-<animal>` branch in its own linked worktree. The toggle is
+off by default. A pristine worktree is removed when the session exits; changes
+or commits keep it for recovery:
+
+```bash
+code wt                    # list session worktrees and their state
+code wt remove <name>      # remove an idle, pristine worktree
+code wt prune              # dry-run cleanup; add --yes to remove
+```
 
 ## Features
 

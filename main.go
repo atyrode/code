@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	clikit "github.com/atyrode/cli-kit"
@@ -30,6 +31,8 @@ func main() {
 			os.Exit(runGenerate(os.Args[2:]))
 		case "session", "sessions":
 			os.Exit(runSession(os.Args[2:]))
+		case "worktree", "wt":
+			os.Exit(runWorktree(os.Args[2:]))
 		case "ls":
 			os.Exit(runSession(append([]string{"list"}, os.Args[2:]...)))
 		}
@@ -75,6 +78,7 @@ func main() {
 	if !hasSandbox {
 		keys.Untrusted.SetEnabled(false)
 	}
+	keys.Worktree.SetEnabled(false)
 	usageCache := os.Getenv("CODE_USAGE_CACHE")
 	cachedAvailability := loadUsageCache(usageCache)
 	m := model{
@@ -121,25 +125,46 @@ func main() {
 		os.Exit(1)
 	}
 	fm, _ := final.(model)
+	var wt *sessionWorktree
+	launchChosen := fm.launchUntrusted || fm.launchRuntime != "" || fm.launchManaged || fm.genConfig != ""
+	if fm.worktreeMode && launchChosen {
+		wt, err = createSessionWorktree(fm.gitRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "code: worktree:", err)
+			os.Exit(1)
+		}
+		wt.ChildDir = filepath.Join(wt.Dir, filepath.FromSlash(fm.gitPrefix))
+		if _, err := os.Stat(wt.ChildDir); err != nil {
+			wt.ChildDir = wt.Dir
+		}
+	}
+	launchDir := ""
+	if wt != nil {
+		launchDir = wt.ChildDir
+	}
+
 	status := 0
 	switch {
 	case fm.launchUntrusted:
-		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, func() int {
-			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt)
+		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func() int {
+			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
 		})
 	case fm.launchRuntime != "":
-		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, func() int {
-			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt)
+		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, func() int {
+			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt, launchDir)
 		})
 	case fm.launchManaged:
-		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, func() int {
+		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, func() int {
 			return runTrusted("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
-				fm.firstPrompt, fm.broker, fm.accountSelections)
+				fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
 		})
 	case fm.genConfig != "":
-		status = withSession(comboID(fm.sel, fm.hasRelief), "CODE_OMP", []string{"omp"}, func() int {
-			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections)
+		status = withSession(comboID(fm.sel, fm.hasRelief), "CODE_OMP", []string{"omp"}, wt, func() int {
+			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
 		})
+	}
+	if wt != nil {
+		releaseSessionWorktree(wt)
 	}
 	if status != 0 {
 		os.Exit(status)

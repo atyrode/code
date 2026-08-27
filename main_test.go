@@ -405,6 +405,34 @@ func TestLaunchKeys(t *testing.T) {
 	}
 }
 
+func TestWorktreeToggleRequiresRepo(t *testing.T) {
+	keys.Worktree.SetEnabled(false)
+	t.Cleanup(func() { keys.Worktree.SetEnabled(true) })
+
+	m := layoutModel()
+	m, _ = press(t, m, "w")
+	if m.worktreeMode {
+		t.Fatal("w enabled worktree mode before the repository probe succeeded")
+	}
+
+	next, _ := m.Update(gitRepoMsg{root: "/r", ok: true})
+	m = next.(model)
+	m, _ = press(t, m, "w")
+	if !m.worktreeMode {
+		t.Fatal("w did not enable worktree mode after a repository probe")
+	}
+	if head := stripAnsi(m.sectionHead()); !strings.Contains(head, "worktree on") {
+		t.Fatalf("enabled worktree cue missing from section head: %q", head)
+	}
+
+	linked := layoutModel()
+	next, _ = linked.Update(gitRepoMsg{root: "/linked", linked: true, ok: true})
+	linked = next.(model)
+	if linked.gitRoot != "" {
+		t.Fatalf("linked worktree enabled nested worktree launches from %q", linked.gitRoot)
+	}
+}
+
 // TestEnterRefusesMissingCombo: Enter must not launch facets the catalog carries
 // no block for. genConfigYAML walks a nil block and emits an overlay whose
 // modelRoles map is empty, which would hand omp a session with no routing at
@@ -3471,7 +3499,7 @@ exit %d
 			selections.SetManualDisabled(map[accountKey]bool{
 				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
 			})
-			status := launchGenerated("models: {}\n", "prompt", broker, selections)
+			status := launchGenerated("models: {}\n", "prompt", broker, selections, "")
 			if status != tc.exit {
 				t.Fatalf("exit status = %d, want %d", status, tc.exit)
 			}
@@ -3539,7 +3567,7 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 		accountPoolCopy := filepath.Join(dir, label+"-account-pool")
 		t.Setenv("ENV_COPY", envCopy)
 		t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
-		if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", broker, selections); status != 0 {
+		if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", broker, selections, ""); status != 0 {
 			t.Fatalf("%s launch status = %d", label, status)
 		}
 		envBody, err := os.ReadFile(envCopy)
@@ -3606,7 +3634,7 @@ func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	t.Setenv("CAPTURE", capture)
 	t.Setenv("OMP_AUTH_BROKER_URL", "http://incomplete")
 	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/stale-pool")
-	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState()); status != 0 {
+	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), ""); status != 0 {
 		t.Fatalf("direct trusted launch status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)
@@ -3636,7 +3664,7 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	oldArgs := os.Args
 	os.Args = []string{"code", "--profile", "ambient"}
 	defer func() { os.Args = oldArgs }()
-	if status := runSandbox("CODE_OMP_UNTRUSTED", nil, ""); status != 0 {
+	if status := runSandbox("CODE_OMP_UNTRUSTED", nil, "", ""); status != 0 {
 		t.Fatalf("sandbox status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)

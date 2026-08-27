@@ -35,11 +35,12 @@ const sessionDisabled = "off"
 // `code` process, which is the root of the session's process tree — omp and
 // everything omp spawns (language servers, browsers, workers) descend from it.
 type sessionRecord struct {
-	PID     int    `json:"pid"`
-	Binary  string `json:"binary,omitempty"`
-	Profile string `json:"profile"`
-	Cwd     string `json:"cwd,omitempty"`
-	Started int64  `json:"started"`
+	PID      int    `json:"pid"`
+	Binary   string `json:"binary,omitempty"`
+	Profile  string `json:"profile"`
+	Cwd      string `json:"cwd,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	Started  int64  `json:"started"`
 }
 
 // sessionEntry is a record plus what the registry could determine about it.
@@ -501,7 +502,7 @@ func runSessionReap(args []string) int {
 // withSession records a launch for the lifetime of its child. Bookkeeping never
 // blocks a launch: the session is the product, the record is not, so a registry
 // failure is silently tolerated rather than surfaced as a launch error.
-func withSession(profile, envName string, fallbacks []string, run func() int) int {
+func withSession(profile, envName string, fallbacks []string, wt *sessionWorktree, run func() int) int {
 	rec := sessionRecord{
 		PID:     os.Getpid(),
 		Profile: profile,
@@ -510,7 +511,10 @@ func withSession(profile, envName string, fallbacks []string, run func() int) in
 	if path, err := resolveLaunchPath(envName, fallbacks); err == nil {
 		rec.Binary = path
 	}
-	if cwd, err := os.Getwd(); err == nil {
+	if wt != nil {
+		rec.Cwd = wt.ChildDir
+		rec.Worktree = wt.Dir
+	} else if cwd, err := os.Getwd(); err == nil {
 		rec.Cwd = cwd
 	}
 	handle, err := openSession(sessionDir(), rec)

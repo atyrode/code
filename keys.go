@@ -4,7 +4,7 @@ import "github.com/charmbracelet/bubbles/key"
 
 // ── keybindings (drive both input handling and the bubbles/help footer) ───────
 type keyMap struct {
-	Move, Change, Reset, Depth, Refresh, Manager, Collapse, Usage, Launch, Managed, Untrusted, Help, Quit key.Binding
+	Move, Change, Reset, Depth, Refresh, Manager, Collapse, Usage, Launch, Managed, Untrusted, Worktree, Help, Quit key.Binding
 }
 
 // ShortHelp is a static single-line stand-in used only when measuring the
@@ -18,7 +18,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Move, k.Change, k.Reset},
 		{k.Depth, k.Refresh, k.Manager, k.Collapse, k.Usage},
-		{k.Launch, k.Managed, k.Untrusted, k.Help, k.Quit},
+		{k.Launch, k.Managed, k.Untrusted, k.Worktree, k.Help, k.Quit},
 	}
 }
 
@@ -34,6 +34,7 @@ var keys = keyMap{
 	Launch:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "launch")),
 	Managed:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "managed omp")),
 	Untrusted: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "sandbox")),
+	Worktree:  key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "isolated worktree")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "more")),
 	Quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
 }
