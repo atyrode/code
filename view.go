@@ -134,7 +134,7 @@ func (m model) contextHelp() helpKeys {
 		}
 	}
 	if !m.generatorShown() {
-		short = append(short, keys.Launch, keys.Managed, keys.Untrusted)
+		short = append(short, keys.Launch, keys.Managed, keys.Untrusted, keys.Worktree)
 	}
 	return helpKeys{short: short, full: keys.FullHelp()}
 }
@@ -194,7 +194,15 @@ func (m model) sectionTitle() string {
 // reset-to-defaults cue (d · defaults) — and a blank separator (headRows
 // tall); it stays pinned above the scrolling facet list.
 func (m model) sectionHead() string {
-	return padLeft(m.sectionTitle()+"  "+stCueKey.Render("d")+stCue.Render(" · defaults"), gut) + "\n\n"
+	head := m.sectionTitle() + "  " + stCueKey.Render("d") + stCue.Render(" · defaults")
+	if m.gitRoot != "" {
+		if m.worktreeMode {
+			head += "  " + stKey.Render("w") + stWtOn.Render(" · worktree on")
+		} else {
+			head += "  " + stCueKey.Render("w") + stCue.Render(" · worktree")
+		}
+	}
+	return padLeft(head, gut) + "\n\n"
 }
 
 // prevChromeRows is the Routing column's pinned chrome around the scrolling

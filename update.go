@@ -19,6 +19,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ompMajor, m.ompMinor = msg.major, msg.minor
 		}
 		return m, nil
+	case gitRepoMsg:
+		if msg.ok && !msg.linked && msg.root != "" {
+			m.gitRoot, m.gitPrefix = msg.root, msg.prefix
+			keys.Worktree.SetEnabled(true)
+		}
+		return m, nil
 	case providerAvailabilityMsg:
 		m.applyProviderAvailability(msg.pools)
 		m.relayout()
@@ -162,6 +168,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleFacet(-1)
 		case "right", "l":
 			m.cycleFacet(1)
+		case "w":
+			if m.gitRoot == "" {
+				return m, nil
+			}
+			m.worktreeMode = !m.worktreeMode
+			return m, nil
 		case "u":
 			// Untrusted sandbox: hand off to CODE_OMP_UNTRUSTED (ompu), which owns its
 			// own routing/policy — no generated --config is passed to it. Inert when

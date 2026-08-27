@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -69,13 +70,15 @@ type model struct {
 	usageStale  bool      // the last central refresh failed; prior data is retained
 	barAnim     int       // first-load fill frame (1..barAnimSteps-1 = partial); 0 = inactive, bars at full value
 
-	launchManaged   bool              // m: run CODE_OMP with no overlay (the managed defaults)
-	launchUntrusted bool              // u: run the CODE_OMP_UNTRUSTED sandbox
-	launchRuntime   string            // delegated local runtime target selected via CODE_RUNTIME_BROKER
-	hasSandbox      bool              // a sandbox binary exists; gates the u key
-	genConfig       string            // generated config YAML to launch omp with (generator Enter)
-	firstPrompt     string            // prompt from the suggest box, forwarded as omp's first message
-	savedSel        map[string]string // selection snapshot before a live suggest preview (for revert)
+	launchManaged      bool              // m: run CODE_OMP with no overlay (the managed defaults)
+	launchUntrusted    bool              // u: run the CODE_OMP_UNTRUSTED sandbox
+	launchRuntime      string            // delegated local runtime target selected via CODE_RUNTIME_BROKER
+	hasSandbox         bool              // a sandbox binary exists; gates the u key
+	gitRoot, gitPrefix string            // repository location for isolated worktree launches
+	worktreeMode       bool              // w: launch the selected session in a fresh worktree
+	genConfig          string            // generated config YAML to launch omp with (generator Enter)
+	firstPrompt        string            // prompt from the suggest box, forwarded as omp's first message
+	savedSel           map[string]string // selection snapshot before a live suggest preview (for revert)
 	// The probed omp version (omp/<semver> from `omp --version`), fetched
 	// async at startup. Zero = unknown: 17.3-only overlay keys are omitted so
 	// a lagging CODE_OMP wrapper never hard-errors at launch.
@@ -186,6 +189,31 @@ func probeOmpVersionCmd() tea.Cmd {
 	}
 }
 
+type gitRepoMsg struct {
+	root, prefix string
+	linked, ok   bool
+}
+
+func probeGitRepoCmd() tea.Cmd {
+	return func() tea.Msg {
+		out, err := exec.Command("git", "rev-parse", "--path-format=absolute",
+			"--show-toplevel", "--show-prefix", "--git-dir", "--git-common-dir").Output()
+		if err != nil {
+			return gitRepoMsg{}
+		}
+		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		if len(lines) != 4 {
+			return gitRepoMsg{}
+		}
+		return gitRepoMsg{
+			root:   lines[0],
+			prefix: lines[1],
+			linked: lines[2] != lines[3],
+			ok:     true,
+		}
+	}
+}
+
 // ompVersionAtLeast reports a probed version ≥ major.minor; unknown is never
 // "at least" anything.
 func (m model) ompVersionAtLeast(major, minor int) bool {
@@ -196,7 +224,7 @@ func (m model) ompVersionAtLeast(major, minor int) bool {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{probeOmpVersionCmd()}
+	cmds := []tea.Cmd{probeOmpVersionCmd(), probeGitRepoCmd()}
 	if m.broker.configured() {
 		cmds = append(cmds, m.startUsageFetch(), m.spin.Tick, tickCmd())
 	} else if !m.providersResolved {
