@@ -63,7 +63,7 @@ func paintModel(tok string) string {
 	case p != nil:
 		br, bg, bb = p.PaintRGB[0], p.PaintRGB[1], p.PaintRGB[2]
 	case strings.Contains(name, "local-"):
-		// Free/local runtimes read green — the same family as the ox accents.
+		// Free/local runtimes read green.
 		br, bg, bb = 96, 211, 150
 	default:
 		return shortModel(name) + ":" + level // unknown provider: uncoloured
@@ -85,7 +85,7 @@ func bucketOf(model string) string {
 	if i := strings.IndexByte(m, ':'); i >= 0 {
 		m = m[:i]
 	}
-	// Provider-scoped ids outside the subscription pools (OpenRouter,
+	// Provider-scoped ids outside the subscription pools (e.g. slash-scoped
 	// local runtimes) have no quota window code knows about. An empty bucket
 	// never reads as down, which is exactly right for a free or local model.
 	if strings.Contains(m, "/") {

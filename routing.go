@@ -177,11 +177,7 @@ func (m model) meter(label, glyph, fill string, n int) string {
 // opinion, so it crosses to another provider whenever the lane allows it: the
 // first advisorPoolOrder pool that is not the lead's (fable-as-main hands the
 // default role to the elite, so the lead becomes the elite's pool). Only the
-// pure lanes stay on their own provider — ox-only's second opinion is Ox.
-//
-// On the mixed ox lanes the chain carries a cross-pool net in spend order —
-// the other paid pool's cheapest rung, then the free pool itself — so a dead
-// quota never leaves the second eye blind.
+// pure lanes stay on their own provider.
 func (m model) advisorChain(level string) []string {
 	lane := m.sel["lane"]
 	if p := providerByLane(lane); p != nil && lanePure(lane) {
@@ -205,29 +201,9 @@ func (m model) advisorChain(level string) []string {
 		if len(chain) == 0 {
 			continue
 		}
-		if lane == "ox-led" || lane == "ox-lean" {
-			chain = m.advisorSpendNet(chain, p.Lane)
-		}
 		return m.advisorRelief(level, chain)
 	}
 	return nil
-}
-
-// advisorSpendNet appends the mixed ox lanes' cross-pool net in spend order —
-// the other paid pool's cheapest rung, then the free pool itself — so a dead
-// quota never leaves the second eye blind.
-func (m model) advisorSpendNet(chain []string, ctx string) []string {
-	tail := m.advisors["glance/gpt"]
-	if ctx == "gpt" {
-		tail = m.advisors["glance/claude"]
-	}
-	out := append([]string(nil), chain...)
-	for _, t := range append(append([]string{}, tail...), m.advisors["glance/ox"]...) {
-		if t != "" && !slices.Contains(out, t) {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // advisorRelief appends the relief tail to the audit chain: audit is the
@@ -363,10 +339,7 @@ func (m model) visibleFacets() []facet {
 		}
 		switch f.key {
 		case "spark":
-			// genValid refuses every ox-lane spark combo (the drain bucket's
-			// leads are utility roles those lanes give to their own pools).
-			if !laneHostsSpecial(lane, "spark") || m.noSpark ||
-				lane == "ox-only" || lane == "ox-led" || lane == "ox-lean" {
+			if !laneHostsSpecial(lane, "spark") || m.noSpark {
 				continue
 			}
 		case "fast":
@@ -376,16 +349,11 @@ func (m model) visibleFacets() []facet {
 			if p := providerByLane(lane); lanePure(lane) && p != nil && p.ServiceTier[0] == "" {
 				continue
 			}
-			if lane == "ox-only" || lane == "ox-led" {
-				continue
-			}
 		case "fable", "main":
 			if !laneHostsSpecial(lane, "fable") || m.noFable {
 				continue
 			}
-			if f.key == "main" && (m.sel["fable"] != "on" || lane == "ox-led") {
-				// fable-as-main would defeat ox-led's free worker, and
-				// genValid refuses that combo outright.
+			if f.key == "main" && m.sel["fable"] != "on" {
 				continue
 			}
 		case "relief":
@@ -404,7 +372,7 @@ func comboID(sel map[string]string, hasRelief bool) string {
 	if !laneHostsSpecial(lane, "fable") {
 		fb = "off"
 	}
-	if !laneHostsSpecial(lane, "spark") || lane == "ox-led" || lane == "ox-lean" {
+	if !laneHostsSpecial(lane, "spark") {
 		sp = "off"
 	}
 	spid, faid := "nosp", "nofa"
@@ -413,10 +381,7 @@ func comboID(sel map[string]string, hasRelief bool) string {
 	}
 	if fb == "on" {
 		faid = "fa"
-		// ox-led hosts the elite on deliberative roles only; promoting it to
-		// the default role would defeat the lane, and genValid refuses that
-		// combo outright.
-		if sel["main"] == "on" && lane != "ox-led" {
+		if sel["main"] == "on" {
 			faid = "famain"
 		}
 	}
@@ -470,7 +435,7 @@ func (m model) laneUsable(lane string) bool {
 }
 
 // disconnectedLeads names the lead-dial providers the credentials cannot run
-// ("DeepSeek, OpenRouter") — the lead row's "log in to unlock" note. Empty
+// ("DeepSeek") — the lead row's "log in to unlock" note. Empty
 // before discovery resolves or when everything is connected.
 func (m model) disconnectedLeads(leads []string) string {
 	if !m.providersResolved {
@@ -539,8 +504,8 @@ func (m model) filterRows(rows []string) []string {
 
 // composeLane joins a lead and a preferred blend into a lane the catalog
 // serves: the preferred blend when that lane exists, else the first served
-// blend for the lead (a lead switch from ox-lean to a pool without a lean
-// lane lands on its led lane, never on a combo that was never generated).
+// blend for the lead (a lead switch never lands on a combo that was never
+// generated).
 func (m model) composeLane(lead, blend string) string {
 	if lead == "mixed" {
 		return "mixed"
@@ -659,9 +624,9 @@ func catalogLanes(generated map[string][]string) []string {
 
 // trimLanes narrows the lane dial to the lanes this catalog actually serves,
 // and lands the selection on a served lane when a persisted or default choice
-// points at one that vanished (an older catalog without ox, say). This is the
-// consumer side of the optional-pool switches: no ox entries in models.yml
-// means no ox values on the dial at all.
+// points at an optional pool that vanished. This is the consumer side of the
+// optional-pool switches: no optional-pool entries in models.yml means no
+// corresponding values on the dial.
 func (m *model) trimLanes(served map[string]bool) {
 	for i, f := range m.facets {
 		if f.key != "lane" {
@@ -739,9 +704,6 @@ func (m *model) clampSel() {
 func laneColor(lane string) string {
 	if lane == "mixed" {
 		return "#aa96e1"
-	}
-	if lane == "ox-lean" {
-		return "#2dd4bf" // teal — paid work riding the free pool
 	}
 	if p := providerByLane(lane); p != nil {
 		if lanePure(lane) {

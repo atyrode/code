@@ -272,8 +272,8 @@ func (m model) listW() int {
 	if w > m.w-33 {
 		w = m.w - 33
 	}
-	// The ox lanes widen the lane row past this function's old 80-cell
-	// aesthetic cap; a wider list beats clipping dial options mid-value.
+	// The optional-pool lanes widen the lane row past this function's old
+	// 80-cell aesthetic cap; a wider list beats clipping dial options mid-value.
 	if w > 116 {
 		w = 116
 	}

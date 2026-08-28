@@ -6,6 +6,7 @@
 //	OMP_AUTH_BROKER_*  : inherited central broker URL, token, and snapshot cache
 //	CODE_SELECTION_STATE: optional persisted generator facet choices; empty disables it
 //	CODE_AUTH_ACCOUNT_STATE: persisted Manual and named account selections
+//	CODE_AUTH_LOGIN_VIA: optional SSH user@host for central-broker OAuth login
 //	CODE_OMP           : the omp-managed executable for trusted sessions
 //	CODE_OMP_UNTRUSTED : the ompu sandbox executable — launched by the u key
 package main
