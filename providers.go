@@ -8,10 +8,9 @@ package main
 import "strings"
 
 const (
-	anthropicProvider  = "anthropic"
-	openAIProvider     = "openai-codex"
-	deepseekProvider   = "deepseek"
-	openRouterProvider = "openrouter"
+	anthropicProvider = "anthropic"
+	openAIProvider    = "openai-codex"
+	deepseekProvider  = "deepseek"
 )
 
 // specialFacet is a provider's tier-scoped lead: a facet dial ("spark",
@@ -37,8 +36,8 @@ type providerDesc struct {
 	ModelPrefixes []string   // model-id prefix matchers (legacy-catalog fallback)
 	BucketBase    string     // bucket name base; main bucket = BucketBase + "-main"
 	Metered       bool       // false => no quota windows; never gates launches
+	OAuth         bool       // provider supports interactive `omp auth-broker login`
 	Required      bool       // generate-init: must fill tiers 1..3, else hard error
-	StrictLadder  bool       // optional-pool ladder must be complete when declared (no nearest-rung borrow)
 	CrossTo       string     // pool this pool's crossing roles divert to (reviewer, advisor)
 	SkeletonWins  []string   // usage-panel loading skeleton windows; nil when unmetered
 	Special       []specialFacet
@@ -52,32 +51,28 @@ var providerRegistry = []providerDesc{
 	{ID: anthropicProvider, Pool: "A", Lane: "claude", Label: "Claude", AccountLabel: "Anthropic",
 		Color: "#ff9f52", LaneOnly: "#ff8534", LaneLed: "#ffb277", PaintRGB: [3]float64{240, 160, 105},
 		ModelPrefixes: []string{"claude", "sonnet", "haiku", "opus"}, BucketBase: "claude",
-		Metered: true, Required: true, CrossTo: "O",
+		Metered: true, OAuth: true, Required: true, CrossTo: "O",
 		SkeletonWins: []string{"5h", "7d", "7d fable"},
 		Special:      []specialFacet{{Facet: "fable", Tier: 4, Bucket: "fable"}}},
 	{ID: openAIProvider, Aliases: []string{"openai"}, Pool: "O", Lane: "gpt", Label: "Codex", AccountLabel: "OpenAI",
 		Color: "#62a7ff", LaneOnly: "#3f8ef0", LaneLed: "#7ab6ff", PaintRGB: [3]float64{110, 170, 240},
 		ModelPrefixes: []string{"gpt", "codex"}, BucketBase: "codex",
-		Metered: true, Required: true, CrossTo: "A",
+		Metered: true, OAuth: true, Required: true, CrossTo: "A",
 		SkeletonWins: []string{"5h", "7d"},
 		Special:      []specialFacet{{Facet: "spark", Tier: 0, Bucket: "spark"}},
 		ServiceTier:  [2]string{"openai", "priority"}},
 	{ID: deepseekProvider, Pool: "D", Lane: "ds", Label: "DeepSeek", AccountLabel: "DeepSeek",
 		Color: "#4d6bfe", LaneOnly: "#3a55f0", LaneLed: "#7d92ff", PaintRGB: [3]float64{77, 107, 254},
 		ModelPrefixes: []string{"deepseek"}, BucketBase: "deepseek", CrossTo: "O"},
-	{ID: openRouterProvider, Pool: "R", Lane: "ox", Label: "Ox Alpha", AccountLabel: "OpenRouter",
-		Color: "#5fce96", LaneOnly: "#1f9d5b", LaneLed: "#5fce96", PaintRGB: [3]float64{95, 206, 150},
-		ModelPrefixes: []string{"stealth/ox-alpha"}, BucketBase: "openrouter",
-		StrictLadder: true, CrossTo: "A"},
 }
 
 // fallbackPoolOrder is the generator-side pool order: non-lead pools appear in
 // fallback chains (and cross-provider role dispatch) in this order.
-var fallbackPoolOrder = []string{"O", "A", "D", "R"}
+var fallbackPoolOrder = []string{"O", "A", "D"}
 
 // advisorPoolOrder decides the advisor's context: the first entry that is not
 // the lead pool (pure lanes keep their own pool).
-var advisorPoolOrder = []string{"A", "O", "D", "R"}
+var advisorPoolOrder = []string{"A", "O", "D"}
 
 // providerByID matches a provider id or alias; nil when unknown.
 func providerByID(id string) *providerDesc {
@@ -250,13 +245,12 @@ func laneReliefApplies(lane string) bool {
 }
 
 // laneBlends is the blend dial's canonical order: led (the lead pool drives
-// everything), lean (the lead pool keeps the deliberative work and drains the
-// rest elsewhere), only (pure). A lead offers the subset its catalog serves.
-var laneBlends = []string{"led", "lean", "only"}
+// everything), only (pure). A lead offers the subset its catalog serves.
+var laneBlends = []string{"led", "only"}
 
 // laneSplit decomposes a lane into the two dials the TUI renders: the lead
-// (a provider's lane segment, or "mixed") and the blend ("led" | "lean" |
-// "only" — the lane's suffix). mixed has no blend of its own; it reports
+// (a provider's lane segment, or "mixed") and the blend ("led" | "only" —
+// the lane's suffix). mixed has no blend of its own; it reports
 // "led" so a later lead change lands on the -led lane.
 func laneSplit(lane string) (lead, blend string) {
 	if lane == "mixed" {
@@ -303,7 +297,7 @@ func laneAvailable(lane string, connected map[string]bool) bool {
 		if pol.pure {
 			return connected[pol.primary]
 		}
-		for _, pool := range []string{pol.primary, pol.delib, pol.util, pol.vision, pol.visionSmart} {
+		for _, pool := range []string{pol.primary, pol.delib, pol.visionSmart} {
 			if pool != "" && !connected[pool] {
 				return false
 			}

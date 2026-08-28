@@ -1,1 +1,1 @@
-| `pool` | `O` (OpenAI/Codex), `A` (Anthropic), `D` (DeepSeek), or `R` (OpenRouter — optional, see below). `O` and `A` must fill tiers 1..3; `D` is optional — one verified model is enough, missing tiers borrow the nearest rung; `R` is optional but all-or-nothing — when present it must fill tiers 1..3 |
+| `pool` | `O` (OpenAI/Codex), `A` (Anthropic), or `D` (DeepSeek). `O` and `A` must fill tiers 1..3; `D` is optional — one verified model is enough, missing tiers borrow the nearest rung |

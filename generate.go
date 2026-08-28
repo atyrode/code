@@ -11,13 +11,10 @@ package main
 //   - required pools (see providerRegistry: O = OpenAI/Codex, A = Anthropic)
 //     must each fill tiers 1..3 — the per-pool fallback ladder (cheap,
 //     regular, smart); generation fails loudly otherwise. Optional pools
-//     participate when present, each with its own strictness: D (DeepSeek,
-//     pay-as-you-go) needs one verified rung — missing tiers borrow the
-//     nearest existing one — while R (OpenRouter) is all-or-nothing: when any
-//     R model is declared, its tiers 1..3 must all be filled (a one-model
-//     family declares the same id three times with ascending thinking
-//     ceilings). An absent optional pool's lanes are simply not generated and
-//     the TUI never offers them; catalog presence is the whole on/off switch.
+//     participate when present: D (DeepSeek, pay-as-you-go) needs one
+//     verified rung — missing tiers borrow the nearest existing one. An
+//     absent optional pool's lanes are simply not generated and the TUI
+//     never offers them; catalog presence is the whole on/off switch.
 //   - tier 0 (an idle-bucket speed model, "spark") and tier 4 (a scarce elite,
 //     "fable") are optional; without them the corresponding facet combos are
 //     simply not generated and the TUI hides the dial.
@@ -157,28 +154,6 @@ func loadCatalogBytes(raw []byte, path string) (*catalog, error) {
 			if c.ladder[pool][t] == "" {
 				return nil, fmt.Errorf("%s: pool %s has no tier-%d model — code assumes %s with tiers 1..3 filled (cheap, regular, smart)", path, pool, t, requiredProviderNames())
 			}
-		}
-	}
-	// Pool R is all-or-nothing: a half-declared ox ladder would generate lanes
-	// whose fallback rungs silently vanish. One-model families declare the same
-	// id at every tier with ascending thinking ceilings — that repetition is
-	// the encoding, not a mistake. Strictness is a registry property: other
-	// optional pools (DeepSeek) stay lenient via fillOptionalLadders below.
-	for _, p := range providerRegistry {
-		if p.Required || !p.StrictLadder {
-			continue
-		}
-		l := c.ladder[p.Pool]
-		part, full := false, true
-		for t := 1; t <= 3; t++ {
-			if l[t] != "" {
-				part = true
-			} else {
-				full = false
-			}
-		}
-		if part && !full {
-			return nil, fmt.Errorf("%s: pool %s must fill tiers 1..3 when present — declare the model once per tier with ascending thinking ceilings, or remove the pool entirely", path, p.Pool)
 		}
 	}
 	c.fillOptionalLadders()
@@ -341,8 +316,7 @@ func (c *catalog) clampTh(key, level string) string {
 // otherPool is the crossing target for roles that must leave their lead pool:
 // the reviewer's independent second eye, the advisor's minimum diversity.
 // Declared per provider in the registry (providerDesc.CrossTo): O and A cross
-// to each other, D crosses to O, and R crosses to A — the strongest judgment
-// pool, which is what every crossing on an ox lane is for.
+// to each other, D crosses to O.
 func otherPool(p string) string {
 	if d := providerByPool(p); d != nil {
 		return d.CrossTo
@@ -544,8 +518,7 @@ var (
 
 // lanePolicy is a lane's whole role-mapping, as data. primary answers for
 // default/task/librarian; delib hosts plan/slow/designer/reviewer ("" = the
-// primary); util hosts scout/sonic/smol/tiny/commit ("" = primary); vision is
-// the image rung's pool, with visionSmart overriding it when the model dial
+// primary); visionSmart overrides the image rung's pool when the model dial
 // sits on smart (mixed prefers Claude's tier-3 for that). pure lanes never
 // cross: reviewer and advisor stay in-primary.
 //
@@ -557,8 +530,6 @@ var (
 type lanePolicy struct {
 	primary     string
 	delib       string
-	util        string
-	vision      string
 	visionSmart string
 	pure        bool
 }
@@ -574,12 +545,6 @@ var genLanePolicies = map[string]lanePolicy{
 	// so vision alone borrows an image-capable pool.
 	"ds-led":  {primary: "D"},
 	"ds-only": {primary: "D", pure: true},
-	"ox-only": {primary: "R", pure: true},
-	"ox-led":  {primary: "R", delib: "A"},
-	// The mirror of ox-led: paid providers keep everything that answers for
-	// the work (default, task, librarian), while the free pool absorbs the
-	// high-volume background and image description.
-	"ox-lean": {primary: "O", delib: "A", util: "R", vision: "R"},
 }
 
 func (p lanePolicy) pool(role string) string {
@@ -592,18 +557,14 @@ func (p lanePolicy) pool(role string) string {
 	if genCrossLed[role] {
 		return otherPool(p.primary)
 	}
-	if genUtil[role] && p.util != "" {
-		return p.util
-	}
 	return p.primary
 }
 
 // lanes lists the lanes this catalog serves: the five base lanes always, plus
 // each optional pool's lanes once its ladder qualifies — the ds pair when a
-// DeepSeek ladder participates (one verified rung suffices), the ox trio only
-// when the OpenRouter ladder is fully declared. This is the generator side of
-// each optional pool's on/off switch. Order follows the dial: base lanes
-// first, optional-pool lanes appended.
+// DeepSeek ladder participates (one verified rung suffices). This is the
+// generator side of each optional pool's on/off switch. Order follows the
+// dial: base lanes first, optional-pool lanes appended.
 func (c *catalog) lanes() []string {
 	out := append([]string{}, genBaseLanes...)
 	present := map[string]bool{}
@@ -612,9 +573,6 @@ func (c *catalog) lanes() []string {
 	}
 	if present["D"] {
 		out = append(out, "ds-led", "ds-only")
-	}
-	if present["R"] {
-		out = append(out, "ox-only", "ox-led", "ox-lean")
 	}
 	return out
 }
@@ -680,9 +638,6 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			// image described, and describeForTextModels is on by default — so
 			// this rung must be a model that actually accepts images. Vision
 			vp := p
-			if pol.vision != "" {
-				vp = pol.vision
-			}
 			if mtier == "smart" && pol.visionSmart != "" {
 				vp = pol.visionSmart
 			}
@@ -816,15 +771,6 @@ func genValid(lane string, spark, fable, fableMain, relief bool) bool {
 	}
 	if spark && !laneHostsSpecial(lane, "spark") {
 		return false // no spark outside its pool's lanes
-	}
-	if lane == "ox-only" && (spark || fable) {
-		return false // a pure ox lane has no O drain bucket or A elite to lead with
-	}
-	if lane == "ox-led" && (spark || fableMain) {
-		return false // utility already lives on the free pool; fable-as-main would defeat the lane
-	}
-	if lane == "ox-lean" && spark {
-		return false // the drain bucket's leads are ox here; spark has nothing to drain
 	}
 	if fableMain && !fable {
 		return false // fable-as-main only exists on top of fable

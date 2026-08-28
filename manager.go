@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -28,6 +30,11 @@ type managerPresetState struct {
 	deleting string
 	name     []rune
 	draft    map[accountKey]bool
+}
+
+type authLoginFinishedMsg struct {
+	provider string
+	err      error
 }
 
 func cloneAccountSelectionState(state accountSelectionState) accountSelectionState {
@@ -215,10 +222,83 @@ func (m *model) toggleManagerAccount() error {
 	return m.commitAccountSelections(candidate)
 }
 
+func managerLoginProviders() []providerDesc {
+	providers := make([]providerDesc, 0, len(providerRegistry))
+	for _, provider := range providerRegistry {
+		if provider.OAuth {
+			providers = append(providers, provider)
+		}
+	}
+	return providers
+}
+
+func (m *model) clampManagerLoginCursor() {
+	providers := managerLoginProviders()
+	if len(providers) == 0 {
+		m.managerLoginCursor = 0
+		return
+	}
+	m.managerLoginCursor = min(max(m.managerLoginCursor, 0), len(providers)-1)
+}
+
+func authLoginArgv(path, provider, via string) []string {
+	argv := []string{path, "auth-broker", "login", provider}
+	if via = strings.TrimSpace(via); via != "" {
+		argv = append(argv, "--via="+via)
+	}
+	return argv
+}
+
+func startAuthLogin(provider string) (tea.Cmd, error) {
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return nil, err
+	}
+	argv := authLoginArgv(path, provider, os.Getenv("CODE_AUTH_LOGIN_VIA"))
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = os.Environ()
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return authLoginFinishedMsg{provider: provider, err: err}
+	}), nil
+}
+
 // updateManager handles only account-manager controls. The generator's global
 // actions remain inert until the manager closes.
 func (m model) updateManager(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.clampManagerCursor()
+	if m.managerLogin {
+		providers := managerLoginProviders()
+		m.clampManagerLoginCursor()
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.managerLogin = false
+			m.accountErr = ""
+		case "up", "k":
+			if m.managerLoginCursor > 0 {
+				m.managerLoginCursor--
+			}
+		case "down", "j":
+			if m.managerLoginCursor+1 < len(providers) {
+				m.managerLoginCursor++
+			}
+		case "enter":
+			if len(providers) == 0 {
+				m.accountErr = "no interactive login providers configured"
+				return m, nil
+			}
+			provider := providers[m.managerLoginCursor]
+			cmd, err := startAuthLogin(provider.ID)
+			if err != nil {
+				m.accountErr = err.Error()
+				return m, nil
+			}
+			m.accountErr = ""
+			return m, cmd
+		}
+		return m, nil
+	}
 
 	if m.managerPreset.deleting != "" {
 		switch msg.String() {
@@ -334,6 +414,11 @@ func (m model) updateManager(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.accountErr = ""
 		}
+		return m, nil
+	case "a":
+		m.managerLogin = true
+		m.accountErr = ""
+		m.clampManagerLoginCursor()
 		return m, nil
 	case "e":
 		m.beginManagerPresetEdit()
@@ -886,7 +971,48 @@ func (m model) managerUsageAction(inlineFits bool) string {
 	return "show usage"
 }
 
+func (m model) managerLoginBody(width int) string {
+	providers := managerLoginProviders()
+	title := m.pill("add OAuth account")
+	lines := make([]string, 0, len(providers)+2)
+	for i, provider := range providers {
+		cursor := "  "
+		style := stHead
+		if i == m.managerLoginCursor {
+			cursor = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(m.accent())).
+				Render("▸ ")
+		}
+		lines = append(lines, cursor+style.Render(provider.AccountLabel))
+	}
+	target := "this broker host"
+	if via := strings.TrimSpace(os.Getenv("CODE_AUTH_LOGIN_VIA")); via != "" {
+		target = via
+	}
+	note := stDim.Render("OAuth login runs on " + target)
+	body := padLeft(managerClipCell(title, width), gut)
+	if len(lines) > 0 {
+		body += "\n\n" + padLeft(strings.Join(lines, "\n"), gut)
+	}
+	return body + "\n\n" + padLeft(managerClipCell(note, width), gut)
+}
+
+func (m model) managerLoginView() string {
+	width := max(0, m.w-2*gut)
+	body := m.managerLoginBody(width)
+	controls := padLeft(m.managerControlsFor(width, ""), gut)
+	footer := clikit.SeparatedSections(m.w, controls)
+	contentHeight := max(1, m.h-lipgloss.Height(footer))
+	placed := lipgloss.Place(m.w, contentHeight, lipgloss.Left, lipgloss.Top,
+		strings.Repeat("\n", topGap)+body)
+	return lipgloss.NewStyle().MaxWidth(m.w).MaxHeight(m.h).Render(
+		lipgloss.JoinVertical(lipgloss.Left, placed, footer))
+}
+
 func (m model) managerView() string {
+	if m.managerLogin {
+		return m.managerLoginView()
+	}
 	m.clampManagerCursor()
 	width := max(0, m.w-2*gut)
 	rows := m.managerLines(width)
@@ -965,6 +1091,12 @@ func (m model) managerControlsFor(w int, usageAction string) string {
 	compact := w < 48
 	var items []clikit.HelpItem
 	switch {
+	case m.managerLogin:
+		items = []clikit.HelpItem{
+			{Key: "↑↓", Description: "provider"},
+			{Key: "enter", Description: "log in"},
+			{Key: "esc", Description: "cancel"},
+		}
 	case m.managerPreset.deleting != "":
 		items = []clikit.HelpItem{
 			{Key: "y", Description: "confirm delete"},
@@ -997,6 +1129,7 @@ func (m model) managerControlsFor(w int, usageAction string) string {
 			{Key: "←→", Description: "preset"},
 			{Key: "↑↓", Description: "move"},
 		}
+		items = append(items, clikit.HelpItem{Key: "a", Description: "add OAuth"})
 		if strings.EqualFold(m.accountSelections.ActiveName(), accountSelectionManualName) {
 			items = append(items,
 				clikit.HelpItem{Key: "space", Description: "toggle account"},

@@ -98,7 +98,7 @@ code wt prune              # dry-run cleanup; add --yes to remove
   spending it.
 - **Usage at a glance** — quota bars and reset countdowns per provider,
   before you spend the scarce bucket.
-- **Account presets** — choose broker accounts and save reusable selections (`v`).
+- **Account presets** — choose broker accounts, add OAuth logins, and save reusable selections (`v`).
 - **Cost & speed meters** — every dial change reprices the session; DeepSeek
   rungs are priced by the clock during its off-peak discount window.
 - **Guided first run** — no catalog? `code` builds one from your omp,
@@ -126,9 +126,14 @@ nix run github:atyrode/code#with-omp   # code + a pinned omp on PATH
 **Or, for Gophers:** `go install github.com/atyrode/code@latest`
 
 Unless you took `#with-omp`, you need
-[oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed — `code`
-launches it, it doesn't replace it. Authenticate providers directly with OMP
-using `omp auth-broker login` before running `code`.
+[oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) installed—`code`
+launches it, it doesn't replace it. Authenticate locally with
+`omp auth-broker login <provider>`. For a canonical broker on another machine,
+set `CODE_AUTH_LOGIN_VIA=user@host`; the account manager's `v` → `a` flow then
+runs the same interactive login over SSH and refreshes the account list.
+API-key providers are broker writes rather than OAuth logins; the
+[atyrode dotfiles](https://github.com/atyrode/dotfiles) expose the secure
+`atyrode auth broker add-api-key <provider>` route.
 
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you

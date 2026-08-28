@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,6 +26,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			keys.Worktree.SetEnabled(true)
 		}
 		return m, nil
+	case authLoginFinishedMsg:
+		m.managerLogin = false
+		if msg.err != nil {
+			m.accountErr = fmt.Sprintf("%s login failed: %v", msg.provider, msg.err)
+			return m, nil
+		}
+		m.accountErr = ""
+		if m.broker.configured() {
+			return m, m.startUsageFetch()
+		}
+		return m, probeProviderAvailabilityCmd()
 	case providerAvailabilityMsg:
 		m.applyProviderAvailability(msg.pools)
 		m.relayout()

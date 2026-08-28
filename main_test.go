@@ -3791,14 +3791,14 @@ func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
 		"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
 		"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
 		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
-		"ox-only_fast_low_nosp_nofa":     {"    default ox:low"},
+		"ds-only_fast_low_nosp_nofa":     {"    default ds:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
 	served := m.laneValues()
 
-	// The user's regression: O+A logged in, the catalog's optional R is not.
-	// Only the ox lane goes dark; every O/A lane and blend stays usable.
+	// The user's regression: O+A logged in, the catalog's optional D is not.
+	// Only the ds lane goes dark; every O/A lane and blend stays usable.
 	m.applyProviderAvailability(map[string]bool{"O": true, "A": true})
 	if !reflect.DeepEqual(m.laneValues(), served) {
 		t.Fatalf("availability trimmed the dial: %v, want %v", m.laneValues(), served)
@@ -3808,24 +3808,24 @@ func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
 			t.Fatalf("connected-provider lane %q went unusable", lane)
 		}
 	}
-	if m.laneUsable("ox-only") {
-		t.Fatal("ox-only usable without an OpenRouter credential")
+	if m.laneUsable("ds-only") {
+		t.Fatal("ds-only usable without a DeepSeek credential")
 	}
 	if m.sel["lane"] != "mixed" || m.noProviders {
 		t.Fatalf("selection = %q noProviders=%v, want mixed/false", m.sel["lane"], m.noProviders)
 	}
-	if note := m.disconnectedLeads([]string{"mixed", "gpt", "claude", "ox"}); note != "OpenRouter" {
-		t.Fatalf("lead note = %q, want OpenRouter", note)
+	if note := m.disconnectedLeads([]string{"mixed", "gpt", "claude", "ds"}); note != "DeepSeek" {
+		t.Fatalf("lead note = %q, want DeepSeek", note)
 	}
 
-	// The inverse setup: only OpenRouter is connected. The dial still shows
+	// The inverse setup: only DeepSeek is connected. The dial still shows
 	// everything; the selection lands on the one usable lane.
-	m.applyProviderAvailability(map[string]bool{"R": true})
+	m.applyProviderAvailability(map[string]bool{"D": true})
 	if !reflect.DeepEqual(m.laneValues(), served) {
 		t.Fatalf("availability trimmed the dial: %v", m.laneValues())
 	}
-	if m.sel["lane"] != "ox-only" || m.noProviders {
-		t.Fatalf("OpenRouter-only selection = %q noProviders=%v", m.sel["lane"], m.noProviders)
+	if m.sel["lane"] != "ds-only" || m.noProviders {
+		t.Fatalf("DeepSeek-only selection = %q noProviders=%v", m.sel["lane"], m.noProviders)
 	}
 	if m.laneUsable("mixed") || m.laneUsable("gpt-only") {
 		t.Fatal("required-pool lanes usable without their credentials")
@@ -3860,7 +3860,6 @@ func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
 		"claude-led_fast_low_nosp_nofa":  {"    default claude:low"},
 		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
 		"ds-led_fast_low_nosp_nofa":      {"    default ds:low"},
-		"ox-led_fast_low_nosp_nofa":      {"    default ox:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
@@ -3869,8 +3868,8 @@ func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
 	m.visibleFacets() // sync lead/blend from lane
 	m.fcur = 0
 
-	// lead order: mixed gpt claude ds ox — right from claude must stop at
-	// claude (ds and ox are struck), not land on a dead lane.
+	// lead order: mixed gpt claude ds — right from claude must stop at
+	// claude (ds is struck), not land on a dead lane.
 	m.cycleFacet(1)
 	if m.sel["lane"] != "claude-led" {
 		t.Fatalf("cycle onto unusable leads moved the lane: %q", m.sel["lane"])
@@ -3881,39 +3880,31 @@ func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
 	}
 }
 
-// TestLaneLeanBlend: ox-lean is a first-class blend — laneSplit/laneJoin
-// round-trip it, the blend dial lists it between led and only, and a lead
-// switch to a pool without a lean lane lands on that pool's led lane.
-func TestLaneLeanBlend(t *testing.T) {
-	if lead, blend := laneSplit("ox-lean"); lead != "ox" || blend != "lean" {
-		t.Fatalf("laneSplit(ox-lean) = %q %q", lead, blend)
-	}
-	if lane := laneJoin("ox", "lean"); lane != "ox-lean" {
-		t.Fatalf("laneJoin(ox, lean) = %q", lane)
-	}
+// TestBlendDialListsServedBlends: the blend dial exists only when the lead's
+// catalog serves more than one blend, and a lead switch to a pool that never
+// generated the preferred blend lands on a lane the catalog serves.
+func TestBlendDialListsServedBlends(t *testing.T) {
 	catalog := map[string][]string{
 		"gpt-led_fast_low_nosp_nofa":  {"    default gpt:low"},
 		"gpt-only_fast_low_nosp_nofa": {"    default gpt:low"},
 		"mixed_fast_low_nosp_nofa":    {"    default gpt:low"},
-		"ox-led_fast_low_nosp_nofa":   {"    default ox:low"},
-		"ox-lean_fast_low_nosp_nofa":  {"    default gpt:low"},
-		"ox-only_fast_low_nosp_nofa":  {"    default ox:low"},
+		"ds-led_fast_low_nosp_nofa":   {"    default ds:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
-	m.sel["lane"] = "ox-lean"
+	m.sel["lane"] = "gpt-led"
 	var blends []string
 	for _, f := range m.visibleFacets() {
 		if f.key == "blend" {
 			blends = f.values
 		}
 	}
-	if !reflect.DeepEqual(blends, []string{"led", "lean", "only"}) {
-		t.Fatalf("ox blends = %v, want [led lean only]", blends)
+	if !reflect.DeepEqual(blends, []string{"led", "only"}) {
+		t.Fatalf("gpt blends = %v, want [led only]", blends)
 	}
-	// A lead switch from ox-lean to gpt: gpt has no lean lane — land on led.
-	if lane := m.composeLane("gpt", "lean"); lane != "gpt-led" {
-		t.Fatalf("composeLane(gpt, lean) = %q, want gpt-led", lane)
+	// A lead switch from gpt-only to ds: ds has no pure lane — land on led.
+	if lane := m.composeLane("ds", "only"); lane != "ds-led" {
+		t.Fatalf("composeLane(ds, only) = %q, want ds-led", lane)
 	}
 }
 
@@ -3946,14 +3937,14 @@ func TestFilterRowsDropsDisconnectedRungs(t *testing.T) {
 func TestDirectProviderProbeUsesOMPToken(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "omp")
-	body := "#!/bin/sh\n[ \"$1\" = token ] && [ \"$2\" = openrouter ]\n"
+	body := "#!/bin/sh\n[ \"$1\" = token ] && [ \"$2\" = deepseek ]\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CODE_OMP", script)
 	msg := probeProviderAvailabilityCmd()().(providerAvailabilityMsg)
-	if !reflect.DeepEqual(msg.pools, map[string]bool{"R": true}) {
-		t.Fatalf("provider probe pools = %v, want R only", msg.pools)
+	if !reflect.DeepEqual(msg.pools, map[string]bool{"D": true}) {
+		t.Fatalf("provider probe pools = %v, want D only", msg.pools)
 	}
 }
 
@@ -4234,12 +4225,12 @@ func TestAdvisorAuditReliefTail(t *testing.T) {
 	}
 }
 
-// ── pool R surface ────────────────────────────────────────────────────────────
+// ── provider routing surface ──────────────────────────────────────────────────
 
 func TestModelReMatchesProviderScopedIds(t *testing.T) {
-	line := "  ● task  stealth/ox-alpha:high → claude-opus-5:high"
+	line := "  ● task  deepseek/deepseek-v4-pro:high → claude-opus-5:high"
 	got := modelRe.FindAllString(line, -1)
-	want := []string{"stealth/ox-alpha:high", "claude-opus-5:high"}
+	want := []string{"deepseek/deepseek-v4-pro:high", "claude-opus-5:high"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("modelRe matched %v, want %v", got, want)
 	}
@@ -4252,8 +4243,8 @@ func TestModelReMatchesProviderScopedIds(t *testing.T) {
 }
 
 func TestShortModelStripsProviderPath(t *testing.T) {
-	if got := shortModel("stealth/ox-alpha"); got != "ox-alpha" {
-		t.Errorf("shortModel(stealth/ox-alpha) = %q, want ox-alpha", got)
+	if got := shortModel("local-qwen/qwen3.8-27b"); got != "qwen3.8-27b" {
+		t.Errorf("shortModel(local-qwen/qwen3.8-27b) = %q, want qwen3.8-27b", got)
 	}
 	if got := shortModel("claude-opus-5"); got != "opus" {
 		t.Errorf("shortModel baseline moved: %q", got)
@@ -4262,14 +4253,14 @@ func TestShortModelStripsProviderPath(t *testing.T) {
 
 func TestPrefixedUsesCatalogPool(t *testing.T) {
 	m := model{facts: map[string]modelFact{
-		"stealth/ox-alpha": {pool: "R"},
-		"gpt-5.6-luna":     {pool: "O"},
-		"claude-opus-5":    {pool: "A"},
+		"v4-experimental": {pool: "D"},
+		"gpt-5.6-luna":    {pool: "O"},
+		"claude-opus-5":   {pool: "A"},
 	}}
 	for id, want := range map[string]string{
-		"stealth/ox-alpha": "openrouter/stealth/ox-alpha",
-		"gpt-5.6-luna":     "openai-codex/gpt-5.6-luna",
-		"claude-opus-5":    "anthropic/claude-opus-5",
+		"v4-experimental": "deepseek/v4-experimental",
+		"gpt-5.6-luna":    "openai-codex/gpt-5.6-luna",
+		"claude-opus-5":   "anthropic/claude-opus-5",
 	} {
 		if got := m.prefixed(id); got != want {
 			t.Errorf("prefixed(%q) = %q, want %q", id, got, want)
@@ -4285,10 +4276,10 @@ func TestPrefixedUsesCatalogPool(t *testing.T) {
 func TestTrimLanesResetsVanishedLane(t *testing.T) {
 	m := &model{
 		facets: []facet{
-			{key: "lane", values: []string{"gpt-only", "mixed", "ox-only", "ox-led"}},
+			{key: "lane", values: []string{"gpt-only", "mixed", "ds-only", "ds-led"}},
 			{key: "thinking", values: []string{"medium"}},
 		},
-		sel: map[string]string{"lane": "ox-only", "thinking": "medium"},
+		sel: map[string]string{"lane": "ds-only", "thinking": "medium"},
 		generated: map[string][]string{
 			"gpt-only_smart_medium_nosp_nofa": nil,
 			"mixed_smart_medium_nosp_nofa":    nil,
@@ -4305,54 +4296,13 @@ func TestTrimLanesResetsVanishedLane(t *testing.T) {
 
 // The launch path prefixes tokens that still carry their thinking level
 // ("id:level"); the facts table is keyed on the bare id. This regresses the
-// bug where ox ids missed the pool lookup and fell to the two-provider name
-// heuristic — openai-codex/stealth/ox-alpha is not a model omp knows.
+// bug where catalog-pool ids missed the pool lookup and fell to the
+// name heuristic — a wrongly-prefixed model is not a model omp knows.
 func TestPrefixedLeveledTokens(t *testing.T) {
 	m := model{facts: map[string]modelFact{
-		"stealth/ox-alpha": {pool: "R"},
+		"v4-experimental": {pool: "D"},
 	}}
-	if got := m.prefixed("stealth/ox-alpha:high"); got != "openrouter/stealth/ox-alpha:high" {
-		t.Fatalf("prefixed(leveled) = %q, want openrouter/stealth/ox-alpha:high", got)
-	}
-}
-
-// End to end: the emitted config must qualify every reference with the
-// catalog's pool, and the ox-led advisor must carry its cross-pool net
-func TestGenConfigYAMLOxLed(t *testing.T) {
-	blocks := loadBlocks("/tmp/grid-ox.plain")
-	if len(blocks) == 0 {
-		t.Skip("regeneration fixture /tmp/grid-ox.plain absent")
-	}
-	m := model{
-		generated: blocks,
-		advisors:  parseAdvisors(blocks["__advisors__"]),
-		facts:     parseFacts(blocks["__models__"]),
-		glyphs:    defaultGlyphs(),
-		facets:    facetDefs(defaultGlyphs()),
-		sel: map[string]string{"lane": "ox-led", "model": "smart", "thinking": "high",
-			"advisor": "glance", "spark": "off", "fable": "off", "main": "off", "fast": "off",
-			"relief": "on"},
-		// An ox catalog carries an optional pool, so its rendered combos are
-		// relief-segmented — mirror what applyCatalog would derive.
-		hasRelief: true,
-	}
-	cfg := m.genConfigYAML()
-	if strings.Contains(cfg, "openai-codex/stealth") || strings.Contains(cfg, "anthropic/stealth") {
-		t.Errorf("heuristic prefix leaked onto ox ids:\n%s", cfg)
-	}
-	if !strings.Contains(cfg, "openrouter/stealth/ox-alpha:") {
-		t.Errorf("no pool-qualified ox reference:\n%s", cfg)
-	}
-	adv := m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], "glance")
-	advisorRow := ""
-	for _, r := range adv {
-		if roleOf(r) == "advisor" {
-			advisorRow = r
-		}
-	}
-	for _, want := range []string{"claude-haiku-4-5:low", "gpt-5.6-luna:low", "stealth/ox-alpha:low"} {
-		if !strings.Contains(advisorRow, want) {
-			t.Errorf("advisor net missing %s in %q", want, advisorRow)
-		}
+	if got := m.prefixed("v4-experimental:high"); got != "deepseek/v4-experimental:high" {
+		t.Fatalf("prefixed(leveled) = %q, want deepseek/v4-experimental:high", got)
 	}
 }

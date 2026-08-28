@@ -55,14 +55,16 @@ type model struct {
 	w, h int
 	rdy  bool
 
-	broker            brokerConfig
-	usageCache        string
-	accountState      string
-	accountSelections accountSelectionState
-	accountErr        string
-	manager           bool
-	mgrCursor         int
-	managerPreset     managerPresetState
+	broker             brokerConfig
+	usageCache         string
+	accountState       string
+	accountSelections  accountSelectionState
+	accountErr         string
+	manager            bool
+	mgrCursor          int
+	managerPreset      managerPresetState
+	managerLogin       bool
+	managerLoginCursor int
 
 	fetching    bool      // a usage fetch is in flight (manual or auto)
 	nextRefresh time.Time // when the next auto-refresh fires

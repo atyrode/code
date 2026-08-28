@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1820,5 +1822,67 @@ func TestManagerDeepSeekBalanceRow(t *testing.T) {
 	m.avail.deepseek = &deepseekBalance{ok: false}
 	if view := flat(); !strings.Contains(view, "balance unavailable") {
 		t.Errorf("failed balance must render as unavailable, not vanish:\n%s", view)
+	}
+}
+
+func TestManagerLoginPickerAndCommand(t *testing.T) {
+	m := managerTestModel(t)
+	m, cmd := managerUpdate(t, m, "a")
+	if cmd != nil || !m.managerLogin {
+		t.Fatalf("a did not open login picker: login=%v cmd=%v", m.managerLogin, cmd)
+	}
+	view := m.managerView()
+	for _, want := range []string{"add OAuth account", "Anthropic", "OpenAI", "this broker host"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("login picker missing %q:\n%s", want, view)
+		}
+	}
+
+	dir := t.TempDir()
+	omp := filepath.Join(dir, "omp")
+	if err := os.WriteFile(omp, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", omp)
+	t.Setenv("CODE_AUTH_LOGIN_VIA", "alex@broker.test")
+	m, _ = managerUpdate(t, m, "down")
+	if m.managerLoginCursor != 1 {
+		t.Fatalf("login cursor = %d, want OpenAI row", m.managerLoginCursor)
+	}
+	m, cmd = managerUpdate(t, m, "enter")
+	if cmd == nil {
+		t.Fatal("enter did not start interactive login")
+	}
+	if view := m.managerView(); !strings.Contains(view, "alex@broker.test") {
+		t.Fatalf("login picker did not name SSH target:\n%s", view)
+	}
+}
+
+func TestAuthLoginArgv(t *testing.T) {
+	if got := authLoginArgv("/bin/omp", anthropicProvider, "  "); !reflect.DeepEqual(got,
+		[]string{"/bin/omp", "auth-broker", "login", anthropicProvider}) {
+		t.Fatalf("local login argv = %#v", got)
+	}
+	if got := authLoginArgv("/bin/omp", openAIProvider, " alex@broker "); !reflect.DeepEqual(got,
+		[]string{"/bin/omp", "auth-broker", "login", openAIProvider, "--via=alex@broker"}) {
+		t.Fatalf("remote login argv = %#v", got)
+	}
+}
+
+func TestAuthLoginFinishedRefreshesBrokerAccounts(t *testing.T) {
+	m := managerTestModel(t)
+	m.managerLogin = true
+	next, cmd := m.Update(authLoginFinishedMsg{provider: anthropicProvider})
+	got := next.(model)
+	if got.managerLogin || got.accountErr != "" || !got.fetching || cmd == nil {
+		t.Fatalf("successful login did not refresh: login=%v err=%q fetching=%v cmd=%v",
+			got.managerLogin, got.accountErr, got.fetching, cmd)
+	}
+
+	m.managerLogin = true
+	next, cmd = m.Update(authLoginFinishedMsg{provider: openAIProvider, err: fmt.Errorf("ssh failed")})
+	got = next.(model)
+	if got.managerLogin || cmd != nil || !strings.Contains(got.accountErr, "ssh failed") {
+		t.Fatalf("failed login state = login=%v err=%q cmd=%v", got.managerLogin, got.accountErr, cmd)
 	}
 }

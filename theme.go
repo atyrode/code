@@ -54,7 +54,7 @@ var (
 	windowList = clikit.WindowList
 
 	// Provider-qualified ids: bare catalog ids today (gpt-…, claude-…) plus
-	// slash-scoped ones (stealth/ox-alpha, local-qwen/qwen3.8-27b). The level
+	// slash-scoped ones (local-qwen/qwen3.8-27b). The level
 	// suffix with its colon is what keeps prose out; the word boundary keeps
 	// "maxed" from reading as a model.
 	modelRe = regexp.MustCompile(`([a-z][a-z0-9._/-]*):(minimal|low|medium|high|xhigh|max)\b`)
