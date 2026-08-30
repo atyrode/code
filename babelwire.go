@@ -224,6 +224,23 @@ func (j babelJob) conformanceDirective() string {
 	}
 }
 
+// conformanceRequested reports whether this job is one of Babel's conformance
+// obligations rather than a real analysis run.
+//
+// It is deliberately separate from conformanceDirective, which cannot answer
+// this: that method defaults an absent key to well-behaved, so it reads the
+// same for a production job and for the suite's well-behaved obligation. The
+// distinction matters in exactly one place. The suite's job names a profile no
+// local store will ever hold, so a conformance run must proceed without
+// resolving one, while a production job naming a profile Code cannot find must
+// fail with babelErrProfileUnavailable. A worker that echoed the job's profile
+// reference in both cases would be claiming a profile it does not have, and
+// Babel would record that claim in a receipt a reviewer trusts.
+func (j babelJob) conformanceRequested() bool {
+	_, requested := j.Params[babelParamConformance]
+	return requested
+}
+
 // secrets lists the values that must not appear in any event, diagnostic or
 // child environment for this job.
 func (j babelJob) secrets() []string {
@@ -393,6 +410,14 @@ type investigator interface {
 	// reference actually resolved, its disclosure class, its cost estimate and
 	// its provider metadata. It must not execute analysis and must not return
 	// anything secret.
+	//
+	// The rule is resolve-or-fail, not echo. Babel refuses a configuration
+	// naming a different profile than the job named, which makes echoing the
+	// job's reference the tempting way to satisfy it -- and the wrong one: a
+	// profile Code cannot find must produce babelErrProfileUnavailable rather
+	// than a reference Code cannot back. The one exception is a job where
+	// conformanceRequested reports true, which names a synthetic profile on
+	// purpose so the suite can grade a worker with no store at all.
 	resolve(ctx investigatorContext, ref babelProfileRef) (babelConfiguration, error)
 
 	// investigate runs the job to a terminal outcome.
