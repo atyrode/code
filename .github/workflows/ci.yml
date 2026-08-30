@@ -31,15 +31,35 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+
+          # Ubuntu 23.10 onward confines unprivileged user namespaces with
+          # AppArmor, and bwrap is not a profiled binary here, so creating the
+          # network namespace succeeds but bringing up its loopback fails with
+          # "Failed RTM_NEWADDR: Operation not permitted". The sandbox is built
+          # on unprivileged userns by design (decision 57), so this restriction
+          # has to be lifted for the runner rather than worked around. It is a
+          # property of the CI host only; the operator's own machine already
+          # allows it, and a machine that does not is expected to refuse the
+          # backend rather than to weaken it.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
           sudo loginctl enable-linger "$USER"
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           for i in $(seq 1 30); do
             [ -S "/run/user/$(id -u)/bus" ] && break
             sleep 1
           done
-          bwrap --version
-          XDG_RUNTIME_DIR=/run/user/$(id -u) systemd-run --user --scope --quiet \
-            -p MemoryMax=256M -p TasksMax=32 -- true
-          echo "bubblewrap and a transient user scope are both available"
+
+          # Assert the composition, not each half. The first version of this
+          # step checked bwrap --version and an empty scope separately; both
+          # passed while the thing the tests actually need — bwrap unsharing
+          # the network inside a scope — failed, so a provisioning problem
+          # surfaced as ten test failures instead of a named step failure.
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          systemd-run --user --scope --quiet -p MemoryMax=256M -p TasksMax=32 -- \
+            bwrap --unshare-all --die-with-parent --ro-bind /usr /usr \
+              --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev \
+              --size 1048576 --tmpfs /tmp -- /usr/bin/test -d /tmp
+          echo "bubblewrap unshares the network inside a transient user scope"
       - name: test
         run: go test ./...
