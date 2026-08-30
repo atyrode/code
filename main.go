@@ -4,7 +4,8 @@
 //
 //	CODE_GENERATED     : generated.plain (facet-grid blocks, keyed by combo id)
 //	OMP_AUTH_BROKER_*  : inherited central broker URL, token, and snapshot cache
-//	CODE_SELECTION_STATE: optional persisted generator facet choices; empty disables it
+//	CODE_SELECTION_STATE: relocates the persisted generator facet choices;
+//	                      unset uses $XDG_STATE_HOME/code/selection.json, "off" disables
 //	CODE_AUTH_ACCOUNT_STATE: persisted Manual and named account selections
 //	CODE_AUTH_LOGIN_VIA: optional SSH user@host for central-broker OAuth login
 //	CODE_OMP           : the omp-managed executable for trusted sessions
@@ -69,7 +70,11 @@ func main() {
 	if len(runtimeTargets) > 0 {
 		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
 	}
-	selectionState := os.Getenv("CODE_SELECTION_STATE")
+	// The interactive run is the only thing that writes a selection, and worker
+	// mode under Babel is the caller that most needs to read one, so an unset
+	// variable now means the default location rather than statelessness — and an
+	// override, which the worker can never be told about, is mirrored there too.
+	selectionState, selectionHandoff := selectionStateTargets()
 	selection := loadSelectionState(selectionState, facets)
 	if len(runtimeTargets) > 0 {
 		if _, ok := selection["runtime"]; !ok {
@@ -108,6 +113,7 @@ func main() {
 		facets:            facets,
 		sel:               selection,
 		selectionState:    selectionState,
+		selectionHandoff:  selectionHandoff,
 		hasSandbox:        hasSandbox,
 	}
 	// The catalog decides which dials exist at all; a persisted or default

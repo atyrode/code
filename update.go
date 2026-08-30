@@ -316,6 +316,21 @@ func (m *model) applyWheelStep(b tea.MouseButton) {
 	}
 }
 
+// clampFacetCursor keeps the row cursor inside the visible facets.
+//
+// No visible facets is a legitimate state, not an impossible one: a generator
+// with no connected credentials renders no dials at all (see
+// applyProviderAvailability), which is exactly the state a fresh machine opens
+// in. The floor of zero is what makes it legitimate — a bare len-1 is -1 there,
+// and a negative cursor is not merely out of range for the read that happens
+// next, it survives in the model and crashes a later keypress made in a
+// perfectly ordinary state.
+func (m *model) clampFacetCursor(visible int) {
+	if m.fcur >= visible {
+		m.fcur = max(visible-1, 0)
+	}
+}
+
 func (m *model) moveUp() {
 	if m.fcur > 0 {
 		m.fcur--
@@ -328,9 +343,10 @@ func (m *model) moveDown() {
 }
 func (m *model) cycleFacet(dir int) {
 	vf := m.visibleFacets()
-	if m.fcur >= len(vf) {
-		m.fcur = len(vf) - 1
+	if len(vf) == 0 {
+		return // no dials rendered, so there is no dial to turn
 	}
+	m.clampFacetCursor(len(vf))
 	f := vf[m.fcur]
 	cur := m.sel[f.key]
 	idx := 0
@@ -385,9 +401,7 @@ func (m *model) cycleFacet(dir int) {
 		m.sel["main"] = "off"
 	}
 	// changing the lane can hide/show facets; keep the cursor in range.
-	if nv := len(m.visibleFacets()); m.fcur >= nv {
-		m.fcur = nv - 1
-	}
+	m.clampFacetCursor(len(m.visibleFacets()))
 	m.syncPreview()
 	m.persistSelection()
 }

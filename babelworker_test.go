@@ -195,6 +195,11 @@ func babelAcceptLine(mode string) babelAccept {
 // babelTestJob mirrors the job Babel's conformance suite writes: one recipe, one
 // source, a grant covering corpus search and repository reads but deliberately
 // not sandbox execution, and a synthetic broker credential.
+//
+// The grant's tools mapping is part of the mirror and is spelled the way Babel
+// spells it: corpus-search names the one operation Babel brokers, and repo-read
+// gets no key at all, because Babel brokers no repository facility and a key
+// with an empty array would say something different from saying nothing.
 func babelTestJob(directive string) map[string]any {
 	return map[string]any{
 		"type":    babelMessageJob,
@@ -205,6 +210,7 @@ func babelTestJob(directive string) map[string]any {
 		"grant": map[string]any{
 			"capabilities": []string{babelCapabilityCorpusSearch, babelCapabilityRepoRead},
 			"disclosure":   babelDisclosureLocal,
+			"tools":        map[string][]string{babelCapabilityCorpusSearch: {"search"}},
 		},
 		"sources": []map[string]any{{"kind": "session", "selector": "omp/synthetic"}},
 		"broker":  map[string]any{"endpoint": "http://127.0.0.1:1/evidence", "token": babelTestToken},
@@ -221,7 +227,12 @@ func isolateBabelEnv(t *testing.T) string {
 	store := t.TempDir()
 	t.Setenv(babelProfileStateEnv, store)
 	t.Setenv("CODE_GENERATED", filepath.Join(t.TempDir(), "absent.plain"))
+	// An unset CODE_SELECTION_STATE now resolves to a location under
+	// XDG_STATE_HOME, so relocating that root is what keeps a test off the
+	// developer's real dials; the explicit "" here says "take the default" and
+	// the default is now inside the sandbox.
 	t.Setenv("CODE_SELECTION_STATE", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CODE_RUNTIME_BROKER", "")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -504,6 +515,96 @@ func TestBabelResolveDialsNeedsNoTerminal(t *testing.T) {
 	}
 	if names := secretShapedMetadata(profile.Metadata); len(names) > 0 {
 		t.Errorf("described dials declare credential-shaped keys %v", names)
+	}
+}
+
+// TestBabelResolveDialsReadsTheDefaultSelectionLocation is the seam the whole
+// fix turns on. Babel builds its worker's environment from HOME, PATH, TMPDIR
+// and LANG, so CODE_SELECTION_STATE is genuinely absent here — unset, not empty
+// — and the operator's dials can only arrive through the default location under
+// HOME. The second half is the non-vacuity check: with the file gone the same
+// call must fall back to Code's defaults, so a pass proves the read happened.
+func TestBabelResolveDialsReadsTheDefaultSelectionLocation(t *testing.T) {
+	isolateBabelEnv(t)
+	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	// isolateBabelEnv set it to "". Babel does not even do that.
+	if err := os.Unsetenv(codeSelectionStateEnv); err != nil {
+		t.Fatal(err)
+	}
+
+	path := defaultSelectionStatePath()
+	chosen := map[string]string{"lane": "claude-led", "model": "fast", "thinking": "low", "advisor": "off"}
+	writeSelectionFixture(t, path, `{"lane":"claude-led","model":"fast","thinking":"low","advisor":"off"}`)
+
+	m, err := babelResolveDials(nil)
+	if err != nil {
+		t.Fatalf("babelResolveDials: %v", err)
+	}
+	for key, want := range chosen {
+		if m.sel[key] != want {
+			t.Errorf("dial %s = %q, want the persisted %q", key, m.sel[key], want)
+		}
+	}
+	profile := babelDescribeDials(m, "code")
+	if got := profile.Metadata["provider"]; got == "openai-codex" || got == "unresolved" {
+		t.Errorf("metadata provider = %q, want the Anthropic-led lane's provider", got)
+	}
+	// The trailing segments come from dials the persisted file never named, so
+	// only the three it did name are asserted.
+	if got := profile.Metadata["combo"]; !strings.HasPrefix(got, "claude-led_fast_low_") {
+		t.Errorf("metadata combo = %q, want the cheapest Anthropic-led combo", got)
+	}
+
+	// Non-vacuity: nothing else in this environment could have supplied those
+	// dials, so removing the file has to lose them.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	bare, err := babelResolveDials(nil)
+	if err != nil {
+		t.Fatalf("babelResolveDials without a selection: %v", err)
+	}
+	defaults := defaultSel()
+	for _, key := range []string{"lane", "model", "thinking", "advisor"} {
+		if bare.sel[key] != defaults[key] {
+			t.Errorf("without the file dial %s = %q, want the default %q — the read is not doing the work",
+				key, bare.sel[key], defaults[key])
+		}
+	}
+}
+
+// TestBabelResolveDialsClampsAnUnservableDefaultSelection keeps the failure mode
+// harmless: a value the generated catalog cannot serve must not fail the run,
+// and the profile must record what it resolved to rather than what was asked.
+func TestBabelResolveDialsClampsAnUnservableDefaultSelection(t *testing.T) {
+	isolateBabelEnv(t)
+	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	if err := os.Unsetenv(codeSelectionStateEnv); err != nil {
+		t.Fatal(err)
+	}
+	// "moon-led" is not a lane this (or any) catalog generates, and
+	// "telepathic" is not a thinking level any facet offers.
+	writeSelectionFixture(t, defaultSelectionStatePath(),
+		`{"lane":"moon-led","model":"fast","thinking":"telepathic","advisor":"off"}`)
+
+	m, err := babelResolveDials(nil)
+	if err != nil {
+		t.Fatalf("an unservable selection failed the run instead of clamping: %v", err)
+	}
+	if m.sel["lane"] == "moon-led" || m.sel["thinking"] == "telepathic" {
+		t.Fatalf("unservable dials survived clamping: %v", m.sel)
+	}
+	// The dials that were servable still stand.
+	if m.sel["model"] != "fast" || m.sel["advisor"] != "off" {
+		t.Errorf("clamping moved dials the catalog serves: %v", m.sel)
+	}
+	profile := babelDescribeDials(m, "code")
+	if profile.Metadata["lane"] != m.sel["lane"] || profile.Metadata["thinking"] != m.sel["thinking"] {
+		t.Errorf("metadata reports the requested dials, not the resolved ones: %v vs %v",
+			profile.Metadata, m.sel)
+	}
+	if strings.Contains(profile.ComboID, "moon-led") {
+		t.Errorf("combo id names a lane the catalog cannot serve: %q", profile.ComboID)
 	}
 }
 
@@ -825,6 +926,165 @@ func TestBabelWorkerDenialIsNotTerminal(t *testing.T) {
 	}
 }
 
+// TestBabelWorkerRequestsTheToolNameTheJobPublished is the outermost assertion
+// of the fix: not the constant the worker holds, but the "tool" field of the
+// message it actually writes to Babel.
+//
+// The name is Babel's to state. A worker that chose its own got every request
+// denied with `corpus-search has no tool "babel_corpus_search"` and delivered a
+// run with no retrievals, no observations and no hypotheses, while the
+// conformance suite scored it full marks — so the emitted string is what has to
+// be checked here, and checking it against the grant the job carried is what
+// makes the two repositories unable to drift apart again.
+func TestBabelWorkerRequestsTheToolNameTheJobPublished(t *testing.T) {
+	isolateBabelEnv(t)
+
+	toolRequest := func(t *testing.T, stream babelStream) map[string]any {
+		t.Helper()
+		for _, event := range stream.events {
+			if kind, _ := event["type"].(string); kind == babelMessageToolRequest {
+				return event
+			}
+		}
+		t.Fatalf("the run wrote no tool-request at all: %v", stream.types())
+		return nil
+	}
+
+	t.Run("published", func(t *testing.T) {
+		isolateBabelEnv(t)
+		stream := runBabelWorkerStream(t, babelTestJob(babelConformanceRequestTool), allowDecision)
+		stream.check(t)
+
+		request := toolRequest(t, stream)
+		if request["capability"] != babelCapabilityCorpusSearch {
+			t.Errorf("capability = %v; want %q", request["capability"], babelCapabilityCorpusSearch)
+		}
+		// The job published exactly ["search"] for corpus-search, so that is the
+		// only string Babel will serve and the only one this may be.
+		if request["tool"] != "search" {
+			t.Errorf("tool = %v; the job published [\"search\"] and Babel denies anything else",
+				request["tool"])
+		}
+		payload, _ := json.Marshal(stream.terminal["payload"])
+		var report conformanceReport
+		if err := json.Unmarshal(payload, &report); err != nil {
+			t.Fatalf("payload does not decode: %v", err)
+		}
+		if report.ToolName != "search" || report.ToolNameSource != ompToolNamePublished {
+			t.Errorf("report = %+v; a receipt must say the name came out of the grant", report)
+		}
+	})
+
+	t.Run("unpublished", func(t *testing.T) {
+		isolateBabelEnv(t)
+		// A Babel predating the mapping. The worker still asks, because a run
+		// that refuses to ask reaches the same zero-evidence receipt from the
+		// other direction — but the payload has to say the name was its own.
+		job := babelTestJob(babelConformanceRequestTool)
+		grant, _ := job["grant"].(map[string]any)
+		delete(grant, "tools")
+		stream := runBabelWorkerStream(t, job, allowDecision)
+		stream.check(t)
+
+		if got := toolRequest(t, stream)["tool"]; got != "search" {
+			t.Errorf("tool = %v; want the operation the worker implements", got)
+		}
+		payload, _ := json.Marshal(stream.terminal["payload"])
+		var report conformanceReport
+		if err := json.Unmarshal(payload, &report); err != nil {
+			t.Fatalf("payload does not decode: %v", err)
+		}
+		if report.ToolNameSource != ompToolNameUnpublished {
+			t.Errorf("tool_name_source = %q; want %q, so the fallback cannot be silent",
+				report.ToolNameSource, ompToolNameUnpublished)
+		}
+	})
+
+	t.Run("published nothing", func(t *testing.T) {
+		isolateBabelEnv(t)
+		// Babel spoke and named nothing for the capability it granted. That is
+		// an answer, not a silence, so there is no fallback and no request.
+		job := babelTestJob(babelConformanceRequestTool)
+		grant, _ := job["grant"].(map[string]any)
+		grant["tools"] = map[string][]string{babelCapabilityCorpusSearch: {}}
+		stream := runBabelWorkerStream(t, job, allowDecision)
+		stream.check(t)
+
+		for _, kind := range stream.types() {
+			if kind == babelMessageToolRequest {
+				t.Fatalf("the run requested a tool Babel published none for: %v", stream.events)
+			}
+		}
+		if kind, _ := stream.terminal["type"].(string); kind != babelMessageResult {
+			t.Errorf("terminal event is %q; having nothing to ask for is not a failure", kind)
+		}
+		payload, _ := json.Marshal(stream.terminal["payload"])
+		if !strings.Contains(string(payload), ompToolNamePublished) {
+			t.Errorf("the payload does not say why no request was made: %s", payload)
+		}
+	})
+}
+
+// TestBabelWorkerReadsTheEvidenceServedWithADecision is the wire-level half of
+// the payload change: the decision is written to this process's stdin as bytes,
+// exactly as Babel writes it, and the assertion is on the terminal result the
+// process wrote back. Nothing here constructs a babelDecision in memory, so it
+// grades the decode rather than the struct.
+func TestBabelWorkerReadsTheEvidenceServedWithADecision(t *testing.T) {
+	isolateBabelEnv(t)
+
+	const digest = "5c0b7e3a19d84f26bc35a7018e4d9f2036b1c8ea75d40f93a2617cb8e05d3f4a"
+	served := func(requestID string) any {
+		return babelDecision{
+			Type: babelMessageToolDecision, RequestID: requestID, Decision: babelDecisionAllow,
+			Reason: "served 1 hit from the corpus index",
+			Results: json.RawMessage(`{"schema":"babel.corpus-search/1","query":"probe","limit":10,` +
+				`"hits":[{"harness":"omp","source_id":"session-` + babelTestNonce + `","index":42,` +
+				`"kind":"tool-observation","excerpt":"the archive says ` + babelTestNonce + `",` +
+				`"truncated":false,"locator":{"path":"sessions/omp/` + babelTestNonce + `.jsonl",` +
+				`"line":12,"byte_offset":3456,"digest":"` + digest + `"}}]}`),
+		}
+	}
+
+	t.Run("served", func(t *testing.T) {
+		isolateBabelEnv(t)
+		stream := runBabelWorkerStream(t, babelTestJob(babelConformanceEchoEvidence), served)
+		stream.check(t)
+
+		payload, _ := json.Marshal(stream.terminal["payload"])
+		var report conformanceReport
+		if err := json.Unmarshal(payload, &report); err != nil {
+			t.Fatalf("payload does not decode: %v", err)
+		}
+		if report.ServedEvidence == nil {
+			t.Fatalf(`the run reports no "served_evidence": %s`, payload)
+		}
+		want := []string{"omp|session-" + babelTestNonce + "|42|sessions/omp/" + babelTestNonce +
+			".jsonl|12|3456|" + digest + "|the archive says " + babelTestNonce}
+		if !reflect.DeepEqual(report.ServedEvidence.Hits, want) {
+			t.Errorf("the worker reports %q, the decision served %q", report.ServedEvidence.Hits, want)
+		}
+	})
+
+	t.Run("allowed with nothing served", func(t *testing.T) {
+		isolateBabelEnv(t)
+		// What an older Babel sends. The key is still there, holding nothing,
+		// because "this worker read no hits" and "this worker does not
+		// implement the directive" are answers to different questions.
+		stream := runBabelWorkerStream(t, babelTestJob(babelConformanceEchoEvidence), allowDecision)
+		stream.check(t)
+
+		payload, _ := json.Marshal(stream.terminal["payload"])
+		var report conformanceReport
+		if err := json.Unmarshal(payload, &report); err != nil {
+			t.Fatalf("payload does not decode: %v", err)
+		}
+		if report.ServedEvidence == nil || len(report.ServedEvidence.Hits) != 0 {
+			t.Errorf("served_evidence = %+v; want a present, empty answer", report.ServedEvidence)
+		}
+	})
+}
+
 // TestBabelWorkerErrorIsTerminal checks the other terminal event: no result may
 // follow it, and the exit status must not claim success.
 func TestBabelWorkerErrorIsTerminal(t *testing.T) {
@@ -996,6 +1256,7 @@ func TestBabelConformanceDirectiveRecognizesEveryDirectiveItImplements(t *testin
 		babelConformanceErrorOnly,
 		babelConformanceSlow,
 		babelConformanceEchoToken,
+		babelConformanceEchoEvidence,
 	} {
 		job := babelJob{Params: map[string]string{babelParamConformance: directive}}
 		if got := job.conformanceDirective(); got != directive {
@@ -2056,7 +2317,10 @@ func TestBabelBinaryEndToEnd(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		babelProfileStateEnv+"="+store,
 		"CODE_GENERATED="+filepath.Join(t.TempDir(), "absent.plain"),
+		// This child inherits os.Environ(), so the default selection location
+		// has to be moved out of the developer's real state root too.
 		"CODE_SELECTION_STATE=",
+		"XDG_STATE_HOME="+t.TempDir(),
 		"CODE_RUNTIME_BROKER=",
 	)
 	stdin, err := cmd.StdinPipe()

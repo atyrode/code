@@ -3849,6 +3849,62 @@ func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
 	}
 }
 
+// TestAccountlessNavigationIsInert is the crash a fresh machine opens into: with
+// no connected credentials the generator renders no dials, and ←/→ used to index
+// the empty visible-facet slice and take the whole TUI down
+// ("index out of range [-1]"). No visible facets is a legitimate state, so a
+// keypress in it has to do nothing — and, just as importantly, must not leave a
+// negative cursor behind for a later keypress made once credentials are back.
+func TestAccountlessNavigationIsInert(t *testing.T) {
+	catalog := map[string][]string{
+		"mixed_smart_medium_nosp_nofa":    {"    default gpt:medium"},
+		"gpt-only_smart_medium_nosp_nofa": {"    default gpt:medium"},
+		"claude-only_fast_low_nosp_nofa":  {"    default claude:low"},
+	}
+	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
+	m.applyCatalog()
+
+	m.applyProviderAvailability(nil)
+	if !m.noProviders || len(m.visibleFacets()) != 0 {
+		t.Fatalf("precondition: want an accountless model with no visible facets, got noProviders=%v facets=%v",
+			m.noProviders, m.visibleFacets())
+	}
+	before := map[string]string{}
+	for k, v := range m.sel {
+		before[k] = v
+	}
+
+	app := tea.Model(m)
+	for _, key := range []tea.KeyType{tea.KeyLeft, tea.KeyRight} {
+		next, cmd := app.Update(tea.KeyMsg{Type: key})
+		app = next
+		if cmd != nil {
+			t.Errorf("%v returned a command in a state with no dials: %v", key, cmd)
+		}
+	}
+	turned := app.(model)
+	if !reflect.DeepEqual(turned.sel, before) {
+		t.Errorf("a keypress with no dials rendered changed the selection: %v, want %v", turned.sel, before)
+	}
+	if turned.fcur < 0 {
+		t.Fatalf("cursor left negative (%d): the next keypress in any state would panic", turned.fcur)
+	}
+
+	// Credentials come back; the dials it now renders must be usable.
+	turned.applyProviderAvailability(map[string]bool{"O": true, "A": true})
+	if len(turned.visibleFacets()) == 0 {
+		t.Fatal("precondition: connected providers should render dials again")
+	}
+	restored, _ := tea.Model(turned).Update(tea.KeyMsg{Type: tea.KeyRight})
+	got := restored.(model)
+	if got.fcur < 0 || got.fcur >= len(got.visibleFacets()) {
+		t.Fatalf("cursor %d out of range for %d visible facets", got.fcur, len(got.visibleFacets()))
+	}
+	if !got.laneUsable(got.sel["lane"]) {
+		t.Errorf("selection rests on lane %q, which the connected credentials cannot run", got.sel["lane"])
+	}
+}
+
 // TestCycleFacetSkipsUnusableLeads: an unconnected provider's lead is visible
 // but not a stop — cycling steps past it onto the next usable lead, and stops
 // at the edge when everything beyond is unusable.
