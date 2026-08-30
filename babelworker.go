@@ -425,6 +425,14 @@ func (s *babelSession) writeLine(v any) error {
 // structure before identity: a progress event may lose its message, a result may
 // lose its payload, but a tool-request never loses the request_id that makes it
 // answerable. Every branch shrinks strictly, so writeLine's loop terminates.
+//
+// Resource use is given up last, after the payload has already been reduced to a
+// truncation note. It is a few dozen bytes and it is a measurement: this worker
+// declares that it bounds its own resources, and a bound is only a bound if the
+// usage it bounded is reported, so trading the whole claim away to save a
+// fraction of what an oversized payload costs would buy line budget with the
+// integrity of the receipt. It is still expendable rather than sacred — a line
+// that cannot be sent at all is worse — which is why it goes last and not never.
 func babelShrink(v any, over int) bool {
 	switch ev := v.(type) {
 	case *babelConfiguration:
@@ -445,22 +453,28 @@ func babelShrink(v any, over int) bool {
 		}
 		return false
 	case *babelProgress:
+		if babelTrim(&ev.Message, over) || babelTrim(&ev.Stage, over) {
+			return true
+		}
 		if ev.Resources != nil {
 			ev.Resources = nil
 			return true
 		}
-		return babelTrim(&ev.Message, over) || babelTrim(&ev.Stage, over)
+		return false
 	case *babelToolRequest:
 		if babelTrim(&ev.Reason, over) {
 			return true
 		}
 		return babelTruncateJSON(&ev.Arguments)
 	case *babelResult:
+		if babelTruncateJSON(&ev.Payload) {
+			return true
+		}
 		if ev.Resources != nil {
 			ev.Resources = nil
 			return true
 		}
-		return babelTruncateJSON(&ev.Payload)
+		return false
 	case *babelError:
 		return babelTrim(&ev.Message, over)
 	}
@@ -913,23 +927,11 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 			"this build has no investigator wired in, so worker mode has nothing to run", false)
 	}
 
-	// Containment is declared before any job material is used: Babel refuses an
-	// insufficient declaration, and there is no point resolving a profile for a
-	// run that cannot start.
-	containment := inv.containment()
-	if strings.TrimSpace(containment.Backend) == "" {
-		return s.fail(babelErrContainment, "the investigator declared no sandbox backend", false)
-	}
-	if strings.TrimSpace(containment.Escape) == "" {
-		return s.fail(babelErrContainment,
-			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false)
-	}
-
-	// The credential is next, and for the same reason: a run that cannot
-	// authenticate is refused here rather than discovered three events later as
-	// an analysis that failed for no stated cause. A conformance job is exempt
-	// because it launches nothing — that exemption is what lets Babel grade a
-	// worker on a machine with no provider.
+	// The credential comes first: a run that cannot authenticate is refused
+	// here rather than discovered three events later as an analysis that failed
+	// for no stated cause. A conformance job is exempt because it launches
+	// nothing — that exemption is what lets Babel grade a worker on a machine
+	// with no provider.
 	if resolver, ok := inv.(credentialResolver); ok && !job.conformanceRequested() {
 		secrets, err := resolver.resolveCredential()
 		if err != nil {
@@ -964,6 +966,24 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 		return s.fail(babelErrProfileUnavailable, fmt.Sprintf(
 			"the job named profile %s@%d but the investigator resolved %s@%d",
 			job.Profile.ID, job.Profile.Revision, cfg.Profile.ID, cfg.Profile.Revision), false)
+	}
+	// Containment is declared here, after the profile and before the first
+	// event, and the order is deliberate. An investigator's declaration is
+	// about a boundary it establishes rather than a constant it holds, so
+	// asking for it late means asking a backend that has been probed against
+	// this machine and, for the OMP investigator, one that can name the
+	// provider endpoint its egress will actually allow. Nothing is lost by
+	// waiting: Babel's refusal of an insufficient declaration happens when it
+	// reads the configuration event below, which is after resolve either way,
+	// and a run whose profile is unavailable now avoids probing a sandbox it
+	// was never going to use.
+	containment := inv.containment()
+	if strings.TrimSpace(containment.Backend) == "" {
+		return s.fail(babelErrContainment, "the investigator declared no sandbox backend", false)
+	}
+	if strings.TrimSpace(containment.Escape) == "" {
+		return s.fail(babelErrContainment,
+			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false)
 	}
 	// Containment and capabilities are the protocol layer's to attach. Neither
 	// resolve nor syntheticConfiguration is given the run, so neither can state
@@ -1414,6 +1434,12 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 	emit func(stage, message string, fraction float64),
 	request func(capability, tool, reason string, arguments json.RawMessage) babelDecision,
 ) (babelResult, error) {
+	// The stub declares resource ceilings — it executes nothing, so every
+	// containment claim is trivially true — and a declared ceiling has to be
+	// reported against. This process is the whole run here, exactly as on the
+	// investigator's conformance path, so the reading is this process's own and
+	// the span is the difference across the directive.
+	started := ompSelfUsage()
 	directive := job.conformanceDirective()
 	report := conformanceReport{
 		Directive: directive,
@@ -1493,6 +1519,6 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 		Status:    babelStatusOK,
 		Schema:    babelResultSchema,
 		Payload:   payload,
-		Resources: &babelResources{ToolCalls: len(report.Decisions)},
+		Resources: ompSelfUsage().since(started).report(len(report.Decisions)),
 	}, nil
 }

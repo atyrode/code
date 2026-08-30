@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -179,6 +181,14 @@ type ompFindings struct {
 	Evidence  []ompEvidenceLog `json:"evidence,omitempty"`
 	Analysis  string           `json:"analysis,omitempty"`
 	Gaps      []string         `json:"gaps,omitempty"`
+	// Egress is every CONNECT the sandbox attempted, in order, with the ones
+	// the allowlist refused marked as such. It belongs in the payload for the
+	// same reason the evidence log does: the containment declaration says the
+	// run could reach exactly one endpoint, and this is the only place a
+	// reviewer can see what it actually tried to reach. A run that reached
+	// only its provider says so; a run that tried somewhere else says that
+	// too, which is the finding.
+	Egress []sandboxConnect `json:"egress,omitempty"`
 
 	// Job answers the echo-job conformance directive and appears under no
 	// other one, which is why it is a pointer: Babel reads the key's presence
@@ -248,10 +258,54 @@ type ompInvestigator struct {
 	// launch it authorizes. A zero value means nothing was resolved, which is a
 	// refusal rather than an unauthenticated run.
 	credential ompAuth
+	// profile is what resolve() opened, held so containment() can name the
+	// provider endpoint the sandbox's one egress hole points at. It is zero
+	// until a profile has been resolved, and a conformance job never resolves
+	// one — which is why the declaration degrades to describing the mechanism
+	// without a target rather than inventing one.
+	profile resolvedProfile
 	// pace and slowBudget shape a conformance "slow" run: how often it reports
 	// progress, and when it gives up on being cancelled.
 	pace       time.Duration
 	slowBudget time.Duration
+	// ceilings are the resource limits a contained run is held to. It is a
+	// field rather than a constant so an escape scenario can pin a tiny one and
+	// watch the kernel enforce it.
+	ceilings sandboxCeilings
+	// probe establishes the backend. It is a seam only so a test can substitute
+	// a backend it built itself; every real run probes this machine.
+	probe func(sandboxCeilings) *sandboxBackend
+	// backend is what probe established, resolved once. containment() reads its
+	// facts and drive() launches through it, so the declaration and the launch
+	// cannot describe different things.
+	backend     *sandboxBackend
+	backendOnce sync.Once
+}
+
+// sandbox is the probed backend, established on first use.
+//
+// The probe is a launch: it starts the real chain with a payload that tries to
+// break out and reads the scope's cgroup back. That happens once per worker
+// process, at the first call, which is containment() — after the profile is
+// resolved and before the first event, which is exactly when Babel wants to
+// hear what the boundary is.
+//
+// A zero-valued investigator still probes this machine. The seam defaults
+// rather than being required, because a declaration is the one thing that must
+// never degrade quietly through a construction path someone forgot to wire.
+func (o *ompInvestigator) sandbox() *sandboxBackend {
+	o.backendOnce.Do(func() {
+		probe := o.probe
+		if probe == nil {
+			probe = newSandboxBackend
+		}
+		ceilings := o.ceilings
+		if ceilings.MemoryMaxBytes == 0 {
+			ceilings = defaultSandboxCeilings()
+		}
+		o.backend = probe(ceilings)
+	})
+	return o.backend
 }
 
 // The seam is checked at compile time: the protocol layer plugs this in behind
@@ -273,6 +327,8 @@ func newOmpInvestigator(profiles profileSource) *ompInvestigator {
 		evidence:   fetchBrokeredEvidence,
 		pace:       time.Second,
 		slowBudget: ompSlowBudget,
+		ceilings:   defaultSandboxCeilings(),
+		probe:      newSandboxBackend,
 	}
 }
 
@@ -298,37 +354,46 @@ func (o *ompInvestigator) resolveCredential() ([]string, error) {
 
 // ── containment ──────────────────────────────────────────────────────────────
 
-// ompContainmentEscape is Code's statement of what it does not contain. It is
-// long because it is the honest answer, and Babel's receipt is read by someone
-// deciding whether to trust evidence produced behind this boundary.
-const ompContainmentEscape = "OMP runs as an ordinary child process under the same uid as Code: no namespace, " +
-	"no chroot, no seccomp filter and no rlimit. Code has no sandbox to offer — runSandbox only execs an " +
-	"operator-named launcher with the auth environment stripped — so nothing here enforces a boundary. " +
-	"The investigator does narrow what the model can reach: --no-tools plus a private OMP home leaves the " +
-	"session's tool registry holding only the Babel-brokered host tools, and the run's writes default into " +
-	"a temporary directory Code deletes at teardown. That is a tool-surface restriction, not containment. " +
-	"Any OMP defect, extension, MCP server or provider-side capability has the full filesystem and the full " +
-	"network of the invoking user, the run can exhaust CPU, memory and disk, and nothing outside the " +
-	"temporary directory is disposed of."
-
-// containment declares what this investigator actually runs inside.
+// containment declares the sandbox this investigator provides, read off a
+// backend that was probed on this machine moments ago.
 //
-// Every field is false, and that is the finding rather than an omission. Babel
-// requires filesystem isolation, network default-deny, resource ceilings and a
-// disposable environment for an exploration run, and Code provides none of the
-// four today: the OMP child is a plain fork of the same user with the same
-// filesystem and the same network. Declaring otherwise would start runs that
-// Babel would then record as sandboxed in a receipt a reviewer trusts, which is
-// a worse outcome than a refusal. Babel refusing this declaration is the
-// mechanism working.
+// Nothing here is a constant. sandbox() launches the real chain with a payload
+// that tries, from inside, to read and write a host path, to write the Nix
+// store and to find a route off the machine, and the parent reads the transient
+// scope's cgroup back to see which ceilings the kernel installed. Every boolean
+// below is one of those observations. A machine where the boundary does not
+// come up declares less and Babel refuses the run, which is the outcome the
+// declaration exists to produce — a refused run costs an operator a message,
+// and an overstated one costs a reviewer their basis for trusting a finding.
+//
+// The escape statement names the endpoint this run's egress allows whenever a
+// profile has been resolved, because "restricted to the provider" is a weaker
+// thing to read in a receipt than the host and port a compromised worker could
+// still reach.
 func (o *ompInvestigator) containment() babelContainment {
-	return babelContainment{
-		Backend:             "process",
-		FilesystemIsolation: false,
-		NetworkDefaultDeny:  false,
-		ResourceCeilings:    false,
-		Disposable:          false,
-		Escape:              ompContainmentEscape,
+	return o.sandbox().facts.declare(o.egressDescription())
+}
+
+// egressDescription is the run's egress plan as prose needs it, resolved
+// without opening a socket: a declaration is made before anything is launched,
+// and a listener that existed for a run Babel then refused would be a boundary
+// opened for nothing.
+func (o *ompInvestigator) egressDescription() sandboxEgressDescription {
+	provider, endpoint, err := sandboxProviderEndpoint(o.profile)
+	if err != nil {
+		// No profile has been resolved yet, or its provider has no endpoint. The
+		// mechanism is still exactly what it is; only the target is unknown, and
+		// drive() refuses the run rather than guessing one.
+		return sandboxEgressDescription{}
+	}
+	policy, err := sandboxResolveEgress(endpoint, o.credential.broker.URL)
+	if err != nil {
+		return sandboxEgressDescription{provider: provider, allowed: []string{endpoint}}
+	}
+	return sandboxEgressDescription{
+		provider: provider,
+		allowed:  policy.allowed,
+		relay:    policy.brokerAddr != "",
 	}
 }
 
@@ -342,11 +407,18 @@ func (o *ompInvestigator) containment() babelContainment {
 // Babel writes claims into receipts. The context is unused: a profile resolves
 // out of local state with no cancellable work in it, and pretending otherwise
 // would suggest this call can block.
+//
+// What it resolved is kept, because the containment declaration the protocol
+// layer asks for next has to name the endpoint this run's egress will allow,
+// and the provider is a property of the profile. Holding it here is how a
+// method with no arguments — the interface is Babel's, not Code's — gets to
+// describe the run it is actually about to declare for.
 func (o *ompInvestigator) resolve(_ investigatorContext, ref babelProfileRef) (babelConfiguration, error) {
 	profile, err := o.openProfile(ref)
 	if err != nil {
 		return babelConfiguration{}, err
 	}
+	o.profile = profile
 	return ompConfigurationOf(profile.Ref, profile.Disclosure, profile.Cost, profile.Metadata), nil
 }
 
@@ -494,17 +566,23 @@ func ompFindingsOf(job babelJob) ompFindings {
 // what it receives against that exact string and refuses the result on any
 // other value, so a worker-specific schema is not a variant Babel tolerates —
 // it is a run discarded after all the work was done.
-func ompResultOf(status string, findings ompFindings, resources *babelResources) (babelResult, error) {
+//
+// It carries no resource accounting. Both paths that reach a terminal result —
+// the driven session and the conformance directives — measure resources at a
+// different moment from the one where the payload is assembled, and each
+// attaches its own reading afterwards. Taking a *babelResources parameter here
+// would mean six call sites passing nil for a figure their caller supplies,
+// which is how a path that reports nothing comes to look deliberate.
+func ompResultOf(status string, findings ompFindings) (babelResult, error) {
 	payload, err := json.Marshal(findings)
 	if err != nil {
 		return babelResult{}, err
 	}
 	return babelResult{
-		Type:      babelMessageResult,
-		Status:    status,
-		Schema:    babelResultSchema,
-		Payload:   payload,
-		Resources: resources,
+		Type:    babelMessageResult,
+		Status:  status,
+		Schema:  babelResultSchema,
+		Payload: payload,
 	}, nil
 }
 
@@ -523,7 +601,13 @@ const ompSlowBudget = 60 * time.Second
 const ompConformanceQuery = `{"query":"babel conformance probe","limit":1}`
 
 // conform reaches one of Babel's observable states without a model, a network
-// or a profile.
+// or a profile, and accounts for the resources it used doing so.
+//
+// The accounting is this process's own, because on this path this process is
+// the whole run: no OMP is launched, no sandbox is entered, and there is no
+// cgroup anywhere to read. getrusage(RUSAGE_SELF) is therefore not a stand-in
+// for the cgroup figure the contained path reports — it is a direct measurement
+// of the process that did the work, and it is labelled as that.
 func (o *ompInvestigator) conform(ctx context.Context, job babelJob,
 	emit func(stage, message string, fraction float64),
 	request func(capability, tool, reason string, arguments json.RawMessage) babelDecision,
@@ -533,6 +617,36 @@ func (o *ompInvestigator) conform(ctx context.Context, job babelJob,
 	findings.Directive = directive
 	emit(ompStageResolve, "conformance directive "+directive, ompFraction(0))
 
+	// Read before the directive runs, not after. CPU time is a cumulative
+	// counter for the life of the process, and this worker has already probed
+	// the sandbox by now: reporting the counter itself would charge this run
+	// for work done before the job arrived, so what is reported is the
+	// difference across the run.
+	started := ompSelfUsage()
+	calls := 0
+	counted := func(capability, tool, reason string, arguments json.RawMessage) babelDecision {
+		calls++
+		return request(capability, tool, reason, arguments)
+	}
+
+	result, err := o.conformDirective(ctx, job, emit, counted, findings, directive)
+	if err != nil {
+		return babelResult{}, err
+	}
+	// The bytes dimension is left off rather than zeroed. No sandbox was
+	// entered and no run directory was created, so there is nothing that was
+	// looked at and found empty — there is nothing that was looked at.
+	result.Resources = ompSelfUsage().since(started).report(calls)
+	return result, nil
+}
+
+// conformDirective is the directive switch, split out so every branch's result
+// passes through one place that attaches the run's accounting.
+func (o *ompInvestigator) conformDirective(ctx context.Context, job babelJob,
+	emit func(stage, message string, fraction float64),
+	request func(capability, tool, reason string, arguments json.RawMessage) babelDecision,
+	findings ompFindings, directive string,
+) (babelResult, error) {
 	switch directive {
 	case babelConformanceEchoJob:
 		return o.conformEchoJob(job, emit, findings)
@@ -564,7 +678,7 @@ func (o *ompInvestigator) conform(ctx context.Context, job babelJob,
 	emit(ompStageReport, "delivering the result", ompFraction(2))
 	findings.Analysis = "The conformance directive " + directive +
 		" asks for a minimal successful run, so this result carries no analysis of its own."
-	return ompResultOf(babelStatusOK, findings, nil)
+	return ompResultOf(babelStatusOK, findings)
 }
 
 // conformSlow emits progress and then keeps working until it is cancelled. The
@@ -598,7 +712,7 @@ func (o *ompInvestigator) conformSlow(ctx context.Context, emit func(stage, mess
 	}
 	findings.Analysis = "The run exhausted its own budget without being cancelled, so it stopped short."
 	findings.Gaps = append(findings.Gaps, "the run was not cancelled and gave up on its own schedule")
-	return ompResultOf(babelStatusPartial, findings, nil)
+	return ompResultOf(babelStatusPartial, findings)
 }
 
 // conformRequest makes exactly one evidence request, records the decision it
@@ -650,7 +764,7 @@ func (o *ompInvestigator) conformRequest(ctx context.Context, job babelJob,
 	findings.Analysis = "The conformance directive " + findings.Directive +
 		" exercised one " + capability + " request, which Babel decided: " + decision.Decision + "."
 	emit(ompStageReport, "delivering the result", ompFraction(3))
-	return ompResultOf(status, findings, nil)
+	return ompResultOf(status, findings)
 }
 
 // conformEchoJob reports the job this run decoded. The directive exists because
@@ -680,7 +794,7 @@ func (o *ompInvestigator) conformEchoJob(job babelJob,
 		" asks this run to report the job it decoded rather than to analyse anything, " +
 		"so the result carries the recipes and sources this worker read off the wire."
 	emit(ompStageReport, "delivering the result", ompFraction(2))
-	return ompResultOf(babelStatusOK, findings, nil)
+	return ompResultOf(babelStatusOK, findings)
 }
 
 // conformEchoToken puts the run's broker credential exactly where a leak would
@@ -710,7 +824,7 @@ func (o *ompInvestigator) conformEchoToken(job babelJob,
 		" asks this run to disclose its own broker credential, so it is reproduced here " +
 		"verbatim: " + token
 	emit(ompStageReport, "delivering the result", ompFraction(2))
-	return ompResultOf(babelStatusOK, findings, nil)
+	return ompResultOf(babelStatusOK, findings)
 }
 
 // serveEvidence performs one allowed request against Babel's broker. A job with
@@ -737,8 +851,9 @@ func (o *ompInvestigator) serveEvidence(ctx context.Context, job babelJob,
 
 // ── the real run ─────────────────────────────────────────────────────────────
 
-// drive resolves the profile, launches OMP with the run's tools and nothing
-// else, and turns the session into progress, brokered evidence and a result.
+// drive resolves the profile, builds the run's boundary, launches OMP inside it
+// with the run's tools and nothing else, and turns the session into progress,
+// brokered evidence and a result.
 func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 	emit func(stage, message string, fraction float64),
 	request func(capability, tool, reason string, arguments json.RawMessage) babelDecision,
@@ -754,6 +869,7 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 	if err != nil {
 		return babelResult{}, err
 	}
+	o.profile = profile
 
 	binary, err := o.lookOmp()
 	if err != nil {
@@ -772,16 +888,17 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 		return babelResult{}, fmt.Errorf("the run's account pool could not be written: %w", err)
 	}
 
-	tools := ompToolsFor(job.Grant)
-	emit(ompStageLaunch, "launching omp with "+strconv.Itoa(len(tools))+" brokered tools and no built-ins", ompFraction(1))
+	launch, contained, err := o.launchPlan(job, profile, dir, binary, auth)
+	if err != nil {
+		return babelResult{}, err
+	}
+	defer contained.close()
 
-	session, err := ompStartSession(ctx, ompLaunch{
-		binary: binary,
-		config: dir.config,
-		home:   dir.home,
-		work:   dir.work,
-		env:    ompChildEnv(o.environ(), dir.home, job, auth),
-	})
+	tools := ompToolsFor(job.Grant)
+	emit(ompStageLaunch, "launching omp in "+o.sandbox().facts.backend+" with "+
+		strconv.Itoa(len(tools))+" brokered tools and no built-ins", ompFraction(1))
+
+	session, err := ompStartSession(ctx, launch)
 	if err != nil {
 		return babelResult{}, err
 	}
@@ -802,11 +919,20 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 	}
 
 	runErr := run.play(tools, profile)
-	resources := session.stop()
-	if resources != nil {
-		resources.SandboxBytesWritten = dir.bytesWritten()
-		resources.ToolCalls = run.calls
-	}
+
+	// Order is load-bearing. The scope's cgroup is the whole tree's account and
+	// it is read here, while the tree is still in it: the transient scope is
+	// collected when its last task exits, so session.stop() below is what makes
+	// these counters unreadable. The child's rusage is the opposite — it does
+	// not exist until the child has been reaped — so the two readings cannot be
+	// taken at the same moment and the better one is taken first.
+	usage := contained.usage().fillFrom(session.stop())
+	usage = usage.fillFrom(o.scratchUsage(ctx, contained, dir))
+
+	// The egress log is attached whatever the outcome: a run that failed while
+	// reaching for somewhere it was not allowed is precisely the case a
+	// reviewer needs to see, and a failure returns no payload at all.
+	run.findings.Egress = contained.egressLog()
 	if runErr != nil {
 		if ctx.Err() != nil {
 			return babelResult{}, ctx.Err()
@@ -817,9 +943,120 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 		return babelResult{}, runErr
 	}
 
-	emit(ompStageReport, "delivering the result", 0.95)
+	// The provenance goes out with the last progress message because the wire's
+	// resource object has no room for it and a figure without its source is not
+	// a measurement a reviewer can weigh: cgroup memory.peak and a single
+	// process's ru_maxrss are different quantities.
+	emit(ompStageReport, "delivering the result; resource use measured from "+usage.provenance(), 0.95)
 	run.findings.Analysis = run.analysis()
-	return ompResultOf(run.status(), run.findings, resources)
+	result, err := ompResultOf(run.status(), run.findings)
+	if err != nil {
+		return babelResult{}, err
+	}
+	result.Resources = usage.report(run.calls)
+	return result, nil
+}
+
+// launchPlan builds the boundary this run goes inside, and the launch that
+// describes the session from within it.
+//
+// A backend that established nothing returns a plain launch and a nil boundary.
+// That is not a fallback dressed up as one: containment() already declared
+// every property false, so Babel refuses such a run under its strict default,
+// and the only way this path executes is an operator relaxing a run on purpose.
+func (o *ompInvestigator) launchPlan(job babelJob, profile resolvedProfile, dir *ompRunDir,
+	binary string, auth ompAuth,
+) (ompLaunch, *sandboxRun, error) {
+	plain := ompLaunch{
+		binary: binary,
+		config: dir.config,
+		home:   dir.home,
+		work:   dir.work,
+		env:    ompChildEnv(o.environ(), dir.home, job, auth),
+	}
+	if o.sandbox().facts.backend == sandboxBackendNone {
+		return plain, nil, nil
+	}
+
+	// The allowlist follows the profile's own provider. An endpoint Code cannot
+	// resolve ends the run here: a proxy with nothing allowed would strand the
+	// analysis, and one with everything allowed would contradict the
+	// declaration Babel has already recorded.
+	_, endpoint, err := sandboxProviderEndpoint(profile)
+	if err != nil {
+		return ompLaunch{}, nil, err
+	}
+	policy, err := sandboxResolveEgress(endpoint, auth.broker.URL)
+	if err != nil {
+		return ompLaunch{}, nil, err
+	}
+	egress, err := newSandboxEgress(filepath.Join(dir.root, "egress"), policy)
+	if err != nil {
+		return ompLaunch{}, nil, fmt.Errorf("the run's egress proxy could not be opened: %w", err)
+	}
+
+	// Inside, the credential still travels by environment and never on argv;
+	// only the places it points at change, because the pool and the broker are
+	// reachable at different paths in there.
+	guest := auth
+	guest.poolPath = sandboxPoolPath
+	if policy.brokerURL != "" {
+		guest.broker.URL = policy.brokerURL
+	}
+
+	contained, err := o.sandbox().contain(sandboxRequest{
+		ompBinary:  binary,
+		configHost: dir.config,
+		poolHost:   auth.poolPath,
+		caBundle:   sandboxCABundle(),
+		corpus:     sandboxCorpusPaths(job.Sources),
+		egress:     egress,
+	})
+	if err != nil || contained == nil {
+		egress.close()
+		if err == nil {
+			err = errors.New("the sandbox backend declared a boundary and then produced no way to enter it")
+		}
+		return ompLaunch{}, nil, err
+	}
+	return ompLaunch{
+		binary:  binary,
+		config:  sandboxConfigPath,
+		home:    sandboxHomePath,
+		work:    sandboxWorkPath,
+		env:     sandboxProxyEnv(ompChildEnv(o.environ(), sandboxHomePath, job, guest)),
+		contain: contained,
+	}, contained, nil
+}
+
+// scratchUsage reports what the run wrote, and where that was seen from.
+//
+// A contained run is measured from inside, because its scratch is a tmpfs that
+// no longer exists by the time the host could look — that unobservability is
+// the property the disposable claim rests on, so the guest's own measurement is
+// not a convenience here, it is the only reading there is. An uncontained run
+// is measured on the host, over the run directory, which is then all there is.
+//
+// A contained run whose helper never reported falls through to the host
+// reading, which for a contained run sees the run directory the launch was
+// staged from rather than the tmpfs the session wrote to. That is a different
+// quantity and it says so, which is the point of carrying the source: a
+// reviewer can tell a scratch measurement from a staging-directory one instead
+// of reading both as "bytes written".
+func (o *ompInvestigator) scratchUsage(ctx context.Context, contained *sandboxRun, dir *ompRunDir) runUsage {
+	if contained != nil {
+		if bytes, ok := contained.bytesWritten(ctx); ok {
+			return runUsage{
+				bytesWritten: bytes,
+				bytesSource: "the in-sandbox helper's own walk of the run's tmpfs scratch " +
+					"(bytes, measured from inside just before it exited)",
+			}
+		}
+	}
+	return runUsage{
+		bytesWritten: dir.bytesWritten(),
+		bytesSource:  "a host walk of the run directory (bytes, file sizes summed)",
+	}
 }
 
 // ── the session driver ───────────────────────────────────────────────────────

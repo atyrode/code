@@ -19,7 +19,12 @@ func managedLaunchArgv(path string, forwarded []string, prompt string) []string 
 	return forwardArgv(path, forwarded, prompt)
 }
 
-func sandboxLaunchArgv(path string, forwarded []string, prompt string) []string {
+// untrustedLaunchArgv is the `u` key's launcher command line. It is the
+// operator's own untrusted-session binary (ompu), not a containment mechanism:
+// Code's sandbox is the one worker mode builds in sandbox.go, and naming two
+// unrelated things "sandbox" is how the containment declaration came to say
+// something Code did not do.
+func untrustedLaunchArgv(path string, forwarded []string, prompt string) []string {
 	return forwardArgv(path, forwarded, prompt)
 }
 
@@ -74,15 +79,19 @@ func childStatus(err error) int {
 	return 1
 }
 
-func runSandbox(envName string, fallbacks []string, prompt, dir string) int {
+// runUntrustedLauncher execs the launcher the operator designated for untrusted
+// sessions, with the auth environment stripped. It contains nothing itself —
+// whatever ompu is, is the operator's business — which is exactly why it is no
+// longer called runSandbox.
+func runUntrustedLauncher(envName string, fallbacks []string, prompt, dir string) int {
 	path, err := resolveLaunchPath(envName, fallbacks)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "code: sandbox not found:", err)
+		fmt.Fprintln(os.Stderr, "code: untrusted launcher not found:", err)
 		return 1
 	}
-	err = runChild(path, sandboxLaunchArgv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
+	err = runChild(path, untrustedLaunchArgv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "code: sandbox:", err)
+		fmt.Fprintln(os.Stderr, "code: untrusted launcher:", err)
 	}
 	return childStatus(err)
 }

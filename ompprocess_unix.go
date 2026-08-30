@@ -61,22 +61,65 @@ func ompTerminateTree(cmd *exec.Cmd, pgid int, graceful bool) error {
 	return cmd.Process.Signal(signal)
 }
 
-// ompChildUsage reports the child's CPU time and peak resident size once it has
-// been waited for. Babel treats an absent resource record as unknown and a zero
-// as a claim, so ok=false is the honest answer whenever the kernel handed back
-// no usable rusage.
-func ompChildUsage(cmd *exec.Cmd) (cpuSeconds float64, maxRSSBytes int64, ok bool) {
+// ompChildUsage reports what the kernel accounted to the OMP child once it has
+// been waited for. It is the second-best source for a contained run and the
+// only one for an uncontained one, so what it does not cover is named in the
+// provenance rather than glossed: wait4 fills the rusage of the process that
+// was reaped, so a tree that forked is understated, and ru_maxrss is that one
+// process's high-water mark rather than the tree's sum.
+//
+// An unmeasured reading is the honest answer whenever the kernel handed back no
+// usable rusage, because Babel treats an absent figure as unknown and a zero as
+// a claim.
+func ompChildUsage(cmd *exec.Cmd) runUsage {
 	if cmd.ProcessState == nil {
-		return 0, 0, false
+		return runUsage{}
 	}
 	usage, ok := cmd.ProcessState.SysUsage().(*syscall.Rusage)
 	if !ok || usage == nil {
-		return 0, 0, false
+		return runUsage{}
 	}
+	return runUsage{
+		cpuSeconds: ompRusageSeconds(usage),
+		cpuSource: "the omp child's rusage (wait4 ru_utime+ru_stime, seconds, " +
+			"the direct child only, so a tree that forked is understated)",
+		maxRSSBytes:  ompMaxRSSBytes(int64(usage.Maxrss)),
+		maxRSSSource: "the omp child's rusage (wait4 ru_maxrss, one process's peak rather than the tree's)",
+	}
+}
+
+// ompSelfUsage reports what the kernel has accounted to this worker process.
+//
+// It is the source for a run that launches nothing — the conformance
+// directives reach Babel's observable states without OMP, a provider or a
+// network, and the work they do happens right here — and it is a real reading
+// of the process that did that work rather than a stand-in for a cgroup that
+// does not exist.
+//
+// CPU is a cumulative counter, so a caller that wants the run's own share takes
+// two readings and subtracts. ru_maxrss cannot be treated that way and is not:
+// it is this process's high-water mark for its whole lifetime, which the
+// provenance says.
+func ompSelfUsage() runUsage {
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		return runUsage{}
+	}
+	return runUsage{
+		cpuSeconds: ompRusageSeconds(&usage),
+		cpuSource: "this worker process's own rusage (getrusage RUSAGE_SELF " +
+			"ru_utime+ru_stime, seconds, differenced across the run)",
+		maxRSSBytes: ompMaxRSSBytes(int64(usage.Maxrss)),
+		maxRSSSource: "this worker process's own rusage (getrusage RUSAGE_SELF ru_maxrss, " +
+			"the process's lifetime peak rather than this run's alone)",
+	}
+}
+
+func ompRusageSeconds(usage *syscall.Rusage) float64 {
 	seconds := func(tv syscall.Timeval) float64 {
 		return float64(tv.Sec) + float64(tv.Usec)/1e6
 	}
-	return seconds(usage.Utime) + seconds(usage.Stime), ompMaxRSSBytes(int64(usage.Maxrss)), true
+	return seconds(usage.Utime) + seconds(usage.Stime)
 }
 
 // ompMaxRSSBytes converts ru_maxrss to bytes. getrusage(2) reports kilobytes on

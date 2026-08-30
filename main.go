@@ -36,6 +36,12 @@ func main() {
 			os.Exit(runWorktree(os.Args[2:]))
 		case "babel":
 			os.Exit(runBabel(os.Args[2:]))
+		case sandboxHelperCommand:
+			// Code re-entering itself inside its own sandbox. Nothing but the
+			// containment backend spawns this, and it is undocumented on
+			// purpose: it is an implementation detail of the boundary rather
+			// than a command an operator has any use for.
+			os.Exit(runSandboxHelper(os.Args[2:]))
 		case "ls":
 			os.Exit(runSession(append([]string{"list"}, os.Args[2:]...)))
 		}
@@ -149,8 +155,12 @@ func main() {
 	status := 0
 	switch {
 	case fm.launchUntrusted:
-		status = withSession("sandbox", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func() int {
-			return runSandbox("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
+		// "untrusted", not "sandbox": this is the launcher the operator
+		// designated for untrusted sessions, and it contains nothing. The one
+		// sandbox in this codebase is the boundary worker mode builds, and the
+		// containment declaration is the only thing entitled to that word.
+		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func() int {
+			return runUntrustedLauncher("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
 		})
 	case fm.launchRuntime != "":
 		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, func() int {

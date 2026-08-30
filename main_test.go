@@ -1679,7 +1679,7 @@ func TestCompactHelpDerivation(t *testing.T) {
 
 	m = resize(t, m, wide.w, wide.h)
 	descs := shortDescs(m)
-	for _, d := range []string{"move", "change", gReset + " defaults", "manage accounts", "refresh usage", "managed omp", "sandbox", "launch", "show routing", "show usage"} {
+	for _, d := range []string{"move", "change", gReset + " defaults", "manage accounts", "refresh usage", "managed omp", "untrusted omp", "launch", "show routing", "show usage"} {
 		got := hasDesc(descs, d)
 		want := d == "move" || d == "change"
 		if got != want {
@@ -1719,7 +1719,7 @@ func TestCompactHelpDerivation(t *testing.T) {
 	// narrow + p: routing full-screen hides the generator launch footer.
 	swapped, _ := press(t, m, "p")
 	descs = shortDescs(swapped)
-	for _, d := range []string{gReset + " defaults", "launch", "managed omp", "sandbox"} {
+	for _, d := range []string{gReset + " defaults", "launch", "managed omp", "untrusted omp"} {
 		if !hasDesc(descs, d) {
 			t.Errorf("routing-full-screen compact help missing %q: %v", d, descs)
 		}
@@ -1748,7 +1748,7 @@ func TestFullHelpComplete(t *testing.T) {
 	m.collapse = true
 	m.help.ShowAll = true
 	foot := stripAnsi(m.footer())
-	for _, d := range []string{"move", "change", "defaults", "primary ⇄ full chains", "refresh usage", "manage accounts", "show/hide routing", "show/hide usage", "launch", "managed omp", "sandbox", "quit"} {
+	for _, d := range []string{"move", "change", "defaults", "primary ⇄ full chains", "refresh usage", "manage accounts", "show/hide routing", "show/hide usage", "launch", "managed omp", "untrusted omp", "quit"} {
 		if !strings.Contains(foot, d) {
 			t.Errorf("full help missing %q:\n%s", d, foot)
 		}
@@ -3646,7 +3646,7 @@ func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	}
 }
 
-func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
+func TestUntrustedLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "env")
 	script := filepath.Join(dir, "ompu")
@@ -3664,15 +3664,15 @@ func TestSandboxLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	oldArgs := os.Args
 	os.Args = []string{"code", "--profile", "ambient"}
 	defer func() { os.Args = oldArgs }()
-	if status := runSandbox("CODE_OMP_UNTRUSTED", nil, "", ""); status != 0 {
-		t.Fatalf("sandbox status = %d", status)
+	if status := runUntrustedLauncher("CODE_OMP_UNTRUSTED", nil, "", ""); status != 0 {
+		t.Fatalf("untrusted launcher status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.TrimSpace(string(raw)); got != "||||" {
-		t.Errorf("sandbox inherited auth routing: %q", got)
+		t.Errorf("untrusted launcher inherited auth routing: %q", got)
 	}
 }
 

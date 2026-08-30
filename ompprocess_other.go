@@ -26,6 +26,12 @@ func ompTerminateTree(cmd *exec.Cmd, _ int, _ bool) error {
 	return cmd.Process.Kill()
 }
 
-// ompChildUsage reports nothing. Off Unix there is no rusage to read, and
-// reporting zeroes would turn "unknown" into a claim in Babel's receipt.
-func ompChildUsage(*exec.Cmd) (float64, int64, bool) { return 0, 0, false }
+// ompChildUsage and ompSelfUsage report nothing. Off Unix there is no rusage to
+// read, and reporting zeroes would turn "unknown" into a claim in Babel's
+// receipt. A run on this platform therefore reports only the tool calls it
+// counted and the bytes it can see on disk, which is exactly as much as this
+// platform can honestly say — and it declares no containment at all, so there
+// is no ceiling here whose enforcement a missing figure would leave unproven.
+func ompChildUsage(*exec.Cmd) runUsage { return runUsage{} }
+
+func ompSelfUsage() runUsage { return runUsage{} }

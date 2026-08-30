@@ -126,6 +126,13 @@ func newTestInvestigator(t *testing.T) (*ompInvestigator, *fakeProfiles) {
 	inv.slowBudget = 50 * time.Millisecond
 	inv.lookOmp = func() (string, error) { return "", errors.New("no omp in this test") }
 	inv.auth = func() (ompAuth, error) { return testAuth(), nil }
+	// The driver tests are about the driver. They run a fake OMP that is a
+	// shell script in a temporary directory — nothing a real boundary would
+	// have any way to reach — so they take the launch path Code takes when no
+	// backend came up. The boundary itself is exercised by the escape scenarios
+	// in sandbox_linux_test.go, against the real thing, which is where a
+	// containment claim has to be tested.
+	inv.probe = noSandboxBackend
 	// Every driver test goes through the credential gate the protocol layer
 	// puts in front of a real run, so none of them can pass on a path
 	// production does not take.
@@ -135,25 +142,68 @@ func newTestInvestigator(t *testing.T) (*ompInvestigator, *fakeProfiles) {
 	return inv, profiles
 }
 
+// noSandboxBackend is a backend that established nothing, which is exactly what
+// Code declares on a machine where the boundary will not come up.
+func noSandboxBackend(ceilings sandboxCeilings) *sandboxBackend {
+	return &sandboxBackend{facts: sandboxFacts{
+		backend:  sandboxBackendNone,
+		ceilings: ceilings,
+		degraded: []string{"this test replaced the backend, so nothing was contained"},
+	}}
+}
+
 // ── containment ──────────────────────────────────────────────────────────────
 
-func TestOmpContainmentDeclaresWhatCodeActuallyProvides(t *testing.T) {
-	got := (&ompInvestigator{}).containment()
+// TestOmpContainmentDeclaresOnlyWhatTheBackendEstablished checks the direction
+// that matters: a backend that established nothing must produce a declaration
+// that claims nothing, and must still say what is therefore unprotected.
+//
+// The other direction — a backend that did come up, declaring four true
+// properties — is not assertable from a stub, because the whole point is that
+// the booleans come from a probe rather than from a value a test can hand in.
+// It is asserted in sandbox_linux_test.go against the real backend, beside the
+// scenarios that try to break each property.
+func TestOmpContainmentDeclaresOnlyWhatTheBackendEstablished(t *testing.T) {
+	inv := &ompInvestigator{probe: noSandboxBackend}
+	got := inv.containment()
 	if got.Backend == "" {
 		t.Error("containment names no backend, and an unnamed mechanism cannot be assessed")
 	}
 	if got.FilesystemIsolation || got.NetworkDefaultDeny || got.ResourceCeilings || got.Disposable {
-		t.Errorf("containment claims isolation Code does not implement: %+v", got)
+		t.Errorf("containment claims isolation the backend never established: %+v", got)
 	}
 	if got.Escape == "" {
 		t.Fatal("containment declares no escape assumption, which the contract forbids")
 	}
 	// The escape text is the whole value of an all-false declaration: it has to
-	// say what is not contained, not merely that something is not.
-	for _, want := range []string{"uid", "seccomp", "rlimit", "network", "filesystem"} {
+	// say what is not contained, and why Code could not contain it.
+	for _, want := range []string{"no sandbox", "uid", "filesystem", "network", "replaced the backend"} {
 		if !strings.Contains(got.Escape, want) {
 			t.Errorf("escape statement never mentions %q: %s", want, got.Escape)
 		}
+	}
+}
+
+// TestOmpContainmentNamesTheEndpointItsEgressAllows is the other half of the
+// declaration: whichever backend came up, the escape statement has to name the
+// one target the boundary opens, because "restricted to the provider" is not
+// something a reviewer can act on and a host and port is.
+func TestOmpContainmentNamesTheEndpointItsEgressAllows(t *testing.T) {
+	inv := &ompInvestigator{probe: noSandboxBackend}
+	inv.profile = resolvedProfile{Metadata: map[string]string{"provider": anthropicProvider}}
+	got := inv.egressDescription()
+	if got.provider != anthropicProvider {
+		t.Errorf("provider = %q, want %q", got.provider, anthropicProvider)
+	}
+	if len(got.allowed) == 0 || !strings.HasSuffix(got.allowed[0], ":443") {
+		t.Fatalf("the egress description allows %v; a contained run reaches its provider on 443", got.allowed)
+	}
+
+	// A profile whose provider Code cannot place must not produce an allowlist
+	// at all. An invented one would be a hole the declaration then describes.
+	inv.profile = resolvedProfile{Metadata: map[string]string{"provider": "a-runtime-nobody-registered"}}
+	if unknown := inv.egressDescription(); len(unknown.allowed) != 0 {
+		t.Errorf("an unplaceable provider produced an allowlist: %v", unknown.allowed)
 	}
 }
 
@@ -758,8 +808,28 @@ func TestOmpDriveRegistersOnlyTheGrantedToolsAndReportsAResult(t *testing.T) {
 	if !strings.Contains(string(result.Payload), "the corpus supports the finding") {
 		t.Errorf("payload carries no analysis: %s", result.Payload)
 	}
-	if result.Resources == nil || result.Resources.CPUSeconds <= 0 {
-		t.Errorf("resources = %+v; the child's rusage was available and should be reported", result.Resources)
+	// This test's backend contains nothing, so the uncontained tier is what is
+	// being exercised: there is no cgroup, and the honest sources are the
+	// child's rusage and a host walk of the run directory. Both are real
+	// readings, so both are reported — and the report has to say which they
+	// were, because the same two fields carry the scope's whole-tree figures
+	// on a machine that has one.
+	resources := result.Resources
+	if resources == nil || resources.CPUSeconds == nil || *resources.CPUSeconds <= 0 {
+		t.Errorf("resources = %+v; the child's rusage was available and should be reported", resources)
+	}
+	if resources != nil && resources.SandboxBytesWritten == nil {
+		t.Error("no sandbox_bytes_written; the run directory is on the host and can always be walked")
+	}
+	if inv.containment().ResourceCeilings {
+		t.Error("a backend that installed no ceiling declared one")
+	}
+	provenance := strings.Join(rec.messages, "\n")
+	if !strings.Contains(provenance, "rusage") || !strings.Contains(provenance, "run directory") {
+		t.Errorf("the run never said where its figures came from: %s", provenance)
+	}
+	if strings.Contains(provenance, "cgroup") {
+		t.Errorf("a tier with no cgroup reported a cgroup figure: %s", provenance)
 	}
 	if len(rec.stages) == 0 {
 		t.Error("the run emitted no progress")
@@ -1304,6 +1374,41 @@ func ompFakeBinary(t *testing.T, scenario string) (binary, record string) {
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatalf("writing the fake omp: %v", err)
 	}
+	return binary, record
+}
+
+// ompFakeStaticBinary is ompFakeBinary for a run that will happen inside the
+// sandbox.
+//
+// The wrapper form above cannot be used there and should not be: it is a
+// `#!/bin/sh` script, and a contained run has no /bin/sh and no libc outside the
+// Nix store, so the sandbox refuses to start it — correctly. This form is a copy
+// of the test binary, which is statically linked and is the one executable the
+// backend already binds inside, and the scenario travels in the environment
+// because the driver owns OMP's command line.
+const (
+	ompFakeScenarioEnv = "CODE_OMP_FAKE_SCENARIO"
+	ompFakeRecordEnv   = "CODE_OMP_FAKE_RECORD"
+)
+
+func ompFakeStaticBinary(t *testing.T, scenario string) (binary, record string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	body, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatalf("reading this test binary: %v", err)
+	}
+	dir := t.TempDir()
+	record = filepath.Join(dir, "record.json")
+	binary = filepath.Join(dir, "fake-omp")
+	if err := os.WriteFile(binary, body, 0o700); err != nil {
+		t.Fatalf("writing the fake omp: %v", err)
+	}
+	t.Setenv(ompFakeScenarioEnv, scenario)
+	t.Setenv(ompFakeRecordEnv, record)
 	return binary, record
 }
 

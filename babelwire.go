@@ -395,11 +395,25 @@ type babelCost struct {
 // babelResources is self-reported resource use. Babel treats an absent value
 // as unknown rather than zero, so reporting nothing is honest and reporting
 // zero is a claim.
+//
+// The same reasoning applies one level down, which is why three of the four
+// fields are pointers. Babel's struct declares them as plain numbers, so an
+// omitted key arrives there as zero either way; the difference is what Code
+// puts on the wire. A dimension this run had no way to measure is absent from
+// the JSON, and a dimension that was measured as zero is present as zero, so
+// the bytes a reviewer reads distinguish "nothing wrote anything" from "nobody
+// looked". Filling an unmeasured dimension with a zero would be the cheapest
+// possible way to satisfy a resource obligation with a number nobody read off
+// anything, which is the failure this shape exists to make impossible.
+//
+// ToolCalls is not a pointer because the driver always knows it: every request
+// this worker makes goes through one counter, so there is no state in which the
+// count is unavailable.
 type babelResources struct {
-	CPUSeconds          float64 `json:"cpu_seconds"`
-	MaxRSSBytes         int64   `json:"max_rss_bytes"`
-	SandboxBytesWritten int64   `json:"sandbox_bytes_written"`
-	ToolCalls           int     `json:"tool_calls"`
+	CPUSeconds          *float64 `json:"cpu_seconds,omitempty"`
+	MaxRSSBytes         *int64   `json:"max_rss_bytes,omitempty"`
+	SandboxBytesWritten *int64   `json:"sandbox_bytes_written,omitempty"`
+	ToolCalls           int      `json:"tool_calls"`
 }
 
 // babelContainment is the sandbox this worker declares it provides. Babel does
