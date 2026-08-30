@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"debug/elf"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -403,10 +405,15 @@ func sandboxRunOutside(t *testing.T, env []string, timeout time.Duration, args .
 	return sandboxRunArgv(t, argv, env, timeout, nil)
 }
 
+// sandboxTestMounts composes a plan the way a run does: the payload is the test
+// binary, bound at the guest layout's path, so the read-only binds it needs are
+// derived from that binary rather than from a directory this host may not have.
 func sandboxTestMounts(t *testing.T, backend *sandboxBackend, extra ...string) sandboxMounts {
 	t.Helper()
 	mounts := sandboxMounts{scratch: []string{sandboxRoot}}
-	mounts.bindSame(sandboxStore)
+	for _, path := range sandboxRuntimePaths(nil, []string{backend.helper}) {
+		mounts.bindSame(path)
+	}
 	for _, path := range extra {
 		mounts.bindSame(path)
 	}
@@ -1048,6 +1055,300 @@ func TestSandboxRefusesToRunWithoutTheCeilingsItDeclared(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "refused") {
 		t.Errorf("the refusal does not say the run was refused: %v", err)
+	}
+}
+
+// ── the mount plan ───────────────────────────────────────────────────────────
+
+// TestSandboxMountPlanNamesOnlyWhatItNeedsAndOnlyWhatIsThere pins the two
+// properties of the plan that nothing else in this file can see.
+//
+// The first is the defect this section exists for. bubblewrap refuses to start
+// when a bind source is missing, and it refuses for the whole plan: one
+// unconditional path that a machine does not happen to have — a Nix store on a
+// distribution that has none — takes the entire boundary down, degrades all
+// four properties to false, and makes Babel refuse every run with a reason that
+// reads as a missing directory rather than as the portability gap it is. So no
+// path the plan names may be absent.
+//
+// The second is the opposite failure and it is quieter. A derivation that
+// widened until it worked would come up green everywhere and hand the run a
+// boundary with a hole in it. So every directory the derivation produces has to
+// be one of exactly two things — the Nix store, which is read-only and
+// hash-addressed, or a directory the dynamic loader owns — and everything else
+// it produces has to be a single regular file. A directory that is neither, and
+// any of the broad roots where an operator's data lives, is a failure here.
+func TestSandboxMountPlanNamesOnlyWhatItNeedsAndOnlyWhatIsThere(t *testing.T) {
+	backend := sandboxTestBackend(t)
+	corpus := t.TempDir()
+	if err := os.WriteFile(filepath.Join(corpus, "note.md"), []byte("corpus\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The production plan, read off the argv a launch would really run, so this
+	// checks what bubblewrap is handed rather than a reconstruction of it. The
+	// run directory is made short by hand: a unix socket address holds 107
+	// bytes and a test's own name is not a budget the egress can afford.
+	dir, err := os.MkdirTemp("", "code-plan-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	egress, err := newSandboxEgress(filepath.Join(dir, "egress"),
+		sandboxEgressPolicy{allowed: []string{"api.example:443"}, brokerURL: "http://127.0.0.1:1/auth"})
+	if err != nil {
+		t.Fatalf("opening the egress: %v", err)
+	}
+	defer egress.close()
+	config := filepath.Join(dir, "config.yml")
+	pool := filepath.Join(dir, "account-pool.json")
+	for _, path := range []string{config, pool} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := backend.contain(sandboxRequest{
+		ompBinary:  self,
+		configHost: config,
+		poolHost:   pool,
+		caBundle:   sandboxCABundle(),
+		corpus:     []string{corpus},
+		egress:     egress,
+	})
+	if err != nil || run == nil {
+		t.Fatalf("the production plan would not compose: %v", err)
+	}
+
+	// Anything the grant or the guest layout named is allowed to be a directory
+	// because something outside the derivation decided it: the corpus is the
+	// grant's own, and the run directory is Code's.
+	granted := []string{corpus}
+	sandboxCheckPlan(t, "the production plan", sandboxPlanBinds(run.prefix), granted)
+	sandboxCheckPlan(t, "the probe plan",
+		sandboxPlanBinds(backend.enter(sandboxTestMounts(t, backend), sandboxWorkPath, "/no-op")), nil)
+
+	// And the derivation on its own, against the three shapes a host presents:
+	// a statically linked binary that needs nothing, a script that names its
+	// interpreter, and a dynamically linked system binary.
+	script := filepath.Join(dir, "wrapper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []string{self, script, "/bin/sh"} {
+		derived := sandboxRuntimePaths([]string{subject}, []string{backend.helper})
+		var binds []sandboxBind
+		for _, path := range derived {
+			binds = append(binds, sandboxBind{host: path, guest: path})
+		}
+		sandboxCheckPlan(t, "the closure of "+subject, binds, nil)
+		if len(derived) == 0 {
+			t.Errorf("the closure of %s is empty, so the guest has nothing to execute", subject)
+		}
+	}
+}
+
+// sandboxPlanBinds reads the read-only binds back out of a launch's argv, which
+// is the only place the plan exists by the time it matters.
+func sandboxPlanBinds(argv []string) []sandboxBind {
+	var binds []sandboxBind
+	for i := 0; i+2 < len(argv); i++ {
+		if argv[i] == "--ro-bind" {
+			binds = append(binds, sandboxBind{host: argv[i+1], guest: argv[i+2]})
+		}
+	}
+	return binds
+}
+
+// sandboxCheckPlan holds one plan to both properties. granted names the host
+// directories something other than the derivation chose, which are exempt from
+// the narrowness rule and from nothing else.
+func sandboxCheckPlan(t *testing.T, what string, binds []sandboxBind, granted []string) {
+	t.Helper()
+	if len(binds) == 0 {
+		t.Fatalf("%s has no read-only binds at all, so this proves nothing", what)
+	}
+	// The roots an operator's data lives under. None of them is ever a bind,
+	// whole or as an ancestor of one that was widened to reach it.
+	forbidden := []string{"/", "/boot", "/dev", "/etc", "/home", "/media", "/mnt", "/nix", "/opt",
+		"/proc", "/root", "/run", "/srv", "/sys", "/tmp", "/usr", "/var"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		forbidden = append(forbidden, filepath.Clean(home))
+	}
+	for _, bind := range binds {
+		info, err := os.Stat(bind.host)
+		if err != nil {
+			t.Errorf("%s binds %s, which is not there: %v — bubblewrap refuses to start on a plan "+
+				"with a missing source, and it refuses for the whole plan", what, bind.host, err)
+			continue
+		}
+		for _, root := range forbidden {
+			if filepath.Clean(bind.host) == root {
+				t.Errorf("%s binds %s whole, which is a root the operator's data lives under",
+					what, bind.host)
+			}
+		}
+		if bind.guest == sandboxRoot || strings.HasPrefix(bind.guest, sandboxRoot+"/") {
+			// The guest layout's own binds. Their guest path is fixed by the
+			// layout the corpus-versus-cwd rule and the egress sockets depend
+			// on, so they are checked against it rather than for narrowness.
+			if !sandboxLayoutPath(bind.guest) {
+				t.Errorf("%s binds %s at %s, which is not a path the guest layout names",
+					what, bind.host, bind.guest)
+			}
+			continue
+		}
+		if bind.host != bind.guest {
+			t.Errorf("%s binds %s at %s: a host path outside the guest layout must mean the same "+
+				"thing on both sides", what, bind.host, bind.guest)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		switch {
+		case bind.host == sandboxStore:
+		case sandboxIsLibraryDir(bind.host):
+		default:
+			var allowed bool
+			for _, path := range granted {
+				allowed = allowed || filepath.Clean(path) == filepath.Clean(bind.host)
+			}
+			if !allowed {
+				t.Errorf("%s binds the directory %s whole; a derived bind may be the Nix store, a "+
+					"directory the loader owns, or one file — nothing else", what, bind.host)
+			}
+		}
+	}
+}
+
+func sandboxLayoutPath(guest string) bool {
+	switch guest {
+	case sandboxHelperPath, sandboxConfigPath, sandboxPoolPath, sandboxProxySock, sandboxBrokerSock:
+		return true
+	}
+	return false
+}
+
+// TestSandboxRuntimePathsCarryADynamicallyLinkedBinary is the sufficiency half
+// of the derivation, and it is the one that cannot be argued: a plan derived
+// from a dynamically linked host binary is composed, and that binary is then
+// executed inside the real boundary. A closure that missed its loader or its
+// libc produces a sandbox that cannot exec anything, and the payload says so by
+// never reporting.
+//
+// /bin/sh is the subject because every Linux has one and its shape is the one
+// this derivation exists for: an ELF that names its interpreter in a program
+// header and its libraries in a dynamic section, none of it in the Nix store on
+// a machine that has no Nix store.
+func TestSandboxRuntimePathsCarryADynamicallyLinkedBinary(t *testing.T) {
+	backend := sandboxTestBackend(t)
+	real, err := filepath.EvalSymlinks("/bin/sh")
+	if err != nil {
+		t.Fatalf("this machine has no /bin/sh: %v", err)
+	}
+
+	mounts := sandboxMounts{scratch: []string{sandboxRoot}}
+	for _, path := range sandboxRuntimePaths([]string{"/bin/sh"}, nil) {
+		mounts.bindSame(path)
+	}
+	if strings.HasPrefix(real, sandboxStore+"/") {
+		// A machine whose /bin/sh is a store path: the derivation is right to
+		// name the store and the distro half of this is not what it can show.
+		if !slices.Contains(mounts.same, sandboxStore) {
+			t.Fatalf("/bin/sh resolves to %s and the plan does not bind the store: %v", real, mounts.same)
+		}
+	} else {
+		if slices.Contains(mounts.same, sandboxStore) {
+			t.Errorf("/bin/sh resolves to %s, outside any store, and the plan named the store anyway: %v",
+				real, mounts.same)
+		}
+		// The interpreter the ELF asks for by absolute path is the dependency
+		// whose absence reads as a bare ENOENT from exec, so it is named here.
+		interp := sandboxInterpreterOf(t, real)
+		var covered bool
+		for _, bind := range mounts.same {
+			covered = covered || sandboxCovers(bind, interp)
+		}
+		if !covered {
+			t.Errorf("%s asks the kernel for %s and the plan binds nothing that provides it: %v",
+				real, interp, mounts.same)
+		}
+	}
+
+	// The proof: it runs. One JSON line from a shell that had to find its own
+	// loader and libc inside a tmpfs root that holds only what was derived.
+	argv := backend.enter(mounts, sandboxWorkPath, "/bin/sh", "-c", `printf '{"ok":true}\n'`)
+	outcome := sandboxRunArgv(t, argv, backend.scopeEnv, 30*time.Second, nil)
+	if !outcome.reported || !outcome.result.OK {
+		t.Fatalf("a dynamically linked binary could not execute inside a plan derived from it; "+
+			"plan %v, stderr: %s", mounts.same, outcome.stderr)
+	}
+}
+
+// sandboxInterpreterOf reads the program interpreter an ELF asks for.
+func sandboxInterpreterOf(t *testing.T, path string) string {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	image, err := elf.NewFile(file)
+	if err != nil {
+		t.Fatalf("%s is not an ELF object: %v", path, err)
+	}
+	for _, prog := range image.Progs {
+		if prog.Type != elf.PT_INTERP {
+			continue
+		}
+		body := make([]byte, prog.Filesz)
+		if _, err := file.ReadAt(body, int64(prog.Off)); err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimRight(string(body), "\x00")
+	}
+	t.Fatalf("%s names no program interpreter, so it proves nothing about resolving one", path)
+	return ""
+}
+
+// TestSandboxComesUpWithNoNixStoreInItsMountPlan is the portability measurement
+// itself.
+//
+// The store cannot be removed from a machine that is built out of it, so the
+// condition is established the honest way instead: the plan is derived, the
+// store is shown not to be in it, the real backend comes up on that plan as the
+// full tier, and a payload inside reports the root directory it can actually
+// see — which has no /nix in it at all. A run that executed in a namespace
+// where the store does not exist is the property, whatever the host has.
+func TestSandboxComesUpWithNoNixStoreInItsMountPlan(t *testing.T) {
+	backend := sandboxTestBackend(t)
+	mounts := sandboxTestMounts(t, backend)
+	if slices.Contains(mounts.same, sandboxStore) {
+		t.Skipf("this machine's %s binary resolves into the Nix store, so its own plan needs the "+
+			"store and the store-free condition cannot be established here; the derivation is "+
+			"covered by TestSandboxRuntimePathsCarryADynamicallyLinkedBinary instead", backend.helper)
+	}
+	if backend.facts.backend != sandboxBackendFull {
+		t.Fatalf("the backend probed as %q on a plan that names no store: %v",
+			backend.facts.backend, backend.facts.degraded)
+	}
+
+	inside := sandboxRunInside(t, backend, mounts, sandboxWorkPath, nil, 30*time.Second, "observe")
+	if !inside.reported || !inside.result.OK {
+		t.Fatalf("the payload never reported from a store-free sandbox; stderr: %s", inside.stderr)
+	}
+	for _, name := range inside.result.Entries {
+		if name == "nix" {
+			t.Errorf("the guest's root still carries /nix, so this ran with a store after all: %v",
+				inside.result.Entries)
+		}
+	}
+	if inside.result.Text != sandboxWorkPath {
+		t.Errorf("the payload's working directory is %q, want the guest layout's %q",
+			inside.result.Text, sandboxWorkPath)
 	}
 }
 

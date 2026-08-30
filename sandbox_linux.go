@@ -15,15 +15,17 @@ package main
 //
 // Nothing here trusts either tool's exit status for a claim. Before a run is
 // declared contained, the backend launches the whole chain with a probe payload
-// that tries, from inside, to read and write a host path, to write the Nix
-// store, and to find a route off the machine — and the parent reads the scope's
-// own cgroup files back to see that the ceilings it asked for are the ones the
-// kernel installed. A property that survives that is declared; a property that
-// does not is declared false, and Babel refuses the run.
+// that tries, from inside, to read and write a host path, to write every path
+// the mount plan bound read-only, and to find a route off the machine — and the
+// parent reads the scope's own cgroup files back to see that the ceilings it
+// asked for are the ones the kernel installed. A property that survives that is
+// declared; a property that does not is declared false, and Babel refuses the
+// run.
 
 import (
 	"bufio"
 	"bytes"
+	"debug/elf"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,8 +170,9 @@ func sandboxProbeGaps(report sandboxProbeReport) []string {
 	if report.OutsideWritable {
 		gaps = append(gaps, "a host path outside the grant was writable from inside the sandbox")
 	}
-	if report.StoreWritable {
-		gaps = append(gaps, "the Nix store was writable from inside the sandbox")
+	if report.ReadOnlyWritable {
+		gaps = append(gaps, "a path the mount plan bound read-only was writable from inside the sandbox, "+
+			"so a run could rewrite the binaries the next one executes")
 	}
 	if !report.ScratchWritable {
 		gaps = append(gaps, "the sandbox's own scratch directory was not writable, so a run could not proceed")
@@ -254,6 +257,482 @@ func sandboxScopeTool() (string, []string, error) {
 	}, nil
 }
 
+// ── what the guest has to have in order to execute anything ──────────────────
+
+// The mount plan's read-only binds are derived from the programs the run has to
+// execute, not from an assumption about how this host was built. That
+// distinction is the difference between a backend that works and one that does
+// not: naming a path unconditionally makes bubblewrap refuse to start on every
+// machine that does not have it, which degrades the declaration to no boundary
+// at all and makes Babel refuse the run — for a reason that reads as a missing
+// directory rather than as the portability gap it is.
+//
+// The derivation resolves each executable to its real path and then reads what
+// that file itself says it needs: a script's shebang line names its interpreter
+// by absolute path, and an ELF object's program headers name its dynamic loader
+// while its dynamic section names the libraries it links. That closure is
+// walked to fixpoint. What it can miss is named at sandboxRuntimePaths.
+
+// sandboxStore is the Nix store. It is a bulk root here rather than a
+// requirement, and it is bound only when something the run executes actually
+// resolves into it.
+//
+// Nothing narrower is sound for it. A store path's runtime references are
+// absolute store paths embedded in file contents — a wrapper script's exec
+// target, a NODE_PATH, a DT_RUNPATH — so the closure of one store path is
+// Nix's own computation over those references and not something to re-derive
+// from ELF headers. Binding the store whole is what the operator's machine has
+// always done and it discloses nothing: the store is read-only, hash-addressed
+// and holds no operator data. On a machine where nothing resolves into it, it
+// is not named at all.
+const sandboxStore = "/nix/store"
+
+// sandboxLibraryDirs are the host directories a resolved shared object may be
+// bound from whole. They are the dynamic loader's own territory — the
+// multiarch and biarch library roots — and a bind of one exposes system
+// libraries and nothing else.
+//
+// The list is an allowlist rather than a denylist because the failure modes are
+// not symmetric. An unknown directory that is refused costs a per-file bind,
+// which still works; an unknown directory that is allowed could be a directory
+// holding the operator's data, and a boundary with a hole in it is worse than a
+// backend that will not come up.
+var sandboxLibraryDirs = []string{
+	"/lib", "/lib32", "/lib64", "/libx32",
+	"/usr/lib", "/usr/lib32", "/usr/lib64", "/usr/libx32",
+	"/usr/local/lib", "/usr/local/lib64",
+}
+
+// sandboxClosureBudget bounds the walk. A dependency graph this deep is a
+// machine doing something the derivation was not written for, and stopping is
+// the safe end: an unresolved dependency degrades the declaration through a
+// probe that fails to start, which is loud, while an unbounded walk of a
+// symlink cycle is not.
+const sandboxClosureBudget = 512
+
+// sandboxRuntimePaths derives the read-only host paths the sandbox needs in
+// order to execute the programs a run is built from.
+//
+// named are executables the guest reaches at their own host path, because
+// something inside — an argv, a wrapper's exec target — names that path.
+// relocated are executables the guest layout binds elsewhere, Code's own
+// helper being the only one: its host path is not required, only whatever it
+// needs at runtime.
+//
+// What this can miss, stated plainly, because a derivation that is trusted
+// without its limits is worse than one that is not trusted at all:
+//
+//   - Anything opened by name at runtime rather than linked. dlopen targets,
+//     NSS and PAM modules, a Python or Node module tree, a locale archive, a
+//     data file next to a binary: none of them is in any header. A shared
+//     object's own directory is bound whole, which covers the siblings, the
+//     versioned symlinks and the glibc-hwcaps subdirectories beside it; a
+//     program's own package directory is not something this can find.
+//   - Libraries reachable only through /etc/ld.so.cache. The search
+//     directories the loader would use are read from /etc/ld.so.conf and its
+//     includes, which is the same list the cache indexes, so a library placed
+//     in a directory that is in the cache and in no config file is not found.
+//   - A shebang whose interpreter is resolved through PATH. `env` is followed,
+//     because that is the common form and the host's PATH is the guest's; any
+//     other PATH-relative interpreter is not.
+//   - Store-like bulk roots other than Nix's. Guix's /gnu/store and a Spack or
+//     conda prefix are structurally the same problem and are not special-cased,
+//     so a dependency in one is bound file by file and may lose a dlopen
+//     sibling.
+//
+// Every one of those misses has the same consequence and it is the safe one:
+// the probe cannot execute its payload, the backend degrades with the reason
+// bubblewrap or the loader gave, and Babel refuses the run. None of them can
+// widen the boundary.
+func sandboxRuntimePaths(named, relocated []string) []string {
+	closure := &sandboxRuntimeClosure{
+		seen:   make(map[string]bool),
+		bound:  make(map[string]bool),
+		budget: sandboxClosureBudget,
+	}
+	for _, path := range named {
+		closure.executable(path)
+	}
+	for _, path := range relocated {
+		closure.dependenciesOf(path)
+	}
+	return closure.paths
+}
+
+// sandboxRuntimeClosure is one derivation in progress.
+type sandboxRuntimeClosure struct {
+	// seen is every file whose dependencies have been read, which is what
+	// makes a diamond in the graph — and a symlink cycle — terminate.
+	seen map[string]bool
+	// bound and paths are the answer: the set for lookups, the slice for the
+	// order the plan is built in.
+	bound map[string]bool
+	paths []string
+	// search is the loader's search path, resolved once. It is a host-wide
+	// fact rather than a per-object one, and reading a handful of config
+	// files for every needed library would be the same answer many times.
+	search []string
+	budget int
+}
+
+// executable takes an executable the guest reaches at its own host path.
+//
+// Both the name and the file it resolves to are bound. The guest looks up the
+// path the launch handed it, so that string has to resolve inside; a Nix
+// profile entry is a symlink chain into the store, and the store path at the
+// end of it is what the loader, the wrapper's own exec target and /proc/self/exe
+// all refer to afterwards.
+func (c *sandboxRuntimeClosure) executable(path string) {
+	real, ok := sandboxRealFile(path)
+	if !ok {
+		return
+	}
+	c.add(path, false)
+	c.add(real, false)
+	c.dependencies(real)
+}
+
+// dependenciesOf takes an executable the guest layout binds somewhere else. Its
+// own path is deliberately not bound: the guest reaches it at the layout's path
+// and binding the host one would widen the plan by a whole bulk root for a file
+// that is already inside.
+func (c *sandboxRuntimeClosure) dependenciesOf(path string) {
+	if real, ok := sandboxRealFile(path); ok {
+		c.dependencies(real)
+	}
+}
+
+// dependencies reads one file's own account of what it needs to run.
+func (c *sandboxRuntimeClosure) dependencies(path string) {
+	if c.seen[path] || c.budget <= 0 {
+		return
+	}
+	c.seen[path] = true
+	c.budget--
+
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	// Enough for a shebang line and far more than enough for an ELF magic
+	// number. A short file reads short, which is not an error here.
+	head := make([]byte, 256)
+	read, _ := file.ReadAt(head, 0)
+	head = head[:read]
+	switch {
+	case bytes.HasPrefix(head, []byte("#!")):
+		c.shebang(head)
+	case bytes.HasPrefix(head, []byte("\x7fELF")):
+		c.linked(file, path)
+	}
+}
+
+// shebang follows a script's interpreter. On the operator's machine this is the
+// line that makes the Nix store a requirement rather than a guess: `omp` is a
+// bash script whose first line is an absolute store path.
+func (c *sandboxRuntimeClosure) shebang(head []byte) {
+	line, _, _ := bytes.Cut(head, []byte("\n"))
+	fields := strings.Fields(strings.TrimPrefix(string(line), "#!"))
+	if len(fields) == 0 {
+		return
+	}
+	c.executable(fields[0])
+	if filepath.Base(fields[0]) != "env" {
+		return
+	}
+	// `env` resolves its program through PATH, so the shebang does not name
+	// it. Resolving it here against the host's PATH is a guess about the
+	// guest, and it is the right one: the guest's PATH is the launch's own.
+	for _, arg := range fields[1:] {
+		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			continue
+		}
+		if resolved, err := exec.LookPath(arg); err == nil {
+			c.executable(resolved)
+		}
+		return
+	}
+}
+
+// linked reads an ELF object's dynamic loader and the libraries it links.
+func (c *sandboxRuntimeClosure) linked(file *os.File, path string) {
+	image, err := elf.NewFile(file)
+	if err != nil {
+		return
+	}
+	// The program interpreter is the one dependency an ELF names by absolute
+	// path, and it is the one whose absence bubblewrap reports as a bare ENOENT
+	// from exec.
+	for _, prog := range image.Progs {
+		if prog.Type != elf.PT_INTERP || prog.Filesz == 0 || prog.Filesz > 4096 {
+			continue
+		}
+		body := make([]byte, prog.Filesz)
+		if _, err := file.ReadAt(body, int64(prog.Off)); err != nil {
+			continue
+		}
+		c.library(string(bytes.TrimRight(body, "\x00")))
+	}
+
+	needed, _ := image.DynString(elf.DT_NEEDED)
+	if len(needed) == 0 {
+		return
+	}
+	// An object that lives in a bulk root resolves its libraries inside that
+	// root, and the root is bound whole, so there is nothing left to derive for
+	// it and the host's search directories are not consulted on its behalf.
+	// That is not a shortcut: a needed name a store object's own run path does
+	// not carry is either satisfied by an object the loader has already loaded
+	// — glibc names the dynamic loader itself that way — or is a broken
+	// package, and resolving it against /usr/lib would bind a directory full of
+	// libraries the object can never load and then walk their dependencies too.
+	search := c.loaderDirs()
+	if sandboxBulkRootOf(path) != "" {
+		search = nil
+	}
+	own := sandboxRunPath(image, filepath.Dir(path))
+	for _, soname := range needed {
+		c.library(sandboxFindLibrary(soname, own, search, image.Class, image.Machine))
+	}
+}
+
+// library takes one resolved shared object or dynamic loader.
+func (c *sandboxRuntimeClosure) library(path string) {
+	real, ok := sandboxRealFile(path)
+	if !ok {
+		return
+	}
+	// The name the object was found under has to resolve inside as well as the
+	// file behind it: an ELF asks its kernel for /lib64/ld-linux-x86-64.so.2,
+	// and on a merged-/usr distribution that path is a symlink whose target is
+	// somewhere else entirely.
+	c.add(path, true)
+	c.add(real, true)
+	c.dependencies(real)
+}
+
+// add records the narrowest bind that makes one resolved path reachable, and
+// keeps the set free of paths an entry already covers.
+func (c *sandboxRuntimeClosure) add(path string, library bool) {
+	bind := sandboxBindFor(path, library)
+	if bind == "" || c.bound[bind] {
+		return
+	}
+	for existing := range c.bound {
+		if sandboxCovers(existing, bind) {
+			return
+		}
+	}
+	// A new entry that covers earlier ones replaces them, so the plan carries
+	// each directory once rather than a directory and three files inside it.
+	kept := c.paths[:0]
+	for _, existing := range c.paths {
+		if sandboxCovers(bind, existing) {
+			delete(c.bound, existing)
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	c.paths = append(kept, bind)
+	c.bound[bind] = true
+}
+
+// loaderDirs is where the dynamic loader looks for a needed library that the
+// object naming it gave no run path for: the directories /etc/ld.so.conf and
+// its includes list, then glibc's built-in defaults.
+//
+// /etc/ld.so.cache is deliberately not read. It is an index over these same
+// directories, so parsing its binary format would buy nothing but a second
+// implementation of it; a library reachable only through the cache is named in
+// sandboxRuntimePaths as a miss rather than guessed at.
+func (c *sandboxRuntimeClosure) loaderDirs() []string {
+	if c.search == nil {
+		c.search = append(sandboxLoaderConfigDirs("/etc/ld.so.conf", 0),
+			"/lib64", "/usr/lib64", "/lib", "/usr/lib")
+	}
+	return c.search
+}
+
+// sandboxLoaderConfigDirs reads the loader's configured search directories.
+// The format is one directory per line, with comments, `include` globs and
+// `hwcap` ordering hints — the last of which is not a directory at all.
+func sandboxLoaderConfigDirs(path string, depth int) []string {
+	if depth > 4 {
+		return nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if comment := strings.IndexByte(line, '#'); comment >= 0 {
+			line = line[:comment]
+		}
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || strings.HasPrefix(line, "hwcap "):
+		case strings.HasPrefix(line, "include "):
+			matches, _ := filepath.Glob(strings.TrimSpace(strings.TrimPrefix(line, "include ")))
+			for _, match := range matches {
+				dirs = append(dirs, sandboxLoaderConfigDirs(match, depth+1)...)
+			}
+		case filepath.IsAbs(line):
+			dirs = append(dirs, filepath.Clean(line))
+		}
+	}
+	return dirs
+}
+
+// sandboxRunPath is the object's own library search path: DT_RUNPATH, or
+// DT_RPATH where there is no DT_RUNPATH, which is the order the loader uses.
+//
+// $ORIGIN is expanded because it is the whole point of a run path on a
+// relocatable installation. An entry still carrying a token afterwards —
+// $LIB, $PLATFORM — is dropped rather than guessed at: a wrong directory here
+// would silently resolve a library to the wrong file.
+func sandboxRunPath(image *elf.File, origin string) []string {
+	entries, _ := image.DynString(elf.DT_RUNPATH)
+	if len(entries) == 0 {
+		entries, _ = image.DynString(elf.DT_RPATH)
+	}
+	var dirs []string
+	for _, entry := range entries {
+		for _, dir := range strings.Split(entry, ":") {
+			dir = strings.ReplaceAll(dir, "${ORIGIN}", origin)
+			dir = strings.ReplaceAll(dir, "$ORIGIN", origin)
+			if dir == "" || strings.Contains(dir, "$") || !filepath.IsAbs(dir) {
+				continue
+			}
+			dirs = append(dirs, filepath.Clean(dir))
+		}
+	}
+	return dirs
+}
+
+// sandboxFindLibrary resolves one DT_NEEDED entry to a file, in the loader's
+// own order: the object's run path first, then the configured directories. An
+// entry it cannot resolve returns the empty string, which binds nothing.
+//
+// A candidate of the wrong architecture is skipped, which is not a refinement
+// but the loader's own behaviour: a multiarch host lists its 32-bit
+// directories in the same config file as its 64-bit ones, ld.so opens each
+// candidate and rejects the ones whose ELF class or machine does not match, and
+// a derivation that stopped at the first name match would bind a whole
+// directory of libraries that could never be loaded — and, worse, would then
+// walk that library's own dependencies and bind their directories too.
+func sandboxFindLibrary(soname string, own, search []string, class elf.Class, machine elf.Machine) string {
+	if strings.Contains(soname, "/") {
+		// A needed entry with a slash is a path rather than a name, and the
+		// loader treats it as one. A relative one is relative to a working
+		// directory this cannot know.
+		if filepath.IsAbs(soname) {
+			return soname
+		}
+		return ""
+	}
+	for _, dirs := range [][]string{own, search} {
+		for _, dir := range dirs {
+			candidate := filepath.Join(dir, soname)
+			if sandboxIsFile(candidate) && sandboxSameArch(candidate, class, machine) {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+// sandboxSameArch reports whether a candidate library is one the object that
+// needs it could actually load.
+func sandboxSameArch(path string, class elf.Class, machine elf.Machine) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	image, err := elf.NewFile(file)
+	if err != nil {
+		return false
+	}
+	return image.Class == class && image.Machine == machine
+}
+
+// sandboxBindFor is the whole narrowness decision, in one place.
+func sandboxBindFor(path string, library bool) string {
+	switch {
+	case path == "" || !filepath.IsAbs(path):
+		return ""
+	case path == sandboxRoot || strings.HasPrefix(path, sandboxRoot+"/"):
+		// The guest layout owns this prefix and a host path here would collide
+		// with it. Nothing is bound, the probe then fails to execute, and the
+		// backend says so — which is the right outcome for a machine that keeps
+		// its binaries where the sandbox keeps its own.
+		return ""
+	case sandboxBulkRootOf(path) != "":
+		return sandboxBulkRootOf(path)
+	case !library:
+		// An executable is one file and the guest needs exactly that file.
+		return path
+	}
+	// A shared object's siblings are part of it in practice: gconv modules,
+	// versioned symlinks, glibc-hwcaps variants, an NSS module the object
+	// opens by name. None of them is in any header and the directory is the
+	// smallest unit that holds them all — but only where that directory is the
+	// loader's own territory rather than somewhere a program was unpacked.
+	if dir := filepath.Dir(path); sandboxIsLibraryDir(dir) {
+		return dir
+	}
+	return path
+}
+
+// sandboxIsLibraryDir reports whether a directory may be bound whole.
+func sandboxIsLibraryDir(dir string) bool {
+	for _, prefix := range sandboxLibraryDirs {
+		if dir == prefix || strings.HasPrefix(dir, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// sandboxBulkRootOf names the bulk root a path lives in, or the empty string.
+// The Nix store is the only one Code knows how to recognise; the same shape
+// elsewhere — Guix's /gnu/store, a conda or Spack prefix — is bound file by
+// file instead, which works and may lose a dlopen sibling.
+func sandboxBulkRootOf(path string) string {
+	if strings.HasPrefix(path, sandboxStore+"/") {
+		return sandboxStore
+	}
+	return ""
+}
+
+// sandboxCovers reports whether binding outer already makes inner reachable.
+func sandboxCovers(outer, inner string) bool {
+	return outer == inner || strings.HasPrefix(inner, strings.TrimSuffix(outer, "/")+"/")
+}
+
+// sandboxRealFile resolves a path to the regular file behind it, or reports
+// that there is none. A path that does not exist is never a bind: that is the
+// single rule this whole section exists to enforce, because bubblewrap refuses
+// to start when a bind source is missing and the cost of one missing optional
+// path is the entire boundary.
+func sandboxRealFile(path string) (string, bool) {
+	if path == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil || !sandboxIsFile(real) {
+		return "", false
+	}
+	return real, true
+}
+
+func sandboxIsFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 // ── the mount plan ───────────────────────────────────────────────────────────
 
 // sandboxMounts is the guest filesystem, as bwrap arguments are built from it.
@@ -262,9 +741,9 @@ func sandboxScopeTool() (string, []string, error) {
 // filesystem because no writable host path is ever in this structure.
 type sandboxMounts struct {
 	// same binds a host path read-only at the identical path inside, which is
-	// what the Nix store, the CA bundle and the grant's corpus need: the omp
-	// wrapper resolves absolute store paths, and a corpus path a finding cites
-	// must mean the same thing on both sides.
+	// what the derived runtime paths, the CA bundle and the grant's corpus
+	// need: a program resolves the absolute path it was launched from, and a
+	// corpus path a finding cites must mean the same thing on both sides.
 	same []string
 	// at binds a host path read-only somewhere else inside, in insertion order.
 	at []sandboxBind
@@ -274,8 +753,19 @@ type sandboxMounts struct {
 
 type sandboxBind struct{ host, guest string }
 
+// bindSame adds a read-only bind of a host path at the same path inside, if
+// there is something there to bind.
+//
+// The existence check is the load-bearing line in this file. bubblewrap refuses
+// to start when a bind source is missing, and it refuses for the whole plan: on
+// a machine without one optional path — a Nix store, a CA bundle, a library
+// directory another distribution keeps elsewhere — an unconditional bind takes
+// the entire boundary down with it, the declaration degrades to no containment
+// at all, and Babel refuses every run with a reason that names a directory
+// rather than the portability gap it actually is. So a path that is not there
+// is not a bind.
 func (m *sandboxMounts) bindSame(host string) {
-	if host == "" {
+	if host == "" || !sandboxExists(host) {
 		return
 	}
 	for _, existing := range m.same {
@@ -286,11 +776,43 @@ func (m *sandboxMounts) bindSame(host string) {
 	m.same = append(m.same, host)
 }
 
+// bindAt adds a read-only bind of a host path somewhere else inside. These are
+// the guest layout's own binds — the helper, the config, the account pool, the
+// egress sockets — and a missing one is a broken launch rather than an absent
+// option, so contain reports it by name instead of dropping it silently.
 func (m *sandboxMounts) bindAt(host, guest string) {
 	if host == "" || guest == "" {
 		return
 	}
 	m.at = append(m.at, sandboxBind{host: host, guest: guest})
+}
+
+// missing names the first guest-layout bind whose host path is not there.
+func (m sandboxMounts) missing() string {
+	for _, bind := range m.at {
+		if !sandboxExists(bind.host) {
+			return bind.host
+		}
+	}
+	return ""
+}
+
+// readOnly is every path the guest sees read-only, in guest terms. The probe
+// tries to write each one, which is how the read-only half of the filesystem
+// claim is established on the plan this machine actually composed rather than
+// on a path some other machine would have had.
+func (m sandboxMounts) readOnly() []string {
+	paths := make([]string, 0, len(m.same)+len(m.at))
+	paths = append(paths, m.same...)
+	for _, bind := range m.at {
+		paths = append(paths, bind.guest)
+	}
+	return paths
+}
+
+func sandboxExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // args renders the mount plan. Order is load-bearing: bwrap applies operations
@@ -333,13 +855,16 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 		return nil, nil
 	}
 	mounts := sandboxMounts{scratch: []string{sandboxRoot}}
-	mounts.bindSame(sandboxStore)
-	mounts.bindSame(request.caBundle)
-	if !strings.HasPrefix(request.ompBinary, sandboxStore+"/") {
-		// A binary outside the store — an operator's own build, or a test's
-		// stand-in — still has to be reachable, at the path the argv names.
-		mounts.bindSame(request.ompBinary)
+	// What the run has to be able to execute, derived from the programs
+	// themselves: the OMP binary at the path its own argv names, and whatever
+	// it and Code's helper link or interpret. On the operator's machine that
+	// resolves into the Nix store and the store is bound; on a machine that
+	// has no store it resolves to that machine's own loader and libraries, and
+	// the store is never named.
+	for _, path := range sandboxRuntimePaths([]string{request.ompBinary}, []string{b.helper}) {
+		mounts.bindSame(path)
 	}
+	mounts.bindSame(request.caBundle)
 	for _, path := range request.corpus {
 		mounts.bindSame(path)
 	}
@@ -349,6 +874,14 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 	mounts.bindAt(request.egress.proxySocket(), sandboxProxySock)
 	if socket := request.egress.brokerSocket(); socket != "" {
 		mounts.bindAt(socket, sandboxBrokerSock)
+	}
+	// The guest layout's own binds are not optional, so an absent one is
+	// reported here rather than left to bubblewrap: a launch that lost the
+	// session's config or the egress socket it was going to authenticate
+	// through must fail with the path it could not find.
+	if absent := mounts.missing(); absent != "" {
+		return nil, fmt.Errorf("the sandbox needs %s inside and there is nothing at that path on the host",
+			absent)
 	}
 
 	spec := sandboxSpec{
@@ -561,15 +1094,22 @@ func (b *sandboxBackend) probe(withScope bool) (sandboxProbeReport, bool, error)
 		return sandboxProbeReport{}, false, err
 	}
 
-	spec := sandboxSpec{Outside: outside, Scratch: []string{sandboxWorkPath}}
+	// The probe payload is Code's own binary, bound at the guest layout's path,
+	// so what it needs is whatever that binary links — nothing at all where it
+	// is statically linked, this machine's loader and libc where it is not, and
+	// the Nix store where it came from one.
+	mounts := sandboxMounts{scratch: []string{sandboxRoot}}
+	for _, path := range sandboxRuntimePaths(nil, []string{b.helper}) {
+		mounts.bindSame(path)
+	}
+	mounts.bindAt(b.helper, sandboxHelperPath)
+
+	spec := sandboxSpec{Outside: outside, Scratch: []string{sandboxWorkPath},
+		ReadOnly: mounts.readOnly()}
 	encoded, err := json.Marshal(spec)
 	if err != nil {
 		return sandboxProbeReport{}, false, err
 	}
-
-	mounts := sandboxMounts{scratch: []string{sandboxRoot}}
-	mounts.bindSame(sandboxStore)
-	mounts.bindAt(b.helper, sandboxHelperPath)
 
 	systemd := b.systemd
 	if !withScope {

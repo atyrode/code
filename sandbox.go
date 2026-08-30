@@ -447,9 +447,12 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 			f.ceilings.describeCgroup() + " on its cgroup; every writable mount is a tmpfs of at most " +
 			f.ceilings.describeDisk() + ". ")
 	}
-	b.WriteString("The only host paths inside are read-only: the Nix store the binaries come from, the " +
-		"profile's OMP overlay, the run's account pool, the system CA bundle, and the corpus paths the run's " +
-		"grant named. The session's home and working directory are tmpfs and go away with the mount " +
+	b.WriteString("The only host paths inside are read-only: the binaries the run executes and the " +
+		"directories they load their interpreter and libraries from, the profile's OMP overlay, the run's " +
+		"account pool, the system CA bundle, and the corpus paths the run's grant named. That set is " +
+		"derived from the programs themselves — a shebang line, an ELF program header, a dynamic section " +
+		"— so it is what this machine actually needs rather than what some other machine would have had. " +
+		"The session's home and working directory are tmpfs and go away with the mount " +
 		"namespace. There is no network interface but the sandbox's own loopback and no route off the " +
 		"machine.\n\n")
 
@@ -804,26 +807,35 @@ type sandboxSpec struct {
 	// filesystem-isolation claim's evidence: a probe that cannot reach it is
 	// the only reason Code declares the boundary exists.
 	Outside string `json:"outside,omitempty"`
+	// ReadOnly is every path the mount plan bound read-only, in guest terms.
+	// The probe tries to write each one, which is the other half of the same
+	// claim: a read-only bind that is not read-only means the binaries the
+	// next run executes can be rewritten by this one.
+	//
+	// It is a list the plan produced rather than a constant, because the plan
+	// is derived per host: naming a fixed path here would check a bind this
+	// machine may never have made and miss every bind it did.
+	ReadOnly []string `json:"read_only,omitempty"`
 }
 
 // sandboxProbeReport is what the probe payload saw from inside. Every field is
 // an observation, and containment() turns them into booleans without adding
 // anything.
 type sandboxProbeReport struct {
-	Root            []string `json:"root"`
-	Routes          int      `json:"routes"`
-	OutsideReadable bool     `json:"outside_readable"`
-	OutsideWritable bool     `json:"outside_writable"`
-	ScratchWritable bool     `json:"scratch_writable"`
-	StoreWritable   bool     `json:"store_writable"`
-	Loopback        bool     `json:"loopback"`
+	Root             []string `json:"root"`
+	Routes           int      `json:"routes"`
+	OutsideReadable  bool     `json:"outside_readable"`
+	OutsideWritable  bool     `json:"outside_writable"`
+	ScratchWritable  bool     `json:"scratch_writable"`
+	ReadOnlyWritable bool     `json:"read_only_writable"`
+	Loopback         bool     `json:"loopback"`
 }
 
 // isolated reports whether the probe observed a filesystem boundary: the host
 // path it was pointed at is neither readable nor writable, the read-only mounts
 // are read-only, and the scratch it is supposed to write to works.
 func (r sandboxProbeReport) isolated() bool {
-	return !r.OutsideReadable && !r.OutsideWritable && !r.StoreWritable && r.ScratchWritable
+	return !r.OutsideReadable && !r.OutsideWritable && !r.ReadOnlyWritable && r.ScratchWritable
 }
 
 // networkDenied reports the absence of a route off the machine. /proc/net/route
@@ -892,12 +904,17 @@ func runSandboxProbe(spec sandboxSpec) int {
 			break
 		}
 	}
-	// A writable Nix store would mean the binaries the next run executes can be
-	// rewritten by this one, which is the loudest possible failure of a
-	// read-only bind.
-	if err := os.WriteFile(filepath.Join(sandboxStore, ".code-sandbox-probe"), []byte("x"), 0o600); err == nil {
-		report.StoreWritable = true
-		_ = os.Remove(filepath.Join(sandboxStore, ".code-sandbox-probe"))
+	// A writable read-only bind would mean the binaries the next run executes
+	// can be rewritten by this one, which is the loudest possible failure of a
+	// mount plan. Every path the plan actually bound is tried, rather than one
+	// path a particular kind of host happens to have: the plan is derived per
+	// machine, so a fixed name here would check a bind this host never made
+	// and miss every bind it did.
+	for _, path := range spec.ReadOnly {
+		if sandboxWritable(path) {
+			report.ReadOnlyWritable = true
+			break
+		}
 	}
 	if listener, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
 		report.Loopback = true
@@ -917,9 +934,38 @@ func runSandboxProbe(spec sandboxSpec) int {
 	return 0
 }
 
-// sandboxStore is the one host tree the sandbox needs to execute anything: the
-// Nix store the omp wrapper, its interpreter and Code's own binary come from.
-const sandboxStore = "/nix/store"
+// sandboxWritable reports whether a path the mount plan bound read-only can be
+// written from inside.
+//
+// Nothing is ever written to the path itself. A directory is tried by creating
+// a file in it, which is removed again; a file is tried by opening it for
+// writing and closing it immediately. That distinction matters more than it
+// looks: a bind that turned out to be writable is a bind whose host content a
+// probe must not destroy while checking it, and the binds here are Code's own
+// binary and the libraries the next run executes.
+func sandboxWritable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		// A path that is not there is not a writable bind. The plan promises
+		// only that what it bound is read-only, and the mount plan already
+		// refuses to name a path that does not exist.
+		return false
+	}
+	if info.IsDir() {
+		probe := filepath.Join(path, ".code-sandbox-probe")
+		if err := os.WriteFile(probe, []byte("x"), 0o600); err != nil {
+			return false
+		}
+		_ = os.Remove(probe)
+		return true
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
+}
 
 func sandboxRootEntries() []string {
 	entries, err := os.ReadDir("/")
