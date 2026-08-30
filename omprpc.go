@@ -186,14 +186,35 @@ type ompSession struct {
 }
 
 // ompLaunch is everything the child needs that is not a constant: where the
-// binary is, what overlay configures it, and which directories it may treat as
-// its own.
+// binary is, what overlay configures it, which directories it may treat as its
+// own, and the sandbox it runs inside.
+//
+// When contain is set, config, home and work name paths inside the sandbox
+// rather than on the host: the boundary binds Code's files in at fixed places
+// and the session never sees where they came from. A nil contain is a launch
+// with no boundary at all, which happens only when the backend established
+// none — and Code declares exactly that, so such a run reaches here only for an
+// operator who relaxed it deliberately.
 type ompLaunch struct {
-	binary string
-	config string
-	home   string
-	work   string
-	env    []string
+	binary  string
+	config  string
+	home    string
+	work    string
+	env     []string
+	contain *sandboxRun
+}
+
+// cwdHostDir names the host directory whose contents become the child's
+// working directory. It reports false for a contained launch, where the
+// working directory is a tmpfs the sandbox creates empty and no host directory
+// backs it — which is the stronger guarantee, not a weaker one: OMP registers
+// MCP servers from a config file at its working directory's root, and a
+// directory that only ever exists inside the boundary cannot hold one.
+func (l ompLaunch) cwdHostDir() (string, bool) {
+	if l.contain != nil {
+		return "", false
+	}
+	return l.work, true
 }
 
 // ompStartSession launches OMP with built-in tools disabled and a private OMP
@@ -211,10 +232,22 @@ type ompLaunch struct {
 // because the private home is exactly what makes discovery impossible.
 func ompStartSession(ctx context.Context, launch ompLaunch) (*ompSession, error) {
 	argv := ompArgv(launch)
-	cmd := exec.Command(launch.binary, argv[1:]...)
+	env := launch.env
+	dir := launch.work
+	var extra []*os.File
+	if launch.contain != nil {
+		argv = launch.contain.command(argv)
+		env = launch.contain.childEnv(launch.env)
+		extra = launch.contain.extraFiles()
+		// The child's working directory is set inside the boundary; launch.work
+		// names a path in the sandbox, which does not exist out here.
+		dir = ""
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Args = argv
-	cmd.Env = launch.env
-	cmd.Dir = launch.work
+	cmd.Env = env
+	cmd.Dir = dir
+	cmd.ExtraFiles = extra
 	ompSetProcessGroup(cmd)
 
 	stdin, err := cmd.StdinPipe()
@@ -230,6 +263,17 @@ func ompStartSession(ctx context.Context, launch ompLaunch) (*ompSession, error)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("omp did not start: %w", err)
+	}
+	// The boundary is checked before the session is used, not after: a run that
+	// declared ceilings it did not get is torn down here rather than allowed to
+	// produce evidence behind a weaker boundary than Babel recorded.
+	if launch.contain != nil {
+		if err := launch.contain.started(cmd.Process.Pid); err != nil {
+			pgid := ompProcessGroup(cmd)
+			_ = ompTerminateTree(cmd, pgid, false)
+			_ = cmd.Wait()
+			return nil, err
+		}
 	}
 	lines := bufio.NewScanner(stdout)
 	lines.Buffer(make([]byte, 0, 64<<10), ompFrameBytes)
@@ -322,9 +366,11 @@ func (s *ompSession) next() (*ompFrame, error) {
 }
 
 // stop releases the child: stdin is closed so OMP can exit on its own, and the
-// tree is killed if it does not. Resources are reported only when the kernel
-// handed back a usable rusage, because Babel reads a zero as a claim.
-func (s *ompSession) stop() *babelResources {
+// tree is killed if it does not. It reports what the kernel accounted to the
+// child, which is only available once the child has been reaped — so a caller
+// that also wants the run's cgroup figures has to read those before calling
+// this, because stopping the tree is what collects the scope.
+func (s *ompSession) stop() runUsage {
 	_ = s.stdin.Close()
 	done := make(chan struct{})
 	go func() {
@@ -341,11 +387,7 @@ func (s *ompSession) stop() *babelResources {
 	}
 	s.watchOnce.Do(func() { close(s.stopWatch) })
 
-	cpu, rss, ok := ompChildUsage(s.cmd)
-	if !ok {
-		return nil
-	}
-	return &babelResources{CPUSeconds: cpu, MaxRSSBytes: rss}
+	return ompChildUsage(s.cmd)
 }
 
 func (s *ompSession) wait() {

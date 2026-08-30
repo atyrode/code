@@ -1524,7 +1524,12 @@ func TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp(t *testing.T) {
 	defer broker.Close()
 	t.Setenv("OMP_AUTH_BROKER_URL", broker.URL)
 	t.Setenv("OMP_AUTH_BROKER_TOKEN", testProviderToken)
-	fake, _ := ompFakeBinary(t, "credleak")
+	// A static fake, because this run goes through the real investigator and so
+	// through the real sandbox: a shell-script stand-in has no interpreter in
+	// there, and the containment would refuse it before it could print
+	// anything. The credential's route to a durable event is the same either
+	// way — the child's stderr, folded into the run's terminal error.
+	fake, _ := ompFakeStaticBinary(t, "credleak")
 	t.Setenv("CODE_OMP", fake)
 
 	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
@@ -1820,6 +1825,115 @@ func TestBabelShrinkTerminates(t *testing.T) {
 	}
 	if request.RequestID != "t-1" || request.Capability == "" || request.Tool == "" {
 		t.Errorf("babelShrink damaged a tool-request's identity: %+v", request)
+	}
+}
+
+// TestBabelShrinkKeepsTheResourceClaimUntilLast checks the order the result
+// branch gives things up in. The payload is the reason a result is oversized and
+// the resource object is a few dozen bytes, so a shrink that dropped the
+// measurement first would trade a claim this worker is obliged to make for a
+// saving it did not need.
+func TestBabelShrinkKeepsTheResourceClaimUntilLast(t *testing.T) {
+	cpu, bytes := 1.5, int64(4096)
+	result := &babelResult{
+		Type: babelMessageResult, Status: babelStatusOK, Schema: babelResultSchema,
+		Payload:   json.RawMessage(`{"finding":"` + strings.Repeat("w", 4096) + `"}`),
+		Resources: &babelResources{CPUSeconds: &cpu, SandboxBytesWritten: &bytes, ToolCalls: 3},
+	}
+	if !babelShrink(result, 8) {
+		t.Fatal("an oversized result gave up nothing")
+	}
+	if result.Resources == nil {
+		t.Error("the first thing given up was the measurement rather than the payload")
+	}
+	if strings.Contains(string(result.Payload), "wwww") {
+		t.Errorf("the payload was not the thing truncated: %s", result.Payload)
+	}
+	// Only once the payload has nothing left does the claim go.
+	for babelShrink(result, 8) {
+	}
+	if result.Resources != nil {
+		t.Error("a result that ran out of payload kept a claim it could still have given up")
+	}
+}
+
+// TestReportedResourcesOmitWhatWasNotMeasured is the honesty invariant of the
+// resource report, checked where it is observable: the bytes on the wire.
+//
+// Babel's struct declares plain numbers, so an omitted key and a zero key both
+// arrive there as zero. The distinction is what Code writes, and it is the whole
+// defence against the cheapest way to satisfy a resource obligation — filling in
+// figures nobody read off anything. A dimension with no source must be absent, a
+// dimension measured as zero must be present as zero, and the two must never
+// look alike.
+func TestReportedResourcesOmitWhatWasNotMeasured(t *testing.T) {
+	// Nothing measurable: only the count the driver keeps itself survives.
+	body, err := json.Marshal(runUsage{}.report(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), `{"tool_calls":2}`; got != want {
+		t.Errorf("an unmeasured reading rendered as %s, want %s", got, want)
+	}
+
+	// A run that looked and found nothing said exactly that: the zero is
+	// present, because it is a measurement.
+	body, err = json.Marshal(runUsage{bytesSource: "a host walk of the run directory"}.report(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), `{"sandbox_bytes_written":0,"tool_calls":0}`; got != want {
+		t.Errorf("a measured zero rendered as %s, want %s", got, want)
+	}
+
+	// And a full reading carries every key, in the units the sources report.
+	full := runUsage{
+		cpuSeconds: 2.5, cpuSource: "cgroup cpu.stat",
+		maxRSSBytes: 1 << 20, maxRSSSource: "cgroup memory.peak",
+		bytesWritten: 4096, bytesSource: "the guest's own walk",
+	}
+	body, err = json.Marshal(full.report(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"cpu_seconds":2.5,"max_rss_bytes":1048576,"sandbox_bytes_written":4096,"tool_calls":1}`
+	if string(body) != want {
+		t.Errorf("a full reading rendered as %s, want %s", body, want)
+	}
+}
+
+// TestRunUsagePrefersTheBetterSourceAndNeverGoesBackwards covers the two
+// compositions the reporting path performs: filling a dimension the best source
+// could not supply from a weaker one, and turning two readings of a cumulative
+// counter into the run's own share.
+func TestRunUsagePrefersTheBetterSourceAndNeverGoesBackwards(t *testing.T) {
+	cgroup := runUsage{cpuSeconds: 9, cpuSource: "cgroup cpu.stat"}
+	child := runUsage{
+		cpuSeconds: 3, cpuSource: "child rusage",
+		maxRSSBytes: 2048, maxRSSSource: "child rusage",
+	}
+	merged := cgroup.fillFrom(child)
+	if merged.cpuSeconds != 9 || merged.cpuSource != "cgroup cpu.stat" {
+		t.Errorf("the weaker source overwrote the better one: %+v", merged)
+	}
+	if merged.maxRSSBytes != 2048 || merged.maxRSSSource != "child rusage" {
+		t.Errorf("a dimension the cgroup could not supply was not filled in: %+v", merged)
+	}
+
+	span := runUsage{cpuSeconds: 4, cpuSource: "self"}.since(runUsage{cpuSeconds: 1.5, cpuSource: "self"})
+	if span.cpuSeconds != 2.5 {
+		t.Errorf("the run's own CPU share = %v, want the difference 2.5", span.cpuSeconds)
+	}
+	// A start reading that never happened cannot make the end reading a span.
+	whole := runUsage{cpuSeconds: 4, cpuSource: "self"}.since(runUsage{})
+	if whole.cpuSeconds != 4 {
+		t.Errorf("differencing against an unmeasured start changed the figure: %v", whole.cpuSeconds)
+	}
+	// And nothing may leave here negative, because a negative counter in a
+	// receipt is a wrong measurement rather than a small one.
+	clamped := runUsage{cpuSeconds: 1, cpuSource: "self"}.since(runUsage{cpuSeconds: 5, cpuSource: "self"})
+	if clamped.cpuSeconds != 0 {
+		t.Errorf("a contradictory pair of readings produced %v, want a clamped 0", clamped.cpuSeconds)
 	}
 }
 

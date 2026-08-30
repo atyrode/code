@@ -33,7 +33,7 @@ var keys = keyMap{
 	Usage:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "show/hide usage")),
 	Launch:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "launch")),
 	Managed:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "managed omp")),
-	Untrusted: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "sandbox")),
+	Untrusted: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "untrusted omp")),
 	Worktree:  key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "isolated worktree")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "more")),
 	Quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
