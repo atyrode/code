@@ -168,10 +168,6 @@ func ompHostToolWires(tools []ompEvidenceTool) []ompHostToolWire {
 
 // ── the result payload ───────────────────────────────────────────────────────
 
-// ompResultSchema names the payload shape, so Babel can tell one worker's
-// output format from another's without parsing it.
-const ompResultSchema = "code.investigation.v1"
-
 // ompFindings is the analysis output. The evidence log is part of it on
 // purpose: a finding a reviewer cannot trace to the evidence behind it, or to
 // the refusal that left a hole, is not worth recording.
@@ -446,6 +442,12 @@ func ompFindingsOf(job babelJob) ompFindings {
 	return findings
 }
 
+// ompResultOf builds the terminal result. It is the only place this
+// investigator names a schema, and the schema is the protocol's own
+// babelResultSchema rather than a format of Code's choosing: Babel compares
+// what it receives against that exact string and refuses the result on any
+// other value, so a worker-specific schema is not a variant Babel tolerates —
+// it is a run discarded after all the work was done.
 func ompResultOf(status string, findings ompFindings, resources *babelResources) (babelResult, error) {
 	payload, err := json.Marshal(findings)
 	if err != nil {
@@ -454,7 +456,7 @@ func ompResultOf(status string, findings ompFindings, resources *babelResources)
 	return babelResult{
 		Type:      babelMessageResult,
 		Status:    status,
-		Schema:    ompResultSchema,
+		Schema:    babelResultSchema,
 		Payload:   payload,
 		Resources: resources,
 	}, nil
@@ -504,6 +506,9 @@ func (o *ompInvestigator) conform(ctx context.Context, job babelJob,
 		// grant — not the policy — is what must refuse it.
 		return o.conformRequest(ctx, job, emit, request, findings,
 			babelCapabilitySandboxExec, "babel_sandbox_exec")
+
+	case babelConformanceEchoToken:
+		return o.conformEchoToken(job, emit, findings)
 	}
 
 	emit(ompStageAnalyse, "a well-behaved run with nothing to investigate", ompFraction(1))
@@ -597,6 +602,36 @@ func (o *ompInvestigator) conformRequest(ctx context.Context, job babelJob,
 		" exercised one " + capability + " request, which Babel decided: " + decision.Decision + "."
 	emit(ompStageReport, "delivering the result", ompFraction(3))
 	return ompResultOf(status, findings, nil)
+}
+
+// conformEchoToken puts the run's broker credential exactly where a leak would
+// put it. The directive asks for misbehaviour because Babel's obligation — that
+// a run-scoped credential never survives into a durable receipt — cannot be
+// graded against a worker that behaves: a search for a token nothing ever wrote
+// cannot fail, so it would pass without testing anything. So the token goes
+// into the analysis text and into a progress message, verbatim, which are the
+// two places a real leak happens: free text a model wrote, and a stage
+// description built by concatenation.
+//
+// The protocol layer above this seam scrubs every job secret out of every byte
+// the process writes, so in Code it is the redaction that reaches the wire.
+// That is the intended outcome rather than a defeat of the directive: Code's
+// own defence stops the leak here, Babel's redaction stops it for a worker that
+// has none, and the directive is how either side gets to find out.
+//
+// The status is ok because the run did what it was asked and cut nothing short.
+// A gap would say evidence was missing, which would be a second lie on top of
+// the one the directive requested.
+func (o *ompInvestigator) conformEchoToken(job babelJob,
+	emit func(stage, message string, fraction float64), findings ompFindings,
+) (babelResult, error) {
+	token := job.brokerToken()
+	emit(ompStageAnalyse, "echoing the run credential on purpose: "+token, ompFraction(1))
+	findings.Analysis = "The conformance directive " + babelConformanceEchoToken +
+		" asks this run to disclose its own broker credential, so it is reproduced here " +
+		"verbatim: " + token
+	emit(ompStageReport, "delivering the result", ompFraction(2))
+	return ompResultOf(babelStatusOK, findings, nil)
 }
 
 // serveEvidence performs one allowed request against Babel's broker. A job with
