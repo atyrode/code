@@ -34,6 +34,8 @@ func main() {
 			os.Exit(runSession(os.Args[2:]))
 		case "worktree", "wt":
 			os.Exit(runWorktree(os.Args[2:]))
+		case "babel":
+			os.Exit(runBabel(os.Args[2:]))
 		case "ls":
 			os.Exit(runSession(append([]string{"list"}, os.Args[2:]...)))
 		}
