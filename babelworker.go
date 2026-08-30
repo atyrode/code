@@ -177,6 +177,24 @@ type syntheticResolver interface {
 	syntheticConfiguration(job babelJob) babelConfiguration
 }
 
+// credentialResolver is the investigator that must authenticate a provider
+// before it can run anything. Worker mode asks it to do so before any job
+// material becomes a launch, and adds whatever secrets that produced to the set
+// every byte this process writes is scrubbed against.
+//
+// The registration matters at least as much as the resolution. A job secret is
+// scrubbed because Babel handed it over; the provider credential is Code's own
+// and Babel never sees it — but the moment it is handed to a child, that
+// child's diagnostics become something this worker forwards, and an OMP stderr
+// tail is exactly how a failed run gets explained. Registering the credential
+// closes that route with the mechanism already guarding the other one.
+//
+// An investigator that does not implement this is never asked, which is what
+// keeps the conformance stub gradeable on a machine with no provider at all.
+type credentialResolver interface {
+	resolveCredential() (secrets []string, err error)
+}
+
 // ── argv ─────────────────────────────────────────────────────────────────────
 
 type babelOptions struct {
@@ -907,6 +925,25 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false)
 	}
 
+	// The credential is next, and for the same reason: a run that cannot
+	// authenticate is refused here rather than discovered three events later as
+	// an analysis that failed for no stated cause. A conformance job is exempt
+	// because it launches nothing — that exemption is what lets Babel grade a
+	// worker on a machine with no provider.
+	if resolver, ok := inv.(credentialResolver); ok && !job.conformanceRequested() {
+		secrets, err := resolver.resolveCredential()
+		if err != nil {
+			// Not retryable: the credential is resolved out of the environment
+			// and the HOME Babel spawned this worker with, and respawning it
+			// resolves the same ones.
+			return s.fail(babelErrInvestigator, s.scrubString(err.Error()), false)
+		}
+		// From here the provider credential is scrubbed too. It is not a job
+		// secret, so nothing above covered it, and it is about to be handed to
+		// a child whose diagnostics this worker forwards.
+		s.secrets = append(s.secrets, secrets...)
+	}
+
 	// A conformance job names a profile no store will ever hold, so it takes the
 	// synthetic path when the investigator offers one. Every real run goes
 	// through resolve, which is resolve-or-fail.
@@ -928,7 +965,15 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 			"the job named profile %s@%d but the investigator resolved %s@%d",
 			job.Profile.ID, job.Profile.Revision, cfg.Profile.ID, cfg.Profile.Revision), false)
 	}
+	// Containment and capabilities are the protocol layer's to attach. Neither
+	// resolve nor syntheticConfiguration is given the run, so neither can state
+	// what this worker will ask Babel for, and both left the list empty — which
+	// Babel reads as a profile that can do nothing, then catches the moment the
+	// run makes a request the profile never claimed. Configure mode already
+	// reports exactly this list, so declaring it from the same function is what
+	// keeps the two modes' answers the same claim rather than two that drift.
 	cfg.Containment = &containment
+	cfg.Capabilities = babelWorkerCapabilities()
 	if err := s.emitConfiguration(cfg); err != nil {
 		s.diag("worker: %v", err)
 		return 2
@@ -1317,12 +1362,15 @@ func (conformanceInvestigator) resolve(_ investigatorContext, ref babelProfileRe
 // conformance job: the suite names a synthetic profile on purpose so a worker
 // with no store at all can still be graded, so the reference is echoed and the
 // metadata describes the stub rather than any provider.
+//
+// Capabilities are absent because worker mode attaches them: two copies of the
+// same claim is one that can drift, and the stub's copy would be the one no
+// production run ever exercises.
 func (conformanceInvestigator) syntheticConfiguration(job babelJob) babelConfiguration {
 	return babelConfiguration{
-		Profile:      job.Profile,
-		Privacy:      babelPrivacy{Disclosure: babelDisclosureLocal},
-		Cost:         babelCost{Currency: "USD"},
-		Capabilities: babelWorkerCapabilities(),
+		Profile: job.Profile,
+		Privacy: babelPrivacy{Disclosure: babelDisclosureLocal},
+		Cost:    babelCost{Currency: "USD"},
 		Metadata: map[string]string{
 			"provider":    "none",
 			"model":       "conformance-stub",
@@ -1342,6 +1390,18 @@ type conformanceReport struct {
 	Recipes    int      `json:"recipes"`
 	Sources    int      `json:"sources"`
 	UnknownJob []string `json:"unknown_job_fields,omitempty"`
+
+	// Job answers the echo-job directive: the recipes and sources this run
+	// decoded, in the flat shape Babel compares against the job it sent. It
+	// is a pointer so it is absent under every other directive — the key's
+	// presence is what Babel reads as "the worker answered", so an empty
+	// object under a directive that never asked would be a claim about a
+	// question nobody put.
+	//
+	// The counts above are not a substitute. Two counts match a worker that
+	// read the array lengths and nothing inside them, which is the reading
+	// this directive exists to distinguish from a real one.
+	Job *babelJobEcho `json:"job,omitempty"`
 
 	// EchoedToken carries the run's broker credential when the echo-token
 	// directive asks for it, and is the only field here that is not a fact
@@ -1366,6 +1426,13 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 	emit("discover", "reading the job", 0.25)
 
 	switch directive {
+	case babelConformanceEchoJob:
+		// The run is otherwise well-behaved; the whole answer is the echo,
+		// which travels in the terminal result assembled below.
+		echo := job.decodedEcho()
+		report.Job = &echo
+		emit("analyse", "reporting the job this run decoded", 0.5)
+
 	case babelConformanceErrorOnly:
 		return babelResult{}, errors.New("conformance stub: the error-only directive fails on purpose")
 

@@ -24,6 +24,8 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -107,6 +109,25 @@ const babelParamConformance = "babel.conformance"
 
 // Conformance directives, each a state Babel needs to observe.
 //
+// babelConformanceEchoJob asks for the one thing about a run Babel cannot see
+// for itself: what this worker made of the job it was handed. A receipt records
+// the recipes and sources Babel sent, never the ones the worker read, so a
+// worker that ignored both arrays produces a receipt indistinguishable from one
+// that honoured them — which means the reading can only be graded by asking for
+// it. A worker receiving this directive runs an otherwise ordinary well-behaved
+// analysis and reports, under the "job" key of the terminal result's payload,
+// the recipes as "ID@VERSION" and the sources as "KIND|SELECTOR|DIGEST|SNAPSHOT":
+// one entry per element, in the job's own order, an absent digest or snapshot
+// rendered as the empty string between its separators. Babel plants a per-run
+// nonce in that material, so the answer has to be built from the job that
+// arrived and cannot be a constant transcribed out of this file.
+//
+// Nothing else is asked for. The job's identifiers, profile and grant are each
+// already held to something else — Babel correlates the run, refuses a resolved
+// profile that does not match the one it named, and denies a request outside
+// the grant — so echoing them would be a second contract over material that
+// already has one.
+//
 // babelConformanceEchoToken is the one directive that asks this worker to
 // misbehave, and it has to. Babel's obligation is that a run-scoped credential
 // never survives into a durable receipt, and that obligation cannot be graded
@@ -119,6 +140,7 @@ const babelParamConformance = "babel.conformance"
 // concatenation.
 const (
 	babelConformanceWellBehaved      = "well-behaved"
+	babelConformanceEchoJob          = "echo-job"
 	babelConformanceRequestTool      = "request-tool"
 	babelConformanceRequestUngranted = "request-ungranted"
 	babelConformanceErrorOnly        = "error-only"
@@ -240,9 +262,14 @@ type babelJob struct {
 // conformanceDirective reports which obligation this job exercises. An
 // unrecognized value is well-behaved by contract, so a newer suite cannot make
 // an older worker fail by naming a directive it has never heard of.
+//
+// The list below is load-bearing rather than documentation: a directive missing
+// from it reads as well-behaved, so the worker answers a question it was never
+// asked and looks like it simply does not implement the obligation. Adding a
+// directive means adding it here as well as handling it.
 func (j babelJob) conformanceDirective() string {
 	switch d := j.Params[babelParamConformance]; d {
-	case babelConformanceRequestTool, babelConformanceRequestUngranted,
+	case babelConformanceEchoJob, babelConformanceRequestTool, babelConformanceRequestUngranted,
 		babelConformanceErrorOnly, babelConformanceSlow, babelConformanceEchoToken:
 		return d
 	default:
@@ -288,6 +315,49 @@ func (j babelJob) brokerToken() string {
 		return ""
 	}
 	return j.Broker.Token
+}
+
+// babelJobEcho is the answer the echo-job directive asks for: the recipes and
+// sources this worker decoded, each flattened to one string.
+//
+// The flat shape is Babel's rather than a choice made here — it compares these
+// strings against the job it sent — and it is flat for a reason. A worker that
+// renders "ID@VERSION" has read both halves of a recipe reference, and one that
+// renders "KIND|SELECTOR|DIGEST|SNAPSHOT" has read all four parts of a source,
+// so producing the string is itself the evidence of the decode instead of a
+// claim about it.
+type babelJobEcho struct {
+	Recipes []string `json:"recipes"`
+	Sources []string `json:"sources"`
+}
+
+// decodedEcho renders this job's recipes and sources for the echo-job
+// directive.
+//
+// It reads the typed job, which in this build is the decode: readJob
+// unmarshals the wire line straight into babelJob, and the generic map it
+// builds beside that exists only to spot top-level fields this build does not
+// define, is reduced to those fields in Extra, and is then dropped. There is no
+// second copy of the job to prefer, so every string below came from the bytes
+// Babel wrote — which is the only reason the answer is worth anything.
+//
+// The slices are allocated rather than left nil so a job carrying no recipes or
+// no sources answers with an empty array. Babel reads either as zero entries,
+// but a null in the record says the worker had nothing to say where an empty
+// array says it decoded nothing.
+func (j babelJob) decodedEcho() babelJobEcho {
+	echo := babelJobEcho{
+		Recipes: make([]string, 0, len(j.Recipes)),
+		Sources: make([]string, 0, len(j.Sources)),
+	}
+	for _, recipe := range j.Recipes {
+		echo.Recipes = append(echo.Recipes, recipe.ID+"@"+strconv.Itoa(recipe.Version))
+	}
+	for _, source := range j.Sources {
+		echo.Sources = append(echo.Sources,
+			strings.Join([]string{source.Kind, source.Selector, source.Digest, source.Snapshot}, "|"))
+	}
+	return echo
 }
 
 // babelDecision is Babel's answer to one tool-request. A denial is not a

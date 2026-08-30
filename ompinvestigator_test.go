@@ -22,6 +22,25 @@ import (
 // environment or a payload cannot match it by coincidence.
 const testBrokerToken = "BROKERTOKEN4f19c8d3a72b6e05f8341ca9"
 
+// testProviderToken is the provider credential these tests resolve. It is
+// distinct from testBrokerToken because the two are protected by different
+// mechanisms and a test that confused them would prove neither.
+const testProviderToken = "PROVIDERTOKEN0b7d41e5c93a2f68d150ba7c"
+
+// testAuth is a resolved credential with no broker behind it: the driver only
+// ever hands these values to the child, so a test needs the values and not a
+// service.
+func testAuth() ompAuth {
+	return ompAuth{
+		broker: brokerConfig{
+			URL:           "http://127.0.0.1:1/auth",
+			Token:         testProviderToken,
+			SnapshotCache: "/nonexistent/snapshot-cache",
+		},
+		pool: map[string][]string{anthropicProvider: {"enabled-identity"}},
+	}
+}
+
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 // fakeProfiles is a profileSource with no store behind it: the investigator
@@ -106,6 +125,13 @@ func newTestInvestigator(t *testing.T) (*ompInvestigator, *fakeProfiles) {
 	inv.pace = time.Millisecond
 	inv.slowBudget = 50 * time.Millisecond
 	inv.lookOmp = func() (string, error) { return "", errors.New("no omp in this test") }
+	inv.auth = func() (ompAuth, error) { return testAuth(), nil }
+	// Every driver test goes through the credential gate the protocol layer
+	// puts in front of a real run, so none of them can pass on a path
+	// production does not take.
+	if _, err := inv.resolveCredential(); err != nil {
+		t.Fatalf("resolving the test credential: %v", err)
+	}
 	return inv, profiles
 }
 
@@ -296,7 +322,7 @@ func TestOmpChildEnvReplacesTheHomeAndDropsSecretBearingEntries(t *testing.T) {
 		"AMBIENT=" + testBrokerToken,
 		"PI_PACKAGE_DIR=/nix/store/omp",
 	}
-	got := ompChildEnv(base, "/tmp/run/home", job)
+	got := ompChildEnv(base, "/tmp/run/home", job, testAuth())
 
 	index := map[string]string{}
 	for _, entry := range got {
@@ -321,6 +347,65 @@ func TestOmpChildEnvReplacesTheHomeAndDropsSecretBearingEntries(t *testing.T) {
 	for _, entry := range got {
 		if strings.Contains(entry, testBrokerToken) {
 			t.Fatalf("the broker token is in the child environment: %s", entry)
+		}
+	}
+}
+
+// TestOmpChildEnvReplacesAmbientAuthWithTheRunsOwnCredential is the hazard a
+// hand-run `code babel` in an operator's shell creates: the shell exports a
+// broker and an account-pool file, and a supervised run that inherited them
+// would authenticate under a pool this run's account policy never approved.
+func TestOmpChildEnvReplacesAmbientAuthWithTheRunsOwnCredential(t *testing.T) {
+	auth := testAuth()
+	auth.poolPath = "/tmp/run/account-pool.json"
+	base := []string{
+		"PATH=/usr/bin",
+		"OMP_AUTH_BROKER_URL=http://ambient.invalid/auth",
+		"OMP_AUTH_BROKER_TOKEN=ambient-token",
+		"OMP_AUTH_BROKER_SNAPSHOT_CACHE=/ambient/cache",
+		"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE=/ambient/account-pool.json",
+	}
+	got := ompChildEnv(base, "/tmp/run/home", testJob("", babelCapabilityCorpusSearch), auth)
+
+	for _, key := range []string{
+		"OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN",
+		"OMP_AUTH_BROKER_SNAPSHOT_CACHE", "OMP_AUTH_BROKER_ACCOUNT_POOL_FILE",
+	} {
+		var seen []string
+		for _, entry := range got {
+			if name, value, _ := strings.Cut(entry, "="); name == key {
+				seen = append(seen, value)
+			}
+		}
+		if len(seen) != 1 {
+			t.Fatalf("%s appears %d times in the child environment: %v", key, len(seen), seen)
+		}
+		if strings.Contains(seen[0], "ambient") {
+			t.Errorf("%s = %q; the inherited value survived into a supervised run", key, seen[0])
+		}
+	}
+	index := map[string]string{}
+	for _, entry := range got {
+		key, value, _ := strings.Cut(entry, "=")
+		index[key] = value
+	}
+	if index["OMP_AUTH_BROKER_TOKEN"] != testProviderToken {
+		t.Errorf("OMP_AUTH_BROKER_TOKEN = %q; the run's own credential must be the one the child gets", index["OMP_AUTH_BROKER_TOKEN"])
+	}
+	if index["OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"] != auth.poolPath {
+		t.Errorf("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE = %q, want the run's own pool %q",
+			index["OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"], auth.poolPath)
+	}
+}
+
+// TestOmpChildEnvWithoutACredentialAddsNoBrokerVariables keeps the failure
+// honest: empty broker variables read to OMP as a configured broker, which
+// turns "no credential" into an authentication error nobody can trace back.
+func TestOmpChildEnvWithoutACredentialAddsNoBrokerVariables(t *testing.T) {
+	got := ompChildEnv([]string{"PATH=/usr/bin"}, "/tmp/run/home", testJob("", babelCapabilityCorpusSearch), ompAuth{})
+	for _, entry := range got {
+		if strings.HasPrefix(entry, "OMP_AUTH_BROKER_") {
+			t.Errorf("an unauthenticated child was given %s", entry)
 		}
 	}
 }
@@ -535,6 +620,78 @@ func TestOmpConformanceSlowEndsOnItsOwnBudget(t *testing.T) {
 	}
 	if result.Status != babelStatusPartial {
 		t.Errorf("status = %q; a run that gave up on its own schedule stopped short", result.Status)
+	}
+}
+
+// TestOmpConformanceEchoJobReportsTheJobItDecoded grades the omp path's answer
+// to the echo-job directive the way Babel does: against the job that was sent,
+// entry by entry, including the empty final segment an unarchived source must
+// render.
+//
+// The material carries a nonce because without one this assertion is satisfied
+// by a worker that prints a constant, which is the exact reading the obligation
+// exists to rule out. So the answer is also checked against what that worker
+// would have said.
+func TestOmpConformanceEchoJobReportsTheJobItDecoded(t *testing.T) {
+	inv, profiles := newTestInvestigator(t)
+	rec := &recorder{}
+	job := testJob(babelConformanceEchoJob, babelCapabilityCorpusSearch)
+	job.Recipes = []babelRecipeRef{
+		{ID: "outcome-integrity", Version: 1},
+		{ID: "evidence-" + babelTestNonce, Version: 7},
+	}
+	job.Sources = []babelSource{{
+		Kind:     "session",
+		Selector: "omp/synthetic-" + babelTestNonce,
+		Digest:   "sha256:" + strings.Repeat("0", 64),
+		Snapshot: "snapshot-" + babelTestNonce,
+	}, {
+		Kind:     "repository",
+		Selector: "synthetic/repository-" + babelTestNonce,
+		Digest:   "sha256:" + strings.Repeat("1", 64),
+	}}
+
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	if profiles.askedID != "" {
+		t.Error("a conformance run resolved a profile; the suite names one no store holds")
+	}
+	if result.Status != babelStatusOK {
+		t.Errorf("status = %q; the run answered what it was asked and cut nothing short", result.Status)
+	}
+	if len(rec.asks) != 0 {
+		t.Errorf("the directive made %d tool requests and needs none: %+v", len(rec.asks), rec.asks)
+	}
+
+	var answered struct {
+		Job *babelJobEcho `json:"job"`
+	}
+	if err := json.Unmarshal(result.Payload, &answered); err != nil {
+		t.Fatalf("the result payload is not a JSON object: %v", err)
+	}
+	if answered.Job == nil {
+		t.Fatalf(`the result payload carries no "job" object: %s`, result.Payload)
+	}
+	if want := babelEchoJobAnswer(); !reflect.DeepEqual(*answered.Job, want) {
+		t.Errorf("the worker reports %+v, the job carried %+v", *answered.Job, want)
+	}
+	if stale := babelStaleEchoAnswer(); reflect.DeepEqual(*answered.Job, stale) {
+		t.Errorf("the worker reports the published conformance job rather than the one that "+
+			"arrived: %+v", *answered.Job)
+	}
+
+	// The payload's own recipe and source summary is not the echo and must not
+	// be mistaken for it: it renders a source as "kind:selector", which drops
+	// two of the four parts Babel compares.
+	var summary ompFindings
+	if err := json.Unmarshal(result.Payload, &summary); err != nil {
+		t.Fatalf("the result payload is not findings: %v", err)
+	}
+	if len(summary.Sources) != len(answered.Job.Sources) {
+		t.Errorf("the payload summarises %d sources and echoes %d; both come from the same "+
+			"decoded job", len(summary.Sources), len(answered.Job.Sources))
 	}
 }
 
@@ -843,6 +1000,259 @@ func TestOmpDriveKeepsTheBrokerTokenOutOfTheChildsArgvAndEnvironment(t *testing.
 	}
 }
 
+// TestOmpDriveGivesTheChildAUsableProviderCredential is the property the whole
+// path exists for: an OMP started under Babel has to be able to authenticate.
+// It asserts against the environment the child actually received — recorded by
+// the child itself — rather than against what the driver believes it built,
+// because a credential the driver assembled and did not pass would satisfy the
+// second and fail the run.
+func TestOmpDriveGivesTheChildAUsableProviderCredential(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	// Nothing ambient: the credential in the child's environment can only have
+	// come from the run's own resolution.
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{}
+
+	if _, err := inv.investigate(context.Background(), testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request); err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	got := ompFakeRead(t, record)
+	index := map[string]string{}
+	for _, entry := range got.Env {
+		key, value, _ := strings.Cut(entry, "=")
+		index[key] = value
+	}
+	want := testAuth()
+	if index["OMP_AUTH_BROKER_URL"] != want.broker.URL {
+		t.Errorf("the child's OMP_AUTH_BROKER_URL = %q, want %q", index["OMP_AUTH_BROKER_URL"], want.broker.URL)
+	}
+	if index["OMP_AUTH_BROKER_TOKEN"] != want.broker.Token {
+		t.Error("the child received no usable provider credential, so no real exploration could authenticate")
+	}
+	if index["OMP_AUTH_BROKER_SNAPSHOT_CACHE"] != want.broker.SnapshotCache {
+		t.Errorf("the child's snapshot cache = %q, want %q",
+			index["OMP_AUTH_BROKER_SNAPSHOT_CACHE"], want.broker.SnapshotCache)
+	}
+	// The pool is a file the child must be able to open, so the child reading
+	// it is the assertion; a path alone would prove only that a string was set.
+	if got.Pool == "" {
+		t.Fatal("the child could not read the run's account pool")
+	}
+	var pool map[string][]string
+	if err := json.Unmarshal([]byte(got.Pool), &pool); err != nil {
+		t.Fatalf("the account pool the child read does not parse: %v", err)
+	}
+	if !reflect.DeepEqual(pool[anthropicProvider], want.pool[anthropicProvider]) {
+		t.Errorf("the child's account pool = %v, want %v", pool, want.pool)
+	}
+	if index["OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"] == "" {
+		t.Fatal("no account pool file was named")
+	}
+	// The pool carries the run's account policy, so it is disposed of with the
+	// run rather than left in a temporary directory nobody owns.
+	if _, err := os.Stat(index["OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"]); !os.IsNotExist(err) {
+		t.Errorf("the account pool outlived the run at %q (stat error %v)",
+			index["OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"], err)
+	}
+}
+
+// TestOmpDriveKeepsTheProviderCredentialOutOfTheArgvAndTheStream holds the
+// credential to the confinement the broker token already has: argv is a process
+// listing, and everything the investigator emits becomes an event Babel records
+// durably.
+func TestOmpDriveKeepsTheProviderCredentialOutOfTheArgvAndTheStream(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{}
+
+	result, err := inv.investigate(context.Background(), testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	for _, arg := range ompFakeRead(t, record).Argv {
+		if strings.Contains(arg, testProviderToken) {
+			t.Fatalf("the provider credential is in the child's argv: %s", arg)
+		}
+	}
+	for _, message := range append(append([]string{}, rec.messages...), rec.stages...) {
+		if strings.Contains(message, testProviderToken) {
+			t.Fatalf("the provider credential reached the progress stream: %s", message)
+		}
+	}
+	if strings.Contains(string(result.Payload), testProviderToken) {
+		t.Fatal("the provider credential reached the result payload")
+	}
+}
+
+// TestOmpDriveHonoursADisabledAccount runs the resolution the operator's
+// machine runs — broker snapshot, selection file, pool — and checks the account
+// they disabled is absent from what the child is routed through. A worker that
+// ignored the selection would put a supervised run on an account taken out of
+// service, which is the one thing the pool file exists to prevent.
+func TestOmpDriveHonoursADisabledAccount(t *testing.T) {
+	const snapshot = `{"credentials":[
+		{"provider":"anthropic","identityKey":"kept","credential":{"type":"oauth","email":"kept@example.com"}},
+		{"provider":"anthropic","identityKey":"retired","credential":{"type":"oauth","email":"retired@example.com"}}
+	]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(snapshot))
+	}))
+	defer server.Close()
+
+	state := filepath.Join(t.TempDir(), "accounts.json")
+	selections := defaultAccountSelectionState()
+	selections.SetManualDisabled(map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "retired"}: true})
+	if err := writeAccountSelectionState(state, selections); err != nil {
+		t.Fatalf("writing the account selection: %v", err)
+	}
+	t.Setenv("OMP_AUTH_BROKER_URL", server.URL)
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", testProviderToken)
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", state)
+
+	inv, _ := newTestInvestigator(t)
+	inv.auth = ompResolveAuth
+	if _, err := inv.resolveCredential(); err != nil {
+		t.Fatalf("resolveCredential: %v", err)
+	}
+	fake, record := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{}
+
+	if _, err := inv.investigate(context.Background(), testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request); err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var pool map[string][]string
+	if err := json.Unmarshal([]byte(ompFakeRead(t, record).Pool), &pool); err != nil {
+		t.Fatalf("the account pool the child read does not parse: %v", err)
+	}
+	if !reflect.DeepEqual(pool[anthropicProvider], []string{"kept"}) {
+		t.Errorf("the run's anthropic pool = %v, want only the account the operator left enabled", pool[anthropicProvider])
+	}
+}
+
+// TestOmpResolveAuthWithNoBrokerNamesTheRemedy is the honest failure. A worker
+// that launched anyway would produce an authentication error from inside OMP,
+// attributed to the analysis, in a receipt with no way back to the cause.
+func TestOmpResolveAuthWithNoBrokerNamesTheRemedy(t *testing.T) {
+	t.Setenv("OMP_AUTH_BROKER_URL", "")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "")
+	t.Setenv("CODE_AUTH_VAULTS", "")
+	t.Setenv("CODE_AUTH_VAULTS_FILE", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	_, err := ompResolveAuth()
+	if !errors.Is(err, errOmpNoCredential) {
+		t.Fatalf("error = %v; want errOmpNoCredential", err)
+	}
+	for _, remedy := range []string{"OMP_AUTH_BROKER_TOKEN", ompVaultManifestName, "CODE_AUTH_VAULTS_FILE"} {
+		if !strings.Contains(err.Error(), remedy) {
+			t.Errorf("the failure does not name %q, so an operator cannot act on it: %v", remedy, err)
+		}
+	}
+}
+
+// TestOmpResolveAuthReadsCodesOwnVaultManifest is why the failure above is not
+// the only outcome under Babel. Babel's curated environment exports no broker
+// variables by design, but it does hand the worker the operator's real HOME,
+// and the manifest and the token file it names live there.
+func TestOmpResolveAuthReadsCodesOwnVaultManifest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"credentials":[]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	tokenFile := filepath.Join(home, "token")
+	if err := os.WriteFile(tokenFile, []byte(testProviderToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(home, ".config", "code")
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := json.Marshal([]map[string]string{{"brokerUrl": server.URL, "tokenFile": tokenFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, ompVaultManifestName), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Exactly what Babel spawns a worker with: a real HOME and nothing else.
+	t.Setenv("OMP_AUTH_BROKER_URL", "")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "")
+	t.Setenv("CODE_AUTH_VAULTS", "")
+	t.Setenv("CODE_AUTH_VAULTS_FILE", "")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", home)
+
+	auth, err := ompResolveAuth()
+	if err != nil {
+		t.Fatalf("ompResolveAuth: %v", err)
+	}
+	if auth.broker.Token != testProviderToken {
+		t.Error("the credential Code stores under the operator's HOME did not resolve")
+	}
+}
+
+// TestOmpDriveWithoutACredentialRefusesToLaunch pins the order: no credential
+// means no child, not a child that fails later for a reason the receipt cannot
+// explain.
+func TestOmpDriveWithoutACredentialRefusesToLaunch(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	inv.credential = ompAuth{}
+	fake, record := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	rec := &recorder{}
+
+	_, err := inv.investigate(context.Background(), testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if !errors.Is(err, errOmpNoCredential) {
+		t.Fatalf("error = %v; want errOmpNoCredential", err)
+	}
+	if _, statErr := os.Stat(record); statErr == nil {
+		t.Error("omp was launched with nothing to authenticate with")
+	}
+}
+
+// TestOmpResolveCredentialRefusesAnUnconfiguredBroker keeps the seam total: a
+// resolver that answers with an empty broker and no error must not be read as
+// a credential.
+func TestOmpResolveCredentialRefusesAnUnconfiguredBroker(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	inv.auth = func() (ompAuth, error) { return ompAuth{broker: brokerConfig{URL: "http://broker.invalid"}}, nil }
+	if _, err := inv.resolveCredential(); !errors.Is(err, errOmpNoCredential) {
+		t.Fatalf("error = %v; want errOmpNoCredential", err)
+	}
+}
+
+// TestOmpResolveCredentialReportsTheSecretsToScrub is the contract the protocol
+// layer relies on: it cannot scrub what it is not told about, and OMP's own
+// diagnostics are forwarded into the run's failure record.
+func TestOmpResolveCredentialReportsTheSecretsToScrub(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	secrets, err := inv.resolveCredential()
+	if err != nil {
+		t.Fatalf("resolveCredential: %v", err)
+	}
+	found := false
+	for _, secret := range secrets {
+		if secret == testProviderToken {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the provider credential was not reported for scrubbing: %v", secrets)
+	}
+}
+
 func TestOmpDriveWithoutAnOmpFails(t *testing.T) {
 	inv, _ := newTestInvestigator(t)
 	rec := &recorder{}
@@ -871,6 +1281,10 @@ type ompFakeRecord struct {
 	Env     []string          `json:"env"`
 	Frames  []json.RawMessage `json:"frames"`
 	Sleeper int               `json:"sleeper"`
+	// Pool is the account-pool document as the child managed to read it. The
+	// driver deletes the run directory when the run ends, so a test that only
+	// looked at the path afterwards could not tell a readable pool from a name.
+	Pool string `json:"pool"`
 }
 
 // ompFakeBinary writes a wrapper that re-executes this test binary as the fake
@@ -971,6 +1385,9 @@ func ompFakeArgs() []string {
 func ompFakeMain(args []string) {
 	scenario, record := args[0], args[1]
 	state := ompFakeRecord{Argv: args[2:], Env: os.Environ()}
+	if pool, err := os.ReadFile(os.Getenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE")); err == nil {
+		state.Pool = string(pool)
+	}
 	save := func() {
 		body, err := json.Marshal(state)
 		if err == nil {
@@ -984,6 +1401,16 @@ func ompFakeMain(args []string) {
 		save()
 		time.Sleep(10 * time.Minute)
 		os.Exit(0)
+	}
+
+	if scenario == "credleak" {
+		// The child prints the provider credential exactly where a real OMP
+		// prints an authentication failure, and dies without a ready frame so
+		// the driver folds that stderr tail into the run's error. From here
+		// only the worker's own scrubbing keeps it off the wire.
+		_, _ = os.Stderr.WriteString("omp: authentication rejected for " +
+			os.Getenv("OMP_AUTH_BROKER_TOKEN") + "\n")
+		os.Exit(1)
 	}
 
 	emit := func(frame string) {
