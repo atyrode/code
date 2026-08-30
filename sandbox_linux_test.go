@@ -251,12 +251,18 @@ func errText(err error) string {
 
 // ── the harness ──────────────────────────────────────────────────────────────
 
-// sandboxTestBackend probes the real backend, or skips loudly.
+// sandboxTestBackend probes the real backend, or refuses to pretend it ran.
 //
 // The skip names the property that went unverified and writes to stderr as well
 // as to the test log, because a `go test` without -v prints a skip nowhere an
 // operator would see it, and an unverified containment claim is exactly the
 // thing that must not pass unnoticed.
+//
+// In CI that is not enough. A skip there retires the gate for everyone: the
+// escape scenarios are the only evidence that the boundary Babel refuses runs
+// without actually holds, so a green pipeline that ran none of them is worse
+// than a red one. Where CI is set, or where the operator asks for the
+// guarantee explicitly, an absent backend is a failure instead.
 func sandboxTestBackend(t *testing.T) *sandboxBackend {
 	t.Helper()
 	backend := newSandboxBackend(defaultSandboxCeilings())
@@ -267,9 +273,34 @@ func sandboxTestBackend(t *testing.T) *sandboxBackend {
 			"disposability and reaping properties of Code's sandbox are NOT tested by this run. " +
 			"Backend probed as " + backend.facts.backend + ": " + reason
 		fmt.Fprintln(os.Stderr, "sandbox escape scenarios: "+message)
+		if sandboxGateIsRequired() {
+			t.Fatal(message + "\n\nThis is a failure rather than a skip because " +
+				sandboxGateReason() + ". Install bubblewrap and provide a user " +
+				"systemd session, or unset the variable to accept an unverified boundary.")
+		}
 		t.Skip(message)
 	}
 	return backend
+}
+
+// sandboxGateIsRequired reports whether an absent backend must fail.
+//
+// CI is the load-bearing case and needs no opt-in, since a pipeline is exactly
+// where a silent skip becomes everyone's problem. CODE_REQUIRE_SANDBOX exists
+// for a developer who wants the same guarantee locally, and can be set to "0"
+// to opt a CI job out deliberately rather than by accident.
+func sandboxGateIsRequired() bool {
+	if v, ok := os.LookupEnv("CODE_REQUIRE_SANDBOX"); ok {
+		return v != "" && v != "0"
+	}
+	return os.Getenv("CI") != ""
+}
+
+func sandboxGateReason() string {
+	if _, ok := os.LookupEnv("CODE_REQUIRE_SANDBOX"); ok {
+		return "CODE_REQUIRE_SANDBOX is set"
+	}
+	return "CI is set, and a skipped gate in CI retires it for every later change"
 }
 
 // sandboxWithCeilings copies a probed backend with different limits. The
@@ -935,6 +966,11 @@ func TestSandboxBackendComesUpWhereItsPrerequisitesDo(t *testing.T) {
 		message := "UNVERIFIED: this machine cannot run Code's containment backend, so nothing in " +
 			"sandbox_linux_test.go tested it. Missing " + strings.Join(missing, "; ")
 		fmt.Fprintln(os.Stderr, "sandbox escape scenarios: "+message)
+		if sandboxGateIsRequired() {
+			t.Fatal(message + "\n\nThis is a failure rather than a skip because " +
+				sandboxGateReason() + ". A pipeline that cannot run the escape scenarios " +
+				"must say so rather than report success for a boundary it never exercised.")
+		}
 		t.Skip(message)
 	}
 

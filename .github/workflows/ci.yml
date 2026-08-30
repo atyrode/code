@@ -21,5 +21,25 @@ jobs:
           fi
       - name: vet
         run: go vet ./...
+      - name: Provision the containment backend
+        # The escape scenarios in sandbox_linux_test.go are the only evidence
+        # that the boundary Babel refuses runs without actually holds, and they
+        # need bubblewrap plus a systemd user session. ubuntu-latest ships
+        # neither: without this step every scenario skips and the job stays
+        # green, which retires the gate for every later change. The tests fail
+        # rather than skip when CI is set, so a regression here is loud.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            [ -S "/run/user/$(id -u)/bus" ] && break
+            sleep 1
+          done
+          bwrap --version
+          XDG_RUNTIME_DIR=/run/user/$(id -u) systemd-run --user --scope --quiet \
+            -p MemoryMax=256M -p TasksMax=32 -- true
+          echo "bubblewrap and a transient user scope are both available"
       - name: test
         run: go test ./...
