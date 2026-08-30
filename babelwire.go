@@ -32,6 +32,20 @@ import (
 const (
 	babelProtocolName    = "babel.analysis-worker"
 	babelProtocolVersion = 1
+
+	// babelResultSchema is the schema every terminal result must declare.
+	// Babel fails closed on anything else: its explore package compares the
+	// stored record's schema against this exact string and rejects the result
+	// rather than recording an analysis it cannot read, so a worker that names
+	// its own format produces runs that are all discarded at the far end.
+	//
+	// It lives here, beside the protocol's name and version, because it is wire
+	// surface rather than a property of any one payload — and it must not be
+	// duplicated. Defining it next to its first user is exactly how this build
+	// came to carry two schemas: the conformance stub declared Babel's and
+	// passed, while the real investigator declared its own and would have had
+	// every production result refused.
+	babelResultSchema = "babel.analysis-result/1"
 )
 
 // Message types on the wire. Code writes hello, configuration, progress,
@@ -92,12 +106,24 @@ const (
 const babelParamConformance = "babel.conformance"
 
 // Conformance directives, each a state Babel needs to observe.
+//
+// babelConformanceEchoToken is the one directive that asks this worker to
+// misbehave, and it has to. Babel's obligation is that a run-scoped credential
+// never survives into a durable receipt, and that obligation cannot be graded
+// against a worker that behaves: searching a receipt built from a well-behaved
+// run for a token nothing ever wrote cannot fail, so it proves nothing. So the
+// suite asks for the leak and grades what Babel does with it. A worker
+// receiving it puts the job's broker token verbatim into the terminal result's
+// payload and into at least one progress message, which are the two places a
+// real leak happens — free text a model wrote and a stage description built by
+// concatenation.
 const (
 	babelConformanceWellBehaved      = "well-behaved"
 	babelConformanceRequestTool      = "request-tool"
 	babelConformanceRequestUngranted = "request-ungranted"
 	babelConformanceErrorOnly        = "error-only"
 	babelConformanceSlow             = "slow"
+	babelConformanceEchoToken        = "echo-token"
 )
 
 // babelHello is the worker's opening line. It is written before reading
@@ -217,7 +243,7 @@ type babelJob struct {
 func (j babelJob) conformanceDirective() string {
 	switch d := j.Params[babelParamConformance]; d {
 	case babelConformanceRequestTool, babelConformanceRequestUngranted,
-		babelConformanceErrorOnly, babelConformanceSlow:
+		babelConformanceErrorOnly, babelConformanceSlow, babelConformanceEchoToken:
 		return d
 	default:
 		return babelConformanceWellBehaved
@@ -248,6 +274,20 @@ func (j babelJob) secrets() []string {
 		return nil
 	}
 	return []string{j.Broker.Token}
+}
+
+// brokerToken is the run's broker credential, or empty when the job carries
+// none. It exists for the echo-token conformance directive and nothing else:
+// every other handling of the token goes through secrets(), which is the list
+// of values that must never be written, or through the broker request itself.
+// Naming the one deliberate read keeps it findable, so a reviewer auditing what
+// touches the credential does not have to trust that a Broker.Token dereference
+// somewhere was the intended one.
+func (j babelJob) brokerToken() string {
+	if j.Broker == nil {
+		return ""
+	}
+	return j.Broker.Token
 }
 
 // babelDecision is Babel's answer to one tool-request. A denial is not a

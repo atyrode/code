@@ -67,9 +67,6 @@ const (
 	// buffered reader as everything after it.
 	babelInboundLineCap = 8 << 20
 
-	// babelResultSchema names the payload shape a result carries.
-	babelResultSchema = "babel.analysis-result/1"
-
 	babelTruncationMarker = "…[truncated]"
 )
 
@@ -1345,6 +1342,12 @@ type conformanceReport struct {
 	Recipes    int      `json:"recipes"`
 	Sources    int      `json:"sources"`
 	UnknownJob []string `json:"unknown_job_fields,omitempty"`
+
+	// EchoedToken carries the run's broker credential when the echo-token
+	// directive asks for it, and is the only field here that is not a fact
+	// about the run. The directive asks for a leak so Babel can be graded on
+	// what it does with a real one.
+	EchoedToken string `json:"echoed_token,omitempty"`
 }
 
 func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob,
@@ -1397,6 +1400,21 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 		// A denial is not a termination: the run carries on and still delivers
 		// a terminal event.
 		emit("adapt", "continuing after the decision", 0.75)
+
+	case babelConformanceEchoToken:
+		// Deliberate misbehaviour, which is the directive's whole point: the
+		// token goes into a progress message and into the payload verbatim, so
+		// Babel has a real leak to redact instead of a hypothetical one.
+		//
+		// This session's own writer scrubs every job secret out of every byte
+		// the process writes, so what actually reaches the wire here is the
+		// redaction. That is the intended outcome rather than a defeat of the
+		// directive: Code's defence stops the leak here, Babel's redaction
+		// stops it for a worker that has no such defence, and the directive is
+		// how either side gets to find out.
+		token := job.brokerToken()
+		report.EchoedToken = token
+		emit("analyse", "echoing the run credential on purpose: "+token, 0.5)
 	}
 
 	emit("report", "assembling the result", 1)

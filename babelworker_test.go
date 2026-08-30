@@ -857,6 +857,50 @@ func TestBabelWorkerUngrantedRequest(t *testing.T) {
 	}
 }
 
+// TestBabelWorkerEchoTokenIsDisclosedAndThenScrubbed asserts both halves of the
+// echo-token directive, because either half alone is worthless. A stream with no
+// credential in it proves nothing if the investigator never wrote one, and an
+// investigator that wrote one proves nothing if the stream still carries it.
+//
+// runBabelWorkerStream fails any run whose stdout or stderr contains the
+// credential, so it already owns the scrubbing half. What this test adds is the
+// evidence that there was something to scrub: the redaction marker appears only
+// where a job secret was, so finding it in the payload and in a progress message
+// is proof the investigator disclosed the token in both places the directive
+// requires — and that this session's writer, not the investigator's restraint,
+// is what kept it off the wire.
+func TestBabelWorkerEchoTokenIsDisclosedAndThenScrubbed(t *testing.T) {
+	isolateBabelEnv(t)
+	stream := runBabelWorkerStream(t, babelTestJob(babelConformanceEchoToken), nil)
+	stream.check(t)
+
+	if kind, _ := stream.terminal["type"].(string); kind != babelMessageResult {
+		t.Fatalf("terminal event is %q, want a result", kind)
+	}
+	payload, _ := json.Marshal(stream.terminal["payload"])
+	if !strings.Contains(string(payload), string(babelRedacted)) {
+		t.Errorf("the result payload carries no redaction, so the investigator never "+
+			"disclosed the token and the leak this directive exists to create did not "+
+			"happen: %s", payload)
+	}
+	redactedProgress := 0
+	for _, ev := range stream.events {
+		if kind, _ := ev["type"].(string); kind != babelMessageProgress {
+			continue
+		}
+		if message, _ := ev["message"].(string); strings.Contains(message, string(babelRedacted)) {
+			redactedProgress++
+		}
+	}
+	if redactedProgress == 0 {
+		t.Error("no progress message carries a redaction; the directive requires the " +
+			"token in at least one of them")
+	}
+	if stream.status != 0 {
+		t.Errorf("exit status = %d, want 0 after a result", stream.status)
+	}
+}
+
 // TestBabelWorkerUnknownFieldsSurvive is the forward-compatibility rule in both
 // directions: unknown fields in accept, job and tool-decision are never fatal,
 // and a job's unknown top-level fields are preserved rather than dropped, so a

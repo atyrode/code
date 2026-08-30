@@ -463,8 +463,11 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 			if result.Status != tc.wantStatus {
 				t.Errorf("status = %q; want %q", result.Status, tc.wantStatus)
 			}
-			if result.Schema != ompResultSchema {
-				t.Errorf("schema = %q", result.Schema)
+			// The literal rather than the constant: a test that compares the
+			// emitted schema against the same constant the emitter used agrees
+			// with itself whatever either of them says.
+			if result.Schema != "babel.analysis-result/1" {
+				t.Errorf("schema = %q; Babel refuses a result declaring any other value", result.Schema)
 			}
 			if len(rec.asks) != tc.wantAsks {
 				t.Fatalf("made %d tool requests, want %d: %+v", len(rec.asks), tc.wantAsks, rec.asks)
@@ -535,6 +538,46 @@ func TestOmpConformanceSlowEndsOnItsOwnBudget(t *testing.T) {
 	}
 }
 
+// TestOmpConformanceEchoTokenDisclosesTheTokenOnPurpose defends the property
+// that makes Babel's redaction obligation gradeable at all. The directive asks
+// this worker to leak the run's broker credential; if the worker quietly
+// behaved instead, Babel's search for that token in the receipt could not fail
+// and would pass without testing anything. So the assertion here is the inverse
+// of the one every other directive gets above: the token must be present, in
+// both of the two places a real leak reaches.
+func TestOmpConformanceEchoTokenDisclosesTheTokenOnPurpose(t *testing.T) {
+	inv, profiles := newTestInvestigator(t)
+	rec := &recorder{}
+	job := testJob(babelConformanceEchoToken, babelCapabilityCorpusSearch)
+
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	if profiles.askedID != "" {
+		t.Error("a conformance run resolved a profile; the suite names one no store holds")
+	}
+	if result.Status != babelStatusOK {
+		t.Errorf("status = %q; the run did what it was asked and cut nothing short", result.Status)
+	}
+	if !strings.Contains(string(result.Payload), testBrokerToken) {
+		t.Errorf("the result payload does not carry the token verbatim, so a redaction "+
+			"downstream would have nothing to find: %s", result.Payload)
+	}
+	disclosed := false
+	for _, message := range rec.messages {
+		if strings.Contains(message, testBrokerToken) {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Errorf("no progress message carried the token; the directive requires at least one: %v", rec.messages)
+	}
+	if len(rec.asks) != 0 {
+		t.Errorf("the directive made %d tool requests and needs none: %+v", len(rec.asks), rec.asks)
+	}
+}
+
 // ── the real run, against a fake OMP ─────────────────────────────────────────
 
 func TestOmpDriveRegistersOnlyTheGrantedToolsAndReportsAResult(t *testing.T) {
@@ -569,6 +612,58 @@ func TestOmpDriveRegistersOnlyTheGrantedToolsAndReportsAResult(t *testing.T) {
 	want := []string{"babel_corpus_search", "babel_repo_read"}
 	if !reflect.DeepEqual(registered, want) {
 		t.Fatalf("registered %v; want exactly the granted tools %v", registered, want)
+	}
+}
+
+// TestOmpProductionResultDeclaresTheSchemaBabelAccepts is the check the two
+// divergent schema constants got past. Babel's explore package compares the
+// stored record's schema against "babel.analysis-result/1" and rejects the
+// result on anything else, so a production investigator naming a format of its
+// own produces runs that are all discarded after the work is done — while a
+// conformance stub declaring the right one passes the suite and hides it.
+//
+// The value is read out of the marshalled result rather than off a constant,
+// because these bytes are the real wire value: the protocol layer's emitResult
+// fills Schema in only when the investigator left it empty and then writes this
+// struct through writeLine unchanged, so the schema field here is the field
+// Babel parses. Comparing against babelResultSchema instead would restate the
+// emitter rather than check it.
+//
+// The job carries no conformance directive, so this reaches drive — the real
+// production path — and the fake omp is the narrowest seam that gets there
+// without a provider credential or a network.
+func TestOmpProductionResultDeclaresTheSchemaBabelAccepts(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, _ := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{}
+
+	job := testJob("", babelCapabilityCorpusSearch)
+	if job.conformanceRequested() {
+		t.Fatal("the job took the conformance path, so this test never reached the production investigator")
+	}
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	line, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshalling the result the protocol layer writes: %v", err)
+	}
+	var onTheWire struct {
+		Schema  string          `json:"schema"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(line, &onTheWire); err != nil {
+		t.Fatalf("decoding the emitted result: %v", err)
+	}
+	if onTheWire.Schema != "babel.analysis-result/1" {
+		t.Fatalf("the production investigator emitted schema %q; Babel accepts only "+
+			"babel.analysis-result/1 and discards the run on anything else", onTheWire.Schema)
+	}
+	if len(onTheWire.Payload) == 0 {
+		t.Error("the result carried no payload, so the declared schema describes nothing")
 	}
 }
 
