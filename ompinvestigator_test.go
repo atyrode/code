@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,27 @@ func testProfile() resolvedProfile {
 	}
 }
 
+// testPublishedTools is the capability-to-tool mapping a current Babel puts in
+// the grant, restricted to the capabilities the job grants. It mirrors Babel's
+// omission rules exactly, because a test job that published more generously
+// than Babel does would exercise a shape production never sees: a capability
+// Babel brokers nothing for gets no key at all, and a grant where nothing is
+// served gets no mapping at all rather than an empty object.
+func testPublishedTools(capabilities ...string) map[string][]string {
+	var tools map[string][]string
+	for _, capability := range capabilities {
+		if capability != babelCapabilityCorpusSearch {
+			// corpus-search is the only facility Babel brokers today.
+			continue
+		}
+		if tools == nil {
+			tools = map[string][]string{}
+		}
+		tools[capability] = []string{"search"}
+	}
+	return tools
+}
+
 func testJob(directive string, capabilities ...string) babelJob {
 	job := babelJob{
 		Type:     babelMessageJob,
@@ -78,6 +100,7 @@ func testJob(directive string, capabilities ...string) babelJob {
 		Grant: babelGrant{
 			Capabilities: capabilities,
 			Disclosure:   babelDisclosureLocal,
+			Tools:        testPublishedTools(capabilities...),
 		},
 		Sources: []babelSource{{Kind: "session", Selector: "omp/synthetic-session"}},
 		Broker:  &babelBroker{Endpoint: "http://127.0.0.1:1/evidence", Token: testBrokerToken},
@@ -85,6 +108,16 @@ func testJob(directive string, capabilities ...string) babelJob {
 	if directive != "" {
 		job.Params = map[string]string{babelParamConformance: directive}
 	}
+	return job
+}
+
+// testLegacyJob is the same job as it arrives from a Babel predating the
+// published mapping: the grant carries no tools field at all. It is the only
+// input that reaches Code's fallback, so every test of that path builds its job
+// here rather than by mutating one.
+func testLegacyJob(directive string, capabilities ...string) babelJob {
+	job := testJob(directive, capabilities...)
+	job.Grant.Tools = nil
 	return job
 }
 
@@ -308,42 +341,177 @@ func TestOmpSyntheticConfigurationEchoesOnlyForConformance(t *testing.T) {
 
 // ── capability mapping ───────────────────────────────────────────────────────
 
-func TestOmpToolsForGrantRegistersOnlyGrantedCapabilities(t *testing.T) {
+func TestOmpToolsForResolvesBothNamesOutOfTheGrant(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		capabilities []string
-		want         []string
+		name  string
+		grant babelGrant
+		// wantHost is the tools registered with OMP, by the name the model
+		// calls. wantBabel is the name each one puts on the wire, in the same
+		// order, which is the assertion that matters: it is the string Babel's
+		// authorizer compares, and getting it wrong produced a whole
+		// exploration with zero retrievals.
+		wantHost  []string
+		wantBabel []string
+		// wantUnreachable is the granted capabilities that resolved to no tool
+		// and so were never offered to the model.
+		wantUnreachable []string
 	}{
-		{name: "none", capabilities: nil, want: []string{}},
 		{
-			name:         "corpus and repo",
-			capabilities: []string{babelCapabilityRepoRead, babelCapabilityCorpusSearch},
-			want:         []string{"babel_corpus_search", "babel_repo_read"},
+			name:      "the published name is what goes on the wire",
+			grant:     babelGrant{Capabilities: []string{babelCapabilityCorpusSearch}, Tools: map[string][]string{babelCapabilityCorpusSearch: {"search"}}},
+			wantHost:  []string{"babel_corpus_search"},
+			wantBabel: []string{"search"},
 		},
 		{
-			name: "all four",
-			capabilities: []string{
-				babelCapabilityCorpusSearch, babelCapabilitySandboxExec,
-				babelCapabilityRepoRead, babelCapabilityPublicResearch,
+			name: "a granted capability the mapping names nothing for is not offered",
+			grant: babelGrant{
+				Capabilities: []string{babelCapabilityCorpusSearch, babelCapabilityRepoRead},
+				Tools:        map[string][]string{babelCapabilityCorpusSearch: {"search"}},
 			},
-			want: []string{"babel_corpus_search", "babel_repo_read", "babel_sandbox_exec", "babel_public_research"},
+			wantHost:        []string{"babel_corpus_search"},
+			wantBabel:       []string{"search"},
+			wantUnreachable: []string{babelCapabilityRepoRead},
 		},
 		{
-			name:         "unknown capability grants nothing",
-			capabilities: []string{"corpus-write"},
-			want:         []string{},
+			name: "an empty array says the same as a missing key",
+			grant: babelGrant{
+				Capabilities: []string{babelCapabilityCorpusSearch},
+				Tools:        map[string][]string{babelCapabilityCorpusSearch: {}},
+			},
+			wantHost:        []string{},
+			wantBabel:       []string{},
+			wantUnreachable: []string{babelCapabilityCorpusSearch},
+		},
+		{
+			name: "a name Code implements is picked out of several published",
+			grant: babelGrant{
+				Capabilities: []string{babelCapabilityCorpusSearch},
+				Tools:        map[string][]string{babelCapabilityCorpusSearch: {"semantic", "search", "neighbourhood"}},
+			},
+			wantHost:  []string{"babel_corpus_search"},
+			wantBabel: []string{"search"},
+		},
+		{
+			name: "published names Code implements none of leave the capability unreachable",
+			grant: babelGrant{
+				Capabilities: []string{babelCapabilityCorpusSearch},
+				Tools:        map[string][]string{babelCapabilityCorpusSearch: {"semantic"}},
+			},
+			wantHost:        []string{},
+			wantBabel:       []string{},
+			wantUnreachable: []string{babelCapabilityCorpusSearch},
+		},
+		{
+			name:      "no mapping at all falls back to the operation Code implements",
+			grant:     babelGrant{Capabilities: []string{babelCapabilityCorpusSearch, babelCapabilityRepoRead}},
+			wantHost:  []string{"babel_corpus_search"},
+			wantBabel: []string{"search"},
+			// repo-read has no operation name in either direction, so even the
+			// fallback has nothing to fall back to.
+			wantUnreachable: []string{babelCapabilityRepoRead},
+		},
+		{
+			name:      "an ungranted capability is not a tool however it is published",
+			grant:     babelGrant{Capabilities: nil, Tools: map[string][]string{babelCapabilityCorpusSearch: {"search"}}},
+			wantHost:  []string{},
+			wantBabel: []string{},
+		},
+		{
+			name:      "a capability Code has never heard of grants nothing",
+			grant:     babelGrant{Capabilities: []string{"corpus-write"}, Tools: map[string][]string{"corpus-write": {"write"}}},
+			wantHost:  []string{},
+			wantBabel: []string{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tools := ompToolsFor(babelGrant{Capabilities: tc.capabilities})
-			got := make([]string, 0, len(tools))
+			tools, bindings := ompToolsFor(tc.grant)
+			host := make([]string, 0, len(tools))
+			babel := make([]string, 0, len(tools))
 			for _, tool := range tools {
-				got = append(got, tool.name)
+				host = append(host, tool.name)
+				babel = append(babel, tool.babelTool)
 			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("tools = %v; want %v", got, tc.want)
+			if !reflect.DeepEqual(host, tc.wantHost) {
+				t.Errorf("host tools = %v; want %v", host, tc.wantHost)
+			}
+			if !reflect.DeepEqual(babel, tc.wantBabel) {
+				t.Errorf("wire names = %v; want %v", babel, tc.wantBabel)
+			}
+
+			unreachable := []string(nil)
+			for _, binding := range bindings {
+				if binding.BabelTool == "" {
+					unreachable = append(unreachable, binding.Capability)
+				}
+				if binding.Note == "" && binding.BabelTool == "" {
+					t.Errorf("%s resolved to no tool and gave no reason", binding.Capability)
+				}
+			}
+			if !reflect.DeepEqual(unreachable, tc.wantUnreachable) {
+				t.Errorf("unreachable = %v; want %v", unreachable, tc.wantUnreachable)
+			}
+			// A grant is a ceiling, not a requirement, so one unreachable
+			// capability among several is a binding rather than a shortfall. A
+			// run left with no route at all is the failure that started this,
+			// and it is the one that has to become a gap.
+			gap := ompNoRouteGap(tools, bindings)
+			if wantGap := len(bindings) > 0 && len(tools) == 0; (gap != "") != wantGap {
+				t.Errorf("gap = %q; want a gap only for a run left with no route at all (%v)", gap, wantGap)
 			}
 		})
+	}
+}
+
+// TestOmpToolBindingsSayWhereTheWireNameCameFrom is the operator-facing half of
+// the contract: whichever path a run took, the payload has to say which one, or
+// a receipt cannot distinguish a name Babel published from one Code chose.
+func TestOmpToolBindingsSayWhereTheWireNameCameFrom(t *testing.T) {
+	_, published := ompToolsFor(babelGrant{
+		Capabilities: []string{babelCapabilityCorpusSearch},
+		Tools:        map[string][]string{babelCapabilityCorpusSearch: {"search"}},
+	})
+	if len(published) != 1 || published[0].Source != ompToolNamePublished {
+		t.Fatalf("bindings = %+v; want one sourced %q", published, ompToolNamePublished)
+	}
+	if published[0].BabelTool != "search" || published[0].HostTool != "babel_corpus_search" {
+		t.Errorf("binding = %+v; want the two names kept apart", published[0])
+	}
+	if summary := ompBindingSummary(published[0]); !strings.Contains(summary, "search") ||
+		!strings.Contains(summary, ompToolNamePublished) {
+		t.Errorf("progress line %q names neither the wire name nor its source", summary)
+	}
+
+	_, fallback := ompToolsFor(babelGrant{Capabilities: []string{babelCapabilityCorpusSearch}})
+	if len(fallback) != 1 || fallback[0].Source != ompToolNameUnpublished {
+		t.Fatalf("bindings = %+v; want one sourced %q", fallback, ompToolNameUnpublished)
+	}
+	if fallback[0].BabelTool != "search" {
+		t.Errorf("fallback wire name = %q; want the operation Code implements", fallback[0].BabelTool)
+	}
+	if summary := ompBindingSummary(fallback[0]); !strings.Contains(summary, ompToolNameUnpublished) {
+		t.Errorf("progress line %q does not mark the run as having fallen back", summary)
+	}
+}
+
+// TestOmpEvidenceToolsNameNothingTheyCannotDescribe holds the one invariant that
+// keeps the fallback honest. Code's babelTools is allowed to exist only for a
+// facility Code can hand a model an argument schema for; a name with no schema
+// behind it would be a guess wearing the mechanism's clothes.
+func TestOmpEvidenceToolsNameNothingTheyCannotDescribe(t *testing.T) {
+	for _, tool := range ompEvidenceTools {
+		if len(tool.babelTools) == 0 {
+			continue
+		}
+		if tool.parameters == "" {
+			t.Errorf("%s names Babel operations %v with no argument schema to describe them",
+				tool.capability, tool.babelTools)
+		}
+		for _, name := range tool.babelTools {
+			if name == tool.name {
+				t.Errorf("%s uses one string for both namespaces (%q), which is the defect this split closed",
+					tool.capability, name)
+			}
+		}
 	}
 }
 
@@ -357,6 +525,236 @@ func TestOmpHostToolParametersAreValidSchemas(t *testing.T) {
 		if schema["type"] != "object" {
 			t.Errorf("%s: parameter schema is not an object schema", tool.name)
 		}
+	}
+}
+
+// ── the recording tools ──────────────────────────────────────────────────────
+
+// TestOmpRecordSchemasDemandBabelsMinima checks the one thing the schema is for.
+// A weak model asked in prose to emit structure sometimes emits prose, so the
+// argument document is where §4.3's minima get enforced before a token is spent:
+// a claim must carry evidence, and it must answer the counter-evidence question
+// rather than skip it. A required list that lost minItems, or a counter_evidence
+// that stopped being required, would leave a schema the provider satisfies and
+// Babel refuses.
+func TestOmpRecordSchemasDemandBabelsMinima(t *testing.T) {
+	for _, wire := range ompRecordWires(testJob("")) {
+		var schema struct {
+			Type       string                     `json:"type"`
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+			Additional *bool                      `json:"additionalProperties"`
+		}
+		if err := json.Unmarshal(wire.Parameters, &schema); err != nil {
+			t.Fatalf("%s: parameters are not valid JSON: %v", wire.Name, err)
+		}
+		if schema.Type != "object" {
+			t.Errorf("%s: parameter schema is not an object schema", wire.Name)
+		}
+		if schema.Additional == nil || *schema.Additional {
+			t.Errorf("%s: additionalProperties is not false, so a misspelled field passes silently",
+				wire.Name)
+		}
+		if wire.LoadMode != "essential" {
+			t.Errorf("%s: loadMode %q hides the run's only output behind a discovery step",
+				wire.Name, wire.LoadMode)
+		}
+		for _, want := range schema.Required {
+			if _, declared := schema.Properties[want]; !declared {
+				t.Errorf("%s: %q is required and not declared", wire.Name, want)
+			}
+		}
+		if wire.Name != ompRecordObservationTool {
+			continue
+		}
+		for _, want := range []string{"hypothesis", "claim", "confidence", "impact",
+			"evidence", "counter_evidence"} {
+			if !slices.Contains(schema.Required, want) {
+				t.Errorf("%s: %q is not required, so Babel's minimum is not enforced here",
+					wire.Name, want)
+			}
+		}
+		var evidence struct {
+			MinItems int `json:"minItems"`
+		}
+		if err := json.Unmarshal(schema.Properties["evidence"], &evidence); err != nil {
+			t.Fatalf("%s: the evidence schema does not decode: %v", wire.Name, err)
+		}
+		if evidence.MinItems != 1 {
+			t.Errorf("%s: evidence minItems = %d; §4.3 refuses a claim with no locator",
+				wire.Name, evidence.MinItems)
+		}
+	}
+}
+
+// TestOmpObservationSchemaOffersOnlyTheRunsRecipes covers the field that has to
+// be built per run. Babel matches recipe provenance against the stage's own
+// assets and refuses the claim on a miss, so the model is offered exactly those
+// ids — and is not asked at all when there is only one, because a field with a
+// single legal value is a field a weak model can only get wrong.
+func TestOmpObservationSchemaOffersOnlyTheRunsRecipes(t *testing.T) {
+	// Both variants have to be valid JSON, because a schema OMP cannot read is
+	// a session whose tool registration fails and therefore a run with no way
+	// to record anything. The multi-recipe branch splices a field in, which is
+	// exactly where a stray comma would live.
+	decode := func(t *testing.T, schema string) []string {
+		t.Helper()
+		var parsed struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		}
+		if err := json.Unmarshal([]byte(schema), &parsed); err != nil {
+			t.Fatalf("the schema is not valid JSON: %v\n%s", err, schema)
+		}
+		for _, want := range parsed.Required {
+			if _, declared := parsed.Properties[want]; !declared {
+				t.Errorf("%q is required and not declared:\n%s", want, schema)
+			}
+		}
+		return parsed.Required
+	}
+
+	one := ompObservationSchema([]babelRecipeRef{{ID: "outcome-integrity", Version: 1}})
+	required := decode(t, one)
+	if slices.Contains(required, "recipe") || strings.Contains(one, `"recipe"`) {
+		t.Errorf("a single-recipe run still asks the model to name one:\n%s", one)
+	}
+	t.Logf("single-recipe run: %d required fields %v", len(required), required)
+
+	two := ompObservationSchema([]babelRecipeRef{
+		{ID: "outcome-integrity", Version: 1},
+		{ID: "handoff-loss", Version: 3},
+	})
+	required = decode(t, two)
+	if !slices.Contains(required, "recipe") {
+		t.Errorf("a multi-recipe run does not require the model to attribute a claim: %v", required)
+	}
+	for _, want := range []string{`"outcome-integrity"`, `"handoff-loss"`} {
+		if !strings.Contains(two, want) {
+			t.Errorf("a multi-recipe run's schema does not offer %s:\n%s", want, two)
+		}
+	}
+	// The version is never in the schema: Babel matches id and version
+	// together, and the version is a fact about the job rather than the claim.
+	if strings.Contains(two, `"version"`) {
+		t.Errorf("the schema asks the model for a recipe version:\n%s", two)
+	}
+	t.Logf("multi-recipe run: %d required fields %v", len(required), required)
+}
+
+// TestOmpLedgerBindsCitationsToServedBytes is the provenance rule at unit scale.
+// A handle resolves to the locator Babel served, byte for byte, and a handle
+// this run never issued resolves to nothing at all.
+func TestOmpLedgerBindsCitationsToServedBytes(t *testing.T) {
+	var served babelServed
+	if err := json.Unmarshal([]byte(testServedPayload), &served); err != nil {
+		t.Fatalf("the test payload does not decode: %v", err)
+	}
+	var ledger ompLedger
+	announced := ledger.enroll(served.hits())
+	if !strings.Contains(announced, "e1") {
+		t.Errorf("the model was never told the handle it has to cite: %q", announced)
+	}
+
+	citations, err := ledger.cite("evidence", []ompCitedHit{{Hit: "e1", Note: "what it shows"}})
+	if err != nil {
+		t.Fatalf("citing a served handle: %v", err)
+	}
+	if want := served.hits()[0].Locator; citations[0].Locator != want {
+		t.Errorf("locator = %+v; want the served hit's own, %+v", citations[0].Locator, want)
+	}
+
+	if _, err := ledger.cite("evidence", []ompCitedHit{{Hit: "e7"}}); !errors.Is(err, errOmpUncitedEvidence) {
+		t.Errorf("citing an unserved handle gave %v; want errOmpUncitedEvidence", err)
+	}
+	// A citation is all-or-nothing. Keeping the good half would record a claim
+	// resting on less than the model said it rested on, which is the same lie
+	// told more quietly.
+	both := []ompCitedHit{{Hit: "e1", Note: "real"}, {Hit: "e7", Note: "invented"}}
+	if got, err := ledger.cite("evidence", both); err == nil {
+		t.Errorf("a part-fabricated citation was accepted as %+v", got)
+	}
+}
+
+// TestOmpLedgerRefusesAClaimThatSkipsTheCounterEvidenceQuestion holds §4.3's
+// distinction that a plain slice would erase: an absent counter_evidence is an
+// unanswered question and an empty one is an answer. Without this, every claim
+// in every run would silently declare that nothing weighs against it.
+func TestOmpLedgerRefusesAClaimThatSkipsTheCounterEvidenceQuestion(t *testing.T) {
+	var served babelServed
+	if err := json.Unmarshal([]byte(testServedPayload), &served); err != nil {
+		t.Fatalf("the test payload does not decode: %v", err)
+	}
+	recipes := []babelRecipeRef{{ID: "outcome-integrity", Version: 1}}
+	novelty, priority := 0.5, 0.5
+
+	newLedger := func(t *testing.T) *ompLedger {
+		t.Helper()
+		ledger := &ompLedger{}
+		ledger.enroll(served.hits())
+		if _, err := ledger.recordHypothesis(ompHypothesisArgs{
+			Statement: "a candidate", Novelty: &novelty, Priority: &priority,
+		}); err != nil {
+			t.Fatalf("recording the candidate: %v", err)
+		}
+		return ledger
+	}
+	base := func() ompObservationArgs {
+		return ompObservationArgs{
+			Hypothesis: "c1",
+			Claim:      "a claim",
+			Confidence: "moderate",
+			Impact:     "low",
+			Evidence:   []ompCitedHit{{Hit: "e1", Note: "what it shows"}},
+		}
+	}
+
+	skipped := newLedger(t)
+	if _, _, err := skipped.recordObservation(base(), recipes); err == nil {
+		t.Error("a claim that never answered the counter-evidence question was recorded")
+	}
+
+	answered := newLedger(t)
+	args := base()
+	args.CounterEvidence = &[]ompCitedHit{}
+	if _, _, err := answered.recordObservation(args, recipes); err != nil {
+		t.Fatalf("an explicit empty answer was refused: %v", err)
+	}
+	claim := answered.candidates[0].Observations[0].Claim
+	if !claim.CounterEvidenceAbsent || len(claim.CounterEvidence) != 0 {
+		t.Errorf("claim = %+v; exactly one of the two fields may be set", claim)
+	}
+
+	// A missing sorting signal is refused for the same reason: zero is a legal
+	// judgement and an absent field is not one.
+	if _, err := (&ompLedger{}).recordHypothesis(ompHypothesisArgs{
+		Statement: "a candidate", Priority: &priority,
+	}); err == nil {
+		t.Error("a candidate with no novelty was recorded, so it sorts at zero by default")
+	}
+}
+
+// TestOmpResolveRecipeNeverInventsProvenance covers the three inputs. Babel
+// refuses a claim whose recipe it did not select, so a run with none can carry
+// no observation at all — and that is reported rather than papered over with an
+// empty reference.
+func TestOmpResolveRecipeNeverInventsProvenance(t *testing.T) {
+	one := []babelRecipeRef{{ID: "outcome-integrity", Version: 1}}
+	if got, err := ompResolveRecipe(one, ""); err != nil || got != one[0] {
+		t.Errorf("resolve(one, \"\") = %+v, %v; want the only recipe filled in", got, err)
+	}
+	two := append(one, babelRecipeRef{ID: "handoff-loss", Version: 3})
+	if got, err := ompResolveRecipe(two, "handoff-loss"); err != nil || got != two[1] {
+		t.Errorf("resolve(two, named) = %+v, %v; want the named recipe with its own version", got, err)
+	}
+	if _, err := ompResolveRecipe(two, ""); err == nil {
+		t.Error("a claim naming no recipe on a multi-recipe run was given one Code chose")
+	}
+	if _, err := ompResolveRecipe(two, "invented"); err == nil {
+		t.Error("a claim naming a recipe this run never selected was accepted")
+	}
+	if _, err := ompResolveRecipe(nil, ""); err == nil {
+		t.Error("a run with no recipe produced provenance anyway")
 	}
 }
 
@@ -475,7 +873,7 @@ func TestFetchBrokeredEvidenceCarriesTheTokenInAHeaderOnly(t *testing.T) {
 
 	got, err := fetchBrokeredEvidence(context.Background(),
 		babelBroker{Endpoint: server.URL, Token: testBrokerToken},
-		ompEvidenceRequest{RunID: "run-1", Capability: babelCapabilityCorpusSearch, Tool: "babel_corpus_search"})
+		ompEvidenceRequest{RunID: "run-1", Capability: babelCapabilityCorpusSearch, Tool: "search"})
 	if err != nil {
 		t.Fatalf("fetchBrokeredEvidence: %v", err)
 	}
@@ -523,6 +921,10 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 		wantStatus  string
 		wantAsks    int
 		wantAskedOn string
+		// wantTool is the tool name the request must carry. Babel's suite grades
+		// this now, and the whole reason the last mismatch survived a 14/14 run
+		// is that nothing here looked at it.
+		wantTool    string
 		wantPayload string
 	}{
 		{
@@ -535,7 +937,7 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 		},
 		{
 			name: "request tool allowed", directive: babelConformanceRequestTool,
-			wantAsks: 1, wantAskedOn: babelCapabilityCorpusSearch,
+			wantAsks: 1, wantAskedOn: babelCapabilityCorpusSearch, wantTool: "search",
 			wantStatus: babelStatusOK, wantPayload: babelDecisionAllow,
 		},
 		{
@@ -543,7 +945,7 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 			decide: func(babelToolRequest) babelDecision {
 				return babelDecision{Decision: babelDecisionDeny, Code: "policy", Reason: "policy denies this"}
 			},
-			wantAsks: 1, wantAskedOn: babelCapabilityCorpusSearch,
+			wantAsks: 1, wantAskedOn: babelCapabilityCorpusSearch, wantTool: "search",
 			wantStatus: babelStatusPartial, wantPayload: babelDecisionDeny,
 		},
 		{
@@ -551,7 +953,7 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 			decide: func(babelToolRequest) babelDecision {
 				return babelDecision{Decision: babelDecisionDeny, Code: "not-granted"}
 			},
-			wantAsks: 1, wantAskedOn: babelCapabilitySandboxExec,
+			wantAsks: 1, wantAskedOn: babelCapabilitySandboxExec, wantTool: ompOutOfGrantProbeTool,
 			wantStatus: babelStatusPartial, wantPayload: babelDecisionDeny,
 		},
 		{
@@ -610,6 +1012,9 @@ func TestOmpConformanceDirectivesReachEachState(t *testing.T) {
 			if tc.wantAsks == 1 {
 				if rec.asks[0].Capability != tc.wantAskedOn {
 					t.Errorf("asked for %q; want %q", rec.asks[0].Capability, tc.wantAskedOn)
+				}
+				if rec.asks[0].Tool != tc.wantTool {
+					t.Errorf("asked with tool %q; want %q", rec.asks[0].Tool, tc.wantTool)
 				}
 				if rec.asks[0].Reason == "" {
 					t.Error("the tool request carried no reason for Babel's authorizer")
@@ -745,6 +1150,115 @@ func TestOmpConformanceEchoJobReportsTheJobItDecoded(t *testing.T) {
 	}
 }
 
+// TestOmpConformanceEchoEvidenceReportsTheHitsItDecoded grades the reading of a
+// served payload the same way echo-job grades the reading of a job, and for the
+// same reason: nothing else in a run makes it observable. An allowed decision
+// looks identical in a receipt whether the worker handed its hits to the model
+// or dropped them on the floor, which is how a build that dropped every one of
+// them passed a full conformance suite.
+//
+// The answer is built from the decision that arrived, so the values here are
+// arbitrary on purpose — Babel's suite plants a per-run nonce in exactly these
+// fields, and a worker answering from anything it held would answer with the
+// wrong ones.
+func TestOmpConformanceEchoEvidenceReportsTheHitsItDecoded(t *testing.T) {
+	const payload = `{"schema":"babel.corpus-search/1","query":"probe","limit":10,` +
+		`"hits":[{"harness":"omp","source_id":"session-` + babelTestNonce + `","index":42,` +
+		`"excerpt":"the archive says ` + babelTestNonce + `","truncated":false,` +
+		`"locator":{"path":"sessions/omp/` + babelTestNonce + `.jsonl","line":12,` +
+		`"byte_offset":3456,"digest":"` + testServedDigest + `"}},` +
+		`{"harness":"claude","source_id":"session-two","index":7,"excerpt":"second","truncated":true,` +
+		`"locator":{"path":"sessions/claude/two.jsonl","line":1,"byte_offset":0,` +
+		`"digest":"` + testServedDigest + `"}}]}`
+
+	inv, profiles := newTestInvestigator(t)
+	rec := &recorder{decide: func(ask babelToolRequest) babelDecision {
+		return babelDecision{
+			Type: babelMessageToolDecision, RequestID: ask.RequestID,
+			Decision: babelDecisionAllow, Results: json.RawMessage(payload),
+		}
+	}}
+
+	result, err := inv.investigate(context.Background(),
+		testJob(babelConformanceEchoEvidence, babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	if profiles.askedID != "" {
+		t.Error("a conformance run resolved a profile; the suite names one no store holds")
+	}
+	// One ordinary request, by the name the grant published: the directive
+	// grades what became of the decision, not a request shape of its own.
+	if len(rec.asks) != 1 || rec.asks[0].Capability != babelCapabilityCorpusSearch ||
+		rec.asks[0].Tool != "search" {
+		t.Fatalf("requests = %+v; want one corpus-search request by the published name", rec.asks)
+	}
+
+	var answered struct {
+		Served *babelServedEcho `json:"served_evidence"`
+	}
+	if err := json.Unmarshal(result.Payload, &answered); err != nil {
+		t.Fatalf("the result payload is not a JSON object: %v", err)
+	}
+	if answered.Served == nil {
+		t.Fatalf(`the result payload carries no "served_evidence" object: %s`, result.Payload)
+	}
+	want := []string{
+		"omp|session-" + babelTestNonce + "|42|sessions/omp/" + babelTestNonce + ".jsonl|12|3456|" +
+			testServedDigest + "|the archive says " + babelTestNonce,
+		"claude|session-two|7|sessions/claude/two.jsonl|1|0|" + testServedDigest + "|second",
+	}
+	if !reflect.DeepEqual(answered.Served.Hits, want) {
+		t.Errorf("the worker reports %q, Babel served %q", answered.Served.Hits, want)
+	}
+
+	// The request log is a different key and a different thing, and the echo
+	// must not have displaced it.
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("the result payload is not findings: %v", err)
+	}
+	if len(findings.Evidence) != 1 || findings.Evidence[0].Hits == nil ||
+		*findings.Evidence[0].Hits != 2 {
+		t.Errorf("evidence log = %+v; the request log records two served hits", findings.Evidence)
+	}
+}
+
+// TestOmpConformanceEchoEvidenceAnswersEmptyWhenNothingWasServed keeps the
+// directive's own two failures apart. A missing key says the worker never
+// implemented the directive; an empty array says it implemented it and the
+// decision carried nothing. Babel grades those as different defects — one is
+// Code's and one is Babel's — so answering the second with silence would
+// misattribute it.
+func TestOmpConformanceEchoEvidenceAnswersEmptyWhenNothingWasServed(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	rec := &recorder{}
+	inv.evidence = func(context.Context, babelBroker, ompEvidenceRequest) (string, error) {
+		return "", errors.New("no broker is listening")
+	}
+
+	result, err := inv.investigate(context.Background(),
+		testJob(babelConformanceEchoEvidence, babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var answered struct {
+		Served *babelServedEcho `json:"served_evidence"`
+	}
+	if err := json.Unmarshal(result.Payload, &answered); err != nil {
+		t.Fatalf("the result payload is not a JSON object: %v", err)
+	}
+	if answered.Served == nil {
+		t.Fatalf(`a decision that served nothing produced no "served_evidence" key: %s`, result.Payload)
+	}
+	if len(answered.Served.Hits) != 0 {
+		t.Errorf("hits = %q; nothing was served", answered.Served.Hits)
+	}
+	if !strings.Contains(string(result.Payload), `"hits":[]`) {
+		t.Errorf("the empty answer is a null rather than an empty array: %s", result.Payload)
+	}
+}
+
 // TestOmpConformanceEchoTokenDisclosesTheTokenOnPurpose defends the property
 // that makes Babel's redaction obligation gradeable at all. The directive asks
 // this worker to leak the run's broker credential; if the worker quietly
@@ -802,8 +1316,12 @@ func TestOmpDriveRegistersOnlyTheGrantedToolsAndReportsAResult(t *testing.T) {
 	if profiles.askedID != "mixed-led" || profiles.askedAt != 4 {
 		t.Errorf("resolved %q@%d; want the job's profile", profiles.askedID, profiles.askedAt)
 	}
-	if result.Status != babelStatusOK {
-		t.Errorf("status = %q; the fake run finished cleanly with output", result.Status)
+	// The fake finished cleanly and recorded nothing, which is now partial
+	// rather than ok: prose is not an outcome. The scenario that records is
+	// TestOmpDriveRecordsWhatTheModelStructures.
+	if result.Status != babelStatusPartial {
+		t.Errorf("status = %q; a run that recorded no candidate has produced nothing durable",
+			result.Status)
 	}
 	if !strings.Contains(string(result.Payload), "the corpus supports the finding") {
 		t.Errorf("payload carries no analysis: %s", result.Payload)
@@ -835,10 +1353,33 @@ func TestOmpDriveRegistersOnlyTheGrantedToolsAndReportsAResult(t *testing.T) {
 		t.Error("the run emitted no progress")
 	}
 
+	// repo-read is granted and Babel publishes nothing for it, so no host tool
+	// is offered for it: showing the model a route certain to be refused wastes
+	// a turn and puts a denial in the receipt that means nothing. The two
+	// recording tools are always there, because they depend on no grant.
 	registered := ompFakeToolNames(t, record)
-	want := []string{"babel_corpus_search", "babel_repo_read"}
+	want := []string{"babel_corpus_search", ompRecordHypothesisTool, ompRecordObservationTool}
 	if !reflect.DeepEqual(registered, want) {
-		t.Fatalf("registered %v; want exactly the granted tools %v", registered, want)
+		t.Fatalf("registered %v; want the tools a published name backs plus the recording tools %v",
+			registered, want)
+	}
+
+	// The payload still has to account for repo-read, or a reviewer cannot tell
+	// a capability that was granted and unroutable from one never granted.
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	byCapability := map[string]ompToolBinding{}
+	for _, binding := range findings.Tools {
+		byCapability[binding.Capability] = binding
+	}
+	if got := byCapability[babelCapabilityCorpusSearch]; got.BabelTool != "search" ||
+		got.Source != ompToolNamePublished {
+		t.Errorf("corpus-search binding = %+v; want the published name on the wire", got)
+	}
+	if got := byCapability[babelCapabilityRepoRead]; got.BabelTool != "" || got.Note == "" {
+		t.Errorf("repo-read binding = %+v; want no wire name and a reason", got)
 	}
 }
 
@@ -894,7 +1435,16 @@ func TestOmpProductionResultDeclaresTheSchemaBabelAccepts(t *testing.T) {
 	}
 }
 
-func TestOmpDriveRegistersNothingForAnEmptyGrant(t *testing.T) {
+// TestOmpDriveOffersNoEvidenceRouteForAnEmptyGrant checks the direction that
+// still matters after the recording tools became unconditional: a grant with no
+// capabilities must produce no evidence route, so the model is never shown a
+// call it would only be refused on.
+//
+// It cannot check that nothing at all is registered any more, and should not.
+// The recording tools depend on no grant, and a run that could not record
+// anything would be the failure this whole output path exists to prevent — a
+// grantless run can still record a speculative candidate, which §4.2 keeps.
+func TestOmpDriveOffersNoEvidenceRouteForAnEmptyGrant(t *testing.T) {
 	inv, _ := newTestInvestigator(t)
 	fake, record := ompFakeBinary(t, "plain")
 	inv.lookOmp = func() (string, error) { return fake, nil }
@@ -904,12 +1454,11 @@ func TestOmpDriveRegistersNothingForAnEmptyGrant(t *testing.T) {
 	if _, err := inv.investigate(context.Background(), testJob(""), rec.emit, rec.request); err != nil {
 		t.Fatalf("investigate: %v", err)
 	}
-	for _, frame := range ompFakeFrames(t, record) {
-		var probe struct{ Type string }
-		_ = json.Unmarshal(frame, &probe)
-		if probe.Type == ompCommandSetHostTools {
-			t.Fatalf("a grant with no capabilities still registered tools: %s", frame)
-		}
+	registered := ompFakeToolNames(t, record)
+	want := []string{ompRecordHypothesisTool, ompRecordObservationTool}
+	if !reflect.DeepEqual(registered, want) {
+		t.Fatalf("registered %v; a grant with no capabilities justifies no evidence route, so want "+
+			"only the recording tools %v", registered, want)
 	}
 }
 
@@ -935,15 +1484,22 @@ func TestOmpDriveServesAllowedEvidenceThroughTheBroker(t *testing.T) {
 	if len(rec.asks) != 1 {
 		t.Fatalf("made %d tool requests, want 1: %+v", len(rec.asks), rec.asks)
 	}
+	// This is the assertion the last incident turned on. The model called the
+	// host tool babel_corpus_search; what reaches Babel's authorizer must be the
+	// name Babel published, because Babel denies every other name and the run
+	// that emitted the host tool name got three refusals and produced nothing.
 	ask := rec.asks[0]
-	if ask.Capability != babelCapabilityCorpusSearch || ask.Tool != "babel_corpus_search" {
-		t.Errorf("request = %+v; want the corpus-search capability", ask)
+	if ask.Capability != babelCapabilityCorpusSearch || ask.Tool != "search" {
+		t.Errorf("request = %+v; want capability %q and Babel's published tool %q",
+			ask, babelCapabilityCorpusSearch, "search")
 	}
 	if !strings.Contains(string(ask.Arguments), "outcome integrity") {
 		t.Errorf("the model's arguments did not reach Babel's authorizer: %s", ask.Arguments)
 	}
-	if gotBroker.Token != testBrokerToken || gotEvidence.Capability != babelCapabilityCorpusSearch {
-		t.Errorf("broker call = %+v %+v", gotBroker, gotEvidence)
+	if gotBroker.Token != testBrokerToken || gotEvidence.Capability != babelCapabilityCorpusSearch ||
+		gotEvidence.Tool != "search" {
+		t.Errorf("broker call = %+v %+v; the broker must be asked by the published name too",
+			gotBroker, gotEvidence)
 	}
 
 	answer := ompFakeHostToolResult(t, record)
@@ -953,14 +1509,370 @@ func TestOmpDriveServesAllowedEvidenceThroughTheBroker(t *testing.T) {
 	if len(answer.Result.Content) == 0 || answer.Result.Content[0].Text != "excerpt: the archive agrees" {
 		t.Errorf("the evidence did not reach the model: %+v", answer.Result)
 	}
-	if result.Status != babelStatusOK {
-		t.Errorf("status = %q; nothing was refused", result.Status)
+	// This scenario records nothing, so the run is partial for that and nothing
+	// else. What this test is about is that the evidence path left no gap of
+	// its own.
+	if gaps := evidenceGaps(t, result); len(gaps) != 0 {
+		t.Errorf("gaps = %v; nothing was refused", gaps)
 	}
 	if !strings.Contains(string(result.Payload), babelDecisionAllow) {
 		t.Errorf("payload does not report the decision received: %s", result.Payload)
 	}
 	if result.Resources == nil || result.Resources.ToolCalls != 1 {
 		t.Errorf("resources = %+v; one brokered tool call was made", result.Resources)
+	}
+}
+
+// testServedDigest is a plausible record digest: the locator carries a bare
+// 64-character lowercase hex sha256, and a test that rendered a short one would
+// pass while a rendering that truncated the real thing also passed.
+const testServedDigest = "9f2c1a4b6d8e0f13579bdf02468ace13579bdf02468ace13579bdf02468ace13"
+
+// testServedPayload is one served hit as Babel writes it, including fields this
+// build of Code does not model — "kind", "role", "corpus_version", "cluster".
+// They are here because the payload reaches the model unchanged and that is
+// what makes an unknown field non-fatal in this direction: it survives rather
+// than being dropped by a re-encode.
+const testServedPayload = `{"schema":"babel.corpus-search/1","query":"outcome integrity",` +
+	`"limit":10,"corpus_version":9,"hits":[{"harness":"codex","source_id":"019a-c7f2",` +
+	`"index":87,"kind":"tool-observation","role":"assistant","tool":"bash","outcome":"fail",` +
+	`"cluster":"c-1","excerpt":"the retry loop was removed and the suite passed",` +
+	`"truncated":true,"locator":{"path":"sessions/codex/019a-c7f2.jsonl","line":412,` +
+	`"byte_offset":91233,"digest":"` + testServedDigest + `"}}]}`
+
+// TestOmpDriveGivesTheModelTheEvidenceBabelServed is the assertion this whole
+// path exists for, and it is made on the frame OMP received rather than on
+// anything Code kept. A run that recorded "allow, served" while handing the
+// model a sentence with no corpus in it is exactly what shipped before, and it
+// would satisfy every internal assertion available.
+func TestOmpDriveGivesTheModelTheEvidenceBabelServed(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "hosttool")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	inv.evidence = func(context.Context, babelBroker, ompEvidenceRequest) (string, error) {
+		t.Error("the broker was called for evidence the decision had already served")
+		return "", nil
+	}
+	rec := &recorder{decide: func(ask babelToolRequest) babelDecision {
+		return babelDecision{
+			Type: babelMessageToolDecision, RequestID: ask.RequestID,
+			Decision: babelDecisionAllow, Reason: "served 1 hit from the corpus index",
+			Results: json.RawMessage(testServedPayload),
+		}
+	}}
+
+	result, err := inv.investigate(context.Background(),
+		testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+
+	answer := ompFakeHostToolResult(t, record)
+	if answer.IsError {
+		t.Fatalf("served evidence reached the model as a tool error: %+v", answer)
+	}
+	text := answer.Result.Content[0].Text
+	// The excerpt, because without it the model has nothing to observe, and
+	// every part of the locator, because a citation missing one of them cannot
+	// be reopened: the path and line find the record and the digest proves the
+	// record found is the record served.
+	for _, want := range []string{
+		"the retry loop was removed and the suite passed",
+		"sessions/codex/019a-c7f2.jsonl", "412", "91233", testServedDigest,
+		"codex", "019a-c7f2", "87",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the model was never shown %q:\n%s", want, text)
+		}
+	}
+	// Fields this build does not model reached the model anyway, which is the
+	// point of forwarding Babel's bytes instead of re-encoding Code's struct.
+	for _, want := range []string{"corpus_version", "cluster", "tool-observation"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("a field Code does not model was dropped on the way to the model: %q\n%s", want, text)
+		}
+	}
+	if !strings.Contains(text, "truncated") {
+		t.Errorf("the model was not told the excerpt was a cut clip:\n%s", text)
+	}
+
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Evidence) != 1 {
+		t.Fatalf("evidence log = %+v; want one entry", findings.Evidence)
+	}
+	entry := findings.Evidence[0]
+	if !entry.Served || entry.Hits == nil || *entry.Hits != 1 {
+		t.Errorf("evidence entry = %+v; the receipt must record one served hit", entry)
+	}
+	// The receipt keeps the count and the locators; the excerpt is the wire's
+	// business and must not have followed the count into a durable record.
+	if strings.Contains(string(result.Payload), "the retry loop was removed") {
+		t.Errorf("an excerpt reached the terminal result payload: %s", result.Payload)
+	}
+	if gaps := evidenceGaps(t, result); len(gaps) != 0 {
+		t.Errorf("gaps = %v; nothing was refused or missing", gaps)
+	}
+}
+
+// TestOmpDriveTellsAnUnservedDecisionApartFromAnEmptyMatch holds the two
+// allowed outcomes apart in the one place it matters: the text the model reads.
+// "Babel served nothing" and "the corpus matched nothing" support opposite
+// findings — the second licenses writing that the archive is silent on a
+// question, and the first licenses nothing at all — so a build that renders
+// them alike invites a confident negative claim about a corpus nobody searched.
+func TestOmpDriveTellsAnUnservedDecisionApartFromAnEmptyMatch(t *testing.T) {
+	const emptyPayload = `{"schema":"babel.corpus-search/1","query":"outcome integrity",` +
+		`"limit":10,"hits":[]}`
+
+	texts := map[string]string{}
+	for _, tc := range []struct {
+		name    string
+		results json.RawMessage
+		// wantError marks the outcome the model must read as a failed call:
+		// an absence of evidence, never an answer.
+		wantError bool
+		wantHits  bool
+		wantGap   bool
+		wantText  []string
+		denyText  []string
+	}{
+		{
+			name: "no payload", results: nil, wantError: true, wantHits: false, wantGap: true,
+			wantText: []string{"served no evidence", "not an empty result", "state the gap"},
+			denyText: []string{"matched nothing"},
+		},
+		{
+			name: "empty match", results: json.RawMessage(emptyPayload),
+			wantError: false, wantHits: true, wantGap: false,
+			wantText: []string{"matched nothing", "an answer", `"hits": []`},
+			denyText: []string{"served no evidence"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv, _ := newTestInvestigator(t)
+			fake, record := ompFakeBinary(t, "hosttool")
+			inv.lookOmp = func() (string, error) { return fake, nil }
+			inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+			inv.evidence = func(context.Context, babelBroker, ompEvidenceRequest) (string, error) {
+				t.Error("a run with no broker still reached for one")
+				return "", nil
+			}
+			rec := &recorder{decide: func(ask babelToolRequest) babelDecision {
+				return babelDecision{
+					Type: babelMessageToolDecision, RequestID: ask.RequestID,
+					Decision: babelDecisionAllow, Results: tc.results,
+				}
+			}}
+
+			// No broker, so the decision's payload is the only route either
+			// case has. A job that named one would send the no-payload case
+			// down the fallback and grade a different question.
+			job := testJob("", babelCapabilityCorpusSearch)
+			job.Broker = nil
+			result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+			if err != nil {
+				t.Fatalf("investigate: %v", err)
+			}
+
+			answer := ompFakeHostToolResult(t, record)
+			if answer.IsError != tc.wantError {
+				t.Errorf("tool error = %v, want %v: %+v", answer.IsError, tc.wantError, answer.Result)
+			}
+			text := answer.Result.Content[0].Text
+			texts[tc.name] = text
+			for _, want := range tc.wantText {
+				if !strings.Contains(text, want) {
+					t.Errorf("the model was never told %q:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tc.denyText {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("the model was told %q, which is the other outcome:\n%s", unwanted, text)
+				}
+			}
+
+			var findings ompFindings
+			if err := json.Unmarshal(result.Payload, &findings); err != nil {
+				t.Fatalf("payload does not decode: %v", err)
+			}
+			if len(findings.Evidence) != 1 {
+				t.Fatalf("evidence log = %+v; want one entry", findings.Evidence)
+			}
+			// The receipt keeps the same distinction structurally: no hit
+			// count at all against a count of zero.
+			switch entry := findings.Evidence[0]; {
+			case tc.wantHits && (entry.Hits == nil || *entry.Hits != 0):
+				t.Errorf("evidence entry = %+v; a search that matched nothing records zero hits", entry)
+			case !tc.wantHits && entry.Hits != nil:
+				t.Errorf("evidence entry = %+v; a decision that served nothing has no hit count", entry)
+			}
+			gaps := evidenceGaps(t, result)
+			if gapped := len(gaps) > 0; gapped != tc.wantGap {
+				t.Errorf("gaps = %v, want an evidence gap: %v", gaps, tc.wantGap)
+			}
+		})
+	}
+
+	if texts["no payload"] == texts["empty match"] {
+		t.Errorf("both outcomes read identically to the model:\n%s", texts["no payload"])
+	}
+}
+
+// TestOmpDrivePassesAPayloadItCannotReadStraightThrough is the protocol's
+// unknown-shape rule applied to the payload as a whole. A newer Babel that
+// restructures its results is not a broken Babel, and the bytes it took the
+// disclosure risk of sending are still evidence: Code says it could not read
+// them and shows them anyway, rather than deciding on the model's behalf that
+// there was nothing there.
+func TestOmpDrivePassesAPayloadItCannotReadStraightThrough(t *testing.T) {
+	const foreign = `{"schema":"babel.corpus-search/2","clusters":[{"theme":"retry loops",` +
+		`"members":[{"where":"sessions/codex/019a.jsonl:412","says":"the suite passed"}]}]}`
+
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "hosttool")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{decide: func(ask babelToolRequest) babelDecision {
+		return babelDecision{
+			Type: babelMessageToolDecision, RequestID: ask.RequestID,
+			Decision: babelDecisionAllow, Results: json.RawMessage(foreign),
+		}
+	}}
+
+	job := testJob("", babelCapabilityCorpusSearch)
+	job.Broker = nil
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("an unreadable payload ended the run: %v", err)
+	}
+
+	answer := ompFakeHostToolResult(t, record)
+	if answer.IsError {
+		t.Errorf("a payload Code could not read was withheld from the model as an error: %+v", answer.Result)
+	}
+	text := answer.Result.Content[0].Text
+	for _, want := range []string{"does not recognize", "retry loops", "sessions/codex/019a.jsonl:412",
+		"the suite passed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the model was never shown %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "matched nothing") {
+		t.Errorf("a shape Code could not read was reported as an empty corpus:\n%s", text)
+	}
+
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Evidence) != 1 || findings.Evidence[0].Hits != nil {
+		t.Errorf("evidence log = %+v; an unread payload yields no hit count", findings.Evidence)
+	}
+}
+
+// TestOmpDriveFallsBackAudiblyWhenBabelPublishesNoToolNames is the absent-mapping
+// decision, asserted on the request Code emits rather than on the constant it
+// holds.
+//
+// The choice is a fallback rather than a refusal, and the reason is that
+// refusing would recreate the failure from the other side: a Babel predating
+// the mapping would get a run that requests nothing at all, which is the same
+// zero-evidence receipt the guessed name produced. What makes the fallback
+// acceptable is that it cannot be silent — the payload's binding and a progress
+// message both say the name was Code's, so an operator reading either can tell
+// this run apart from one that obeyed a published mapping.
+func TestOmpDriveFallsBackAudiblyWhenBabelPublishesNoToolNames(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "hosttool")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	inv.evidence = func(context.Context, babelBroker, ompEvidenceRequest) (string, error) {
+		return "excerpt: the archive agrees", nil
+	}
+	rec := &recorder{}
+
+	job := testLegacyJob("", babelCapabilityCorpusSearch)
+	if job.Grant.publishesTools() {
+		t.Fatal("the legacy job published a mapping, so this test never reached the fallback")
+	}
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	if len(rec.asks) != 1 {
+		t.Fatalf("made %d tool requests, want 1: %+v", len(rec.asks), rec.asks)
+	}
+	if got := rec.asks[0].Tool; got != "search" {
+		t.Errorf("request tool = %q; want the operation Code implements, %q", got, "search")
+	}
+	if registered := ompFakeToolNames(t, record); !slices.Contains(registered, "babel_corpus_search") {
+		t.Errorf("registered %v; the host tool name is Code's either way", registered)
+	}
+
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Tools) != 1 || findings.Tools[0].Source != ompToolNameUnpublished {
+		t.Fatalf("payload bindings = %+v; a receipt must show the fallback was taken", findings.Tools)
+	}
+	if len(findings.Evidence) != 1 || findings.Evidence[0].Tool != "search" {
+		t.Errorf("evidence log = %+v; want the name that actually went on the wire", findings.Evidence)
+	}
+	if !slices.ContainsFunc(rec.messages, func(m string) bool {
+		return strings.Contains(m, ompToolNameUnpublished)
+	}) {
+		t.Errorf("no progress message said the tool name was unpublished: %v", rec.messages)
+	}
+}
+
+// TestOmpDriveAsksForNothingWhenTheMappingNamesNoTool is the other half of the
+// absent-mapping decision. A grant that carries a mapping and names nothing for
+// a capability is Babel stating that nothing serves it, which is an answer
+// rather than a silence — so there is no fallback, no host tool, and no request.
+func TestOmpDriveAsksForNothingWhenTheMappingNamesNoTool(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "hosttool")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	inv.evidence = func(context.Context, babelBroker, ompEvidenceRequest) (string, error) {
+		t.Error("evidence was fetched for a capability Babel publishes no tool for")
+		return "", nil
+	}
+	rec := &recorder{}
+
+	job := testJob("", babelCapabilityCorpusSearch)
+	job.Grant.Tools = map[string][]string{babelCapabilityCorpusSearch: {}}
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	if len(rec.asks) != 0 {
+		t.Errorf("made %d tool requests; Babel named no tool to request: %+v", len(rec.asks), rec.asks)
+	}
+	if registered := ompFakeToolNames(t, record); slices.Contains(registered, "babel_corpus_search") {
+		t.Fatalf("registered %v; a capability with no published tool was still shown to the model",
+			registered)
+	}
+	// The run had one capability granted and no route to it, which is exactly
+	// the shape that used to report success while producing nothing.
+	if result.Status != babelStatusPartial {
+		t.Errorf("status = %q; a run with no evidence route stopped short", result.Status)
+	}
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Gaps) == 0 {
+		t.Error("the payload records no gap for a run that could reach no evidence at all")
+	}
+	if len(findings.Tools) != 1 || findings.Tools[0].BabelTool != "" ||
+		findings.Tools[0].Source != ompToolNamePublished {
+		t.Errorf("bindings = %+v; want the capability recorded as published-but-unserved", findings.Tools)
 	}
 }
 
@@ -1021,6 +1933,292 @@ func TestOmpDriveRefusesAnUnregisteredToolWithoutSpendingADecision(t *testing.T)
 	answer := ompFakeHostToolResult(t, record)
 	if !answer.IsError {
 		t.Fatal("an unregistered tool call was answered as a success")
+	}
+}
+
+// ── what the run records ─────────────────────────────────────────────────────
+
+// evidenceGaps is the run's gaps other than the one every recordless run now
+// carries. The evidence-path tests above are about evidence, and a fake that
+// records nothing always leaves ompNoRecordsGap — asserting on the raw list
+// would silently turn each of them into a test of the recording contract as
+// well, and they would then fail for a reason they say nothing about.
+func evidenceGaps(t *testing.T, result babelResult) []string {
+	t.Helper()
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	kept := make([]string, 0, len(findings.Gaps))
+	for _, gap := range findings.Gaps {
+		if gap != ompNoRecordsGap && gap != ompForgedCitationGap {
+			kept = append(kept, gap)
+		}
+	}
+	return kept
+}
+
+// serveOneHit is a decision that allows the request and carries one hit, which
+// is what Code needs before any citation can exist: a handle is issued per
+// served hit, so a run that was served nothing can record no claim at all.
+func serveOneHit(babelToolRequest) babelDecision {
+	return babelDecision{
+		Type:     babelMessageToolDecision,
+		Decision: babelDecisionAllow,
+		Results:  json.RawMessage(testServedPayload),
+	}
+}
+
+// TestOmpDriveRecordsWhatTheModelStructures is the acceptance case: a model that
+// searches, records a candidate and develops it with a cited claim must produce
+// the candidates array Babel turns into durable records, with a locator that
+// came out of the payload Babel served rather than out of the model.
+//
+// It asserts the locator field by field against the served hit rather than
+// against a constant, because the whole mechanism is that those bytes are copied
+// and not retyped — a test comparing both sides to the same literal would pass
+// for a build that let the model supply them.
+func TestOmpDriveRecordsWhatTheModelStructures(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, _ := ompFakeBinary(t, "record")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{decide: serveOneHit}
+
+	job := testJob("", babelCapabilityCorpusSearch)
+	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Candidates) != 1 {
+		t.Fatalf("candidates = %+v; want the one the model recorded", findings.Candidates)
+	}
+	candidate := findings.Candidates[0]
+	if candidate.Ref != "c1" {
+		t.Errorf("candidate ref = %q; Code assigns refs, so the first is c1", candidate.Ref)
+	}
+	if candidate.Hypothesis.Statement == "" || candidate.Hypothesis.Novelty != 0.7 ||
+		candidate.Hypothesis.Priority != 0.6 {
+		t.Errorf("hypothesis = %+v; want the model's wording and both sorting signals",
+			candidate.Hypothesis)
+	}
+	if len(candidate.Observations) != 1 {
+		t.Fatalf("observations = %+v; want the one cited claim", candidate.Observations)
+	}
+	observation := candidate.Observations[0]
+	if observation.Ref != "o1" {
+		t.Errorf("observation ref = %q; want o1", observation.Ref)
+	}
+	// §5.1 provenance Babel matches on id and version together. The run
+	// selected one recipe, so Code fills both in and the model was never asked.
+	if observation.Recipe != job.Recipes[0] {
+		t.Errorf("recipe = %+v; want the one this run selected, %+v", observation.Recipe, job.Recipes[0])
+	}
+	claim := observation.Claim
+	if claim.Confidence != "moderate" || claim.Impact != "high" ||
+		claim.TemporalStatus != "still-applicable" {
+		t.Errorf("gradings = %+v; want the ones the model gave", claim)
+	}
+	if len(claim.Evidence) != 1 {
+		t.Fatalf("evidence = %+v; §4.3 refuses a claim with none", claim.Evidence)
+	}
+	// The model cited "e1" and never saw a locator field. Everything below came
+	// out of Babel's payload.
+	var served babelServed
+	if err := json.Unmarshal([]byte(testServedPayload), &served); err != nil {
+		t.Fatalf("the test payload does not decode: %v", err)
+	}
+	want := served.hits()[0].Locator
+	if got := claim.Evidence[0].Locator; got != want {
+		t.Errorf("locator = %+v; want the served hit's own, %+v", got, want)
+	}
+	if claim.Evidence[0].Note == "" {
+		t.Error("the citation carries no note, so nothing says what the bytes show")
+	}
+	// §4.3 wants counter-evidence or an explicit absence, and exactly one of
+	// the two set. The model sent an empty array; Code derived the absence.
+	if len(claim.CounterEvidence) != 0 || !claim.CounterEvidenceAbsent {
+		t.Errorf("counter-evidence = %+v absent = %v; want the absence stated exactly once",
+			claim.CounterEvidence, claim.CounterEvidenceAbsent)
+	}
+	if len(findings.Records) != 2 ||
+		findings.Records[0].Ref != "c1" || findings.Records[1].Ref != "o1" ||
+		findings.Records[0].Refusal != "" || findings.Records[1].Refusal != "" {
+		t.Errorf("records = %+v; want both attempts logged as accepted", findings.Records)
+	}
+	if findings.NudgedForRecords {
+		t.Error("a run that recorded on its own was still asked again")
+	}
+	if result.Status != babelStatusOK {
+		t.Errorf("status = %q gaps = %v; this run recorded a cited claim and lost nothing",
+			result.Status, findings.Gaps)
+	}
+
+	// The structured half of the payload, as Babel receives it. Printed rather
+	// than only asserted because the shape is the deliverable and a reviewer
+	// reading a failure needs to see it, not reconstruct it from field checks.
+	structured, err := json.MarshalIndent(struct {
+		Candidates []babelCandidate `json:"candidates"`
+	}{findings.Candidates}, "", "  ")
+	if err != nil {
+		t.Fatalf("re-marshalling the candidates: %v", err)
+	}
+	t.Logf("candidates as Babel receives them:\n%s", structured)
+}
+
+// TestOmpDriveRefusesACitationItNeverServed is the provenance boundary. A model
+// that cites a handle this run never issued has made a claim no reviewer can
+// reopen, and Babel would keep it: its own validation checks a locator's shape,
+// never that the digest belongs to anything it served. So Code refuses it here,
+// and the receipt says so — a silent drop would leave the model believing the
+// claim was kept and leave the operator unable to tell it from a claim never
+// made.
+//
+// The candidate recorded before the bad citation stays. That is deliberate: one
+// fabricated citation is a reason to distrust that claim, not to discard work
+// that was properly cited.
+func TestOmpDriveRefusesACitationItNeverServed(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "forged")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{decide: serveOneHit}
+
+	result, err := inv.investigate(context.Background(),
+		testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Candidates) != 1 {
+		t.Fatalf("candidates = %+v; the properly recorded candidate must survive", findings.Candidates)
+	}
+	if obs := findings.Candidates[0].Observations; len(obs) != 0 {
+		t.Fatalf("observations = %+v; a claim citing evidence this run never served must not be kept", obs)
+	}
+	var refusal string
+	for _, entry := range findings.Records {
+		if entry.Refusal != "" {
+			refusal = entry.Refusal
+		}
+	}
+	if !strings.Contains(refusal, `"e9"`) || !strings.Contains(refusal, "not a handle this run served") {
+		t.Errorf("refusal = %q; the receipt must name the handle that was cited and why it failed",
+			refusal)
+	}
+	if !slices.Contains(findings.Gaps, ompForgedCitationGap) {
+		t.Errorf("gaps = %v; a fabricated citation is a fact about the run, not just a log line",
+			findings.Gaps)
+	}
+	if result.Status != babelStatusPartial {
+		t.Errorf("status = %q; a run that fabricated a citation did not finish clean", result.Status)
+	}
+	// The model has to be told, in terms it can act on, or it cannot repair the
+	// call — and the alternative to repairing it is inventing another citation.
+	answers := ompFakeHostToolResults(t, record)
+	var rejected bool
+	for _, answer := range answers {
+		if answer.IsError && len(answer.Result.Content) > 0 &&
+			strings.Contains(answer.Result.Content[0].Text, "This record was not kept") &&
+			strings.Contains(answer.Result.Content[0].Text, "e1") {
+			rejected = true
+		}
+	}
+	if !rejected {
+		t.Errorf("the model was never told the citation failed or which handles exist: %+v", answers)
+	}
+}
+
+// TestOmpDriveReportsAProseOnlyRunAsPartial is the failure this whole change is
+// about, held as a test. The run that motivated it read the corpus eleven times,
+// reasoned for five turns, returned an essay, recorded nothing, and reported
+// status ok with every count at zero. It must now report partial, say why, and
+// show in the receipt that it asked once more.
+func TestOmpDriveReportsAProseOnlyRunAsPartial(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, record := ompFakeBinary(t, "plain")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{}
+
+	result, err := inv.investigate(context.Background(),
+		testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Candidates) != 0 {
+		t.Fatalf("candidates = %+v; this scenario records nothing", findings.Candidates)
+	}
+	if findings.Analysis == "" {
+		t.Error("the narrative was dropped; it is still the model's own account of the run")
+	}
+	if !slices.Contains(findings.Gaps, ompNoRecordsGap) {
+		t.Errorf("gaps = %v; a run with no records must say so", findings.Gaps)
+	}
+	if result.Status != babelStatusOK && result.Status != babelStatusPartial {
+		t.Fatalf("status = %q is not a status this worker emits", result.Status)
+	}
+	if result.Status != babelStatusPartial {
+		t.Errorf("status = %q; prose is not an outcome", result.Status)
+	}
+	if !findings.NudgedForRecords {
+		t.Error("the run never asked for records, so the follow-up mechanism did not fire")
+	}
+	// Exactly one follow-up. A model that answers a nudge with more prose must
+	// end the run rather than start a loop the operator pays for.
+	prompts := 0
+	for _, frame := range ompFakeFrames(t, record) {
+		var probe struct{ Type string }
+		_ = json.Unmarshal(frame, &probe)
+		if probe.Type == ompCommandPrompt {
+			prompts++
+		}
+	}
+	if prompts != 2 {
+		t.Errorf("sent %d prompts; want the brief and exactly one follow-up", prompts)
+	}
+}
+
+// TestOmpDriveRecordsAfterTheFollowUp is the other half: the follow-up is only
+// worth a turn if a model that ignored the contract can still satisfy it. This
+// scenario answers the brief with prose and the nudge with records.
+func TestOmpDriveRecordsAfterTheFollowUp(t *testing.T) {
+	inv, _ := newTestInvestigator(t)
+	fake, _ := ompFakeBinary(t, "nudged")
+	inv.lookOmp = func() (string, error) { return fake, nil }
+	inv.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
+	rec := &recorder{decide: serveOneHit}
+
+	result, err := inv.investigate(context.Background(),
+		testJob("", babelCapabilityCorpusSearch), rec.emit, rec.request)
+	if err != nil {
+		t.Fatalf("investigate: %v", err)
+	}
+	var findings ompFindings
+	if err := json.Unmarshal(result.Payload, &findings); err != nil {
+		t.Fatalf("payload does not decode: %v", err)
+	}
+	if len(findings.Candidates) != 1 || len(findings.Candidates[0].Observations) != 1 {
+		t.Fatalf("candidates = %+v; the follow-up turn recorded a candidate and a claim",
+			findings.Candidates)
+	}
+	if !findings.NudgedForRecords {
+		t.Error("the payload does not show the run needed asking, which costs the operator a turn")
+	}
+	if result.Status != babelStatusOK {
+		t.Errorf("status = %q gaps = %v; the run ended with a cited claim and no loss",
+			result.Status, findings.Gaps)
 	}
 }
 
@@ -1467,6 +2665,24 @@ func ompFakeHostToolResult(t *testing.T, record string) ompHostToolResult {
 	return ompHostToolResult{}
 }
 
+// ompFakeHostToolResults is every host tool answer the fake received, for the
+// scenarios that make more than one call and care about a later one.
+func ompFakeHostToolResults(t *testing.T, record string) []ompHostToolResult {
+	t.Helper()
+	var answers []ompHostToolResult
+	for _, frame := range ompFakeFrames(t, record) {
+		var answer ompHostToolResult
+		if err := json.Unmarshal(frame, &answer); err != nil || answer.Type != ompFrameHostToolResult {
+			continue
+		}
+		answers = append(answers, answer)
+	}
+	if len(answers) == 0 {
+		t.Fatal("the fake omp never received a host tool result")
+	}
+	return answers
+}
+
 // TestOmpFakeHelper is not an assertion. It is the entry point the wrapper
 // re-executes, and it exits before the testing package writes anything, because
 // its stdout is the driver's RPC stream.
@@ -1525,6 +2741,7 @@ func ompFakeMain(args []string) {
 
 	lines := bufio.NewScanner(os.Stdin)
 	lines.Buffer(make([]byte, 0, 64<<10), ompFrameBytes)
+	prompts, answered := 0, 0
 	for lines.Scan() {
 		line := bytes.TrimSpace(lines.Bytes())
 		if len(line) == 0 {
@@ -1545,22 +2762,75 @@ func ompFakeMain(args []string) {
 		case ompCommandPrompt:
 			emit(`{"id":"` + command.ID + `","type":"response","command":"prompt",` +
 				`"success":true,"data":{"agentInvoked":true}}`)
-			ompFakePlay(scenario, record, &state, save, emit)
+			prompts++
+			ompFakePlay(scenario, prompts, record, &state, save, emit)
 		case ompFrameHostToolResult:
-			ompFakeFinish(emit)
+			answered++
+			ompFakeAdvance(scenario, answered, emit)
 		}
 	}
 	os.Exit(0)
 }
 
+// The tool calls the scenarios make. They are constants because two scenarios
+// share the first two and differ only in the third, which is the whole point of
+// the forged-citation scenario: it is a run that behaved until the moment it
+// cited something.
+const (
+	ompFakeSearchCall = `{"type":"host_tool_call","id":"host_1","toolCallId":"toolu_1",` +
+		`"toolName":"babel_corpus_search","arguments":{"query":"outcome integrity","limit":3}}`
+
+	// ompFakeHypothesisCall is a well-formed candidate: the three fields Babel
+	// refuses a record without, and nothing invented.
+	ompFakeHypothesisCall = `{"type":"host_tool_call","id":"host_2","toolCallId":"toolu_2",` +
+		`"toolName":"babel_record_hypothesis","arguments":{` +
+		`"statement":"handoffs between agents drop a constraint that was stated once",` +
+		`"origin_cues":["a constraint restated three turns after the handoff"],` +
+		`"labels":["coordination"],"novelty":0.7,"priority":0.6,` +
+		`"notes":"seen in one session so far; worth a second pass"}}`
+
+	// ompFakeObservationCall cites the handle Code issued for the hit the search
+	// returned, which is the only citation the driver accepts.
+	ompFakeObservationCall = `{"type":"host_tool_call","id":"host_3","toolCallId":"toolu_3",` +
+		`"toolName":"babel_record_observation","arguments":{` +
+		`"hypothesis":"c1","claim":"the reviewer restated the constraint the handoff had omitted",` +
+		`"category":"coordination","confidence":"moderate","impact":"high",` +
+		`"temporal_status":"still-applicable",` +
+		`"evidence":[{"hit":"e1","note":"the constraint appears only after the handoff"}],` +
+		`"counter_evidence":[]}}`
+
+	// ompFakeForgedCitationCall cites a handle this run never issued. It is the
+	// one thing a model can do here that no repair turn can fix after the fact:
+	// a locator nobody can reopen reads exactly like provenance.
+	ompFakeForgedCitationCall = `{"type":"host_tool_call","id":"host_3","toolCallId":"toolu_3",` +
+		`"toolName":"babel_record_observation","arguments":{` +
+		`"hypothesis":"c1","claim":"the same constraint is dropped in nine other sessions",` +
+		`"confidence":"high","impact":"high",` +
+		`"evidence":[{"hit":"e9","note":"nine sessions show the same drop"}],` +
+		`"counter_evidence":[]}}`
+)
+
 // ompFakePlay is the scenario: what the fake does once it has been prompted.
-func ompFakePlay(scenario, record string, state *ompFakeRecord, save func(), emit func(string)) {
+//
+// prompt is which prompt this is. A run that recorded nothing gets exactly one
+// follow-up from the driver, and a real model does not answer that by repeating
+// its whole tool sequence — so only "nudged" does anything on the second prompt,
+// and every other scenario answers with prose again, which is what a run that
+// ignores the follow-up looks like.
+func ompFakePlay(scenario string, prompt int, record string, state *ompFakeRecord, save func(), emit func(string)) {
 	emit(`{"type":"agent_start"}`)
 	emit(`{"type":"turn_start"}`)
+	if prompt > 1 {
+		if scenario == "nudged" {
+			emit(ompFakeSearchCall)
+			return
+		}
+		ompFakeFinish(emit)
+		return
+	}
 	switch scenario {
-	case "hosttool":
-		emit(`{"type":"host_tool_call","id":"host_1","toolCallId":"toolu_1",` +
-			`"toolName":"babel_corpus_search","arguments":{"query":"outcome integrity","limit":3}}`)
+	case "hosttool", "record", "forged":
+		emit(ompFakeSearchCall)
 	case "unregistered":
 		emit(`{"type":"host_tool_call","id":"host_1","toolCallId":"toolu_1",` +
 			`"toolName":"bash","arguments":{"command":"whoami"}}`)
@@ -1579,6 +2849,36 @@ func ompFakePlay(scenario, record string, state *ompFakeRecord, save func(), emi
 	default:
 		ompFakeFinish(emit)
 	}
+}
+
+// ompFakeAdvance is what the fake does once the host has answered a tool call.
+//
+// answered counts those answers, so a scenario is a sequence rather than a
+// single call. That sequencing is not decoration: a citation can only name a
+// handle a search already produced, so the recording path is unreachable except
+// from a run that searched first, which is exactly the ordering a real run has.
+func ompFakeAdvance(scenario string, answered int, emit func(string)) {
+	switch scenario {
+	case "record", "nudged":
+		switch answered {
+		case 1:
+			emit(ompFakeHypothesisCall)
+			return
+		case 2:
+			emit(ompFakeObservationCall)
+			return
+		}
+	case "forged":
+		switch answered {
+		case 1:
+			emit(ompFakeHypothesisCall)
+			return
+		case 2:
+			emit(ompFakeForgedCitationCall)
+			return
+		}
+	}
+	ompFakeFinish(emit)
 }
 
 func ompFakeFinish(emit func(string)) {

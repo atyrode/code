@@ -271,3 +271,104 @@ func TestSelectionStateDisabledPath(t *testing.T) {
 		t.Fatalf("disabled load = %v, want defaults", got)
 	}
 }
+
+// TestSelectionStatePathResolution pins the resolution order the Babel seam
+// depends on. The default location is what makes worker mode possible at all —
+// Babel strips CODE_SELECTION_STATE — so an unset variable must resolve to a
+// path under the state root rather than to the old "stateless" empty string.
+func TestSelectionStatePathResolution(t *testing.T) {
+	state, home := t.TempDir(), t.TempDir()
+
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv(codeSelectionStateEnv, "")
+	if got, want := selectionStatePath(), filepath.Join(state, "code", "selection.json"); got != want {
+		t.Errorf("unset selection state = %q, want the XDG default %q", got, want)
+	}
+
+	t.Setenv("XDG_STATE_HOME", "")
+	if got, want := selectionStatePath(), filepath.Join(home, ".local", "state", "code", "selection.json"); got != want {
+		t.Errorf("unset selection state without XDG_STATE_HOME = %q, want the HOME default %q", got, want)
+	}
+
+	override := filepath.Join(t.TempDir(), "elsewhere.json")
+	t.Setenv(codeSelectionStateEnv, override)
+	if got := selectionStatePath(); got != override {
+		t.Errorf("override = %q, want it to win outright (%q)", got, override)
+	}
+
+	t.Setenv(codeSelectionStateEnv, codeSelectionDisabled)
+	if got := selectionStatePath(); got != "" {
+		t.Errorf("%s=%s = %q, want the opt-out empty path", codeSelectionStateEnv, codeSelectionDisabled, got)
+	}
+}
+
+// TestInteractiveDialChangeWritesTheDefaultLocation closes the loop the fix
+// exists for: the TUI is the only thing that writes a selection, so a dial
+// turned interactively has to land exactly where a worker with a stripped
+// environment will look for it.
+func TestInteractiveDialChangeWritesTheDefaultLocation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv(codeSelectionStateEnv, "")
+
+	path := defaultSelectionStatePath()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("default selection location already exists before any dial was turned: %v", err)
+	}
+
+	// Constructed the way main does: the resolved targets, not the raw variable.
+	state, handoff := selectionStateTargets()
+	if handoff != "" {
+		t.Fatalf("no override is in force, so nothing should need mirroring: %q", handoff)
+	}
+	m := model{facets: testFacets(), sel: defaultSel(), selectionState: state}
+	turnedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	turned := turnedModel.(model)
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("turning a dial did not write %s: %v", path, err)
+	}
+	// A second process, resolving the location for itself, must see the choice.
+	reloaded := loadSelectionState(selectionStatePath(), testFacets())
+	if !reflect.DeepEqual(reloaded, selectionChoices(turned.sel, testFacets())) {
+		t.Fatalf("reloaded %v, want the turned dials %v", reloaded, selectionChoices(turned.sel, testFacets()))
+	}
+}
+
+// TestRelocatedSelectionIsMirroredForTheWorker is the case the operator is
+// actually in: his wrapper points CODE_SELECTION_STATE at a path of its own, and
+// Babel's worker is handed no such variable. The override still owns the read, so
+// the default location has to be kept current or configure mode would keep
+// reporting defaults while the TUI showed something else.
+func TestRelocatedSelectionIsMirroredForTheWorker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	override := filepath.Join(t.TempDir(), "wrapper", "code-generator-selection.json")
+	t.Setenv(codeSelectionStateEnv, override)
+
+	state, handoff := selectionStateTargets()
+	if state != override {
+		t.Fatalf("read target = %q, want the override %q", state, override)
+	}
+	if handoff != defaultSelectionStatePath() {
+		t.Fatalf("mirror target = %q, want the default location %q", handoff, defaultSelectionStatePath())
+	}
+
+	m := model{facets: testFacets(), sel: defaultSel(), selectionState: state, selectionHandoff: handoff}
+	turnedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	want := selectionChoices(turnedModel.(model).sel, testFacets())
+
+	// The override keeps owning the read this process does.
+	if got := loadSelectionState(override, testFacets()); !reflect.DeepEqual(got, want) {
+		t.Errorf("override holds %v, want the turned dials %v", got, want)
+	}
+	// And a worker resolving the location with a stripped environment — no
+	// override at all — sees the same dials.
+	if err := os.Unsetenv(codeSelectionStateEnv); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSelectionState(selectionStatePath(), testFacets()); !reflect.DeepEqual(got, want) {
+		t.Errorf("a stripped-environment reader sees %v, want the turned dials %v", got, want)
+	}
+}

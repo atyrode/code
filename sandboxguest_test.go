@@ -136,6 +136,15 @@ func runSandboxFakeOmp() int {
 			}
 			emit(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":` +
 				string(delta) + `},"message":{"role":"assistant","content":[]}}`)
+			// One recorded candidate, so the run has the durable output the
+			// driver requires and does not spend a follow-up turn asking for
+			// one. The statement is about the boundary because that is the
+			// only thing this stand-in knows anything about.
+			emit(`{"type":"host_tool_call","id":"host_1","toolCallId":"toolu_1",` +
+				`"toolName":"babel_record_hypothesis","arguments":{` +
+				`"statement":"the session woke up inside the boundary Code declared",` +
+				`"novelty":0.5,"priority":0.5}}`)
+		case ompFrameHostToolResult:
 			emit(`{"type":"turn_end"}`)
 			emit(`{"type":"agent_end","messages":[],"isTerminal":true}`)
 			return 0

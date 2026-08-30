@@ -224,13 +224,20 @@ const babelHelp = `code babel — speak Babel's analysis-worker protocol on stdi
                            runs no analysis and must never do real work
 
       The dials are resolved without a terminal: --set wins, then the persisted
-      selection, then Code's defaults. See the note at babelResolveDials.
+      selection, then Code's defaults. See the note at babelResolveDials. Babel
+      strips the environment down to HOME, PATH, TMPDIR and LANG, so the
+      selection is read from its default location under HOME rather than from
+      %s — run "code", turn the dials, and configure mode reports them.
+      An install that relocates the selection with that variable keeps the
+      default location mirrored, because a worker cannot be told about it.
 
-  Profile store: $XDG_STATE_HOME/code/babel/profiles, or %s.
+  Profile store:   $XDG_STATE_HOME/code/babel/profiles, or %s.
+  Dial selection:  $XDG_STATE_HOME/code/selection.json, mirrored from %s.
 `
 
 func babelHelpText() string {
-	return fmt.Sprintf(babelHelp, defaultBabelProfileID, babelInvestigatorConformance, babelProfileStateEnv)
+	return fmt.Sprintf(babelHelp, defaultBabelProfileID, babelInvestigatorConformance,
+		codeSelectionStateEnv, babelProfileStateEnv, codeSelectionStateEnv)
 }
 
 // runBabel is the `code babel` subcommand.
@@ -1108,7 +1115,11 @@ func babelCatalogModel() model {
 	if len(runtimeTargets) > 0 {
 		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
 	}
-	selection := loadSelectionState(os.Getenv("CODE_SELECTION_STATE"), facets)
+	// Not os.Getenv: Babel strips every variable but HOME, PATH, TMPDIR and
+	// LANG, so CODE_SELECTION_STATE is by construction absent here. The default
+	// location under HOME is the only way this process can see the operator's
+	// dials at all (selectionStatePath).
+	selection := loadSelectionState(selectionStatePath(), facets)
 	if len(runtimeTargets) > 0 {
 		if _, ok := selection["runtime"]; !ok {
 			selection["runtime"] = "hosted"
@@ -1411,6 +1422,14 @@ type conformanceReport struct {
 	Sources    int      `json:"sources"`
 	UnknownJob []string `json:"unknown_job_fields,omitempty"`
 
+	// ToolName is the tool name the tool-request directives actually sent, and
+	// ToolNameSource says how it was chosen. They are on the payload because a
+	// receipt otherwise records only the decision, and the decision looks the
+	// same whether the worker obeyed the grant's published mapping or guessed
+	// a name that happened to match.
+	ToolName       string `json:"tool_name,omitempty"`
+	ToolNameSource string `json:"tool_name_source,omitempty"`
+
 	// Job answers the echo-job directive: the recipes and sources this run
 	// decoded, in the flat shape Babel compares against the job it sent. It
 	// is a pointer so it is absent under every other directive — the key's
@@ -1422,6 +1441,17 @@ type conformanceReport struct {
 	// read the array lengths and nothing inside them, which is the reading
 	// this directive exists to distinguish from a real one.
 	Job *babelJobEcho `json:"job,omitempty"`
+
+	// ServedEvidence answers the echo-evidence directive: the hits this run
+	// decoded off the decision it was given, flattened the way Babel compares
+	// them. It is a pointer for the reason Job above is, and it is emitted
+	// even when it is empty once the directive has asked, because a missing
+	// key and an empty array report different failures.
+	//
+	// Decisions is not a substitute here either. It records that an allowed
+	// decision arrived, which is exactly what a worker that threw away every
+	// hit also records.
+	ServedEvidence *babelServedEcho `json:"served_evidence,omitempty"`
 
 	// EchoedToken carries the run's broker credential when the echo-token
 	// directive asks for it, and is the only field here that is not a fact
@@ -1476,12 +1506,39 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 			}
 		}
 
-	case babelConformanceRequestTool, babelConformanceRequestUngranted:
-		capability, tool := babelCapabilityCorpusSearch, "search"
+	case babelConformanceRequestTool, babelConformanceRequestUngranted, babelConformanceEchoEvidence:
+		// The name comes out of the job's grant, not out of this file. Babel
+		// publishes the tool names it serves per capability and denies anything
+		// else, so a constant here would be a second place for the two repos to
+		// drift apart — which is exactly how a whole exploration came to have
+		// every evidence request refused.
+		capability := babelCapabilityCorpusSearch
 		if directive == babelConformanceRequestUngranted {
 			// Deliberately outside the suite's grant: the grant is the boundary
-			// and Babel must deny this before any policy is consulted.
-			capability, tool = babelCapabilitySandboxExec, "exec"
+			// and Babel must deny this before any policy is consulted, so the
+			// name is immaterial and the grant publishes none.
+			capability = babelCapabilitySandboxExec
+		}
+		if directive == babelConformanceEchoEvidence {
+			// Answered before the request so that a run which never gets to
+			// make one still says "implemented, and nothing was served"
+			// rather than going silent, which Babel reads as a worker that
+			// does not implement the directive at all.
+			report.ServedEvidence = &babelServedEcho{Hits: []string{}}
+		}
+		known, _ := ompEvidenceToolFor(capability)
+		tool, source, note := ompOutOfGrantProbeTool, ompToolNameProbe, ""
+		if job.Grant.allows(capability) {
+			tool, source, note = ompResolveToolName(job.Grant, known)
+		}
+		report.ToolName, report.ToolNameSource = tool, source
+		if tool == "" {
+			// Babel published no tool for a capability it granted. Requesting
+			// anything under it would be the guess this mechanism removes, so
+			// the stub reports the reason and makes no request.
+			report.ToolNameSource = source + ": " + note
+			emit("adapt", "no tool is published for "+capability+"; asking for nothing", 0.75)
+			break
 		}
 		decision := request(capability, tool,
 			"conformance stub: exercising the tool-request round trip",
@@ -1489,6 +1546,14 @@ func (conformanceInvestigator) investigate(ctx investigatorContext, job babelJob
 		report.Decisions = append(report.Decisions, decision.Decision)
 		if decision.Code != "" {
 			report.DenyCodes = append(report.DenyCodes, decision.Code)
+		}
+		if directive == babelConformanceEchoEvidence {
+			// Off the decision that just arrived and nothing else: Babel
+			// plants a per-run nonce through the hits it serves, so an answer
+			// assembled from anything held here answers with the wrong bytes.
+			served, _ := decision.servedEvidence()
+			echo := served.echo()
+			report.ServedEvidence = &echo
 		}
 		// A denial is not a termination: the run carries on and still delivers
 		// a terminal event.

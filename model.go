@@ -47,7 +47,11 @@ type model struct {
 	facets         []facet
 	fcur           int
 	sel            map[string]string
-	selectionState string // CODE_SELECTION_STATE; empty keeps standalone runs stateless
+	selectionState string // resolved by selectionStatePath; empty is the "off" opt-out
+	// selectionHandoff is the default location a relocated selection is also
+	// mirrored to, because Babel's worker sees no CODE_SELECTION_STATE at all.
+	// Empty when the resolved path is already the default one.
+	selectionHandoff string
 
 	vp   viewport.Model
 	spin spinner.Model

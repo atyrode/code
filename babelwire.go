@@ -23,6 +23,7 @@ package main
 // the two disagree, Babel is right and this file is wrong.
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -138,6 +139,29 @@ const babelParamConformance = "babel.conformance"
 // payload and into at least one progress message, which are the two places a
 // real leak happens — free text a model wrote and a stage description built by
 // concatenation.
+//
+// babelConformanceEchoEvidence is the directive that grades the one thing a
+// decision's own fields cannot show: whether the worker read the evidence
+// Babel served with it. An allowed decision used to carry nothing but a
+// sentence, so a worker could report "allow" and hand the model no corpus
+// material at all, and the receipt would read the same as a worker that served
+// every hit. It is the same blind spot echo-job closes for the job document,
+// and it is closed the same way: by asking.
+//
+// A worker receiving it makes one ordinary corpus-search request, blocks for
+// the decision, and reports the hits it decoded off that decision under the
+// "served_evidence" key of the terminal result's payload — one entry per hit,
+// in served order, each flattened to
+// "HARNESS|SOURCE_ID|INDEX|PATH|LINE|BYTE_OFFSET|DIGEST|EXCERPT". The key is
+// its own rather than the payload's existing "evidence" array, which is the
+// request log a reviewer reads and is not this.
+//
+// The flat rendering is the evidence of the decode, exactly as it is for
+// echo-job: a worker that produces those eight fields has walked into the
+// locator object and out to the excerpt, and Babel plants a per-run nonce in
+// five of them, so the answer cannot be a constant written here. The array is
+// emitted even when it is empty, because "implemented and served nothing" and
+// "never implemented" are two different failures and Babel grades them apart.
 const (
 	babelConformanceWellBehaved      = "well-behaved"
 	babelConformanceEchoJob          = "echo-job"
@@ -146,6 +170,7 @@ const (
 	babelConformanceErrorOnly        = "error-only"
 	babelConformanceSlow             = "slow"
 	babelConformanceEchoToken        = "echo-token"
+	babelConformanceEchoEvidence     = "echo-evidence"
 )
 
 // babelHello is the worker's opening line. It is written before reading
@@ -217,10 +242,27 @@ type babelSource struct {
 }
 
 // babelGrant is the run's capability boundary, fixed before work starts.
+//
+// Tools is Babel's published capability-to-tool-name mapping: for each granted
+// capability, the tool names Babel will actually serve under it. It exists
+// because a capability names a facility while a tool names one operation
+// inside it, and Babel denies an operation it does not recognize. Code used to
+// choose that name itself, which is how a whole exploration came to make three
+// evidence requests and have all three refused for naming a tool Babel never
+// served. The name is now Babel's to state and Code's to obey.
+//
+// Absence is meaningful at both levels and the two absences are different
+// facts. A nil map means this Babel published no mapping at all — an older
+// build that predates the field — and says nothing about any capability. A
+// present map with no entry for a granted capability, or an entry holding no
+// names, is this Babel stating that nothing it brokers serves that capability.
+// Code treats the first as unanswered and the second as answered "nothing",
+// and records which one it acted on.
 type babelGrant struct {
-	Capabilities []string   `json:"capabilities"`
-	Disclosure   string     `json:"disclosure"`
-	Expires      *time.Time `json:"expires,omitempty"`
+	Capabilities []string            `json:"capabilities"`
+	Disclosure   string              `json:"disclosure"`
+	Tools        map[string][]string `json:"tools,omitempty"`
+	Expires      *time.Time          `json:"expires,omitempty"`
 }
 
 // allows reports whether c is inside the grant. Code checks this to avoid
@@ -233,6 +275,17 @@ func (g babelGrant) allows(c string) bool {
 	}
 	return false
 }
+
+// publishesTools reports whether this grant carries a tool-name mapping at all.
+// It is the difference between a Babel that stated nothing serves a capability
+// and a Babel too old to have been asked.
+func (g babelGrant) publishesTools() bool { return g.Tools != nil }
+
+// toolNames is the tool names Babel published for capability c, in the order
+// Babel gave them. An empty result means either that this grant publishes no
+// mapping or that the mapping names nothing for c; publishesTools tells the two
+// apart, and every caller here needs both answers.
+func (g babelGrant) toolNames(c string) []string { return g.Tools[c] }
 
 // babelBroker locates Babel's capability-gated evidence API for this run.
 // Token is the one secret the job carries. It must never be logged, never
@@ -270,7 +323,8 @@ type babelJob struct {
 func (j babelJob) conformanceDirective() string {
 	switch d := j.Params[babelParamConformance]; d {
 	case babelConformanceEchoJob, babelConformanceRequestTool, babelConformanceRequestUngranted,
-		babelConformanceErrorOnly, babelConformanceSlow, babelConformanceEchoToken:
+		babelConformanceErrorOnly, babelConformanceSlow, babelConformanceEchoToken,
+		babelConformanceEchoEvidence:
 		return d
 	default:
 		return babelConformanceWellBehaved
@@ -301,6 +355,15 @@ func (j babelJob) secrets() []string {
 		return nil
 	}
 	return []string{j.Broker.Token}
+}
+
+// brokered reports whether this job named an evidence API to fetch from. It is
+// the second of the two routes an allowed request can take, and it is asked
+// before the fetch rather than discovered from its failure: "this run has no
+// broker" and "the broker did not answer" are different things to tell a model
+// and different things to leave in a receipt.
+func (j babelJob) brokered() bool {
+	return j.Broker != nil && strings.TrimSpace(j.Broker.Endpoint) != ""
 }
 
 // brokerToken is the run's broker credential, or empty when the job carries
@@ -368,6 +431,23 @@ type babelDecision struct {
 	Decision  string `json:"decision"`
 	Code      string `json:"code,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+
+	// Results is the evidence Babel served with an allowed decision, as Babel
+	// wrote it. It is held as raw JSON and forwarded to the model unchanged,
+	// which is not laziness: Babel is the authority on what was served, it has
+	// already redacted and bounded every excerpt, and any field this build
+	// does not model still reaches the model instead of being dropped by a
+	// re-encode. Code decodes it only to count what arrived and to answer the
+	// echo-evidence directive.
+	//
+	// Absence is a fact of its own and is never an empty result set. No
+	// payload means this decision served no evidence at all — an older Babel,
+	// a denial, or a capability whose facility is not the corpus index —
+	// whereas a payload carrying an empty hits array means Babel searched and
+	// the corpus matched nothing. Conflating the two would let a run report
+	// the archive as silent on a question nobody ever put to it, so the
+	// omitempty here and the pointer in babelServed exist for the same reason.
+	Results json.RawMessage `json:"results,omitempty"`
 }
 
 const (
@@ -376,6 +456,261 @@ const (
 )
 
 func (d babelDecision) allowed() bool { return d.Decision == babelDecisionAllow }
+
+// carriesResults reports whether the decision came with a payload. A JSON null
+// counts as no payload: it is what a marshaller emits for an absent value, and
+// reading it as "served, empty" would invent the very distinction this
+// predicate exists to keep.
+func (d babelDecision) carriesResults() bool {
+	trimmed := bytes.TrimSpace(d.Results)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
+// babelServed is the corpus evidence one allowed decision served. It mirrors
+// Babel's babel.corpus-search/1 object and deliberately models less of it than
+// arrives: the payload reaches the model verbatim, so a field named here is a
+// field Code itself reads rather than one it passes on.
+type babelServed struct {
+	Schema string `json:"schema"`
+	Query  string `json:"query"`
+
+	// Limit is the page bound Babel applied, which is not the limit that was
+	// asked for: a request for fifty hits is served ten. It is the only thing
+	// that makes a short page readable — as many hits as the limit means the
+	// page was full and more may lie behind an offset, fewer means the matches
+	// ran out — and without it a worker reads a full page as the whole corpus.
+	Limit int `json:"limit"`
+
+	// Hits is a pointer because its absence and its emptiness are different
+	// answers. A payload with an empty array is Babel saying the corpus
+	// matched nothing; a payload with no array at all is a shape this build
+	// does not recognize, and reporting that as "nothing matched" would put a
+	// finding's weight on a decode that never happened.
+	Hits *[]babelServedHit `json:"hits"`
+}
+
+// babelServedHit is one served hit: which session it came from, where in that
+// session it sits, the locator that reopens it against the archive, and the
+// bounded excerpt Babel redacted before serving.
+//
+// Index is the event's place in its session's event order, never its position
+// in the hits array. Retrieval rank is not evidence strength and Babel serves
+// no score for one to be inferred from, so nothing here or downstream may
+// order anything by array position.
+type babelServedHit struct {
+	Harness  string `json:"harness"`
+	SourceID string `json:"source_id"`
+	Index    int    `json:"index"`
+
+	// Excerpt is a clip and is named as one. Truncated says Babel cut it, and
+	// a reader that ignores that flag can conclude a record says only what its
+	// first two kilobytes say.
+	Excerpt   string `json:"excerpt"`
+	Truncated bool   `json:"truncated"`
+
+	Locator babelLocator `json:"locator"`
+}
+
+// babelLocator is what reopens a hit against the archive: path and line find
+// the record, and the digest proves the bytes found are the bytes served.
+// SPEC.md requires every claim to be reopenable, so a rendering that drops
+// this turns a citation into an assertion.
+type babelLocator struct {
+	Path       string `json:"path"`
+	Line       int    `json:"line"`
+	ByteOffset int64  `json:"byte_offset"`
+	Digest     string `json:"digest"`
+}
+
+// servedEvidence decodes the payload. The boolean reports whether this build
+// recognized the shape, which is not the same as whether the decode errored: a
+// payload that unmarshals cleanly but carries no hits array is a shape from
+// some other Babel, and it is reported as unrecognized rather than as a search
+// that found nothing.
+//
+// Neither outcome is fatal, in either direction. The protocol's rule is that
+// unknown fields are ignored inside a known version, and its consequence here
+// is that an unreadable payload is still Babel's served evidence: the caller
+// forwards the bytes and says it could not read them, rather than discarding
+// what a newer Babel took the disclosure risk of sending.
+func (d babelDecision) servedEvidence() (babelServed, bool) {
+	if !d.carriesResults() {
+		return babelServed{}, false
+	}
+	var served babelServed
+	if err := json.Unmarshal(d.Results, &served); err != nil {
+		return babelServed{}, false
+	}
+	return served, served.Hits != nil
+}
+
+// hits is the served hits, or none when the payload carried no array.
+func (s babelServed) hits() []babelServedHit {
+	if s.Hits == nil {
+		return nil
+	}
+	return *s.Hits
+}
+
+// babelServedEcho is the answer the echo-evidence directive asks for: every
+// hit this worker decoded off the decision, flattened to one string each.
+//
+// Flat for the reason babelJobEcho is flat. Producing
+// "HARNESS|SOURCE_ID|INDEX|PATH|LINE|BYTE_OFFSET|DIGEST|EXCERPT" requires
+// having walked the whole hit — into the nested locator and back out to the
+// excerpt — so the string is the evidence of the decode rather than a claim
+// about it, and Babel compares it against the bytes it served.
+type babelServedEcho struct {
+	Hits []string `json:"hits"`
+}
+
+// echo renders the served hits for the echo-evidence directive. The slice is
+// allocated rather than left nil so a decision that served nothing answers
+// with an empty array: Babel reads a null as a worker that never implemented
+// the directive, and an empty array as one that implemented it and was served
+// nothing, which are two different failures of two different programs.
+func (s babelServed) echo() babelServedEcho {
+	served := s.hits()
+	echo := babelServedEcho{Hits: make([]string, 0, len(served))}
+	for _, hit := range served {
+		echo.Hits = append(echo.Hits, strings.Join([]string{
+			hit.Harness,
+			hit.SourceID,
+			strconv.Itoa(hit.Index),
+			hit.Locator.Path,
+			strconv.Itoa(hit.Locator.Line),
+			strconv.FormatInt(hit.Locator.ByteOffset, 10),
+			hit.Locator.Digest,
+			hit.Excerpt,
+		}, "|"))
+	}
+	return echo
+}
+
+// ── what Babel records ───────────────────────────────────────────────────────
+
+// The structured half of babel.analysis-result/1.
+//
+// Everything above this line is what Babel serves a worker. Everything below is
+// what a worker gives back for Babel to keep, and it is a different kind of
+// object: the analysis field beside it is prose nobody can reopen, while these
+// become durable frontier records with lineage, status histories and
+// consolidations hanging off them. A run that emits only prose has, as far as
+// Babel is concerned, emitted nothing — which is exactly what happened on the
+// exploration that produced eleven allowed corpus searches, five turns of
+// reasoning, an essay, and every count at zero.
+//
+// These are Babel's own payload shapes, field for field, and they are declared
+// here rather than assembled ad hoc where they are filled in, because a field
+// Babel validates and Code never names is a field Code silently never sends.
+// Babel's §4.3 minima are enforced on its side — an observation with no
+// evidence locator is refused, and exactly one of counter_evidence and
+// counter_evidence_absent must be set — so a shape that cannot express them is
+// a run discarded after the model has already been paid for.
+
+// babelCandidate is one emitted hypothesis and the claims developed against it.
+// Ref is Code's own reference for it, unique within the result, and Babel binds
+// it to the durable record it creates so a resumed run recognizes the same
+// candidate instead of writing a second copy.
+type babelCandidate struct {
+	Ref          string               `json:"ref"`
+	Hypothesis   babelHypothesisClaim `json:"hypothesis"`
+	Observations []babelObservation   `json:"observations,omitempty"`
+}
+
+// babelHypothesisClaim is a candidate in the model's own wording plus the
+// signals Babel sorts the frontier by. Novelty and Priority are ordering
+// signals in [0,1] and never gate whether a candidate exists, which is why they
+// are plain values with no absent state: a candidate Babel cannot sort is still
+// a candidate Babel keeps.
+type babelHypothesisClaim struct {
+	Statement         string   `json:"statement"`
+	OriginCues        []string `json:"origin_cues,omitempty"`
+	ProvisionalLabels []string `json:"provisional_labels,omitempty"`
+	Novelty           float64  `json:"novelty"`
+	Priority          float64  `json:"priority"`
+	Notes             string   `json:"notes,omitempty"`
+}
+
+// babelObservation is one provenance-bearing claim developed against a
+// candidate. Recipe is §5.1 provenance and must name a recipe the run actually
+// selected: Babel compares both the id and the version against the stage's
+// assets and refuses the claim on a mismatch, so neither half may be guessed.
+type babelObservation struct {
+	Ref    string         `json:"ref"`
+	Recipe babelRecipeRef `json:"recipe"`
+	Claim  babelClaim     `json:"claim"`
+}
+
+// babelClaim is what an observation asserts, with the provenance that makes it
+// reopenable.
+//
+// CounterEvidence and CounterEvidenceAbsent implement §4.3's "explicit
+// counter-evidence or absence thereof", and exactly one of them is set so that
+// an empty list can never be read as an unasked question. Nothing may write
+// either field alone, which is why babelClaimOf below is the only place they are
+// written at all.
+type babelClaim struct {
+	Claim                 string          `json:"claim"`
+	Category              string          `json:"category,omitempty"`
+	Confidence            string          `json:"confidence"`
+	Impact                string          `json:"impact"`
+	Evidence              []babelCitation `json:"evidence"`
+	CounterEvidence       []babelCitation `json:"counter_evidence,omitempty"`
+	CounterEvidenceAbsent bool            `json:"counter_evidence_absent,omitempty"`
+	TemporalStatus        string          `json:"temporal_status,omitempty"`
+}
+
+// babelClaimOf assembles a claim, deriving the counter-evidence position from
+// the citations rather than taking it as an argument. §4.3 requires exactly one
+// of the two to be set and Babel refuses a payload that sets both or neither, so
+// deriving it is what makes the contradiction unrepresentable instead of merely
+// unlikely.
+func babelClaimOf(claim, category, confidence, impact, temporal string,
+	evidence, counter []babelCitation,
+) babelClaim {
+	return babelClaim{
+		Claim:                 claim,
+		Category:              category,
+		Confidence:            confidence,
+		Impact:                impact,
+		Evidence:              evidence,
+		CounterEvidence:       counter,
+		CounterEvidenceAbsent: len(counter) == 0,
+		TemporalStatus:        temporal,
+	}
+}
+
+// babelCitation is one evidence locator and what the citing claim says those
+// bytes show. Babel decodes it through a type whose fields are unexported
+// precisely so that no citation can exist without a locator, so a note with no
+// locator does not become a weaker citation — it fails to decode and takes the
+// whole result with it.
+type babelCitation struct {
+	Locator babelLocator `json:"locator"`
+	Note    string       `json:"note,omitempty"`
+}
+
+// babelGradings is the accepted value set for §4.3's confidence and impact, in
+// the order a reader should see them offered. They are coarse and closed rather
+// than numeric because confidence never substitutes for evidence and a spurious
+// decimal invites exactly that, and Babel refuses any other value. One list
+// serves both fields because the two vocabularies are the same three words, and
+// a second copy of them could only ever become a divergence.
+var babelGradings = []string{"low", "moderate", "high"}
+
+// babelTemporalStatuses are §5.4's present-reality readings. The empty value is
+// valid and means the question was not assessed, which is a different statement
+// from "unverifiable" — where it was assessed and no answer was reachable — so
+// it is absent from this list rather than a member of it.
+var babelTemporalStatuses = []string{
+	"historical",
+	"still-applicable",
+	"resolved",
+	"regressed",
+	"contradicted",
+	"unverifiable",
+}
 
 // babelPrivacy is the profile's disclosure class and redaction requirement.
 type babelPrivacy struct {
