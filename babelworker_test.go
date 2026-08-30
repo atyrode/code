@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -208,8 +212,10 @@ func babelTestJob(directive string) map[string]any {
 	}
 }
 
-// isolateBabelEnv keeps a test off the developer's real catalog, selection and
-// profile store.
+// isolateBabelEnv keeps a test off the developer's real catalog, selection,
+// profile store and auth broker. The broker matters as much as the rest now
+// that worker mode resolves a credential: a test that inherited the operator's
+// exported broker variables would reach out to their real one.
 func isolateBabelEnv(t *testing.T) string {
 	t.Helper()
 	store := t.TempDir()
@@ -219,7 +225,23 @@ func isolateBabelEnv(t *testing.T) string {
 	t.Setenv("CODE_RUNTIME_BROKER", "")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("OMP_AUTH_BROKER_URL", "")
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "")
+	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "")
+	t.Setenv("CODE_AUTH_VAULTS", "")
+	t.Setenv("CODE_AUTH_VAULTS_FILE", "")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", "")
 	return store
+}
+
+// babelProductionJob is babelTestJob without the conformance directive and
+// naming a profile the store actually holds. The directive is what routes a run
+// away from OMP, so a job that has to reach the real path must carry none.
+func babelProductionJob(id string, revision int) map[string]any {
+	job := babelTestJob("")
+	delete(job, "params")
+	job["profile"] = map[string]any{"id": id, "revision": revision}
+	return job
 }
 
 func conformanceOpts() babelOptions {
@@ -901,6 +923,355 @@ func TestBabelWorkerEchoTokenIsDisclosedAndThenScrubbed(t *testing.T) {
 	}
 }
 
+// babelTestNonce stands in for the per-run value Babel plants in the material
+// the echo-job directive asks about. Babel randomizes it per run so a worker
+// cannot answer with a constant read out of the published fixture; a test needs
+// only a value that is not that fixture, so this one is fixed and reproducible.
+const babelTestNonce = "9d41c7f2"
+
+// babelEchoJobFixture is the job Babel's run/decodes-the-job obligation sends:
+// two recipes and two sources carrying the nonce, one source archived and one
+// not, so a worker that drops "snapshot" is caught by the first and one that
+// invents it is caught by the second.
+func babelEchoJobFixture() map[string]any {
+	job := babelTestJob(babelConformanceEchoJob)
+	job["recipes"] = []map[string]any{
+		{"id": "outcome-integrity", "version": 1},
+		{"id": "evidence-" + babelTestNonce, "version": 7},
+	}
+	job["sources"] = []map[string]any{{
+		"kind":     "session",
+		"selector": "omp/synthetic-" + babelTestNonce,
+		"digest":   "sha256:" + strings.Repeat("0", 64),
+		"snapshot": "snapshot-" + babelTestNonce,
+	}, {
+		"kind":     "repository",
+		"selector": "synthetic/repository-" + babelTestNonce,
+		"digest":   "sha256:" + strings.Repeat("1", 64),
+	}}
+	return job
+}
+
+// babelEchoJobAnswer is what a worker that decoded babelEchoJobFixture must
+// report. It is spelled out from the directive rather than computed with
+// decodedEcho, so the expectation is an independent statement of Babel's format
+// instead of the implementation grading itself.
+func babelEchoJobAnswer() babelJobEcho {
+	return babelJobEcho{
+		Recipes: []string{"outcome-integrity@1", "evidence-" + babelTestNonce + "@7"},
+		Sources: []string{
+			"session|omp/synthetic-" + babelTestNonce + "|sha256:" + strings.Repeat("0", 64) +
+				"|snapshot-" + babelTestNonce,
+			// The trailing separator with nothing after it is the contract for
+			// a source that was never archived: four parts always, the absent
+			// one empty.
+			"repository|synthetic/repository-" + babelTestNonce + "|sha256:" + strings.Repeat("1", 64) + "|",
+		},
+	}
+}
+
+// babelStaleEchoAnswer is what a worker that hardcoded the published conformance
+// job would report instead. It is the answer the nonce exists to reject, so
+// every echo assertion checks against it too: an equality test that passed for
+// this value as well would be measuring nothing.
+func babelStaleEchoAnswer() babelJobEcho {
+	return babelJobEcho{
+		Recipes: []string{"outcome-integrity@1"},
+		Sources: []string{"session|omp/synthetic||"},
+	}
+}
+
+// TestBabelConformanceDirectiveRecognizesEveryDirectiveItImplements is the guard
+// on a failure mode that is invisible from the outside. A directive missing from
+// conformanceDirective's switch is reported as well-behaved, so the worker runs
+// a perfectly correct analysis of the wrong question and Babel grades it as not
+// implementing the obligation at all. Every constant is checked because the
+// omission is silent for whichever one is forgotten.
+func TestBabelConformanceDirectiveRecognizesEveryDirectiveItImplements(t *testing.T) {
+	for _, directive := range []string{
+		babelConformanceWellBehaved,
+		babelConformanceEchoJob,
+		babelConformanceRequestTool,
+		babelConformanceRequestUngranted,
+		babelConformanceErrorOnly,
+		babelConformanceSlow,
+		babelConformanceEchoToken,
+	} {
+		job := babelJob{Params: map[string]string{babelParamConformance: directive}}
+		if got := job.conformanceDirective(); got != directive {
+			t.Errorf("directive %q reads back as %q; an unrecognized directive falls through to "+
+				"well-behaved, so the worker answers a question it was never asked", directive, got)
+		}
+	}
+
+	// The fall-through itself is the contract for anything this build has not
+	// heard of: a newer suite must not be able to fail an older worker by
+	// naming a directive it never implemented.
+	for _, unknown := range []string{"", "request-unknown", "echo-jobs"} {
+		job := babelJob{Params: map[string]string{babelParamConformance: unknown}}
+		if got := job.conformanceDirective(); got != babelConformanceWellBehaved {
+			t.Errorf("unknown directive %q reads back as %q, want well-behaved", unknown, got)
+		}
+	}
+}
+
+// TestBabelDecodedEchoRendersEveryPartBabelCompares checks the rendering against
+// the format written out by hand, including the empty final segment an
+// unarchived source must produce: Babel compares these strings literally, so a
+// separator this build omits is a mismatch on every entry rather than a cosmetic
+// difference.
+func TestBabelDecodedEchoRendersEveryPartBabelCompares(t *testing.T) {
+	job := babelJob{
+		Recipes: []babelRecipeRef{
+			{ID: "outcome-integrity", Version: 1},
+			{ID: "evidence-" + babelTestNonce, Version: 7},
+		},
+		Sources: []babelSource{{
+			Kind:     "session",
+			Selector: "omp/synthetic-" + babelTestNonce,
+			Digest:   "sha256:" + strings.Repeat("0", 64),
+			Snapshot: "snapshot-" + babelTestNonce,
+		}, {
+			Kind:     "repository",
+			Selector: "synthetic/repository-" + babelTestNonce,
+			Digest:   "sha256:" + strings.Repeat("1", 64),
+		}},
+	}
+	if got, want := job.decodedEcho(), babelEchoJobAnswer(); !reflect.DeepEqual(got, want) {
+		t.Errorf("decodedEcho() = %+v, want %+v", got, want)
+	}
+
+	// A job with nothing in it answers with empty arrays rather than nulls, so
+	// the record says the worker decoded nothing instead of saying nothing.
+	empty := babelJob{}.decodedEcho()
+	if empty.Recipes == nil || empty.Sources == nil {
+		t.Errorf("an empty job echoes %+v; a null reads as no answer where an empty array "+
+			"reads as nothing decoded", empty)
+	}
+}
+
+// TestBabelDecodedEchoDistinguishesEveryFieldBabelCompares is what makes the
+// equality assertions elsewhere worth making. Babel grades the echo by comparing
+// it against the job it sent, so the rendering has to be sensitive to every part
+// of every entry: one that dropped a field would render two genuinely different
+// jobs identically, and every comparison built on it would pass while proving
+// nothing. Each case below is one field misread, and each must be visible.
+func TestBabelDecodedEchoDistinguishesEveryFieldBabelCompares(t *testing.T) {
+	base := babelJob{
+		Recipes: []babelRecipeRef{{ID: "outcome-integrity", Version: 1}, {ID: "evidence", Version: 7}},
+		Sources: []babelSource{
+			{Kind: "session", Selector: "omp/one", Digest: "sha256:aa", Snapshot: "snap"},
+			{Kind: "repository", Selector: "synthetic/two", Digest: "sha256:bb"},
+		},
+	}
+	for _, tc := range []struct {
+		name  string
+		wrong func(babelJob) babelJob
+	}{
+		{"a recipe id", func(j babelJob) babelJob {
+			j.Recipes = []babelRecipeRef{{ID: "outcome-integrity", Version: 1}, {ID: "evidence-other", Version: 7}}
+			return j
+		}},
+		{"a recipe version", func(j babelJob) babelJob {
+			j.Recipes = []babelRecipeRef{{ID: "outcome-integrity", Version: 1}, {ID: "evidence", Version: 8}}
+			return j
+		}},
+		{"the recipe order", func(j babelJob) babelJob {
+			j.Recipes = []babelRecipeRef{{ID: "evidence", Version: 7}, {ID: "outcome-integrity", Version: 1}}
+			return j
+		}},
+		{"a dropped recipe", func(j babelJob) babelJob {
+			j.Recipes = j.Recipes[:1]
+			return j
+		}},
+		{"a source kind", func(j babelJob) babelJob {
+			j.Sources = append([]babelSource(nil), j.Sources...)
+			j.Sources[0].Kind = "repository"
+			return j
+		}},
+		{"a source selector", func(j babelJob) babelJob {
+			j.Sources = append([]babelSource(nil), j.Sources...)
+			j.Sources[0].Selector = "omp/other"
+			return j
+		}},
+		{"a source digest", func(j babelJob) babelJob {
+			j.Sources = append([]babelSource(nil), j.Sources...)
+			j.Sources[0].Digest = "sha256:cc"
+			return j
+		}},
+		{"a source snapshot", func(j babelJob) babelJob {
+			j.Sources = append([]babelSource(nil), j.Sources...)
+			j.Sources[0].Snapshot = "other-snap"
+			return j
+		}},
+		{"an invented snapshot on an unarchived source", func(j babelJob) babelJob {
+			j.Sources = append([]babelSource(nil), j.Sources...)
+			j.Sources[1].Snapshot = "invented"
+			return j
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.wrong(base).decodedEcho(); reflect.DeepEqual(got, base.decodedEcho()) {
+				t.Errorf("a job differing in %s echoes identically as %+v; Babel compares the "+
+					"echo against what it sent, so a field this rendering drops can never be graded",
+					tc.name, got)
+			}
+		})
+	}
+}
+
+// TestBabelWorkerEchoJobReportsTheJobItDecoded drives the whole worker — real
+// binary, real stream, conformance investigator — through the echo-job directive
+// and grades the answer the way Babel does.
+//
+// The job carries a nonce in both recipes and both sources, which is the only
+// thing separating this assertion from one a worker could satisfy by printing
+// the published fixture. So the answer is checked against the fixture too: it
+// must not be that.
+func TestBabelWorkerEchoJobReportsTheJobItDecoded(t *testing.T) {
+	isolateBabelEnv(t)
+	stream := runBabelWorkerStream(t, babelEchoJobFixture(), nil)
+	stream.check(t)
+
+	if kind, _ := stream.terminal["type"].(string); kind != babelMessageResult {
+		t.Fatalf("terminal event is %q, want a result; a run that produces none has reported "+
+			"no reading of the job", kind)
+	}
+	got := babelEchoOfPayload(t, stream.terminal["payload"])
+	if want := babelEchoJobAnswer(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the worker reports %+v, the job carried %+v", got, want)
+	}
+	if stale := babelStaleEchoAnswer(); reflect.DeepEqual(got, stale) {
+		t.Errorf("the worker reports the published conformance job rather than the one that "+
+			"arrived: %+v", got)
+	}
+}
+
+// TestBabelWorkerEchoJobIsAskedForAndNotVolunteered checks the other half of the
+// key's contract. Babel reads the presence of "job" as the worker answering, so
+// a payload that carried it on every run would be answering a question nobody
+// put — and the counts the stub reports are not that answer, because two matching
+// counts are exactly what a worker that read the array lengths and nothing
+// inside them produces.
+func TestBabelWorkerEchoJobIsAskedForAndNotVolunteered(t *testing.T) {
+	isolateBabelEnv(t)
+	stream := runBabelWorkerStream(t, babelTestJob(babelConformanceWellBehaved), nil)
+	stream.check(t)
+
+	payload, err := json.Marshal(stream.terminal["payload"])
+	if err != nil {
+		t.Fatalf("marshalling the terminal payload: %v", err)
+	}
+	var answered struct {
+		Job *babelJobEcho `json:"job"`
+	}
+	if err := json.Unmarshal(payload, &answered); err != nil {
+		t.Fatalf("the result payload is not a JSON object: %v", err)
+	}
+	if answered.Job != nil {
+		t.Errorf("a well-behaved run volunteered a job echo: %+v", *answered.Job)
+	}
+}
+
+// babelEchoOfPayload reads the echo out of a terminal result payload exactly as
+// Babel does: through JSON, under the "job" key, with an absent key treated as
+// the worker having reported no reading at all rather than as an empty one.
+func babelEchoOfPayload(t *testing.T, payload any) babelJobEcho {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshalling the terminal payload: %v", err)
+	}
+	var answered struct {
+		Job *babelJobEcho `json:"job"`
+	}
+	if err := json.Unmarshal(encoded, &answered); err != nil {
+		t.Fatalf("the result payload is not a JSON object: %v", err)
+	}
+	if answered.Job == nil {
+		t.Fatalf(`the result payload carries no "job" object: %s`, encoded)
+	}
+	return *answered.Job
+}
+
+// TestBabelWorkerConfigurationDeclaresTheProfileThatRan defends the three claims
+// Babel reads out of a worker-mode configuration event.
+//
+// The capability list is the one that regressed: neither resolve nor
+// syntheticConfiguration is handed the run, so both left it empty and the worker
+// declared a profile that can do nothing — then made a request that profile never
+// claimed. Babel catches that as a profile which is not the profile that ran, and
+// it is invisible from inside a run because the request is still answered.
+//
+// The metadata keys are checked by their literal names because that is how
+// Babel's receipt consumers read them: a renamed "model" is recorded as an empty
+// model rather than as an error, which is a durable record of the wrong thing.
+func TestBabelWorkerConfigurationDeclaresTheProfileThatRan(t *testing.T) {
+	isolateBabelEnv(t)
+	stream := runBabelWorkerStream(t, babelTestJob(babelConformanceRequestTool), allowDecision)
+	stream.check(t)
+
+	var cfg babelConfiguration
+	for _, ev := range stream.events {
+		if kind, _ := ev["type"].(string); kind != babelMessageConfiguration {
+			continue
+		}
+		encoded, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshalling the configuration event: %v", err)
+		}
+		if err := json.Unmarshal(encoded, &cfg); err != nil {
+			t.Fatalf("the configuration event does not decode: %v", err)
+		}
+	}
+
+	for _, key := range []string{"provider", "model", "thinking"} {
+		if strings.TrimSpace(cfg.Metadata[key]) == "" {
+			t.Errorf("resolved metadata names no %q; Babel reads the three under exactly "+
+				"those keys, so a renamed one is recorded as absent: %v", key, cfg.Metadata)
+		}
+	}
+
+	// Every capability declared has to be one Babel defines. A name Babel has
+	// no boundary for can never be granted, so declaring it tells an operator
+	// the profile can do something no run will ever authorize.
+	known := map[string]bool{
+		babelCapabilityCorpusSearch: true, babelCapabilityRepoRead: true,
+		babelCapabilitySandboxExec: true, babelCapabilityPublicResearch: true,
+	}
+	for _, capability := range cfg.Capabilities {
+		if !known[capability] {
+			t.Errorf("the configuration declares capability %q, which Babel does not define",
+				capability)
+		}
+	}
+
+	// And the claim must cover what the run actually did: this directive makes
+	// one corpus-search request, and the request is the evidence.
+	for _, ev := range stream.events {
+		if kind, _ := ev["type"].(string); kind != babelMessageToolRequest {
+			continue
+		}
+		asked, _ := ev["capability"].(string)
+		if !slices.Contains(cfg.Capabilities, asked) {
+			t.Errorf("the run exercised %q but the configuration declares only %v; a profile "+
+				"that omits what the run did is not the profile that ran", asked, cfg.Capabilities)
+		}
+	}
+
+	// Cost is the profile's own estimate and never a measurement, so the only
+	// two things wrong on their face are a negative figure and a figure with no
+	// unit: a cost guard reads the first as a discount and drops the second.
+	if cfg.Cost.InputPer1K < 0 || cfg.Cost.OutputPer1K < 0 || cfg.Cost.EstimatedRun < 0 {
+		t.Errorf("declared cost carries a negative figure: %+v", cfg.Cost)
+	}
+	if cfg.Cost.Currency == "" &&
+		(cfg.Cost.InputPer1K != 0 || cfg.Cost.OutputPer1K != 0 || cfg.Cost.EstimatedRun != 0) {
+		t.Errorf("declared cost quotes %+v in no currency, so Babel drops the whole figure",
+			cfg.Cost)
+	}
+}
+
 // TestBabelWorkerUnknownFieldsSurvive is the forward-compatibility rule in both
 // directions: unknown fields in accept, job and tool-decision are never fatal,
 // and a job's unknown top-level fields are preserved rather than dropped, so a
@@ -1088,6 +1459,101 @@ func TestBabelWorkerWithoutInvestigator(t *testing.T) {
 	}
 	if status := h.wait(); status == 0 {
 		t.Error("exit status = 0 after an error event")
+	}
+}
+
+// ── the provider credential ──────────────────────────────────────────────────
+
+// TestBabelWorkerWithoutACredentialEndsInATerminalError is the honest failure
+// for a run that could never have authenticated. Babel gets exactly one
+// terminal event either way, and an error naming the missing credential is
+// worth more than an OMP that starts and fails its first model call.
+func TestBabelWorkerWithoutACredentialEndsInATerminalError(t *testing.T) {
+	isolateBabelEnv(t)
+	if _, ok := newInvestigator().(credentialResolver); !ok {
+		t.Fatal("the wired investigator resolves no credential, so no real exploration can authenticate")
+	}
+	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+	h.expectHello()
+	h.write(babelAcceptLine(babelModeWorker))
+	h.write(babelProductionJob("code", 1))
+
+	event := h.next()
+	if event["type"] != babelMessageError {
+		t.Fatalf("a run with no credential answered with %v, want a terminal error", event["type"])
+	}
+	if event["code"] != babelErrInvestigator {
+		t.Errorf("error code = %v, want %q", event["code"], babelErrInvestigator)
+	}
+	message, _ := event["message"].(string)
+	for _, remedy := range []string{"OMP_AUTH_BROKER_TOKEN", ompVaultManifestName} {
+		if !strings.Contains(message, remedy) {
+			t.Errorf("the terminal error does not name %q, so an operator cannot act on it: %q", remedy, message)
+		}
+	}
+	if rest := h.drain(); len(rest) != 0 {
+		t.Errorf("%d events followed the terminal error: %v", len(rest), rest)
+	}
+	if status := h.wait(); status == 0 {
+		t.Error("exit status = 0 after an error event")
+	}
+}
+
+// TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp closes the route
+// wiring the credential opens. OMP now holds it, OMP's stderr tail is how a
+// failed run is explained, and that explanation goes to Babel as a durable
+// event — so the credential is registered with the same scrubber the job's is,
+// and this drives a child that prints it where a real one prints an auth
+// failure.
+func TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp(t *testing.T) {
+	isolateBabelEnv(t)
+	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+
+	m, err := babelResolveDials(map[string]string{"lane": "ds-led", "thinking": "high", "advisor": "audit"})
+	if err != nil {
+		t.Fatalf("babelResolveDials: %v", err)
+	}
+	saved, err := newProfileStore("").save(babelDescribeDials(m, "code"))
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"credentials":[]}`))
+	}))
+	defer broker.Close()
+	t.Setenv("OMP_AUTH_BROKER_URL", broker.URL)
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", testProviderToken)
+	fake, _ := ompFakeBinary(t, "credleak")
+	t.Setenv("CODE_OMP", fake)
+
+	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+	h.expectHello()
+	h.write(babelAcceptLine(babelModeWorker))
+	h.write(babelProductionJob(saved.ID, saved.Revision))
+
+	var terminal map[string]any
+	for terminal == nil {
+		event := h.next()
+		if kind, _ := event["type"].(string); kind == babelMessageResult || kind == babelMessageError {
+			terminal = event
+		}
+	}
+	h.drain()
+	h.wait()
+
+	message, _ := terminal["message"].(string)
+	// The child has to have printed it, or the scrub proves nothing.
+	if !strings.Contains(message, "authentication rejected for") {
+		t.Fatalf("omp's diagnostics never reached the terminal event, so nothing was scrubbed: %v", terminal)
+	}
+	if !strings.Contains(message, string(babelRedacted)) {
+		t.Errorf("the credential omp printed was not redacted: %q", message)
+	}
+	for name, stream := range map[string]string{"stdout": h.stdout.String(), "stderr": h.stderr.String()} {
+		if strings.Contains(stream, testProviderToken) {
+			t.Errorf("the provider credential reached %s: %s", name, stream)
+		}
 	}
 }
 

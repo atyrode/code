@@ -179,6 +179,18 @@ type ompFindings struct {
 	Evidence  []ompEvidenceLog `json:"evidence,omitempty"`
 	Analysis  string           `json:"analysis,omitempty"`
 	Gaps      []string         `json:"gaps,omitempty"`
+
+	// Job answers the echo-job conformance directive and appears under no
+	// other one, which is why it is a pointer: Babel reads the key's presence
+	// as "the worker answered", so emitting an empty object on every run
+	// would answer a question nobody asked.
+	//
+	// It overlaps Recipes and Sources above and cannot replace them. Those two
+	// are this payload's own summary, rendered for a reader — a source is
+	// "kind:selector", because a digest in a prose list is noise. Babel's echo
+	// is a comparison against the exact bytes it sent, so it carries all four
+	// parts of a source and is spelled Babel's way, not Code's.
+	Job *babelJobEcho `json:"job,omitempty"`
 }
 
 // ompEvidenceLog is one evidence request and what became of it. Decision holds
@@ -227,7 +239,15 @@ type ompInvestigator struct {
 	profiles profileSource
 	lookOmp  func() (string, error)
 	environ  func() []string
+	// auth resolves the run's provider credential. It is a seam because the
+	// real one talks to the operator's auth broker, and a driver test must be
+	// able to run without one.
+	auth     func() (ompAuth, error)
 	evidence func(ctx context.Context, broker babelBroker, request ompEvidenceRequest) (string, error)
+	// credential is what auth resolved, held between resolveCredential and the
+	// launch it authorizes. A zero value means nothing was resolved, which is a
+	// refusal rather than an unauthenticated run.
+	credential ompAuth
 	// pace and slowBudget shape a conformance "slow" run: how often it reports
 	// progress, and when it gives up on being cancelled.
 	pace       time.Duration
@@ -239,15 +259,41 @@ type ompInvestigator struct {
 // plug should fail the build here rather than at the one call site.
 var _ investigator = (*ompInvestigator)(nil)
 
+// The credential seam is checked the same way: the protocol layer discovers it
+// through a method set, so a signature that drifts stops being discovered
+// rather than failing, and a run would launch with no credential.
+var _ credentialResolver = (*ompInvestigator)(nil)
+
 func newOmpInvestigator(profiles profileSource) *ompInvestigator {
 	return &ompInvestigator{
 		profiles:   profiles,
 		lookOmp:    func() (string, error) { return resolveLaunchPath("CODE_OMP", []string{"omp"}) },
 		environ:    os.Environ,
+		auth:       ompResolveAuth,
 		evidence:   fetchBrokeredEvidence,
 		pace:       time.Second,
 		slowBudget: ompSlowBudget,
 	}
+}
+
+// resolveCredential resolves what this run will authenticate with, before
+// anything is launched, and returns the secret strings it consists of so the
+// protocol layer can keep them out of every byte the worker writes.
+//
+// It is separate from investigate because its answer decides whether there is a
+// run at all. A worker that cannot authenticate owes Babel a terminal error
+// naming the remedy, and owes it instead of a launch — not after an OMP child
+// has failed a model call for a reason the receipt cannot explain.
+func (o *ompInvestigator) resolveCredential() ([]string, error) {
+	auth, err := o.auth()
+	if err != nil {
+		return nil, err
+	}
+	if !auth.configured() {
+		return nil, errOmpNoCredential
+	}
+	o.credential = auth
+	return []string{auth.broker.Token}, nil
 }
 
 // ── containment ──────────────────────────────────────────────────────────────
@@ -349,10 +395,10 @@ func ompProfileName(ref babelProfileRef) string {
 
 // ompConfigurationOf assembles the configuration event's non-secret half.
 //
-// Seq, Time and Capabilities are left to the protocol layer: sequencing is its
-// business, and the run's capability list comes from the job's grant, which
-// resolve is not given. In worker mode the protocol layer also attaches
-// containment.
+// Seq, Time, Capabilities and Containment are left to the protocol layer:
+// sequencing is its business, and the capability claim is Code's single list of
+// what its analysis asks for, which this function is not given and must not
+// invent a second version of.
 //
 // Redaction is required exactly when the profile is hosted. A hosted profile
 // sends material to a third party, which is the thing redaction protects
@@ -488,6 +534,9 @@ func (o *ompInvestigator) conform(ctx context.Context, job babelJob,
 	emit(ompStageResolve, "conformance directive "+directive, ompFraction(0))
 
 	switch directive {
+	case babelConformanceEchoJob:
+		return o.conformEchoJob(job, emit, findings)
+
 	case babelConformanceErrorOnly:
 		emit(ompStageAnalyse, "this directive asks the run to fail instead of finishing", ompFraction(1))
 		// No result may follow an error, so this returns without building one.
@@ -604,6 +653,36 @@ func (o *ompInvestigator) conformRequest(ctx context.Context, job babelJob,
 	return ompResultOf(status, findings, nil)
 }
 
+// conformEchoJob reports the job this run decoded. The directive exists because
+// nothing else in a run makes that reading observable: Babel's receipt quotes
+// the recipes and sources Babel itself sent, so a worker that never looked at
+// either array leaves a receipt identical to one that honoured both. Asking is
+// the only way to tell them apart, and Babel plants a per-run nonce in the
+// material so the answer cannot be a constant.
+//
+// The echo is built from the decoded job rather than from the findings summary
+// already on the payload. That summary drops a source's digest and snapshot,
+// which are two of the four parts the directive asks about, so answering from
+// it would report a reading narrower than the one that happened — and would
+// couple Babel's comparison to a shape Code renders for human readers.
+//
+// The run is otherwise well-behaved: no evidence is requested, because the
+// obligation is about the job and a tool request would only add a decision to
+// grade.
+func (o *ompInvestigator) conformEchoJob(job babelJob,
+	emit func(stage, message string, fraction float64), findings ompFindings,
+) (babelResult, error) {
+	echo := job.decodedEcho()
+	findings.Job = &echo
+	emit(ompStageAnalyse, "decoded "+strconv.Itoa(len(echo.Recipes))+" recipe(s) over "+
+		strconv.Itoa(len(echo.Sources))+" source(s)", ompFraction(1))
+	findings.Analysis = "The conformance directive " + babelConformanceEchoJob +
+		" asks this run to report the job it decoded rather than to analyse anything, " +
+		"so the result carries the recipes and sources this worker read off the wire."
+	emit(ompStageReport, "delivering the result", ompFraction(2))
+	return ompResultOf(babelStatusOK, findings, nil)
+}
+
 // conformEchoToken puts the run's broker credential exactly where a leak would
 // put it. The directive asks for misbehaviour because Babel's obligation — that
 // a run-scoped credential never survives into a durable receipt — cannot be
@@ -664,6 +743,12 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 	emit func(stage, message string, fraction float64),
 	request func(capability, tool, reason string, arguments json.RawMessage) babelDecision,
 ) (babelResult, error) {
+	// resolveCredential runs before the run starts, so reaching here without a
+	// credential means worker mode never asked for one. Launching anyway would
+	// authenticate with nothing.
+	if !o.credential.configured() {
+		return babelResult{}, errOmpNoCredential
+	}
 	emit(ompStageResolve, "opening "+ompProfileName(job.Profile), ompFraction(0))
 	profile, err := o.openProfile(job.Profile)
 	if err != nil {
@@ -679,6 +764,13 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 		return babelResult{}, fmt.Errorf("the run directory could not be created: %w", err)
 	}
 	defer dir.remove()
+	// The pool lives in the run directory rather than a temporary of its own,
+	// so the run's account policy is disposed of with the run that set it.
+	auth := o.credential
+	auth.poolPath, err = dir.writeAccountPool(auth.pool)
+	if err != nil {
+		return babelResult{}, fmt.Errorf("the run's account pool could not be written: %w", err)
+	}
 
 	tools := ompToolsFor(job.Grant)
 	emit(ompStageLaunch, "launching omp with "+strconv.Itoa(len(tools))+" brokered tools and no built-ins", ompFraction(1))
@@ -688,7 +780,7 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 		config: dir.config,
 		home:   dir.home,
 		work:   dir.work,
-		env:    ompChildEnv(o.environ(), dir.home, job),
+		env:    ompChildEnv(o.environ(), dir.home, job, auth),
 	})
 	if err != nil {
 		return babelResult{}, err
