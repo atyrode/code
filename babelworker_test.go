@@ -1313,6 +1313,70 @@ func TestBabelShrinkTerminates(t *testing.T) {
 	}
 }
 
+// TestBabelRepeatedToolRequests covers a real run rather than a conformance
+// directive: a model that retries a refused tool asks again, so one run holds
+// several requests. Each has to get its own request_id and its own decision, and
+// a stale decision for a request that was already answered must not be applied
+// to whichever one is outstanding.
+func TestBabelRepeatedToolRequests(t *testing.T) {
+	inbound := strings.Join([]string{
+		`{"type":"tool-decision","request_id":"t-1","decision":"deny","code":"policy","reason":"refused once"}`,
+		`{"type":"tool-decision","request_id":"t-2","decision":"allow"}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	s := newBabelSession(strings.NewReader(inbound), &out, io.Discard)
+	s.limits = babelLimits{MaxLineBytes: 1 << 20, MaxEvents: 100, MaxToolRequests: 2}
+	s.configured = true
+	s.startPump()
+
+	first := s.requestTool(babelCapabilityCorpusSearch, "search", "first try", json.RawMessage(`{"q":1}`))
+	second := s.requestTool(babelCapabilityCorpusSearch, "search", "retry", json.RawMessage(`{"q":2}`))
+	if s.fatal != nil {
+		t.Fatalf("two ordinary requests were treated as a violation: %v", s.fatal)
+	}
+	if first.allowed() || first.Code != "policy" {
+		t.Errorf("first decision = %+v, want the denial Babel sent", first)
+	}
+	if !second.allowed() {
+		t.Errorf("second decision = %+v, want the allow Babel sent", second)
+	}
+
+	var ids []string
+	var seqs []int
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var ev babelToolRequest
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, ev.RequestID)
+		seqs = append(seqs, ev.Seq)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("wrote %d tool requests, want 2: %q", len(ids), out.String())
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("both requests used request_id %q, so a decision could name either", ids[0])
+	}
+	if seqs[0] >= seqs[1] {
+		t.Errorf("request seqs %v do not strictly increase", seqs)
+	}
+
+	// The run's tool budget is spent. Babel would deny a third with "limit", so
+	// refusing here keeps the stream inside the budget it accepted — and it is a
+	// denial, not a failure.
+	before := out.Len()
+	third := s.requestTool(babelCapabilityCorpusSearch, "search", "one too many", nil)
+	if third.allowed() || third.Code != "limit" {
+		t.Errorf("third decision = %+v, want a limit denial", third)
+	}
+	if out.Len() != before {
+		t.Errorf("the over-budget request was written anyway: %q", out.String()[before:])
+	}
+	if s.fatal != nil {
+		t.Errorf("an over-budget request was treated as a violation: %v", s.fatal)
+	}
+}
+
 // TestBabelJobExtraPreservesUnknownFields pins the decode rule the wire contract
 // states: every documented field lands in its own place and everything else is
 // preserved, so nothing is silently dropped and nothing documented is duplicated

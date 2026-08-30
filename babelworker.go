@@ -122,24 +122,46 @@ func babelWorkerVersion() string {
 // in-tree conformance stub.
 const babelInvestigatorConformance = "conformance"
 
-// newInvestigator selects the investigator worker mode drives. This is the one
-// place OMP is wired in: the OMP driver is a separate file implementing the
-// investigator interface from babelwire.go, and it lands by replacing the single
-// return below with a call to its constructor.
+// babelStoreSource adapts the profile store to the narrow source the OMP
+// investigator depends on. It lives here because it is the only code that names
+// types from both sides: the store's codeProfile and the driver's
+// resolvedProfile. The driver deliberately knows nothing about how profiles are
+// stored, named or versioned.
 //
-// Until then a worker-mode run has nothing to run, and says so with a terminal
-// error rather than pretending. A default placeholder that answered like an
-// investigator would put fabricated analysis into a receipt a reviewer is meant
-// to trust, which is worse than an honest failure — so the conformance stub,
-// which does exactly that on purpose, is reachable only through an explicit
-// --investigator=conformance.
+// The reference, disclosure, cost and metadata come from the profile's own
+// configuration rendering rather than being re-derived here, so there is one
+// place that decides what a saved profile reports to Babel.
+type babelStoreSource struct{ store *profileStore }
+
+func (s babelStoreSource) resolveProfile(id string, revision int) (resolvedProfile, error) {
+	profile, err := s.store.load(id, revision)
+	if err != nil {
+		return resolvedProfile{}, err
+	}
+	overlay, err := profileOverlay(profile)
+	if err != nil {
+		return resolvedProfile{}, err
+	}
+	rendered := profile.configuration(nil)
+	return resolvedProfile{
+		Ref:        rendered.Profile,
+		Disclosure: rendered.Privacy.Disclosure,
+		Cost:       rendered.Cost,
+		Metadata:   rendered.Metadata,
+		ConfigYAML: overlay,
+	}, nil
+}
+
+// newInvestigator selects the investigator worker mode drives. This is the one
+// place OMP is wired in: the driver lives in its own file, implements the
+// investigator interface from babelwire.go, and reaches the profile store only
+// through the adapter above.
+//
+// The conformance stub answers like an investigator without analysing anything,
+// which is exactly what a receipt must never contain by accident, so it stays
+// reachable only through an explicit --investigator=conformance.
 func newInvestigator() investigator {
-	// ← OMP driver plugs in here. Its constructor takes a profile source, and
-	// the adapter below belongs in this file because it is the one that names
-	// the store's types:
-	//
-	//	return newOmpInvestigator(babelStoreSource{store: newProfileStore("")})
-	return nil
+	return newOmpInvestigator(babelStoreSource{store: newProfileStore("")})
 }
 
 // syntheticResolver is the conformance exception, at the only layer that can
