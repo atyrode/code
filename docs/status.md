@@ -42,6 +42,11 @@ single sample rather than a steady benchmark. A verified file is marked
   and the TUI prefers that; guessing it from the model family is now only the
   fallback for catalogs that declare none. Model-family colouring is still
   name matching that reflects the author's provider mix. Both fail soft.
+- The local model lane (Babel's configuration ceremony) offers whatever the
+  daemon reports and verifies only that the endpoint answers and still serves
+  the chosen tag. Nothing probes whether that model can carry an analysis — the
+  catalog's rungs are `omp bench`-verified, these are not — so a 1B model is as
+  selectable as a 30B one, and the resulting findings are as good as the model.
 
 ## Built on
 

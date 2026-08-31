@@ -282,6 +282,23 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // never persisted (saveSelectionState filters on m.facets, which carries only
 // "lane").
 func (m model) visibleFacets() []facet {
+	// A local model answers every role, so the hosted dials — lane, tier,
+	// advisor, the special tiers — describe nothing about this run and are
+	// taken off screen, exactly as a delegated runtime target takes them off.
+	// The thinking dial stays, narrowed to what a local endpoint can honestly
+	// be asked for (locallane.go).
+	if _, on := m.selectedLocalModel(); on {
+		var out []facet
+		for _, f := range m.facets {
+			switch f.key {
+			case localFacetKey:
+				out = append(out, f)
+			case "thinking":
+				out = append(out, facet{key: f.key, values: localThinkingLevels, glyph: f.glyph})
+			}
+		}
+		return out
+	}
 	if _, local := m.selectedRuntime(); local {
 		var out []facet
 		for _, f := range m.facets {
@@ -292,6 +309,15 @@ func (m model) visibleFacets() []facet {
 		return out
 	}
 	if m.noProviders {
+		// The local lane needs no provider credential, so it is the one dial a
+		// machine with no connected provider still has a use for: hiding it
+		// would leave the ceremony with nothing to confirm on a host that can
+		// in fact run an analysis.
+		for _, f := range m.facets {
+			if f.key == localFacetKey {
+				return []facet{f}
+			}
+		}
 		return nil
 	}
 	lane := m.sel["lane"]

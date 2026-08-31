@@ -875,6 +875,9 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 	if socket := request.egress.brokerSocket(); socket != "" {
 		mounts.bindAt(socket, sandboxBrokerSock)
 	}
+	if socket := request.egress.modelSocket(); socket != "" {
+		mounts.bindAt(socket, sandboxModelSock)
+	}
 	// The guest layout's own binds are not optional, so an absent one is
 	// reported here rather than left to bubblewrap: a launch that lost the
 	// session's config or the egress socket it was going to authenticate
@@ -892,6 +895,10 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 	if request.egress.brokerSocket() != "" {
 		spec.BrokerPort = sandboxBrokerPort
 		spec.BrokerSocket = sandboxBrokerSock
+	}
+	if request.egress.modelSocket() != "" {
+		spec.ModelPort = sandboxModelPort
+		spec.ModelSocket = sandboxModelSock
 	}
 	encoded, err := json.Marshal(spec)
 	if err != nil {

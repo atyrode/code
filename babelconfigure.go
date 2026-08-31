@@ -122,16 +122,17 @@ func requireOperatorTerminal() error {
 //
 // It reads the same fields a launch reads, because the confirming keypress is
 // the same one: Enter on a generated combination leaves the rendered overlay
-// behind, and Enter on a delegated local runtime names that target. The launch
-// keys that produce neither are inert during a ceremony (update.go), so there is
-// no third state where something was chosen but nothing can be described.
+// behind, Enter on a delegated local runtime names that target, and Enter on the
+// local model dial names the model (locallane.go). The launch keys that produce
+// none of those are inert during a ceremony (update.go), so there is no fourth
+// state where something was chosen but nothing can be described.
 //
 // Enter itself is inert where a launch would be: a combination the catalog does
 // not generate, and a machine where no provider credential was discovered. Both
 // end the ceremony unchanged rather than minting a profile nothing could run,
 // which is the same judgement the launch path makes about the same dials.
 func (m model) configureConfirmed() bool {
-	return m.genConfig != "" || m.launchRuntime != ""
+	return m.genConfig != "" || m.launchRuntime != "" || m.localConfirmed != ""
 }
 
 // babelMintProfile records the dials the operator confirmed as a profile
@@ -143,8 +144,26 @@ func (m model) configureConfirmed() bool {
 // An unchanged confirmation returns the current revision rather than a new one
 // (profileStore.save), so opening the ceremony to check the dials and confirming
 // them again does not inflate the history Babel holds references into.
+//
+// A local profile is checked against its endpoint before it is written, and the
+// check is a refusal rather than a warning. Nothing else in this ceremony can
+// tell an operator that the daemon they dialled has gone away, and the
+// alternative is a reference Babel stores, resolves, launches, and fails —
+// with a receipt that can only report that the analysis did not work. The
+// endpoint answered when the dial was built moments ago, so a refusal here is
+// rare and specific: the daemon stopped, or it no longer serves that model.
 func babelMintProfile(m model, id string) (codeProfile, error) {
-	return newProfileStore("").save(babelDescribeDials(m, id))
+	profile := babelDescribeDials(m, id)
+	if isLocalProfile(profile.Metadata) {
+		target, err := localTargetOf(profile.Metadata)
+		if err != nil {
+			return codeProfile{}, err
+		}
+		if err := confirmLocalEndpoint(target); err != nil {
+			return codeProfile{}, err
+		}
+	}
+	return newProfileStore("").save(profile)
 }
 
 // writeBabelConfigureResult hands Babel the reference. The file is truncated and

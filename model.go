@@ -22,6 +22,11 @@ type model struct {
 	avail          availability
 	glyphs         map[string]string
 	runtimeTargets []runtimeTarget
+	// local is the local model endpoint this ceremony discovered: the dial's
+	// values and the endpoint a confirmed local profile records (locallane.go).
+	// It is zero in every mode but the configuration ceremony, which is what
+	// keeps a local model unreachable except by an operator choosing one.
+	local localLane
 
 	// Catalog capability, phrased as absence so the zero value keeps every dial:
 	// a model with no catalog yet (the onboarding shell, tests) must behave as it
@@ -79,6 +84,11 @@ type model struct {
 	launchManaged   bool   // m: run CODE_OMP with no overlay (the managed defaults)
 	launchUntrusted bool   // u: run the CODE_OMP_UNTRUSTED sandbox
 	launchRuntime   string // delegated local runtime target selected via CODE_RUNTIME_BROKER
+	// localConfirmed is the model an operator confirmed on the local dial. It
+	// is the local lane's counterpart to launchRuntime: it ends the ceremony
+	// with a configuration rather than starting a session, because there is no
+	// session here to start.
+	localConfirmed string
 	// configuring is the configuration ceremony: this run mints a Babel profile
 	// out of the dials the operator confirms and launches nothing at all
 	// (babelconfigure.go). Every key that would start a session instead of

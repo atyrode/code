@@ -1068,6 +1068,12 @@ type ompInvestigator struct {
 	// launch it authorizes. A zero value means nothing was resolved, which is a
 	// refusal rather than an unauthenticated run.
 	credential ompAuth
+	// keyless records that resolveCredential opened a local-lane profile, whose
+	// endpoint takes no key. It is a separate field from credential because the
+	// two absences are different: a zero credential with keyless false is a
+	// worker that never authenticated and must not launch, and one with keyless
+	// true is a run that has nothing to authenticate with by design.
+	keyless bool
 	// profile is what resolve() opened, held so containment() can name the
 	// provider endpoint the sandbox's one egress hole points at. It is zero
 	// until a profile has been resolved, and a conformance job never resolves
@@ -1150,7 +1156,21 @@ func newOmpInvestigator(profiles profileSource) *ompInvestigator {
 // run at all. A worker that cannot authenticate owes Babel a terminal error
 // naming the remedy, and owes it instead of a launch — not after an OMP child
 // has failed a model call for a reason the receipt cannot explain.
-func (o *ompInvestigator) resolveCredential() ([]string, error) {
+//
+// A local-lane profile is the one configuration with nothing to resolve: the
+// model is served on this machine over an endpoint that takes no key
+// (locallane.go), so the run is keyless and the broker is not consulted at all.
+// That is decided from the profile the job named rather than from a fallback,
+// and a reference that will not open leaves the credential required — the
+// stricter answer, and the one whose failure resolve then reports properly.
+func (o *ompInvestigator) resolveCredential(ref babelProfileRef) ([]string, error) {
+	if profile, err := o.openProfile(ref); err == nil && isLocalProfile(profile.Metadata) {
+		if _, err := localTargetOf(profile.Metadata); err != nil {
+			return nil, err
+		}
+		o.profile, o.keyless = profile, true
+		return nil, nil
+	}
 	auth, err := o.auth()
 	if err != nil {
 		return nil, err
@@ -1189,21 +1209,20 @@ func (o *ompInvestigator) containment() babelContainment {
 // and a listener that existed for a run Babel then refused would be a boundary
 // opened for nothing.
 func (o *ompInvestigator) egressDescription() sandboxEgressDescription {
-	provider, endpoint, err := sandboxProviderEndpoint(o.profile)
+	provider, policy, err := sandboxRunEgress(o.profile, o.credential.broker.URL)
 	if err != nil {
-		// No profile has been resolved yet, or its provider has no endpoint. The
-		// mechanism is still exactly what it is; only the target is unknown, and
-		// drive() refuses the run rather than guessing one.
-		return sandboxEgressDescription{}
-	}
-	policy, err := sandboxResolveEgress(endpoint, o.credential.broker.URL)
-	if err != nil {
-		return sandboxEgressDescription{provider: provider, allowed: []string{endpoint}}
+		// No profile has been resolved yet, or its endpoint cannot be resolved.
+		// The mechanism is still exactly what it is; only the target is
+		// unknown, and drive() refuses the run rather than guessing one — so
+		// the declaration names the provider if that much is known and claims
+		// no route at all.
+		return sandboxEgressDescription{provider: provider}
 	}
 	return sandboxEgressDescription{
 		provider: provider,
 		allowed:  policy.allowed,
 		relay:    policy.brokerAddr != "",
+		local:    policy.modelAddr,
 	}
 }
 
@@ -1761,8 +1780,10 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 ) (babelResult, error) {
 	// resolveCredential runs before the run starts, so reaching here without a
 	// credential means worker mode never asked for one. Launching anyway would
-	// authenticate with nothing.
-	if !o.credential.configured() {
+	// authenticate with nothing. A keyless run is the deliberate exception: a
+	// local-lane profile's endpoint takes no key, and resolveCredential said so
+	// after opening the very profile this run is about (locallane.go).
+	if !o.credential.configured() && !o.keyless {
 		return babelResult{}, errOmpNoCredential
 	}
 	emit(ompStageResolve, "opening "+ompProfileName(job.Profile), ompFraction(0))
@@ -1881,26 +1902,36 @@ func (o *ompInvestigator) drive(ctx context.Context, job babelJob,
 func (o *ompInvestigator) launchPlan(job babelJob, profile resolvedProfile, dir *ompRunDir,
 	binary string, auth ompAuth,
 ) (ompLaunch, *sandboxRun, error) {
+	// A local-lane run's model calls go to the endpoint its profile recorded,
+	// and the environment is how omp's implicit local engine is told where that
+	// is (locallane.go). The inherited endpoint variables are replaced rather
+	// than added to, so nothing ambient can redirect a supervised run.
+	local, isLocal, err := localRunProfile(profile)
+	if err != nil {
+		return ompLaunch{}, nil, err
+	}
+	env := ompChildEnv(o.environ(), dir.home, job, auth)
+	if isLocal {
+		env = localChildEnv(env, local, local.Endpoint)
+	}
 	plain := ompLaunch{
 		binary: binary,
 		config: dir.config,
 		home:   dir.home,
 		work:   dir.work,
-		env:    ompChildEnv(o.environ(), dir.home, job, auth),
+		env:    env,
 	}
 	if o.sandbox().facts.backend == sandboxBackendNone {
 		return plain, nil, nil
 	}
 
-	// The allowlist follows the profile's own provider. An endpoint Code cannot
-	// resolve ends the run here: a proxy with nothing allowed would strand the
-	// analysis, and one with everything allowed would contradict the
-	// declaration Babel has already recorded.
-	_, endpoint, err := sandboxProviderEndpoint(profile)
-	if err != nil {
-		return ompLaunch{}, nil, err
-	}
-	policy, err := sandboxResolveEgress(endpoint, auth.broker.URL)
+	// The boundary follows the profile: a CONNECT allowlist of exactly the
+	// hosted provider's endpoint, or a raw relay to the local endpoint this
+	// run's model is served from. An endpoint Code cannot resolve ends the run
+	// here: a proxy with nothing allowed would strand the analysis, and one
+	// with everything allowed would contradict the declaration Babel has
+	// already recorded.
+	_, policy, err := sandboxRunEgress(profile, auth.broker.URL)
 	if err != nil {
 		return ompLaunch{}, nil, err
 	}
@@ -1933,12 +1964,19 @@ func (o *ompInvestigator) launchPlan(job babelJob, profile resolvedProfile, dir 
 		}
 		return ompLaunch{}, nil, err
 	}
+	guestEnv := sandboxProxyEnv(ompChildEnv(o.environ(), sandboxHomePath, job, guest))
+	if isLocal {
+		// Inside, the endpoint is the sandbox's own loopback relay rather than
+		// the host address: there is no such host in there, and the relay is
+		// what carries the bytes back out to it.
+		guestEnv = localChildEnv(guestEnv, local, policy.modelURL)
+	}
 	return ompLaunch{
 		binary:  binary,
 		config:  sandboxConfigPath,
 		home:    sandboxHomePath,
 		work:    sandboxWorkPath,
-		env:     sandboxProxyEnv(ompChildEnv(o.environ(), sandboxHomePath, job, guest)),
+		env:     guestEnv,
 		contain: contained,
 	}, contained, nil
 }

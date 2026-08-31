@@ -10,6 +10,9 @@
 //	CODE_AUTH_LOGIN_VIA: optional SSH user@host for central-broker OAuth login
 //	CODE_OMP           : the omp-managed executable for trusted sessions
 //	CODE_OMP_UNTRUSTED : the ompu sandbox executable — launched by the u key
+//	CODE_OLLAMA_ENDPOINT: where the local model daemon listens — the ctrl+o
+//	                      classifier's endpoint, and the one the configuration
+//	                      ceremony discovers its local lane at (locallane.go)
 package main
 
 import (
@@ -140,9 +143,20 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
 	accountSelections := loadAccountSelectionState(accountState)
 	runtimeTargets := loadRuntimeTargets()
+	// The local model lane is discovered only while the ceremony has the
+	// operator's terminal. Its dial is the only way to choose a local model, so
+	// building it anywhere else — a launch, worker mode — would be a route to
+	// one that nobody in the room confirmed (locallane.go).
+	var local localLane
+	if mode == interactiveConfigure {
+		local = discoverLocalLane(localEndpoint())
+	}
 	facets := facetDefs(glyphs)
 	if len(runtimeTargets) > 0 {
 		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
+	}
+	if local.offered() {
+		facets = append([]facet{localFacet(glyphs[localFacetKey], local)}, facets...)
 	}
 	// The interactive run is the only thing that writes a selection, and worker
 	// mode under Babel is the caller that most needs to read one, so an unset
@@ -165,6 +179,11 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	if len(runtimeTargets) > 0 {
 		if _, ok := selection["runtime"]; !ok {
 			selection["runtime"] = "hosted"
+		}
+	}
+	if local.offered() {
+		if _, ok := selection[localFacetKey]; !ok {
+			selection[localFacetKey] = localOff
 		}
 	}
 	// The u key only exists when a sandbox binary does — an explicit
@@ -206,6 +225,7 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 		help:              clikit.NewHelp(),
 		glyphs:            glyphs,
 		runtimeTargets:    runtimeTargets,
+		local:             local,
 		facets:            facets,
 		sel:               selection,
 		selectionState:    selectionState,
@@ -222,8 +242,10 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
 	// TUI in the guided onboarding that builds one (an explicit but broken
 	// CODE_GENERATED is an operator config error and is left visible as the
-	// usual empty routing panel instead).
-	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 {
+	// usual empty routing panel instead). A discovered local endpoint is a
+	// working dial too: a ceremony that can mint a local profile has no need of
+	// a catalog to build first.
+	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 && !local.offered() {
 		return newOnboarding(m)
 	}
 	return m

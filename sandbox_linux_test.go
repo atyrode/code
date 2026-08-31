@@ -1395,7 +1395,7 @@ func TestOmpDriveLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 		auth.broker.URL = broker.URL + "/auth"
 		return auth, nil
 	}
-	if _, err := inv.resolveCredential(); err != nil {
+	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
 		t.Fatalf("resolving the credential: %v", err)
 	}
 
@@ -1550,7 +1550,7 @@ func TestContainedRunMeasuresWhatItActuallyUsed(t *testing.T) {
 			auth.broker.URL = broker.URL + "/auth"
 			return auth, nil
 		}
-		if _, err := inv.resolveCredential(); err != nil {
+		if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
 			t.Fatalf("resolving the credential: %v", err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1654,7 +1654,7 @@ func TestBwrapOnlyTierReportsNoCeilingFigure(t *testing.T) {
 		auth.broker.URL = broker.URL + "/auth"
 		return auth, nil
 	}
-	if _, err := inv.resolveCredential(); err != nil {
+	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
 		t.Fatalf("resolving the credential: %v", err)
 	}
 

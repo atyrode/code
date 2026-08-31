@@ -174,6 +174,18 @@ func (m model) bodyLines() ([]string, int) {
 // target gets the same footer shape with an honest summary instead of meters:
 // its tokens are free and code has no measurement to quote.
 func (m model) launchFooter() []string {
+	// The local lane is checked before the no-provider notice: a machine with
+	// no connected provider can still confirm a local model, and telling it
+	// there is nothing to do would be wrong (locallane.go).
+	if _, on := m.selectedLocalModel(); on {
+		return []string{
+			"",
+			stDim.Render("  cost 0.00 USD · local endpoint · no provider billing"),
+			"",
+			"",
+			lipgloss.NewStyle().Foreground(lipgloss.Color(m.accent())).Bold(true).Render("  ⏎ confirm"),
+		}
+	}
 	if m.noProviders {
 		return []string{
 			"",

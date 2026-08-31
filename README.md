@@ -85,7 +85,14 @@ code wt prune              # dry-run cleanup; add --yes to remove
   metered chains may spill into the pay-as-you-go pool.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
-  launch without mixing cloud credentials into the session.
+  launch without mixing cloud credentials into the session. Babel's
+  configuration ceremony (`code babel --configure`) adds a **local model** dial
+  when a loopback OpenAI-compatible daemon answers — [ollama](https://ollama.com),
+  llama.cpp, LM Studio, oMLX (`CODE_OLLAMA_ENDPOINT` relocates it): every tag it
+  serves is offered, the profile it mints needs no API key and costs nothing, and
+  a contained analysis reaches the daemon through the sandbox's own relay rather
+  than the network. The dial exists nowhere else, so nothing but an operator at
+  the dials can put a local model into a supervised run.
 - **Live preview** — see which model leads every role, and its fallback
   chain, before anything runs.
 - **One-shot overlays** — each launch is an ephemeral `--config`; your omp

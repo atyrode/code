@@ -162,6 +162,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.runtimeTargets) > 0 {
 				m.sel["runtime"] = "hosted"
 			}
+			if m.local.offered() {
+				m.sel[localFacetKey] = localOff
+			}
 			m.clampSel() // the defaults assume a full catalog; this one may not be
 			m.persistSelection()
 			m.syncPreview()
@@ -218,6 +221,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launchManaged = true
 			return m, tea.Quit
 		case "enter":
+			// The local lane is confirmed before the hosted checks below, and
+			// needs none of them: it resolves no catalog combination and no
+			// provider credential, so a machine with neither can still mint a
+			// profile that runs (locallane.go).
+			if chosen, on := m.selectedLocalModel(); on {
+				if !m.configuring {
+					// A launch is not this lane's business: the dial exists
+					// only in the ceremony, and reaching here otherwise would
+					// mean an inconsistent model rather than a session to run.
+					return m, nil
+				}
+				m.localConfirmed = chosen
+				m.sel["thinking"] = localThinking(m.sel["thinking"])
+				return m, tea.Quit
+			}
 			if target, local := m.selectedRuntime(); local {
 				m.launchRuntime = target.Name
 				return m, tea.Quit
@@ -413,6 +431,13 @@ func (m *model) cycleFacet(dir int) {
 	// fable-as-main escalation — it is re-chosen deliberately every time.
 	if m.sel["fable"] != "on" {
 		m.sel["main"] = "off"
+	}
+	// The local lane's thinking dial is two levels wide (locallane.go), so
+	// turning it on with the hosted dial parked at "max" would leave a value
+	// this endpoint cannot be asked for selected — and minted. Clamping here
+	// means the dial the operator sees is the dial that gets recorded.
+	if _, on := m.selectedLocalModel(); on {
+		m.sel["thinking"] = localThinking(m.sel["thinking"])
 	}
 	// changing the lane can hide/show facets; keep the cursor in range.
 	m.clampFacetCursor(len(m.visibleFacets()))

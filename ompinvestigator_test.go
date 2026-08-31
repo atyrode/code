@@ -169,9 +169,14 @@ func newTestInvestigator(t *testing.T) (*ompInvestigator, *fakeProfiles) {
 	// Every driver test goes through the credential gate the protocol layer
 	// puts in front of a real run, so none of them can pass on a path
 	// production does not take.
-	if _, err := inv.resolveCredential(); err != nil {
+	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
 		t.Fatalf("resolving the test credential: %v", err)
 	}
+	// That gate asks the store whether the profile needs a credential at all —
+	// a local-lane one does not (locallane.go) — so the ask it just made is
+	// this helper's, not something a test observed. Clearing it keeps the
+	// conformance assertions ("this run resolved no profile") about the run.
+	profiles.askedID, profiles.askedAt = "", 0
 	return inv, profiles
 }
 
@@ -2384,7 +2389,7 @@ func TestOmpDriveHonoursADisabledAccount(t *testing.T) {
 
 	inv, _ := newTestInvestigator(t)
 	inv.auth = ompResolveAuth
-	if _, err := inv.resolveCredential(); err != nil {
+	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
 	fake, record := ompFakeBinary(t, "plain")
@@ -2496,7 +2501,7 @@ func TestOmpDriveWithoutACredentialRefusesToLaunch(t *testing.T) {
 func TestOmpResolveCredentialRefusesAnUnconfiguredBroker(t *testing.T) {
 	inv, _ := newTestInvestigator(t)
 	inv.auth = func() (ompAuth, error) { return ompAuth{broker: brokerConfig{URL: "http://broker.invalid"}}, nil }
-	if _, err := inv.resolveCredential(); !errors.Is(err, errOmpNoCredential) {
+	if _, err := inv.resolveCredential(testProfile().Ref); !errors.Is(err, errOmpNoCredential) {
 		t.Fatalf("error = %v; want errOmpNoCredential", err)
 	}
 }
@@ -2506,7 +2511,7 @@ func TestOmpResolveCredentialRefusesAnUnconfiguredBroker(t *testing.T) {
 // diagnostics are forwarded into the run's failure record.
 func TestOmpResolveCredentialReportsTheSecretsToScrub(t *testing.T) {
 	inv, _ := newTestInvestigator(t)
-	secrets, err := inv.resolveCredential()
+	secrets, err := inv.resolveCredential(testProfile().Ref)
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
@@ -2553,6 +2558,12 @@ type ompFakeRecord struct {
 	// driver deletes the run directory when the run ends, so a test that only
 	// looked at the path afterwards could not tell a readable pool from a name.
 	Pool string `json:"pool"`
+	// ModelEndpoint is where the child was told the model is served, and
+	// ModelReached is what it got by asking. Together they are the local
+	// lane's whole claim: the run talks to the endpoint its profile named
+	// (locallane.go), with no credential in sight.
+	ModelEndpoint string `json:"model_endpoint,omitempty"`
+	ModelReached  string `json:"model_reached,omitempty"`
 }
 
 // ompFakeBinary writes a wrapper that re-executes this test binary as the fake
@@ -2732,6 +2743,16 @@ func ompFakeMain(args []string) {
 		_, _ = os.Stderr.WriteString("omp: authentication rejected for " +
 			os.Getenv("OMP_AUTH_BROKER_TOKEN") + "\n")
 		os.Exit(1)
+	}
+
+	if scenario == "localmodel" {
+		// A real OMP discovers a local engine's models at this route before it
+		// calls one. This is that request and nothing else: what matters is
+		// which address the child was handed, and whether anything answers
+		// there.
+		state.ModelEndpoint = os.Getenv("OLLAMA_BASE_URL")
+		state.ModelReached = ompFakeGet(state.ModelEndpoint + "/api/tags")
+		save()
 	}
 
 	emit := func(frame string) {
