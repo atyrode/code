@@ -114,6 +114,30 @@ func (m *model) syncPreviewAt(yoff int) {
 	// generator list on the left, so the preview shows only what that selection
 	// produces — the role → model routing itself.
 	var b strings.Builder
+	if chosen, on := m.selectedLocalModel(); on {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render("local · "+chosen) + "\n")
+		b.WriteString(stDim.Render(m.local.statusLine()) + "\n\n")
+		// The same grammar a hosted profile is previewed in: every role this
+		// installation routes, led by the one model the endpoint serves. The
+		// advisor is off — a second opinion from a single model is not one.
+		rows := []string{fmt.Sprintf("  thinking %s · fallback off · advisor off", m.sel["thinking"])}
+		for _, r := range genRoleOrder {
+			if r == "advisor" {
+				continue
+			}
+			marker := " "
+			if genAgentRoles[r] {
+				marker = "●"
+			}
+			rows = append(rows, fmt.Sprintf("  %s %-10s %s:%s", marker, r, chosen, m.sel["thinking"]))
+		}
+		b.WriteString(m.renderRoute(rows, m.depth, m.selectedLaunchAvailability(), rw))
+		b.WriteString("\n" + stDim.Render("on-device inference · no provider credential · cost 0.00 USD") + "\n")
+		content := lipgloss.NewStyle().MaxWidth(m.vp.Width).Render(b.String())
+		m.vp.SetContent(content)
+		m.vp.SetYOffset(yoff)
+		return
+	}
 	if target, local := m.selectedRuntime(); local {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(target.Label) + "\n")
 		b.WriteString(stDim.Render(target.statusLine()) + "\n\n")

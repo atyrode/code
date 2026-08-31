@@ -235,6 +235,10 @@ func isolateBabelEnv(t *testing.T) string {
 	t.Setenv("CODE_SELECTION_STATE", "")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CODE_RUNTIME_BROKER", "")
+	// A local endpoint that answers would put the local-lane dial on screen
+	// (locallane.go) and change what a ceremony test is looking at, so a test
+	// points at a port nothing listens on unless it means to.
+	t.Setenv(localEndpointEnv, "http://127.0.0.1:1")
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("OMP_AUTH_BROKER_URL", "")

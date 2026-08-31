@@ -170,6 +170,11 @@ func (m model) previewPane(w, h int) string {
 // accent is the context colour — the selected lane in the generator.
 // Blue / purple / orange.
 func (m model) accent() string {
+	// On-device inference reads green, whichever route reaches it: a delegated
+	// runtime target or the local endpoint lane.
+	if _, on := m.selectedLocalModel(); on {
+		return cGreen
+	}
 	if _, local := m.selectedRuntime(); local {
 		return cGreen
 	}
@@ -461,11 +466,12 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 // was once wiped by an edit exactly because of that. CODE_FACET_GLYPHS may
 // override any entry (see main).
 //
-//	runtime 🖥 (f108)  lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
+//	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
 //	spark 🚀 (f135)  fable 📖 (f02d)  default 🎯 (f140)  fast ⚡ (f0e7)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
-		"runtime": "\uf108", "lane": "\uf127", "model": "\uf085", "thinking": "\uf0eb", "advisor": "\uf14e",
+		"runtime": "\uf108", "local": "\uf109", "lane": "\uf127", "model": "\uf085",
+		"thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fable": "\uf02d", "main": "\uf140", "fast": "\uf0e7",
 		"relief": "\uf132",
 	}

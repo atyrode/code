@@ -13,6 +13,19 @@ const (
 	deepseekProvider  = "deepseek"
 )
 
+// localProvider is the lane for a model served on this machine (locallane.go).
+// The id lives here because this is where provider ids are spelled, and
+// nowhere else may spell one.
+//
+// It is deliberately not a providerRegistry entry. Every field of a
+// providerDesc is about a hosted pool — a catalog pool letter, a quota bucket,
+// a lane blend other pools' chains cross into, an account the manager logs in
+// to — and this lane has none of them: its models come from the endpoint
+// rather than the catalog, it bills nothing, and it blends with nothing. An
+// entry would put a phantom pool into every pool iteration in the tree to
+// describe a lane that is not one of them.
+const localProvider = "local"
+
 // specialFacet is a provider's tier-scoped lead: a facet dial ("spark",
 // "fable") that swaps a dedicated ladder tier in as a role lead, drawing a
 // separate quota bucket.

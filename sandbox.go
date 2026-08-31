@@ -316,6 +316,7 @@ const (
 	sandboxEgressDir  = sandboxRoot + "/egress"
 	sandboxProxySock  = sandboxEgressDir + "/proxy.sock"
 	sandboxBrokerSock = sandboxEgressDir + "/broker.sock"
+	sandboxModelSock  = sandboxEgressDir + "/model.sock"
 )
 
 // The loopback ports the in-sandbox forwarder listens on. The sandbox has a
@@ -324,6 +325,12 @@ const (
 const (
 	sandboxProxyPort  = 3128
 	sandboxBrokerPort = 3129
+	// sandboxModelPort carries a local-lane run's model calls to the endpoint
+	// on the host's loopback (locallane.go). It is a relay rather than an
+	// allowlist entry for the same reason the broker's is: OMP does not send a
+	// loopback or private target through a proxy, and in here there is no such
+	// host to send it to.
+	sandboxModelPort = 3130
 )
 
 // sandboxProxyURL is what PI_PROXY is set to inside. OMP bypasses its proxy for
@@ -417,6 +424,11 @@ type sandboxEgressDescription struct {
 	// relay reports that a second unix socket carries the run's auth-broker
 	// traffic straight through, which is the case for a broker on loopback.
 	relay bool
+	// local is the host address a local-lane run's model calls are relayed to,
+	// empty for a hosted run. It is named rather than implied because "no
+	// route off the machine" and "a route to a daemon on the machine" are
+	// different boundaries, and the second is the one a local run has.
+	local string
 }
 
 // escape is Code's statement of what it does not contain.
@@ -472,19 +484,39 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 	if egress.provider != "" {
 		b.WriteString(" (the resolved profile's provider is " + egress.provider + ")")
 	}
-	b.WriteString(". Every other CONNECT target is refused and recorded. So a worker that compromises OMP " +
-		"cannot reach this machine or the network at large, but it can still open a TLS tunnel to what is " +
-		"allowed and put anything it can read into it.")
+	if len(egress.allowed) == 0 {
+		// Nothing is allowed, so the tunnel sentence below would describe a
+		// route this run does not have. A local-lane run is the case that
+		// reaches here (locallane.go), and what it does have is the relay named
+		// next.
+		b.WriteString(". Every CONNECT target is refused and recorded, so a worker that compromises OMP " +
+			"has no route to the network at large and none to this machine through the proxy.")
+	} else {
+		b.WriteString(". Every other CONNECT target is refused and recorded. So a worker that compromises OMP " +
+			"cannot reach this machine or the network at large, but it can still open a TLS tunnel to what is " +
+			"allowed and put anything it can read into it.")
+	}
 	if egress.relay {
 		b.WriteString(" A second unix socket relays the run's auth-broker calls to the broker Code itself " +
 			"uses, which is a service on this host, so a compromised worker can also drive that broker for " +
 			"as long as the run lasts.")
 	}
+	if egress.local != "" {
+		b.WriteString(" A second unix socket relays this run's model calls to the local endpoint they are " +
+			"served from, " + egress.local + " on this host, so a compromised worker can also drive that " +
+			"daemon — and read whatever it will answer — for as long as the run lasts.")
+	}
 	b.WriteString("\n\n")
 
-	b.WriteString("Second, the provider credential is inside the boundary. OMP authenticates for itself, so " +
-		"the auth-broker token this run was issued is in the sandbox's environment. Anything that " +
-		"compromises the session has it, and it is valid outside this run.\n\n")
+	if egress.local != "" {
+		b.WriteString("Second, there is no provider credential to be inside the boundary: this run's model " +
+			"is served on this machine and authenticates with nothing, so a compromised session has no " +
+			"token that outlives it. What it has instead is the relay above.\n\n")
+	} else {
+		b.WriteString("Second, the provider credential is inside the boundary. OMP authenticates for itself, so " +
+			"the auth-broker token this run was issued is in the sandbox's environment. Anything that " +
+			"compromises the session has it, and it is valid outside this run.\n\n")
+	}
 
 	b.WriteString("Third, the isolation rests on unprivileged user namespaces. There is no hypervisor and no " +
 		"privileged helper, and the sandbox runs under the same uid as Code, so a kernel defect in the " +
@@ -705,6 +737,36 @@ func sandboxProviderEndpoint(profile resolvedProfile) (provider, endpoint string
 	return provider, net.JoinHostPort(host, strconv.Itoa(sandboxProviderPort)), nil
 }
 
+// sandboxRunEgress is this run's whole egress plan: the provider the boundary
+// opens for, and the policy that opens it.
+//
+// The two lanes need different holes and the difference is not cosmetic. A
+// hosted provider is a name on the public internet reached over TLS, so the
+// hole is the CONNECT proxy with a one-entry allowlist. A local endpoint is a
+// socket on this host: OMP sends no loopback or private target through a proxy,
+// and inside the sandbox there is no such host to send it to, so it is relayed
+// as a raw stream to a fixed port on the sandbox's own loopback — the same
+// mechanism a loopback auth broker already needs, for the same reason.
+//
+// The provider is returned even when the policy fails, so a declaration made
+// before a run Code is about to refuse can still name what it was for.
+func sandboxRunEgress(profile resolvedProfile, brokerURL string) (string, sandboxEgressPolicy, error) {
+	target, local, err := localRunProfile(profile)
+	if err != nil {
+		return localProvider, sandboxEgressPolicy{}, err
+	}
+	if local {
+		policy, err := sandboxResolveLocalEgress(target.Endpoint)
+		return localProvider, policy, err
+	}
+	provider, endpoint, err := sandboxProviderEndpoint(profile)
+	if err != nil {
+		return "", sandboxEgressPolicy{}, err
+	}
+	policy, err := sandboxResolveEgress(endpoint, brokerURL)
+	return provider, policy, err
+}
+
 // ── the corpus the grant named ───────────────────────────────────────────────
 
 // sandboxCorpusPaths is the set of host paths the run's sources name, cleaned
@@ -800,9 +862,13 @@ type sandboxSpec struct {
 	ProxyPort   int    `json:"proxy_port"`
 	ProxySocket string `json:"proxy_socket"`
 	// BrokerPort is zero when no auth broker needs relaying.
-	BrokerPort   int      `json:"broker_port,omitempty"`
-	BrokerSocket string   `json:"broker_socket,omitempty"`
-	Scratch      []string `json:"scratch,omitempty"`
+	BrokerPort   int    `json:"broker_port,omitempty"`
+	BrokerSocket string `json:"broker_socket,omitempty"`
+	// ModelPort is zero unless this is a local-lane run, whose model endpoint
+	// is a service on the host and is relayed the same way (locallane.go).
+	ModelPort   int      `json:"model_port,omitempty"`
+	ModelSocket string   `json:"model_socket,omitempty"`
+	Scratch     []string `json:"scratch,omitempty"`
 	// Outside is a host path the probe tries to read and write. It is the
 	// filesystem-isolation claim's evidence: a probe that cannot reach it is
 	// the only reason Code declares the boundary exists.

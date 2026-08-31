@@ -189,10 +189,18 @@ type syntheticResolver interface {
 // tail is exactly how a failed run gets explained. Registering the credential
 // closes that route with the mechanism already guarding the other one.
 //
+// It is given the profile the job named because whether a credential is needed
+// at all is a property of that profile: a local-lane profile runs against an
+// endpoint on this machine that takes no key (locallane.go), and refusing such
+// a run for want of a broker would refuse the one configuration that cannot
+// need one. Nothing else about the profile is resolved here — that is resolve's
+// job — and a reference this resolver cannot open leaves the credential
+// required, which is the stricter answer.
+//
 // An investigator that does not implement this is never asked, which is what
 // keeps the conformance stub gradeable on a machine with no provider at all.
 type credentialResolver interface {
-	resolveCredential() (secrets []string, err error)
+	resolveCredential(ref babelProfileRef) (secrets []string, err error)
 }
 
 // ── argv ─────────────────────────────────────────────────────────────────────
@@ -982,11 +990,12 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 
 	// The credential comes first: a run that cannot authenticate is refused
 	// here rather than discovered three events later as an analysis that failed
-	// for no stated cause. A conformance job is exempt because it launches
-	// nothing — that exemption is what lets Babel grade a worker on a machine
-	// with no provider.
+	// for no stated cause. The profile goes with the question, because a
+	// profile can be one that needs no credential. A conformance job is exempt
+	// because it launches nothing — that exemption is what lets Babel grade a
+	// worker on a machine with no provider.
 	if resolver, ok := inv.(credentialResolver); ok && !job.conformanceRequested() {
-		secrets, err := resolver.resolveCredential()
+		secrets, err := resolver.resolveCredential(job.Profile)
 		if err != nil {
 			// Not retryable: the credential is resolved out of the environment
 			// and the HOME Babel spawned this worker with, and respawning it
@@ -1203,7 +1212,15 @@ func babelStoredProfile(id string) (codeProfile, error) {
 // babelDescribeDials turns a resolved selection into the profile Babel records.
 // Everything here is non-secret by construction: the provider credential lives
 // in the central broker and the vault and is never part of a selection.
+//
+// The local lane is described elsewhere (locallane.go) because it shares none
+// of this: it resolves no catalog rows, so there is no lead model to find and
+// no per-model price to weight, and the fields it does record — the endpoint,
+// the engine — mean nothing to a hosted profile.
 func babelDescribeDials(m model, id string) codeProfile {
+	if chosen, on := m.selectedLocalModel(); on {
+		return describeLocalDials(m, id, chosen)
+	}
 	rows := m.currentRows()
 	metadata := map[string]string{
 		"lane":     m.sel["lane"],
@@ -1320,11 +1337,24 @@ func babelDialCost(m model, rows []string) babelCost {
 // silently runs on its own defaults — the same trap update.go guards Enter
 // against.
 //
+// A local profile is rendered from what it recorded rather than from the
+// catalog, because the catalog never generated it: the endpoint's model, the
+// engine it speaks and the thinking level are the whole configuration, and
+// they are in the profile (locallane.go). Reading the environment for them
+// instead would let a variable decide what a minted profile runs.
+//
 // The omp version is unknown here (nothing probes it in a worker), so the
 // omp ≥ 17.3 advisor key is omitted. That is the safe direction by design: an
 // older omp hard-errors on the unknown key, and a newer one simply does not get
 // the audit-tier agent advisor.
 func profileOverlay(p codeProfile) (string, error) {
+	if isLocalProfile(p.Metadata) {
+		target, err := localTargetOf(p.Metadata)
+		if err != nil {
+			return "", fmt.Errorf("profile %s@%d: %w", p.ID, p.Revision, err)
+		}
+		return target.overlayYAML(), nil
+	}
 	if len(p.Selection) == 0 {
 		return "", fmt.Errorf("profile %s@%d saved no selection to render", p.ID, p.Revision)
 	}

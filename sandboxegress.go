@@ -60,20 +60,21 @@ type sandboxConnect struct {
 }
 
 // sandboxEgress is the host-side half: one listening unix socket that speaks
-// HTTP CONNECT against a fixed allowlist, and optionally a second that relays
-// straight to the auth broker Code itself uses.
+// HTTP CONNECT against a fixed allowlist, and optionally further sockets that
+// relay straight through to a service on this host — the auth broker Code
+// itself uses, and the local model endpoint a local-lane run is served from.
 //
-// The broker needs the second socket rather than an allowlist entry because a
-// loopback broker is a target OMP's fetch never sends to a proxy — the bypass
-// rule for loopback and private ranges is exactly right for a host-side service
-// and exactly wrong for a sandbox that has no such host. Relaying it as a raw
-// stream, and rewriting the URL the child is given to point at the sandbox's
-// own loopback, is what keeps the run authenticating without opening the proxy
-// to anything private.
+// Those need their own sockets rather than allowlist entries because a loopback
+// or private target is one OMP's fetch never sends to a proxy — the bypass rule
+// is exactly right for a host-side service and exactly wrong for a sandbox that
+// has no such host. Relaying them as raw streams, and rewriting the URL the
+// child is given to point at the sandbox's own loopback, is what keeps the run
+// working without opening the proxy to anything private.
 type sandboxEgress struct {
 	dir    string
 	proxy  net.Listener
 	broker net.Listener
+	model  net.Listener
 	policy sandboxEgressPolicy
 	allow  map[string]bool
 
@@ -90,7 +91,9 @@ type sandboxEgress struct {
 // for nothing.
 type sandboxEgressPolicy struct {
 	// allowed is every host:port the CONNECT proxy will dial: the provider
-	// endpoint, plus the auth broker when it lives off this machine.
+	// endpoint, plus the auth broker when it lives off this machine. It is
+	// empty for a local-lane run, which reaches nothing off this machine at
+	// all.
 	allowed []string
 	// brokerAddr is the host-side address the second socket relays to, empty
 	// when no relay is needed.
@@ -98,6 +101,19 @@ type sandboxEgressPolicy struct {
 	// brokerURL is what the child is told to use instead of the real one, so
 	// its requests land on the sandbox's own loopback.
 	brokerURL string
+	// modelAddr is the host-side address of a local-lane run's model endpoint,
+	// relayed the same way, and modelURL is what the child is told to call
+	// instead (locallane.go). Both empty for a hosted run.
+	modelAddr string
+	modelURL  string
+}
+
+// routed reports whether the policy gives the run any way to reach a model at
+// all. An allowlist can legitimately be empty — a local run reaches nothing off
+// this machine — but a policy with no allowlist and no relay would strand the
+// analysis behind a boundary with no hole in it.
+func (p sandboxEgressPolicy) routed() bool {
+	return len(p.allowed) > 0 || p.brokerAddr != "" || p.modelAddr != ""
 }
 
 // sandboxResolveEgress decides the run's allowlist.
@@ -139,11 +155,39 @@ func sandboxResolveEgress(endpoint, brokerURL string) (sandboxEgressPolicy, erro
 	return policy, nil
 }
 
+// sandboxResolveLocalEgress decides a local-lane run's egress: nothing on the
+// CONNECT allowlist at all, and a raw relay to the model endpoint on this host
+// (locallane.go).
+//
+// An empty allowlist is the stronger boundary rather than a gap in one. The
+// proxy still runs and still refuses — and records — every target, so a
+// compromised session has no route to the network whatsoever; the one thing it
+// can reach is the daemon this run's own model is served by, which the escape
+// statement names.
+//
+// The auth broker is not relayed because a local run resolves no credential to
+// authenticate with (locallane.go, resolveCredential): there is nothing for it
+// to ask a broker for.
+func sandboxResolveLocalEgress(endpoint string) (sandboxEgressPolicy, error) {
+	addr, err := localHostPort(endpoint)
+	if err != nil {
+		return sandboxEgressPolicy{}, fmt.Errorf("the local endpoint %q has no address the sandbox could "+
+			"be given a route to: %w", endpoint, err)
+	}
+	guest, err := localGuestBase(endpoint, sandboxModelPort)
+	if err != nil {
+		return sandboxEgressPolicy{}, fmt.Errorf("the local endpoint %q cannot be rewritten to the "+
+			"sandbox's loopback: %w", endpoint, err)
+	}
+	return sandboxEgressPolicy{modelAddr: addr, modelURL: guest}, nil
+}
+
 // newSandboxEgress opens the run's egress sockets in dir and starts serving
 // them. Nothing here decides anything the policy did not already decide.
 func newSandboxEgress(dir string, policy sandboxEgressPolicy) (*sandboxEgress, error) {
-	if len(policy.allowed) == 0 {
-		return nil, errors.New("the sandbox egress was given an empty allowlist")
+	if !policy.routed() {
+		return nil, errors.New("the sandbox egress was given no route at all: no allowlist, no broker " +
+			"relay and no model relay, which would strand the analysis behind a boundary with no hole")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -173,9 +217,23 @@ func newSandboxEgress(dir string, policy sandboxEgressPolicy) (*sandboxEgress, e
 		}
 		e.broker = broker
 	}
+	if policy.modelAddr != "" {
+		local, err := net.Listen("unix", filepath.Join(dir, "model.sock"))
+		if err != nil {
+			_ = proxy.Close()
+			if e.broker != nil {
+				_ = e.broker.Close()
+			}
+			return nil, err
+		}
+		e.model = local
+	}
 	go e.serveProxy()
 	if e.broker != nil {
 		go e.serveBroker()
+	}
+	if e.model != nil {
+		go e.serveModel()
 	}
 	return e, nil
 }
@@ -228,12 +286,20 @@ func (e *sandboxEgress) brokerSocket() string {
 	return filepath.Join(e.dir, "broker.sock")
 }
 
+func (e *sandboxEgress) modelSocket() string {
+	if e.model == nil {
+		return ""
+	}
+	return filepath.Join(e.dir, "model.sock")
+}
+
 // describe is the non-secret summary the escape statement names.
 func (e *sandboxEgress) describe(provider string) sandboxEgressDescription {
 	return sandboxEgressDescription{
 		provider: provider,
 		allowed:  append([]string(nil), e.policy.allowed...),
 		relay:    e.broker != nil,
+		local:    e.policy.modelAddr,
 	}
 }
 
@@ -259,6 +325,9 @@ func (e *sandboxEgress) close() {
 		if e.broker != nil {
 			_ = e.broker.Close()
 		}
+		if e.model != nil {
+			_ = e.model.Close()
+		}
 		_ = os.RemoveAll(e.dir)
 	})
 }
@@ -282,6 +351,27 @@ func (e *sandboxEgress) serveBroker() {
 		go func() {
 			defer conn.Close()
 			upstream, err := net.DialTimeout("tcp", e.policy.brokerAddr, sandboxDialTimeout)
+			if err != nil {
+				return
+			}
+			defer upstream.Close()
+			sandboxSplice(conn, upstream)
+		}()
+	}
+}
+
+// serveModel relays a local-lane run's model calls to the endpoint on this
+// host. It is serveBroker's twin and decides nothing either: the address it
+// dials was fixed by the policy before any socket existed.
+func (e *sandboxEgress) serveModel() {
+	for {
+		conn, err := e.model.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			upstream, err := net.DialTimeout("tcp", e.policy.modelAddr, sandboxDialTimeout)
 			if err != nil {
 				return
 			}
@@ -380,6 +470,12 @@ func runSandboxEgressHelper(spec sandboxSpec, argv []string) int {
 	if spec.BrokerPort > 0 && spec.BrokerSocket != "" {
 		if err := sandboxForward(spec.BrokerPort, spec.BrokerSocket); err != nil {
 			fmt.Fprintln(os.Stderr, "code: __sandbox egress: broker forwarder:", err)
+			return 2
+		}
+	}
+	if spec.ModelPort > 0 && spec.ModelSocket != "" {
+		if err := sandboxForward(spec.ModelPort, spec.ModelSocket); err != nil {
+			fmt.Fprintln(os.Stderr, "code: __sandbox egress: model forwarder:", err)
 			return 2
 		}
 	}
