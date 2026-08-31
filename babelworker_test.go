@@ -260,6 +260,68 @@ func babelProductionJob(id string, revision int) map[string]any {
 	return job
 }
 
+// babelStageJob splits one job document into the two messages Babel writes: the
+// preamble, and the material it sends only after the worker's containment
+// declaration has been accepted.
+//
+// The fixtures above describe a whole job, which is what a reader needs to see
+// in one place, and this is the one function that knows which half each field
+// belongs to. A field a test adds that this function does not name travels in
+// the material — the same default Babel's own encoder has, because the material
+// is the stage that carries everything the run needs and the preamble is
+// deliberately the short one.
+func babelStageJob(job map[string]any) (preamble, material map[string]any) {
+	preamble = map[string]any{
+		"type":     babelMessageJobPreamble,
+		"protocol": babelProtocolName,
+	}
+	material = map[string]any{
+		"type":     babelMessageJob,
+		"protocol": babelProtocolName,
+	}
+	for key, value := range job {
+		switch key {
+		case "type", "protocol":
+		case "job_id", "run_id":
+			// The run's identity is in both stages, so either line is
+			// self-identifying and a worker can refuse a mismatched pairing.
+			preamble[key] = value
+			material[key] = value
+		case "profile", "params":
+			preamble[key] = value
+		default:
+			material[key] = value
+		}
+	}
+	return preamble, material
+}
+
+// stagePreamble writes stage one and returns stage two for the caller to write
+// once the worker has declared its containment. A test whose run never gets
+// that far simply never writes it, which is exactly what Babel does when it
+// refuses a declaration.
+func (h *babelHarness) stagePreamble(job map[string]any) map[string]any {
+	h.t.Helper()
+	preamble, material := babelStageJob(job)
+	h.write(preamble)
+	return material
+}
+
+// stageJob performs the whole exchange Babel performs: the preamble, the
+// declaration the worker answers with, then the material. It returns the
+// declaration, because it had to read it and a caller stepping through the
+// stream would otherwise lose an event.
+func (h *babelHarness) stageJob(job map[string]any) map[string]any {
+	h.t.Helper()
+	material := h.stagePreamble(job)
+	declaration := h.next()
+	if kind, _ := declaration["type"].(string); kind != babelMessageConfiguration {
+		h.t.Fatalf("the worker answered the job preamble with %q, want its resolved configuration", kind)
+	}
+	h.write(material)
+	return declaration
+}
+
 func conformanceOpts() babelOptions {
 	return babelOptions{
 		profileID:    defaultBabelProfileID,
@@ -379,9 +441,9 @@ func TestBabelHandshakeRejections(t *testing.T) {
 		name string
 		line string
 	}{
-		{"wrong protocol", `{"type":"accept","protocol":"something.else","version":1,"mode":"worker"}`},
+		{"wrong protocol", `{"type":"accept","protocol":"something.else","version":2,"mode":"worker"}`},
 		{"unsupported version", `{"type":"accept","protocol":"babel.analysis-worker","version":9001,"mode":"worker"}`},
-		{"unadvertised mode", `{"type":"accept","protocol":"babel.analysis-worker","version":1,"mode":"teleport"}`},
+		{"unadvertised mode", `{"type":"accept","protocol":"babel.analysis-worker","version":2,"mode":"teleport"}`},
 		{"not a handshake", `{"type":"job","job_id":"j"}`},
 		{"not json", `this is not a line babel would write`},
 	}
@@ -835,7 +897,7 @@ func runBabelWorkerStream(t *testing.T, job map[string]any, respond func(request
 	h := newBabelHarness(t, conformanceOpts())
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(job)
+	material := h.stagePreamble(job)
 
 	var stream babelStream
 	for {
@@ -846,6 +908,11 @@ func runBabelWorkerStream(t *testing.T, job map[string]any, respond func(request
 		stream.events = append(stream.events, ev)
 		kind, _ := ev["type"].(string)
 		switch kind {
+		case babelMessageConfiguration:
+			// The material follows the declaration, the way Babel writes it:
+			// this driver is the counterpart, so it withholds what Babel
+			// withholds.
+			h.write(material)
 		case babelMessageToolRequest:
 			if respond == nil {
 				t.Fatalf("the worker asked for a tool this test does not answer: %v", ev)
@@ -1301,6 +1368,7 @@ func TestBabelConformanceDirectiveRecognizesEveryDirectiveItImplements(t *testin
 		babelConformanceSlow,
 		babelConformanceEchoToken,
 		babelConformanceEchoEvidence,
+		babelConformanceUnderDeclare,
 	} {
 		job := babelJob{Params: map[string]string{babelParamConformance: directive}}
 		if got := job.conformanceDirective(); got != directive {
@@ -1577,22 +1645,145 @@ func TestBabelWorkerConfigurationDeclaresTheProfileThatRan(t *testing.T) {
 	}
 }
 
+// TestBabelWorkerDeclaresFromThePreambleAlone is this side of atyrode/babel#71.
+// The declaration has to be producible from a profile reference and the run's
+// parameters, because that is all Babel has written when it asks for it: a
+// worker that needed the sources, the grant or the broker token first would
+// block on a read Babel has made conditional on the event it is waiting for.
+func TestBabelWorkerDeclaresFromThePreambleAlone(t *testing.T) {
+	isolateBabelEnv(t)
+	h := newBabelHarness(t, conformanceOpts())
+	h.expectHello()
+	h.write(babelAcceptLine(babelModeWorker))
+
+	// Only the preamble is written, and it is written from the full fixture
+	// through the same splitter every other test uses, so this run sees exactly
+	// the stage-one document Babel writes and nothing else.
+	material := h.stagePreamble(babelTestJob(babelConformanceWellBehaved))
+
+	declaration := h.next()
+	if kind, _ := declaration["type"].(string); kind != babelMessageConfiguration {
+		t.Fatalf("the worker answered the preamble with %q, want its resolved configuration", kind)
+	}
+	if seq, _ := declaration["seq"].(float64); seq != 1 {
+		t.Errorf("the declaration has seq %v, want 1: it is the run's first event", seq)
+	}
+	containment, _ := declaration["containment"].(map[string]any)
+	if len(containment) == 0 {
+		t.Fatalf("the first event declares no containment, so Babel has nothing to hold the run to: %v", declaration)
+	}
+	if backend, _ := containment["backend"].(string); backend == "" {
+		t.Error("the declaration names no sandbox backend; an unnamed mechanism cannot be assessed")
+	}
+	if escape, _ := containment["escape"].(string); escape == "" {
+		t.Error("the declaration states no escape assumption; a sandbox with no residual risk has not been examined")
+	}
+	profile, _ := declaration["profile"].(map[string]any)
+	if profile["id"] != "synthetic-profile" {
+		t.Errorf("the declaration names profile %v, want the one the preamble named", profile)
+	}
+
+	// Only now does the material exist for this worker, and the run goes on to
+	// use it: a declaration that stalled the run would leave no result.
+	h.write(material)
+	var terminal map[string]any
+	for terminal == nil {
+		ev := h.next()
+		if kind, _ := ev["type"].(string); kind == babelMessageResult || kind == babelMessageError {
+			terminal = ev
+		}
+	}
+	if kind, _ := terminal["type"].(string); kind != babelMessageResult {
+		t.Fatalf("terminal event is %q, want a result: %v", kind, terminal)
+	}
+	h.drain()
+	if status := h.wait(); status != 0 {
+		t.Errorf("exit status = %d, want 0 after a result", status)
+	}
+}
+
+// TestBabelWorkerExitsWhenItsDeclarationIsRefused is the other half of the
+// staged exchange: Babel answers a declaration it will not accept with a
+// refusal instead of the material, and this worker has to read that and leave.
+// A worker that blocked on the read would have to be killed, and its own
+// teardown — the sandbox, the OMP tree — would never run.
+//
+// The directive is what makes the case reachable: it asks this worker to
+// declare less than it provides, which is the only way a conforming worker is
+// ever refused (see babelConformanceUnderDeclare).
+func TestBabelWorkerExitsWhenItsDeclarationIsRefused(t *testing.T) {
+	isolateBabelEnv(t)
+	h := newBabelHarness(t, conformanceOpts())
+	h.expectHello()
+	h.write(babelAcceptLine(babelModeWorker))
+	h.stagePreamble(babelTestJob(babelConformanceUnderDeclare))
+
+	declaration := h.next()
+	if kind, _ := declaration["type"].(string); kind != babelMessageConfiguration {
+		t.Fatalf("the worker answered the preamble with %q, want its resolved configuration", kind)
+	}
+	containment, _ := declaration["containment"].(map[string]any)
+	for _, property := range []string{
+		"filesystem_isolation", "network_default_deny", "resource_ceilings", "disposable",
+	} {
+		if claimed, _ := containment[property].(bool); claimed {
+			t.Errorf("the under-declare directive asks for a declaration a sandboxed run refuses, and this one claims %s: %v",
+				property, containment)
+		}
+	}
+	// Still a complete declaration: the directive asks for a boundary that
+	// falls short, not for a malformed claim, so Babel refuses it for the
+	// properties rather than for a missing backend.
+	if backend, _ := containment["backend"].(string); backend == "" {
+		t.Error("the under-declared boundary names no backend, so the refusal would be about the wrong thing")
+	}
+	if escape, _ := containment["escape"].(string); escape == "" {
+		t.Error("the under-declared boundary states no escape assumption, so the refusal would be about the wrong thing")
+	}
+
+	// Babel's answer, in place of the material it would otherwise write.
+	h.write(babelRefuse{
+		Type:     babelMessageRefuse,
+		Protocol: babelProtocolName,
+		Reason:   "worker: insufficient containment: backend does not provide filesystem isolation, network default-deny",
+	})
+
+	if rest := h.drain(); len(rest) != 0 {
+		t.Errorf("the refused worker wrote %d more event(s): %v", len(rest), rest)
+	}
+	if status := h.wait(); status != 3 {
+		t.Errorf("exit status = %d, want 3: the run was refused, which is not a protocol failure and not a result", status)
+	}
+	if diag := h.stderr.String(); !strings.Contains(diag, "refused") {
+		t.Errorf("the worker's diagnostics do not say it was refused: %q", diag)
+	}
+}
+
 // TestBabelWorkerUnknownFieldsSurvive is the forward-compatibility rule in both
-// directions: unknown fields in accept, job and tool-decision are never fatal,
-// and a job's unknown top-level fields are preserved rather than dropped, so a
-// newer Babel can add one without this build losing it.
+// directions: unknown fields in accept, either job stage and tool-decision are
+// never fatal, and a job's unknown top-level fields are preserved rather than
+// dropped, so a newer Babel can add one without this build losing it.
+//
+// One unknown field per job stage, because the job is two messages and
+// tolerating one is not tolerating the other. The preamble is the more likely
+// of the two to grow — it is where the policy surface lives — and it is parsed
+// before this worker has declared anything, so a build that hard-failed on an
+// unrecognized field there would abandon the run at the earliest possible
+// moment for the least possible reason.
 func TestBabelWorkerUnknownFieldsSurvive(t *testing.T) {
 	isolateBabelEnv(t)
 	h := newBabelHarness(t, conformanceOpts())
 	h.expectHello()
-	h.writeRaw(`{"type":"accept","protocol":"babel.analysis-worker","version":1,"mode":"worker",` +
+	h.writeRaw(`{"type":"accept","protocol":"babel.analysis-worker","version":2,"mode":"worker",` +
 		`"limits":{"max_line_bytes":1048576,"max_events":1000,"max_tool_requests":16,"x-future":7},` +
 		`"x-babel-future":{"added":"later"}}`)
 
 	job := babelTestJob(babelConformanceRequestTool)
 	job["x-babel-future"] = map[string]any{"unknown": "to this worker"}
 	job["x-babel-scalar"] = 42
-	h.write(job)
+	preamble, material := babelStageJob(job)
+	preamble["x-babel-future-preamble"] = map[string]any{"unknown": "and read before anything was declared"}
+	h.write(preamble)
 
 	var stream babelStream
 	for {
@@ -1603,6 +1794,8 @@ func TestBabelWorkerUnknownFieldsSurvive(t *testing.T) {
 		stream.events = append(stream.events, ev)
 		kind, _ := ev["type"].(string)
 		switch kind {
+		case babelMessageConfiguration:
+			h.write(material)
 		case babelMessageToolRequest:
 			id, _ := ev["request_id"].(string)
 			// An unknown field in the decision must not stop it being honoured.
@@ -1619,7 +1812,9 @@ func TestBabelWorkerUnknownFieldsSurvive(t *testing.T) {
 		t.Fatalf("terminal event is %q, want a result", kind)
 	}
 	payload, _ := json.Marshal(stream.terminal["payload"])
-	for _, want := range []string{"x-babel-future", "x-babel-scalar", babelDecisionAllow} {
+	for _, want := range []string{
+		"x-babel-future", "x-babel-scalar", "x-babel-future-preamble", babelDecisionAllow,
+	} {
 		if !strings.Contains(string(payload), want) {
 			t.Errorf("the result payload does not carry %q: %s", want, payload)
 		}
@@ -1669,7 +1864,7 @@ func TestBabelWorkerRepeatedDecision(t *testing.T) {
 	h := newBabelHarness(t, conformanceOpts())
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(babelTestJob(babelConformanceRequestTool))
+	material := h.stagePreamble(babelTestJob(babelConformanceRequestTool))
 
 	var stream babelStream
 	answered := ""
@@ -1680,6 +1875,9 @@ func TestBabelWorkerRepeatedDecision(t *testing.T) {
 		}
 		stream.events = append(stream.events, ev)
 		kind, _ := ev["type"].(string)
+		if kind == babelMessageConfiguration {
+			h.write(material)
+		}
 		if kind == babelMessageToolRequest {
 			answered, _ = ev["request_id"].(string)
 			h.write(allowDecision(answered))
@@ -1714,7 +1912,7 @@ func TestBabelWorkerCancellationOnStdinClose(t *testing.T) {
 	h := newBabelHarness(t, conformanceOpts())
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(babelTestJob(babelConformanceSlow))
+	h.stageJob(babelTestJob(babelConformanceSlow))
 
 	// Wait until the run is demonstrably working, then cancel the way Babel
 	// does.
@@ -1750,7 +1948,9 @@ func TestBabelWorkerWithoutInvestigator(t *testing.T) {
 	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(babelTestJob(babelConformanceWellBehaved))
+	// The preamble alone: this run fails before it declares anything, so the
+	// material is never owed and never written.
+	h.stagePreamble(babelTestJob(babelConformanceWellBehaved))
 
 	event := h.next()
 	if event["type"] != babelMessageError {
@@ -1781,7 +1981,9 @@ func TestBabelWorkerWithoutACredentialEndsInATerminalError(t *testing.T) {
 	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(babelProductionJob("code", 1))
+	// Preamble only. A run that cannot authenticate fails before the
+	// declaration, which is before Babel would have written the material.
+	h.stagePreamble(babelProductionJob("code", 1))
 
 	event := h.next()
 	if event["type"] != babelMessageError {
@@ -1834,7 +2036,7 @@ func TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp(t *testing.T) {
 	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
-	h.write(babelProductionJob(saved.ID, saved.Revision))
+	h.stageJob(babelProductionJob(saved.ID, saved.Revision))
 
 	var terminal map[string]any
 	for terminal == nil {
@@ -2300,37 +2502,85 @@ func TestBabelRepeatedToolRequests(t *testing.T) {
 	}
 }
 
-// TestBabelJobExtraPreservesUnknownFields pins the decode rule the wire contract
-// states: every documented field lands in its own place and everything else is
-// preserved, so nothing is silently dropped and nothing documented is duplicated
-// into Extra.
-func TestBabelJobExtraPreservesUnknownFields(t *testing.T) {
-	line := `{"type":"job","protocol":"babel.analysis-worker","job_id":"j","run_id":"r",` +
-		`"profile":{"id":"p","revision":3},"grant":{"capabilities":["corpus-search"],"disclosure":"local"},` +
-		`"params":{"babel.conformance":"well-behaved"},"x-one":1,"x-two":{"nested":true}}`
-	s := newBabelSession(strings.NewReader(line+"\n"), io.Discard, io.Discard)
+// TestBabelJobStagesAssembleOneJob pins the decode rule the wire contract
+// states, over both stages: every documented field lands in its own place,
+// everything else is preserved so nothing is silently dropped, the material
+// adds to the preamble rather than replacing it, and a material stage naming a
+// different run is refused rather than merged.
+func TestBabelJobStagesAssembleOneJob(t *testing.T) {
+	preamble := `{"type":"job-preamble","protocol":"babel.analysis-worker","job_id":"j","run_id":"r",` +
+		`"profile":{"id":"p","revision":3},"params":{"babel.conformance":"well-behaved"},"x-one":1}`
+	material := `{"type":"job","protocol":"babel.analysis-worker","job_id":"j","run_id":"r",` +
+		`"grant":{"capabilities":["corpus-search"],"disclosure":"local"},` +
+		`"broker":{"endpoint":"http://127.0.0.1:1/evidence","token":"` + babelTestToken + `"},` +
+		`"x-two":{"nested":true}}`
+
+	s := newBabelSession(strings.NewReader(preamble+"\n"+material+"\n"), io.Discard, io.Discard)
 	s.startPump()
-	job, err := s.readJob()
+	staged, err := s.readPreamble()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.JobID != "j" || job.Profile.Revision != 3 || !job.Grant.allows(babelCapabilityCorpusSearch) {
-		t.Fatalf("documented fields did not decode: %+v", job)
+	// What the worker knows when it declares its containment: which profile to
+	// resolve, and what kind of run this is. Nothing about the material.
+	if staged.JobID != "j" || staged.Profile.Revision != 3 {
+		t.Fatalf("the preamble's documented fields did not decode: %+v", staged)
 	}
-	if !job.conformanceRequested() {
+	if !staged.conformanceRequested() {
 		t.Error("the conformance parameter did not decode")
 	}
+	if staged.Grant.allows(babelCapabilityCorpusSearch) || staged.Broker != nil || len(staged.Sources) != 0 {
+		t.Errorf("the preamble carried material: %+v", staged)
+	}
+
+	job, err := s.readMaterial(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !job.Grant.allows(babelCapabilityCorpusSearch) || !job.brokered() {
+		t.Fatalf("the material's documented fields did not decode: %+v", job)
+	}
+	// The material added to the preamble instead of replacing it: a job whose
+	// profile or parameters were lost in the second stage would resolve nothing
+	// and answer no directive.
+	if job.Profile.ID != "p" || !job.conformanceRequested() {
+		t.Errorf("the material stage dropped what the preamble carried: %+v", job)
+	}
 	if len(job.Extra) != 2 {
-		t.Fatalf("Extra = %v, want exactly the two unknown fields", job.Extra)
+		t.Fatalf("Extra = %v, want the one unknown field from each stage", job.Extra)
 	}
 	if string(job.Extra["x-one"]) != "1" || string(job.Extra["x-two"]) != `{"nested":true}` {
 		t.Errorf("Extra lost the raw values: %v", job.Extra)
 	}
-	for _, documented := range []string{"type", "job_id", "profile", "grant", "params"} {
+	for _, documented := range []string{"type", "job_id", "profile", "grant", "params", "broker"} {
 		if _, dup := job.Extra[documented]; dup {
 			t.Errorf("documented field %q was also treated as unknown", documented)
 		}
 	}
+
+	t.Run("a material stage from another run is refused", func(t *testing.T) {
+		other := strings.Replace(material, `"run_id":"r"`, `"run_id":"someone-else"`, 1)
+		s := newBabelSession(strings.NewReader(other+"\n"), io.Discard, io.Discard)
+		s.startPump()
+		if _, err := s.readMaterial(staged); err == nil {
+			t.Error("a job assembled from two runs' halves was accepted; the receipt would attribute one run's material to the other")
+		}
+	})
+
+	t.Run("a refusal in place of the material is a refusal, not a broken stream", func(t *testing.T) {
+		refusal := `{"type":"refuse","protocol":"babel.analysis-worker",` +
+			`"reason":"worker: insufficient containment: backend \"none\" does not provide network default-deny"}`
+		s := newBabelSession(strings.NewReader(refusal+"\n"), io.Discard, io.Discard)
+		s.startPump()
+		_, err := s.readMaterial(staged)
+		var refused *babelRefusal
+		if !errors.As(err, &refused) {
+			t.Fatalf("readMaterial error = %v, want a *babelRefusal so worker mode exits refused rather than reporting a protocol failure", err)
+		}
+		if !strings.Contains(refused.Error(), "containment") {
+			t.Errorf("the refusal does not carry Babel's reason: %v", refused)
+		}
+	})
 }
 
 // ── the real binary ──────────────────────────────────────────────────────────
@@ -2409,7 +2659,12 @@ func TestBabelBinaryEndToEnd(t *testing.T) {
 		t.Fatalf("first line is %v, want hello", hello["type"])
 	}
 	writeLine(babelAcceptLine(babelModeWorker))
-	writeLine(babelTestJob(babelConformanceRequestTool))
+	// The staged job document, driven the way Babel drives it: the preamble
+	// first, the material only after the worker's declaration has arrived. The
+	// transcript logged below is therefore the real ordering, over real pipes,
+	// against the real binary.
+	preamble, material := babelStageJob(babelTestJob(babelConformanceRequestTool))
+	writeLine(preamble)
 
 	var kinds []string
 	var terminal map[string]any
@@ -2417,6 +2672,9 @@ func TestBabelBinaryEndToEnd(t *testing.T) {
 		event := readLine()
 		kind, _ := event["type"].(string)
 		kinds = append(kinds, kind)
+		if kind == babelMessageConfiguration {
+			writeLine(material)
+		}
 		if kind == babelMessageToolRequest {
 			id, _ := event["request_id"].(string)
 			writeLine(allowDecision(id))

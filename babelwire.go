@@ -32,9 +32,23 @@ import (
 
 // The protocol this file speaks. A counterpart declaring a different name is a
 // different program, not an older version of this one.
+//
+// Version 2 staged the job document: Babel writes a preamble carrying the run's
+// identity, the profile to resolve and the run's parameters; this worker answers
+// with its resolved configuration, containment declaration included; and only
+// then does Babel write the recipes, the grant, the sources and the run-scoped
+// broker token. Version 1 wrote all of it at once and checked the declaration
+// against the first event, so a worker that under-declared held the credential
+// and knew the corpus selection before Babel refused it (atyrode/babel#71).
+//
+// There is no compatibility path, deliberately: the ordering is the whole of
+// what the declaration buys, and a build that could still accept the old
+// ordering would keep the exposure reachable. A version 1 Babel's accept is
+// refused by this build, and this build's hello is refused by a version 1
+// Babel — both loudly, both naming the version.
 const (
 	babelProtocolName    = "babel.analysis-worker"
-	babelProtocolVersion = 1
+	babelProtocolVersion = 2
 
 	// babelResultSchema is the schema every terminal result must declare.
 	// Babel fails closed on anything else: its explore package compares the
@@ -52,12 +66,13 @@ const (
 )
 
 // Message types on the wire. Code writes hello, configuration, progress,
-// tool-request, result and error; Babel writes accept, refuse, job and
-// tool-decision.
+// tool-request, result and error; Babel writes accept, refuse, job-preamble,
+// job and tool-decision.
 const (
 	babelMessageHello         = "hello"
 	babelMessageAccept        = "accept"
 	babelMessageRefuse        = "refuse"
+	babelMessageJobPreamble   = "job-preamble"
 	babelMessageJob           = "job"
 	babelMessageToolDecision  = "tool-decision"
 	babelMessageConfiguration = "configuration"
@@ -162,6 +177,18 @@ const babelParamConformance = "babel.conformance"
 // five of them, so the answer cannot be a constant written here. The array is
 // emitted even when it is empty, because "implemented and served nothing" and
 // "never implemented" are two different failures and Babel grades them apart.
+//
+// babelConformanceUnderDeclare is the second directive that asks this worker to
+// do something it would never do on its own, and for the same kind of reason.
+// The job document is staged so that a containment declaration Babel will not
+// accept is refused before the run's material and its broker token are written;
+// that path cannot be graded against a worker that always declares enough,
+// because nothing would ever refuse it. A worker receiving this directive
+// declares a named backend, a stated escape assumption, and none of the four
+// properties a sandboxed run requires — then reads what Babel writes back,
+// which is a refusal rather than the material, and exits. What Babel grades is
+// this half of it: no result, no tool request, and no process left blocking on
+// a read for material that is not coming.
 const (
 	babelConformanceWellBehaved      = "well-behaved"
 	babelConformanceEchoJob          = "echo-job"
@@ -171,6 +198,7 @@ const (
 	babelConformanceSlow             = "slow"
 	babelConformanceEchoToken        = "echo-token"
 	babelConformanceEchoEvidence     = "echo-evidence"
+	babelConformanceUnderDeclare     = "under-declare"
 )
 
 // babelHello is the worker's opening line. It is written before reading
@@ -295,19 +323,43 @@ type babelBroker struct {
 	Token    string `json:"token"`
 }
 
-// babelJob is one analysis job. Extra preserves top-level fields this build
-// does not know so a newer Babel can add them without breaking this one.
+// babelJob is one analysis job, and it arrives as two messages rather than one.
+// The field comments say which stage carries what, because the split is the
+// boundary and not a detail of the encoding: everything below the declaration
+// is material Babel withholds until it has accepted the containment this worker
+// declares (atyrode/babel#71).
+//
+// Reading it is readPreamble followed by readMaterial. Between those two calls
+// the Recipes, Grant, Sources and Broker fields are zero, so nothing may read
+// them there — and nothing needs to: what this worker does before declaring is
+// resolve a profile and describe its own sandbox.
+//
+// Extra preserves top-level fields this build does not know, from either stage,
+// so a newer Babel can add one without breaking this one. The two stages'
+// unknown fields land in the same map because nothing here reads them: they
+// exist to be preserved rather than interpreted, and Babel guarantees each
+// stage's names are its own.
 type babelJob struct {
-	Type     string            `json:"type"`
-	Protocol string            `json:"protocol"`
-	JobID    string            `json:"job_id"`
-	RunID    string            `json:"run_id"`
-	Profile  babelProfileRef   `json:"profile"`
-	Recipes  []babelRecipeRef  `json:"recipes,omitempty"`
-	Grant    babelGrant        `json:"grant"`
-	Sources  []babelSource     `json:"sources,omitempty"`
-	Broker   *babelBroker      `json:"broker,omitempty"`
-	Params   map[string]string `json:"params,omitempty"`
+	Type     string `json:"type"`
+	Protocol string `json:"protocol"`
+
+	// The run's identity, carried by both stages so each line is
+	// self-identifying. A material stage naming a different run than the
+	// preamble is a pairing from two runs and is refused, not merged.
+	JobID string `json:"job_id"`
+	RunID string `json:"run_id"`
+
+	// Stage one: what this worker needs to resolve itself and to know what
+	// kind of run this is.
+	Profile babelProfileRef   `json:"profile"`
+	Params  map[string]string `json:"params,omitempty"`
+
+	// Stage two, written only after Babel accepted the declaration: the
+	// boundary, the material, and the one credential the job carries.
+	Recipes []babelRecipeRef `json:"recipes,omitempty"`
+	Grant   babelGrant       `json:"grant"`
+	Sources []babelSource    `json:"sources,omitempty"`
+	Broker  *babelBroker     `json:"broker,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -324,7 +376,7 @@ func (j babelJob) conformanceDirective() string {
 	switch d := j.Params[babelParamConformance]; d {
 	case babelConformanceEchoJob, babelConformanceRequestTool, babelConformanceRequestUngranted,
 		babelConformanceErrorOnly, babelConformanceSlow, babelConformanceEchoToken,
-		babelConformanceEchoEvidence:
+		babelConformanceEchoEvidence, babelConformanceUnderDeclare:
 		return d
 	default:
 		return babelConformanceWellBehaved
