@@ -18,10 +18,16 @@ package main
 //     so no code path can skip or reuse one;
 //   - the first stream event is the resolved configuration, there is exactly one
 //     terminal event, and nothing follows it;
+//   - the resolved configuration — which carries the containment declaration —
+//     is produced from the job's preamble alone, because the recipes, the grant,
+//     the sources and the broker token are the stage Babel writes in answer to
+//     it (atyrode/babel#71). Nothing above emitConfiguration may need them, and
+//     nothing below may assume they arrived: a declaration Babel will not accept
+//     is answered with a refusal instead of the material;
 //   - every line written fits the accepted line budget, because an oversized
 //     line is a protocol violation rather than a large message;
 //   - the job's broker credential is scrubbed out of every byte this process
-//     writes to stdout or stderr.
+//     writes to stdout or stderr, from the moment the stage carrying it is read.
 //
 // A denial is not a failure. Babel denies a tool request that falls outside the
 // run's grant before it consults any policy, so asking for something Code was
@@ -29,8 +35,9 @@ package main
 // caller as a denial and the run still delivers a terminal event.
 //
 // Exit status: 0 after a result, 1 after an error event, 2 when the protocol
-// itself broke, 3 when Babel refused the handshake. Babel owns the run's final
-// status either way, so these are for an operator reading a shell, not for Babel.
+// itself broke, 3 when Babel refused this worker — at the handshake, or by
+// declining the containment it declared. Babel owns the run's final status
+// either way, so these are for an operator reading a shell, not for Babel.
 
 import (
 	"bufio"
@@ -955,13 +962,22 @@ func (s *babelSession) runConfigure(opts babelOptions) int {
 }
 
 // runWorker runs one analysis job to a terminal event.
+//
+// The job arrives in two stages and this worker's own configuration event sits
+// between them (atyrode/babel#71). Stage one carries the run's identity, the
+// profile to resolve and the run's parameters; Babel writes stage two — the
+// recipes, the grant, the sources and the run-scoped broker token — only after
+// it has accepted the containment declared here. So everything that happens
+// before emitConfiguration below is work done from a profile reference and
+// nothing else, and a declaration Babel will not accept is answered with a
+// refusal in place of the material.
 func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int {
 	s.ctx, s.cancel = context.WithCancel(parent)
 	defer s.cancel()
 	s.startPump()
 	// Babel closes this process's stdin as it tears a run down, so stdin's end
 	// is a cancellation in its own right — and the only one an investigation
-	// that is not waiting for a decision would otherwise notice.
+	// that is not currently waiting for a decision would otherwise notice.
 	go func() {
 		select {
 		case <-s.stdinDone:
@@ -970,14 +986,11 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 		}
 	}()
 
-	job, err := s.readJob()
+	job, err := s.readPreamble()
 	if err != nil {
-		s.diag("worker: reading the job: %v", err)
+		s.diag("worker: reading the job preamble: %v", err)
 		return 2
 	}
-	// From here on the broker credential exists in this process, so everything
-	// written is scrubbed.
-	s.secrets = job.secrets()
 
 	inv := newInvestigator()
 	if opts.investigator == babelInvestigatorConformance {
@@ -1002,9 +1015,9 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 			// resolves the same ones.
 			return s.fail(babelErrInvestigator, s.scrubString(err.Error()), false)
 		}
-		// From here the provider credential is scrubbed too. It is not a job
-		// secret, so nothing above covered it, and it is about to be handed to
-		// a child whose diagnostics this worker forwards.
+		// The provider credential is scrubbed from here on. It is not a job
+		// secret — the job has not even sent its own yet — and it is about to
+		// be handed to a child whose diagnostics this worker forwards.
 		s.secrets = append(s.secrets, secrets...)
 	}
 
@@ -1021,8 +1034,8 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 		}
 		cfg = resolved
 	}
-	// Babel requires the configuration to name the profile the job named, and
-	// checking it here means an investigator that resolves the wrong profile
+	// Babel requires the configuration to name the profile the preamble named,
+	// and checking it here means an investigator that resolves the wrong profile
 	// fails visibly instead of producing a stream Babel rejects.
 	if cfg.Profile != job.Profile {
 		return s.fail(babelErrProfileUnavailable, fmt.Sprintf(
@@ -1035,10 +1048,9 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 	// asking for it late means asking a backend that has been probed against
 	// this machine and, for the OMP investigator, one that can name the
 	// provider endpoint its egress will actually allow. Nothing is lost by
-	// waiting: Babel's refusal of an insufficient declaration happens when it
-	// reads the configuration event below, which is after resolve either way,
-	// and a run whose profile is unavailable now avoids probing a sandbox it
-	// was never going to use.
+	// waiting: the declaration is what Babel is waiting for before it writes
+	// anything else, so a run whose profile is unavailable now fails without
+	// having probed a sandbox it was never going to use.
 	containment := inv.containment()
 	if strings.TrimSpace(containment.Backend) == "" {
 		return s.fail(babelErrContainment, "the investigator declared no sandbox backend", false)
@@ -1046,6 +1058,16 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 	if strings.TrimSpace(containment.Escape) == "" {
 		return s.fail(babelErrContainment,
 			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false)
+	}
+	// The one directive that asks this worker to declare less than it provides.
+	// Babel's refusal path decides whether the run's credential travels at all,
+	// and it cannot be graded against a worker that always declares enough, so
+	// the suite asks for a declaration it will then refuse. It is applied here
+	// rather than inside an investigator because the directive is a fact about
+	// the run, which is in the job, and the investigator seam is handed the
+	// profile rather than the job (see syntheticResolver for the same reason).
+	if job.conformanceDirective() == babelConformanceUnderDeclare {
+		containment = babelUnderDeclaredContainment(containment.Backend)
 	}
 	// Containment and capabilities are the protocol layer's to attach. Neither
 	// resolve nor syntheticConfiguration is given the run, so neither can state
@@ -1060,6 +1082,40 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 		s.diag("worker: %v", err)
 		return 2
 	}
+
+	// Stage two, or the refusal that replaces it. Everything the run needs to
+	// do any work at all arrives here, which is why nothing above this line
+	// could have read the corpus or reached the broker.
+	job, err = s.readMaterial(job)
+	if err != nil {
+		var refused *babelRefusal
+		switch {
+		case errors.As(err, &refused):
+			// Babel would not accept the declaration, so there is no run, and
+			// no terminal event is owed for one: Babel is not reading for an
+			// answer to a message it refused. It said why; this process says so
+			// on stderr and leaves, rather than waiting for material it has just
+			// been told is not coming.
+			s.diag("worker: %v", err)
+			return 3
+		case errors.Is(err, io.EOF), s.ctx.Err() != nil:
+			// Stdin ended while this worker was waiting for the material, which
+			// is how Babel tears a run down. The declaration is already on the
+			// wire, so this run has started as far as Babel is concerned and
+			// owes exactly one terminal event; it is written best-effort before
+			// exiting, the same way a cancellation mid-investigation is.
+			return s.fail(babelErrInternal, "the run was cancelled before the job material arrived", true)
+		default:
+			// A material stage that could not be read at all: undecodable, the
+			// wrong message, or a pairing from another run. The stream is live,
+			// so the failure is reported on it rather than only on stderr.
+			return s.fail(babelErrInternal, s.scrubString("the job material did not arrive: "+err.Error()), false)
+		}
+	}
+	// From here on the broker credential exists in this process, so everything
+	// written is scrubbed. The provider credential, if there was one, was added
+	// to this list above.
+	s.secrets = append(s.secrets, job.secrets()...)
 
 	result, invErr := inv.investigate(s.ctx, job, s.emitProgress, s.requestTool)
 
@@ -1082,6 +1138,23 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 	return 0
 }
 
+// babelUnderDeclaredContainment is the declaration the under-declare directive
+// asks for: everything a declaration must state, and none of the properties a
+// sandboxed run requires. The backend name is the real one the investigator
+// named, suffixed, so a receipt of such a run cannot be mistaken for a claim
+// about the sandbox real analysis runs behind.
+func babelUnderDeclaredContainment(backend string) babelContainment {
+	return babelContainment{
+		Backend:             backend + "-under-declared",
+		FilesystemIsolation: false,
+		NetworkDefaultDeny:  false,
+		ResourceCeilings:    false,
+		Disposable:          false,
+		Escape: "under-declared on request: Babel's conformance suite asked for a declaration " +
+			"short of a sandboxed run so that its refusal path could be graded. This run contains nothing.",
+	}
+}
+
 // fail writes the run's terminal error event. Babel accepts an error as the
 // first event, so this is usable before a configuration was ever resolved.
 func (s *babelSession) fail(code, message string, retryable bool) int {
@@ -1093,34 +1166,99 @@ func (s *babelSession) fail(code, message string, retryable bool) int {
 	return 1
 }
 
-// readJob reads the one job Babel writes after accept. Top-level fields this
-// build does not define are preserved in Extra, so a newer Babel can add one
-// without this worker losing it.
-func (s *babelSession) readJob() (babelJob, error) {
-	line, err := s.nextLine()
+// readPreamble reads stage one of the job document: the run's identity, the
+// profile to resolve, and the parameters that say what kind of run this is.
+// The Recipes, Grant, Sources and Broker fields of what it returns are zero —
+// Babel has not written them yet, and will not until this worker has declared
+// the sandbox it provides.
+func (s *babelSession) readPreamble() (babelJob, error) {
+	line, kind, err := s.readStage()
 	if err != nil {
 		return babelJob{}, err
+	}
+	if kind != babelMessageJobPreamble {
+		return babelJob{}, fmt.Errorf("expected a %s, got %q", babelMessageJobPreamble, kind)
+	}
+	return decodeJobStage(line, babelJob{})
+}
+
+// readMaterial reads stage two into the job the preamble began: the recipes,
+// the grant, the sources and the run-scoped broker token.
+//
+// A refusal here is not a malformed exchange. It is what Babel writes instead
+// of the material when it will not accept the containment this worker declared,
+// and it is returned as a *babelRefusal so the caller exits with the refused
+// status rather than reporting a protocol failure the operator cannot act on.
+//
+// The two stages must name the same run. Nothing in the protocol pairs them
+// otherwise, and a job assembled from two runs' halves would analyse one run's
+// material under the other's identity — a receipt nobody wrote.
+func (s *babelSession) readMaterial(preamble babelJob) (babelJob, error) {
+	line, kind, err := s.readStage()
+	if err != nil {
+		return babelJob{}, err
+	}
+	switch kind {
+	case babelMessageJob:
+	case babelMessageRefuse:
+		var refuse babelRefuse
+		if err := json.Unmarshal(line, &refuse); err != nil {
+			return babelJob{}, fmt.Errorf("undecodable refusal: %w", err)
+		}
+		return babelJob{}, &babelRefusal{reason: refuse.Reason, supported: refuse.Supported}
+	default:
+		return babelJob{}, fmt.Errorf("expected a %s or a %s, got %q",
+			babelMessageJob, babelMessageRefuse, kind)
+	}
+	job, err := decodeJobStage(line, preamble)
+	if err != nil {
+		return babelJob{}, err
+	}
+	if job.JobID != preamble.JobID || job.RunID != preamble.RunID {
+		return babelJob{}, fmt.Errorf("the job material names job %q of run %q, the preamble named job %q of run %q",
+			job.JobID, job.RunID, preamble.JobID, preamble.RunID)
+	}
+	return job, nil
+}
+
+// readStage reads one inbound line and reports its message type, which is what
+// both stage readers need before they can decide whether the line is theirs.
+func (s *babelSession) readStage() ([]byte, string, error) {
+	line, err := s.nextLine()
+	if err != nil {
+		return nil, "", err
 	}
 	kind, err := babelMessageType(line)
 	if err != nil {
-		return babelJob{}, err
+		return nil, "", err
 	}
-	if kind != babelMessageJob {
-		return babelJob{}, fmt.Errorf("expected a job, got %q", kind)
-	}
-	var job babelJob
+	return line, kind, nil
+}
+
+// decodeJobStage decodes one stage over the job assembled so far. Fields the
+// stage does not carry are left as they were, which is what makes the material
+// stage add to the preamble rather than replace it; top-level fields this build
+// does not define are preserved in Extra, so a newer Babel can add one to
+// either stage without this worker losing it.
+func decodeJobStage(line []byte, job babelJob) (babelJob, error) {
 	if err := json.Unmarshal(line, &job); err != nil {
-		return babelJob{}, fmt.Errorf("undecodable job: %w", err)
+		return babelJob{}, fmt.Errorf("undecodable job stage: %w", err)
 	}
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(line, &all); err != nil {
-		return babelJob{}, fmt.Errorf("undecodable job: %w", err)
+		return babelJob{}, fmt.Errorf("undecodable job stage: %w", err)
 	}
 	for name := range babelJobFields() {
 		delete(all, name)
 	}
-	if len(all) > 0 {
-		job.Extra = all
+	if len(all) == 0 {
+		return job, nil
+	}
+	if job.Extra == nil {
+		job.Extra = make(map[string]json.RawMessage, len(all))
+	}
+	for name, value := range all {
+		job.Extra[name] = value
 	}
 	return job, nil
 }

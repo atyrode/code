@@ -721,7 +721,10 @@ func TestLocalRunBinaryEmitsALocalConfiguration(t *testing.T) {
 	job := babelTestJob("")
 	delete(job, "params")
 	job["profile"] = map[string]any{"id": minted.ID, "revision": minted.Revision}
-	writeLine(job)
+	// Only the preamble: this test reads the declaration, which is the answer to
+	// it, and never needs the material Babel would write afterwards.
+	preamble, _ := babelStageJob(job)
+	writeLine(preamble)
 
 	// The first event is the one Babel builds its receipt around. Anything
 	// after it belongs to a launch this test does not need: an endpoint that
