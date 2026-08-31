@@ -199,13 +199,19 @@ type credentialResolver interface {
 
 type babelOptions struct {
 	profileID    string
-	sets         map[string]string
 	investigator string
+	// configure and resultFile are the configuration ceremony, which is not a
+	// protocol mode at all: --configure runs Code's dial UI on the terminal
+	// Babel inherited to this process, and the reference the operator confirms
+	// is written to resultFile (babelconfigure.go).
+	configure  bool
+	resultFile string
 }
 
 const babelHelp = `code babel — speak Babel's analysis-worker protocol on stdin/stdout
 
-  code babel [--profile ID] [--set KEY=VALUE]... [--investigator KIND]
+  code babel [--profile ID] [--investigator KIND]
+  code babel --configure --result-file PATH [--profile ID]
 
       Babel (github.com/atyrode/babel) supervises this process as its analysis
       worker. The protocol is newline-delimited JSON: this process writes hello
@@ -213,36 +219,49 @@ const babelHelp = `code babel — speak Babel's analysis-worker protocol on stdi
       happens next. Nothing is read from a terminal and nothing is printed for a
       human — stdout is the protocol and stderr is diagnostics.
 
-      Configure mode resolves Code's dials, saves the result as an immutable
-      profile revision, reports the reference, and exits without launching OMP.
-      Worker mode runs one analysis job through the investigator.
+      Configure mode reports the profile revision the ceremony below minted, and
+      exits without launching OMP. Worker mode runs one analysis job through the
+      investigator. Neither resolves a dial: the configuration a run is
+      attributed to is the one an operator confirmed, so a mode that could
+      compute one for itself would be a mode that mints configurations nobody
+      chose (atyrode/babel#86).
 
-        --profile ID       profile to save or report (default %s)
-        --set KEY=VALUE    override one dial, repeatable: --set thinking=high
+        --profile ID       profile to report or mint (default %s)
         --investigator K   worker-mode investigator. %s selects the
                            in-tree stub Babel's conformance suite grades; it
                            runs no analysis and must never do real work
 
-      The dials are resolved without a terminal: --set wins, then the persisted
-      selection, then Code's defaults. See the note at babelResolveDials. Babel
-      strips the environment down to HOME, PATH, TMPDIR and LANG, so the
-      selection is read from its default location under HOME rather than from
-      %s — run "code", turn the dials, and configure mode reports them.
-      An install that relocates the selection with that variable keeps the
-      default location mirrored, because a worker cannot be told about it.
+  The ceremony:
 
-  Profile store:   $XDG_STATE_HOME/code/babel/profiles, or %s.
-  Dial selection:  $XDG_STATE_HOME/code/selection.json, mirrored from %s.
+        --configure        run Code's dial UI on the terminal on stdin/stdout —
+                           the operator's own, inherited from Babel — and mint a
+                           profile revision out of what they confirm. Refuses
+                           without a terminal; there is no fallback, because a
+                           fallback is what this replaces. Exits 0 after writing
+                           the reference, and nonzero — which Babel reads as
+                           "unchanged" — after a cancelled or failed one
+        --result-file PATH where the confirmed reference is written, as
+                           {"profile":"ID","revision":N}, mode 0600
+
+      %s is not read in either mode, and no flag sets a dial.
+      An environment variable and an argument are both channels an unattended
+      process can reach, and a profile minted through either would carry an
+      operator's authority without their knowledge. The dials come from the
+      ceremony and nowhere else.
+
+  Profiles: $XDG_STATE_HOME/code/babel/profiles, or %s
+  Dials:    $XDG_STATE_HOME/code/selection.json — the ceremony opens on it and
+            writes it back, exactly as an interactive "code" does.
 `
 
 func babelHelpText() string {
 	return fmt.Sprintf(babelHelp, defaultBabelProfileID, babelInvestigatorConformance,
-		codeSelectionStateEnv, babelProfileStateEnv, codeSelectionStateEnv)
+		codeSelectionStateEnv, babelProfileStateEnv)
 }
 
 // runBabel is the `code babel` subcommand.
 func runBabel(args []string) int {
-	opts := babelOptions{profileID: defaultBabelProfileID, sets: map[string]string{}}
+	opts := babelOptions{profileID: defaultBabelProfileID}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--profile":
@@ -252,18 +271,25 @@ func runBabel(args []string) int {
 				return 2
 			}
 			opts.profileID = args[i]
-		case "--set":
+		case "--configure":
+			opts.configure = true
+		case "--result-file":
 			i++
 			if i >= len(args) {
-				fmt.Fprintln(os.Stderr, "code babel: --set needs KEY=VALUE")
+				fmt.Fprintln(os.Stderr, "code babel: --result-file needs a path")
 				return 2
 			}
-			key, value, ok := strings.Cut(args[i], "=")
-			if !ok || key == "" {
-				fmt.Fprintf(os.Stderr, "code babel: --set %q is not KEY=VALUE\n", args[i])
-				return 2
-			}
-			opts.sets[key] = value
+			opts.resultFile = args[i]
+		case "--set":
+			// Refused, not ignored, and refused in every mode. A dial set from
+			// argv mints a profile no operator confirmed, and Babel records that
+			// profile in a receipt a reviewer trusts — so the flag that used to
+			// do this now says where the dials come from instead of quietly
+			// doing nothing (atyrode/babel#86).
+			fmt.Fprintln(os.Stderr, "code babel: --set is refused: a dial is turned by an "+
+				"operator in the configuration ceremony (`babel analysis profile configure`, "+
+				"which runs `code babel --configure` on your terminal) and nowhere else")
+			return 2
 		case "--investigator":
 			i++
 			if i >= len(args) {
@@ -282,6 +308,17 @@ func runBabel(args []string) int {
 	if opts.investigator != "" && opts.investigator != babelInvestigatorConformance {
 		fmt.Fprintf(os.Stderr, "code babel: unknown investigator %q\n", opts.investigator)
 		return 2
+	}
+	if opts.resultFile != "" && !opts.configure {
+		fmt.Fprintln(os.Stderr, "code babel: --result-file is only answered by --configure")
+		return 2
+	}
+	// The ceremony owns stdin and stdout as a terminal, so it is dispatched
+	// before anything that would treat them as the protocol. It handles its own
+	// interruption: Bubble Tea reads the keys, and ctrl+c there is a cancelled
+	// ceremony rather than a signal this process has to translate.
+	if opts.configure {
+		return runBabelConfigure(opts)
 	}
 	// Babel cancels by closing this process's stdin and then killing the tree;
 	// honouring the signals too means a run interrupted from a shell tears down
@@ -882,11 +919,20 @@ func (s *babelSession) run(ctx context.Context, opts babelOptions) int {
 	}
 }
 
-// runConfigure resolves Code's dials, saves the profile, and reports the
-// reference. It emits exactly one message and needs no seq: there is no stream
-// to order. Nothing is launched.
+// runConfigure reports the profile the ceremony minted. It emits exactly one
+// message and needs no seq: there is no stream to order. Nothing is launched and
+// nothing is resolved.
+//
+// That it only reports is the change atyrode/babel#86 made. This mode runs on
+// pipes, with no operator to ask, so any configuration it produced by itself
+// would be one nobody chose — resolved from an environment variable, an
+// argument, or Code's compiled defaults. Babel's own `analysis profile
+// configure` therefore no longer speaks this mode at all; it runs the ceremony
+// (babelconfigure.go) on the operator's terminal. What is left here is the
+// question Babel's conformance suite asks — "what are you configured as?" — and
+// an unconfigured worker answers it by refusing rather than by inventing one.
 func (s *babelSession) runConfigure(opts babelOptions) int {
-	profile, err := babelResolveProfile(opts)
+	profile, err := babelStoredProfile(opts.profileID)
 	if err != nil {
 		s.diag("configure: %v", err)
 		return 1
@@ -1093,11 +1139,18 @@ var babelJobFields = func() func() map[string]struct{} {
 
 // ── dials ────────────────────────────────────────────────────────────────────
 
-// babelCatalogModel builds the dial model from Code's own state — the catalog,
-// the runtime targets and the persisted selection — with none of the TUI's
-// transient fields. Everything below reads dials through it, so a profile is
-// resolved and later replayed against the same construction the interactive run
-// uses.
+// babelCatalogModel builds the dial model from Code's own state — the catalog
+// and the runtime targets — with none of the TUI's transient fields, and with no
+// dial position of its own. A stored profile is replayed against it, so a
+// profile is rendered months later by the same construction that produced it.
+//
+// The selection it starts with is Code's compiled default, and it is there only
+// so applyCatalog has a map to clamp: the one caller replaces it wholesale with
+// the selection the stored profile carries. Reading the persisted position here
+// — let alone CODE_SELECTION_STATE — would mean a dial nobody confirmed could
+// decide what a run launches, which is what atyrode/babel#86 removed. A dial
+// this process may act on comes from a profile an operator minted, and there is
+// no other source left.
 //
 // providersResolved stays false: credential discovery is a live probe the TUI
 // runs against OMP, and a worker under Babel must not silently move a dial
@@ -1115,16 +1168,6 @@ func babelCatalogModel() model {
 	if len(runtimeTargets) > 0 {
 		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
 	}
-	// Not os.Getenv: Babel strips every variable but HOME, PATH, TMPDIR and
-	// LANG, so CODE_SELECTION_STATE is by construction absent here. The default
-	// location under HOME is the only way this process can see the operator's
-	// dials at all (selectionStatePath).
-	selection := loadSelectionState(selectionStatePath(), facets)
-	if len(runtimeTargets) > 0 {
-		if _, ok := selection["runtime"]; !ok {
-			selection["runtime"] = "hosted"
-		}
-	}
 	m := model{
 		generated:      generated,
 		advisors:       parseAdvisors(generated["__advisors__"]),
@@ -1132,78 +1175,29 @@ func babelCatalogModel() model {
 		glyphs:         glyphs,
 		runtimeTargets: runtimeTargets,
 		facets:         facets,
-		sel:            selection,
+		sel:            defaultSel(),
 	}
 	m.applyCatalog()
 	return m
 }
 
-// babelResolveDials resolves Code's dials without a terminal, in the order
-// --set, then the persisted selection, then Code's defaults, and clamps the
-// result to what the catalog can actually serve.
+// babelStoredProfile reads the configuration this installation was given, which
+// is the latest revision the ceremony minted for id.
 //
-// Configure mode is non-interactive on purpose. Code's dial UI is a Bubble Tea
-// TUI mounted through clikit.Run, which takes stdin and stdout unconditionally
-// and offers no way to redirect them; under Babel those two file descriptors are
-// the protocol. Driving the TUI on /dev/tty instead would mean rebuilding main's
-// app construction against a raw tea.NewProgram, diverging from the path every
-// interactive run takes — and it would still be the wrong shape, because Babel
-// spawns this process with pipes and no controlling terminal, so a mode that
-// needed one would hang in exactly the environment it exists for.
-//
-// So the dials are resolved from the same three sources the TUI seeds itself
-// from, through the same validity rules (repairSelectionSpecials, clampSel). An
-// operator who wants to turn a dial interactively runs `code`, which persists
-// the selection; configure mode then reports it. A run with no catalog and no
-// persisted state still resolves — to Code's defaults — rather than failing or
-// waiting for input.
-func babelResolveDials(sets map[string]string) (model, error) {
-	m := babelCatalogModel()
-
-	for key, value := range sets {
-		known := false
-		for _, f := range m.facets {
-			if f.key != key {
-				continue
-			}
-			for _, candidate := range f.values {
-				if candidate == value {
-					known = true
-					break
-				}
-			}
-			if !known {
-				return model{}, fmt.Errorf("dial %s has no value %q (have %s)",
-					key, value, strings.Join(f.values, ", "))
-			}
-			break
-		}
-		if !known {
-			return model{}, fmt.Errorf("no dial named %q", key)
-		}
-		m.sel[key] = value
-	}
-	// The same repairs a persisted selection goes through: a special-tier dial
-	// the chosen lane cannot host is forced off, and the catalog gets the last
-	// word on every dial it does not serve.
-	repairSelectionSpecials(m.sel)
-	m.clampSel()
-	return m, nil
-}
-
-// babelResolveProfile resolves the dials, describes them the way Babel records
-// them, and saves the result as a profile revision.
-func babelResolveProfile(opts babelOptions) (codeProfile, error) {
-	m, err := babelResolveDials(opts.sets)
+// The failure is the interesting half. A worker with an empty store is not
+// misconfigured, it is unconfigured, and the two need different words: there is
+// no dial resolution left that could paper over it, so the answer names the
+// ceremony that produces one instead. Babel's conformance suite grades this
+// mode, so a machine where nobody has run the ceremony yet fails
+// handshake/accept — honestly, because a worker that cannot say what it is
+// configured as has nothing a receipt could attribute a run to.
+func babelStoredProfile(id string) (codeProfile, error) {
+	profile, err := newProfileStore("").load(id, 0)
 	if err != nil {
-		return codeProfile{}, err
+		return codeProfile{}, fmt.Errorf("profile %s has no configuration to report (%w); mint one "+
+			"with `babel analysis profile configure`, which runs Code's dial UI on your terminal", id, err)
 	}
-	profile := babelDescribeDials(m, opts.profileID)
-	saved, err := newProfileStore("").save(profile)
-	if err != nil {
-		return codeProfile{}, err
-	}
-	return saved, nil
+	return profile, nil
 }
 
 // babelDescribeDials turns a resolved selection into the profile Babel records.

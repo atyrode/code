@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -258,9 +259,46 @@ func babelProductionJob(id string, revision int) map[string]any {
 func conformanceOpts() babelOptions {
 	return babelOptions{
 		profileID:    defaultBabelProfileID,
-		sets:         map[string]string{},
 		investigator: babelInvestigatorConformance,
 	}
+}
+
+// babelTurnedDials builds the model a ceremony hands to the store: the catalog's
+// dials with the named ones turned, repaired and clamped exactly as the
+// interactive UI does it.
+//
+// It stands in for the operator's hands, so it only accepts a value some dial
+// actually offers: cycling a facet moves between its own values, and the
+// persisted position is filtered through the same list on load, so a value no
+// dial carries is not a state the ceremony can reach. It replaces
+// babelResolveDials, which took its dials from argv and the environment — the
+// two sources atyrode/babel#86 removed, because a profile either of them minted
+// is one no operator confirmed.
+func babelTurnedDials(t *testing.T, dials map[string]string) model {
+	t.Helper()
+	m := babelCatalogModel()
+	for key, value := range dials {
+		if !slices.ContainsFunc(m.facets, func(f facet) bool {
+			return f.key == key && slices.Contains(f.values, value)
+		}) {
+			t.Fatalf("no dial %q offers %q, so no ceremony could confirm it", key, value)
+		}
+		m.sel[key] = value
+	}
+	repairSelectionSpecials(m.sel)
+	m.clampSel()
+	return m
+}
+
+// babelMintedProfile stores one revision the way a confirmed ceremony does, for
+// the tests whose subject is what happens to a profile that already exists.
+func babelMintedProfile(t *testing.T, id string, dials map[string]string) codeProfile {
+	t.Helper()
+	saved, err := babelMintProfile(babelTurnedDials(t, dials), id)
+	if err != nil {
+		t.Fatalf("minting profile %s: %v", id, err)
+	}
+	return saved
 }
 
 // ── handshake ────────────────────────────────────────────────────────────────
@@ -365,9 +403,15 @@ func TestBabelHandshakeRejections(t *testing.T) {
 // message, a reference it can re-resolve, non-secret metadata, and an exit —
 // configure mode promises not to launch anything, and a process that keeps
 // running has.
+//
+// The profile is minted first, by hand, because that is now the only way one
+// exists: this mode reports the configuration an operator confirmed in the
+// ceremony and has no way to produce one of its own (atyrode/babel#86).
 func TestBabelConfigureMode(t *testing.T) {
 	store := isolateBabelEnv(t)
-	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{"thinking": "high"}})
+	minted := babelMintedProfile(t, "code", map[string]string{"thinking": "high"})
+
+	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeConfigure))
 
@@ -386,6 +430,10 @@ func TestBabelConfigureMode(t *testing.T) {
 	if revision < 1 {
 		t.Errorf("profile revision = %v, want a positive revision Babel can record", profile["revision"])
 	}
+	if int(revision) != minted.Revision {
+		t.Errorf("configure mode reported revision %v, want the minted %d — it must report the "+
+			"configuration that exists, not one of its own", profile["revision"], minted.Revision)
+	}
 	privacy, _ := event["privacy"].(map[string]any)
 	switch privacy["disclosure"] {
 	case babelDisclosureLocal, babelDisclosureHosted:
@@ -397,7 +445,7 @@ func TestBabelConfigureMode(t *testing.T) {
 		t.Fatal("configuration reports no metadata; a receipt requires provider/model metadata")
 	}
 	if metadata["thinking"] != "high" {
-		t.Errorf("--set thinking=high did not reach the configuration: %v", metadata)
+		t.Errorf("the confirmed dials did not reach the configuration: %v", metadata)
 	}
 	if names := secretShapedMetadataKeys(metadata); len(names) > 0 {
 		t.Errorf("configuration metadata declares credential-shaped keys %v", names)
@@ -413,13 +461,19 @@ func TestBabelConfigureMode(t *testing.T) {
 		t.Errorf("configure mode exited %d, want 0", status)
 	}
 
-	// The reference it reported resolves in the store it claimed to write.
+	// The reference it reported resolves in the store it read.
 	saved, err := newProfileStore(store).load("code", int(revision))
 	if err != nil {
 		t.Fatalf("the reported reference does not resolve: %v", err)
 	}
 	if saved.Selection["thinking"] != "high" {
 		t.Errorf("saved selection = %v", saved.Selection)
+	}
+	// And reporting it minted nothing: the history Babel holds references into
+	// is exactly as long as the number of ceremonies that produced it.
+	if latest, err := newProfileStore(store).latestRevision("code"); err != nil || latest != minted.Revision {
+		t.Errorf("after reporting, latest revision = %d (%v), want the minted %d — configure mode "+
+			"wrote a revision of its own", latest, err, minted.Revision)
 	}
 }
 
@@ -433,14 +487,42 @@ func secretShapedMetadataKeys(metadata map[string]any) []string {
 	return secretShapedMetadata(flat)
 }
 
+// TestBabelConfigureModeWithoutACeremony is the refusal that replaces the old
+// fallback. A worker whose store is empty has no configuration to report, and
+// the three sources it used to fall back to — an argument, an environment
+// variable, Code's compiled defaults — each produced a profile that a receipt
+// would attribute to an operator who never saw it. So it says so, names the
+// ceremony, writes no configuration event and mints nothing.
+func TestBabelConfigureModeWithoutACeremony(t *testing.T) {
+	store := isolateBabelEnv(t)
+	h := newBabelHarness(t, babelOptions{profileID: "code"})
+	h.expectHello()
+	h.write(babelAcceptLine(babelModeConfigure))
+
+	if rest := h.drain(); len(rest) != 0 {
+		t.Errorf("an unconfigured worker answered with %v; it has no configuration to report", rest)
+	}
+	if status := h.wait(); status == 0 {
+		t.Error("an unconfigured worker exited 0 without reporting a configuration")
+	}
+	if diagnostics := h.stderr.String(); !strings.Contains(diagnostics, "babel analysis profile configure") {
+		t.Errorf("the refusal does not name the ceremony that produces a configuration: %q", diagnostics)
+	}
+	if latest, err := newProfileStore(store).latestRevision("code"); err != nil || latest != 0 {
+		t.Errorf("latest revision = %d (%v), want none: an unconfigured worker must not mint one",
+			latest, err)
+	}
+}
+
 // TestBabelConfigureModeIsIdempotent checks the revision rule end to end: two
-// configure runs with the same dials must report the same reference, because
-// Babel records it and a gratuitous bump invalidates nothing but its own
-// history.
+// configure runs against the same confirmed dials must report the same
+// reference, because Babel records it and a gratuitous bump invalidates nothing
+// but its own history.
 func TestBabelConfigureModeIsIdempotent(t *testing.T) {
 	isolateBabelEnv(t)
+	babelMintedProfile(t, "code", nil)
 	run := func() (string, float64) {
-		h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+		h := newBabelHarness(t, babelOptions{profileID: "code"})
 		h.expectHello()
 		h.write(babelAcceptLine(babelModeConfigure))
 		event := h.next()
@@ -461,48 +543,57 @@ func TestBabelConfigureModeIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestBabelResolveDialsRejectsUnknownDials keeps configure mode from silently
-// accepting an override it does not understand: an operator who mistypes a dial
-// must be told, not handed a profile that ignores them.
-func TestBabelResolveDialsRejectsUnknownDials(t *testing.T) {
+// TestBabelWorkerTakesNoDialsFromTheEnvironment is the deletion, asserted. The
+// worker-side dial model used to seed itself from the persisted selection, which
+// made CODE_SELECTION_STATE — a variable any process in the tree can set — a
+// channel into what a run launches. Nothing reads it now: the only dials this
+// process may act on are the ones a stored profile carries.
+//
+// Both locations are planted, because there were two: the override the variable
+// names and the default location the old fallback read when it was absent.
+func TestBabelWorkerTakesNoDialsFromTheEnvironment(t *testing.T) {
 	isolateBabelEnv(t)
-	cases := []struct {
-		name string
-		sets map[string]string
-		ok   bool
-	}{
-		{"unknown dial", map[string]string{"nonsense": "on"}, false},
-		{"unknown value", map[string]string{"thinking": "telepathic"}, false},
-		{"valid", map[string]string{"thinking": "xhigh", "advisor": "audit"}, true},
-		{"none", map[string]string{}, true},
+	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+
+	planted := `{"lane":"claude-led","model":"fast","thinking":"low","advisor":"off"}`
+	writeSelectionFixture(t, defaultSelectionStatePath(), planted)
+	override := filepath.Join(t.TempDir(), "selection.json")
+	writeSelectionFixture(t, override, planted)
+	t.Setenv(codeSelectionStateEnv, override)
+
+	m := babelCatalogModel()
+	defaults := defaultSel()
+	for _, key := range []string{"lane", "model", "thinking", "advisor"} {
+		if m.sel[key] != defaults[key] {
+			t.Errorf("dial %s = %q, want the compiled default %q: a planted selection reached "+
+				"the worker's dial model", key, m.sel[key], defaults[key])
+		}
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m, err := babelResolveDials(tc.sets)
-			if tc.ok != (err == nil) {
-				t.Fatalf("babelResolveDials(%v) error = %v", tc.sets, err)
-			}
-			if !tc.ok {
-				return
-			}
-			for key, value := range tc.sets {
-				if m.sel[key] != value {
-					t.Errorf("dial %s = %q, want %q", key, m.sel[key], value)
-				}
-			}
-		})
+	// Non-vacuity: the fixture really does hold dials that differ from the
+	// defaults, so reading it would have been visible above.
+	if !strings.Contains(planted, `"lane":"claude-led"`) || defaults["lane"] == "claude-led" {
+		t.Fatal("the planted selection matches the defaults, so this test could not fail")
+	}
+
+	// And a stored profile still replays exactly: the compiled default is a map
+	// for applyCatalog to clamp, never a dial anything acts on.
+	stored := babelMintedProfile(t, "code", map[string]string{"lane": "ds-led", "thinking": "high"})
+	overlay, err := profileOverlay(stored)
+	if err != nil {
+		t.Fatalf("profileOverlay: %v", err)
+	}
+	if !strings.Contains(overlay, "defaultThinkingLevel: high\n") {
+		t.Errorf("the replayed overlay lost the profile's own dials:\n%s", overlay)
 	}
 }
 
-// TestBabelResolveDialsNeedsNoTerminal is the honest half of the non-interactive
-// choice: a run with no catalog, no persisted selection and no terminal still
-// resolves, to Code's defaults, rather than hanging or failing.
-func TestBabelResolveDialsNeedsNoTerminal(t *testing.T) {
+// TestBabelWorkerRunsAProfileWithNoCatalogPosition is the honest half of having
+// no dial source: a worker that has never seen a selection file still resolves
+// the profile it was told to run, because everything it needs is in the stored
+// revision.
+func TestBabelWorkerRunsAProfileWithNoCatalogPosition(t *testing.T) {
 	isolateBabelEnv(t)
-	m, err := babelResolveDials(nil)
-	if err != nil {
-		t.Fatalf("babelResolveDials with nothing configured: %v", err)
-	}
+	m := babelTurnedDials(t, nil)
 	defaults := defaultSel()
 	for _, key := range []string{"lane", "model", "thinking"} {
 		if m.sel[key] != defaults[key] {
@@ -518,93 +609,45 @@ func TestBabelResolveDialsNeedsNoTerminal(t *testing.T) {
 	}
 }
 
-// TestBabelResolveDialsReadsTheDefaultSelectionLocation is the seam the whole
-// fix turns on. Babel builds its worker's environment from HOME, PATH, TMPDIR
-// and LANG, so CODE_SELECTION_STATE is genuinely absent here — unset, not empty
-// — and the operator's dials can only arrive through the default location under
-// HOME. The second half is the non-vacuity check: with the file gone the same
-// call must fall back to Code's defaults, so a pass proves the read happened.
-func TestBabelResolveDialsReadsTheDefaultSelectionLocation(t *testing.T) {
+// TestBabelDescribesTheDialsAsConfirmed pins what a minted profile records: the
+// dials as they stand in the model that was on screen, and the provider and
+// combination they resolve to. A receipt that reported anything else would
+// describe a run that never happened.
+func TestBabelDescribesTheDialsAsConfirmed(t *testing.T) {
 	isolateBabelEnv(t)
 	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
-	// isolateBabelEnv set it to "". Babel does not even do that.
-	if err := os.Unsetenv(codeSelectionStateEnv); err != nil {
-		t.Fatal(err)
-	}
 
-	path := defaultSelectionStatePath()
-	chosen := map[string]string{"lane": "claude-led", "model": "fast", "thinking": "low", "advisor": "off"}
-	writeSelectionFixture(t, path, `{"lane":"claude-led","model":"fast","thinking":"low","advisor":"off"}`)
-
-	m, err := babelResolveDials(nil)
-	if err != nil {
-		t.Fatalf("babelResolveDials: %v", err)
-	}
-	for key, want := range chosen {
-		if m.sel[key] != want {
-			t.Errorf("dial %s = %q, want the persisted %q", key, m.sel[key], want)
+	m := babelTurnedDials(t, map[string]string{"lane": "claude-led", "model": "fast", "thinking": "low"})
+	profile := babelDescribeDials(m, "code")
+	for _, key := range []string{"lane", "thinking"} {
+		if profile.Metadata[key] != m.sel[key] {
+			t.Errorf("metadata reports %s = %q, want the confirmed %q",
+				key, profile.Metadata[key], m.sel[key])
 		}
 	}
-	profile := babelDescribeDials(m, "code")
 	if got := profile.Metadata["provider"]; got == "openai-codex" || got == "unresolved" {
 		t.Errorf("metadata provider = %q, want the Anthropic-led lane's provider", got)
 	}
-	// The trailing segments come from dials the persisted file never named, so
-	// only the three it did name are asserted.
 	if got := profile.Metadata["combo"]; !strings.HasPrefix(got, "claude-led_fast_low_") {
 		t.Errorf("metadata combo = %q, want the cheapest Anthropic-led combo", got)
 	}
+	if profile.ComboID != comboID(m.sel, m.hasRelief) {
+		t.Errorf("combo id = %q, want the confirmed selection's own %q",
+			profile.ComboID, comboID(m.sel, m.hasRelief))
+	}
 
-	// Non-vacuity: nothing else in this environment could have supplied those
-	// dials, so removing the file has to lose them.
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	bare, err := babelResolveDials(nil)
-	if err != nil {
-		t.Fatalf("babelResolveDials without a selection: %v", err)
-	}
-	defaults := defaultSel()
-	for _, key := range []string{"lane", "model", "thinking", "advisor"} {
-		if bare.sel[key] != defaults[key] {
-			t.Errorf("without the file dial %s = %q, want the default %q — the read is not doing the work",
-				key, bare.sel[key], defaults[key])
-		}
-	}
-}
-
-// TestBabelResolveDialsClampsAnUnservableDefaultSelection keeps the failure mode
-// harmless: a value the generated catalog cannot serve must not fail the run,
-// and the profile must record what it resolved to rather than what was asked.
-func TestBabelResolveDialsClampsAnUnservableDefaultSelection(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
-	if err := os.Unsetenv(codeSelectionStateEnv); err != nil {
-		t.Fatal(err)
-	}
-	// "moon-led" is not a lane this (or any) catalog generates, and
-	// "telepathic" is not a thinking level any facet offers.
+	// A value no dial offers cannot reach a profile, because it cannot reach the
+	// UI: a persisted position is filtered through each facet's own values on
+	// load, and cycling a dial only ever lands on one of them. So the clamping
+	// question a profile can actually pose is about combinations, not values.
 	writeSelectionFixture(t, defaultSelectionStatePath(),
 		`{"lane":"moon-led","model":"fast","thinking":"telepathic","advisor":"off"}`)
-
-	m, err := babelResolveDials(nil)
-	if err != nil {
-		t.Fatalf("an unservable selection failed the run instead of clamping: %v", err)
+	loaded := loadSelectionState(defaultSelectionStatePath(), m.facets)
+	if loaded["lane"] == "moon-led" || loaded["thinking"] == "telepathic" {
+		t.Errorf("a value no dial offers survived the load: %v", loaded)
 	}
-	if m.sel["lane"] == "moon-led" || m.sel["thinking"] == "telepathic" {
-		t.Fatalf("unservable dials survived clamping: %v", m.sel)
-	}
-	// The dials that were servable still stand.
-	if m.sel["model"] != "fast" || m.sel["advisor"] != "off" {
-		t.Errorf("clamping moved dials the catalog serves: %v", m.sel)
-	}
-	profile := babelDescribeDials(m, "code")
-	if profile.Metadata["lane"] != m.sel["lane"] || profile.Metadata["thinking"] != m.sel["thinking"] {
-		t.Errorf("metadata reports the requested dials, not the resolved ones: %v vs %v",
-			profile.Metadata, m.sel)
-	}
-	if strings.Contains(profile.ComboID, "moon-led") {
-		t.Errorf("combo id names a lane the catalog cannot serve: %q", profile.ComboID)
+	if loaded["model"] != "fast" || loaded["advisor"] != "off" {
+		t.Errorf("the load dropped values the dials do offer: %v", loaded)
 	}
 }
 
@@ -632,13 +675,10 @@ func TestBabelProfileOverlay(t *testing.T) {
 	isolateBabelEnv(t)
 	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
 
-	m, err := babelResolveDials(map[string]string{"lane": "ds-led", "thinking": "high", "advisor": "audit"})
+	m := babelTurnedDials(t, map[string]string{"lane": "ds-led", "thinking": "high", "advisor": "audit"})
+	saved, err := babelMintProfile(m, "code")
 	if err != nil {
-		t.Fatalf("babelResolveDials: %v", err)
-	}
-	saved, err := newProfileStore("").save(babelDescribeDials(m, "code"))
-	if err != nil {
-		t.Fatalf("save: %v", err)
+		t.Fatalf("minting the confirmed dials: %v", err)
 	}
 	if saved.Metadata["provider"] != "deepseek" {
 		t.Errorf("metadata provider = %q, want the lane's leading provider", saved.Metadata["provider"])
@@ -1703,7 +1743,7 @@ func TestBabelWorkerWithoutInvestigator(t *testing.T) {
 	if inv := newInvestigator(); inv != nil {
 		t.Skip("an investigator is wired in; this test only describes the unwired state")
 	}
-	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
 	h.write(babelTestJob(babelConformanceWellBehaved))
@@ -1734,7 +1774,7 @@ func TestBabelWorkerWithoutACredentialEndsInATerminalError(t *testing.T) {
 	if _, ok := newInvestigator().(credentialResolver); !ok {
 		t.Fatal("the wired investigator resolves no credential, so no real exploration can authenticate")
 	}
-	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
 	h.write(babelProductionJob("code", 1))
@@ -1770,14 +1810,8 @@ func TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp(t *testing.T) {
 	isolateBabelEnv(t)
 	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
 
-	m, err := babelResolveDials(map[string]string{"lane": "ds-led", "thinking": "high", "advisor": "audit"})
-	if err != nil {
-		t.Fatalf("babelResolveDials: %v", err)
-	}
-	saved, err := newProfileStore("").save(babelDescribeDials(m, "code"))
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	saved := babelMintedProfile(t, "code",
+		map[string]string{"lane": "ds-led", "thinking": "high", "advisor": "audit"})
 
 	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"credentials":[]}`))
@@ -1793,7 +1827,7 @@ func TestBabelWorkerScrubsTheProviderCredentialItHandedToOmp(t *testing.T) {
 	fake, _ := ompFakeStaticBinary(t, "credleak")
 	t.Setenv("CODE_OMP", fake)
 
-	h := newBabelHarness(t, babelOptions{profileID: "code", sets: map[string]string{}})
+	h := newBabelHarness(t, babelOptions{profileID: "code"})
 	h.expectHello()
 	h.write(babelAcceptLine(babelModeWorker))
 	h.write(babelProductionJob(saved.ID, saved.Revision))
@@ -2413,7 +2447,15 @@ func TestBabelBinaryEndToEnd(t *testing.T) {
 		t.Errorf("the credential appeared on stderr: %s", stderr.String())
 	}
 
-	// Configure mode, in the same built binary: one message, then exit 0.
+	// Configure mode, in the same built binary: one message, then exit 0. The
+	// profile has to exist first — this mode reports a configuration and can no
+	// longer produce one — so it is minted here, into the same store the child
+	// reads, the way a confirmed ceremony would.
+	t.Setenv("CODE_GENERATED", filepath.Join(t.TempDir(), "absent.plain"))
+	minted, err := newProfileStore(store).save(babelDescribeDials(babelTurnedDials(t, nil), "e2e"))
+	if err != nil {
+		t.Fatalf("minting the profile configure mode reports: %v", err)
+	}
 	configure := exec.Command(binary, "babel", "--profile", "e2e")
 	configure.Env = cmd.Env
 	configureIn, err := configure.StdinPipe()
@@ -2460,7 +2502,52 @@ func TestBabelBinaryEndToEnd(t *testing.T) {
 	if profile, _ := cfg["profile"].(map[string]any); profile["id"] != "e2e" {
 		t.Errorf("configure mode reported profile %v, want e2e", profile["id"])
 	}
+	if profile, _ := cfg["profile"].(map[string]any); profile["revision"] != float64(minted.Revision) {
+		t.Errorf("configure mode reported revision %v, want the minted %d",
+			profile["revision"], minted.Revision)
+	}
 	if _, err := newProfileStore(store).load("e2e", 0); err != nil {
 		t.Errorf("configure mode reported a reference that does not resolve: %v", err)
 	}
+
+	// The two ways an unattended caller could still have minted a profile, in
+	// the real binary. Both have to fail before anything is written, because
+	// Babel would record whatever came out of them.
+	t.Run("a dial set from argv is refused", func(t *testing.T) {
+		rejected := exec.Command(binary, "babel", "--set", "thinking=high")
+		rejected.Env = cmd.Env
+		var out bytes.Buffer
+		rejected.Stderr = &out
+		rejected.Stdout = &out
+		err := rejected.Run()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("--set exited %v, want a refusal: %s", err, out.String())
+		}
+		if !strings.Contains(out.String(), "babel analysis profile configure") {
+			t.Errorf("the refusal does not name the ceremony dials come from: %q", out.String())
+		}
+	})
+
+	t.Run("the ceremony refuses without a terminal", func(t *testing.T) {
+		result := filepath.Join(t.TempDir(), "result.json")
+		// Pipes on both descriptors — which is exactly what Babel hands a
+		// worker in every mode but this one, and what an unattended caller has.
+		refused := exec.Command(binary, "babel", "--configure", "--result-file", result)
+		refused.Env = cmd.Env
+		var out bytes.Buffer
+		refused.Stderr = &out
+		refused.Stdout = &out
+		err := refused.Run()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("--configure with no terminal exited %v, want a refusal: %s", err, out.String())
+		}
+		if !strings.Contains(out.String(), "terminal") {
+			t.Errorf("the refusal does not say a terminal is missing: %q", out.String())
+		}
+		if _, err := os.Stat(result); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a refused ceremony wrote a result file: %v", err)
+		}
+	})
 }
