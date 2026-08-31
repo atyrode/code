@@ -23,7 +23,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitRepoMsg:
 		if msg.ok && !msg.linked && msg.root != "" {
 			m.gitRoot, m.gitPrefix = msg.root, msg.prefix
-			keys.Worktree.SetEnabled(true)
+			// A ceremony launches nothing, so an isolated worktree has nothing
+			// to hold: the key stays hidden even where a repository was found.
+			if !m.configuring {
+				keys.Worktree.SetEnabled(true)
+			}
 		}
 		return m, nil
 	case authLoginFinishedMsg:
@@ -181,7 +185,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right", "l":
 			m.cycleFacet(1)
 		case "w":
-			if m.gitRoot == "" {
+			if m.gitRoot == "" || m.configuring {
 				return m, nil
 			}
 			m.worktreeMode = !m.worktreeMode
@@ -191,7 +195,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// own routing/policy — no generated --config is passed to it. Inert when
 			// no sandbox binary exists (the help hides the key too), so a stranger
 			// can't kill the TUI with a stray keypress.
-			if !m.hasSandbox {
+			// A ceremony is answered with a profile, and this launcher owns its
+			// own routing: there is nothing here Code could describe to Babel.
+			if !m.hasSandbox || m.configuring {
 				return m, nil
 			}
 			m.launchUntrusted = true
@@ -203,6 +209,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m":
 			// Managed-defaults omp: omp-managed with no generated overlay. The
 			// explicit keybind keeps every Enter launch a generated profile.
+			// Inert during a ceremony: omp's own defaults are not a Code
+			// profile, so confirming them would mint a reference to dials Code
+			// never resolved.
+			if m.configuring {
+				return m, nil
+			}
 			m.launchManaged = true
 			return m, tea.Quit
 		case "enter":
@@ -215,6 +227,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Enter always launches the generated profile for the current facets —
 			// the untouched default combo is a generated profile like any other.
+			// During a ceremony the same key confirms that profile instead, and
+			// the model it leaves behind is what gets minted.
 			// Never for a combo the catalog doesn't carry, though: genConfigYAML
 			// would walk a nil block and emit an overlay whose modelRoles map is
 			// empty, handing omp a session with no routing at all. The preview

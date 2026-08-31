@@ -47,99 +47,11 @@ func main() {
 			os.Exit(runSession(append([]string{"list"}, os.Args[2:]...)))
 		}
 	}
-	glyphs := defaultGlyphs()
-	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
-		if p := strings.SplitN(kv, "=", 2); len(p) == 2 && p[1] != "" {
-			glyphs[p[0]] = p[1]
-		}
-	}
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	// The catalog: an explicit CODE_GENERATED wins (the Nix wrapper pre-bakes
-	// one); otherwise fall back to where `code generate` writes.
-	catalogPath := os.Getenv("CODE_GENERATED")
-	if catalogPath == "" {
-		catalogPath = defaultCatalogPath()
-	}
-	generated := loadBlocks(catalogPath)
-	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
-	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
-	accountSelections := loadAccountSelectionState(accountState)
-	runtimeTargets := loadRuntimeTargets()
-	facets := facetDefs(glyphs)
-	if len(runtimeTargets) > 0 {
-		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
-	}
-	// The interactive run is the only thing that writes a selection, and worker
-	// mode under Babel is the caller that most needs to read one, so an unset
-	// variable now means the default location rather than statelessness — and an
-	// override, which the worker can never be told about, is mirrored there too.
-	selectionState, selectionHandoff := selectionStateTargets()
-	selection := loadSelectionState(selectionState, facets)
-	if len(runtimeTargets) > 0 {
-		if _, ok := selection["runtime"]; !ok {
-			selection["runtime"] = "hosted"
-		}
-	}
-	// The u key only exists when a sandbox binary does — an explicit
-	// CODE_OMP_UNTRUSTED or an ompu on PATH; otherwise hide it from the help
-	// and ignore the keypress rather than dying on exec.
-	hasSandbox := os.Getenv("CODE_OMP_UNTRUSTED") != ""
-	if !hasSandbox {
-		_, lookErr := exec.LookPath("ompu")
-		hasSandbox = lookErr == nil
-	}
-	if !hasSandbox {
-		keys.Untrusted.SetEnabled(false)
-	}
-	keys.Worktree.SetEnabled(false)
-	usageCache := os.Getenv("CODE_USAGE_CACHE")
-	cachedAvailability := loadUsageCache(usageCache)
-	m := model{
-		generated:         generated,
-		advisors:          parseAdvisors(generated["__advisors__"]),
-		facts:             parseFacts(generated["__models__"]),
-		avail:             cachedAvailability,
-		broker:            broker,
-		usageCache:        usageCache,
-		accountState:      accountState,
-		accountSelections: accountSelections,
-		fetching:          broker.URL != "" && broker.Token != "",
-		hadUsage:          cachedAvailability.ok,
-		spin:              sp,
-		help:              clikit.NewHelp(),
-		glyphs:            glyphs,
-		runtimeTargets:    runtimeTargets,
-		facets:            facets,
-		sel:               selection,
-		selectionState:    selectionState,
-		selectionHandoff:  selectionHandoff,
-		hasSandbox:        hasSandbox,
-	}
-	// The catalog decides which dials exist at all; a persisted or default
-	// selection must not open on a combo it never generated.
-	m.applyCatalog()
-	if cachedAvailability.accountsOK {
-		m.applyProviderAvailability(connectedPools(cachedAvailability.accounts))
-	}
-	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
-	// TUI in the guided onboarding that builds one (an explicit but broken
-	// CODE_GENERATED is an operator config error and is left visible as the
-	// usual empty routing panel instead).
-	app := tea.Model(m)
-	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 {
-		app = newOnboarding(m)
-	}
-	// Cell-motion mouse reporting carries wheel events. Filter rejected
-	// momentum and unused motion before Bubble Tea's redraw-after-Update loop.
-	inputFilter := &wheelInputFilter{}
-	final, err := clikit.Run(app, clikit.WithAltScreen(), clikit.WithMouseCellMotion(),
-		clikit.WithMessageFilter(inputFilter.Filter))
+	fm, err := runInteractive(newInteractiveApp(interactiveLaunch))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
 		os.Exit(1)
 	}
-	fm, _ := final.(model)
 	var wt *sessionWorktree
 	launchChosen := fm.launchUntrusted || fm.launchRuntime != "" || fm.launchManaged || fm.genConfig != ""
 	if fm.worktreeMode && launchChosen {
@@ -188,6 +100,150 @@ func main() {
 	if status != 0 {
 		os.Exit(status)
 	}
+}
+
+// interactiveMode says what confirming a selection means. The dial UI is the
+// same either way — that it is the same UI is the whole point of the
+// configuration ceremony (babelconfigure.go) — but a launch hands the selection
+// to omp, while a ceremony mints an immutable profile revision out of it and
+// hands Babel the reference. The keys that only make sense for a launch are
+// inert in the latter, and the environment is not allowed to decide which dials
+// the operator is shown.
+type interactiveMode int
+
+const (
+	interactiveLaunch interactiveMode = iota
+	interactiveConfigure
+)
+
+// newInteractiveApp builds the dial TUI from Code's own state: the catalog, the
+// usage broker, the runtime targets and the persisted dial position. It returns
+// the app to mount, which is the generator itself — or, on a machine with no
+// catalog at all, the onboarding shell that builds one and then hands off to it.
+func newInteractiveApp(mode interactiveMode) tea.Model {
+	glyphs := defaultGlyphs()
+	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
+		if p := strings.SplitN(kv, "=", 2); len(p) == 2 && p[1] != "" {
+			glyphs[p[0]] = p[1]
+		}
+	}
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	// The catalog: an explicit CODE_GENERATED wins (the Nix wrapper pre-bakes
+	// one); otherwise fall back to where `code generate` writes.
+	catalogPath := os.Getenv("CODE_GENERATED")
+	if catalogPath == "" {
+		catalogPath = defaultCatalogPath()
+	}
+	generated := loadBlocks(catalogPath)
+	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
+	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
+	accountSelections := loadAccountSelectionState(accountState)
+	runtimeTargets := loadRuntimeTargets()
+	facets := facetDefs(glyphs)
+	if len(runtimeTargets) > 0 {
+		facets = append([]facet{runtimeFacet(glyphs["runtime"], runtimeTargets)}, facets...)
+	}
+	// The interactive run is the only thing that writes a selection, and worker
+	// mode under Babel is the caller that most needs to read one, so an unset
+	// variable now means the default location rather than statelessness — and an
+	// override, which the worker can never be told about, is mirrored there too.
+	selectionState, selectionHandoff := selectionStateTargets()
+	if mode == interactiveConfigure {
+		// The ceremony reads and writes the default location and nothing else.
+		// CODE_SELECTION_STATE is a variable anything in the process tree can
+		// set, so honouring it here would let a dial position nobody in the
+		// room chose be the one the operator is asked to confirm — and the
+		// profile minted from it would carry that confirmation into every
+		// receipt (atyrode/babel#86). The default location is where an
+		// interactive `code` writes, so the ceremony still opens on the dials
+		// this operator last turned and leaves them where the next `code`
+		// finds them.
+		selectionState, selectionHandoff = defaultSelectionStatePath(), ""
+	}
+	selection := loadSelectionState(selectionState, facets)
+	if len(runtimeTargets) > 0 {
+		if _, ok := selection["runtime"]; !ok {
+			selection["runtime"] = "hosted"
+		}
+	}
+	// The u key only exists when a sandbox binary does — an explicit
+	// CODE_OMP_UNTRUSTED or an ompu on PATH; otherwise hide it from the help
+	// and ignore the keypress rather than dying on exec.
+	hasSandbox := os.Getenv("CODE_OMP_UNTRUSTED") != ""
+	if !hasSandbox {
+		_, lookErr := exec.LookPath("ompu")
+		hasSandbox = lookErr == nil
+	}
+	if !hasSandbox {
+		keys.Untrusted.SetEnabled(false)
+	}
+	keys.Worktree.SetEnabled(false)
+	if mode == interactiveConfigure {
+		// A ceremony ends in a profile or in nothing. The launch keys mint no
+		// profile, so they are inert here rather than quietly starting a
+		// session Babel is holding the terminal open for; Enter is relabelled
+		// because it is now the only key that ends this run with a
+		// configuration.
+		keys.Managed.SetEnabled(false)
+		keys.Untrusted.SetEnabled(false)
+		keys.Launch.SetHelp("⏎", "confirm")
+	}
+	usageCache := os.Getenv("CODE_USAGE_CACHE")
+	cachedAvailability := loadUsageCache(usageCache)
+	m := model{
+		generated:         generated,
+		advisors:          parseAdvisors(generated["__advisors__"]),
+		facts:             parseFacts(generated["__models__"]),
+		avail:             cachedAvailability,
+		broker:            broker,
+		usageCache:        usageCache,
+		accountState:      accountState,
+		accountSelections: accountSelections,
+		fetching:          broker.URL != "" && broker.Token != "",
+		hadUsage:          cachedAvailability.ok,
+		spin:              sp,
+		help:              clikit.NewHelp(),
+		glyphs:            glyphs,
+		runtimeTargets:    runtimeTargets,
+		facets:            facets,
+		sel:               selection,
+		selectionState:    selectionState,
+		selectionHandoff:  selectionHandoff,
+		hasSandbox:        hasSandbox,
+		configuring:       mode == interactiveConfigure,
+	}
+	// The catalog decides which dials exist at all; a persisted or default
+	// selection must not open on a combo it never generated.
+	m.applyCatalog()
+	if cachedAvailability.accountsOK {
+		m.applyProviderAvailability(connectedPools(cachedAvailability.accounts))
+	}
+	// First run: no catalog anywhere and no explicit CODE_GENERATED — wrap the
+	// TUI in the guided onboarding that builds one (an explicit but broken
+	// CODE_GENERATED is an operator config error and is left visible as the
+	// usual empty routing panel instead).
+	if len(generated) == 0 && os.Getenv("CODE_GENERATED") == "" && len(runtimeTargets) == 0 {
+		return newOnboarding(m)
+	}
+	return m
+}
+
+// runInteractive mounts the app and returns the generator's end state. The final
+// model is what every caller reads its answer from — which session to launch, or
+// which dials were confirmed — so the type assertion lives here rather than at
+// each call site.
+func runInteractive(app tea.Model) (model, error) {
+	// Cell-motion mouse reporting carries wheel events. Filter rejected
+	// momentum and unused motion before Bubble Tea's redraw-after-Update loop.
+	inputFilter := &wheelInputFilter{}
+	final, err := clikit.Run(app, clikit.WithAltScreen(), clikit.WithMouseCellMotion(),
+		clikit.WithMessageFilter(inputFilter.Filter))
+	if err != nil {
+		return model{}, err
+	}
+	fm, _ := final.(model)
+	return fm, nil
 }
 
 // forwardArgv strips every forwarded profile flag. Trusted launches use OMP's

@@ -10,16 +10,17 @@ import (
 // codeSelectionStateEnv relocates the persisted dial selection.
 //
 // An empty value used to mean "no persistence at all", which quietly made the
-// selection unreachable from the one caller that needs it most. Babel builds its
-// worker's environment out of HOME, PATH, TMPDIR and LANG and nothing else — the
-// stripping is what keeps a provider credential out of a process listing and is
-// not negotiable — so an environment variable is precisely the channel
-// `babel analysis profile configure` can never be reached through. The dials that
-// command exists to report therefore have to have a location on disk that both
-// sides can derive independently.
+// selection unreachable from the one caller that needs it most: the
+// configuration ceremony, which opens Code's dial UI on the operator's terminal
+// and mints the profile Babel records (babelconfigure.go). The ceremony reads the
+// default location and only the default location — a variable anything in the
+// process tree can set must not decide which dials an operator is asked to
+// confirm (atyrode/babel#86) — so the dials it shows have to have a place on
+// disk that both sides derive independently.
 //
-// The override still wins when it is set, so a standalone or test run can point
-// somewhere explicit; codeSelectionDisabled is the opt-out empty used to be.
+// The override still wins for an interactive launch, so a standalone or test run
+// can point somewhere explicit; codeSelectionDisabled is the opt-out empty used
+// to be.
 const codeSelectionStateEnv = "CODE_SELECTION_STATE"
 
 // codeSelectionDisabled is the explicit opt-out, mirroring how
@@ -29,8 +30,8 @@ const codeSelectionDisabled = "off"
 
 // defaultSelectionStatePath derives the choice file exactly the way the profile
 // store derives its directory (defaultBabelProfileDir): XDG_STATE_HOME, else
-// $HOME/.local/state, then under code/. HOME is passed to the worker, so a path
-// rooted there is the one seam both the TUI and worker mode can see.
+// $HOME/.local/state, then under code/. HOME is all a stripped environment
+// carries, so a path rooted there is the one seam every mode can derive.
 func defaultSelectionStatePath() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
@@ -53,16 +54,22 @@ func selectionStatePath() string {
 	}
 }
 
-// selectionStateTargets resolves both places an interactive run has to keep the
-// dials: the path this process reads and owns, and — when an override moved that
-// somewhere a stripped environment cannot name — the default location as well.
+// selectionStateTargets resolves both places an interactive launch has to keep
+// the dials: the path this process reads and owns, and — when an override moved
+// that somewhere the ceremony will not look — the default location as well.
 //
 // The mirror is not a third store, it is the handoff. The operator's wrapper sets
-// CODE_SELECTION_STATE to a path of its own, and Babel's worker is handed HOME,
-// PATH, TMPDIR and LANG only, so a relocated selection is structurally invisible
-// to configure mode. Writing the default location too is what makes "turn the
-// dials in Code, then configure" true for a relocated install as well as a plain
-// one. With no override in force the two coincide and this is a single write.
+// CODE_SELECTION_STATE to a path of its own, and the ceremony deliberately
+// ignores that variable, so a relocated selection would otherwise be invisible to
+// it. Writing the default location too is what makes "turn the dials in Code,
+// then configure" true for a relocated install as well as a plain one. With no
+// override in force the two coincide and this is a single write.
+//
+// A ceremony does not call this: it reads and writes the default location alone
+// (newInteractiveApp), so a dial turned while confirming does not travel back
+// into a wrapper's relocated file. The profile is what that keypress produced;
+// the dial position is a convenience, and the alternative is honouring the
+// variable this whole arrangement exists to ignore.
 func selectionStateTargets() (state, handoff string) {
 	state = selectionStatePath()
 	if def := defaultSelectionStatePath(); state != "" && state != def {
@@ -222,8 +229,9 @@ func saveSelectionStateWithRename(path string, sel map[string]string, facets []f
 
 // persistSelection writes the turned dials to every location that has to see
 // them. selectionHandoff is empty unless an override relocated the selection, in
-// which case it is the default location Babel's worker reads; saveSelectionState
-// treats an empty path as a no-op, so the common case is one write.
+// which case it is the default location the configuration ceremony reads;
+// saveSelectionState treats an empty path as a no-op, so the common case is one
+// write.
 func (m *model) persistSelection() {
 	_ = saveSelectionState(m.selectionState, m.sel, m.facets)
 	_ = saveSelectionState(m.selectionHandoff, m.sel, m.facets)

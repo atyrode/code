@@ -76,9 +76,14 @@ type model struct {
 	usageStale  bool      // the last central refresh failed; prior data is retained
 	barAnim     int       // first-load fill frame (1..barAnimSteps-1 = partial); 0 = inactive, bars at full value
 
-	launchManaged      bool              // m: run CODE_OMP with no overlay (the managed defaults)
-	launchUntrusted    bool              // u: run the CODE_OMP_UNTRUSTED sandbox
-	launchRuntime      string            // delegated local runtime target selected via CODE_RUNTIME_BROKER
+	launchManaged   bool   // m: run CODE_OMP with no overlay (the managed defaults)
+	launchUntrusted bool   // u: run the CODE_OMP_UNTRUSTED sandbox
+	launchRuntime   string // delegated local runtime target selected via CODE_RUNTIME_BROKER
+	// configuring is the configuration ceremony: this run mints a Babel profile
+	// out of the dials the operator confirms and launches nothing at all
+	// (babelconfigure.go). Every key that would start a session instead of
+	// answering the ceremony is inert while it is set.
+	configuring        bool
 	hasSandbox         bool              // a sandbox binary exists; gates the u key
 	gitRoot, gitPrefix string            // repository location for isolated worktree launches
 	worktreeMode       bool              // w: launch the selected session in a fresh worktree
