@@ -10,6 +10,10 @@
 //	CODE_AUTH_LOGIN_VIA: optional SSH user@host for central-broker OAuth login
 //	CODE_OMP           : the omp-managed executable for trusted sessions
 //	CODE_OMP_UNTRUSTED : the ompu sandbox executable — launched by the u key
+//	CODE_SYMBOLS       : facet-glyph preset (nerd|unicode|ascii); unset means nerd,
+//	                      whose glyphs need a patched font (see resolveGlyphs)
+//	CODE_FACET_GLYPHS  : per-key glyph overrides ("model=*,lane=>"), applied over
+//	                      whichever preset resolved
 //	CODE_OLLAMA_ENDPOINT: where the local model daemon listens — the ctrl+o
 //	                      classifier's endpoint, and the one the configuration
 //	                      ceremony discovers its local lane at (locallane.go)
@@ -93,7 +97,7 @@ func main() {
 				fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
 		})
 	case fm.genConfig != "":
-		status = withSession(comboID(fm.sel, fm.hasRelief), "CODE_OMP", []string{"omp"}, wt, func() int {
+		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func() int {
 			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
 		})
 	}
@@ -103,6 +107,45 @@ func main() {
 	if status != 0 {
 		os.Exit(status)
 	}
+}
+
+// resolveGlyphs picks the facet-glyph table this terminal can actually render,
+// then lets the operator overrule it per key. Precedence, most specific first:
+//
+//  1. CODE_FACET_GLYPHS ("model=*,lane=>") — a per-key override, applied last
+//     so it wins over whichever table was chosen;
+//  2. CODE_SYMBOLS (nerd|unicode|ascii) — this binary's own preset switch;
+//  3. nerd.
+//
+// The glyphs are Nerd Font Private Use Area codepoints, so a terminal without a
+// patched font renders them as tofu. That is what the unicode and ascii tables
+// are for, and why the switch exists at all — but the floor stays nerd, because
+// every existing install renders nerd today and a rebuild must not restyle it.
+//
+// omp's own `symbolPreset` setting (unicode|nerd|ascii) is deliberately NOT
+// consulted, though it is the obvious candidate. It reports `unicode` on a
+// machine where nobody ever set it, so reading it cannot distinguish a
+// deliberate choice from omp's default — and taking it at face value silently
+// restyled a machine whose operator had asked for nothing. Whoever installs the
+// font owns the preset: a Nix/goreleaser package of a TUI cannot install a font
+// into the terminal emulator that renders it, so the font is the dotfiles'
+// business, and the dotfiles set CODE_SYMBOLS alongside it.
+func resolveGlyphs() map[string]string {
+	var glyphs map[string]string
+	switch os.Getenv("CODE_SYMBOLS") {
+	case "unicode":
+		glyphs = unicodeGlyphs()
+	case "ascii":
+		glyphs = asciiGlyphs()
+	default:
+		glyphs = defaultGlyphs()
+	}
+	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
+		if p := strings.SplitN(kv, "=", 2); len(p) == 2 && p[1] != "" {
+			glyphs[p[0]] = p[1]
+		}
+	}
+	return glyphs
 }
 
 // interactiveMode says what confirming a selection means. The dial UI is the
@@ -124,12 +167,7 @@ const (
 // the app to mount, which is the generator itself — or, on a machine with no
 // catalog at all, the onboarding shell that builds one and then hands off to it.
 func newInteractiveApp(mode interactiveMode) tea.Model {
-	glyphs := defaultGlyphs()
-	for _, kv := range strings.Split(os.Getenv("CODE_FACET_GLYPHS"), ",") {
-		if p := strings.SplitN(kv, "=", 2); len(p) == 2 && p[1] != "" {
-			glyphs[p[0]] = p[1]
-		}
-	}
+	glyphs := resolveGlyphs()
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	// The catalog: an explicit CODE_GENERATED wins (the Nix wrapper pre-bakes

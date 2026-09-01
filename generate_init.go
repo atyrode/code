@@ -208,37 +208,69 @@ func cheaper(a, b ompModel) bool {
 	return a.ID < b.ID
 }
 
-// pickLadder chooses tiers 1..3 for one pool from an already-superseded
-// candidate set: cheapest is tier 1, the most capable is tier 3, and tier 2 is
-// the most capable model priced strictly between them.
+// pickLadder chooses the capability ladder for one pool from an already-
+// superseded candidate set: the cheapest candidate is tier 1, the most capable
+// is the top tier, and the tiers between them are the most capable candidates
+// priced strictly in between, ordered by price ascending.
+//
+// The depth is pool-generic, not per-provider: a pool with three usable
+// candidates gets three rungs and a pool with four or more gets four, so a
+// provider shipping a fourth model needs no code change here. Four is the hard
+// cap — the catalog's ladder array runs tiers 0..4 and the model dial has four
+// notches, so a fifth rung would be unreachable by any combo.
 func pickLadder(cands []ompModel) []ompModel {
 	if len(cands) < 3 {
 		return cands
 	}
 	sort.Slice(cands, func(i, j int) bool { return cheaper(cands[i], cands[j]) })
+	depth := len(cands)
+	if depth > 4 {
+		depth = 4
+	}
 	t1, rest := cands[0], cands[1:]
-	t3 := rest[0]
+	top := rest[0]
 	for _, m := range rest[1:] {
-		if moreCapable(m, t3) {
-			t3 = m
+		if moreCapable(m, top) {
+			top = m
 		}
 	}
-	t2, found := ompModel{}, false
+	// Everything priced strictly between the two ends, most capable first.
+	// rest is already in price order and the sort is stable, so a tie on
+	// capability keeps the cheaper model — the same choice the single-slot
+	// scan made before this generalised to more than one middle rung.
+	var mid []ompModel
 	for _, m := range rest {
-		if m.ID == t3.ID || m.Cost.Input <= t1.Cost.Input || m.Cost.Input >= t3.Cost.Input {
+		if m.ID == top.ID || m.Cost.Input <= t1.Cost.Input || m.Cost.Input >= top.Cost.Input {
 			continue
 		}
-		if !found || moreCapable(m, t2) {
-			t2, found = m, true
+		mid = append(mid, m)
+	}
+	sort.SliceStable(mid, func(i, j int) bool { return moreCapable(mid[i], mid[j]) })
+	need := depth - 2
+	if len(mid) > need {
+		mid = mid[:need]
+	}
+	if len(mid) < need {
+		// No room between the rungs — the remaining candidates all sit at the
+		// cheap end's price or at/above the top's. Fall back to the price-
+		// ordered remainder starting at the median, which for a three-candidate
+		// pool is exactly the one model that is neither end.
+		used := map[string]bool{t1.ID: true, top.ID: true}
+		for _, m := range mid {
+			used[m.ID] = true
+		}
+		var pool []ompModel
+		for _, m := range rest {
+			if !used[m.ID] {
+				pool = append(pool, m)
+			}
+		}
+		for i := 0; len(mid) < need && i < len(pool); i++ {
+			mid = append(mid, pool[(len(pool)/2+i)%len(pool)])
 		}
 	}
-	if !found { // no room between the rungs — take the median by price
-		t2 = rest[len(rest)/2]
-		if t2.ID == t3.ID {
-			t2 = rest[0]
-		}
-	}
-	return []ompModel{t1, t2, t3}
+	sort.Slice(mid, func(i, j int) bool { return cheaper(mid[i], mid[j]) })
+	return append(append([]ompModel{t1}, mid...), top)
 }
 
 // ompUsageJSON fetches the provider quota report; a var so tests and the
@@ -248,11 +280,16 @@ var ompUsageJSON = func() ([]byte, error) {
 	return exec.Command("omp", "usage", "--json").Output()
 }
 
-// specialTier is a quota bucket omp scopes to a subset of a provider's models:
-// the codex spark drain bucket, and Anthropic's scarce elite bucket. omp names
-// these itself, so the scaffolder reads them rather than guessing which model
-// is the cheap drain and which is the scarce elite — the guess used to be
-// "nobody, ever", which left the spark and fable dials dead on every scaffold.
+// specialTier is a quota bucket omp scopes to a subset of a provider's models
+// rather than to the provider as a whole — today that is the codex spark drain
+// bucket. omp names the bucket itself, so the scaffolder reads it rather than
+// guessing which model is the cheap idle drain; the guess used to be "nobody,
+// ever", which left the spark dial dead on every scaffold.
+//
+// The scope carries a `tier` string (omp 18.0.11 still reports it — Anthropic's
+// retired 7d fable window arrived as tier "fable"), which is what this parse
+// keys on. Window identity (scope.windowId, window.id) is the usage meter's
+// business, not the scaffolder's, and is deliberately not read here.
 type specialTier struct {
 	pool, tier, modelID string
 }
@@ -300,10 +337,15 @@ func readSpecialTiers() []specialTier {
 
 // matchSpecial resolves a tier-scoped bucket to one of the pool's candidates. A
 // scope that names its model wins outright; otherwise the bucket's tier name is
-// matched against the model family, which is where the label comes from (omp's
-// "Claude 7 Day (Fable)" is the claude-fable-* family). Matching by name and
-// not by price matters: claude-mythos-5 lists at claude-fable-5's exact price
-// but is not served on every account.
+// matched against the model family, which is where the label comes from (a
+// "spark" tier names the gpt-*-codex-spark family, and Anthropic's retired
+// "Claude 7 Day (Fable)" window named the claude-fable-* family the same way).
+// A match here is not itself a promotion: the caller still requires the pool to
+// declare a lead tier of that shape, so a scoped bucket for a pool with no
+// declared lead — pool A since the 7d fable window was retired — resolves fine
+// and then changes nothing. Matching by name and not by price matters:
+// claude-mythos-5 lists at claude-fable-5's exact price but is not served on
+// every account.
 func matchSpecial(st specialTier, cands []ompModel) string {
 	if st.modelID != "" {
 		for _, m := range cands {
@@ -359,21 +401,46 @@ func thinkingField(levels []string) string {
 	return strings.Join(names, ",")
 }
 
-// benchFact is one model's probe outcome. reachable means it answered; notFound
-// means the provider says it does not exist for this account; anything else is
-// unresolved — a transport, auth or rate failure that says nothing either way
-// about entitlement, and so must not be guessed in either direction.
+// benchFact is one model's probe outcome, and the four-way split is this file's
+// central safety property — each outcome licenses a different action and they
+// must never be collapsed:
+//
+//   - reachable: the model answered. It may become a rung, and its measured
+//     speed/ttft go into the scaffold.
+//   - notFound: the provider denies the model exists for this account. A
+//     definitive negative verdict on entitlement, so the model is dropped
+//     silently — it was never ours to route to.
+//   - blocked: the model exists and this account is entitled to it, but the
+//     provider refuses the call for a reason the operator can fix. The live
+//     case is Anthropic's client-version gate: claude-fable-5-1 is listed and
+//     entitled, yet every call returns 400 invalid_request_error with
+//     "claude_code_version_too_old" and "Claude Code 2.1.246 does not support
+//     this model; version 2.1.251 or newer is required". Like notFound this is
+//     definitive and permanent — retrying changes nothing until the client is
+//     upgraded — so the model is dropped rather than poisoning the run. Unlike
+//     notFound it is not the operator's settled state, so the drop must be
+//     announced: scaffoldModels writes a named warning into models.yml.
+//   - unresolved (neither flag, reachable false): a transport, auth or rate
+//     failure. It says nothing either way about entitlement, so it must not be
+//     guessed in either direction and the whole scaffold refuses.
 type benchFact struct {
 	speed, ttft float64
 	reachable   bool
 	notFound    bool
+	blocked     bool
 	why         string
 }
 
-// notFoundProbe matches the one failure that is genuinely disqualifying: the
+// notFoundProbe matches the failure that is genuinely disqualifying: the
 // provider denying the model exists. claude-mythos-5 answers exactly this way
 // while listing at claude-fable-5's price, context and thinking range.
 var notFoundProbe = regexp.MustCompile(`(?i)not_found|model_not_found|no such model|unknown model|does not exist`)
+
+// versionBlockedProbe matches the client-version gate. The provider is saying
+// the model is real and entitled but this client build cannot speak to it, so
+// it is neither a 404 nor a blip. Matched ahead of notFoundProbe because the
+// wording ("does not support this model") sits uncomfortably close to it.
+var versionBlockedProbe = regexp.MustCompile(`(?i)claude_code_version_too_old|does not support this model`)
 
 // ompBenchJSON probes models with omp's own benchmark; a var so tests can stub
 // it. One short run per model: this is mandatory on every init and every
@@ -381,22 +448,27 @@ var notFoundProbe = regexp.MustCompile(`(?i)not_found|model_not_found|no such mo
 // only steady a throughput figure at the cost of a longer wait.
 //
 // The prompt is overridden deliberately. omp's bundled bench prompt reads as
-// cyber content to Anthropic's safety layer, and claude-fable-5 refuses it —
-// which would have deleted a perfectly callable elite from the ladder. A probe
-// that decides eligibility has to ask something nothing can object to.
+// cyber content to Anthropic's safety layer, and the claude-fable-* models
+// refuse it — which would have deleted a perfectly callable top rung from the
+// ladder. A probe that decides eligibility has to ask something nothing can
+// object to. --profile chat is not optional cosmetics: since omp 18.x, `--prompt`
+// without a profile fails the whole invocation with "--prompt requires --profile
+// chat or generation", which took `code generate init` down on every run.
 var ompBenchJSON = func(selectors []string) ([]byte, error) {
 	args := append([]string{"bench"}, selectors...)
 	return exec.Command("omp", append(args,
 		"--json", "--runs", "1", "--max-tokens", "4",
+		"--profile", "chat",
 		"--prompt", "Reply with the single word: ok")...).Output()
 }
 
-// runBench sorts each model into the three outcomes benchFact describes and
-// records throughput for the ones that answered. It deliberately does not
-// collapse "refused" or "rate limited" into "unreachable": omp lists models an
-// account cannot call (claude-mythos-5, at claude-fable-5's exact price), but a
-// failed request is evidence of that only when the provider says the model does
-// not exist. Everything else is unresolved, and the caller must not guess.
+// runBench sorts each model into the outcomes benchFact describes and records
+// throughput for the ones that answered. It deliberately does not collapse
+// "refused" or "rate limited" into "unreachable": omp lists models an account
+// cannot call (claude-mythos-5, at claude-fable-5's exact price), but a failed
+// request is evidence of that only when the provider says the model does not
+// exist, or names a client-version gate. Everything else is unresolved, and the
+// caller must not guess.
 func runBench(selectors []string) (map[string]benchFact, error) {
 	raw, err := ompBenchJSON(selectors)
 	if len(raw) == 0 {
@@ -405,6 +477,17 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 		}
 		return nil, fmt.Errorf("running `omp bench`: %w", err)
 	}
+	// omp 18.x renamed the per-model aggregate from `average` to `stats` and
+	// turned every metric into a distribution object ({mean,min,p50,p95,max})
+	// rather than a bare float, and dropped the per-model `failures` count. The
+	// old shape parsed into zero values against the new payload, so `Average`
+	// was always nil and EVERY reachable model fell through to "incomplete
+	// probe report" — which made the run refuse the whole ladder. Reachability
+	// is therefore derived from the runs themselves (all ok, at least one),
+	// never from an aggregate that a schema change can quietly empty.
+	type metric struct {
+		Mean float64 `json:"mean"`
+	}
 	var parsed struct {
 		Models []struct {
 			Model   string `json:"model"`
@@ -412,11 +495,16 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 				OK    bool   `json:"ok"`
 				Error string `json:"error"`
 			} `json:"results"`
-			Failures float64 `json:"failures"`
-			Average  *struct {
-				TTFTMs          float64 `json:"ttftMs"`
-				TokensPerSecond float64 `json:"tokensPerSecond"`
-			} `json:"average"`
+			Stats *struct {
+				TTFTMs *metric `json:"ttftMs"`
+				// generationTps is the streaming rate; tokensPerSecond folds
+				// the startup wait into the same figure. effTPS (facets.go)
+				// already composes ttft with the streaming rate itself, so
+				// taking tokensPerSecond here would charge for time-to-first
+				// token twice and read a 62 t/s haiku as 5 t/s.
+				GenerationTps   *metric `json:"generationTps"`
+				TokensPerSecond *metric `json:"tokensPerSecond"`
+			} `json:"stats"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
@@ -440,18 +528,37 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 				break
 			}
 		}
+		ok := len(m.Results) > 0
+		for _, r := range m.Results {
+			if !r.OK {
+				ok = false
+			}
+		}
+		speed, ttft, measured := 0.0, 0.0, false
+		if m.Stats != nil {
+			if m.Stats.GenerationTps != nil {
+				speed, measured = m.Stats.GenerationTps.Mean, true
+			} else if m.Stats.TokensPerSecond != nil {
+				speed, measured = m.Stats.TokensPerSecond.Mean, true
+			}
+			if m.Stats.TTFTMs != nil {
+				ttft = m.Stats.TTFTMs.Mean
+			}
+		}
 		switch {
-		case why == "" && m.Failures == 0 && len(m.Results) > 0 && m.Average != nil:
+		case why == "" && ok && measured:
 			out[id] = benchFact{
-				speed:     math.Round(m.Average.TokensPerSecond*10) / 10,
-				ttft:      math.Round(m.Average.TTFTMs/10) / 100,
+				speed:     math.Round(speed*10) / 10,
+				ttft:      math.Round(ttft/10) / 100,
 				reachable: true,
 			}
+		case versionBlockedProbe.MatchString(why):
+			out[id] = benchFact{blocked: true, why: why}
 		case notFoundProbe.MatchString(why):
 			out[id] = benchFact{notFound: true, why: why}
 		default:
 			if why == "" {
-				why = "incomplete probe report — no average or no runs recorded"
+				why = "incomplete probe report — no timing stats or no runs recorded"
 			}
 			out[id] = benchFact{why: why}
 		}
@@ -470,25 +577,42 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", fmt.Errorf("parsing model list: %w", err)
 	}
-	var unresolved []string
+	var unresolved, blocked []string
 	byPool := map[string][]ompModel{}
 	for _, m := range parsed.Models {
 		pool := poolOf(m.Provider)
 		if pool == "" || !m.Reasoning || len(m.Thinking) == 0 ||
-			m.Cost.Input <= 0 || datedID.MatchString(m.ID) {
+			m.Cost.Input <= 0 || datedID.MatchString(m.ID) || skipModel(m.ID) {
 			continue
 		}
 		// A model omp lists but the account cannot call is worse than useless on
 		// the ladder: it looks top-spec and 404s at launch, and no metadata
-		// distinguishes it (claude-mythos-5 lists at claude-fable-5's exact
-		// price, context and thinking range). Only a live probe knows, and only
-		// its verdict is actionable: a model the provider says does not exist is
-		// dropped, while a model that merely failed to answer is unresolved and
-		// must not be silently treated as either fine or absent.
+		// distinguishes it. claude-mythos-5 is the standing example — it lists at
+		// claude-fable-5's exact price, context and thinking range, and 404s
+		// here. That one is now settled and skipped outright (skippedModels), so
+		// it never reaches this filter; the general shape of the problem is not
+		// settled, and only a live call separates a top rung from a lookalike.
+		// This probe, not a price heuristic, is what decides: the old "anything
+		// priced at or above the elite is a sibling elite" guard is gone, so the
+		// probe is the sole remaining defence and must never be bypassed.
+		//
+		// Only two verdicts are the scaffolder's to act on unilaterally, and
+		// they act differently (see benchFact): notFound drops the model
+		// silently, blocked drops it with a warning the operator can act on, and
+		// anything else is unresolved and forfeits the whole run.
+		//
+		// This filter runs before supersede(), which matters: dropping a blocked
+		// claude-fable-5-1 leaves its family sibling claude-fable-5 — which
+		// probes fine — as the family's newest survivor, so it becomes the top
+		// rung. Graceful degradation to the best callable model, not a hole in
+		// the ladder.
 		if probe != nil {
 			f, seen := probe[strings.ToLower(m.ID)]
 			switch {
 			case f.notFound:
+				continue
+			case f.blocked:
+				blocked = append(blocked, m.ID+": "+f.why)
 				continue
 			case !seen:
 				unresolved = append(unresolved, m.ID+": missing from the probe report")
@@ -517,8 +641,9 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	// An unresolved probe is not a licence to proceed. Dropping these silently
 	// would write `probed: true` over a partial answer, and keeping them could
 	// crown a model that never replied — so refuse, name each one, and let the
-	// operator decide. Models the provider explicitly disowned are already gone
-	// above and deliberately absent from this list.
+	// operator decide. Models the provider explicitly disowned, and models a
+	// client-version gate blocks, are already gone above and deliberately absent
+	// from this list — both are settled verdicts, not open questions.
 	if len(unresolved) > 0 {
 		sort.Strings(unresolved)
 		return "", fmt.Errorf("the reachability probe came back inconclusive for %d model(s), so the ladder cannot be certified:\n  %s\nre-run once the provider is answering, or pass --from-json to scaffold offline without a probe",
@@ -561,11 +686,18 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 				pick, pickID = st, id
 			}
 		}
-		// The grid reads tier 0 off pool O and tier 4 off pool A, so the pool
-		// decides which kind of lead this is — but only price confirms it. An
-		// elite is the scarce top of its pool, a drain bucket is not; a scoped
-		// bucket that fits neither shape is some other quota window and is left
-		// on the ordinary ladder.
+		// A tier-scoped bucket is only a lead when the pool declares that kind
+		// of lead and the model's price agrees. Today the sole declared kind is
+		// tier 0, the idle drain bucket: its model is cheap relative to the rest
+		// of the pool, so a scoped bucket whose model prices like the pool's top
+		// is some other quota window and stays on the ordinary ladder.
+		//
+		// There used to be a tier-4 arm here that lifted Anthropic's fable model
+		// off the ladder into a "scarce elite" of its own, because it drew a
+		// separate 7d quota window. Anthropic retired that window: the top model
+		// now spends the same quota as the rest of the pool, so it is simply the
+		// ladder's top rung and pickLadder places it. Nothing special about it
+		// survives except its reachability, which the probe above decides.
 		var top float64
 		for _, m := range cands {
 			if m.ID != pickID && m.Cost.Input > top {
@@ -580,79 +712,30 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 					c = m.Cost.Input
 				}
 			}
-			if poolDeclaresSpecialTier(pool, 4) && c >= top {
-				specialTierNo = 4
-			} else if poolDeclaresSpecialTier(pool, 0) && c < top {
+			if poolDeclaresSpecialTier(pool, 0) && c < top {
 				specialTierNo = 0
 			}
 		}
-		// Fallback when no bucket named an elite. The quota report is not always
-		// there to ask — it turns out to vary with the ambient auth environment,
-		// and the failure is silent and expensive: with the elite left on the
-		// ordinary ladder it becomes tier 3, so every routine "smart" request
-		// drains the scarce bucket that exists precisely to be spent on purpose.
-		// Price is legitimate evidence here. It says nothing about entitlement,
-		// which is why the reachability probe exists, but a model in its own
-		// price class is by definition not the everyday workhorse.
-		if specialTierNo < 0 && poolDeclaresSpecialTier(pool, 4) && len(cands) > 1 {
-			lead, next := cands[0], 0.0
-			for _, m := range cands {
-				if m.Cost.Input > lead.Cost.Input {
-					lead = m
-				}
-			}
-			for _, m := range cands {
-				if m.ID != lead.ID && m.Cost.Input > next {
-					next = m.Cost.Input
-				}
-			}
-			if next > 0 && lead.Cost.Input >= 2*next {
-				specialTierNo, pickID = 4, lead.ID
-			}
-		}
-		// The bucket label comes from the quota scope when one named this lead.
-		// The price fallback has no scope to read, so it names the bucket after
-		// the tier it inferred — tier 4 is the elite window by construction.
+		// The bucket label always comes from the quota scope, since a lead only
+		// exists when a scope named one.
 		specialBucket := ""
-		switch {
-		case pick != nil:
+		if specialTierNo >= 0 {
 			specialBucket = bucketName(pool, pick.tier)
-		case specialTierNo == 4:
-			specialBucket = bucketName(pool, "fable")
-		case specialTierNo == 0:
-			specialBucket = bucketName(pool, "spark")
 		}
-		var elite ompModel
 		var ladderCands []ompModel
 		for _, m := range cands {
 			if specialTierNo < 0 || m.ID != pickID {
 				ladderCands = append(ladderCands, m)
 				continue
 			}
-			if specialTierNo == 4 {
-				elite = m
-			}
 			rungs[pool] = append(rungs[pool], rung{m, specialTierNo, specialBucket})
-		}
-		// An elite defines the scarce, expensive class. Anything priced at or
-		// above it is a sibling elite rather than a tier-3 workhorse, and must
-		// not be crowned "smart" — claude-mythos-5 is exactly that trap: same
-		// price as claude-fable-5, and 404 on accounts that do not have it.
-		if elite.ID != "" {
-			var kept []ompModel
-			for _, m := range ladderCands {
-				if m.Cost.Input < elite.Cost.Input {
-					kept = append(kept, m)
-				}
-			}
-			ladderCands = kept
 		}
 		ladder := pickLadder(ladderCands)
 		if len(ladder) < 3 && required {
 			name := providerByPool(pool).Label
 			hint := "code assumes " + requiredProviderNames() + " are set up in omp"
 			if probe != nil {
-				hint += "; models the provider reported as non-existent were dropped by the probe"
+				hint += "; models the provider reported as non-existent, or refused for a client-version reason, were dropped by the probe"
 			}
 			return "", fmt.Errorf("found %d usable %s model(s), need 3 (cheap/regular/smart) — %s", len(ladder), name, hint)
 		}
@@ -670,10 +753,12 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 # thinking ceiling, context and price) and worth a sanity check.
 #
 #   pool:   O = OpenAI/Codex   ·   A = Anthropic   ·   D = DeepSeek
-#   tier:   1 cheap · 2 regular · 3 smart  (the per-pool fallback ladder)
-#           tier 0 = a fast idle-bucket model the 'spark' toggle drains;
-#           tier 4 = a scarce elite the 'fable' toggle leads with. Both are
-#           detected from the quota buckets omp reports, and simply absent when
+#   tier:   1..N = the per-pool capability ladder, cheapest first (N is 3 or 4,
+#           depending on how many usable models the pool offers). Tier 4 is the
+#           optional top rung the model dial's 'elite' notch reaches; a pool
+#           without one simply stops at 3 and 'elite' routes like 'smart'.
+#           tier 0 = a fast idle-bucket model the 'spark' toggle drains,
+#           detected from the quota buckets omp reports and simply absent when
 #           your providers expose no such bucket.
 #   bucket: the quota window the model draws — drives the usage meter.
 #   image:  false marks a text-only model, which the vision role then avoids.
@@ -681,6 +766,21 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 # Re-render the catalog after any edit:  code generate
 # Re-derive the tiers after a provider ships new models:  code generate init --refresh
 `)
+	// A blocked model is dropped from the ladder, but never quietly: the
+	// operator's newest model is missing from a file they are about to review,
+	// and unlike a 404 the cause is on their side of the wire and fixable. Name
+	// each one and quote the provider's own verdict so the fix is self-service.
+	if len(blocked) > 0 {
+		sort.Strings(blocked)
+		b.WriteString(`#
+# WARNING — models dropped because your client cannot call them. Your provider
+# lists them and your account is entitled to them, but every call was refused:
+`)
+		for _, s := range blocked {
+			b.WriteString("#   " + strings.Join(strings.Fields(s), " ") + "\n")
+		}
+		b.WriteString("# Upgrade the client it names, then re-run 'code generate init --refresh'.\n")
+	}
 	// The marker is the whole point of probing: without it `code generate`
 	// refuses the file, so an offline scaffold can never quietly become live
 	// routing that names a model this account cannot call.
@@ -840,6 +940,28 @@ func runGenerateInit(args []string) int {
 	return 0
 }
 
+// skippedModels are model ids the scaffolder must not even probe. This is the
+// one place in the tree that spells a model id, and it earns the exception by
+// encoding an account fact no metadata expresses: omp lists the model, its
+// specs look top-of-ladder, and the account simply cannot call it.
+//
+// claude-mythos-5 is the standing case. It advertises claude-fable-5's exact
+// price, context window and thinking range, and 404s here — the operator has
+// confirmed there is no entitlement and none is expected. The probe already
+// dropped it on the 404, so this list is not what keeps it off the ladder; what
+// this buys is the probe call itself. A denied model is the slowest row in the
+// report by a wide margin (its 404 retries dominated a seven-minute run), for a
+// verdict that is known in advance.
+//
+// Keep it short and keep it justified: a model belongs here only while its
+// unavailability is settled and expected. Anything provisional should stay in
+// the probe's hands, which is where an outcome that might change belongs.
+var skippedModels = map[string]bool{
+	"claude-mythos-5": true,
+}
+
+func skipModel(id string) bool { return skippedModels[strings.ToLower(id)] }
+
 // benchSelectors lists every model the scaffolder would consider, as
 // provider-qualified selectors so `omp bench` cannot fuzzy-match the wrong one.
 func benchSelectors(raw []byte) ([]string, error) {
@@ -849,7 +971,8 @@ func benchSelectors(raw []byte) ([]string, error) {
 	}
 	var out []string
 	for _, m := range parsed.Models {
-		if poolOf(m.Provider) == "" || !m.Reasoning || m.Cost.Input <= 0 || datedID.MatchString(m.ID) {
+		if poolOf(m.Provider) == "" || !m.Reasoning || m.Cost.Input <= 0 ||
+			datedID.MatchString(m.ID) || skipModel(m.ID) {
 			continue
 		}
 		out = append(out, m.Provider+"/"+m.ID)

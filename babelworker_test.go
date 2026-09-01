@@ -697,9 +697,9 @@ func TestBabelDescribesTheDialsAsConfirmed(t *testing.T) {
 	if got := profile.Metadata["combo"]; !strings.HasPrefix(got, "claude-led_fast_low_") {
 		t.Errorf("metadata combo = %q, want the cheapest Anthropic-led combo", got)
 	}
-	if profile.ComboID != comboID(m.sel, m.hasRelief) {
+	if profile.ComboID != comboID(m.sel) {
 		t.Errorf("combo id = %q, want the confirmed selection's own %q",
-			profile.ComboID, comboID(m.sel, m.hasRelief))
+			profile.ComboID, comboID(m.sel))
 	}
 
 	// A value no dial offers cannot reach a profile, because it cannot reach the
@@ -773,7 +773,7 @@ func TestBabelProfileOverlay(t *testing.T) {
 		stale := saved
 		stale.Selection = map[string]string{
 			"lane": "ds-led", "model": "smart", "thinking": "telepathic",
-			"spark": "off", "fable": "off", "main": "off", "advisor": "off", "relief": "on",
+			"spark": "off", "advisor": "off",
 		}
 		if _, err := profileOverlay(stale); err == nil {
 			t.Error("profileOverlay rendered an overlay for a combination the catalog does not carry")

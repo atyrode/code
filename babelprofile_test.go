@@ -15,7 +15,7 @@ func sampleProfile(id string) codeProfile {
 	return codeProfile{
 		ID:                id,
 		Selection:         map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium"},
-		ComboID:           "mixed_smart_medium_nosp_nofa",
+		ComboID:           "mixed_smart_medium_nosp",
 		Disclosure:        babelDisclosureHosted,
 		RedactionRequired: true,
 		Cost:              babelCost{Currency: "USD", InputPer1K: 0.003, OutputPer1K: 0.015},

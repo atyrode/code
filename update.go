@@ -154,6 +154,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "i":
 			m.fullUsageIDs = !m.fullUsageIDs
 			m.relayout()
+		case "n":
+			// Reveal the routing preview's full model ids. A view preference,
+			// not routing: nothing about the selection or the launched profile
+			// changes, so it is never persisted — only the preview repaints.
+			m.showFullIDs = !m.showFullIDs
+			m.syncPreviewKeepScroll()
 		case "?":
 			m.help.ShowAll = !m.help.ShowAll
 			m.relayout() // the taller/shorter footer changes the body height
@@ -252,7 +258,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// empty, handing omp a session with no routing at all. The preview
 			// already says "no profile for this combination", so the key does
 			// nothing rather than launching something broken.
-			if _, ok := m.generated[comboID(m.sel, m.hasRelief)]; !ok {
+			if _, ok := m.generated[comboID(m.sel)]; !ok {
 				return m, nil
 			}
 			m.genConfig = m.genConfigYAML()
@@ -271,8 +277,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.applyActions(msg.Actions)
 		// applyActions' repair rules know lanes and quota, not catalog contents:
-		// a "critical" proposal switches fable on even where no fable combo was
-		// generated. Clamp and re-render before reporting what was applied.
+		// a proposal can size the model dial past the notch this lane's combos
+		// carry. Clamp and re-render before reporting what was applied.
 		m.clampSel()
 		m.syncPreview()
 		return m, func() tea.Msg { return clikit.AppliedActionsMsg{Actions: m.appliedDiff()} }
@@ -426,11 +432,12 @@ func (m *model) cycleFacet(dir int) {
 	case "blend":
 		m.sel["lane"] = laneJoin(m.sel["lead"], m.sel["blend"])
 	}
-	// main is fable's sub-setting: whenever fable leaves "on" it must clear too,
-	// so a later fable re-enable never silently resurrects the (expensive)
-	// fable-as-main escalation — it is re-chosen deliberately every time.
-	if m.sel["fable"] != "on" {
-		m.sel["main"] = "off"
+	// A lane switch can land on a shallower ladder (a lane whose pools stop at
+	// tier 3), where the notch just left behind was never generated. clampSel
+	// snaps the model dial back onto a served rung, so what the dial shows is
+	// always a combination the catalog carries.
+	if f.key == "lead" || f.key == "blend" {
+		m.clampSel()
 	}
 	// The local lane's thinking dial is two levels wide (locallane.go), so
 	// turning it on with the hosted dial parked at "max" would leave a value

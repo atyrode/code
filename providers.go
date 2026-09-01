@@ -26,12 +26,18 @@ const (
 // describe a lane that is not one of them.
 const localProvider = "local"
 
-// specialFacet is a provider's tier-scoped lead: a facet dial ("spark",
-// "fable") that swaps a dedicated ladder tier in as a role lead, drawing a
-// separate quota bucket.
+// specialFacet is a provider's tier-scoped lead: a facet dial ("spark") that
+// swaps a dedicated ladder tier in as a role lead, drawing a separate quota
+// bucket.
+//
+// Only the idle-drain shape remains. Anthropic's scarce elite used to be one of
+// these (facet "fable", tier 4, its own "7d fable" quota window); Anthropic
+// retired that window, so the model is now simply the top rung of pool A's
+// ordinary ladder and the "elite" notch on the model dial reaches it. Nothing
+// about it is special any more — which is why no fable-shaped entry exists here.
 type specialFacet struct {
-	Facet  string // facet key: "spark" | "fable"
-	Tier   int    // ladder index: 0 | 4
+	Facet  string // facet key: "spark"
+	Tier   int    // ladder index: 0
 	Bucket string // bucket suffix; full name = BucketBase + "-" + Bucket
 }
 
@@ -65,8 +71,7 @@ var providerRegistry = []providerDesc{
 		Color: "#ff9f52", LaneOnly: "#ff8534", LaneLed: "#ffb277", PaintRGB: [3]float64{240, 160, 105},
 		ModelPrefixes: []string{"claude", "sonnet", "haiku", "opus"}, BucketBase: "claude",
 		Metered: true, OAuth: true, Required: true, CrossTo: "O",
-		SkeletonWins: []string{"5h", "7d", "7d fable"},
-		Special:      []specialFacet{{Facet: "fable", Tier: 4, Bucket: "fable"}}},
+		SkeletonWins: []string{"5h", "7d"}},
 	{ID: openAIProvider, Aliases: []string{"openai"}, Pool: "O", Lane: "gpt", Label: "Codex", AccountLabel: "OpenAI",
 		Color: "#62a7ff", LaneOnly: "#3f8ef0", LaneLed: "#7ab6ff", PaintRGB: [3]float64{110, 170, 240},
 		ModelPrefixes: []string{"gpt", "codex"}, BucketBase: "codex",
@@ -191,20 +196,8 @@ func meteredProviderIDs() []string {
 	return out
 }
 
-// optionalPoolLabels names the pay-as-you-go pools ("DeepSeek"), joined for
-// display — the pools relief can spill into.
-func optionalPoolLabels() string {
-	var out []string
-	for i := range providerRegistry {
-		if !providerRegistry[i].Required {
-			out = append(out, providerRegistry[i].Label)
-		}
-	}
-	return strings.Join(out, "/")
-}
-
 // poolDeclaresSpecialTier reports whether the pool's provider declares a
-// special facet at the given ladder tier (O's spark at 0, A's fable at 4).
+// special facet at the given ladder tier (O's spark at 0).
 func poolDeclaresSpecialTier(pool string, tier int) bool {
 	p := providerByPool(pool)
 	if p == nil {
@@ -241,20 +234,6 @@ func laneHasPool(lane, pool string) bool {
 	}
 	p := providerByLane(lane)
 	return p != nil && p.Pool == pool
-}
-
-// laneReliefApplies reports whether relief tails are a real choice on this
-// lane: a metered-led blend can spill into a pay-as-you-go pool, so the
-// relief dial exists there. Pure lanes never take tails, and a lane led by
-// the optional pool already spends it deliberately.
-func laneReliefApplies(lane string) bool {
-	if lanePure(lane) {
-		return false
-	}
-	if p := providerByLane(lane); p != nil && !p.Required {
-		return false
-	}
-	return true
 }
 
 // laneBlends is the blend dial's canonical order: led (the lead pool drives

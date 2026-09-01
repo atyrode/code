@@ -15,8 +15,16 @@ package main
 //     verified rung — missing tiers borrow the nearest existing one. An
 //     absent optional pool's lanes are simply not generated and the TUI
 //     never offers them; catalog presence is the whole on/off switch.
-//   - tier 0 (an idle-bucket speed model, "spark") and tier 4 (a scarce elite,
-//     "fable") are optional; without them the corresponding facet combos are
+//   - tier 4 is the optional top rung of that same capability ladder. Pools
+//     ladder to different depths (see catalog.top) — one provider ships a
+//     fourth model, another stops at three, a third may ship its own fourth
+//     later — and the model dial's `elite` notch reaches tier 4 wherever a
+//     pool declares one. Requests for a rung a pool does not have clamp to
+//     its best (see catalog.rung), and a lane whose pools all stop at three
+//     gets no elite combo at all: it would be byte-identical to smart.
+//   - tier 0 (an idle-bucket speed model, "spark") is off the capability
+//     ladder entirely — it is a quota-bucket drain lead, picked for speed,
+//     not capability. It is optional; without it the spark facet combos are
 //     simply not generated and the TUI hides the dial.
 //
 // The dotfiles build now invokes this binary rather than keeping its own copy
@@ -59,8 +67,9 @@ type catalog struct {
 	models map[string]catModel // short key -> model
 	levels map[string][]int    // short key -> thinking levels it truly offers
 	ladder map[string][5]string
-	// ladder[pool][tier] for tiers 0..4; "" = absent. Tiers 1..3 are the
-	// fallback ladder; 0 is the drain/speed lead, 4 the elite lead.
+	// ladder[pool][tier] for tiers 0..4; "" = absent. Tiers 1..4 are the
+	// capability/fallback ladder, of per-pool depth (see top); 0 is the
+	// bucket-drain lead, deliberately off that ladder.
 }
 
 var thScale = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
@@ -217,20 +226,54 @@ func (c *catalog) fillOptionalLadders() {
 	}
 }
 
+// top is a pool's highest non-empty capability rung (1..4), or 0 when the pool
+// brought no ladder at all. Ladder depth is per-pool data, never a constant:
+// providers ship their fourth model on their own schedule, so every tier read
+// asks the catalog how deep the pool goes instead of assuming.
+func (c *catalog) top(pool string) int {
+	l := c.ladder[pool]
+	for t := 4; t >= 1; t-- {
+		if l[t] != "" {
+			return t
+		}
+	}
+	return 0
+}
+
+// rung reads a pool's ladder with the requested tier clamped into what that
+// pool actually has. Lanes and dials ask for tiers, not models: a deliberative
+// bump or the `elite` notch can ask a pool for tier 4 when that pool only
+// ladders to 3, and the answer must be that pool's best rung — never the empty
+// model id, which would silently drop a role out of a rendered profile.
+func (c *catalog) rung(pool string, tier int) string {
+	t := c.top(pool)
+	if t == 0 {
+		return ""
+	}
+	if tier > t {
+		tier = t
+	}
+	if tier < 1 {
+		tier = 1
+	}
+	return c.ladder[pool][tier]
+}
+
 // checkLadder rejects a ladder whose rungs are out of order. Input price used
 // to be a fair proxy for capability, so the scaffolder ranked by it — then
 // providers started repricing new models below predecessors they never
 // delisted, and a $15 claude-opus-4-1 (200k context, no max thinking) outranked
 // a $5 claude-opus-5 (1M, max) on price alone. Rather than trust the ranking,
 // assert the property it is supposed to produce: a dearer rung must not offer
-// less. Only tiers 1..3 are the capability ladder — tier 0 is a bucket-drain
-// lead and tier 4 an elite lead, both deliberately off it.
+// less. Tiers 1..4 are one capability ladder — tier 4 is simply its optional
+// top rung, so it must not regress on tier 3 either. Tier 0 stays off the
+// ladder: it is a bucket-drain lead chosen for speed, not for capability.
 func (c *catalog) checkLadder(path string) error {
 	// Optional pools join only when declared; an absent pool has no rungs to
 	// compare and the empty-rung guard below skips it.
 	for _, pool := range fallbackPoolOrder {
-		for lo := 1; lo <= 3; lo++ {
-			for hi := lo + 1; hi <= 3; hi++ {
+		for lo := 1; lo <= 4; lo++ {
+			for hi := lo + 1; hi <= 4; hi++ {
 				a, b := c.ladder[pool][lo], c.ladder[pool][hi]
 				if a == "" || b == "" {
 					continue
@@ -324,8 +367,10 @@ func otherPool(p string) string {
 	return ""
 }
 
-// specialKey resolves a special-tier facet ("spark", "fable") to its ladder
-// rung — "" when the owning pool never filled that tier.
+// specialKey resolves a special-tier facet ("spark") to its ladder rung — ""
+// when the owning pool never filled that tier. Special tiers sit outside the
+// capability ladder, so this indexes the ladder directly rather than via rung:
+// an absent special tier must read as absent, not clamp to a capability rung.
 func (c *catalog) specialKey(facet string) string {
 	p := providerBySpecial(facet)
 	if p == nil {
@@ -349,58 +394,27 @@ func (c *catalog) advisorPool(lead string) string {
 	return lead
 }
 
-// reliefRungs lists each optional pool's regular (tier-2) rung, in
-// fallbackPoolOrder, skipping the lead's own pool.
-func (c *catalog) reliefRungs(lead string) []string {
-	leadPool := c.models[lead].Pool
-	var out []string
-	for _, pool := range c.pools() {
-		if pool == leadPool || providerByPool(pool).Required {
-			continue
-		}
-		out = append(out, c.ladder[pool][2])
-	}
-	return out
-}
-
-// hasOptionalPool reports whether the catalog carries any non-required pool —
-// the gate for the relief dial and its id segment.
-func (c *catalog) hasOptionalPool() bool {
-	for _, pool := range c.pools() {
-		if p := providerByPool(pool); p != nil && !p.Required {
-			return true
-		}
-	}
-	return false
-}
-
-// sibDown is the same-pool fallback rung below a lead: the elite (tier 4)
-// falls to its pool's smart tier, tiers 2..3 fall one rung, the rest have no
-// same-pool net.
+// sibDown is the same-pool fallback rung below a lead: tier 2 and up fall one
+// rung, tier 1 and the off-ladder tier 0 have no same-pool net.
 func (c *catalog) sibDown(key string) string {
 	m := c.models[key]
-	if m.Tier == 4 {
-		return c.ladder[m.Pool][3]
-	}
 	if m.Tier >= 2 {
-		return c.ladder[m.Pool][m.Tier-1]
+		return c.rung(m.Pool, m.Tier-1)
 	}
 	return ""
 }
 
-// cross is the equivalent rung on the crossing target pool (elites cross to
-// smart).
+// cross is the equivalent rung on the crossing target pool, clamped to that
+// pool's own depth: the target may ladder deeper or shallower than the source,
+// so a top-rung lead crosses to tier 4 where the target has one and to the
+// target's best rung where it does not.
 func (c *catalog) cross(key string) string {
 	m := c.models[key]
-	t := m.Tier
-	if t > 3 {
-		t = 3
-	}
 	cp := otherPool(m.Pool)
 	if cp == "" {
 		return ""
 	}
-	return c.ladder[cp][t]
+	return c.rung(cp, m.Tier)
 }
 
 func dedup(seq []string, lead string) []string {
@@ -439,8 +453,10 @@ func (c *catalog) buildChain(lead string, isPure bool) []string {
 // If that rung is text-only, prefer a more capable rung before stepping down;
 // the model dial must still influence vision without ever routing images to a
 // model that cannot consume them.
+// Both scans index the ladder directly rather than through rung: here an empty
+// rung must read as absent so the walk continues, where rung would clamp.
 func (c *catalog) visionLead(pool string, tier int) string {
-	for t := tier; t <= 3; t++ {
+	for t := tier; t <= 4; t++ {
 		if k := c.ladder[pool][t]; k != "" && c.models[k].multimodal() {
 			return k
 		}
@@ -488,13 +504,15 @@ var (
 	genCrossLed = map[string]bool{"reviewer": true, "security-reviewer": true}
 	genUtil     = map[string]bool{"scout": true, "sonic": true, "smol": true, "tiny": true, "commit": true}
 	// Utility roles respond to the dials but are tier-capped so none can ever
-	// become expensive.
+	// become expensive. `elite` therefore shares `smart`'s cap exactly: the cap
+	// exists so that no notch of the model dial — not even the top one — can
+	// make a role that runs on every keystroke cost real money.
 	genUtilModel = map[string]map[string]int{
-		"commit": {"fast": 1, "normal": 1, "smart": 1},
-		"tiny":   {"fast": 1, "normal": 1, "smart": 2},
-		"smol":   {"fast": 1, "normal": 2, "smart": 2},
-		"sonic":  {"fast": 1, "normal": 2, "smart": 2},
-		"scout":  {"fast": 1, "normal": 2, "smart": 2},
+		"commit": {"fast": 1, "normal": 1, "smart": 1, "elite": 1},
+		"tiny":   {"fast": 1, "normal": 1, "smart": 2, "elite": 2},
+		"smol":   {"fast": 1, "normal": 2, "smart": 2, "elite": 2},
+		"sonic":  {"fast": 1, "normal": 2, "smart": 2, "elite": 2},
+		"scout":  {"fast": 1, "normal": 2, "smart": 2, "elite": 2},
 	}
 	genUtilThink = map[string]map[string]string{
 		"commit": {"low": "minimal", "medium": "minimal", "high": "minimal", "xhigh": "low"},
@@ -505,22 +523,19 @@ var (
 		// step more thinking than smol at the same rung.
 		"scout": {"low": "low", "medium": "medium", "high": "medium", "xhigh": "medium"},
 	}
-	genTierMap   = map[string]int{"fast": 1, "normal": 2, "smart": 3}
+	genTierMap   = map[string]int{"fast": 1, "normal": 2, "smart": 3, "elite": 4}
 	genBump      = map[string]string{"minimal": "low", "low": "medium", "medium": "high", "high": "xhigh", "xhigh": "xhigh"}
 	genBaseLanes = []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"}
-	genMTiers    = []string{"fast", "normal", "smart"}
+	genMTiers    = []string{"fast", "normal", "smart", "elite"}
 	genThinking  = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 	genExtremes  = map[string]bool{"minimal": true, "max": true}
-	// genRelief marks the heavyweight roles whose led/mixed chains gain a
-	// relief tail on each optional (unmetered, pay-as-you-go) pool.
-	genRelief = map[string]bool{"default": true, "task": true, "plan": true, "slow": true}
 )
 
 // lanePolicy is a lane's whole role-mapping, as data. primary answers for
 // default/task/librarian; delib hosts plan/slow/designer/reviewer ("" = the
-// primary); visionSmart overrides the image rung's pool when the model dial
-// sits on smart (mixed prefers Claude's tier-3 for that). pure lanes never
-// cross: reviewer and advisor stay in-primary.
+// primary); visionSmart overrides the image rung's pool at the top of the model
+// dial (smart or elite — mixed prefers Claude's top rung there). pure lanes
+// never cross: reviewer and advisor stay in-primary.
 //
 // This table is the whole generator's sense of "a lane". A new setup — a new
 // pool pairing, a new emphasis — is a row here, not new branches in genCombo;
@@ -587,14 +602,19 @@ type roleRoute struct {
 // genCombo computes {role -> route} for one facet combination. A direct port
 // of generate-profiles.py's gen(), with the hard-coded model keys generalised
 // to pool/tier lookups.
-func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain, relief bool) map[string]roleRoute {
+func (c *catalog) genCombo(lane, mtier, thinking string, spark bool) map[string]roleRoute {
 	pol := genLanePolicies[lane]
 	p := pol.primary
 	base := genTierMap[mtier]
 	isPure := pol.pure
 	extreme := genExtremes[thinking]
 	sparkKey := c.specialKey("spark")
-	eliteKey := c.specialKey("fable")
+
+	// Roles that used to branch on mtier == "smart" branch on this instead:
+	// the top of the model dial now has two notches, and both mean "the
+	// operator asked for capability", so neither may fall through to the cheap
+	// arm that fast/normal take.
+	topDial := base >= 3
 
 	rprov := func(r string) string {
 		return pol.pool(r)
@@ -618,9 +638,9 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 				if !extreme {
 					th = "low"
 				}
-				fb = []string{c.ladder[rp][t]}
+				fb = []string{c.rung(rp, t)}
 			} else {
-				lead = c.ladder[rp][t]
+				lead = c.rung(rp, t)
 				// scout and sonic are spawned constantly and block their caller,
 				// so they keep a net; the rest are cheap enough to just retry.
 				if r == "sonic" || r == "scout" {
@@ -638,7 +658,7 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			// image described, and describeForTextModels is on by default — so
 			// this rung must be a model that actually accepts images. Vision
 			vp := p
-			if mtier == "smart" && pol.visionSmart != "" {
+			if topDial && pol.visionSmart != "" {
 				vp = pol.visionSmart
 			}
 			lead := c.visionLead(vp, base)
@@ -677,14 +697,14 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 			if !isPure {
 				ap = c.advisorPool(p)
 			}
-			amod := c.ladder[ap][1]
-			if mtier == "smart" {
-				amod = c.ladder[ap][2]
+			amod := c.rung(ap, 1)
+			if topDial {
+				amod = c.rung(ap, 2)
 			}
 			lvl, fbl := thinking, thinking
 			if !extreme {
 				fbl = "low"
-				if mtier == "smart" {
+				if topDial {
 					lvl = "high"
 				} else {
 					lvl = "low"
@@ -697,33 +717,21 @@ func (c *catalog) genCombo(lane, mtier, thinking string, spark, fable, fableMain
 		rp := rprov(r)
 		t := base
 		if genDelib[r] {
+			// The deliberative bump: one rung above the dial, capped at the
+			// pool's own top. On a pool that ladders to 4 this is how a
+			// deliberative role reaches the top rung straight from the `smart`
+			// notch — the routing the retired elite-lead toggle produced by hand.
 			t = base + 1
-			if t > 3 {
-				t = 3
+			if top := c.top(rp); t > top {
+				t = top
 			}
 		}
 		th := thinking
 		if !extreme && genDelib[r] {
 			th = genBump[thinking]
 		}
-		// The elite leads the deliberative Claude roles when on — gated to the
-		// smart/normal tiers. fable-as-main is an override: the elite takes the
-		// default role on every tier, regardless of lane preference.
-		fableHere := fable && eliteKey != "" &&
-			((fableMain && r == "default") ||
-				(genDelib[r] && rp == "A" && (mtier == "smart" || mtier == "normal")))
-		lead := c.ladder[rp][t]
-		if fableHere {
-			lead = eliteKey
-		}
+		lead := c.rung(rp, t)
 		chain := c.buildChain(lead, isPure)
-		if !isPure && relief && genRelief[r] {
-			// Relief tails: led/mixed lanes end their heavyweight chains on
-			// each optional pool's regular rung — pay-as-you-go capacity that
-			// keeps a session alive when every metered window is drained.
-			// Pure lanes stay pure. dedup absorbs rungs already in the chain.
-			chain = dedup(append(chain, c.reliefRungs(lead)...), lead)
-		}
 		out[r] = roleRoute{lead, th, chain, repeatLvl(th, len(chain))}
 	}
 	return out
@@ -737,67 +745,60 @@ func repeatLvl(lvl string, n int) []string {
 	return out
 }
 
-func genComboID(lane, mtier, thinking string, spark, fable, fableMain, relief, hasRelief bool) string {
-	sp, fa := "nosp", "nofa"
+func genComboID(lane, mtier, thinking string, spark bool) string {
+	sp := "nosp"
 	if spark {
 		sp = "sp"
 	}
-	if fable {
-		fa = "fa"
-		if fableMain {
-			fa = "famain"
-		}
-	}
-	id := fmt.Sprintf("%s_%s_%s_%s_%s", lane, mtier, thinking, sp, fa)
-	if hasRelief {
-		// The relief segment exists only in catalogs that carry an optional
-		// pool — two-pool ids stay byte-identical.
-		if relief {
-			id += "_rel"
-		} else {
-			id += "_norel"
-		}
-	}
-	return id
+	return fmt.Sprintf("%s_%s_%s_%s", lane, mtier, thinking, sp)
 }
 
-// genValid rejects facet combos the lane cannot host: a special-tier facet
-// (spark, fable) is valid only when its provider's pool is in the lane's
-// pool-set — a pure lane hosts only its own pool. relief=off exists only
-// where relief tails could appear at all: a metered-led blend.
-func genValid(lane string, spark, fable, fableMain, relief bool) bool {
-	if fable && !laneHostsSpecial(lane, "fable") {
-		return false // no elite outside its pool's lanes
-	}
+// genValid rejects facet combos the lane cannot host. The spark facet is valid
+// only when its provider's pool is in the lane's pool-set — a pure lane hosts
+// only its own pool.
+//
+// The `elite` notch is gated on the lane's LEAD pool, not its whole pool-set,
+// and the distinction is not pedantic: the deliberative bump (t = base+1,
+// capped at the pool's top rung) already hands plan/slow/designer/reviewer the
+// tier-4 rung at `smart`, which is precisely the routing the retired `fable`
+// toggle used to produce. So on a lane led by a pool that tops out at 3, every
+// seat elite could change is already saturated at `smart`. On gpt-led and
+// gpt-only that makes elite render byte-identical to smart. On mixed one seat
+// does diverge — its visionSmart override points at A, so the vision role would
+// lead on the tier-4 rung — but a whole notch of the model dial whose only
+// effect is which model describes an image is not a routing choice worth
+// offering, and it would carry a full grid of otherwise-identical blocks.
+// What elite genuinely means is "put the lead pool's best model in the lead
+// seats", so it exists only where the lead pool has a fourth rung to give.
+func (c *catalog) genValid(lane, mtier string, spark bool) bool {
 	if spark && !laneHostsSpecial(lane, "spark") {
 		return false // no spark outside its pool's lanes
 	}
-	if fableMain && !fable {
-		return false // fable-as-main only exists on top of fable
-	}
-	if !relief && !laneReliefApplies(lane) {
-		return false // relief is not a choice where no tail is generated
+	if mtier == "elite" && !c.laneLeadsTier4(lane) {
+		return false // elite would duplicate smart where the lead tops out at 3
 	}
 	return true
 }
 
+// laneLeadsTier4 reports whether the lane's lead pool declares a top rung at
+// tier 4. Pool-generic on purpose: a second provider shipping a fourth model
+// lights up its own lanes' elite notch with no code change here.
+func (c *catalog) laneLeadsTier4(lane string) bool {
+	pol, ok := genLanePolicies[lane]
+	if !ok {
+		return false
+	}
+	return c.ladder[pol.primary][4] != ""
+}
+
 // ── rendering (byte-compatible with generate-profiles.py) ────────────────────
 
-func (c *catalog) renderCombo(lane, mtier, thinking string, spark, fable, fableMain, relief, hasRelief bool) string {
-	roles := c.genCombo(lane, mtier, thinking, spark, fable, fableMain, relief)
-	cid := genComboID(lane, mtier, thinking, spark, fable, fableMain, relief, hasRelief)
+func (c *catalog) renderCombo(lane, mtier, thinking string, spark bool) string {
+	roles := c.genCombo(lane, mtier, thinking, spark)
+	cid := genComboID(lane, mtier, thinking, spark)
 	desc := []string{lane, mtier, thinking}
 	if spark {
 		desc = append(desc, "spark")
-	}
-	if fable {
-		desc = append(desc, "fable")
-	}
-	if fable && fableMain {
-		desc = append(desc, "main")
-	}
-	if !relief {
-		desc = append(desc, "no-relief")
 	}
 	lines := []string{fmt.Sprintf("%s  %s", cid, strings.Join(desc, " · "))}
 	advOn := roles["advisor"].lead != ""
@@ -887,7 +888,7 @@ func (c *catalog) renderAdvisors() string {
 		for _, d := range dial {
 			var parts []string
 			for _, rg := range d.chain {
-				k := c.ladder[ctx.pool][rg.tier]
+				k := c.rung(ctx.pool, rg.tier)
 				parts = append(parts, fmt.Sprintf("%s:%s", c.models[k].ID, c.clampTh(k, rg.lvl)))
 			}
 			lines = append(lines, fmt.Sprintf("  %s %s %s", d.level, ctx.name, strings.Join(parts, " → ")))
@@ -914,8 +915,6 @@ func (c *catalog) renderCatalog() string {
 	b.WriteString(c.renderAdvisors() + "\n")
 	b.WriteString(c.renderModelFacts() + "\n")
 	hasSpark := c.specialKey("spark") != ""
-	hasElite := c.specialKey("fable") != ""
-	hasRelief := c.hasOptionalPool()
 	for _, lane := range c.lanes() {
 		for _, mtier := range genMTiers {
 			for _, thinking := range genThinking {
@@ -923,20 +922,8 @@ func (c *catalog) renderCatalog() string {
 					if spark && !hasSpark {
 						continue
 					}
-					for _, fable := range []bool{true, false} {
-						if fable && !hasElite {
-							continue
-						}
-						for _, fableMain := range []bool{false, true} {
-							for _, relief := range []bool{true, false} {
-								if !relief && !hasRelief {
-									continue
-								}
-								if genValid(lane, spark, fable, fableMain, relief) {
-									b.WriteString(c.renderCombo(lane, mtier, thinking, spark, fable, fableMain, relief, hasRelief) + "\n")
-								}
-							}
-						}
+					if c.genValid(lane, mtier, spark) {
+						b.WriteString(c.renderCombo(lane, mtier, thinking, spark) + "\n")
 					}
 				}
 			}

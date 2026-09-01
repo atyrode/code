@@ -54,7 +54,39 @@ func clampByte(x float64) int {
 	return v
 }
 
-func paintModel(tok string) string {
+// modelLabel is how a routing token's model name is displayed: the short key
+// ("opus") by default, the catalog's own full id ("claude-opus-5") while the
+// reveal toggle is on — the sanity check for "which model is this actually".
+func (m model) modelLabel(name string) string {
+	if !m.showFullIDs {
+		return shortModel(name)
+	}
+	return m.fullModelID(name)
+}
+
+// fullModelID resolves a name to the id the catalog knows it by, using
+// __models__ (m.facts) rather than reassembling an id from parts: the ladder's
+// short keys are a naming convention, not a rule, and a guessed id would read
+// as authoritative while being wrong. Routing rows already carry full ids, so
+// the first arm answers almost always; the scan covers a row that carries a
+// ladder key, and an unknown name is returned untouched.
+func (m model) fullModelID(name string) string {
+	if _, ok := m.facts[name]; ok {
+		return name
+	}
+	var found string
+	for id := range m.facts {
+		if shortModel(id) == name && (found == "" || id < found) {
+			found = id // lowest id wins, so the reveal never flickers between runs
+		}
+	}
+	if found != "" {
+		return found
+	}
+	return name
+}
+
+func (m model) paintModel(tok string) string {
 	i := strings.LastIndex(tok, ":")
 	name, level := tok[:i], tok[i+1:]
 	p := providerByModel(name)
@@ -66,18 +98,20 @@ func paintModel(tok string) string {
 		// Free/local runtimes read green.
 		br, bg, bb = 96, 211, 150
 	default:
-		return shortModel(name) + ":" + level // unknown provider: uncoloured
+		return m.modelLabel(name) + ":" + level // unknown provider: uncoloured
 	}
 	f := 0.60 + float64(lvl(level))*0.088
 	col := lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", clampByte(br*f), clampByte(bg*f), clampByte(bb*f)))
-	return lipgloss.NewStyle().Foreground(col).Render(shortModel(name) + ":" + level)
+	return lipgloss.NewStyle().Foreground(col).Render(m.modelLabel(name) + ":" + level)
 }
 
-func colorizeRoute(line string) string { return modelRe.ReplaceAllStringFunc(line, paintModel) }
+func (m model) colorizeRoute(line string) string {
+	return modelRe.ReplaceAllStringFunc(line, m.paintModel)
+}
 
 // bucketOf guesses a quota bucket from a model name. It is the fallback for
 // catalogs that declare no bucket column, and the only resolver for the bare
-// facet names ("fable", "spark") the suggest box asks about — prefer
+// facet name ("spark") the suggest box and the dial list ask about — prefer
 // model.bucketFor wherever a receiver is in reach. An unknown name maps to no
 // bucket at all rather than someone else's quota window.
 func bucketOf(model string) string {
@@ -114,7 +148,7 @@ func bucketOf(model string) string {
 // bucketFor resolves a routing token's quota bucket from the catalog, falling
 // back to the name guess only when the catalog declares none. The catalog wins
 // because names are not a taxonomy: claude-mythos-5 sits in omp's catalog at
-// claude-fable-5's price yet 404s on this account, and every model omp adds
+// the top rung's price yet 404s on this account, and every model omp adds
 // would otherwise need one more substring arm here before it could be struck
 // through correctly.
 func (m model) bucketFor(name string) string {

@@ -19,7 +19,15 @@ import (
 
 // ── usage + availability ─────────────────────────────────────────────────────
 type usageWin struct {
-	label    string
+	label string
+	// id is the short window id straight from the payload — scope.windowId,
+	// falling back to window.id. It is the authoritative name for the window:
+	// omp adds and retires windows (Codex went from a 5h/7d pair to a single
+	// 30d) and the panel has to follow the payload rather than a table of
+	// English labels compiled into this binary. Empty only for payloads that
+	// carry no window id at all, where shortWin falls back to the label
+	// vocabulary.
+	id       string
 	pct      int
 	tier     string
 	secs     int64 // seconds until reset (relative)
@@ -78,6 +86,7 @@ func fetchBrokerUsage(broker brokerConfig) ([]byte, error) {
 
 type usageCacheWin struct {
 	Label    string `json:"label"`
+	ID       string `json:"windowId,omitempty"`
 	Pct      int    `json:"pct"`
 	Tier     string `json:"tier,omitempty"`
 	ResetsAt int64  `json:"resetsAt"`
@@ -123,14 +132,16 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 	type limit struct {
 		Label string `json:"label"`
 		Scope struct {
-			Tier string `json:"tier"`
+			Tier     string `json:"tier"`
+			WindowID string `json:"windowId"`
 		} `json:"scope"`
 		Amount struct {
 			UsedFraction float64 `json:"usedFraction"`
 		} `json:"amount"`
 		Window struct {
-			ResetsAt   int64 `json:"resetsAt"`
-			DurationMs int64 `json:"durationMs"`
+			ID         string `json:"id"`
+			ResetsAt   int64  `json:"resetsAt"`
+			DurationMs int64  `json:"durationMs"`
 		} `json:"window"`
 	}
 	var doc struct {
@@ -166,13 +177,27 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 		reportWins := make([]usageWin, 0, len(r.Limits))
 		for _, l := range r.Limits {
 			pct := int(l.Amount.UsedFraction*100 + 0.5)
-			win := usageWin{label: l.Label, pct: pct, tier: l.Scope.Tier,
+			// scope.windowId names the window this limit is scoped to;
+			// window.id repeats it for payloads that omit the scope copy.
+			winID := l.Scope.WindowID
+			if winID == "" {
+				winID = l.Window.ID
+			}
+			win := usageWin{label: l.Label, id: winID, pct: pct, tier: l.Scope.Tier,
 				secs: l.Window.ResetsAt/1000 - now, dur: l.Window.DurationMs / 1000,
 				prov: r.Provider, observed: observedAt}
 			reportWins = append(reportWins, win)
 			a.wins = append(a.wins, win)
 			bkt := bucketForProviderTier(r.Provider, l.Scope.Tier)
 			if bkt == "" {
+				// A tier no provider entry declares owns no bucket, so this
+				// window takes part in no bucket accounting at all: it renders
+				// as its own row and nothing more. The skip is load-bearing —
+				// providers keep emitting tier-scoped limits for carve-outs
+				// this build does not model, and folding an unrecognised
+				// tier's usedFraction into the provider's MAIN bucket would
+				// mark that provider maxed — stopping every route through it —
+				// on the strength of a quota window nothing here understands.
 				continue
 			}
 			if pct >= 100 {
@@ -288,7 +313,7 @@ func loadUsageCache(path string) availability {
 		key := accountKey{Provider: entry.Provider, IdentityKey: entry.IdentityKey}
 		for _, cachedWin := range entry.Wins {
 			win := usageWin{
-				label: cachedWin.Label, pct: cachedWin.Pct, tier: cachedWin.Tier,
+				label: cachedWin.Label, id: cachedWin.ID, pct: cachedWin.Pct, tier: cachedWin.Tier,
 				secs: cachedWin.ResetsAt - time.Now().Unix(), dur: cachedWin.Dur, prov: cachedWin.Provider,
 				observed: cachedWin.Observed, stale: true,
 			}
@@ -349,7 +374,7 @@ func saveUsageCache(path string, a availability) {
 				observed = now
 			}
 			entry.Wins = append(entry.Wins, usageCacheWin{
-				Label: win.label, Pct: win.pct, Tier: win.tier,
+				Label: win.label, ID: win.id, Pct: win.pct, Tier: win.tier,
 				ResetsAt: observed + win.secs, Dur: win.dur,
 				Provider: win.prov, Observed: observed,
 			})
@@ -406,15 +431,18 @@ func (a availability) down(bucket string) bool {
 //     availability wholesale and reports it stale — the control row shows a
 //     refresh-failed warning instead of dropping to the unauthenticated error;
 //   - a successful payload that omits an account's usage retains that
-//     account's last observed rows, visibly marked stale with their age;
-//   - a successful Anthropic payload that only omits the flaky Fable window
-//     retains the last Fable row, along with its bucket/reset routing state;
-//   - a successful Anthropic payload with no Fable window ever observed
-//     appends a deterministic unavailable placeholder, so the datum appearing
-//     on a later refresh never pops the panel geometry.
+//     account's last observed rows, visibly marked stale with their age.
 //
-// Fresh values always win; nothing is fabricated — retained rows are visibly
-// marked stale and placeholders carry no numbers.
+// Nothing else is retained, and nothing at all is fabricated. The panel shows
+// exactly the windows the payload reports: it never invents a row that is
+// missing, and never suppresses one it does not recognise. This seam used to
+// carry a provider-specific reservation — one quota window was flaky enough
+// that its row was retained across omissions, and synthesised as an
+// "unavailable" placeholder when it had never been seen, so a late-appearing
+// datum could not pop the panel geometry. That reservation outlived the window
+// itself: after the provider retired the window, the panel kept promising a
+// row that would never come back. Window vocabulary belongs to the payload,
+// which is what makes a provider adding or retiring a window a non-event here.
 func reconcileUsage(prev, next availability) (availability, bool) {
 	if !next.ok {
 		if prev.ok {
@@ -433,36 +461,6 @@ func reconcileUsage(prev, next availability) (availability, bool) {
 		retained.stale = true
 		next.deepseek = &retained
 	}
-	hasClaude, hasFable := false, false
-	for _, w := range next.wins {
-		if w.prov != anthropicProvider {
-			continue
-		}
-		hasClaude = true
-		if w.tier == "fable" {
-			hasFable = true
-		}
-	}
-	if !hasClaude || hasFable {
-		return next, false
-	}
-	for _, w := range prev.wins {
-		if w.prov == anthropicProvider && w.tier == "fable" && !w.missing {
-			w.stale = true
-			next.wins = append(next.wins, w)
-			// Carry the bucket/reset state observed with the retained window:
-			// loadAvailability defaults an unseen bucket to "ok", which would
-			// route onto a fable the last real datum said was maxed.
-			if st, ok := prev.bucket["claude-fable"]; ok {
-				next.bucket["claude-fable"] = st
-			}
-			if r, ok := prev.reset["claude-fable"]; ok {
-				next.reset["claude-fable"] = r
-			}
-			return next, false
-		}
-	}
-	next.wins = append(next.wins, fablePlaceholder)
 	return next, false
 }
 
@@ -490,58 +488,23 @@ func reconcileAccountUsage(prev, next map[accountKey][]usageWin, accounts map[st
 				break
 			}
 		}
-		if !hasFresh {
-			retained := make([]usageWin, 0, len(prev[key]))
-			for _, w := range prev[key] {
-				if w.missing {
-					continue
-				}
-				w.stale = true
-				retained = append(retained, w)
-			}
-			if len(retained) > 0 {
-				next[key] = retained
-			}
+		if hasFresh {
 			continue
 		}
-		if key.Provider != anthropicProvider {
-			continue
-		}
-		hasClaude, hasFable := false, false
-		for _, w := range wins {
-			if w.prov != anthropicProvider {
+		retained := make([]usageWin, 0, len(prev[key]))
+		for _, w := range prev[key] {
+			if w.missing {
 				continue
 			}
-			if !w.missing {
-				hasClaude = true
-			}
-			if w.tier == "fable" {
-				hasFable = true
-			}
+			w.stale = true
+			retained = append(retained, w)
 		}
-		if !hasClaude || hasFable {
-			continue
-		}
-		retained := false
-		for _, w := range prev[key] {
-			if w.prov == anthropicProvider && w.tier == "fable" && !w.missing {
-				w.stale = true
-				next[key] = append(next[key], w)
-				retained = true
-				break
-			}
-		}
-		if !retained {
-			next[key] = append(next[key], fablePlaceholder)
+		if len(retained) > 0 {
+			next[key] = retained
 		}
 	}
 	return next
 }
-
-// fablePlaceholder is the never-observed fable window's deterministic
-// stand-in: the real payload label (so shortWin renders the same "7d fable"
-// tag) and window length, with no usage numbers to fabricate.
-var fablePlaceholder = usageWin{label: "Claude 7 Day (Fable)", tier: "fable", dur: 7 * 24 * 3600, prov: anthropicProvider, missing: true}
 
 type usageGroupKey struct {
 	prov  string
@@ -558,18 +521,29 @@ type usageGroup struct {
 	observed int64
 }
 
+// knownUsageWindow gates which reported windows the panel is willing to draw.
+// The old rule was a duration whitelist — 5h or 7d, optionally suffixed by a
+// declared special tier — so it silently dropped every window it had not been
+// taught: Codex now reports a single 30d window, and that row disappeared from
+// the panel entirely instead of being rendered and gated on its real usage.
+//
+// The rule is payload-driven instead: a window is renderable when this build
+// knows the metered provider that owns the quota (an unmetered or unregistered
+// provider has no window to draw) and the window names itself — its own id, or,
+// for id-less payloads, a label the fallback vocabulary recognises. This
+// deliberately does NOT require the window's tier to map onto a declared
+// bucket: an unrecognised tier-scoped window is still a real quota window the
+// operator wants to see, it merely takes part in no bucket accounting.
 func knownUsageWindow(w usageWin) bool {
-	label := shortWin(w.label)
-	bucket := bucketForProviderTier(w.prov, w.tier)
 	p := providerByID(w.prov)
-	if bucket == "" || p == nil {
+	if p == nil || !p.Metered {
 		return false
 	}
-	if bucket == p.mainBucket() {
-		return label == "5h" || label == "7d"
+	if w.id != "" {
+		return true
 	}
-	suffix := strings.TrimPrefix(bucket, p.BucketBase+"-")
-	return label == "5h "+suffix || label == "7d "+suffix
+	_, ok := shortWinLabel(w.label)
+	return ok
 }
 
 // selectedAvailability derives account-sensitive usage and routing availability
@@ -608,7 +582,7 @@ func selectedAvailability(a availability, disabled map[accountKey]bool) availabi
 					continue
 				}
 				selected.accountUsage[key] = append(selected.accountUsage[key], win)
-				groupKey := usageGroupKey{prov: win.prov, tier: win.tier, dur: win.dur, label: shortWin(win.label)}
+				groupKey := usageGroupKey{prov: win.prov, tier: win.tier, dur: win.dur, label: shortWin(win)}
 				if win.missing {
 					if _, ok := missing[groupKey]; !ok {
 						placeholder := win
@@ -728,20 +702,41 @@ func fmtReset(s int64) string {
 	return fmt.Sprintf("%dm", s/60)
 }
 
-func shortWin(l string) string {
+// shortWin is a window's display tag. The payload's own window id is
+// authoritative — "5h", "7d", "30d" — with the limit's tier appended when the
+// window is tier-scoped ("5h spark"), because an id alone cannot tell a
+// provider's main window apart from a tier carve-out of the same duration.
+//
+// The label switch in shortWinLabel is ONLY a fallback for payloads that carry
+// no window id at all, and it must never grow: a hardcoded table of English
+// labels is exactly how Codex's single "30 days" window came to render as the
+// raw payload string and be gated out as unknown.
+func shortWin(w usageWin) string {
+	if w.id != "" {
+		if w.tier != "" && w.tier != "-" {
+			return w.id + " " + w.tier
+		}
+		return w.id
+	}
+	tag, _ := shortWinLabel(w.label)
+	return tag
+}
+
+// shortWinLabel resolves the legacy English window labels, reporting whether
+// the label was one this build recognises. Windows that carry an id never
+// reach it.
+func shortWinLabel(l string) (string, bool) {
 	switch l {
 	case "5 hours", "Claude 5 Hour", "Codex 5 Hour", "OpenAI 5 Hour":
-		return "5h"
+		return "5h", true
 	case "7 days", "Claude 7 Day", "Codex 7 Day", "OpenAI 7 Day":
-		return "7d"
+		return "7d", true
 	case "5 hours (Spark)", "Codex 5 Hour (Spark)", "OpenAI 5 Hour (Spark)":
-		return "5h spark"
+		return "5h spark", true
 	case "7 days (Spark)", "Codex 7 Day (Spark)", "OpenAI 7 Day (Spark)":
-		return "7d spark"
-	case "Claude 7 Day (Fable)":
-		return "7d fable"
+		return "7d spark", true
 	}
-	return l
+	return l, false
 }
 
 // usageCtrlLine is the Usage chrome's bottom action row: central refresh state,
@@ -1113,6 +1108,26 @@ func (m *model) usageBodyLayout(w int, stacked bool) string {
 	return layoutGroups(w, order, blocks, stacked)
 }
 
+// usageColFloorW is the minimum natural width of one provider column: a single
+// canonical usage row carrying the widest window tag the registry declares.
+// Measuring against a content-independent floor is what keeps the side-by-side
+// decision from flipping between the pre-fetch skeleton and the first real
+// payload. The tag is read from the declared skeleton windows instead of being
+// written here as a literal, because window vocabulary belongs to the provider:
+// this line used to hard-code the tag of a quota window that has since been
+// retired, so the floor was reserving cells for a row that can never appear.
+func usageColFloorW() int {
+	widest := ""
+	for _, wins := range skeletonWinsByProvider {
+		for _, label := range wins {
+			if lipgloss.Width(label) > lipgloss.Width(widest) {
+				widest = label
+			}
+		}
+	}
+	return lipgloss.Width(skeletonRow(widest)) + 2
+}
+
 // layoutGroups assigns provider columns before rendering any usage row.
 // Side-by-side groups share the whole panel width; stacked groups each receive
 // the whole section width. A zero width is the non-recursive measurement path
@@ -1123,7 +1138,7 @@ func layoutGroups(w int, order []string, blocks map[string]usageRenderGroup, sta
 		allRows = append(allRows, blocks[prov].rows...)
 	}
 	naturalBarWidth, noteWidth := usageRowsLayout(0, allRows)
-	naturalColW := lipgloss.Width(skeletonRow("7d fable")) + 2
+	naturalColW := usageColFloorW()
 	for _, prov := range order {
 		blockW := usageRenderWidth(blocks[prov].linesWithUsageLayout(naturalBarWidth, noteWidth, 0)) + 2
 		if blockW > naturalColW {
@@ -1172,8 +1187,11 @@ func (m *model) usageLoading() bool {
 	return m.broker.URL != "" && !m.avail.ok && (m.fetching || m.nextRefresh.IsZero())
 }
 
-// skeletonWinsByProvider mirrors each provider's stable usage shape. Anthropic
-// always reserves the Fable row, even before a first successful fetch.
+// skeletonWinsByProvider mirrors each provider's declared usage shape, so the
+// pre-fetch skeleton reserves about the rows the first real payload will fill.
+// It is a layout hint only: the rendered panel follows the payload, so a
+// provider reporting a different set of windows than it declares just changes
+// shape once, on the first successful fetch.
 var skeletonWinsByProvider = func() map[string][]string {
 	wins := map[string][]string{}
 	for _, p := range providerRegistry {
@@ -1373,7 +1391,7 @@ func (m *model) usageRowSpec(w usageWin, indent string) usageRowSpec {
 	if w.missing {
 		// Never-observed windows keep the exact row grammar with dotted values;
 		// only the status text differs from the loading skeleton.
-		row := skeletonUsageRowSpec(shortWin(w.label), indent)
+		row := skeletonUsageRowSpec(shortWin(w), indent)
 		row.note = stDim.Render("unavailable")
 		return row
 	}
@@ -1412,7 +1430,7 @@ func (m *model) usageRowSpec(w usageWin, indent string) usageRowSpec {
 		barPct = barPct * m.barAnim / barAnimSteps
 	}
 	return usageRowSpec{
-		indent: indent, label: shortWin(w.label), barPct: barPct,
+		indent: indent, label: shortWin(w), barPct: barPct,
 		percentage: fmt.Sprintf("%3d%%", w.pct), reset: reset, note: note,
 	}
 }
