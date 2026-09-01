@@ -4793,3 +4793,98 @@ func TestLaneOrderForPoolsPoolCounts(t *testing.T) {
 		t.Errorf("three pools = %v, want the five plus the optional pool's pair", got)
 	}
 }
+
+// TestAccountHealthComesFromOmp: omp 18 reports which credentials it has taken
+// out of service and why (disabledCredentials), which configured accounts sent
+// no report (accountsWithoutUsage), and its own cross-account headroom per
+// provider (capacity). The panel used to infer all of that from an absent
+// report and call it "unauthed" — one word for "never logged in" and "your
+// refresh token died". The payload here is the shape omp 18.1.2 actually
+// emitted for this operator, cause string included.
+func TestAccountHealthComesFromOmp(t *testing.T) {
+	live := accountKey{Provider: "anthropic", IdentityKey: "email:alex@example.test|org:1"}
+	dead := accountKey{Provider: "anthropic", IdentityKey: "email:victor@example.test|org:2"}
+	quiet := accountKey{Provider: "openai-codex", IdentityKey: "codex-quiet"}
+	accounts := map[string][]account{
+		"anthropic": {
+			{Provider: live.Provider, IdentityKey: live.IdentityKey, Email: "alex@example.test"},
+			{Provider: dead.Provider, IdentityKey: dead.IdentityKey, Email: "victor@example.test"},
+		},
+		"openai-codex": {{Provider: quiet.Provider, IdentityKey: quiet.IdentityKey, Email: "quiet@example.test"}},
+	}
+	resetsAt := (time.Now().Unix() + 3600) * 1000
+	payload := fmt.Sprintf(`{
+	  "reports":[{"provider":"anthropic","email":"alex@example.test","limits":[
+	    {"label":"Claude 5 Hour","scope":{"windowId":"5h"},"amount":{"usedFraction":1},
+	     "window":{"id":"5h","resetsAt":%d,"durationMs":18000000}}]}],
+	  "disabledCredentials":[{"id":16,"provider":"anthropic","type":"oauth","disabledAtMs":1785968668000,
+	    "email":"victor@example.test",
+	    "cause":"oauth refresh failed: OAuthError: Anthropic token refresh request failed. url=https://api.anthropic.com/v1/oauth/token; details=ProviderHttpError: HTTP request failed. status=400; body={\"error\": \"invalid_grant\", \"error_description\": \"Refresh token not found or invalid\"}\n    at Z17 (cli.js:54158:17)"}],
+	  "accountsWithoutUsage":[{"provider":"openai-codex","email":"quiet@example.test"}],
+	  "capacity":{"anthropic":[{"window":"5h","accounts":2,"usedAccounts":1,"remainingAccounts":1}]}
+	}`, resetsAt)
+	a := parseAvailability(accounts, true, []byte(payload), 0)
+	if !a.ok {
+		t.Fatal("payload did not parse")
+	}
+
+	f, ok := a.faults[dead]
+	if !ok {
+		t.Fatalf("omp's disabled credential was not attributed to its account: %+v", a.faults)
+	}
+	if f.at != 1785968668000 {
+		t.Errorf("disabledAtMs = %d, want the payload's", f.at)
+	}
+	if got, want := f.short(), "oauth refresh failed (invalid_grant)"; got != want {
+		t.Errorf("short cause = %q, want %q", got, want)
+	}
+	// Without a provider code the first clause survives, minus diagnostics.
+	plain := credFault{cause: "token endpoint unreachable: dial tcp timeout url=https://x status=0; stack..."}
+	if got, want := plain.short(), "token endpoint unreachable: dial tcp timeout"; got != want {
+		t.Errorf("short cause without code = %q, want %q", got, want)
+	}
+	if _, ok := a.faults[live]; ok {
+		t.Error("a healthy credential was marked faulted")
+	}
+	if !a.silent[quiet] || a.silent[live] {
+		t.Errorf("accountsWithoutUsage misattributed: %+v", a.silent)
+	}
+
+	// capacity is the authority on the main bucket: the one reporting account
+	// is at 100%, but omp says a sibling still has headroom, so the provider
+	// is not down. Per-report folding alone would have struck every route.
+	if got := a.bucket["claude-main"]; got != "ok" {
+		t.Errorf("claude-main = %q, want ok — omp reports remaining capacity", got)
+	}
+	if _, ok := a.reset["claude-main"]; ok {
+		t.Error("a bucket omp says has headroom kept a reset countdown")
+	}
+
+	// The rendered block names the cause on its own row and never spells the
+	// dead credential as merely "unavailable".
+	rows := stripAnsi(strings.Join(providerIdentityBlockFor(a, "anthropic", false, true), "\n"))
+	if !strings.Contains(rows, "victor@example.test") || !strings.Contains(rows, "invalid_grant") || !strings.Contains(rows, "disabled by omp") {
+		t.Errorf("fault row missing omp's cause:\n%s", rows)
+	}
+	if strings.Contains(rows, "usage unavailable") {
+		t.Errorf("a credential with a known cause was reported as merely unavailable:\n%s", rows)
+	}
+
+	// Borrowed identities keep their health: a flaky identity lookup must not
+	// re-hide a credential omp disabled.
+	stale := parseAvailability(map[string][]account{}, false, []byte(payload), 0)
+	merged, _ := reconcileUsage(a, stale)
+	if _, ok := merged.faults[dead]; !ok || !merged.accountsStale {
+		t.Errorf("fault dropped when identities were borrowed: stale=%v faults=%+v", merged.accountsStale, merged.faults)
+	}
+
+	// A payload without the new fields degrades to the old absence rule: no
+	// report for a metered provider is still unauthed.
+	old := parseAvailability(accounts, true, []byte(`{"reports":[]}`), 0)
+	if got := old.bucket["claude-main"]; got != "unauthed" {
+		t.Errorf("legacy payload: claude-main = %q, want unauthed", got)
+	}
+	if len(old.faults) != 0 || len(old.silent) != 0 {
+		t.Errorf("legacy payload invented account health: %+v %+v", old.faults, old.silent)
+	}
+}
