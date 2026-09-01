@@ -28,8 +28,13 @@ func untrustedLaunchArgv(path string, forwarded []string, prompt string) []strin
 	return forwardArgv(path, forwarded, prompt)
 }
 
-func generatedLaunchArgv(path, cfgPath string, forwarded []string, prompt string) []string {
-	args := append([]string{"--config", cfgPath}, stripProfileArgs(forwarded)...)
+// generatedLaunchArgv puts the generated overlay first, then the dials' own omp
+// flags, then whatever the operator forwarded — so a forwarded flag still has
+// the last word over a dial, the same precedence the overlay already gives
+// --config.
+func generatedLaunchArgv(path, cfgPath string, flags, forwarded []string, prompt string) []string {
+	args := append([]string{"--config", cfgPath}, flags...)
+	args = append(args, stripProfileArgs(forwarded)...)
 	out := append([]string{path}, args...)
 	if prompt != "" {
 		out = append(out, prompt)
@@ -132,7 +137,7 @@ func runTrusted(envName string, fallbacks []string,
 }
 
 // launchGenerated keeps both immutable launch inputs alive only for the child.
-func launchGenerated(cfg, prompt string, broker brokerConfig, selections accountSelectionState, dir string) int {
+func launchGenerated(cfg, prompt string, flags []string, broker brokerConfig, selections accountSelectionState, dir string) int {
 	tmp, err := os.CreateTemp("", "code-gen-*.yml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
@@ -150,6 +155,6 @@ func launchGenerated(cfg, prompt string, broker brokerConfig, selections account
 		return 1
 	}
 	return runTrusted("CODE_OMP", []string{"omp"}, func(path string, forwarded []string, prompt string) []string {
-		return generatedLaunchArgv(path, cfgPath, forwarded, prompt)
+		return generatedLaunchArgv(path, cfgPath, flags, forwarded, prompt)
 	}, prompt, broker, selections, dir)
 }

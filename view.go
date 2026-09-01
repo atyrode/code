@@ -460,11 +460,13 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 //
 //	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)
 //	thinking 💡 (f0eb)  advisor 🧭 (f14e)  spark 🚀 (f135)  fast ⚡ (f0e7)
+//	prewalk ↓ (f063)  planyolo ▶ (f04b)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
 		"runtime": "\uf108", "local": "\uf109", "lane": "\uf127", "model": "\uf085",
 		"thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fast": "\uf0e7",
+		"prewalk": "\uf063", "planyolo": "\uf04b",
 	}
 }
 
@@ -478,6 +480,7 @@ func unicodeGlyphs() map[string]string {
 		"runtime": "▣", "local": "▢", "lane": "⇄", "model": "⚙",
 		"thinking": "✦", "advisor": "◎",
 		"spark": "✧", "fast": "»",
+		"prewalk": "↓", "planyolo": "›",
 	}
 }
 
@@ -495,5 +498,6 @@ func asciiGlyphs() map[string]string {
 		"runtime": "r", "local": "l", "lane": "n", "model": "m",
 		"thinking": "t", "advisor": "a",
 		"spark": "s", "fast": "f",
+		"prewalk": "p", "planyolo": "y",
 	}
 }

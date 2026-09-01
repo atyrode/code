@@ -1428,8 +1428,9 @@ func (m *model) deepseekBalanceRow(b deepseekBalance) string {
 	if v, err := strconv.ParseFloat(b.total, 64); err == nil && v < deepseekLowBalanceUSD {
 		row += "  " + stWarn.Render("low")
 	}
-	if deepseekOffPeak(offPeakNow().UTC()) {
-		row += "  " + stDim.Render("off-peak −50%")
+	if mult := poolOffPeak(poolOf(deepseekProvider), offPeakNow().UTC()); mult < 1 {
+		pct := strconv.Itoa(int((1-mult)*100 + 0.5))
+		row += "  " + stDim.Render("off-peak −"+pct+"%")
 	}
 	if b.stale {
 		cached := "cached"
