@@ -3491,18 +3491,21 @@ func TestRoutingAndFacetAdvisoriesUseCommittedSelection(t *testing.T) {
 	}
 }
 
-// TestUndeclaredTierWindowRendersWithoutMaxingTheBucket is the corruption
-// parseAvailability's `if bkt == "" { continue }` exists to prevent, and the
-// property that replaced the whole retired fable-window apparatus.
+// TestUndeclaredTierWindowOwnsNoBucket is the corruption parseAvailability's
+// `if bkt == "" { continue }` exists to prevent, and the property that replaced
+// the whole retired fable-window apparatus.
 //
 // This operator's omp still reports an Anthropic limit scoped to tier "fable" — a
-// carve-out no provider entry declares any more. The window is real and the
-// operator wants to see it, so it renders as its own row; but it owns no bucket,
-// and folding its usedFraction into claude-main would mark Claude maxed at 100%
-// and stop every route through it on the strength of a quota window this build
-// does not model. Both bucket seams (the payload parse and the account-selection
-// rebuild) have to apply the rule.
-func TestUndeclaredTierWindowRendersWithoutMaxingTheBucket(t *testing.T) {
+// carve-out no provider entry declares any more. It owns no bucket, and folding
+// its usedFraction into claude-main would mark Claude maxed at 100% and stop
+// every route through it on the strength of a quota window this build does not
+// model. Both bucket seams (the payload parse and the account-selection rebuild)
+// have to apply the rule.
+//
+// Drawability is a separate, catalog-level question: usageRow still renders any
+// window handed to it, but whether the panel hands it one is
+// TestPanelDropsRetiredTierWindows.
+func TestUndeclaredTierWindowOwnsNoBucket(t *testing.T) {
 	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
 	accounts := map[string][]account{
 		"anthropic": {{Provider: key.Provider, IdentityKey: key.IdentityKey, Email: "alex@example.test"}},
@@ -3529,8 +3532,8 @@ func TestUndeclaredTierWindowRendersWithoutMaxingTheBucket(t *testing.T) {
 		t.Error("every route through Claude was struck by a window nothing here models")
 	}
 
-	// It is still a real window: it names itself, so it is drawable and gets a
-	// row of its own, labelled by id plus its tier.
+	// It is still a real window: it names itself, so the payload gate passes it
+	// and the direct renderer labels it by id plus tier.
 	var carve usageWin
 	for _, w := range a.wins {
 		if w.tier == "fable" {
@@ -3573,6 +3576,92 @@ func TestUndeclaredTierWindowRendersWithoutMaxingTheBucket(t *testing.T) {
 	}
 	if got := selectedAvailability(spark, nil); !got.down("codex-spark") || got.down("codex-main") {
 		t.Fatalf("a declared tier must max exactly its own bucket: %+v", got.bucket)
+	}
+}
+
+// TestPanelDropsRetiredTierWindows is the operator-visible half of the retired
+// carve-out: Anthropic stopped scoping quota to that tier, but omp keeps
+// reporting the window — 0% used, "ok", forever. A row nothing can ever spend
+// is noise, so the panel drops it, and the rule that does it names no model:
+// the tier must resolve to a bucket some provider declares AND some catalog
+// model must draw from that bucket.
+func TestPanelDropsRetiredTierWindows(t *testing.T) {
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	codex := accountKey{Provider: "openai-codex", IdentityKey: "codex"}
+	retired := usageWin{label: "Claude 7 Day (Fable)", id: "7d", tier: "fable",
+		secs: 5 * day, dur: 7 * day, prov: "anthropic"}
+	claudeMain := usageWin{label: "Claude 5 Hour", id: "5h", pct: 55,
+		secs: 2 * 3600, dur: 5 * 3600, prov: "anthropic"}
+	spark := usageWin{label: "5 hours (Spark)", id: "5h", tier: "spark", pct: 20,
+		secs: 3 * 3600, dur: 5 * 3600, prov: "openai-codex"}
+
+	build := func(facts map[string]modelFact) model {
+		m := layoutModel()
+		m.facts = facts
+		m.avail = availability{
+			ok: true, accountsOK: true,
+			bucket: map[string]string{}, reset: map[string]int64{},
+			accountCredits: map[accountKey]resetCredits{},
+			accounts: map[string][]account{
+				"anthropic":    {{Provider: claude.Provider, IdentityKey: claude.IdentityKey, Email: "claude@example.test"}},
+				"openai-codex": {{Provider: codex.Provider, IdentityKey: codex.IdentityKey, Email: "codex@example.test"}},
+			},
+			accountUsage: map[accountKey][]usageWin{
+				claude: {claudeMain, retired},
+				codex:  {spark},
+			},
+			wins: []usageWin{claudeMain, retired, spark},
+		}
+		return m
+	}
+	// The real catalog shape after the refactor: every Anthropic rung draws the
+	// ordinary bucket, and the one spark model still draws the spark bucket.
+	live := map[string]modelFact{
+		"claude-fable-5-1":    {bucket: "claude-main", pool: "A"},
+		"claude-sonnet-5":     {bucket: "claude-main", pool: "A"},
+		"gpt-5.3-codex-spark": {bucket: "codex-spark", pool: "O"},
+	}
+
+	labels := func(wins []usageWin) []string {
+		var out []string
+		for _, w := range wins {
+			out = append(out, shortWin(w))
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	m := build(live)
+	sel := m.selectedUsageAvailability()
+	if got, want := labels(sel.wins), []string{"5h", "5h spark"}; !slices.Equal(got, want) {
+		t.Errorf("panel windows = %v, want %v — the retired tier must not get a row", got, want)
+	}
+	if got, want := labels(sel.accountUsage[claude]), []string{"5h"}; !slices.Equal(got, want) {
+		t.Errorf("per-account rows = %v, want %v", got, want)
+	}
+	if body := stripAnsi(m.usageBodyFor(140)); strings.Contains(body, "7d fable") {
+		t.Errorf("the retired window reached the rendered panel:\n%s", body)
+	} else if !strings.Contains(body, "5h spark") {
+		t.Errorf("a live tier-scoped window was dropped with it:\n%s", body)
+	}
+
+	// Display-only: routing reads buckets to strike rungs, and this must not
+	// quietly become a second, invisible availability rule.
+	if got, want := labels(m.selectedLaunchAvailability().wins), []string{"5h", "5h spark", "7d fable"}; !slices.Equal(got, want) {
+		t.Errorf("launch availability = %v, want every reported window %v", got, want)
+	}
+
+	// A declared tier whose bucket no catalog model draws from is just as dead.
+	noSpark := build(map[string]modelFact{"claude-sonnet-5": {bucket: "claude-main", pool: "A"}})
+	if got, want := labels(noSpark.selectedUsageAvailability().wins), []string{"5h"}; !slices.Equal(got, want) {
+		t.Errorf("windows with no spark model = %v, want %v", got, want)
+	}
+
+	// A catalog-less run (onboarding, a broken CODE_GENERATED) knows no buckets,
+	// so it must keep every window rather than render an empty panel.
+	bare := build(nil)
+	if got, want := labels(bare.selectedUsageAvailability().wins), []string{"5h", "5h spark", "7d fable"}; !slices.Equal(got, want) {
+		t.Errorf("catalog-less windows = %v, want every reported window %v", got, want)
 	}
 }
 

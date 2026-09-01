@@ -51,6 +51,13 @@ a ladder around a model that never answered.
   and the TUI prefers that; guessing it from the model family is now only the
   fallback for catalogs that declare none. Model-family colouring is still
   name matching that reflects the author's provider mix. Both fail soft.
+- The Usage panel draws a tier-scoped quota window only while some catalog model
+  still draws from that bucket. Providers do not stop reporting a window they
+  have retired — Anthropic's separate Fable window is still in the payload,
+  reading 0% and `ok` indefinitely — and a row nothing can ever spend is noise.
+  Windows that are not tier-scoped are the account's ordinary quota and always
+  render, and a catalog-less run knows no buckets so it shows everything.
+  Routing is unaffected either way: a bucket no model declares strikes no rung.
 - The local model lane (Babel's configuration ceremony) offers whatever the
   daemon reports and verifies only that the endpoint answers and still serves
   the chosen tag. Nothing probes whether that model can carry an analysis — the

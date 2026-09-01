@@ -530,10 +530,10 @@ type usageGroup struct {
 // The rule is payload-driven instead: a window is renderable when this build
 // knows the metered provider that owns the quota (an unmetered or unregistered
 // provider has no window to draw) and the window names itself — its own id, or,
-// for id-less payloads, a label the fallback vocabulary recognises. This
-// deliberately does NOT require the window's tier to map onto a declared
-// bucket: an unrecognised tier-scoped window is still a real quota window the
-// operator wants to see, it merely takes part in no bucket accounting.
+// for id-less payloads, a label the fallback vocabulary recognises. Whether the
+// window's tier maps onto a live bucket is a separate, catalog-level question
+// the panel asks later (see model.liveUsageWindow); this gate is payload-level
+// and deliberately has no catalog in reach.
 func knownUsageWindow(w usageWin) bool {
 	p := providerByID(w.prov)
 	if p == nil || !p.Metered {
@@ -958,7 +958,60 @@ func (m *model) selectedUsageAvailability() availability {
 	if m.manager {
 		disabled = m.managerDisplayedDisabled()
 	}
-	return selectedAvailability(m.avail, disabled)
+	return m.withLiveWindows(selectedAvailability(m.avail, disabled))
+}
+
+// liveUsageWindow reports whether a tier-scoped quota window still has anything
+// in this catalog drawing from it. A tier-scoped window is a provider's
+// dedicated lead bucket, and it is only worth a row while some model actually
+// spends it: a provider that retires one keeps reporting it — empty, "ok",
+// forever — and a permanently-0% row is noise no operator can act on. Tier-less
+// windows are the account's ordinary quota and always render.
+//
+// Registry- and catalog-driven, never a name list: the tier must resolve to a
+// bucket some provider declares (see specialFacet) and some catalog model must
+// draw from that bucket. Either half missing means nothing routes there. A
+// catalog-less run (onboarding, a broken CODE_GENERATED) knows neither, so it
+// keeps every window rather than emptying the panel.
+func (m *model) liveUsageWindow(w usageWin) bool {
+	if w.tier == "" || w.tier == "-" || len(m.facts) == 0 {
+		return true
+	}
+	bucket := bucketForProviderTier(w.prov, w.tier)
+	if bucket == "" {
+		return false
+	}
+	for _, f := range m.facts {
+		if f.bucket == bucket {
+			return true
+		}
+	}
+	return false
+}
+
+// withLiveWindows is the panel's copy of a selection with retired tier-scoped
+// windows dropped. Only the panel filters: routing reads buckets to strike
+// rungs, and a bucket no model declares strikes nothing, so the launch seam is
+// unaffected either way and this stays a display rule.
+func (m *model) withLiveWindows(a availability) availability {
+	out := a
+	out.wins = nil
+	for _, win := range a.wins {
+		if m.liveUsageWindow(win) {
+			out.wins = append(out.wins, win)
+		}
+	}
+	out.accountUsage = make(map[accountKey][]usageWin, len(a.accountUsage))
+	for key, wins := range a.accountUsage {
+		var kept []usageWin
+		for _, win := range wins {
+			if m.liveUsageWindow(win) {
+				kept = append(kept, win)
+			}
+		}
+		out.accountUsage[key] = kept
+	}
+	return out
 }
 
 func (m *model) identityLines() string {
