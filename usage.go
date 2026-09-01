@@ -45,6 +45,69 @@ type resetCredits struct {
 	exp   []int64
 }
 
+// credFault is omp's own verdict on a credential it has taken out of service:
+// the cause string it recorded and when. We never derive this — the broker owns
+// the refresh, so it is the only thing that knows an OAuth grant expired. Before
+// omp reported it, the panel could only notice that a report was *absent* and
+// call the whole provider "unauthed", which is the same word for "you never
+// logged in" and "your refresh token died last month".
+type credFault struct {
+	cause string
+	at    int64 // ms; 0 when the payload omits it
+}
+
+// short is the cause reduced to one operator-facing phrase. omp's cause is a
+// full error chain with key=value diagnostics and a stack trace — right for a
+// log, useless in a dial row. When the body carries the provider's own error
+// code, the head of the chain plus that code says everything the row needs:
+// what failed, and the exact string to search for. Otherwise the first clause,
+// minus the url=/status= noise.
+func (f credFault) short() string {
+	line := f.cause
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	if i := strings.Index(line, ";"); i >= 0 {
+		line = line[:i]
+	}
+	var kept []string
+	for _, w := range strings.Fields(line) {
+		if !strings.Contains(w, "=") {
+			kept = append(kept, w)
+		}
+	}
+	line = strings.Join(kept, " ")
+	if code := jsonErrorCode(f.cause); code != "" {
+		if i := strings.Index(line, ":"); i >= 0 {
+			line = line[:i]
+		}
+		return line + " (" + code + ")"
+	}
+	return line
+}
+
+// jsonErrorCode pulls a provider's own machine-readable code out of an embedded
+// JSON error body ("invalid_grant"), which is the part worth surfacing verbatim:
+// it is what the operator will search for and what tells them whether a re-login
+// fixes it.
+func jsonErrorCode(cause string) string {
+	i := strings.Index(cause, `"error":`)
+	if i < 0 {
+		return ""
+	}
+	rest := cause[i+len(`"error":`):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return ""
+	}
+	rest = rest[j+1:]
+	k := strings.Index(rest, `"`)
+	if k < 0 {
+		return ""
+	}
+	return rest[:k]
+}
+
 type availability struct {
 	bucket           map[string]string // bucket -> "ok" | "maxed" | "unauthed"
 	reset            map[string]int64
@@ -57,6 +120,11 @@ type availability struct {
 	accountsOK       bool
 	selectionApplied bool
 	accountsStale    bool
+	// faults are the credentials omp has disabled and why (disabledCredentials
+	// in the payload); silent are accounts omp knows about that reported no
+	// usage at all (accountsWithoutUsage). Both replace guessing from absence.
+	faults map[accountKey]credFault
+	silent map[accountKey]bool
 	// deepseek is the DeepSeek prepaid balance: nil when the snapshot carries
 	// no DeepSeek credential (the group is hidden entirely — an absent API key
 	// is the normal state, unlike a metered subscription).
@@ -120,6 +188,7 @@ func emptyAvailability() availability {
 		bucket: map[string]string{}, reset: map[string]int64{},
 		accounts: map[string][]account{}, accountUsage: map[accountKey][]usageWin{},
 		accountCredits: map[accountKey]resetCredits{},
+		faults:         map[accountKey]credFault{}, silent: map[accountKey]bool{},
 	}
 }
 
@@ -144,15 +213,21 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 			DurationMs int64  `json:"durationMs"`
 		} `json:"window"`
 	}
-	var doc struct {
-		Reports []struct {
-			Provider  string `json:"provider"`
+	// identity is the shape every account-scoped block in the payload shares:
+	// reports, disabledCredentials and accountsWithoutUsage all name an account
+	// the same way, so they all match against a.accounts the same way.
+	type identity struct {
+		Provider  string `json:"provider"`
+		Email     string `json:"email"`
+		AccountID string `json:"accountId"`
+		Metadata  struct {
 			Email     string `json:"email"`
 			AccountID string `json:"accountId"`
-			Metadata  struct {
-				Email     string `json:"email"`
-				AccountID string `json:"accountId"`
-			} `json:"metadata"`
+		} `json:"metadata"`
+	}
+	var doc struct {
+		Reports []struct {
+			identity
 			Limits       []limit `json:"limits"`
 			ResetCredits struct {
 				AvailableCount int `json:"availableCount"`
@@ -162,6 +237,24 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 				} `json:"credits"`
 			} `json:"resetCredits"`
 		} `json:"reports"`
+		// omp 18 reports account health directly: which credentials it has
+		// taken out of service and why, and which configured accounts produced
+		// no usage report at all. Both were previously guessed from silence.
+		DisabledCredentials []struct {
+			identity
+			Cause        string `json:"cause"`
+			DisabledAtMs int64  `json:"disabledAtMs"`
+		} `json:"disabledCredentials"`
+		AccountsWithoutUsage []identity `json:"accountsWithoutUsage"`
+		// capacity is omp's own cross-account aggregate per provider and window:
+		// remainingAccounts is the share of that provider's accounts still with
+		// headroom. It carries no tier dimension, so it speaks for the provider's
+		// main bucket only — the tier-scoped buckets stay folded per report.
+		Capacity map[string][]struct {
+			Window            string  `json:"window"`
+			Accounts          float64 `json:"accounts"`
+			RemainingAccounts float64 `json:"remainingAccounts"`
+		} `json:"capacity"`
 	}
 	if len(out) == 0 || json.Unmarshal(out, &doc) != nil {
 		return a
@@ -171,6 +264,26 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 	now := time.Now().Unix()
 	if observedAt <= 0 {
 		observedAt = now
+	}
+	// match resolves a payload identity to one of the accounts the snapshot
+	// carries: email first, then the account id against the identity key. Every
+	// account-scoped block in the payload names an account the same way, so they
+	// all agree on what "the same account" is.
+	match := func(id identity) (accountKey, bool) {
+		email, accountID := id.Metadata.Email, id.Metadata.AccountID
+		if email == "" {
+			email = id.Email
+		}
+		if accountID == "" {
+			accountID = id.AccountID
+		}
+		for _, acct := range a.accounts[id.Provider] {
+			if (email != "" && acct.Email != "" && strings.EqualFold(email, acct.Email)) ||
+				(accountID != "" && accountID == acct.IdentityKey) {
+				return accountKey{Provider: acct.Provider, IdentityKey: acct.IdentityKey}, true
+			}
+		}
+		return accountKey{}, false
 	}
 	for _, r := range doc.Reports {
 		provSeen[r.Provider] = true
@@ -207,23 +320,9 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 				a.bucket[bkt] = "ok"
 			}
 		}
-		email, accountID := r.Metadata.Email, r.Metadata.AccountID
-		if email == "" {
-			email = r.Email
-		}
-		if accountID == "" {
-			accountID = r.AccountID
-		}
-		var matchedKey accountKey
-		matched := false
-		for _, acct := range a.accounts[r.Provider] {
-			if (email != "" && acct.Email != "" && strings.EqualFold(email, acct.Email)) ||
-				(accountID != "" && accountID == acct.IdentityKey) {
-				matchedKey = accountKey{Provider: acct.Provider, IdentityKey: acct.IdentityKey}
-				a.accountUsage[matchedKey] = append(a.accountUsage[matchedKey], reportWins...)
-				matched = true
-				break
-			}
+		matchedKey, matched := match(r.identity)
+		if matched {
+			a.accountUsage[matchedKey] = append(a.accountUsage[matchedKey], reportWins...)
 		}
 		if r.Provider == openAIProvider {
 			credits := resetCredits{avail: r.ResetCredits.AvailableCount}
@@ -245,6 +344,47 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 			}
 		}
 	}
+	for _, d := range doc.DisabledCredentials {
+		if key, ok := match(d.identity); ok {
+			a.faults[key] = credFault{cause: d.Cause, at: d.DisabledAtMs}
+		}
+	}
+	for _, s := range doc.AccountsWithoutUsage {
+		if key, ok := match(s); ok {
+			a.silent[key] = true
+		}
+	}
+	// omp's capacity block is the authority on whether a provider's MAIN bucket
+	// has run out, because it is aggregated across that provider's accounts:
+	// remainingAccounts > 0 means somebody still has headroom. Folding per
+	// report cannot see that — one account at 100% used to mark the bucket
+	// maxed and strike every route through the provider while a sibling account
+	// sat idle. capacity carries no tier, so the tier-scoped buckets keep their
+	// per-report verdict; this speaks only for the main one.
+	for prov, windows := range doc.Capacity {
+		p := providerByID(prov)
+		if p == nil || !p.Metered || len(windows) == 0 {
+			continue
+		}
+		exhausted := false
+		for _, w := range windows {
+			if w.Accounts > 0 && w.RemainingAccounts <= 0 {
+				exhausted = true
+			}
+		}
+		main := p.mainBucket()
+		if exhausted {
+			a.bucket[main] = "maxed"
+		} else if a.bucket[main] == "maxed" {
+			a.bucket[main] = "ok"
+			delete(a.reset, main)
+		}
+	}
+	// The remaining absence rule: a metered provider omp reported nothing for is
+	// unauthed. That is still an inference, but it is now the *only* one left —
+	// a credential omp disabled carries its own cause in a.faults, and an
+	// account that simply reported nothing is in a.silent, so the panel no
+	// longer has to spell both as "unauthed" and hope.
 	for _, prov := range providerRegistry {
 		if !prov.Metered {
 			continue
@@ -451,7 +591,17 @@ func reconcileUsage(prev, next availability) (availability, bool) {
 		return next, false
 	}
 	if !next.accountsOK && prev.accountsOK {
+		// Identities are borrowed from the last good snapshot, so the account
+		// health keyed to them has to come along: parseAvailability could match
+		// no fault without an account list, and dropping them would quietly
+		// re-hide a disabled credential the moment identity lookup flaked.
 		next.accounts, next.accountsOK, next.accountsStale = prev.accounts, true, true
+		if len(next.faults) == 0 {
+			next.faults = prev.faults
+		}
+		if len(next.silent) == 0 {
+			next.silent = prev.silent
+		}
 	}
 	next.accountUsage = reconcileAccountUsage(prev.accountUsage, next.accountUsage, next.accounts)
 	if next.deepseek != nil && !next.deepseek.ok && prev.deepseek != nil && prev.deepseek.ok {
@@ -829,6 +979,11 @@ func usageDisplayIdentity(identity string, full bool) string {
 type compactProviderIdentity struct {
 	label     string
 	reporting bool
+	// fault is omp's own reason this credential is out of service, shortened for
+	// a row. Empty is not the same as healthy: an account can report nothing
+	// without having been disabled, which is what silent covers.
+	fault  string
+	silent bool
 }
 
 // providerIdentities preserves broker snapshot order and collapses repeated
@@ -864,9 +1019,12 @@ func providerIdentities(a availability, prov string, full bool) []compactProvide
 				break
 			}
 		}
-		identities = append(identities, compactProviderIdentity{
-			label: label, reporting: reporting,
-		})
+		key := accountKey{Provider: acct.Provider, IdentityKey: acct.IdentityKey}
+		entry := compactProviderIdentity{label: label, reporting: reporting, silent: a.silent[key]}
+		if f, ok := a.faults[key]; ok {
+			entry.fault = f.short()
+		}
+		identities = append(identities, entry)
 	}
 	return identities
 }
@@ -909,9 +1067,17 @@ func providerIdentityBlockFor(a availability, prov string, checking, full bool) 
 		}
 		return append(rows, stBrk.Render("  not authenticated"))
 	}
+	// A credential omp disabled gets its own row naming omp's cause: it is
+	// actionable ("re-login"), where "usage unavailable" is not. The remaining
+	// non-reporting accounts collapse into the old aggregate line, because
+	// silence with no cause behind it is all we can honestly say about them.
 	unavailable := 0
 	for _, identity := range identities {
-		if !identity.reporting {
+		switch {
+		case identity.fault != "":
+			rows = append(rows, stBrk.Render("  "+identity.label+": ")+
+				stWarn.Render(identity.fault)+stDim.Render(" · disabled by omp"))
+		case !identity.reporting:
 			unavailable++
 		}
 	}

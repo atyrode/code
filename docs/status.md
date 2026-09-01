@@ -78,12 +78,19 @@ a ladder around a model that never answered.
   records. They now live under `code`'s state root; `code wt` still lists any
   left behind, marked `legacy`, so the existing remove/prune flow can clear
   them.
-- The Usage panel still reads the auth broker's snapshot directly and does not
-  consume omp's own `capacity`, `disabledCredentials`, or `accountsWithoutUsage`
-  fields. That is a real gap, not a decision: omp reports *why* a credential is
-  down (an expired OAuth grant, say) and this panel can currently only infer
-  "unauthed" from an absent report. Until it consumes them, an account that omp
-  has disabled renders as merely silent.
+- Account health comes from omp, not from silence. omp reports which
+  credentials it has disabled and why (`disabledCredentials` — an expired OAuth
+  grant reads as `oauth refresh failed (invalid_grant)` on the account's own
+  row), which configured accounts sent no report (`accountsWithoutUsage`), and
+  its own cross-account headroom per provider (`capacity`). That last one is the
+  authority on a provider's main bucket: one account at 100% no longer strikes
+  every route while a sibling still has room. `capacity` carries no tier, so the
+  tier-scoped buckets keep their per-report verdict. The one inference left is
+  the oldest — a metered provider omp reports nothing for at all is `unauthed`.
+- What this tool still holds itself is *which accounts are enabled* — a private
+  selection omp's vault cannot see. That is the remaining place two judges can
+  disagree about one account, and whether it should exist at all is an open
+  question rather than a plan.
 
 ## Built on
 
