@@ -463,6 +463,93 @@ func TestBabelHandshakeRejections(t *testing.T) {
 	}
 }
 
+// TestBabelHelloOffersBothProtocolVersions pins the non-cutover this build
+// made: hello advertises both versions rather than only the one this build
+// prefers, so a Babel that has not moved past version 1 still negotiates a
+// version it and this worker share instead of an empty intersection.
+func TestBabelHelloOffersBothProtocolVersions(t *testing.T) {
+	isolateBabelEnv(t)
+	h := newBabelHarness(t, conformanceOpts())
+	hello := h.expectHello()
+	versions, _ := hello["versions"].([]any)
+	seen := map[float64]bool{}
+	for _, v := range versions {
+		if f, ok := v.(float64); ok {
+			seen[f] = true
+		}
+	}
+	if !seen[1] || !seen[2] {
+		t.Errorf("hello offers versions %v, want both 1 and 2", versions)
+	}
+	h.write(babelRefuse{
+		Type: babelMessageRefuse, Protocol: babelProtocolName,
+		Reason: "test teardown", Supported: []int{1, 2},
+	})
+	h.drain()
+	h.wait()
+}
+
+// TestBabelWorkerSpeaksVersion1WhenNegotiated is the other half of offering
+// both versions: a Babel that accepts at version 1 gets the single-document
+// exchange version 1 always was — the whole job in one "job" message, with the
+// containment declaration produced from material this worker already holds in
+// full, rather than the staged exchange atyrode/babel#71 added for version 2.
+// This worker must still run that job to a result rather than waiting on a
+// job-preamble a version 1 Babel will never write.
+func TestBabelWorkerSpeaksVersion1WhenNegotiated(t *testing.T) {
+	isolateBabelEnv(t)
+	h := newBabelHarness(t, conformanceOpts())
+	h.expectHello()
+	h.write(babelAccept{
+		Type: babelMessageAccept, Protocol: babelProtocolName,
+		Version: 1, Mode: babelModeWorker,
+		Limits: babelLimits{
+			MaxLineBytes: 1 << 20, MaxEvents: 1000, MaxToolRequests: 16,
+			IdleSeconds: 60, ExitGraceSecs: 5,
+		},
+	})
+	// The whole document, unstaged: babelTestJob already renders the version 1
+	// shape (a single "job" message), which is exactly what a version 1 Babel
+	// writes and what babelStageJob splits apart for version 2.
+	h.write(babelTestJob(babelConformanceWellBehaved))
+
+	declaration := h.next()
+	if kind, _ := declaration["type"].(string); kind != babelMessageConfiguration {
+		t.Fatalf("the worker's first event under version 1 is %q, want its resolved configuration", kind)
+	}
+	if seq, _ := declaration["seq"].(float64); seq != 1 {
+		t.Errorf("the declaration has seq %v, want 1", seq)
+	}
+	containment, _ := declaration["containment"].(map[string]any)
+	if len(containment) == 0 {
+		t.Fatal("version 1 still owes a containment declaration; this worker's boundary does not change with the wire ordering")
+	}
+	if backend, _ := containment["backend"].(string); strings.TrimSpace(backend) == "" {
+		t.Error("the declaration names no sandbox backend")
+	}
+
+	var terminal map[string]any
+	for terminal == nil {
+		ev := h.next()
+		if kind, _ := ev["type"].(string); kind == babelMessageResult || kind == babelMessageError {
+			terminal = ev
+		}
+	}
+	if kind, _ := terminal["type"].(string); kind != babelMessageResult {
+		t.Fatalf("terminal event is %q, want a result: %v", kind, terminal)
+	}
+	h.drain()
+	if status := h.wait(); status != 0 {
+		t.Errorf("exit status = %d, want 0 after a result", status)
+	}
+	if strings.Contains(h.stdout.String(), babelTestToken) {
+		t.Error("the broker credential appeared on stdout")
+	}
+	if strings.Contains(h.stderr.String(), babelTestToken) {
+		t.Errorf("the broker credential appeared on stderr: %q", h.stderr.String())
+	}
+}
+
 // ── configure mode ───────────────────────────────────────────────────────────
 
 // TestBabelConfigureMode checks what Babel persists: exactly one configuration

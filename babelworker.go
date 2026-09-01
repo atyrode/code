@@ -18,12 +18,15 @@ package main
 //     so no code path can skip or reuse one;
 //   - the first stream event is the resolved configuration, there is exactly one
 //     terminal event, and nothing follows it;
-//   - the resolved configuration — which carries the containment declaration —
-//     is produced from the job's preamble alone, because the recipes, the grant,
-//     the sources and the broker token are the stage Babel writes in answer to
-//     it (atyrode/babel#71). Nothing above emitConfiguration may need them, and
-//     nothing below may assume they arrived: a declaration Babel will not accept
-//     is answered with a refusal instead of the material;
+//   - under a negotiated version 2, the resolved configuration — which carries
+//     the containment declaration — is produced from the job's preamble alone,
+//     because the recipes, the grant, the sources and the broker token are the
+//     stage Babel writes in answer to it (atyrode/babel#71). Nothing above
+//     emitConfiguration may need them, and nothing below may assume they
+//     arrived: a declaration a version 2 Babel will not accept is answered
+//     with a refusal instead of the material. A negotiated version 1 writes
+//     the whole document before this worker declares anything, which is the
+//     exposure version 2 exists to close (babelwire.go);
 //   - every line written fits the accepted line budget, because an oversized
 //     line is a protocol violation rather than a large message;
 //   - the job's broker credential is scrubbed out of every byte this process
@@ -355,6 +358,10 @@ type babelSession struct {
 
 	limits babelLimits
 	mode   string
+	// version is the protocol version accept named, out of what hello offered
+	// (babelSupportedVersions). It decides which of the two job-document shapes
+	// runWorker speaks: 2 stages it, 1 writes the whole thing up front.
+	version int
 
 	seq        int
 	events     int
@@ -677,7 +684,7 @@ func (s *babelSession) handshake() error {
 	hello := babelHello{
 		Type:     babelMessageHello,
 		Protocol: babelProtocolName,
-		Versions: []int{babelProtocolVersion},
+		Versions: babelSupportedVersions(),
 		Modes:    []string{babelModeConfigure, babelModeWorker},
 		Worker:   babelIdentity{Name: babelWorkerName, Version: babelWorkerVersion()},
 	}
@@ -710,8 +717,9 @@ func (s *babelSession) handshake() error {
 		if accept.Protocol != babelProtocolName {
 			return fmt.Errorf("accept names protocol %q, not %q", accept.Protocol, babelProtocolName)
 		}
-		if accept.Version != babelProtocolVersion {
-			return fmt.Errorf("accept names version %d, which this build does not speak", accept.Version)
+		if !babelVersionSupported(accept.Version) {
+			return fmt.Errorf("accept names version %d, which this build does not speak (offered %v)",
+				accept.Version, babelSupportedVersions())
 		}
 		switch accept.Mode {
 		case babelModeConfigure, babelModeWorker:
@@ -724,7 +732,7 @@ func (s *babelSession) handshake() error {
 		// ration, so they are recorded and deliberately not acted on: closing
 		// stdin is what Babel does when either expires, and that is already the
 		// signal this worker tears down on.
-		s.mode, s.limits = accept.Mode, accept.Limits
+		s.mode, s.limits, s.version = accept.Mode, accept.Limits, accept.Version
 		if s.limits.MaxLineBytes <= 0 {
 			s.limits.MaxLineBytes = babelDefaultMaxLineBytes
 		}
@@ -961,16 +969,19 @@ func (s *babelSession) runConfigure(opts babelOptions) int {
 	return 0
 }
 
-// runWorker runs one analysis job to a terminal event.
+// runWorker runs one analysis job to a terminal event, in whichever of the two
+// job-document shapes handshake negotiated (s.version).
 //
-// The job arrives in two stages and this worker's own configuration event sits
-// between them (atyrode/babel#71). Stage one carries the run's identity, the
-// profile to resolve and the run's parameters; Babel writes stage two — the
-// recipes, the grant, the sources and the run-scoped broker token — only after
-// it has accepted the containment declared here. So everything that happens
-// before emitConfiguration below is work done from a profile reference and
-// nothing else, and a declaration Babel will not accept is answered with a
-// refusal in place of the material.
+// Under version 2 the job arrives in two stages and this worker's own
+// configuration event sits between them (atyrode/babel#71): stage one carries
+// the run's identity, the profile to resolve and the run's parameters; Babel
+// writes stage two — the recipes, the grant, the sources and the run-scoped
+// broker token — only after it has accepted the containment declared here, and
+// a declaration it will not accept is answered with a refusal in place of the
+// material. Under version 1 the whole document arrives before this worker
+// declares anything, which is the exposure version 2 exists to close; this
+// worker still runs it; it just declares nothing that ordering could have
+// protected.
 func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int {
 	s.ctx, s.cancel = context.WithCancel(parent)
 	defer s.cancel()
@@ -986,101 +997,49 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 		}
 	}()
 
+	if s.version <= 1 {
+		return s.runWorkerV1(opts)
+	}
+	return s.runWorkerV2(opts)
+}
+
+// runWorkerV1 speaks the version 1 exchange: the whole job document arrives in
+// one "job" message, so the containment declaration this worker's first event
+// carries is produced from material it already holds in full — the run's
+// credential included. This is what atyrode/babel#71 stopped doing for a
+// version 2 counterpart; a version 1 one still gets it, at the same exposure
+// version 1 always had.
+func (s *babelSession) runWorkerV1(opts babelOptions) int {
+	job, err := s.readJob()
+	if err != nil {
+		s.diag("worker: reading the job: %v", err)
+		return 2
+	}
+	// From here on the broker credential exists in this process, so everything
+	// written is scrubbed.
+	s.secrets = job.secrets()
+
+	inv, code, ok := s.declareAndConfigure(job, opts)
+	if !ok {
+		return code
+	}
+	return s.investigateAndFinish(inv, job)
+}
+
+// runWorkerV2 speaks the staged version 2 exchange: the preamble alone is
+// enough to declare containment against, and the material — including the
+// run's broker credential — arrives only once Babel has accepted that
+// declaration (atyrode/babel#71).
+func (s *babelSession) runWorkerV2(opts babelOptions) int {
 	job, err := s.readPreamble()
 	if err != nil {
 		s.diag("worker: reading the job preamble: %v", err)
 		return 2
 	}
 
-	inv := newInvestigator()
-	if opts.investigator == babelInvestigatorConformance {
-		inv = conformanceInvestigator{}
-	}
-	if inv == nil {
-		return s.fail(babelErrInvestigator,
-			"this build has no investigator wired in, so worker mode has nothing to run", false)
-	}
-
-	// The credential comes first: a run that cannot authenticate is refused
-	// here rather than discovered three events later as an analysis that failed
-	// for no stated cause. The profile goes with the question, because a
-	// profile can be one that needs no credential. A conformance job is exempt
-	// because it launches nothing — that exemption is what lets Babel grade a
-	// worker on a machine with no provider.
-	if resolver, ok := inv.(credentialResolver); ok && !job.conformanceRequested() {
-		secrets, err := resolver.resolveCredential(job.Profile)
-		if err != nil {
-			// Not retryable: the credential is resolved out of the environment
-			// and the HOME Babel spawned this worker with, and respawning it
-			// resolves the same ones.
-			return s.fail(babelErrInvestigator, s.scrubString(err.Error()), false)
-		}
-		// The provider credential is scrubbed from here on. It is not a job
-		// secret — the job has not even sent its own yet — and it is about to
-		// be handed to a child whose diagnostics this worker forwards.
-		s.secrets = append(s.secrets, secrets...)
-	}
-
-	// A conformance job names a profile no store will ever hold, so it takes the
-	// synthetic path when the investigator offers one. Every real run goes
-	// through resolve, which is resolve-or-fail.
-	var cfg babelConfiguration
-	if synthetic, ok := inv.(syntheticResolver); ok && job.conformanceRequested() {
-		cfg = synthetic.syntheticConfiguration(job)
-	} else {
-		resolved, err := inv.resolve(s.ctx, job.Profile)
-		if err != nil {
-			return s.fail(babelErrProfileUnavailable, s.scrubString(err.Error()), false)
-		}
-		cfg = resolved
-	}
-	// Babel requires the configuration to name the profile the preamble named,
-	// and checking it here means an investigator that resolves the wrong profile
-	// fails visibly instead of producing a stream Babel rejects.
-	if cfg.Profile != job.Profile {
-		return s.fail(babelErrProfileUnavailable, fmt.Sprintf(
-			"the job named profile %s@%d but the investigator resolved %s@%d",
-			job.Profile.ID, job.Profile.Revision, cfg.Profile.ID, cfg.Profile.Revision), false)
-	}
-	// Containment is declared here, after the profile and before the first
-	// event, and the order is deliberate. An investigator's declaration is
-	// about a boundary it establishes rather than a constant it holds, so
-	// asking for it late means asking a backend that has been probed against
-	// this machine and, for the OMP investigator, one that can name the
-	// provider endpoint its egress will actually allow. Nothing is lost by
-	// waiting: the declaration is what Babel is waiting for before it writes
-	// anything else, so a run whose profile is unavailable now fails without
-	// having probed a sandbox it was never going to use.
-	containment := inv.containment()
-	if strings.TrimSpace(containment.Backend) == "" {
-		return s.fail(babelErrContainment, "the investigator declared no sandbox backend", false)
-	}
-	if strings.TrimSpace(containment.Escape) == "" {
-		return s.fail(babelErrContainment,
-			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false)
-	}
-	// The one directive that asks this worker to declare less than it provides.
-	// Babel's refusal path decides whether the run's credential travels at all,
-	// and it cannot be graded against a worker that always declares enough, so
-	// the suite asks for a declaration it will then refuse. It is applied here
-	// rather than inside an investigator because the directive is a fact about
-	// the run, which is in the job, and the investigator seam is handed the
-	// profile rather than the job (see syntheticResolver for the same reason).
-	if job.conformanceDirective() == babelConformanceUnderDeclare {
-		containment = babelUnderDeclaredContainment(containment.Backend)
-	}
-	// Containment and capabilities are the protocol layer's to attach. Neither
-	// resolve nor syntheticConfiguration is given the run, so neither can state
-	// what this worker will ask Babel for, and both left the list empty — which
-	// Babel reads as a profile that can do nothing, then catches the moment the
-	// run makes a request the profile never claimed. Configure mode already
-	// reports exactly this list, so declaring it from the same function is what
-	// keeps the two modes' answers the same claim rather than two that drift.
-	cfg.Containment = &containment
-	cfg.Capabilities = babelWorkerCapabilities()
-	if err := s.emitConfiguration(cfg); err != nil {
-		s.diag("worker: %v", err)
-		return 2
+	inv, code, ok := s.declareAndConfigure(job, opts)
+	if !ok {
+		return code
 	}
 
 	// Stage two, or the refusal that replaces it. Everything the run needs to
@@ -1117,6 +1076,119 @@ func (s *babelSession) runWorker(parent context.Context, opts babelOptions) int 
 	// to this list above.
 	s.secrets = append(s.secrets, job.secrets()...)
 
+	return s.investigateAndFinish(inv, job)
+}
+
+// declareAndConfigure is the part of running a job that version 1 and version 2
+// share: pick the investigator, resolve the provider credential, resolve or
+// synthesize the profile's configuration, declare containment and emit it as
+// the run's first event. It is everything from the profile reference to
+// emitConfiguration, on whatever job it is handed — a version 1 job already
+// carries its recipes, grant, sources and broker token at this point; a
+// version 2 job carries only what its preamble did, which is exactly what this
+// step needs and no more.
+//
+// ok is false whenever the caller must return code immediately, which lets a
+// caller stop without inspecting cfg or matching on error types itself.
+func (s *babelSession) declareAndConfigure(job babelJob, opts babelOptions) (inv investigator, code int, ok bool) {
+	inv = newInvestigator()
+	if opts.investigator == babelInvestigatorConformance {
+		inv = conformanceInvestigator{}
+	}
+	if inv == nil {
+		return nil, s.fail(babelErrInvestigator,
+			"this build has no investigator wired in, so worker mode has nothing to run", false), false
+	}
+
+	// The credential comes first: a run that cannot authenticate is refused
+	// here rather than discovered three events later as an analysis that failed
+	// for no stated cause. The profile goes with the question, because a
+	// profile can be one that needs no credential. A conformance job is exempt
+	// because it launches nothing — that exemption is what lets Babel grade a
+	// worker on a machine with no provider.
+	if resolver, okR := inv.(credentialResolver); okR && !job.conformanceRequested() {
+		secrets, err := resolver.resolveCredential(job.Profile)
+		if err != nil {
+			// Not retryable: the credential is resolved out of the environment
+			// and the HOME Babel spawned this worker with, and respawning it
+			// resolves the same ones.
+			return nil, s.fail(babelErrInvestigator, s.scrubString(err.Error()), false), false
+		}
+		// The provider credential is scrubbed from here on. It is not a job
+		// secret — a version 2 job has not even sent its own yet — and it is
+		// about to be handed to a child whose diagnostics this worker forwards.
+		s.secrets = append(s.secrets, secrets...)
+	}
+
+	// A conformance job names a profile no store will ever hold, so it takes the
+	// synthetic path when the investigator offers one. Every real run goes
+	// through resolve, which is resolve-or-fail.
+	var cfg babelConfiguration
+	if synthetic, okS := inv.(syntheticResolver); okS && job.conformanceRequested() {
+		cfg = synthetic.syntheticConfiguration(job)
+	} else {
+		resolved, err := inv.resolve(s.ctx, job.Profile)
+		if err != nil {
+			return nil, s.fail(babelErrProfileUnavailable, s.scrubString(err.Error()), false), false
+		}
+		cfg = resolved
+	}
+	// Babel requires the configuration to name the profile the job named, and
+	// checking it here means an investigator that resolves the wrong profile
+	// fails visibly instead of producing a stream Babel rejects.
+	if cfg.Profile != job.Profile {
+		return nil, s.fail(babelErrProfileUnavailable, fmt.Sprintf(
+			"the job named profile %s@%d but the investigator resolved %s@%d",
+			job.Profile.ID, job.Profile.Revision, cfg.Profile.ID, cfg.Profile.Revision), false), false
+	}
+	// Containment is declared here, after the profile and before the first
+	// event, and the order is deliberate. An investigator's declaration is
+	// about a boundary it establishes rather than a constant it holds, so
+	// asking for it late means asking a backend that has been probed against
+	// this machine and, for the OMP investigator, one that can name the
+	// provider endpoint its egress will actually allow. Nothing is lost by
+	// waiting: under version 2 the declaration is what Babel is waiting for
+	// before it writes anything else, so a run whose profile is unavailable now
+	// fails without having probed a sandbox it was never going to use.
+	containment := inv.containment()
+	if strings.TrimSpace(containment.Backend) == "" {
+		return nil, s.fail(babelErrContainment, "the investigator declared no sandbox backend", false), false
+	}
+	if strings.TrimSpace(containment.Escape) == "" {
+		return nil, s.fail(babelErrContainment,
+			"the investigator declared no escape assumption, and a sandbox with no stated residual risk has not been examined", false), false
+	}
+	// The one directive that asks this worker to declare less than it provides.
+	// Babel's refusal path decides whether the run's credential travels at all,
+	// and it cannot be graded against a worker that always declares enough, so
+	// the suite asks for a declaration it will then refuse. It is applied here
+	// rather than inside an investigator because the directive is a fact about
+	// the run, which is in the job, and the investigator seam is handed the
+	// profile rather than the job (see syntheticResolver for the same reason).
+	if job.conformanceDirective() == babelConformanceUnderDeclare {
+		containment = babelUnderDeclaredContainment(containment.Backend)
+	}
+	// Containment and capabilities are the protocol layer's to attach. Neither
+	// resolve nor syntheticConfiguration is given the run, so neither can state
+	// what this worker will ask Babel for, and both left the list empty — which
+	// Babel reads as a profile that can do nothing, then catches the moment the
+	// run makes a request the profile never claimed. Configure mode already
+	// reports exactly this list, so declaring it from the same function is what
+	// keeps the two modes' answers the same claim rather than two that drift.
+	cfg.Containment = &containment
+	cfg.Capabilities = babelWorkerCapabilities()
+	if err := s.emitConfiguration(cfg); err != nil {
+		s.diag("worker: %v", err)
+		return nil, 2, false
+	}
+	return inv, 0, true
+}
+
+// investigateAndFinish runs the job through inv to a terminal event, in the
+// precedence version 1 and version 2 share: a protocol violation outranks
+// whatever the investigation returned, cancellation outranks a reported error,
+// and only then does the investigator's own outcome decide the exit status.
+func (s *babelSession) investigateAndFinish(inv investigator, job babelJob) int {
 	result, invErr := inv.investigate(s.ctx, job, s.emitProgress, s.requestTool)
 
 	switch {
@@ -1164,6 +1236,24 @@ func (s *babelSession) fail(code, message string, retryable bool) int {
 	}
 	s.diag("%s: %s", code, message)
 	return 1
+}
+
+// readJob reads the one job message a version 1 counterpart writes after
+// accept: the whole document at once, which is what version 1 was before
+// atyrode/babel#71 staged it for version 2. It exists so this build can still
+// run a job for a Babel that negotiated version 1, and readStage and
+// decodeJobStage are the same two calls readPreamble makes below — there is
+// one job decoder either way, it is only ever called a different number of
+// times.
+func (s *babelSession) readJob() (babelJob, error) {
+	line, kind, err := s.readStage()
+	if err != nil {
+		return babelJob{}, err
+	}
+	if kind != babelMessageJob {
+		return babelJob{}, fmt.Errorf("expected a %s, got %q", babelMessageJob, kind)
+	}
+	return decodeJobStage(line, babelJob{})
 }
 
 // readPreamble reads stage one of the job document: the run's identity, the

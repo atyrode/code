@@ -25,6 +25,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,11 +42,13 @@ import (
 // against the first event, so a worker that under-declared held the credential
 // and knew the corpus selection before Babel refused it (atyrode/babel#71).
 //
-// There is no compatibility path, deliberately: the ordering is the whole of
-// what the declaration buys, and a build that could still accept the old
-// ordering would keep the exposure reachable. A version 1 Babel's accept is
-// refused by this build, and this build's hello is refused by a version 1
-// Babel — both loudly, both naming the version.
+// This build offers both in hello (babelSupportedVersions) and negotiates
+// whichever Babel also supports, highest first: runWorker branches on the
+// version accept names and speaks the staged exchange under 2, the single
+// document under 1. A version 1 Babel therefore still gets a worker it can
+// run, at the exposure version 1 always had; nothing here narrows what a
+// version 2 Babel holds this build to, because the ordering it relies on is
+// still the only ordering this build ever offers it.
 const (
 	babelProtocolName    = "babel.analysis-worker"
 	babelProtocolVersion = 2
@@ -64,6 +67,25 @@ const (
 	// every production result refused.
 	babelResultSchema = "babel.analysis-result/1"
 )
+
+// babelSupportedVersions are the protocol versions this build offers in
+// hello, ascending. It is a function rather than a package variable so no
+// caller can mutate the negotiation baseline, mirroring Babel's own
+// DefaultVersions.
+//
+// 1 stays offered alongside 2 deliberately: Babel picks the highest version
+// present in both sets (worker: negotiate), so a version 2 Babel is
+// unaffected by 1 being on the list, and a Babel that has not moved past
+// version 1 still gets a worker rather than a flat refusal.
+func babelSupportedVersions() []int { return []int{1, 2} }
+
+// babelVersionSupported reports whether v is one this build can speak. It is
+// what an accept's version is checked against, in place of the single
+// babelProtocolVersion equality check a build offering only its newest
+// version would use.
+func babelVersionSupported(v int) bool {
+	return slices.Contains(babelSupportedVersions(), v)
+}
 
 // Message types on the wire. Code writes hello, configuration, progress,
 // tool-request, result and error; Babel writes accept, refuse, job-preamble,
