@@ -340,12 +340,23 @@ func TestRenderCatalogStructure(t *testing.T) {
 		}
 	}
 	walk(0)
-	// The walk is only worth anything if it reached the fourth notch: 2 elite
-	// lanes × 6 thinking × 4 advisor × 2 fast × 2 spark. Without this a model
-	// dial that quietly lost "elite" — or a generator that stopped emitting
-	// elite combos on the lanes that can host them — would pass silently.
-	if want := 2 * 6 * 4 * 2 * 2; eliteSeen != want {
+	// The walk is only worth anything if it reached the fourth notch:
+	// 2 elite lanes × 6 thinking × 4 advisor × 2 fast × 2 spark × 2 prewalk ×
+	// 2 planyolo. Without this a model dial that quietly lost "elite" — or a
+	// generator that stopped emitting elite combos on the lanes that can host
+	// them — would pass silently.
+	if want := 2 * 6 * 4 * 2 * 2 * 2 * 2; eliteSeen != want {
 		t.Errorf("coverage walk reached %d elite dial states, want %d", eliteSeen, want)
+	}
+	// The session-switch dials must never reach comboID. If one did, the
+	// generator would owe a grid twice the size for a setting that selects no
+	// model — which is the whole reason they are applied at launch instead.
+	for _, key := range []string{"prewalk", "planyolo", "advisor", "fast"} {
+		on := map[string]string{"lane": "claude-only", "model": "elite", "thinking": "high", "spark": "off", key: "on"}
+		off := map[string]string{"lane": "claude-only", "model": "elite", "thinking": "high", "spark": "off", key: "off"}
+		if comboID(on) != comboID(off) {
+			t.Errorf("dial %q changed comboID: %s vs %s", key, comboID(on), comboID(off))
+		}
 	}
 }
 

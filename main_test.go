@@ -568,6 +568,7 @@ func TestDefaultGlyphs(t *testing.T) {
 		"runtime": 0xf108, "local": 0xf109, "lane": 0xf127, "model": 0xf085,
 		"thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fast": 0xf0e7,
+		"prewalk": 0xf063, "planyolo": 0xf04b,
 	}
 	tables := map[string]map[string]string{
 		"nerd": defaultGlyphs(), "unicode": unicodeGlyphs(), "ascii": asciiGlyphs(),
@@ -3128,7 +3129,7 @@ func TestFooterHelpGutter(t *testing.T) {
 func TestTrustedArgvNeverForcesOrForwardsProfile(t *testing.T) {
 	for name, argv := range map[string][]string{
 		"managed":   managedLaunchArgv("/omp", []string{"--profile", "old", "hello", "--profile=other"}, "prompt"),
-		"generated": generatedLaunchArgv("/omp", "/tmp/generated.yml", []string{"--profile=old", "hello"}, "prompt"),
+		"generated": generatedLaunchArgv("/omp", "/tmp/generated.yml", []string{"--plan-yolo"}, []string{"--profile=old", "hello"}, "prompt"),
 	} {
 		joined := strings.Join(argv, " ")
 		if strings.Contains(joined, "--profile") || strings.Contains(joined, " default") {
@@ -3772,7 +3773,7 @@ exit %d
 			selections.SetManualDisabled(map[accountKey]bool{
 				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
 			})
-			status := launchGenerated("models: {}\n", "prompt", broker, selections, "")
+			status := launchGenerated("models: {}\n", "prompt", nil, broker, selections, "")
 			if status != tc.exit {
 				t.Fatalf("exit status = %d, want %d", status, tc.exit)
 			}
@@ -4327,8 +4328,12 @@ func TestUsageBodyDeepSeekBalanceGroup(t *testing.T) {
 }
 
 // TestDeepSeekOffPeakWindow pins the discount window edges (UTC 16:30-00:30)
-// and that the cost meter actually prices D rungs down inside it.
+// and that the cost meter actually prices D rungs down inside it. The window
+// now lives on the registry entry, so this asserts through poolOffPeak: a pool
+// that declares no window must read 1 at every hour, which is the property that
+// keeps the discount from leaking onto another provider.
 func TestDeepSeekOffPeakWindow(t *testing.T) {
+	dsPool := poolOf(deepseekProvider)
 	for _, tc := range []struct {
 		hhmm string
 		want bool
@@ -4337,8 +4342,12 @@ func TestDeepSeekOffPeakWindow(t *testing.T) {
 		{"00:00", true}, {"00:29", true}, {"00:30", false}, {"12:00", false},
 	} {
 		ts, _ := time.Parse("15:04", tc.hhmm)
-		if got := deepseekOffPeak(ts); got != tc.want {
-			t.Errorf("deepseekOffPeak(%s) = %v, want %v", tc.hhmm, got, tc.want)
+		mult := poolOffPeak(dsPool, ts)
+		if got := mult < 1; got != tc.want {
+			t.Errorf("poolOffPeak(%s, %s) = %v, want discounted=%v", dsPool, tc.hhmm, mult, tc.want)
+		}
+		if other := poolOffPeak(poolOf(anthropicProvider), ts); other != 1 {
+			t.Errorf("a pool with no declared window was discounted at %s: %v", tc.hhmm, other)
 		}
 	}
 
@@ -4361,10 +4370,7 @@ func TestDeepSeekOffPeakWindow(t *testing.T) {
 			if !ok {
 				return
 			}
-			cost := 0.25*c.in + 0.75*c.out
-			if m.poolOfModel(id) == "D" && deepseekOffPeak(offPeakNow().UTC()) {
-				cost *= deepseekOffPeakMult
-			}
+			cost := (0.25*c.in + 0.75*c.out) * poolOffPeak(m.poolOfModel(id), offPeakNow().UTC())
 			num += w * cost
 			den += w
 		})
@@ -4672,5 +4678,118 @@ func TestPrefixedLeveledTokens(t *testing.T) {
 	}}
 	if got := m.prefixed("v4-experimental:high"); got != "deepseek/v4-experimental:high" {
 		t.Fatalf("prefixed(leveled) = %q, want deepseek/v4-experimental:high", got)
+	}
+}
+
+// TestSessionSwitchDialsSetOmpsOwnKeys: prewalk and planyolo are omp's own
+// switches, so the only thing this tool owes them is putting the value where
+// omp reads it — prewalk in the generated overlay, planyolo on argv, because
+// that is where omp exposes each. The task: block must stay single: overlays
+// are strict YAML and two task: keys are invalid.
+func TestSessionSwitchDialsSetOmpsOwnKeys(t *testing.T) {
+	m := layoutModel()
+	m.sel["prewalk"], m.sel["planyolo"] = "off", "off"
+	if off := m.genConfigYAML(); strings.Contains(off, "prewalk") {
+		t.Errorf("prewalk off still wrote a key:\n%s", off)
+	}
+	if flags := m.sessionFlags(); len(flags) != 0 {
+		t.Errorf("both dials off produced argv flags: %v", flags)
+	}
+
+	m.sel["prewalk"] = "on"
+	on := m.genConfigYAML()
+	if !strings.Contains(on, "prewalk:\n  enabled: true\n") {
+		t.Errorf("prewalk on did not switch the main session:\n%s", on)
+	}
+	if !strings.Contains(on, "  prewalk: true\n") {
+		t.Errorf("prewalk on did not reach spawned task agents:\n%s", on)
+	}
+	blocks := 0
+	for _, line := range strings.Split(on, "\n") {
+		if line == "task:" {
+			blocks++
+		}
+	}
+	if blocks != 1 {
+		t.Errorf("overlay has %d task: blocks, want exactly 1:\n%s", blocks, on)
+	}
+
+	m.sel["planyolo"] = "on"
+	if got := m.sessionFlags(); !slices.Equal(got, []string{"--plan-yolo"}) {
+		t.Errorf("sessionFlags = %v, want [--plan-yolo]", got)
+	}
+	if cfg := m.genConfigYAML(); strings.Contains(cfg, "yolo") {
+		t.Errorf("planyolo leaked into the overlay; omp exposes it on argv only:\n%s", cfg)
+	}
+	// The dial's flag sits between the overlay and the forwarded args, so an
+	// operator's own flag still has the last word over a dial.
+	argv := generatedLaunchArgv("/omp", "/tmp/c.yml", m.sessionFlags(), []string{"--no-prewalk"}, "")
+	if want := []string{"/omp", "--config", "/tmp/c.yml", "--plan-yolo", "--no-prewalk"}; !slices.Equal(argv, want) {
+		t.Errorf("argv = %v, want %v", argv, want)
+	}
+}
+
+// TestServiceTierIsProviderGeneric: the fast dial writes whichever priority
+// tier the lane's pools actually sell. omp 18 ships tier.anthropic, so setting
+// ServiceTier on that registry entry must light the dial up with no other edit
+// — the promise providers.go's header makes, and which four hard-coded pool-"O"
+// checks used to break.
+func TestServiceTierIsProviderGeneric(t *testing.T) {
+	idx := -1
+	for i := range providerRegistry {
+		if providerRegistry[i].ID == anthropicProvider {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		t.Fatal("anthropic is not in the registry")
+	}
+	prev := providerRegistry[idx].ServiceTier
+	defer func() { providerRegistry[idx].ServiceTier = prev }()
+	if prev[0] != "" {
+		t.Fatalf("premise gone: anthropic already declares a service tier %v", prev)
+	}
+
+	m := layoutModel()
+	m.sel["lane"], m.sel["fast"] = "claude-only", "on"
+	offered := func() bool {
+		for _, f := range m.visibleFacets() {
+			if f.key == "fast" {
+				return true
+			}
+		}
+		return false
+	}
+	if got := m.genConfigYAML(); strings.Contains(got, "tier:") {
+		t.Errorf("a lane whose pools sell no tier still wrote one:\n%s", got)
+	}
+	if offered() {
+		t.Error("the fast dial is offered on a lane that sells no priority tier")
+	}
+
+	providerRegistry[idx].ServiceTier = [2]string{"anthropic", "priority"}
+	if got := m.genConfigYAML(); !strings.Contains(got, "tier:\n  anthropic: priority\n") {
+		t.Errorf("a registry entry gaining ServiceTier never reached the overlay:\n%s", got)
+	}
+	if !offered() {
+		t.Error("the fast dial stayed hidden on a lane that now sells a tier")
+	}
+}
+
+// TestLaneOrderForPoolsPoolCounts: trimming the registry to a single required
+// pool is the one-entry edit providers.go's header promises, and the lane order
+// used to panic on it (pools[2:] on a one-element slice).
+func TestLaneOrderForPoolsPoolCounts(t *testing.T) {
+	if got := laneOrderForPools(nil); got != nil {
+		t.Errorf("no pools = %v, want nil", got)
+	}
+	if got, want := laneOrderForPools([]string{"A"}), []string{"claude-only", "claude-led"}; !slices.Equal(got, want) {
+		t.Errorf("one pool = %v, want %v — nothing to blend with", got, want)
+	}
+	if got := laneOrderForPools([]string{"A", "O"}); len(got) != 5 || got[2] != "mixed" {
+		t.Errorf("two pools = %v, want the classic five with mixed in the middle", got)
+	}
+	if got := laneOrderForPools([]string{"A", "O", "D"}); len(got) != 7 {
+		t.Errorf("three pools = %v, want the five plus the optional pool's pair", got)
 	}
 }

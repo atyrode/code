@@ -5,7 +5,10 @@ package main
 // nothing else in the tree may hard-code a provider id, pool letter, model
 // prefix, bucket name, or brand color.
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	anthropicProvider = "anthropic"
@@ -41,6 +44,25 @@ type specialFacet struct {
 	Bucket string // bucket suffix; full name = BucketBase + "-" + Bucket
 }
 
+// offPeakDiscount is a pay-as-you-go pool's clock-based price break, in minutes
+// past UTC midnight. The window wraps when StartMin > EndMin (DeepSeek's runs
+// 16:30 through 00:30). It lives here rather than in the meter because it is a
+// fact about a provider's billing, and the registry is where provider facts are
+// spelled — a second pool with a discount window is a field, not a new branch.
+type offPeakDiscount struct {
+	StartMin, EndMin int
+	Mult             float64
+}
+
+// active reports whether utc falls inside the window.
+func (o offPeakDiscount) active(utc time.Time) bool {
+	m := utc.Hour()*60 + utc.Minute()
+	if o.StartMin > o.EndMin {
+		return m >= o.StartMin || m < o.EndMin
+	}
+	return m >= o.StartMin && m < o.EndMin
+}
+
 type providerDesc struct {
 	ID            string     // broker/omp provider id
 	Aliases       []string   // extra omp ids mapping to the same pool
@@ -60,7 +82,8 @@ type providerDesc struct {
 	CrossTo       string     // pool this pool's crossing roles divert to (reviewer, advisor)
 	SkeletonWins  []string   // usage-panel loading skeleton windows; nil when unmetered
 	Special       []specialFacet
-	ServiceTier   [2]string // omp overlay `tier:` key/value when the `fast` facet is on
+	ServiceTier   [2]string        // omp overlay `tier:` key/value when the `fast` facet is on
+	OffPeak       *offPeakDiscount // clock-based price break; nil when the pool bills flat
 }
 
 // providerRegistry order is the account/usage display order (Claude first,
@@ -81,7 +104,9 @@ var providerRegistry = []providerDesc{
 		ServiceTier:  [2]string{"openai", "priority"}},
 	{ID: deepseekProvider, Pool: "D", Lane: "ds", Label: "DeepSeek", AccountLabel: "DeepSeek",
 		Color: "#4d6bfe", LaneOnly: "#3a55f0", LaneLed: "#7d92ff", PaintRGB: [3]float64{77, 107, 254},
-		ModelPrefixes: []string{"deepseek"}, BucketBase: "deepseek", CrossTo: "O"},
+		ModelPrefixes: []string{"deepseek"}, BucketBase: "deepseek", CrossTo: "O",
+		// UTC 16:30–00:30, half price (deepseek.com/pricing).
+		OffPeak: &offPeakDiscount{StartMin: 16*60 + 30, EndMin: 30, Mult: 0.5}},
 }
 
 // fallbackPoolOrder is the generator-side pool order: non-lead pools appear in
@@ -314,18 +339,60 @@ func laneHostsSpecial(lane, facet string) bool {
 // (subset of fallbackPoolOrder, in that order): the first pool's pure lane
 // leads, mixed sits in the middle, the second pool mirrors, and every further
 // pool appends its led/only pair.
+//
+// A single pool yields only its own pure pair: there is nothing to blend with,
+// so "mixed" and every further pair are absent. That case is reachable by
+// editing the registry down to one Required provider — the extension the file
+// header promises — so the tail slice is taken inside the len > 1 branch rather
+// than as pools[2:], which panics on a one-pool slice.
 func laneOrderForPools(pools []string) []string {
-	var lanes []string
-	name := func(pool string) string { return providerByPool(pool).Lane }
 	if len(pools) == 0 {
 		return nil
 	}
-	lanes = append(lanes, name(pools[0])+"-only", name(pools[0])+"-led")
+	name := func(pool string) string { return providerByPool(pool).Lane }
+	lanes := []string{name(pools[0]) + "-only", name(pools[0]) + "-led"}
 	if len(pools) > 1 {
 		lanes = append(lanes, "mixed", name(pools[1])+"-led", name(pools[1])+"-only")
-	}
-	for _, pool := range pools[2:] {
-		lanes = append(lanes, name(pool)+"-led", name(pool)+"-only")
+		for _, pool := range pools[2:] {
+			lanes = append(lanes, name(pool)+"-led", name(pool)+"-only")
+		}
 	}
 	return lanes
+}
+
+// poolServiceTier returns the pool's provider's omp `tier:` overlay key/value,
+// and whether it declares one at all. The `fast` dial is exactly "ask every
+// pool that sells a priority tier for it", so every call site that used to test
+// pool == "O" asks this instead: a second provider gaining a tier is then a
+// registry field, as the file header promises, not another literal.
+func poolServiceTier(pool string) ([2]string, bool) {
+	p := providerByPool(pool)
+	if p == nil || p.ServiceTier[0] == "" {
+		return [2]string{}, false
+	}
+	return p.ServiceTier, true
+}
+
+// laneServiceTiers lists the omp `tier:` overlays the lane's pools sell, in
+// registry order. Empty means the `fast` dial buys nothing on this lane.
+func laneServiceTiers(lane string) [][2]string {
+	var out [][2]string
+	for i := range providerRegistry {
+		p := providerRegistry[i]
+		if p.ServiceTier[0] == "" || !laneHasPool(lane, p.Pool) {
+			continue
+		}
+		out = append(out, p.ServiceTier)
+	}
+	return out
+}
+
+// poolOffPeak returns the pool's clock-based discount multiplier for utc, or 1
+// when the pool bills flat or the window is closed.
+func poolOffPeak(pool string, utc time.Time) float64 {
+	p := providerByPool(pool)
+	if p == nil || p.OffPeak == nil || !p.OffPeak.active(utc) {
+		return 1
+	}
+	return p.OffPeak.Mult
 }

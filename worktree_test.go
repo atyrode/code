@@ -15,7 +15,7 @@ import (
 func isolateWorktreeTest(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
-	t.Setenv("OMP_WORKTREE_DIR", filepath.Join(base, "worktrees"))
+	t.Setenv("CODE_WORKTREE_DIR", filepath.Join(base, "worktrees"))
 	t.Setenv("CODE_WORKTREE_STATE", filepath.Join(base, "worktree-state"))
 	t.Setenv("CODE_SESSION_STATE", filepath.Join(base, "session-state"))
 	return base
@@ -92,6 +92,106 @@ func TestWorktreeNameFormat(t *testing.T) {
 		if name := randomWorktreeName(); !pattern.MatchString(name) {
 			t.Fatalf("worktree name %q does not match adj-color-animal", name)
 		}
+	}
+}
+
+// TestWorktreeBaseDerivesCodeStateRoot pins the root away from omp's directory.
+// omp worktree clear --all force-deletes everything under ~/.omp/wt, so a root
+// that drifts back there loses a live session's work; the omp variables are set
+// here precisely to prove none of them reaches the answer any more.
+func TestWorktreeBaseDerivesCodeStateRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODE_WORKTREE_DIR", "")
+	t.Setenv("OMP_WORKTREE_DIR", filepath.Join(home, "omp-override", "wt"))
+	t.Setenv("OMP_PROFILE", "managed")
+	t.Setenv("PI_CONFIG_DIR", ".omp")
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+
+	state := filepath.Join(home, "state")
+	t.Setenv("XDG_STATE_HOME", state)
+	if got, want := worktreeBase(), filepath.Join(state, "code", "wt"); got != want {
+		t.Fatalf("worktreeBase() = %q, want %q", got, want)
+	}
+
+	t.Setenv("XDG_STATE_HOME", "")
+	if got, want := worktreeBase(), filepath.Join(home, ".local", "state", "code", "wt"); got != want {
+		t.Fatalf("worktreeBase() without XDG_STATE_HOME = %q, want %q", got, want)
+	}
+}
+
+// TestWorktreeBaseOverrideWins keeps the explicit relocation authoritative — and
+// keeps it a CODE_ variable: honouring OMP_WORKTREE_DIR would put the worktrees
+// back inside the directory omp clears.
+func TestWorktreeBaseOverrideWins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("OMP_WORKTREE_DIR", filepath.Join(home, "omp", "wt"))
+
+	explicit := filepath.Join(home, "elsewhere", "trees")
+	t.Setenv("CODE_WORKTREE_DIR", explicit+string(filepath.Separator))
+	if got := worktreeBase(); got != explicit {
+		t.Fatalf("worktreeBase() with override = %q, want %q", got, explicit)
+	}
+
+	t.Setenv("CODE_WORKTREE_DIR", "~/tilde-trees")
+	if got, want := worktreeBase(), filepath.Join(home, "tilde-trees"); got != want {
+		t.Fatalf("worktreeBase() with ~ override = %q, want %q", got, want)
+	}
+
+	// A relative override cannot name a stable directory for a process that
+	// chdirs into the worktree it creates, so it is ignored rather than resolved.
+	t.Setenv("CODE_WORKTREE_DIR", "relative/trees")
+	if got, want := worktreeBase(), filepath.Join(home, "state", "code", "wt"); got != want {
+		t.Fatalf("worktreeBase() with relative override = %q, want %q", got, want)
+	}
+}
+
+// TestWorktreeListMarksLegacyRoot is the adoption contract: a worktree created
+// by an older build still lives in omp's directory, and the operator has to be
+// able to see which ones those are before omp worktree clear --all finds them.
+// Nothing is moved on disk — the listing reports, remove and prune act.
+func TestWorktreeListMarksLegacyRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("OMP_WORKTREE_DIR", "")
+	t.Setenv("OMP_PROFILE", "")
+	t.Setenv("PI_PROFILE", "")
+	t.Setenv("PI_CONFIG_DIR", "")
+	t.Setenv("CODE_WORKTREE_DIR", "")
+	t.Setenv("CODE_SESSION_STATE", filepath.Join(home, "session-state"))
+
+	legacyDir := filepath.Join(home, ".omp", "wt", "lazy-jade-owl")
+	currentDir := filepath.Join(worktreeBase(), "swift-teal-crab")
+	entries := []worktreeEntry{
+		{worktreeRecord: worktreeRecord{Name: "lazy-jade-owl", Branch: "code/lazy-jade-owl", Repo: home, Dir: legacyDir}},
+		{worktreeRecord: worktreeRecord{Name: "swift-teal-crab", Branch: "code/swift-teal-crab", Repo: home, Dir: currentDir}},
+	}
+
+	var out strings.Builder
+	writeWorktreeList(&out, entries, time.Now())
+	rendered := out.String()
+
+	for _, line := range strings.Split(rendered, "\n") {
+		switch {
+		case strings.HasPrefix(line, "lazy-jade-owl"):
+			if !strings.Contains(line, "legacy") {
+				t.Fatalf("worktree in omp's root not marked legacy: %q", line)
+			}
+		case strings.HasPrefix(line, "swift-teal-crab"):
+			if strings.Contains(line, "legacy") {
+				t.Fatalf("worktree in code's own root marked legacy: %q", line)
+			}
+		}
+	}
+	if !strings.Contains(rendered, "omp worktree clear --all") {
+		t.Fatalf("listing does not name the hazard it is warning about:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "code wt rm") {
+		t.Fatalf("listing does not say how to retire a legacy worktree:\n%s", rendered)
 	}
 }
 

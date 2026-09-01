@@ -63,6 +63,27 @@ a ladder around a model that never answered.
   the chosen tag. Nothing probes whether that model can carry an analysis — the
   catalog's rungs are `omp bench`-verified, these are not — so a 1B model is as
   selectable as a 30B one, and the resulting findings are as good as the model.
+- Deliberately not ours, audited against omp 18.1.2: retry, model fallback,
+  quota enforcement, sandboxing of an ordinary session, session resume, and
+  worktree isolation for spawned subagents are all omp's, and nothing here
+  reimplements them — every runtime concern is a freshly exec'd `omp`. What is
+  ours is the pre-launch estimate omp cannot make (the cost/speed meters, which
+  score a facet combination omp has no concept of), the capability ladder
+  (`omp models --json` carries no tier or ranking field), the reachability
+  probe (omp lists models an account cannot call and says nothing about it), and
+  whole-session operator worktrees plus the cross-launch session registry, which
+  omp has no command for.
+- Those worktrees used to live in `~/.omp/wt` — omp's own directory, which
+  `omp worktree clear --all` empties without knowing about this tool's liveness
+  records. They now live under `code`'s state root; `code wt` still lists any
+  left behind, marked `legacy`, so the existing remove/prune flow can clear
+  them.
+- The Usage panel still reads the auth broker's snapshot directly and does not
+  consume omp's own `capacity`, `disabledCredentials`, or `accountsWithoutUsage`
+  fields. That is a real gap, not a decision: omp reports *why* a credential is
+  down (an expired OAuth grant, say) and this panel can currently only infer
+  "unauthed" from an absent report. Until it consumes them, an account that omp
+  has disabled renders as merely silent.
 
 ## Built on
 

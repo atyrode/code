@@ -92,25 +92,17 @@ func logScore(idx, lnLo, lnHi float64) int {
 	return int(math.Round(math.Max(1, math.Min(5, s))))
 }
 
-// DeepSeek discounts the pay-as-you-go API during its off-peak window,
-// UTC 16:30–00:30 (deepseek.com/pricing). The meter prices D rungs by the
-// clock so a cheap window reads as the discount it is. offPeakNow is a var
-// for tests only.
-const deepseekOffPeakMult = 0.5
-
+// offPeakNow is a var for tests only; the discount windows themselves are
+// registry facts (providerDesc.OffPeak), so the meter asks the registry for a
+// pool's multiplier rather than knowing any pool's pricing itself.
 var offPeakNow = time.Now
-
-func deepseekOffPeak(utc time.Time) bool {
-	m := utc.Hour()*60 + utc.Minute()
-	return m >= 16*60+30 || m < 30
-}
 
 // costScore rates the current config from 1 (cheap) to 5 (dear).
 func (m model) costScore() int {
 	if _, ok := m.selectedRuntime(); ok {
 		return 1
 	}
-	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
+	fast := m.sel["fast"] == "on" && len(laneServiceTiers(m.sel["lane"])) > 0
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
 		c, ok := m.facts[id]
@@ -122,12 +114,11 @@ func (m model) costScore() int {
 			mult = 1
 		}
 		cost := (0.25*c.in + 0.75*c.out) * mult
-		if fast && m.poolOfModel(id) == "O" {
+		pool := m.poolOfModel(id)
+		if _, sells := poolServiceTier(pool); fast && sells {
 			cost *= priorityMult
 		}
-		if m.poolOfModel(id) == "D" && deepseekOffPeak(offPeakNow().UTC()) {
-			cost *= deepseekOffPeakMult
-		}
+		cost *= poolOffPeak(pool, offPeakNow().UTC())
 		num += w * cost
 		den += w
 	})
@@ -142,7 +133,7 @@ func (m model) speedScore() int {
 	if _, ok := m.selectedRuntime(); ok {
 		return 3
 	}
-	fast := m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O")
+	fast := m.sel["fast"] == "on" && len(laneServiceTiers(m.sel["lane"])) > 0
 	var num, den float64
 	m.weightedModels(m.currentRows(), func(w float64, id, lvl string) {
 		c, ok := m.facts[id]
@@ -154,7 +145,7 @@ func (m model) speedScore() int {
 			mult = 1
 		}
 		sp := c.effTPS() * mult
-		if fast && m.poolOfModel(id) == "O" {
+		if _, sells := poolServiceTier(m.poolOfModel(id)); fast && sells {
 			sp *= fastSpeed
 		}
 		num += w * sp
@@ -340,10 +331,11 @@ func (m model) visibleFacets() []facet {
 				continue
 			}
 		case "fast":
-			// The fast dial is the priority service tier — an OpenAI pool
-			// feature, meaningless on a pure lane of any other pool or where
-			// no OpenAI token leads the work.
-			if p := providerByLane(lane); lanePure(lane) && p != nil && p.ServiceTier[0] == "" {
+			// The fast dial is the priority service tier, so it is offered
+			// exactly where some pool in the lane sells one. The old rule only
+			// hid it on a pure lane, so a blend of two tier-less pools still
+			// showed a dial that bought nothing.
+			if len(laneServiceTiers(lane)) == 0 {
 				continue
 			}
 		case "model":
@@ -801,7 +793,15 @@ func (m model) genConfigYAML() string {
 	// task agents get their own advisor. Merged into the one task: block —
 	// overlays are strict YAML and two task: keys would be invalid.
 	agentAdvisor := m.sel["advisor"] == "audit" && m.ompVersionAtLeast(17, 3)
-	if ao.Len() > 0 || agentAdvisor {
+	// prewalk drops the run from the active model to the "smol" role at the
+	// first edit once the plan's todo list exists. The dial is one switch, so
+	// both the main session (prewalk.enabled) and spawned task agents
+	// (task.prewalk) move: shifting only half a run onto the cheap model would
+	// make the dial mean something the label does not say. omp defaults the
+	// target to the smol role, which modelRoles above already routes, so there
+	// is no second model for this dial to choose.
+	prewalk := m.sel["prewalk"] == "on"
+	if ao.Len() > 0 || agentAdvisor || prewalk {
 		b.WriteString("task:\n")
 		if ao.Len() > 0 {
 			b.WriteString("  agentModelOverrides:\n" + ao.String())
@@ -809,6 +809,12 @@ func (m model) genConfigYAML() string {
 		if agentAdvisor {
 			b.WriteString("  agentAdvisor:\n    task: \"on\"\n")
 		}
+		if prewalk {
+			b.WriteString("  prewalk: true\n")
+		}
+	}
+	if prewalk {
+		b.WriteString("prewalk:\n  enabled: true\n")
 	}
 	b.WriteString("defaultThinkingLevel: " + m.sel["thinking"] + "\n")
 	if advisorOn {
@@ -816,10 +822,29 @@ func (m model) genConfigYAML() string {
 	} else {
 		b.WriteString("advisor:\n  enabled: false\n")
 	}
-	if m.sel["fast"] == "on" && laneHasPool(m.sel["lane"], "O") {
-		if p := providerByPool("O"); p != nil && p.ServiceTier[0] != "" {
-			b.WriteString("tier:\n  " + p.ServiceTier[0] + ": " + p.ServiceTier[1] + "\n")
+	// The fast dial buys every priority tier the lane's pools sell, keyed by
+	// whichever provider sells it — not pool O's, which is what this used to
+	// hard-code. Anthropic already ships `tier.anthropic` in omp 18, so a
+	// registry entry gaining ServiceTier now lights up here with no edit.
+	if m.sel["fast"] == "on" {
+		if tiers := laneServiceTiers(m.sel["lane"]); len(tiers) > 0 {
+			b.WriteString("tier:\n")
+			for _, t := range tiers {
+				b.WriteString("  " + t[0] + ": " + t[1] + "\n")
+			}
 		}
 	}
 	return b.String()
+}
+
+// sessionFlags are the omp argv flags the routing-neutral dials ask for.
+// prewalk has config keys so it rides the generated overlay; plan-yolo has
+// none — omp exposes it on the command line only — so it rides argv. Same
+// principle either way: set omp's own switch, wherever omp put it.
+func (m model) sessionFlags() []string {
+	var out []string
+	if m.sel["planyolo"] == "on" {
+		out = append(out, "--plan-yolo")
+	}
+	return out
 }

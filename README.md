@@ -73,6 +73,15 @@ code wt remove <name>      # remove an idle, pristine worktree
 code wt prune              # dry-run cleanup; add --yes to remove
 ```
 
+Worktrees are created under `code`'s own state root —
+`$XDG_STATE_HOME/code/wt`, or `$HOME/.local/state/code/wt`, relocatable with
+`CODE_WORKTREE_DIR`. They deliberately do **not** live in omp's `~/.omp/wt`:
+`omp worktree clear --all` force-deletes everything there and has no view of
+`code`'s session registry, so a live session's tree used to be one command away
+from deletion. Worktrees an older build left in omp's directory are still
+listed, with their `ROOT` column marked `legacy`, and `code wt rm` retires them
+— see [configuration](docs/configuration.md#state-on-disk).
+
 ## Features
 
 - **Dials, not config files** — a provider **lead** dial with a led/only
@@ -82,6 +91,13 @@ code wt prune              # dry-run cleanup; add --yes to remove
   as their own lanes. The model slider's top notch, **elite**, appears only
   on lanes whose pools ladder to a fourth rung — it reaches a provider's
   best model, and is simply absent where that would duplicate `smart`.
+- **omp's own switches, on the same dials** — `prewalk` hands the run to the
+  cheap `smol` role at the first edit once the plan's todo list exists, and
+  `planyolo` starts read-only in plan mode, auto-approves, then implements.
+  Both are omp features; this tool only puts the value where omp reads it —
+  config keys for one, an argv flag for the other — so neither changes the
+  routing grid. The `fast` dial is the same story for a provider's priority
+  service tier, and it appears on exactly the lanes whose pools sell one.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
   launch without mixing cloud credentials into the session. Babel's

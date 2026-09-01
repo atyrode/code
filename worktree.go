@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -63,17 +64,91 @@ func gitOut(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// codeWorktreeDirEnv relocates the session worktree root. It is deliberately a
+// CODE_* variable and not omp's OMP_WORKTREE_DIR: the point of owning this path
+// is that nothing omp does to its own worktree directory can reach ours, and
+// honouring omp's variable would hand that directory back the moment an operator
+// set it.
+const codeWorktreeDirEnv = "CODE_WORKTREE_DIR"
+
+// defaultWorktreeBase derives the worktree root exactly the way every other
+// piece of code state is derived (defaultSessionDir, defaultSelectionStatePath):
+// XDG_STATE_HOME, else $HOME/.local/state, then under code/. HOME is all a
+// stripped environment carries, so a path rooted there is the one seam every
+// mode can derive.
+func defaultWorktreeBase() string {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		base = filepath.Join(os.Getenv("HOME"), ".local", "state")
+	}
+	return filepath.Join(base, "code", "wt")
+}
+
+// worktreeBase resolves where session worktrees are created.
+//
+// These used to live in omp's own worktree directory (~/.omp/wt, or whatever
+// OMP_PROFILE/PI_CONFIG_DIR/XDG_DATA_HOME resolved it to), which is a directory
+// omp actively manages: `omp worktree list` enumerates it and `omp worktree
+// clear --all` force-deletes every entry in it, live PR checkouts included. omp
+// has no knowledge of code's session registry ($XDG_STATE_HOME/code/sessions),
+// so it cannot tell a code session's worktree from one of its own abandoned
+// task worktrees — a single `omp worktree clear --all` would delete the tree out
+// from under a running session and take its uncommitted work with it.
+//
+// The two features are not redundant and neither can be dropped: omp's are
+// in-session, per-subagent task isolation; code's are pre-launch, whole-session
+// operator branches. So code keeps its worktrees under its own state root and
+// stays out of omp's namespace entirely. Worktrees created before this move are
+// still recorded and still listed — see legacyWorktreeRoots.
 func worktreeBase() string {
-	if raw := strings.TrimSpace(os.Getenv("OMP_WORKTREE_DIR")); raw != "" {
-		path := raw
-		switch {
-		case raw == "~":
-			path = os.Getenv("HOME")
-		case strings.HasPrefix(raw, "~/"):
-			path = filepath.Join(os.Getenv("HOME"), strings.TrimPrefix(raw, "~/"))
-		}
-		if filepath.IsAbs(path) {
+	if raw := strings.TrimSpace(os.Getenv(codeWorktreeDirEnv)); raw != "" {
+		if path := expandHome(raw); filepath.IsAbs(path) {
 			return filepath.Clean(path)
+		}
+	}
+	return defaultWorktreeBase()
+}
+
+// expandHome resolves a leading ~ against HOME. An override is written by a
+// human in a shell profile, where ~ is what a human writes.
+func expandHome(raw string) string {
+	switch {
+	case raw == "~":
+		return os.Getenv("HOME")
+	case strings.HasPrefix(raw, "~/"):
+		return filepath.Join(os.Getenv("HOME"), strings.TrimPrefix(raw, "~/"))
+	}
+	return raw
+}
+
+// legacyWorktreeRoots reconstructs the omp-managed directories a pre-move code
+// created worktrees in, so `code wt` can still name them. This is the exact
+// resolution worktreeBase used to perform, kept only to recognise old paths:
+// nothing is ever created here again.
+//
+// It is used for marking, never for discovery. Discovery stays record-driven
+// (loadWorktreeRecords reads code's own state directory, which the move did not
+// touch, so every worktree code ever made is still listed with its real Dir).
+// Scanning these roots for directories instead would enumerate omp's own task
+// worktrees and offer to delete them, which is the same trespass in reverse.
+func legacyWorktreeRoots() []string {
+	var roots []string
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		for _, existing := range roots {
+			if existing == path {
+				return
+			}
+		}
+		roots = append(roots, path)
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("OMP_WORKTREE_DIR")); raw != "" {
+		if path := expandHome(raw); filepath.IsAbs(path) {
+			add(path)
 		}
 	}
 
@@ -94,16 +169,31 @@ func worktreeBase() string {
 		if !defaultProfile {
 			root = filepath.Join(root, "profiles", profile)
 		}
-		if _, err := os.Stat(root); err == nil {
-			return filepath.Join(root, "wt")
-		}
+		add(filepath.Join(root, "wt"))
 	}
 
-	root := filepath.Join(os.Getenv("HOME"), configDir)
-	if !defaultProfile {
-		root = filepath.Join(root, "profiles", profile)
+	if home := os.Getenv("HOME"); home != "" {
+		root := filepath.Join(home, configDir)
+		if !defaultProfile {
+			root = filepath.Join(root, "profiles", profile)
+		}
+		add(filepath.Join(root, "wt"))
 	}
-	return filepath.Join(root, "wt")
+	return roots
+}
+
+// underRoot reports whether dir is root itself or lives beneath it. Both sides
+// are cleaned, so a trailing slash or a doubled separator in an override does
+// not decide whether a worktree is recognised as legacy.
+func underRoot(dir, root string) bool {
+	if dir == "" || root == "" {
+		return false
+	}
+	dir, root = filepath.Clean(dir), filepath.Clean(root)
+	if dir == root {
+		return true
+	}
+	return strings.HasPrefix(dir, root+string(filepath.Separator))
 }
 
 func randomWorktreeName() string {
@@ -303,6 +393,30 @@ func (e worktreeEntry) sessionWorktree() *sessionWorktree {
 	}
 }
 
+// worktreeIsLegacy reports whether a recorded worktree still sits in one of the
+// omp-managed roots code used before it took ownership of its own. The record is
+// code's either way — only the directory is in the wrong place — so remove and
+// prune handle such an entry exactly like any other; the listing marks it so an
+// operator can see which trees are still exposed to `omp worktree clear --all`
+// and retire them deliberately. Nothing on disk is moved: these are the
+// operator's git worktrees, and relocating one behind their back would be the
+// same unannounced mutation this whole change exists to prevent.
+//
+// A directory under the current base is never legacy, so pointing
+// CODE_WORKTREE_DIR at an omp root — an operator's choice to make — does not
+// flag every fresh worktree.
+func worktreeIsLegacy(dir, base string, roots []string) bool {
+	if underRoot(dir, base) {
+		return false
+	}
+	for _, root := range roots {
+		if underRoot(dir, root) {
+			return true
+		}
+	}
+	return false
+}
+
 func removeWorktreeEntry(e worktreeEntry, force bool) error {
 	_, _ = gitOut(e.Repo, "worktree", "unlock", e.Dir)
 	args := []string{"worktree", "remove"}
@@ -352,9 +466,19 @@ func runWorktreeList(args []string) int {
 		fmt.Println("no session worktrees")
 		return 0
 	}
-	now := time.Now()
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tAGE\tBRANCH\tSTATE\tDIRECTORY")
+	writeWorktreeList(os.Stdout, entries, time.Now())
+	return 0
+}
+
+// writeWorktreeList renders the table. It takes its writer and its clock so the
+// rendering — in particular the legacy marking, which is the only part an
+// operator has to trust for cleanup — is assertable without a live terminal.
+func writeWorktreeList(out io.Writer, entries []worktreeEntry, now time.Time) {
+	base := worktreeBase()
+	roots := legacyWorktreeRoots()
+	legacy := 0
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tAGE\tBRANCH\tSTATE\tROOT\tDIRECTORY")
 	for _, e := range entries {
 		age := time.Duration(0)
 		if e.Created > 0 {
@@ -370,10 +494,18 @@ func runWorktreeList(args []string) int {
 		case !worktreePristine(e.sessionWorktree()):
 			state = "dirty"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Name, fmtAge(age), e.Branch, state, e.Dir)
+		root := "own"
+		if worktreeIsLegacy(e.Dir, base, roots) {
+			root = "legacy"
+			legacy++
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, fmtAge(age), e.Branch, state, root, e.Dir)
 	}
 	_ = w.Flush()
-	return 0
+	if legacy > 0 {
+		fmt.Fprintf(out, "%d legacy worktree(s) predate code's own root and still sit in omp's, where omp worktree clear --all can force-delete them.\n", legacy)
+		fmt.Fprintf(out, "Retire them with code wt rm <name>; new worktrees are created in %s.\n", base)
+	}
 }
 
 func runWorktreeRemove(args []string) int {
@@ -490,7 +622,9 @@ const worktreeHelp = `code worktree — manage isolated session worktrees
   code worktree [list]
   code wt
       List recorded session worktrees, their age, branch, liveness or dirty
-      state, and directory.
+      state, root, and directory. A "legacy" root is one left in omp's
+      worktree directory by a build older than this one — remove or prune
+      clears it like any other.
 
   code worktree remove <name> [--force]
   code wt rm <name> [--force]
@@ -500,8 +634,7 @@ const worktreeHelp = `code worktree — manage isolated session worktrees
   code worktree prune [--yes]
       Find idle, pristine worktrees. This is a dry run unless --yes is given.
 
-  Worktree base: $OMP_WORKTREE_DIR, otherwise omp's profile data directory.
+  Worktree base: $XDG_STATE_HOME/code/wt, or CODE_WORKTREE_DIR.
   Records: $XDG_STATE_HOME/code/worktrees, or CODE_WORKTREE_STATE.
   Session liveness: $XDG_STATE_HOME/code/sessions, or CODE_SESSION_STATE.
-  Warning: omp wt clear --all can still force-delete these worktrees.
 `

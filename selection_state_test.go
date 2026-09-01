@@ -45,7 +45,7 @@ func TestSelectionStateRoundTripStoresOnlyFacets(t *testing.T) {
 	}
 	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, map[string]string{
 		"lane": "claude-led", "model": "smart", "thinking": "xhigh", "advisor": "glance",
-		"fast": "off", "spark": "on",
+		"fast": "off", "spark": "on", "prewalk": "off", "planyolo": "off",
 	}) {
 		t.Fatalf("round-trip selection = %v", got)
 	}

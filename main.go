@@ -98,7 +98,7 @@ func main() {
 		})
 	case fm.genConfig != "":
 		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func() int {
-			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
+			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, launchDir)
 		})
 	}
 	if wt != nil {

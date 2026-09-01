@@ -35,6 +35,14 @@ func facetDefs(glyphs map[string]string) []facet {
 		{"advisor", []string{"off", "glance", "review", "audit"}, glyphs["advisor"]},
 		{"fast", []string{"on", "off"}, glyphs["fast"]},
 		{"spark", []string{"on", "off"}, glyphs["spark"]},
+		// prewalk and planyolo are omp's own session switches, not routing:
+		// neither appears in comboID, so both leave the generated grid
+		// untouched and are applied where the launch is assembled — prewalk as
+		// omp config keys, planyolo as an argv flag. Both target the "smol"
+		// role by default, which this grid already routes, so there is no
+		// second model to choose.
+		{"prewalk", []string{"on", "off"}, glyphs["prewalk"]},
+		{"planyolo", []string{"on", "off"}, glyphs["planyolo"]},
 	}
 }
 
