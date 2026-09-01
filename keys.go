@@ -4,7 +4,7 @@ import "github.com/charmbracelet/bubbles/key"
 
 // ── keybindings (drive both input handling and the bubbles/help footer) ───────
 type keyMap struct {
-	Move, Change, Reset, Depth, Refresh, Manager, Collapse, Usage, Launch, Managed, Untrusted, Worktree, Help, Quit key.Binding
+	Move, Change, Reset, Depth, Reveal, Refresh, Manager, Collapse, Usage, Launch, Managed, Untrusted, Worktree, Help, Quit key.Binding
 }
 
 // ShortHelp is a static single-line stand-in used only when measuring the
@@ -17,16 +17,19 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Move, k.Change, k.Reset},
-		{k.Depth, k.Refresh, k.Manager, k.Collapse, k.Usage},
+		{k.Depth, k.Reveal, k.Refresh, k.Manager, k.Collapse, k.Usage},
 		{k.Launch, k.Managed, k.Untrusted, k.Worktree, k.Help, k.Quit},
 	}
 }
 
 var keys = keyMap{
-	Move:      key.NewBinding(key.WithKeys("up", "down", "j", "k"), key.WithHelp("↑↓", "move")),
-	Change:    key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "change")),
-	Reset:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", gReset+" defaults")),
-	Depth:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "primary ⇄ full chains")),
+	Move:   key.NewBinding(key.WithKeys("up", "down", "j", "k"), key.WithHelp("↑↓", "move")),
+	Change: key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "change")),
+	Reset:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", gReset+" defaults")),
+	Depth:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "primary ⇄ full chains")),
+	// Reveal repaints the routing preview with the catalog's full model ids
+	// instead of the short keys — a sanity check on what a dial state routes to.
+	Reveal:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "short ⇄ full model ids")),
 	Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh usage")),
 	Manager:   key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "manage accounts")),
 	Collapse:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "show/hide routing")),
@@ -42,5 +45,5 @@ var keys = keyMap{
 // defaultSel returns a fresh copy of the generator's default facet selection —
 // used both to seed the model and to restore it via the reset key.
 func defaultSel() map[string]string {
-	return map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium", "advisor": "glance", "spark": "on", "fable": "off", "main": "off", "fast": "off", "relief": "on"}
+	return map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium", "advisor": "glance", "spark": "on", "fast": "off"}
 }

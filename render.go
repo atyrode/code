@@ -22,7 +22,7 @@ func (m model) renderRoute(rows []string, depth int, a availability, width int) 
 	for _, r := range rows {
 		locs := modelRe.FindAllStringIndex(r, -1)
 		if len(locs) == 0 { // a note/meta line with no models — pass through
-			out = append(out, colorizeRoute(r))
+			out = append(out, m.colorizeRoute(r))
 			continue
 		}
 		label := r[:locs[0][0]] // role + its alignment padding, kept verbatim
@@ -50,16 +50,17 @@ func (m model) renderRoute(rows []string, depth int, a availability, width int) 
 				}
 			}
 		}
-		// render a token as it displays (short name), returning the styled
-		// string and its display width — struck if the model is down.
+		// render a token as it displays (short key, or the full catalog id while
+		// the reveal toggle is on), returning the styled string and its display
+		// width — struck if the model is down.
 		render := func(t tok) (string, int) {
 			c := strings.LastIndexByte(t.text, ':')
-			short := shortModel(t.text[:c]) + t.text[c:]
+			label := m.modelLabel(t.text[:c]) + t.text[c:]
 			if t.down {
-				s := stStruck.Render(short)
+				s := stStruck.Render(label)
 				return s, lipgloss.Width(s)
 			}
-			s := colorizeRoute(t.text) // paintModel shortens + colours
+			s := m.colorizeRoute(t.text) // paintModel labels + colours
 			return s, lipgloss.Width(s)
 		}
 		s0, w0 := render(toks[0])
@@ -166,7 +167,7 @@ func (m *model) syncPreviewAt(yoff int) {
 		m.vp.SetYOffset(yoff)
 		return
 	}
-	id := comboID(m.sel, m.hasRelief)
+	id := comboID(m.sel)
 	if m.noProviders {
 		b.WriteString(stDim.Render("no connected OMP providers") + "\n")
 	} else if base, ok := m.generated[id]; ok {

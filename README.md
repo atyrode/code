@@ -24,10 +24,8 @@ overlay — your omp config is never modified.
 It's made for people who run oh-my-pi with **both Anthropic and OpenAI**:
 the whole point is deciding, per task, how to blend the pools and which
 quota to spend. A DeepSeek API key adds a third, pay-as-you-go pool — its
-own `ds` lanes, a live balance readout in Usage, and a relief tail at the
-end of the heavyweight fallback chains for when the metered windows are
-drained. With a single provider you can still launch, but the dials lose
-most of their meaning.
+own `ds` lanes and a live balance readout in Usage. With a single provider
+you can still launch, but the dials lose most of their meaning.
 
 ## Usage
 
@@ -79,10 +77,11 @@ code wt prune              # dry-run cleanup; add --yes to remove
 
 - **Dials, not config files** — a provider **lead** dial with a led/only
   blend child (scales past two pools without overflowing), notched sliders
-  for model tier and thinking depth, advisor level, plus the spark/fable
-  toggles; every combination maps to a pre-computed routing. Optional pools
-  plug in as their own lanes, and a **relief** dial decides whether drained
-  metered chains may spill into the pay-as-you-go pool.
+  for model tier and thinking depth, advisor level, plus the spark toggle;
+  every combination maps to a pre-computed routing. Optional pools plug in
+  as their own lanes. The model slider's top notch, **elite**, appears only
+  on lanes whose pools ladder to a fourth rung — it reaches a provider's
+  best model, and is simply absent where that would duplicate `smart`.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
   launch without mixing cloud credentials into the session. Babel's

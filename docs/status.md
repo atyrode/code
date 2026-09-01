@@ -14,22 +14,31 @@ provider with defaults, you probably don't need it.
 
 The dials map to pre-generated routing blocks. `code generate init` scaffolds
 a models file from your own omp instance (`omp models --json`, plus
-`omp usage --json` to spot the tier-scoped quota buckets that mark the spark
-and elite models) and `code generate` renders the catalog from it — see the
-README quickstart. The tier assignments `init` derives (newest model per family,
+`omp usage --json` to spot the tier-scoped quota bucket that marks the spark
+model) and `code generate` renders the catalog from it — see the README
+quickstart. The tier assignments `init` derives (newest model per family,
 then ranked by thinking ceiling, context and price) still deserve a human look.
 
 What no longer needs a caveat: `init` probes every candidate with `omp bench`
 before it can become a rung, and that is mandatory rather than a flag. omp lists
 models an account cannot actually call and nothing in the metadata says so —
-`claude-mythos-5` reports `claude-fable-5`'s exact price, context window and
-thinking range, and 404s here — so anything that does not come back with a clean
-probe is dropped, as is anything missing from the report. The same pass supplies
-the real speed/ttft, which used to be an identical placeholder pair on every
-model, making the speed meter move with the thinking dial and nothing else. It
-is one timed request per model, so `init` takes a minute and the figures are a
-single sample rather than a steady benchmark. A verified file is marked
-`probed: true`; `generate` refuses one that is not.
+`claude-mythos-5` reports the fable models' exact price, context window and
+thinking range, and 404s here — so anything the provider disowns is dropped, as
+is anything missing from the report. The same pass supplies the real speed/ttft,
+which used to be an identical placeholder pair on every model, making the speed
+meter move with the thinking dial and nothing else. It is one timed request per
+model, so `init` takes a minute and the figures are a single sample rather than a
+steady benchmark. A verified file is marked `probed: true`; `generate` refuses
+one that is not.
+
+The probe sorts a failure into three outcomes, because they are not the same
+thing. A model the provider says does not exist is dropped. A model the provider
+refuses because the *client* is too old is also dropped, but named in the
+scaffold's header with the version the provider asked for — `claude-fable-5-1`
+is entitled on this account today and still uncallable, because omp advertises
+Claude Code 2.1.246 and Anthropic wants 2.1.251 for it. Anything else is
+inconclusive, and inconclusive refuses the whole scaffold rather than certifying
+a ladder around a model that never answered.
 
 ## Other honest caveats
 

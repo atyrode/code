@@ -45,7 +45,7 @@ func TestSelectionStateRoundTripStoresOnlyFacets(t *testing.T) {
 	}
 	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, map[string]string{
 		"lane": "claude-led", "model": "smart", "thinking": "xhigh", "advisor": "glance",
-		"spark": "on", "fable": "off", "main": "off", "fast": "off", "relief": "on",
+		"fast": "off", "spark": "on",
 	}) {
 		t.Fatalf("round-trip selection = %v", got)
 	}
@@ -198,21 +198,29 @@ func TestSelectionStateAtomicReplacementFailureKeepsLastGoodFile(t *testing.T) {
 	}
 }
 
-func TestSelectionStateFableMainInvariant(t *testing.T) {
+// TestSelectionStateImpossibleSparkNotResurrected: a persisted combination the
+// generator can never emit must not come back to life on load. spark's pool
+// sits outside a pure-Claude lane's pool-set, so a selection file carrying
+// spark:on under claude-only names a combo that was never written — loading it
+// verbatim used to leave the dial pointing at a profile the catalog does not
+// carry. (Successor to the fable/main invariant test: both those facets are
+// gone, spark is the last special tier and keeps the property.)
+func TestSelectionStateImpossibleSparkNotResurrected(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
+		want string
 	}{
-		{"main cannot outlive fable", `{"lane":"mixed","fable":"off","main":"on"}`},
-		{"GPT-only hides fable and main", `{"lane":"gpt-only","fable":"on","main":"on"}`},
+		{"claude-only cannot host spark", `{"lane":"claude-only","spark":"on"}`, "off"},
+		{"a lane that hosts it keeps it", `{"lane":"claude-led","spark":"on"}`, "on"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "selection.json")
 			writeSelectionFixture(t, path, tc.body)
 			got := loadSelectionState(path, testFacets())
-			if got["fable"] != "off" || got["main"] != "off" {
-				t.Fatalf("loaded impossible fable/main state: %v", got)
+			if got["spark"] != tc.want {
+				t.Fatalf("loaded spark = %q, want %q: %v", got["spark"], tc.want, got)
 			}
 		})
 	}

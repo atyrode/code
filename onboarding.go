@@ -179,10 +179,11 @@ func (o onboarding) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		o.m.generated = blocks
 		o.m.advisors = parseAdvisors(blocks["__advisors__"])
 		o.m.facts = parseFacts(blocks["__models__"])
-		// A freshly scaffolded catalog may have no tier-0 or tier-4 model, in
-		// which case it ships no spark/fable combos at all — drop those dials
-		// before the real TUI paints, or the default selection lands on a
-		// combination that was never generated.
+		// A freshly scaffolded catalog may have no tier-0 model, and its pools
+		// may ladder less deep than the dials offer — it then ships no spark and
+		// no elite combos at all. Narrow those dials before the real TUI paints,
+		// or the default selection lands on a combination that was never
+		// generated.
 		o.m.applyCatalog()
 		o.m.syncPreview()
 		return o.m, o.m.Init()

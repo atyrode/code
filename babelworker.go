@@ -1304,7 +1304,7 @@ var babelJobFields = func() func() map[string]struct{} {
 // because a credential happened to be missing at that instant. The catalog's own
 // clamping still applies.
 func babelCatalogModel() model {
-	glyphs := defaultGlyphs()
+	glyphs := resolveGlyphs()
 	catalogPath := os.Getenv("CODE_GENERATED")
 	if catalogPath == "" {
 		catalogPath = defaultCatalogPath()
@@ -1365,7 +1365,7 @@ func babelDescribeDials(m model, id string) codeProfile {
 		"tier":     m.sel["model"],
 		"thinking": m.sel["thinking"],
 		"advisor":  m.sel["advisor"],
-		"combo":    comboID(m.sel, m.hasRelief),
+		"combo":    comboID(m.sel),
 	}
 	disclosure := babelDisclosureHosted
 	if target, ok := m.selectedRuntime(); ok {
@@ -1395,7 +1395,7 @@ func babelDescribeDials(m model, id string) codeProfile {
 	return codeProfile{
 		ID:         id,
 		Selection:  m.sel,
-		ComboID:    comboID(m.sel, m.hasRelief),
+		ComboID:    comboID(m.sel),
 		Disclosure: disclosure,
 		// Material that leaves this machine for a provider API has to be
 		// redacted before it goes; material a local runtime handles does not.
@@ -1501,7 +1501,7 @@ func profileOverlay(p codeProfile) (string, error) {
 	for key, value := range p.Selection {
 		m.sel[key] = value
 	}
-	combo := comboID(m.sel, m.hasRelief)
+	combo := comboID(m.sel)
 	if _, ok := m.generated[combo]; !ok {
 		return "", fmt.Errorf("profile %s@%d selects combination %s, which this catalog does not generate",
 			p.ID, p.Revision, combo)

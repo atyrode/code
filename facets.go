@@ -22,22 +22,19 @@ func facetDefs(glyphs map[string]string) []facet {
 		// onboarding shell, a broken CODE_GENERATED) keeps a working dial;
 		// applyCatalog replaces the list with the lanes the catalog generated.
 		{"lane", requiredPoolLanes(), glyphs["lane"]},
-		{"model", []string{"fast", "normal", "smart"}, glyphs["model"]},
+		// The model dial is the capability ladder, one notch per rung. "elite"
+		// reaches a pool's tier-4 rung — pool A's top model today, and any pool
+		// that later gains a fourth. It is only offered on lanes whose combos
+		// actually carry it (visibleFacets narrows the values to m.mtiers): on a
+		// lane whose pools stop at tier 3 the generator writes no elite combo,
+		// because it would be byte-identical to smart.
+		{"model", []string{"fast", "normal", "smart", "elite"}, glyphs["model"]},
 		{"thinking", []string{"minimal", "low", "medium", "high", "xhigh", "max"}, glyphs["thinking"]},
 		// advisor as a power/cost dial: a quick glance, a proper review, or a
 		// deep (expensive) audit — off spends nothing.
 		{"advisor", []string{"off", "glance", "review", "audit"}, glyphs["advisor"]},
 		{"fast", []string{"on", "off"}, glyphs["fast"]},
 		{"spark", []string{"on", "off"}, glyphs["spark"]},
-		{"fable", []string{"on", "off"}, glyphs["fable"]},
-		// fable-as-main: hand the scarce elite the default (main-agent) role too.
-		// A sub-setting of fable — only visible while fable is on (see
-		// visibleFacets) and never set by a suggestion (see validFacetActions).
-		{"main", []string{"on", "off"}, glyphs["main"]},
-		// relief: whether metered-led chains may spill into a pay-as-you-go
-		// pool's tail rung. Only rendered when the catalog carries an
-		// optional pool and the lane is a metered-led blend.
-		{"relief", []string{"on", "off"}, glyphs["relief"]},
 	}
 }
 

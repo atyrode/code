@@ -217,18 +217,24 @@ const prevChromeRows = headRows + 1
 
 // previewColumn assembles the Routing section: the pinned title row carrying
 // the section-local collapse cue (p · hide), the scrolling routing viewport,
-// then the fallback-display cue pinned at the section's bottom edge — bottom
-// chrome, where the chains it toggles end. The f wording makes clear it only
+// then the display cues pinned at the section's bottom edge — bottom chrome,
+// where the chains they toggle end. The f wording makes clear it only
 // changes what is DISPLAYED: the launched profile always keeps its fallback
-// chains.
+// chains. n reads the same way: it swaps the short model keys for the
+// catalog's full ids, and routes nothing differently.
 func (m model) previewColumn() string {
 	verb := "show"
 	if m.depth == 1 {
 		verb = "hide"
 	}
+	ids := "full ids"
+	if m.showFullIDs {
+		ids = "short ids"
+	}
 	return m.pill("routing") + "  " + stCueKey.Render("p") + stCue.Render(" · hide") + "\n\n" +
 		m.vp.View() + "\n" +
-		stKey.Render("f") + stDim.Render(" · "+verb+" fallback chains")
+		stKey.Render("f") + stDim.Render(" · "+verb+" fallback chains") +
+		"   " + stKey.Render("n") + stDim.Render(" · "+ids)
 }
 
 // leftColumn renders the pinned section head plus the scrolling list body, the
@@ -324,14 +330,7 @@ func (m model) genLines() ([]string, int) {
 			ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Render("▸ ")
 			cursor = len(lines)
 		}
-		// main renders as fable's tabulated child "default": the indent + the
-		// default-role row lighting up Fable in the preview explain themselves,
-		// so it carries no flavor text (which would wrap on narrow panes anyway).
 		label, childPad, childW := f.key, "", 0
-		if f.key == "main" {
-			// tree-style L connector: reads as fable's child, like `tree`.
-			label, childPad, childW = "default", stDim.Render("└ "), 2
-		}
 		if f.key == "blend" {
 			// blend is lane's sub-setting: the lead row picks who drives,
 			// this child picks how exclusively.
@@ -363,7 +362,7 @@ func (m model) genLines() ([]string, int) {
 					col := acc
 					if f.key == "lead" {
 						col = laneColor(m.sel["lane"])
-					} else if (f.key == "spark" || f.key == "fable" || f.key == "main") && v == "on" {
+					} else if f.key == "spark" && v == "on" {
 						col = cGreen
 					}
 					st := lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Bold(true)
@@ -382,11 +381,14 @@ func (m model) genLines() ([]string, int) {
 			}
 		}
 		switch {
-		case (f.key == "fable" || f.key == "spark") && m.sel[f.key] == "on":
-			bkt, lbl := "claude-fable", "Fable"
-			if f.key == "spark" {
-				bkt, lbl = "codex-spark", "Spark"
-			}
+		case f.key == "spark" && m.sel[f.key] == "on":
+			// The spark dial drains a quota window of its own, so a maxed
+			// window has to say so on the dial itself — the preview strikes the
+			// model through, but the dial is where the choice is made. The
+			// bucket comes from the registry (bucketOf resolves the bare facet
+			// name), never from a name typed here.
+			bkt := bucketOf(f.key)
+			lbl := strings.ToUpper(f.key[:1]) + f.key[1:]
 			if selected.down(bkt) {
 				w := lbl + " maxed · " + gReset + " " + fmtReset(selected.reset[bkt])
 				if selected.bucket[bkt] == "unauthed" {
@@ -396,19 +398,6 @@ func (m model) genLines() ([]string, int) {
 			}
 		case f.key == "fast" && m.sel["fast"] == "on":
 			row += "   " + stDim.Render("GPT only")
-		case f.key == "relief":
-			// relief is the least self-explanatory dial: say what it does,
-			// in the state it currently does it — naming only the spill
-			// pools a login actually backs.
-			note := "drained chains wait for quota reset"
-			if m.sel["relief"] == "on" {
-				if spill := m.connectedOptionalLabels(); spill != "" {
-					note = "drained chains spill into " + spill
-				} else {
-					note = "no pay-as-you-go login — drained chains wait"
-				}
-			}
-			row += "   " + stDim.Render(note)
 		}
 		lines = append(lines, row)
 	}
@@ -460,19 +449,51 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 	return b.String() + " " + word.Render(" "+label+" ")
 }
 
-// defaultGlyphs is the built-in facet-glyph set (Nerd Font, Font Awesome PUA
-// range), written as explicit \u escapes so the codepoints stay visible and
-// verifiable in source — a literal PUA glyph is invisible in most editors and
-// was once wiped by an edit exactly because of that. CODE_FACET_GLYPHS may
-// override any entry (see main).
+// The facet-glyph presets. Every table MUST define every glyph key, because a
+// missing entry renders as an empty cell in a two-column slot and silently
+// misaligns the whole dial list; resolveGlyphs (main.go) picks between them.
 //
-//	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)  thinking 💡 (f0eb)  advisor 🧭 (f14e)
-//	spark 🚀 (f135)  fable 📖 (f02d)  default 🎯 (f140)  fast ⚡ (f0e7)
+// defaultGlyphs is the Nerd Font set (Font Awesome PUA range), written as
+// explicit \u escapes so the codepoints stay visible and verifiable in source —
+// a literal PUA glyph is invisible in most editors and was once wiped by an edit
+// exactly because of that. CODE_FACET_GLYPHS may override any entry (see main).
+//
+//	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)
+//	thinking 💡 (f0eb)  advisor 🧭 (f14e)  spark 🚀 (f135)  fast ⚡ (f0e7)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
 		"runtime": "\uf108", "local": "\uf109", "lane": "\uf127", "model": "\uf085",
 		"thinking": "\uf0eb", "advisor": "\uf14e",
-		"spark": "\uf135", "fable": "\uf02d", "main": "\uf140", "fast": "\uf0e7",
-		"relief": "\uf132",
+		"spark": "\uf135", "fast": "\uf0e7",
+	}
+}
+
+// unicodeGlyphs is the no-patched-font set: plain BMP symbols every modern
+// terminal font carries, so an unpatched terminal shows shapes instead of tofu.
+// Deliberately geometric rather than emoji — an emoji-presentation codepoint is
+// double-width in some terminals and single in others, which would move the
+// whole dial list sideways depending on the host.
+func unicodeGlyphs() map[string]string {
+	return map[string]string{
+		"runtime": "▣", "local": "▢", "lane": "⇄", "model": "⚙",
+		"thinking": "✦", "advisor": "◎",
+		"spark": "✧", "fast": "»",
+	}
+}
+
+// asciiGlyphs is the last resort — for terminals, pipes and CI logs where any
+// non-ASCII byte is a liability.
+//
+// One letter, not two. The glyph slot is two cells wide, and the nerd/unicode
+// sets put a single-cell character in it, so the second cell reads as the gap
+// before the label. A two-letter tag fills both and the row renders as
+// "mdmodel" — which is how this was first written, and how a headless capture
+// caught it. The letter is only a hint anyway: the facet's name is spelled out
+// immediately to its right.
+func asciiGlyphs() map[string]string {
+	return map[string]string{
+		"runtime": "r", "local": "l", "lane": "n", "model": "m",
+		"thinking": "t", "advisor": "a",
+		"spark": "s", "fast": "f",
 	}
 }

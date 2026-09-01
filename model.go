@@ -32,10 +32,12 @@ type model struct {
 	// a model with no catalog yet (the onboarding shell, tests) must behave as it
 	// always did. applyCatalog sets these only from a catalog it actually read.
 	noSpark bool // no _sp_ combos exist — hide the spark dial and force it off
-	noFable bool // no _fa_/_famain_ combos — same for fable and its main child
-	// hasRelief is positive-polarity: the relief segment only exists in
-	// catalogs with an optional pool, so the zero value keeps old ids intact.
-	hasRelief         bool // _rel_/_norel combos exist — show the relief dial
+	// mtiers is per-lane the model-dial values this catalog actually generated
+	// (in fast,normal,smart,elite order), collected from the combo ids. Pool
+	// ladders are variable-depth: a lane whose pools stop at tier 3 carries no
+	// elite combo, and the dial must not offer a notch nothing was written for.
+	// A nil map means "no catalog read yet", so every value stays reachable.
+	mtiers            map[string][]string
 	providersResolved bool // connected-provider discovery completed
 	noProviders       bool // discovery found no provider usable by this catalog
 	// connected maps pool letters to "OMP holds a usable credential" — the
@@ -48,6 +50,11 @@ type model struct {
 	hideUsage    bool // s: hide the Usage section (atyrode/dotfiles#198); fetch state keeps running unseen
 	showUsage    bool // narrow mode: show Usage full-screen instead of silently shedding it
 	fullUsageIDs bool // i: expand compact Usage identities to full account addresses
+	// showFullIDs reveals the routing preview's full model ids (claude-opus-5)
+	// instead of the short keys (opus) — a sanity check on what a dial state
+	// actually routes to. A view preference only: never persisted with the
+	// selection, and off by default so the preview's geometry is unchanged.
+	showFullIDs bool
 
 	facets         []facet
 	fcur           int

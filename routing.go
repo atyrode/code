@@ -15,9 +15,10 @@ import (
 // A profile's price and pace are dominated by the models on its heaviest roles,
 // so each role is weighted by the token volume it drives over a session: the
 // default agent and its task sub-agents move the needle; commit/tiny barely
-// register — so Fable-as-commit stays cheap while Fable-as-default is dear (and
-// slow). Per role, cost blends input+output pricing while speed reads the model's
-// effective throughput (tok/s folded with time-to-first-token — see effTPS); both
+// register — so the top rung on a commit role stays cheap while the same rung
+// leading the default agent is dear (and slow). Per role, cost blends
+// input+output pricing while speed reads the model's effective throughput
+// (tok/s folded with time-to-first-token — see effTPS); both
 // scale with thinking effort (more reasoning = pricier + slower) and take OpenAI's
 // priority tier under fast mode (pricier but quicker). The weighted averages map
 // onto 1..5 log scales (both perceived multiplicatively), calibrated across every
@@ -55,7 +56,7 @@ const (
 // currentRows is the routing block the cost/speed meters score: the generator's
 // facet combo with the advisor dial applied.
 func (m model) currentRows() []string {
-	return m.filterRows(m.applyAdvisor(m.generated[comboID(m.sel, m.hasRelief)], m.sel["advisor"]))
+	return m.filterRows(m.applyAdvisor(m.generated[comboID(m.sel)], m.sel["advisor"]))
 }
 
 func (m model) weightedModels(rows []string, fn func(w float64, id, lvl string)) {
@@ -175,20 +176,14 @@ func (m model) meter(label, glyph, fill string, n int) string {
 // advisorChain returns the advisor role's model chain for an intensity, sourced
 // from the baked __advisors__ table. The advisor is the independent second
 // opinion, so it crosses to another provider whenever the lane allows it: the
-// first advisorPoolOrder pool that is not the lead's (fable-as-main hands the
-// default role to the elite, so the lead becomes the elite's pool). Only the
-// pure lanes stay on their own provider.
+// first advisorPoolOrder pool that is not the lead's. Only the pure lanes stay
+// on their own provider.
 func (m model) advisorChain(level string) []string {
 	lane := m.sel["lane"]
 	if p := providerByLane(lane); p != nil && lanePure(lane) {
 		return m.advisors[level+"/"+p.Lane]
 	}
 	lead := genLanePolicies[m.sel["lane"]].primary
-	if fb := providerBySpecial("fable"); fb != nil && m.sel["fable"] == "on" && m.sel["main"] == "on" {
-		// fable-as-main puts the elite in the default seat, so the second
-		// opinion flips away from the elite's own pool.
-		lead = fb.Pool
-	}
 	for _, pool := range advisorPoolOrder {
 		if pool == lead {
 			continue
@@ -201,33 +196,9 @@ func (m model) advisorChain(level string) []string {
 		if len(chain) == 0 {
 			continue
 		}
-		return m.advisorRelief(level, chain)
-	}
-	return nil
-}
-
-// advisorRelief appends the relief tail to the audit chain: audit is the
-// advisor's heavyweight setting, so — exactly like the heavyweight roles —
-// its metered chain ends on each optional pool's own audit rung when relief
-// is on, and a drained day still gets its second opinion. Lighter levels
-// stay short: they are cheap enough that quota rarely blocks them.
-func (m model) advisorRelief(level string, chain []string) []string {
-	if level != "audit" || m.sel["relief"] != "on" || !laneReliefApplies(m.sel["lane"]) {
 		return chain
 	}
-	out := append([]string(nil), chain...)
-	for i := range providerRegistry {
-		p := &providerRegistry[i]
-		if p.Required {
-			continue
-		}
-		relief := m.advisors[level+"/"+p.Lane]
-		if len(relief) == 0 || slices.Contains(out, relief[0]) {
-			continue
-		}
-		out = append(out, relief[0])
-	}
-	return out
+	return nil
 }
 
 // roleOf returns the role name of a routing row ("● task" → "task").
@@ -271,10 +242,10 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 
 // visibleFacets drops facets that don't apply to the current lane, so the
 // generator only ever shows actionable options: no spark/fast on a pure lane
-// of another pool, no fable outside its pool's lanes. main is fable's
-// sub-setting, so it only shows while fable is on (and the lane can host it at
-// all). A dial this catalog generated no combo for is dropped the same way —
-// it is not a choice.
+// of another pool. A dial value this catalog generated no combo for is dropped
+// the same way — it is not a choice. That is what narrows the model dial: pool
+// ladders are variable-depth, so a lane whose pools stop at tier 3 carries no
+// elite combo and must not show the notch.
 //
 // The lane facet renders as two rows: lead (one segment per pool, plus mixed)
 // and blend (led | only, hidden for mixed). sel["lane"] stays the canonical
@@ -283,7 +254,7 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // "lane").
 func (m model) visibleFacets() []facet {
 	// A local model answers every role, so the hosted dials — lane, tier,
-	// advisor, the special tiers — describe nothing about this run and are
+	// advisor, spark — describe nothing about this run and are
 	// taken off screen, exactly as a delegated runtime target takes them off.
 	// The thinking dial stays, narrowed to what a local endpoint can honestly
 	// be asked for (locallane.go).
@@ -375,15 +346,13 @@ func (m model) visibleFacets() []facet {
 			if p := providerByLane(lane); lanePure(lane) && p != nil && p.ServiceTier[0] == "" {
 				continue
 			}
-		case "fable", "main":
-			if !laneHostsSpecial(lane, "fable") || m.noFable {
-				continue
-			}
-			if f.key == "main" && m.sel["fable"] != "on" {
-				continue
-			}
-		case "relief":
-			if !m.hasRelief || !laneReliefApplies(lane) {
+		case "model":
+			// Narrow the ladder notches to the ones this lane's combos cover
+			// (mirroring how the local lane rewrites the thinking facet's
+			// values). Unknown lane, or no catalog read yet: leave the dial
+			// whole, exactly as it behaved before any catalog was applied.
+			if served := m.mtiers[lane]; len(served) > 0 {
+				out = append(out, facet{key: f.key, values: served, glyph: f.glyph})
 				continue
 			}
 		}
@@ -392,38 +361,18 @@ func (m model) visibleFacets() []facet {
 	return out
 }
 
-func comboID(sel map[string]string, hasRelief bool) string {
+// comboID is the catalog key for a dial state: <lane>_<mtier>_<thinking>_<sp|nosp>.
+// The spark segment is lane-suppressed — a lane whose pool-set excludes the
+// spark provider's pool has only the "nosp" variant generated, whatever the
+// dial says — and the mtier segment is whatever the model dial holds, which
+// visibleFacets has already narrowed to the notches this lane serves.
+func comboID(sel map[string]string) string {
 	lane := sel["lane"]
-	sp, fb := sel["spark"], sel["fable"]
-	if !laneHostsSpecial(lane, "fable") {
-		fb = "off"
-	}
-	if !laneHostsSpecial(lane, "spark") {
-		sp = "off"
-	}
-	spid, faid := "nosp", "nofa"
-	if sp == "on" {
+	spid := "nosp"
+	if sel["spark"] == "on" && laneHostsSpecial(lane, "spark") {
 		spid = "sp"
 	}
-	if fb == "on" {
-		faid = "fa"
-		if sel["main"] == "on" {
-			faid = "famain"
-		}
-	}
-	id := fmt.Sprintf("%s_%s_%s_%s_%s", lane, sel["model"], sel["thinking"], spid, faid)
-	if hasRelief {
-		rel := sel["relief"]
-		if !laneReliefApplies(lane) {
-			rel = "on" // the only variant generated there
-		}
-		if rel == "off" {
-			id += "_norel"
-		} else {
-			id += "_rel"
-		}
-	}
-	return id
+	return fmt.Sprintf("%s_%s_%s_%s", lane, sel["model"], sel["thinking"], spid)
 }
 
 func connectedPools(accounts map[string][]account) map[string]bool {
@@ -479,25 +428,8 @@ func (m model) disconnectedLeads(leads []string) string {
 	return strings.Join(out, ", ")
 }
 
-// connectedOptionalLabels names the pay-as-you-go pools a login actually
-// backs — what relief can spill into right now. Before discovery resolves it
-// falls back to every optional pool (the catalog's own promise).
-func (m model) connectedOptionalLabels() string {
-	if !m.providersResolved {
-		return optionalPoolLabels()
-	}
-	var out []string
-	for i := range providerRegistry {
-		p := &providerRegistry[i]
-		if !p.Required && m.connected[p.Pool] {
-			out = append(out, p.Label)
-		}
-	}
-	return strings.Join(out, ", ")
-}
-
 // filterRows drops fallback rungs the connected credentials cannot serve from
-// routing rows (a relief tail into a pool nobody logged into, say), so the
+// routing rows (a fallback rung in a pool nobody logged into), so the
 // preview and the launched overlay never name a model OMP cannot route. The
 // lead token always stays — an unusable lead means an unusable lane, which
 // laneUsable already keeps the selection off of.
@@ -573,8 +505,15 @@ func (m *model) applyProviderAvailability(connected map[string]bool) {
 // the rest off. A models file with no tier-0 model yields no _sp_ combos at all,
 // so the shipped default (spark on) would open the TUI on a combo that was never
 // written — and a selection persisted against a richer catalog does the same.
-// Ids are <lane>_<mtier>_<thinking>_<sp|nosp>_<fa|famain|nofa>, so match whole
-// segments: "nosp" and "nofa" contain the very substrings being looked for.
+// Ids are <lane>_<mtier>_<thinking>_<sp|nosp>, so match whole segments: "nosp"
+// contains the very substring being looked for.
+//
+// The model dial is catalog-driven per lane for the same reason, and the reason
+// is structural rather than optional: pool ladders are variable-depth, so the
+// mtier segments a lane's combos carry are the only truth about which notches
+// exist there (a lane whose pools stop at tier 3 has no elite combo, because it
+// would be a byte-identical duplicate of smart).
+//
 // The lane facet's value list is the catalog's too: the distinct lane segments
 // of the combo ids, ordered canonically (laneOrderForPools), so a catalog with
 // a DeepSeek pool grows ds-led/ds-only dials and an old one shows exactly the
@@ -583,26 +522,40 @@ func (m *model) applyCatalog() {
 	if len(m.generated) == 0 {
 		return // no catalog read yet: onboarding, or a broken CODE_GENERATED
 	}
-	spark, fable, relief := false, false, false
+	spark := false
 	served := map[string]bool{}
+	tiers := map[string]map[string]bool{}
 	for id := range m.generated {
-		lane := id
-		if i := strings.IndexByte(id, '_'); i >= 0 {
-			lane = id[:i]
+		if strings.HasPrefix(id, "__") {
+			continue // a metadata block (__models__, __advisors__), not a combo
 		}
+		segs := strings.Split(id, "_")
+		lane := segs[0]
 		served[lane] = true
-		for _, seg := range strings.Split(id, "_") {
-			switch seg {
-			case "sp":
-				spark = true
-			case "fa", "famain":
-				fable = true
-			case "norel":
-				relief = true
+		if slices.Contains(segs, "sp") {
+			spark = true
+		}
+		if len(segs) < 2 {
+			continue
+		}
+		if tiers[lane] == nil {
+			tiers[lane] = map[string]bool{}
+		}
+		tiers[lane][segs[1]] = true
+	}
+	m.noSpark = !spark
+	m.mtiers = make(map[string][]string, len(tiers))
+	for lane, set := range tiers {
+		var values []string
+		for _, t := range genMTiers {
+			if set[t] {
+				values = append(values, t)
 			}
 		}
+		if len(values) > 0 {
+			m.mtiers[lane] = values
+		}
 	}
-	m.noSpark, m.noFable, m.hasRelief = !spark, !fable, relief
 	if lanes := catalogLanes(m.generated); len(lanes) > 0 {
 		for i := range m.facets {
 			if m.facets[i].key == "lane" {
@@ -682,18 +635,11 @@ func (m *model) trimLanes(served map[string]bool) {
 	}
 }
 
-// clampSel turns off every dial the catalog cannot serve. main is fable's
-// sub-setting and never outlives it.
+// clampSel turns off every dial the catalog cannot serve, and snaps the rest
+// onto a value it does.
 func (m *model) clampSel() {
 	if m.noSpark {
 		m.sel["spark"] = "off"
-	}
-	if m.noFable {
-		m.sel["fable"] = "off"
-		m.sel["main"] = "off"
-	}
-	if !m.hasRelief {
-		m.sel["relief"] = "on"
 	}
 	// A persisted lane the applied catalog no longer generates (or one from a
 	// richer catalog) resets to the dial's first lane.
@@ -719,6 +665,27 @@ func (m *model) clampSel() {
 		for _, lane := range append([]string{"mixed", "gpt-only", "claude-only"}, m.laneValues()...) {
 			if m.laneUsable(lane) {
 				m.sel["lane"] = lane
+				break
+			}
+		}
+	}
+	// The model dial last, because the lane clamps above can move it: a selection
+	// persisted against a richer catalog (or made on a deeper lane) must not rest
+	// on an mtier this lane never generated — "elite" on a lane whose pools stop
+	// at tier 3 is a combo that does not exist. Snap DOWN to the nearest served
+	// notch, so a too-capable choice degrades to this lane's top rung instead of
+	// jumping to its cheapest.
+	if served := m.mtiers[m.sel["lane"]]; len(served) > 0 && !slices.Contains(served, m.sel["model"]) {
+		want := len(genMTiers) // an unknown value reads as "the most capable"
+		for i, t := range genMTiers {
+			if t == m.sel["model"] {
+				want = i
+			}
+		}
+		m.sel["model"] = served[0]
+		for i := len(served) - 1; i >= 0; i-- {
+			if slices.Index(genMTiers, served[i]) <= want {
+				m.sel["model"] = served[i]
 				break
 			}
 		}

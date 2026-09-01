@@ -124,29 +124,20 @@ func facetValues(facets []facet) map[string]map[string]bool {
 }
 
 // repairPersistedSelection prevents a hidden special-tier choice from being
-// resurrected after loading: spark/fable are forced off when the persisted
-// lane's pool-set cannot host them, and main (a subordinate choice that must
-// be explicitly remade) never outlives fable.
+// resurrected after loading: spark is forced off when the persisted lane's
+// pool-set cannot host it.
 func repairPersistedSelection(sel map[string]string) {
 	repairSelectionSpecials(sel)
 }
 
 // repairSelectionSpecials is the one lane-validity rule shared by persisted
 // loads and live suggestions: a special-tier facet is forced off iff its
-// provider's pool is outside the selected lane's pool-set.
+// provider's pool is outside the selected lane's pool-set. Spark is the only
+// special tier left — the elite is an ordinary ladder rung on the model dial,
+// clamped by the catalog (clampSel) rather than by lane validity.
 func repairSelectionSpecials(sel map[string]string) {
-	for _, facet := range []string{"spark", "fable"} {
-		if !laneHostsSpecial(sel["lane"], facet) {
-			sel[facet] = "off"
-		}
-	}
-	if sel["fable"] != "on" {
-		sel["main"] = "off"
-	}
-	// relief is only a choice on a metered-led blend; everywhere else the
-	// generator writes a single (on) variant, so the selection must match.
-	if !laneReliefApplies(sel["lane"]) {
-		sel["relief"] = "on"
+	if !laneHostsSpecial(sel["lane"], "spark") {
+		sel["spark"] = "off"
 	}
 }
 

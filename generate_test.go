@@ -145,7 +145,11 @@ const goldenFacts = `__models__  model facts (id in out speed ttft bucket provid
   claude-fable-5 10 50 54 6.9 claude-fable anthropic
 `
 
-const goldenMixedSmart = `mixed_smart_medium_sp_fa  mixed · smart · medium · spark · fable
+// goldenMixedSmart is the routing the retired `fable` toggle used to produce by
+// hand: on a mixed lane at `smart` the deliberative bump (t = base+1, capped at
+// the pool's own top rung) lands plan/slow/designer/reviewer on pool A's tier-4
+// rung. The toggle is gone; the block it produced must not be.
+const goldenMixedSmart = `mixed_smart_medium_sp  mixed · smart · medium · spark
   thinking medium · fallback on · advisor on
     default    gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -164,38 +168,45 @@ const goldenMixedSmart = `mixed_smart_medium_sp_fa  mixed · smart · medium · 
     commit     gpt-5.3-codex-spark:low  → gpt-5.6-luna:low
 `
 
-const goldenClaudeMax = `claude-only_normal_max_nosp_famain  claude-only · normal · max · fable · main
+// goldenClaudeElite is the other half of what the retired toggles produced: the
+// old `fable`+`main` pair put the tier-4 rung in the `default` seat as well as
+// the deliberative ones. That is now exactly the `elite` notch — base = 4, so
+// every capability seat reads the pool's top rung directly rather than through
+// the deliberative bump. The utility seats stay capped (scout/smol/tiny on
+// tier 2, commit on tier 1): no notch of the model dial may make a role that
+// runs on every keystroke expensive.
+const goldenClaudeElite = `claude-only_elite_max_nosp  claude-only · elite · max
   thinking max · fallback on · advisor on
     default    claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● task       claude-sonnet-5:max      → claude-haiku-4-5:xhigh
+  ● task       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     plan       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● designer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● librarian  claude-sonnet-5:max      → claude-haiku-4-5:xhigh
+  ● librarian  claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● scout      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● sonic      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
-    advisor    claude-haiku-4-5:xhigh
-    vision     claude-sonnet-5:max      → claude-haiku-4-5:xhigh
+    advisor    claude-sonnet-5:max      → claude-haiku-4-5:xhigh
+    vision     claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     smol       claude-sonnet-5:max
-    tiny       claude-haiku-4-5:xhigh
+    tiny       claude-sonnet-5:max
     commit     claude-haiku-4-5:xhigh
 `
 
 // goldenClaudeSmart is the one combo where the Anthropic smart rung is itself
 // the padded lead column, so a change to that model's id shifts the padding
 // rather than just swapping a chain token. Every other golden here has a pool-O
-// model or the elite in the lead.
-const goldenClaudeSmart = `claude-only_smart_medium_nosp_nofa  claude-only · smart · medium
+// model or the tier-4 rung in the lead.
+const goldenClaudeSmart = `claude-only_smart_medium_nosp  claude-only · smart · medium
   thinking medium · fallback on · advisor on
     default    claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● task       claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
-    plan       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
-    slow       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
+    plan       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
+    slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
+  ● designer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
+  ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
+  ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● scout      claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● sonic      claude-sonnet-5:medium   → claude-haiku-4-5:medium
@@ -239,14 +250,14 @@ func TestGoldenCombos(t *testing.T) {
 		name, want string
 		render     func() string
 	}{
-		{"mixed_smart_medium_sp_fa", goldenMixedSmart, func() string {
-			return c.renderCombo("mixed", "smart", "medium", true, true, false, true, false)
+		{"mixed_smart_medium_sp", goldenMixedSmart, func() string {
+			return c.renderCombo("mixed", "smart", "medium", true)
 		}},
-		{"claude-only_normal_max_nosp_famain", goldenClaudeMax, func() string {
-			return c.renderCombo("claude-only", "normal", "max", false, true, true, true, false)
+		{"claude-only_elite_max_nosp", goldenClaudeElite, func() string {
+			return c.renderCombo("claude-only", "elite", "max", false)
 		}},
-		{"claude-only_smart_medium_nosp_nofa", goldenClaudeSmart, func() string {
-			return c.renderCombo("claude-only", "smart", "medium", false, false, false, true, false)
+		{"claude-only_smart_medium_nosp", goldenClaudeSmart, func() string {
+			return c.renderCombo("claude-only", "smart", "medium", false)
 		}},
 	} {
 		if got := tc.render(); got != tc.want {
@@ -255,28 +266,42 @@ func TestGoldenCombos(t *testing.T) {
 	}
 }
 
+// eliteLanesInFixture names the lanes the two-pool fixture may carry an `elite`
+// combo on, derived by hand from the fixture rather than from the generator:
+// pool A ladders to tier 4 (claude-fable-5) and pool O stops at tier 3, and the
+// notch is gated on the lane's *lead* pool, so only the A-led lanes qualify.
+// Hard-coded on purpose — asking the catalog would make the coverage walk below
+// agree with the generator by construction instead of checking it.
+var eliteLanesInFixture = map[string]bool{"claude-led": true, "claude-only": true}
+
 func TestRenderCatalogStructure(t *testing.T) {
 	c := fixtureCatalog(t)
 	out := c.renderCatalog()
-	// 414 combos on the full fixture: 5 lanes × 3 tiers × 6 thinking levels,
-	// times the spark/fable/main combinations genValid admits.
+	// 180 combos on the full fixture, 6 thinking levels each:
+	//   gpt-only    3 mtiers × 2 spark states = 36  (lead O tops at 3: no elite)
+	//   gpt-led     3 × 2 = 36
+	//   mixed       3 × 2 = 36                      (lead is O, so still no elite)
+	//   claude-led  4 × 2 = 48                      (lead A ladders to 4)
+	//   claude-only 4 × 1 = 24                      (pure A hosts no spark)
 	combos := 0
 	for _, l := range strings.Split(out, "\n") {
 		if l != "" && l[0] != ' ' && strings.Contains(l, "_") && !strings.HasPrefix(l, "__") {
 			combos++
 		}
 	}
-	if combos != 414 {
-		t.Errorf("combo blocks = %d, want 414", combos)
+	if combos != 180 {
+		t.Errorf("combo blocks = %d, want 180", combos)
 	}
-	for _, want := range []string{"__advisors__", "__models__", "\ngpt-only_fast_minimal_sp_nofa  ", "\nclaude-only_smart_max_nosp_famain  "} {
+	for _, want := range []string{"__advisors__", "__models__", "\ngpt-only_fast_minimal_sp  ", "\nclaude-only_elite_max_nosp  "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("catalog missing %q", want)
 		}
 	}
 	// The TUI's comboID must find a block for every dial state its facets
 	// allow — after applyCatalog trims the lane dial to the lanes this
-	// catalog serves (a two-pool catalog never offers optional-pool lanes).
+	// catalog serves (a two-pool catalog never offers optional-pool lanes)
+	// and visibleFacets narrows the model dial to the notches each lane
+	// serves. Everything else in the facet space must resolve.
 	servedLanes := map[string]bool{}
 	for _, l := range strings.Split(out, "\n") {
 		if l != "" && l[0] != ' ' && !strings.HasPrefix(l, "__") {
@@ -288,10 +313,16 @@ func TestRenderCatalogStructure(t *testing.T) {
 	facets := facetDefs(defaultGlyphs())
 	sel := map[string]string{}
 	var walk func(i int)
-	misses := 0
+	misses, eliteSeen := 0, 0
 	walk = func(i int) {
 		if i == len(facets) {
-			id := comboID(sel, false)
+			if sel["model"] == "elite" {
+				if !eliteLanesInFixture[sel["lane"]] {
+					return // the dial never offers elite here; no block to find
+				}
+				eliteSeen++
+			}
+			id := comboID(sel)
 			if !strings.Contains(out, "\n"+id+"  ") {
 				misses++
 				if misses < 5 {
@@ -309,6 +340,13 @@ func TestRenderCatalogStructure(t *testing.T) {
 		}
 	}
 	walk(0)
+	// The walk is only worth anything if it reached the fourth notch: 2 elite
+	// lanes × 6 thinking × 4 advisor × 2 fast × 2 spark. Without this a model
+	// dial that quietly lost "elite" — or a generator that stopped emitting
+	// elite combos on the lanes that can host them — would pass silently.
+	if want := 2 * 6 * 4 * 2 * 2; eliteSeen != want {
+		t.Errorf("coverage walk reached %d elite dial states, want %d", eliteSeen, want)
+	}
 }
 
 // Every role the generator emits must be weighted, or weightedModels drops it
@@ -325,7 +363,7 @@ func TestEveryEmittedRoleIsWeighted(t *testing.T) {
 // genConfigYAML mirrors it into task.agentModelOverrides.
 func TestScoutIsAgentBacked(t *testing.T) {
 	c := fixtureCatalog(t)
-	block := c.renderCombo("mixed", "normal", "medium", false, false, false, true, false)
+	block := c.renderCombo("mixed", "normal", "medium", false)
 	if !strings.Contains(block, "● scout ") {
 		t.Errorf("scout must render as an agent-backed role:\n%s", block)
 	}
@@ -389,7 +427,7 @@ func TestVisionSkipsTextOnlyModels(t *testing.T) {
 	if lead := c.visionLead("O", 1); lead == "" || c.models[lead].ID != "gpt-5.6-terra" {
 		t.Errorf("visionLead(O, 1) = %q, want the next image-capable rung (terra)", lead)
 	}
-	block := c.renderCombo("gpt-only", "fast", "medium", false, false, false, true, false)
+	block := c.renderCombo("gpt-only", "fast", "medium", false)
 	for _, l := range strings.Split(block, "\n") {
 		if strings.Contains(l, " vision ") && strings.Contains(l, "codex-spark") {
 			t.Errorf("vision must not route to a text-only model: %s", l)
@@ -408,12 +446,16 @@ func TestVisionFollowsModelTier(t *testing.T) {
 		{"claude-only", "fast", "claude-haiku-4-5"},
 		{"claude-only", "normal", "claude-sonnet-5"},
 		{"claude-only", "smart", "claude-opus-5"},
+		// The fourth notch reaches the fourth rung: visionLead scans 4..1, so
+		// an A-led lane at `elite` describes images on the top rung.
+		{"claude-only", "elite", "claude-fable-5"},
+		{"claude-led", "elite", "claude-fable-5"},
 		{"mixed", "fast", "gpt-5.6-luna"},
 		{"mixed", "normal", "gpt-5.6-terra"},
 		{"mixed", "smart", "claude-opus-5"},
 	} {
 		t.Run(tc.lane+"/"+tc.tier, func(t *testing.T) {
-			route := c.genCombo(tc.lane, tc.tier, "medium", false, false, false, true)["vision"]
+			route := c.genCombo(tc.lane, tc.tier, "medium", false)["vision"]
 			if got := c.models[route.lead].ID; got != tc.want {
 				t.Errorf("vision lead = %q, want %q", got, tc.want)
 			}
@@ -421,11 +463,13 @@ func TestVisionFollowsModelTier(t *testing.T) {
 	}
 }
 
-func TestCatalogWithoutOptionalTiers(t *testing.T) {
+// withoutModel drops one top-level model entry from a models.yml body — the
+// way a real catalog arrives when a provider never shipped that rung.
+func withoutModel(yml, key string) string {
 	trimmed := ""
 	skip := false
-	for _, line := range strings.Split(fixtureYML, "\n") {
-		if strings.HasPrefix(line, "  spark:") || strings.HasPrefix(line, "  fable:") {
+	for _, line := range strings.Split(yml, "\n") {
+		if strings.HasPrefix(line, "  "+key+":") {
 			skip = true
 			continue
 		}
@@ -436,16 +480,54 @@ func TestCatalogWithoutOptionalTiers(t *testing.T) {
 			trimmed += line + "\n"
 		}
 	}
-	c, err := catalogFrom(t, trimmed)
+	return trimmed
+}
+
+// The two optional rungs are independent switches now that the elite dial notch
+// is just tier 4 of the ordinary ladder, so they get one property each. They
+// used to be tested together as "no spark/tier-4 models ⇒ no spark or elite
+// combos", which conflated an off-ladder quota bucket with a capability rung.
+func TestCatalogWithoutOptionalTiers(t *testing.T) {
+	// (a) No tier-0 model: the spark facet has nothing to lead with, so not one
+	// `_sp` combo may be generated — the TUI hides the dial and any `_sp` block
+	// it did emit would be an id no dial state can ever reach.
+	c, err := catalogFrom(t, withoutModel(fixtureYML, "spark"))
 	if err != nil {
-		t.Fatalf("loadCatalog without tier 0/4: %v", err)
+		t.Fatalf("loadCatalog without tier 0: %v", err)
+	}
+	if c.specialKey("spark") != "" {
+		t.Fatal("fixture without the tier-0 model still resolves a spark key")
 	}
 	out := c.renderCatalog()
-	if strings.Contains(out, "_sp_") || strings.Contains(out, "_fa\n") || strings.Contains(out, "_famain") {
-		t.Error("catalog without spark/elite models must not emit spark/fable combos")
+	if strings.Contains(out, "_sp  ") {
+		t.Error("catalog without a tier-0 model must not emit spark combos")
 	}
-	if !strings.Contains(out, "\nmixed_smart_medium_nosp_nofa  ") {
-		t.Error("base combos missing from trimmed catalog")
+	for _, want := range []string{"\nmixed_smart_medium_nosp  ", "\nclaude-only_elite_medium_nosp  "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("base combos missing from the tier-0-less catalog: %q", want)
+		}
+	}
+
+	// (b) No tier-4 rung anywhere: `elite` would clamp back to each pool's best
+	// rung and render byte-identical to `smart`, so the notch is not generated
+	// at all — while every base combo still renders.
+	c, err = catalogFrom(t, withoutModel(fixtureYML, "fable"))
+	if err != nil {
+		t.Fatalf("loadCatalog without tier 4: %v", err)
+	}
+	for _, pool := range []string{"O", "A"} {
+		if c.top(pool) != 3 {
+			t.Fatalf("pool %s should top out at 3 without the tier-4 rung, got %d", pool, c.top(pool))
+		}
+	}
+	out = c.renderCatalog()
+	if strings.Contains(out, "_elite_") {
+		t.Error("catalog with no tier-4 rung must not emit elite combos")
+	}
+	for _, want := range []string{"\nmixed_smart_medium_nosp  ", "\ngpt-only_fast_minimal_sp  ", "\nclaude-only_smart_max_nosp  "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("base combos missing from the tier-4-less catalog: %q", want)
+		}
 	}
 }
 
@@ -631,8 +713,26 @@ const initJSON = `{"models":[
  {"provider":"ollama","id":"qwen2.5:3b","contextWindow":32768,"reasoning":false,"thinking":null,"input":["text"],"cost":{"input":0,"output":0}}
 ]}`
 
+// initJSONWithFable51 is the operator's real situation: omp lists both
+// claude-fable-5 and its newer sibling claude-fable-5-1 at the same price and
+// specs. familyOf() puts them in one family ("claude-fable", versions [5] and
+// [5 1]), so supersede() prefers 5-1 — which is exactly why routing to it needs
+// no new code, and exactly why a probe that drops 5-1 must leave 5 behind.
+const initJSONWithFable51 = `{"models":[
+ {"provider":"anthropic","id":"claude-haiku-4-5","contextWindow":200000,"reasoning":true,"thinking":["minimal","low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":1,"output":5}},
+ {"provider":"anthropic","id":"claude-sonnet-5","contextWindow":1000000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":2,"output":10}},
+ {"provider":"anthropic","id":"claude-opus-5","contextWindow":1000000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":5,"output":25}},
+ {"provider":"anthropic","id":"claude-fable-5","contextWindow":1000000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":10,"output":50}},
+ {"provider":"anthropic","id":"claude-fable-5-1","contextWindow":1000000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":10,"output":50}},
+ {"provider":"openai-codex","id":"gpt-5.6-luna","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":1,"output":6}},
+ {"provider":"openai-codex","id":"gpt-5.6-terra","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":2.5,"output":15}},
+ {"provider":"openai-codex","id":"gpt-5.6-sol","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":5,"output":30}}
+]}`
+
 // initUsage is the shape omp reports: a spark bucket that names its model, and
-// an elite bucket that only names its tier.
+// a tier-scoped Anthropic window that names only its tier. The scaffolder must
+// mine the first for pool O's tier-0 rung and ignore the second — no provider
+// declares an Anthropic special facet, so that window is not a ladder signal.
 const initUsage = `{"reports":[
  {"provider":"openai-codex","limits":[
    {"id":"openai-codex:primary","scope":{"provider":"openai-codex"}},
@@ -698,11 +798,16 @@ func stubBench(t *testing.T, fail ...string) *benchProbe {
 			if failSet[s] || failSet[id] {
 				// The 404 not-found shape: the provider disowns the model. That is
 				// the only failure runBench may read as unreachable, so these drop.
-				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: %s\"}}"}],"failures":1,"average":null}`, s, id))
+				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: %s\"}}"}],"stats":null}`, s, id))
 				continue
 			}
-			// A clean pass: every run ok, zero failures, a measured average.
-			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`, s))
+			// A clean pass, in omp 18.x's shape: every run ok, and a `stats`
+			// block whose metrics are {mean,…} distributions. The omp 17 shape
+			// (a flat `average` object plus a per-model `failures` count) is
+			// deliberately not emitted here — it parsed into a nil aggregate
+			// against the real payload, which misfiled every reachable model as
+			// an incomplete report and made `generate init` refuse every run.
+			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"stats":{"ttftMs":{"mean":1404.2},"generationTps":{"mean":48.94},"tokensPerSecond":{"mean":12.3}}}`, s))
 		}
 		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
 	}
@@ -751,8 +856,12 @@ func TestGenerateInitScaffold(t *testing.T) {
 
 	// The headline property: the newest model in each family wins its rung, so
 	// the undelisted $15 claude-opus-4-1 never outranks the $5 claude-opus-5.
+	// Pool O ladders to four here purely because this model list offers four
+	// usable rungs — the depth is data, never a constant, which is the whole
+	// point of the pool-generic ladder (a provider shipping a fourth model
+	// lights up its lanes' elite notch with no code change).
 	want := map[string][5]string{
-		"O": {"gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.6-terra", "gpt-5.6-sol", ""},
+		"O": {"gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"},
 		"A": {"", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5", "claude-fable-5"},
 	}
 	for pool, ids := range want {
@@ -782,31 +891,43 @@ func TestGenerateInitScaffold(t *testing.T) {
 	if !strings.Contains(text, "image: false") {
 		t.Error("scaffold should mark the text-only codex spark")
 	}
-	if !strings.Contains(text, "bucket: codex-spark") || !strings.Contains(text, "bucket: claude-fable") {
-		t.Errorf("scaffold should carry the tier-scoped buckets omp reported:\n%s", text)
+	// The one tier-scoped bucket left is the spark window: tier 4 is an ordinary
+	// capability rung now, so it draws its pool's main window and the usage
+	// meter must not be handed a bucket no provider declares.
+	if !strings.Contains(text, "bucket: codex-spark") {
+		t.Errorf("scaffold should carry the spark bucket omp reported:\n%s", text)
 	}
-	// A scaffolded catalog must render end-to-end, spark and fable included.
+	if strings.Contains(text, "bucket: claude-fable") {
+		t.Errorf("the tier-4 rung draws the pool's main window, not an invented one:\n%s", text)
+	}
+	// A scaffolded catalog must render end-to-end, spark and elite included —
+	// and elite on a *gpt* lane, since this model list gives pool O four rungs.
 	rendered := c.renderCatalog()
-	for _, want := range []string{"\nmixed_smart_medium_nosp_nofa  ", "\nmixed_smart_medium_sp_fa  "} {
+	for _, want := range []string{"\nmixed_smart_medium_nosp  ", "\nmixed_smart_medium_sp  ", "\ngpt-only_elite_medium_nosp  "} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("scaffolded catalog missing %q", want)
 		}
 	}
 }
 
-// Without a usage probe the special tiers are simply absent — the scaffold must
-// still be a valid, loadable ladder rather than a hard failure.
+// Without a usage probe the off-ladder spark tier is simply absent — but tier 4
+// is not a usage-derived special tier any more, it is the ladder's top rung, so
+// it must survive a machine where the quota probe fails. Losing it here would
+// silently delete the elite notch for anyone whose `omp usage` is unavailable.
 func TestGenerateInitWithoutUsageProbe(t *testing.T) {
 	stubOmp(t, "")
 	c, _ := scaffoldTo(t)
-	if c.ladder["O"][0] != "" || c.ladder["A"][4] != "" {
-		t.Errorf("no usage report should mean no special tiers, got %v / %v", c.ladder["O"], c.ladder["A"])
+	if c.ladder["O"][0] != "" {
+		t.Errorf("no usage report should mean no spark tier, got %v", c.ladder["O"])
 	}
 	for _, pool := range []string{"O", "A"} {
-		for tier := 1; tier <= 3; tier++ {
+		for tier := 1; tier <= 4; tier++ {
 			if c.ladder[pool][tier] == "" {
 				t.Errorf("pool %s tier %d left empty", pool, tier)
 			}
+		}
+		if c.top(pool) != 4 {
+			t.Errorf("pool %s should still ladder to 4 without a usage report, got %d", pool, c.top(pool))
 		}
 	}
 }
@@ -1022,9 +1143,11 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	if probe.calls == 0 {
 		t.Fatal("live init must run the reachability probe")
 	}
-	// The probe has to reach the trap models, or an unreachable one slips
-	// through. Spot-check both pools, the elite, and the mythos look-alike.
-	for _, id := range []string{"claude-opus-5", "claude-fable-5", "claude-mythos-5", "gpt-5.6-sol"} {
+	// The probe has to reach every model that can become a rung, or an
+	// unreachable one slips through. Spot-check both pools and the top rung.
+	// claude-mythos-5 is deliberately NOT here: it is on the skip list, and
+	// TestSkippedModelsNeverProbed asserts its absence from these selectors.
+	for _, id := range []string{"claude-opus-5", "claude-fable-5", "gpt-5.6-sol"} {
 		found := false
 		for _, s := range probe.sels {
 			if strings.HasSuffix(s, "/"+id) {
@@ -1043,12 +1166,22 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	}
 }
 
-// runBench sorts each probe row into exactly one of three outcomes, and the
-// distinction is load-bearing: only the provider's 404 (notFound) may drop a
-// model, a clean run makes it reachable, and everything else — refusals, rate
-// limits, incomplete rows — is unresolved and must be neither dropped nor
-// trusted. Collapsing a refusal into "unreachable" is what would have deleted
-// claude-fable-5 from a real user's ladder.
+// runBench sorts each probe row into exactly one of four outcomes, and the
+// distinction is load-bearing: only the provider's 404 (notFound) or its
+// client-version gate (blocked) may drop a model, a clean run makes it
+// reachable, and everything else — refusals, rate limits, incomplete rows — is
+// unresolved and must be neither dropped nor trusted. Collapsing a refusal into
+// "unreachable" is what would have deleted claude-fable-5 from a real user's
+// ladder.
+//
+// Every row below is the real omp 18.0.11 payload shape, captured from live
+// runs on the operator's machine. That matters more than usual here: omp 18.x
+// renamed the per-model aggregate from `average` to `stats`, made each metric a
+// {mean,min,p50,p95,max} object instead of a bare float, and dropped the
+// per-model `failures` count. The old parse silently produced a nil aggregate
+// for every model, so every reachable model was misfiled as "incomplete probe
+// report" and `code generate init` refused every ladder it was asked to build.
+// A schema-shaped fixture is the only kind that catches that.
 func TestRunBenchClassifiesOutcomes(t *testing.T) {
 	prev := ompBenchJSON
 	t.Cleanup(func() { ompBenchJSON = prev })
@@ -1056,43 +1189,95 @@ func TestRunBenchClassifiesOutcomes(t *testing.T) {
 		ompBenchJSON = func([]string) ([]byte, error) { return []byte(`{"models":[` + row + `]}`), nil }
 	}
 
-	// Reachable: every run answered, so the measured figures come through.
-	stub(`{"model":"anthropic/x","results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`)
-	facts, err := runBench([]string{"anthropic/x"})
+	// Reachable: verbatim claude-haiku-4-5 stats from a live probe. speed must
+	// read generationTps (62.0), NOT tokensPerSecond (5.1) — the latter folds
+	// the startup wait into the same figure, and effTPS already composes ttft
+	// with the streaming rate itself, so trusting it would charge for
+	// time-to-first-token twice and rank a fast model as the slowest in the
+	// catalog.
+	stub(`{"model":"anthropic/claude-haiku-4-5","results":[{"ok":true}],"stats":{"ttftMs":{"mean":716.7357240000001,"min":716.7,"p50":716.7,"p95":716.7,"max":716.7},"tokensPerSecond":{"mean":5.120137111537292},"generationTps":{"mean":62.02189357337661}}}`)
+	facts, err := runBench([]string{"claude-haiku-4-5"})
 	if err != nil {
 		t.Fatalf("reachable: runBench: %v", err)
 	}
-	if f := facts["x"]; !f.reachable || f.notFound || f.speed != 48.9 || f.ttft != 1.4 {
-		t.Errorf("clean row should be reachable with measured figures, got %+v", f)
+	if f := facts["claude-haiku-4-5"]; !f.reachable || f.notFound || f.blocked || f.speed != 62.0 || f.ttft != 0.72 {
+		t.Errorf("clean row should be reachable with generationTps/ttft, got %+v", f)
 	}
 
-	// Not found: the provider disowns the model — the one droppable failure.
-	stub(`{"model":"anthropic/x","results":[{"ok":false,"error":"404 not_found_error: model does not exist"}],"failures":1,"average":null}`)
-	facts, err = runBench([]string{"anthropic/x"})
+	// Not found: the provider disowns the model — a settled negative that may
+	// drop it silently.
+	stub(`{"model":"anthropic/claude-ghost-9","results":[{"ok":false,"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-ghost-9\"}}"}],"stats":null}`)
+	facts, err = runBench([]string{"claude-ghost-9"})
 	if err != nil {
 		t.Fatalf("notFound: runBench: %v", err)
 	}
-	if f := facts["x"]; !f.notFound || f.reachable {
+	if f := facts["claude-ghost-9"]; !f.notFound || f.reachable || f.blocked {
 		t.Errorf("a 404 row should be notFound, got %+v", f)
 	}
 
-	// Unresolved: a refusal or an incomplete row says nothing about entitlement,
-	// so it is neither reachable nor notFound.
+	// Blocked: claude-fable-5-1 is listed AND entitled on this account, and
+	// still uncallable because omp advertises Claude Code 2.1.246 while
+	// Anthropic wants 2.1.251 for it. Definitive like a 404, but fixable by the
+	// operator, so it drops with a warning instead of poisoning the run.
+	stub(`{"model":"anthropic/claude-fable-5-1","results":[{"ok":false,"error":"400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Claude Code 2.1.246 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.\",\"details\":{\"error_code\":\"claude_code_version_too_old\"}}}"}],"stats":null}`)
+	facts, err = runBench([]string{"claude-fable-5-1"})
+	if err != nil {
+		t.Fatalf("blocked: runBench: %v", err)
+	}
+	if f := facts["claude-fable-5-1"]; !f.blocked || f.reachable || f.notFound {
+		t.Errorf("a client-version gate should be blocked, got %+v", f)
+	}
+
+	// Unresolved: a refusal, an exhausted quota or an incomplete row says
+	// nothing either way about entitlement, so it is none of the three settled
+	// outcomes. The usage-limit row is verbatim from a live run against an
+	// exhausted Codex account, and "legacy average only" is the omp 17 shape —
+	// pinned as unresolved so a silent schema regression can never again read as
+	// a clean probe.
 	for _, tc := range []struct{ name, row string }{
-		{"refusal", `{"model":"anthropic/x","results":[{"ok":false,"error":"Refusal (cyber): This request triggered restrictions"}],"failures":1,"average":null}`},
-		{"failed run", `{"model":"anthropic/x","results":[{"ok":true},{"ok":false,"error":"stream closed"}],"failures":0,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
-		{"nonzero failures", `{"model":"anthropic/x","results":[{"ok":true}],"failures":2,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
-		{"no results", `{"model":"anthropic/x","results":[],"failures":0,"average":{"ttftMs":1000,"tokensPerSecond":40}}`},
-		{"null average", `{"model":"anthropic/x","results":[{"ok":true}],"failures":0,"average":null}`},
+		{"refusal", `{"model":"anthropic/x","results":[{"ok":false,"error":"Refusal (cyber): This request triggered restrictions"}],"stats":null}`},
+		{"usage limit", `{"model":"openai-codex/x","results":[{"ok":false,"error":"Codex error event: The usage limit has been reached (code=usage_limit_reached)"}],"stats":null}`},
+		{"failed run", `{"model":"anthropic/x","results":[{"ok":true},{"ok":false,"error":"stream closed"}],"stats":{"ttftMs":{"mean":1000},"generationTps":{"mean":40}}}`},
+		{"no results", `{"model":"anthropic/x","results":[],"stats":{"ttftMs":{"mean":1000},"generationTps":{"mean":40}}}`},
+		{"null stats", `{"model":"anthropic/x","results":[{"ok":true}],"stats":null}`},
+		{"legacy average only", `{"model":"anthropic/x","results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`},
 	} {
 		stub(tc.row)
-		facts, err := runBench([]string{"anthropic/x"})
+		facts, err := runBench([]string{"x"})
 		if err != nil {
 			t.Fatalf("%s: runBench: %v", tc.name, err)
 		}
-		if f := facts["x"]; f.reachable || f.notFound {
-			t.Errorf("%s: must be unresolved (neither reachable nor notFound), got %+v", tc.name, f)
+		if f := facts["x"]; f.reachable || f.notFound || f.blocked {
+			t.Errorf("%s: must be unresolved, got %+v", tc.name, f)
 		}
+	}
+}
+
+// A skipped model must never cost a probe call. claude-mythos-5 is settled —
+// listed by omp, priced like the top rung, and not entitled on this account —
+// and its 404 retries were the slowest rows in the report. So it must be absent
+// from the selector list the probe is given, and absent from the scaffold even
+// when a probe report generously claims it is reachable.
+func TestSkippedModelsNeverProbed(t *testing.T) {
+	sels, err := benchSelectors([]byte(initJSON))
+	if err != nil {
+		t.Fatalf("benchSelectors: %v", err)
+	}
+	for _, s := range sels {
+		if strings.Contains(strings.ToLower(s), "mythos") {
+			t.Errorf("skipped model offered to the probe: %q", s)
+		}
+	}
+
+	stubOmp(t, "")
+	probe := passingProbe(t, initJSON)
+	probe["claude-mythos-5"] = benchFact{reachable: true, speed: 99, ttft: 0.1}
+	yml, err := scaffoldModels([]byte(initJSON), probe)
+	if err != nil {
+		t.Fatalf("scaffoldModels: %v", err)
+	}
+	if strings.Contains(yml, "claude-mythos-5") {
+		t.Errorf("skipped model reached the scaffold:\n%s", yml)
 	}
 }
 
@@ -1108,12 +1293,15 @@ func TestGenerateInitRefusesUnresolvedProbe(t *testing.T) {
 		rows := make([]string, 0, len(sels))
 		for _, s := range sels {
 			// claude-fable-5 is callable, but omp's prompt trips a refusal;
-			// every other model answers cleanly.
+			// every other model answers cleanly. Both rows are omp 18.x
+			// shaped — with the omp 17 `average`/`failures` shape this test
+			// passed for the wrong reason, because EVERY model then parsed as
+			// unresolved and the refusal under test proved nothing.
 			if strings.HasSuffix(s, "/claude-fable-5") {
-				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"Refusal (cyber): blocked under Anthropic's Usage Policy"}],"failures":1,"average":null}`, s))
+				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"Refusal (cyber): blocked under Anthropic's Usage Policy"}],"stats":null}`, s))
 				continue
 			}
-			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"failures":0,"average":{"ttftMs":1404.2,"tokensPerSecond":48.94}}`, s))
+			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"stats":{"ttftMs":{"mean":1404.2},"generationTps":{"mean":48.94}}}`, s))
 		}
 		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
 	}
@@ -1123,6 +1311,60 @@ func TestGenerateInitRefusesUnresolvedProbe(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Errorf("no models file may be written from an unresolved probe (stat err: %v)", err)
+	}
+}
+
+// A client-version gate must not behave like an inconclusive probe. This is the
+// live claude-fable-5-1 case: listed by omp, entitled on the account, and
+// refused with 400 claude_code_version_too_old because omp advertises Claude
+// Code 2.1.246 while Anthropic requires 2.1.251 for that model. Before this was
+// classified, it landed in the unresolved bucket and took the ENTIRE scaffold
+// down with it — the operator could not refresh their ladder at all.
+//
+// So: the run must succeed, the blocked model must be absent from the ladder,
+// its family sibling claude-fable-5 must inherit the top rung (the probe filter
+// runs before supersede(), so the newer id being dropped leaves the older one
+// as the family's survivor), and the file must SAY why — a silent drop would
+// leave the operator hunting for a model omp clearly lists.
+func TestGenerateInitBlockedModelWarnsAndKeepsSibling(t *testing.T) {
+	stubOmp(t, "")
+	stubModels(t, initJSONWithFable51)
+	prev := ompBenchJSON
+	t.Cleanup(func() { ompBenchJSON = prev })
+	ompBenchJSON = func(sels []string) ([]byte, error) {
+		rows := make([]string, 0, len(sels))
+		for _, s := range sels {
+			if strings.HasSuffix(s, "/claude-fable-5-1") {
+				rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":false,"error":"400 invalid_request_error: Claude Code 2.1.246 does not support this model; version 2.1.251 or newer is required (claude_code_version_too_old)"}],"stats":null}`, s))
+				continue
+			}
+			rows = append(rows, fmt.Sprintf(`{"model":%q,"results":[{"ok":true}],"stats":{"ttftMs":{"mean":1404.2},"generationTps":{"mean":48.94}}}`, s))
+		}
+		return []byte(`{"models":[` + strings.Join(rows, ",") + `]}`), nil
+	}
+	out := filepath.Join(t.TempDir(), "models.yml")
+	if code := runGenerateInit([]string{"--models-file", out}); code != 0 {
+		t.Fatalf("a blocked model must not fail the scaffold, exit %d", code)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yml := string(body)
+	if strings.Contains(yml, "claude-fable-5-1") && !strings.Contains(yml, "# ") {
+		t.Errorf("blocked model must not become a rung:\n%s", yml)
+	}
+	for _, want := range []string{"claude-fable-5-1", "2.1.251"} {
+		if !strings.Contains(yml, want) {
+			t.Errorf("scaffold must name the blocked model and the required version (%q missing):\n%s", want, yml)
+		}
+	}
+	c, err := loadCatalogBytes(body, out)
+	if err != nil {
+		t.Fatalf("the scaffold must still render: %v", err)
+	}
+	if top := c.ladder["A"][c.top("A")]; c.models[top].ID != "claude-fable-5" {
+		t.Errorf("top Anthropic rung = %q, want claude-fable-5 to inherit it", c.models[top].ID)
 	}
 }
 
@@ -1201,8 +1443,8 @@ func TestGoldenCatalogTwoPool(t *testing.T) {
 }
 
 // TestThreePoolCatalog locks the DeepSeek pool's grid semantics: the two new
-// lanes, special-tier validity, relief tails on led/mixed heavyweight chains
-// (and only there), the vision purity exception, and the ds advisor contexts.
+// lanes, which lanes may host the spark facet and the elite notch, the vision
+// purity exception, and the ds advisor contexts.
 func TestThreePoolCatalog(t *testing.T) {
 	c, err := catalogFrom(t, fixtureYMLDeepSeek)
 	if err != nil {
@@ -1211,18 +1453,35 @@ func TestThreePoolCatalog(t *testing.T) {
 	out := c.renderCatalog()
 
 	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "claude-led", "claude-only", "ds-led", "ds-only"} {
-		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_rel  ") {
+		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp  ") {
 			t.Errorf("lane %s missing from the three-pool grid", lane)
 		}
 	}
-	// Special tiers follow their pool: none on ds-only, both on ds-led.
-	if strings.Contains(out, "\nds-only_normal_medium_sp_") || strings.Contains(out, "_medium_nosp_fa\nds-only") ||
-		strings.Contains(out, "\nds-only_normal_medium_nosp_fa") {
-		t.Error("ds-only generated spark/fable combos it cannot host")
+	// The spark facet follows its pool: it is pool O's tier-0 model, so every
+	// lane whose pool-set contains O offers it and the two pure lanes that
+	// exclude O do not.
+	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "claude-led", "ds-led"} {
+		if !strings.Contains(out, "\n"+lane+"_normal_medium_sp  ") {
+			t.Errorf("lane %s hosts pool O but generated no spark combo", lane)
+		}
 	}
-	for _, id := range []string{"ds-led_normal_medium_sp_nofa_rel", "ds-led_normal_medium_nosp_fa_rel", "ds-led_normal_medium_nosp_famain_rel"} {
-		if !strings.Contains(out, "\n"+id+"  ") {
-			t.Errorf("ds-led combo %s missing", id)
+	for _, lane := range []string{"claude-only", "ds-only"} {
+		if strings.Contains(out, "\n"+lane+"_normal_medium_sp  ") {
+			t.Errorf("pure lane %s generated a spark combo it cannot host", lane)
+		}
+	}
+	// The elite notch follows the lane's *lead* pool's ladder depth. Only A
+	// declares a tier-4 rung in this fixture, so only the A-led lanes carry it;
+	// D stops at tier 3, so the ds lanes get none — an elite combo there would
+	// clamp straight back to the pool's best rung.
+	for _, lane := range []string{"claude-led", "claude-only"} {
+		if !strings.Contains(out, "\n"+lane+"_elite_medium_nosp  ") {
+			t.Errorf("lane %s leads on a pool with a tier-4 rung but generated no elite combo", lane)
+		}
+	}
+	for _, lane := range []string{"gpt-only", "gpt-led", "mixed", "ds-led", "ds-only"} {
+		if strings.Contains(out, "\n"+lane+"_elite_") {
+			t.Errorf("lane %s leads on a pool that stops at tier 3 but generated an elite combo", lane)
 		}
 	}
 
@@ -1251,28 +1510,24 @@ func TestThreePoolCatalog(t *testing.T) {
 		return ""
 	}
 
-	// Relief tails: led/mixed heavyweight chains end on the DeepSeek regular
-	// rung; pure lanes stay pure.
-	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
-		blk := block(lane + "_normal_medium_nosp_nofa_rel")
-		for _, role := range []string{"default", "task", "plan", "slow"} {
-			if r := row(blk, role); !strings.HasSuffix(r, "→ deepseek-v4:medium") && !strings.HasSuffix(r, "→ deepseek-v4:high") {
-				t.Errorf("%s %s chain lacks the DeepSeek relief tail: %q", lane, role, r)
-			}
-		}
-		if r := row(blk, "reviewer"); strings.Contains(r, "deepseek") {
-			t.Errorf("%s reviewer must not gain a relief tail: %q", lane, r)
+	// Pure lanes stay pure: nothing on a single-pool lane may reach into
+	// DeepSeek (the vision exception below is the one sanctioned crossing).
+	for _, lane := range []string{"gpt-only", "claude-only"} {
+		if blk := block(lane + "_normal_medium_nosp"); strings.Contains(blk, "deepseek") {
+			t.Errorf("pure lane %s crossed into the DeepSeek pool:\n%s", lane, blk)
 		}
 	}
-	for _, lane := range []string{"gpt-only", "claude-only"} {
-		if blk := block(lane + "_normal_medium_nosp_nofa_rel"); strings.Contains(blk, "deepseek") {
-			t.Errorf("pure lane %s crossed into the DeepSeek pool:\n%s", lane, blk)
+	// …and the blends do not either: D is nobody's crossing target but its own
+	// lanes', so an O- or A-led chain never spills into a third pool.
+	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
+		if blk := block(lane + "_normal_medium_nosp"); strings.Contains(blk, "deepseek") {
+			t.Errorf("blend lane %s spilled into the DeepSeek pool:\n%s", lane, blk)
 		}
 	}
 
 	// Vision purity exception: every DeepSeek rung is text-only, so ds-only's
 	// vision role must cross pools rather than route images to a text model.
-	dsOnly := block("ds-only_smart_medium_nosp_nofa_rel")
+	dsOnly := block("ds-only_smart_medium_nosp")
 	if r := row(dsOnly, "vision"); strings.Contains(r, "deepseek") || !strings.Contains(r, "gpt-5.6-sol:low") {
 		t.Errorf("ds-only vision must cross to an image-capable pool: %q", r)
 	}
@@ -1314,7 +1569,7 @@ func TestOneRungOptionalPool(t *testing.T) {
 		}
 	}
 	out := c.renderCatalog()
-	blkStart := strings.Index(out, "\nds-only_smart_medium_nosp_nofa_rel  ")
+	blkStart := strings.Index(out, "\nds-only_smart_medium_nosp  ")
 	if blkStart < 0 {
 		t.Fatal("one-rung D pool generated no ds-only lane")
 	}
@@ -1327,45 +1582,6 @@ func TestOneRungOptionalPool(t *testing.T) {
 	}
 	if !strings.Contains(blk, "    default    deepseek-v4:medium\n") {
 		t.Errorf("one-rung ds-only default should be the single model, got:\n%s", blk)
-	}
-}
-
-// TestReliefToggle: _norel combos exist only on metered-led blends, and the
-// off variant strips exactly the DeepSeek tail while everything else in the
-// block stays identical.
-func TestReliefToggle(t *testing.T) {
-	c, err := catalogFrom(t, fixtureYMLDeepSeek)
-	if err != nil {
-		t.Fatalf("loadCatalog: %v", err)
-	}
-	out := c.renderCatalog()
-	for _, lane := range []string{"gpt-led", "mixed", "claude-led"} {
-		if !strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_norel  ") {
-			t.Errorf("%s lacks a relief-off combo", lane)
-		}
-	}
-	for _, lane := range []string{"gpt-only", "claude-only", "ds-led", "ds-only"} {
-		if strings.Contains(out, "\n"+lane+"_normal_medium_nosp_nofa_norel  ") {
-			t.Errorf("%s generated a relief-off combo it cannot use", lane)
-		}
-	}
-	on := c.renderCombo("gpt-led", "normal", "medium", false, false, false, true, true)
-	off := c.renderCombo("gpt-led", "normal", "medium", false, false, false, false, true)
-	if !strings.Contains(on, "deepseek") {
-		t.Fatalf("relief-on block lost its tail:\n%s", on)
-	}
-	if strings.Contains(off, "deepseek") {
-		t.Errorf("relief-off block still spills into DeepSeek:\n%s", off)
-	}
-	strip := func(s string) string {
-		s = strings.ReplaceAll(s, " → deepseek-v4:medium", "")
-		s = strings.ReplaceAll(s, " → deepseek-v4:high", "")
-		s = strings.ReplaceAll(s, "_rel  ", "  ")
-		s = strings.ReplaceAll(s, "_norel  ", "  ")
-		return strings.ReplaceAll(s, " · no-relief", "")
-	}
-	if strip(on) != strip(off) {
-		t.Errorf("relief must only add/remove tails; blocks diverge:\n--- on ---\n%s\n--- off ---\n%s", on, off)
 	}
 }
 
@@ -1389,5 +1605,231 @@ func TestRetiredPoolRejected(t *testing.T) {
 	_, err := catalogFrom(t, retired)
 	if err == nil || !strings.Contains(err.Error(), `pool must be one of O, A, D, got "R"`) {
 		t.Fatalf("retired pool R accepted or misreported: %v", err)
+	}
+}
+
+// ── ladder depth ─────────────────────────────────────────────────────────────
+
+// Ladder depth is per-pool data, never a constant. Every tier read goes through
+// top/rung precisely so a dial or a deliberative bump can ask a shallow pool for
+// tier 4 and get that pool's best rung back — the alternative, indexing the
+// ladder array directly, hands back the empty model id and silently drops the
+// role out of the rendered profile.
+func TestLadderDepthTopAndRung(t *testing.T) {
+	c := fixtureCatalog(t)
+	// The two-pool fixture: A ships a fourth rung, O stops at three, D is absent.
+	for pool, want := range map[string]int{"A": 4, "O": 3, "D": 0} {
+		if got := c.top(pool); got != want {
+			t.Errorf("top(%s) = %d, want %d", pool, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		pool string
+		tier int
+		want string
+	}{
+		{"A", 4, "claude-fable-5"}, // the deep pool answers tier 4 for real
+		{"O", 4, "gpt-5.6-sol"},    // the shallow pool clamps down to its top
+		{"O", 9, "gpt-5.6-sol"},    // …however far past its top it is asked
+		{"O", 0, "gpt-5.6-luna"},   // and up to the floor: tier 0 is off-ladder
+		{"O", -3, "gpt-5.6-luna"},
+	} {
+		key := c.rung(tc.pool, tc.tier)
+		if key == "" {
+			t.Errorf("rung(%s, %d) = \"\" — an empty rung drops the role from the profile", tc.pool, tc.tier)
+			continue
+		}
+		if got := c.models[key].ID; got != tc.want {
+			t.Errorf("rung(%s, %d) = %q, want %q", tc.pool, tc.tier, got, tc.want)
+		}
+	}
+	// A pool the catalog never declared has no rungs at all, and must say so
+	// rather than clamp into another pool's ladder.
+	for tier := 0; tier <= 4; tier++ {
+		if got := c.rung("D", tier); got != "" {
+			t.Errorf("rung(D, %d) = %q, want \"\" for an absent pool", tier, got)
+		}
+	}
+}
+
+// The `elite` notch is gated on the lane's LEAD pool declaring a tier-4 rung,
+// not on the lane's whole pool-set. The reason is duplicate suppression: the
+// deliberative bump already lands plan/slow/designer/reviewer on the lead
+// pool's top rung at `smart`, so where that pool stops at three there is no
+// seat left for elite to change and the block renders byte-identical to smart.
+// gpt-led is the clean case — proved below by rendering both. mixed is the
+// subtle one: pool A is in its pool-set, yet its lead is O, and the only seat
+// that would differ is vision (lanePolicy.visionSmart sends images to A, and
+// visionLead(A, 4) is the tier-4 rung where visionLead(A, 3) is tier 3). One
+// diverging row is not worth a whole grid of near-duplicate blocks, so mixed is
+// gated out too — and gating on the pool-set, as an earlier cut did, emitted
+// exactly those near-duplicates.
+func TestEliteNotchGatedOnLeadPool(t *testing.T) {
+	c := fixtureCatalog(t)
+	for lane, want := range map[string]bool{
+		"claude-only": true, "claude-led": true,
+		"gpt-only": false, "gpt-led": false, "mixed": false,
+	} {
+		if got := c.laneLeadsTier4(lane); got != want {
+			t.Errorf("laneLeadsTier4(%s) = %v, want %v", lane, got, want)
+		}
+		if got := c.genValid(lane, "elite", false); got != want {
+			t.Errorf("genValid(%s, elite) = %v, want %v", lane, got, want)
+		}
+		// The gate is elite-specific: every lane still serves the lower notches.
+		for _, mtier := range []string{"fast", "normal", "smart"} {
+			if !c.genValid(lane, mtier, false) {
+				t.Errorf("genValid(%s, %s) = false, want true", lane, mtier)
+			}
+		}
+	}
+	// The suppressed duplicate, demonstrated rather than asserted by fiat: on a
+	// lane whose lead pool stops at three, elite and smart differ only in the
+	// id and description on the header line.
+	smart := c.renderCombo("gpt-led", "smart", "medium", false)
+	elite := c.renderCombo("gpt-led", "elite", "medium", false)
+	body := func(s string) string {
+		_, rest, _ := strings.Cut(s, "\n")
+		return rest
+	}
+	if body(smart) != body(elite) {
+		t.Errorf("gpt-led elite should be a byte-identical duplicate of smart:\n--- smart ---\n%s\n--- elite ---\n%s", smart, elite)
+	}
+	// And the grid honours the gate: no lane the dial cannot offer elite on may
+	// carry an elite block. mixed is the case a pool-set gate got wrong.
+	out := c.renderCatalog()
+	for _, lane := range []string{"gpt-only", "gpt-led", "mixed"} {
+		if strings.Contains(out, "\n"+lane+"_elite_") {
+			t.Errorf("lane %s must not carry elite combos — its lead pool tops out at tier 3", lane)
+		}
+	}
+	// The spark facet is gated the same way but on its own pool: pure claude
+	// lanes host no pool-O tier-0 model, so no spark combo either.
+	for lane, want := range map[string]bool{
+		"gpt-only": true, "gpt-led": true, "mixed": true, "claude-led": true, "claude-only": false,
+	} {
+		if got := c.genValid(lane, "normal", true); got != want {
+			t.Errorf("genValid(%s, normal, spark) = %v, want %v", lane, got, want)
+		}
+	}
+}
+
+// The two routings the retired `fable` and `fable`+`main` toggles used to
+// produce must still be reachable, now as ordinary consequences of the ladder:
+// the deliberative bump (t = base+1, capped at the pool's top) puts the tier-4
+// rung in the deliberative seats straight from `smart`, and the `elite` notch
+// (base = 4) puts it in the `default` seat as well. Losing either is losing the
+// routing the toggles existed to reach, with no dial left to ask for it.
+func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
+	c := fixtureCatalog(t)
+	lead := func(lane, mtier, role string) string {
+		rt := c.genCombo(lane, mtier, "medium", false)[role]
+		if rt.lead == "" {
+			t.Fatalf("%s/%s: role %s has no lead", lane, mtier, role)
+		}
+		return c.models[rt.lead].ID
+	}
+	// `smart` on an A-led lane: the deliberative bump reaches tier 4 while the
+	// non-deliberative seats stay on tier 3. That split is the whole point —
+	// the expensive rung goes where the deliberation happens, not everywhere.
+	for _, role := range []string{"plan", "slow", "designer", "reviewer", "security-reviewer"} {
+		if got := lead("claude-only", "smart", role); got != "claude-fable-5" {
+			t.Errorf("claude-only/smart %s = %q, want the tier-4 rung claude-fable-5", role, got)
+		}
+	}
+	for _, role := range []string{"default", "task", "librarian"} {
+		if got := lead("claude-only", "smart", role); got != "claude-opus-5" {
+			t.Errorf("claude-only/smart %s = %q, want the tier-3 rung claude-opus-5", role, got)
+		}
+	}
+	// The bump also crosses lanes: on mixed the deliberative roles live on pool
+	// A, so they reach A's tier 4 while the O-led seats stay on O's tier 3 —
+	// this is exactly the block the `fable` toggle used to gate.
+	if got := lead("mixed", "smart", "plan"); got != "claude-fable-5" {
+		t.Errorf("mixed/smart plan = %q, want claude-fable-5", got)
+	}
+	if got := lead("mixed", "smart", "default"); got != "gpt-5.6-sol" {
+		t.Errorf("mixed/smart default = %q, want gpt-5.6-sol", got)
+	}
+	// `elite`: the tier-4 rung takes the default seat too — the old fable+main
+	// pair. The bump is already saturated, so the deliberative seats do not
+	// climb any further.
+	for _, role := range []string{"default", "task", "librarian", "plan", "slow", "designer", "reviewer", "security-reviewer", "vision"} {
+		if got := lead("claude-only", "elite", role); got != "claude-fable-5" {
+			t.Errorf("claude-only/elite %s = %q, want claude-fable-5", role, got)
+		}
+	}
+}
+
+// The utility roles are tier-capped so that no notch of the model dial can make
+// a role that runs on every keystroke expensive. `elite` is the notch that
+// would have broken that if the cap table had simply been read with a missing
+// key: genUtilModel[r]["elite"] would be the zero value, rung() would clamp it
+// up to tier 1, and the caps would silently rewrite themselves.
+func TestUtilRolesCappedAtTheEliteNotch(t *testing.T) {
+	c := fixtureCatalog(t)
+	for role, caps := range genUtilModel {
+		if _, ok := caps["elite"]; !ok {
+			t.Errorf("utility role %q has no elite cap — the dial's top notch would read tier 0", role)
+			continue
+		}
+		if caps["elite"] != caps["smart"] {
+			t.Errorf("utility role %q: elite cap %d must equal the smart cap %d", role, caps["elite"], caps["smart"])
+		}
+	}
+	// Rendered, on the one lane that actually reaches tier 4: no utility role
+	// may lead on the tier-4 rung, whatever the dial says.
+	roles := c.genCombo("claude-only", "elite", "medium", false)
+	for _, tc := range []struct{ role, want string }{
+		{"scout", "claude-sonnet-5"},
+		{"sonic", "claude-sonnet-5"},
+		{"smol", "claude-sonnet-5"},
+		{"tiny", "claude-sonnet-5"},
+		{"commit", "claude-haiku-4-5"},
+	} {
+		if got := c.models[roles[tc.role].lead].ID; got != tc.want {
+			t.Errorf("claude-only/elite %s = %q, want the capped rung %q", tc.role, got, tc.want)
+		}
+	}
+}
+
+// checkLadder used to validate tiers 1..3 only, so a tier-4 rung that regressed
+// on the ladder below it loaded clean and became the `elite` notch's routing —
+// the exact failure the check exists to prevent, one rung higher. Tier 4 is the
+// same capability ladder's top rung, so it is checked like any other.
+func TestCheckLadderValidatesTierFour(t *testing.T) {
+	const tier4 = `  fable:
+    id: claude-fable-5
+    pool: A
+    tier: 4
+    bucket: claude-fable
+    cost_in: 10
+    cost_out: 50
+    speed: 54
+    ttft: 6.9
+    context: 1000000
+    thinking: low→max
+`
+	base := withoutModel(fixtureYML, "fable")
+	for name, replacement := range map[string]string{
+		// A dearer top rung with less context than the rungs below it: the
+		// price-ranked scaffold's signature mistake.
+		"smaller context at a higher price": strings.Replace(tier4, "    context: 1000000\n", "    context: 200000\n", 1),
+		// …or with less thinking headroom.
+		"lower thinking ceiling at a higher price": strings.Replace(tier4, "    thinking: low→max\n", "    thinking: low→xhigh\n", 1),
+	} {
+		_, err := catalogFrom(t, base+replacement)
+		if err == nil {
+			t.Errorf("%s: a regressing tier-4 rung must be rejected", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "regression") || !strings.Contains(err.Error(), "tier 4") {
+			t.Errorf("%s: error must name tier 4 as the regressing rung, got %v", name, err)
+		}
+	}
+	// The healthy fixture's tier-4 rung costs more while matching the ladder on
+	// context and thinking, so the widened check must not reject it.
+	if _, err := catalogFrom(t, base+tier4); err != nil {
+		t.Errorf("healthy tier-4 rung rejected: %v", err)
 	}
 }

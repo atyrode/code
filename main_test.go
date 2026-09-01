@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -137,9 +138,10 @@ func TestParseFactsBucketColumn(t *testing.T) {
 }
 
 // TestBucketForPrefersCatalog: the catalog's bucket column beats the name guess.
-// claude-mythos-5 prices like fable and drains fable's quota, but every
-// substring arm in bucketOf reads it as plain claude-main — the routing preview
-// would then strike models through against the wrong window.
+// claude-mythos-5 sits in omp's catalog at the top rung's price and draws on the
+// separate quota window the catalog names for it, but every substring arm in
+// bucketOf reads it as plain claude-main — the routing preview would then strike
+// models through against the wrong window.
 func TestBucketForPrefersCatalog(t *testing.T) {
 	m := model{facts: map[string]modelFact{
 		"claude-mythos-5": {5, 25, 30, 2, "claude-fable", ""},
@@ -155,14 +157,17 @@ func TestBucketForPrefersCatalog(t *testing.T) {
 	if got := m.bucketFor("gpt-5.6-luna:low"); got != "codex-main" {
 		t.Errorf("empty bucket must fall back to the guess, got %q", got)
 	}
-	if got := m.bucketFor("claude-fable-5:max"); got != "claude-fable" {
-		t.Errorf("unknown model must fall back to the guess, got %q", got)
+	// claude-fable-5 is an ordinary Anthropic model this fixture never mentions:
+	// no provider entry declares a special bucket for it, so the guess must land
+	// it on the provider's main window rather than invent a private one.
+	if got := m.bucketFor("claude-fable-5:max"); got != "claude-main" {
+		t.Errorf("unknown model must fall back to the provider's main bucket, got %q", got)
 	}
-	// The suggest box asks about bare facet names, which are never catalog ids.
-	for name, want := range map[string]string{"fable": "claude-fable", "spark": "codex-spark"} {
-		if got := m.bucketFor(name); got != want {
-			t.Errorf("bucketFor(%q) = %q, want %q", name, got, want)
-		}
+	// The suggest box and the dial list ask about bare facet names, which are
+	// never catalog ids. Spark is the only special tier left with a bucket of
+	// its own, so it is the only bare name that resolves to one.
+	if got := m.bucketFor("spark"); got != "codex-spark" {
+		t.Errorf(`bucketFor("spark") = %q, want "codex-spark"`, got)
 	}
 }
 
@@ -197,24 +202,30 @@ func TestLvl(t *testing.T) {
 	}
 }
 
-// TestComboID covers the lane-driven suppression: gpt-only forces fable off,
-// claude-only forces spark off, regardless of the toggles — plus the fable-main
-// segment: famain only when fable is on too, and lane suppression wins over both.
+// TestComboID pins the id format every catalog lookup goes through —
+// <lane>_<mtier>_<thinking>_<sp|nosp> — and the one suppression left inside it:
+// spark is a lane capability, so a lane whose pool-set excludes the spark
+// provider's pool only ever had the "nosp" variant generated, whatever the dial
+// says. The mtier segment is passed through verbatim, elite included, because
+// visibleFacets has already narrowed the dial to the notches the lane serves;
+// a fourth notch must not need a fourth code path here.
 func TestComboID(t *testing.T) {
 	cases := []struct {
 		sel  map[string]string
 		want string
 	}{
-		{map[string]string{"lane": "mixed", "model": "normal", "thinking": "medium", "spark": "on", "fable": "off"}, "mixed_normal_medium_sp_nofa"},
-		{map[string]string{"lane": "mixed", "model": "normal", "thinking": "medium", "spark": "off", "fable": "on"}, "mixed_normal_medium_nosp_fa"},
-		{map[string]string{"lane": "gpt-only", "model": "fast", "thinking": "high", "spark": "on", "fable": "on"}, "gpt-only_fast_high_sp_nofa"},
-		{map[string]string{"lane": "claude-only", "model": "smart", "thinking": "low", "spark": "on", "fable": "on"}, "claude-only_smart_low_nosp_fa"},
-		{map[string]string{"lane": "mixed", "model": "smart", "thinking": "high", "spark": "off", "fable": "on", "main": "on"}, "mixed_smart_high_nosp_famain"},
-		{map[string]string{"lane": "mixed", "model": "smart", "thinking": "high", "spark": "off", "fable": "off", "main": "on"}, "mixed_smart_high_nosp_nofa"},
-		{map[string]string{"lane": "gpt-only", "model": "smart", "thinking": "high", "spark": "on", "fable": "on", "main": "on"}, "gpt-only_smart_high_sp_nofa"},
+		{map[string]string{"lane": "mixed", "model": "normal", "thinking": "medium", "spark": "on"}, "mixed_normal_medium_sp"},
+		{map[string]string{"lane": "mixed", "model": "normal", "thinking": "medium", "spark": "off"}, "mixed_normal_medium_nosp"},
+		{map[string]string{"lane": "gpt-only", "model": "fast", "thinking": "high", "spark": "on"}, "gpt-only_fast_high_sp"},
+		// claude-only excludes the spark provider's pool: the dial reads on, the
+		// catalog only carries the nosp id.
+		{map[string]string{"lane": "claude-only", "model": "smart", "thinking": "low", "spark": "on"}, "claude-only_smart_low_nosp"},
+		// elite is an ordinary ladder rung, carried like any other mtier.
+		{map[string]string{"lane": "mixed", "model": "elite", "thinking": "max", "spark": "off"}, "mixed_elite_max_nosp"},
+		{map[string]string{"lane": "claude-only", "model": "elite", "thinking": "xhigh", "spark": "on"}, "claude-only_elite_xhigh_nosp"},
 	}
 	for _, c := range cases {
-		if got := comboID(c.sel, false); got != c.want {
+		if got := comboID(c.sel); got != c.want {
 			t.Errorf("comboID(%v) = %q, want %q", c.sel, got, c.want)
 		}
 	}
@@ -255,34 +266,63 @@ func TestDefaultSelValid(t *testing.T) {
 	}
 }
 
-// TestMainFacetVisibility locks the sub-setting behavior: the main (fable-as-main)
-// dial only exists while fable is on and the lane can host Fable at all.
-func TestMainFacetVisibility(t *testing.T) {
-	has := func(sel map[string]string) bool {
-		m := model{facets: facetDefs(map[string]string{}), sel: sel}
+// TestEliteNotchVisibility is the direct successor to the retired main-facet
+// test: the dial value whose visibility depends on the lane is no longer a facet
+// of its own but the model dial's top notch. Pool ladders are variable-depth, so
+// a lane whose pools all stop at tier 3 has no elite combo written for it (it
+// would be byte-identical to smart) — offering the notch there would point the
+// TUI at an id the catalog does not contain, which is exactly the class of bug
+// the old fable/main gating existed to prevent.
+func TestEliteNotchVisibility(t *testing.T) {
+	m := model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
+		generated: map[string][]string{
+			// The claude-led pool-set reaches tier 4; the pure gpt lane does not.
+			"claude-only_smart_medium_nosp": nil,
+			"claude-only_elite_medium_nosp": nil,
+			"mixed_smart_medium_nosp":       nil,
+			"mixed_elite_medium_nosp":       nil,
+			"gpt-only_fast_medium_nosp":     nil,
+			"gpt-only_smart_medium_nosp":    nil,
+			"__models__":                    nil,
+		}}
+	m.applyCatalog()
+
+	notches := func(lane string) []string {
+		m.sel["lane"] = lane
 		for _, f := range m.visibleFacets() {
-			if f.key == "main" {
-				return true
+			if f.key == "model" {
+				return f.values
 			}
 		}
-		return false
+		return nil
 	}
-	if !has(map[string]string{"lane": "mixed", "fable": "on"}) {
-		t.Errorf("main must be visible when fable is on")
+	for _, lane := range []string{"claude-only", "mixed"} {
+		if got := notches(lane); !slices.Contains(got, "elite") {
+			t.Errorf("lane %q serves an elite combo but the dial hides the notch: %v", lane, got)
+		}
 	}
-	if has(map[string]string{"lane": "mixed", "fable": "off"}) {
-		t.Errorf("main must be hidden while fable is off")
+	if got := notches("gpt-only"); slices.Contains(got, "elite") {
+		t.Errorf("gpt-only carries no elite combo — the dial must not offer the notch: %v", got)
 	}
-	if has(map[string]string{"lane": "gpt-only", "fable": "on"}) {
-		t.Errorf("main must be hidden on a gpt-only lane")
+	// The narrowing is exactly the served set in ladder order, never a padded or
+	// reordered list: the dial's order is what left/right mean.
+	if got := notches("gpt-only"); !reflect.DeepEqual(got, []string{"fast", "smart"}) {
+		t.Errorf("gpt-only notches = %v, want the served set in ladder order [fast smart]", got)
+	}
+	// A lane the catalog never mentions leaves the dial whole, exactly as it
+	// behaved before any catalog was applied.
+	if got := notches("ds-only"); !reflect.DeepEqual(got, []string{"fast", "normal", "smart", "elite"}) {
+		t.Errorf("an unknown lane must not narrow the dial: %v", got)
 	}
 }
 
-// TestCatalogCapabilityGatesDials: spark and fable must never point at a combo
-// the catalog cannot serve. A models file with no tier-0 model generates zero
-// _sp_ ids, so the shipped default (spark on) would open the TUI on a combo that
-// was never written. The segment check must not be fooled by the "nosp"/"nofa"
-// ids that spell the very substrings it looks for.
+// TestCatalogCapabilityGatesDials: spark must never point at a combo the catalog
+// cannot serve. A models file with no tier-0 model generates zero _sp_ ids, so
+// the shipped default (spark on) would open the TUI on a combo that was never
+// written. The segment check must not be fooled by the "nosp" ids that spell the
+// very substring it looks for. The same catalog read also collects m.mtiers —
+// the per-lane served notches of the model dial — because with variable-depth
+// ladders the dial's own values are catalog data, not a constant.
 func TestCatalogCapabilityGatesDials(t *testing.T) {
 	visible := func(m model) map[string]bool {
 		out := map[string]bool{}
@@ -294,35 +334,48 @@ func TestCatalogCapabilityGatesDials(t *testing.T) {
 
 	full := model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
 		generated: map[string][]string{
-			"mixed_smart_medium_sp_fa":     nil,
-			"mixed_smart_medium_nosp_nofa": nil,
+			"mixed_smart_medium_sp":   nil,
+			"mixed_smart_medium_nosp": nil,
+			"mixed_elite_medium_sp":   nil,
+			"mixed_elite_medium_nosp": nil,
 		}}
 	full.applyCatalog()
-	if full.noSpark || full.noFable {
-		t.Fatalf("a catalog serving both dials disabled one: noSpark=%v noFable=%v", full.noSpark, full.noFable)
+	if full.noSpark {
+		t.Fatalf("a catalog serving spark disabled the dial: noSpark=%v", full.noSpark)
 	}
 	if full.sel["spark"] != "on" {
 		t.Errorf("spark must survive a catalog that serves it, got %q", full.sel["spark"])
 	}
+	if got := full.mtiers["mixed"]; !reflect.DeepEqual(got, []string{"smart", "elite"}) {
+		t.Errorf(`mtiers["mixed"] = %v, want the served notches in ladder order [smart elite]`, got)
+	}
 
 	bare := model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
 		generated: map[string][]string{
-			"mixed_smart_medium_nosp_nofa": nil,
-			"gpt-only_fast_low_nosp_nofa":  nil,
-			"__models__":                   nil,
+			"mixed_normal_medium_nosp": nil,
+			"mixed_smart_medium_nosp":  nil,
+			"gpt-only_fast_low_nosp":   nil,
+			"__models__":               nil,
 		}}
-	bare.sel["fable"], bare.sel["main"] = "on", "on"
 	bare.applyCatalog()
-	if !bare.noSpark || !bare.noFable {
-		t.Fatalf(`"nosp"/"nofa" ids read as capability: noSpark=%v noFable=%v`, bare.noSpark, bare.noFable)
+	if !bare.noSpark {
+		t.Fatalf(`"nosp" ids read as spark capability: noSpark=%v`, bare.noSpark)
 	}
-	for key, want := range map[string]string{"spark": "off", "fable": "off", "main": "off"} {
-		if got := bare.sel[key]; got != want {
-			t.Errorf("%s stayed %q on a catalog that cannot serve it, want %q", key, got, want)
+	if got := bare.sel["spark"]; got != "off" {
+		t.Errorf("spark stayed %q on a catalog that cannot serve it, want off", got)
+	}
+	if v := visible(bare); v["spark"] {
+		t.Errorf("the unusable spark dial stayed on screen: %v", v)
+	}
+	// Collected per lane, in ladder order, and never a notch the lane has no
+	// combo for: a shallower lane must not inherit a deeper one's notches.
+	for lane, want := range map[string][]string{
+		"mixed":    {"normal", "smart"},
+		"gpt-only": {"fast"},
+	} {
+		if got := bare.mtiers[lane]; !reflect.DeepEqual(got, want) {
+			t.Errorf("mtiers[%q] = %v, want %v", lane, got, want)
 		}
-	}
-	if v := visible(bare); v["spark"] || v["fable"] || v["main"] {
-		t.Errorf("unusable dials stayed on screen: %v", v)
 	}
 
 	// The reset key restores defaults, which assume a full catalog.
@@ -331,32 +384,44 @@ func TestCatalogCapabilityGatesDials(t *testing.T) {
 		t.Errorf("d reset resurrected the dead spark dial: %q", got)
 	}
 
-	// No catalog at all is the onboarding shell, not a restriction.
+	// No catalog at all is the onboarding shell, not a restriction: a nil mtiers
+	// map has to leave every ladder notch reachable.
 	empty := model{facets: facetDefs(map[string]string{}), sel: defaultSel()}
 	empty.applyCatalog()
-	if empty.noSpark || empty.noFable || empty.sel["spark"] != "on" {
-		t.Errorf("an unread catalog must leave every dial alone: noSpark=%v noFable=%v spark=%q",
-			empty.noSpark, empty.noFable, empty.sel["spark"])
+	if empty.noSpark || empty.sel["spark"] != "on" || empty.mtiers != nil {
+		t.Errorf("an unread catalog must leave every dial alone: noSpark=%v spark=%q mtiers=%v",
+			empty.noSpark, empty.sel["spark"], empty.mtiers)
 	}
 }
 
-// TestCycleFacetClearsMain: manually toggling fable off must clear fable-as-main
-// too, so a later fable re-enable never silently resurrects the escalation.
-func TestCycleFacetClearsMain(t *testing.T) {
-	m := &model{facets: facetDefs(map[string]string{}), sel: defaultSel()}
-	m.sel["fable"] = "on"
-	m.sel["main"] = "on"
-	for i, f := range m.visibleFacets() {
-		if f.key == "fable" {
-			m.fcur = i
-		}
+// TestCycleFacetClampsModelToLaneLadder replaces the retired fable/main
+// sub-setting test: the cross-dial dependency that survives the refactor is the
+// model ladder's. Pool ladders are variable-depth, so turning the lead onto a
+// lane whose pools stop at tier 3 leaves the dial parked on an "elite" notch that
+// lane has no combo for — and Enter would then refuse to launch the very state
+// the dial is displaying.
+func TestCycleFacetClampsModelToLaneLadder(t *testing.T) {
+	m := &model{facets: facetDefs(map[string]string{}), sel: defaultSel(),
+		generated: map[string][]string{
+			"claude-only_smart_medium_nosp": nil,
+			"claude-only_elite_medium_nosp": nil,
+			"gpt-only_fast_medium_nosp":     nil,
+			"gpt-only_smart_medium_nosp":    nil,
+			"__models__":                    nil,
+		}}
+	m.applyCatalog()
+	m.sel["lane"], m.sel["model"] = "claude-only", "elite"
+	m.visibleFacets() // sync the derived lead/blend halves from lane
+	m.fcur = 0        // the lead row
+	m.cycleFacet(-1)  // claude → gpt (lead order is catalog order)
+	if m.sel["lane"] != "gpt-only" {
+		t.Fatalf("cycle should have landed on gpt-only, got %q", m.sel["lane"])
 	}
-	m.cycleFacet(1) // fable on → off
-	if m.sel["fable"] != "off" {
-		t.Fatalf("cycle should have turned fable off, got %q", m.sel["fable"])
+	if m.sel["model"] != "smart" {
+		t.Errorf("model dial stayed on %q, a notch gpt-only never generated — want a snap DOWN to smart", m.sel["model"])
 	}
-	if m.sel["main"] != "off" {
-		t.Errorf("main must clear when fable is manually turned off, got %q", m.sel["main"])
+	if _, ok := m.generated[comboID(m.sel)]; !ok {
+		t.Errorf("the displayed dial state resolves to no catalog block: %s", comboID(m.sel))
 	}
 }
 
@@ -389,7 +454,7 @@ func TestLaunchKeys(t *testing.T) {
 	}
 	base := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel(), false): rows},
+		generated: map[string][]string{comboID(defaultSel()): rows},
 	}
 
 	next, _ := base.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -466,7 +531,7 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	}
 	m := model{
 		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel(), false): rows},
+		generated: map[string][]string{comboID(defaultSel()): rows},
 	}
 	m.sel["advisor"] = "off"
 	got := m.genConfigYAML()
@@ -491,107 +556,134 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	}
 }
 
-// TestDefaultGlyphs pins the built-in facet glyphs to their Nerd Font (FA PUA)
-// codepoints. The literals are invisible in most editors — an edit once wiped
-// them all to empty strings without anything failing; this locks each value.
+// TestDefaultGlyphs pins all three built-in facet glyph tables. The nerd
+// literals are invisible in most editors — an edit once wiped them all to empty
+// strings without anything failing, which is why each codepoint is asserted
+// explicitly. The unicode and ascii fallbacks are held to the SAME key set for
+// the same reason from the other direction: resolveGlyphs picks between them at
+// startup, and a table missing one key renders that dial with an empty glyph
+// slot, which shifts every value column on the row.
 func TestDefaultGlyphs(t *testing.T) {
 	want := map[string]rune{
 		"runtime": 0xf108, "local": 0xf109, "lane": 0xf127, "model": 0xf085,
 		"thinking": 0xf0eb, "advisor": 0xf14e,
-		"spark": 0xf135, "fable": 0xf02d, "main": 0xf140, "fast": 0xf0e7,
-		"relief": 0xf132,
+		"spark": 0xf135, "fast": 0xf0e7,
 	}
+	tables := map[string]map[string]string{
+		"nerd": defaultGlyphs(), "unicode": unicodeGlyphs(), "ascii": asciiGlyphs(),
+	}
+	for name, g := range tables {
+		if len(g) != len(want) {
+			t.Errorf("%s table has %d entries, want %d: %v", name, len(g), len(want), g)
+		}
+		for key := range want {
+			if v, ok := g[key]; !ok || v == "" {
+				t.Errorf("%s table has no glyph for %q (present=%v, value=%q)", name, key, ok, v)
+			}
+		}
+		for key := range g {
+			if _, ok := want[key]; !ok {
+				t.Errorf("%s table defines a glyph for %q, which is not a dial", name, key)
+			}
+		}
+	}
+
 	g := defaultGlyphs()
-	if len(g) != len(want) {
-		t.Errorf("defaultGlyphs has %d entries, want %d", len(g), len(want))
-	}
 	dials := append([]facet{runtimeFacet(g["runtime"], nil), localFacet(g[localFacetKey], localLane{})}, facetDefs(g)...)
 	for _, f := range dials {
+		// Every dial the TUI can render must find a glyph in every table.
+		for name, table := range tables {
+			if table[f.key] == "" {
+				t.Errorf("%s table has no glyph for the %q dial", name, f.key)
+			}
+		}
+		// Only the nerd table is a single PUA rune; the ascii tags are two cells
+		// wide by design, exactly the width the glyph slot reserves.
 		r := []rune(g[f.key])
 		if len(r) != 1 {
-			t.Errorf("glyph for %q is %d runes, want exactly 1", f.key, len(r))
+			t.Errorf("nerd glyph for %q is %d runes, want exactly 1", f.key, len(r))
 			continue
 		}
 		if r[0] != want[f.key] {
-			t.Errorf("glyph for %q = U+%04X, want U+%04X", f.key, r[0], want[f.key])
+			t.Errorf("nerd glyph for %q = U+%04X, want U+%04X", f.key, r[0], want[f.key])
 		}
 	}
 }
 
-// TestGenLinesMainRow: the fable-as-main dial renders as fable's tabulated child
-// labelled "default" (self-explanatory next to the preview), with no flavor text
-// — the old explainer wrapped on narrow panes and broke the layout.
-func TestGenLinesMainRow(t *testing.T) {
+// TestGenLinesChildRow: the tabulated child row still renders as a child. The
+// fable-as-main dial that used to own this shape is gone; the lane dial's blend
+// half is the only sub-setting left, and it must keep the exact same rendering —
+// the 2-space pointer slot plus an L-shaped tree connector before the glyph,
+// which is what makes the parent/child link explicit, like the `tree` CLI — with
+// no flavor text, because the old explainer wrapped on narrow panes and broke
+// the layout.
+func TestGenLinesChildRow(t *testing.T) {
 	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
-	m.sel["fable"] = "on"
-	m.sel["main"] = "on"
+	m.sel["lane"] = "gpt-led" // mixed has no blend to pick
 	lines, _ := m.genLines()
-	var mainRow string
+	var childRow string
 	for _, ln := range lines {
 		p := stripAnsi(ln)
-		if strings.Contains(p, "default") {
-			mainRow = p
-		}
-		if strings.Contains(p, "Fable leads") {
-			t.Errorf("main row must carry no flavor text, got %q", p)
+		if strings.Contains(p, "blend") {
+			childRow = p
 		}
 	}
-	if mainRow == "" {
-		t.Fatalf("no row labelled 'default' while fable+main are on:\n%s", stripAnsi(strings.Join(lines, "\n")))
+	if childRow == "" {
+		t.Fatalf("no blend row on a non-mixed lead:\n%s", stripAnsi(strings.Join(lines, "\n")))
 	}
-	// tabulated child: unfocused prefix is the 2-space pointer slot + an
-	// L-shaped tree connector before the glyph — the connector makes the
-	// parent/child link to fable explicit, like the `tree` CLI.
-	if !strings.HasPrefix(mainRow, "  └ ") {
-		t.Errorf("main row must carry the └ child connector, got %q", mainRow)
+	if !strings.HasPrefix(childRow, "  └ ") {
+		t.Errorf("child row must carry the └ connector, got %q", childRow)
+	}
+	// mixed spans every pool, so there is no blend to choose: the child row
+	// disappears entirely rather than rendering a one-value dial.
+	m.sel["lane"] = "mixed"
+	lines, _ = m.genLines()
+	for _, ln := range lines {
+		if p := stripAnsi(ln); strings.Contains(p, "blend") {
+			t.Errorf("mixed must render no blend child, got %q", p)
+		}
 	}
 }
 
 // TestAdvisorChainFlip locks the advisor's opposite-provider rule: the second
-// opinion tracks whoever actually leads. Lane-led flips were already in place;
-// fable-as-main (fable on + default on) puts Claude Fable in the default seat,
-// so mixed/gpt-led lanes must flip the advisor to GPT too — same-provider lead
-// and advisor would reintroduce the tunnel-vision risk the advisor exists to
-// cut. Pure lanes keep their own provider; fable alone (main off) doesn't flip.
+// opinion never sits on the pool that leads the work, because a same-provider
+// lead and advisor reintroduce the tunnel-vision risk the advisor exists to cut.
+// Only the pure lanes keep their own provider — there is no other pool in the
+// lane to cross to. The fable-as-main flip this test also used to cover is gone
+// with the dial: the top Anthropic rung is an ordinary ladder notch now and
+// moves no lead, so the lane is the whole input.
 func TestAdvisorChainFlip(t *testing.T) {
 	adv := map[string][]string{
 		"glance/gpt":    {"gpt-5.6-terra:low"},
 		"glance/claude": {"claude-quartz-5:low"},
 	}
 	cases := []struct {
-		lane, fable, main string
-		wantCtx           string
+		lane    string
+		wantCtx string
 	}{
-		{"mixed", "off", "off", "claude"},
-		{"gpt-led", "off", "off", "claude"},
-		{"claude-led", "off", "off", "gpt"},
-		{"gpt-only", "off", "off", "gpt"},
-		{"claude-only", "off", "off", "claude"},
-		// fable on but not leading: no flip.
-		{"mixed", "on", "off", "claude"},
-		// fable-as-main: Claude leads, advisor flips to GPT.
-		{"mixed", "on", "on", "gpt"},
-		{"gpt-led", "on", "on", "gpt"},
-		{"claude-led", "on", "on", "gpt"},
-		// pure Claude pool: pure-lane rule wins, no GPT in the pool.
-		{"claude-only", "on", "on", "claude"},
+		{"mixed", "claude"},
+		{"gpt-led", "claude"},
+		{"claude-led", "gpt"},
+		{"gpt-only", "gpt"},
+		{"claude-only", "claude"},
 	}
 	for _, c := range cases {
 		m := model{advisors: adv, sel: defaultSel()}
-		m.sel["lane"], m.sel["fable"], m.sel["main"] = c.lane, c.fable, c.main
+		m.sel["lane"] = c.lane
 		got := m.advisorChain("glance")
 		want := adv["glance/"+c.wantCtx]
 		if len(got) == 0 || got[0] != want[0] {
-			t.Errorf("lane=%s fable=%s main=%s: advisor chain = %v, want %s (%v)",
-				c.lane, c.fable, c.main, got, c.wantCtx, want)
+			t.Errorf("lane=%s: advisor chain = %v, want %s (%v)", c.lane, got, c.wantCtx, want)
 		}
 	}
 }
 
-// TestApplyAdvisorFableMain: the flipped chain must flow through applyAdvisor —
-// the single seam feeding the preview, the cost/speed meters, and the launched
-// config YAML — not just the raw table lookup.
-func TestApplyAdvisorFableMain(t *testing.T) {
+// TestApplyAdvisorCrossesProvider: the crossed chain must flow through
+// applyAdvisor — the single seam feeding the preview, the cost/speed meters, and
+// the launched config YAML — not just the raw table lookup. A Claude-led lane
+// crosses to GPT, and the row is synthesised even when the baked block carries no
+// advisor row of its own to replace.
+func TestApplyAdvisorCrossesProvider(t *testing.T) {
 	m := model{
 		advisors: map[string][]string{
 			"glance/gpt":    {"gpt-5.6-terra:low"},
@@ -599,22 +691,22 @@ func TestApplyAdvisorFableMain(t *testing.T) {
 		},
 		sel: defaultSel(),
 	}
-	m.sel["fable"], m.sel["main"] = "on", "on" // mixed lane (default)
+	m.sel["lane"] = "claude-led"
 	rows := m.applyAdvisor([]string{"    default    claude-fable-5:high"}, "glance")
 	joined := strings.Join(rows, "\n")
 	if !strings.Contains(joined, "advisor    gpt-5.6-terra:low") {
-		t.Errorf("fable-as-main must synthesise a GPT advisor row, got:\n%s", joined)
+		t.Errorf("a Claude-led lane must synthesise a GPT advisor row, got:\n%s", joined)
 	}
 }
 
 // TestPreviewColumn locks the Routing section's shape: the title row carries
-// the section-local collapse cue (p · hide), the fallback-display cue is
-// pinned to the section's LAST row — bottom chrome under the viewport, no
-// longer top chrome — worded as a show/hide DISPLAY toggle, and no baked
-// settings-summary line reaches the preview (the dials are visible on the
-// left).
+// the section-local collapse cue (p · hide), the DISPLAY cues are pinned to the
+// section's LAST row — bottom chrome under the viewport, where the chains they
+// toggle end, no longer top chrome — worded as show/hide toggles so it is clear
+// neither changes what is launched, and no baked settings-summary line reaches
+// the preview (the dials are visible on the left).
 func TestPreviewColumn(t *testing.T) {
-	id := comboID(defaultSel(), false)
+	id := comboID(defaultSel())
 	m := model{
 		generated: map[string][]string{id: {
 			"  thinking medium · fallback on · advisor on",
@@ -637,12 +729,17 @@ func TestPreviewColumn(t *testing.T) {
 	if strings.Contains(rows[0], "fallback") || strings.Contains(rows[1], "fallback") {
 		t.Errorf("the fallback cue must leave the top chrome, got %q / %q", rows[0], rows[1])
 	}
-	if tail := strings.TrimSpace(rows[len(rows)-1]); tail != "f · show fallback chains" {
-		t.Errorf("the fallback cue must be pinned to the section's last row, got %q", tail)
+	// Both display toggles live on that one bottom row: f for the fallback
+	// chains, n for the catalog's full model ids. Each is worded for what the
+	// keypress will DO, which is why both flip with the state they read.
+	if tail := strings.TrimSpace(rows[len(rows)-1]); tail != "f · show fallback chains   n · full ids" {
+		t.Errorf("the display cues must be pinned to the section's last row, got %q", tail)
 	}
 	m.depth = 1
-	if plain := stripAnsi(m.previewColumn()); !strings.Contains(plain, "f · hide fallback chains") {
-		t.Errorf("full-chain depth must flip the cue to hide, got:\n%s", plain)
+	m.showFullIDs = true
+	if plain := stripAnsi(m.previewColumn()); !strings.Contains(plain, "f · hide fallback chains") ||
+		!strings.Contains(plain, "n · short ids") {
+		t.Errorf("the cues must invert with the state they toggle, got:\n%s", plain)
 	}
 }
 
@@ -653,7 +750,7 @@ func TestPreviewColumn(t *testing.T) {
 // tests exercise the actual compositions rather than skeleton fixtures.
 func layoutModel() model {
 	glyphs := defaultGlyphs()
-	id := comboID(defaultSel(), false)
+	id := comboID(defaultSel())
 	rows := []string{
 		"  thinking medium · fallback on · advisor on",
 		"    default    gpt-5.6-terra:medium → gpt-5.6-luna:medium → claude-sonnet-5:medium",
@@ -1000,7 +1097,7 @@ func TestRepeatedResizeCrossingsPreserveState(t *testing.T) {
 // shrinks the panel; a facet change still resets to the top.
 func TestResizeScrollClamp(t *testing.T) {
 	m := layoutModel()
-	id := comboID(defaultSel(), false)
+	id := comboID(defaultSel())
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -1355,29 +1452,56 @@ func hasDesc(descs []string, want string) bool {
 	return false
 }
 
-func TestShortWinProviderLabels(t *testing.T) {
-	tests := map[string]string{
-		"5 hours":               "5h",
-		"Claude 5 Hour":         "5h",
-		"Codex 5 Hour":          "5h",
-		"OpenAI 5 Hour":         "5h",
-		"7 days":                "7d",
-		"Claude 7 Day":          "7d",
-		"Codex 7 Day":           "7d",
-		"OpenAI 7 Day":          "7d",
-		"5 hours (Spark)":       "5h spark",
-		"Codex 5 Hour (Spark)":  "5h spark",
-		"OpenAI 5 Hour (Spark)": "5h spark",
-		"7 days (Spark)":        "7d spark",
-		"Codex 7 Day (Spark)":   "7d spark",
-		"OpenAI 7 Day (Spark)":  "7d spark",
-		"Claude 7 Day (Fable)":  "7d fable",
-		"unrecognized upstream": "unrecognized upstream",
+// TestShortWin pins the tag every usage row is labelled with. The payload's own
+// window id is authoritative, with the limit's tier appended when the limit is
+// tier-scoped, because an id alone cannot tell a provider's main window apart
+// from a carve-out of the same duration.
+//
+// The 30d case is the concrete regression. This operator's Codex account reports
+// exactly one window, a 30d one, and the old hardcoded table of English labels
+// neither recognised it nor named it: the row rendered as the raw payload string
+// "30 days" and knownUsageWindow gated it out of the panel entirely. The label
+// switch survives only as the fallback for payloads that carry no id at all, and
+// it must never grow again.
+func TestShortWin(t *testing.T) {
+	cases := []struct {
+		name string
+		win  usageWin
+		want string
+	}{
+		{"codex's sole 30d window", usageWin{id: "30d", label: "30 days"}, "30d"},
+		{"tier-scoped spark window", usageWin{id: "5h", label: "5 hours (Spark)", tier: "spark"}, "5h spark"},
+		{"untiered id", usageWin{id: "7d", label: "7 days"}, "7d"},
+		{"placeholder tier is not a scope", usageWin{id: "5h", tier: "-"}, "5h"},
+		// A tier this build does not model is still the window's own name: no
+		// vocabulary is whitelisted here any more.
+		{"undeclared tier", usageWin{id: "7d", tier: "fable"}, "7d fable"},
+		// The id wins outright — a stale English label never overrides it.
+		{"id beats a disagreeing label", usageWin{id: "30d", label: "7 days"}, "30d"},
+		// id-less legacy payloads fall back to the label vocabulary.
+		{"legacy label", usageWin{label: "Claude 5 Hour"}, "5h"},
+		{"legacy spark label", usageWin{label: "Codex 5 Hour (Spark)"}, "5h spark"},
+		{"unknown legacy label passes through", usageWin{label: "unrecognized upstream"}, "unrecognized upstream"},
 	}
-	for label, want := range tests {
-		if got := shortWin(label); got != want {
-			t.Errorf("shortWin(%q) = %q, want %q", label, got, want)
-		}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := shortWin(c.win); got != c.want {
+				t.Errorf("shortWin(%+v) = %q, want %q", c.win, got, c.want)
+			}
+		})
+	}
+	// The other half of the same incident: the gate no longer whitelists
+	// durations, so a payload-named window on a metered provider is drawable
+	// whatever its length — and an id-less window with a label nothing
+	// recognises still is not, because the panel would have nothing to call it.
+	if !knownUsageWindow(usageWin{id: "30d", prov: "openai-codex"}) {
+		t.Error("a payload-named 30d window on a metered provider must be renderable")
+	}
+	if knownUsageWindow(usageWin{label: "30 days", prov: "openai-codex"}) {
+		t.Error("an id-less window whose label nothing recognises must not be drawn")
+	}
+	if knownUsageWindow(usageWin{id: "30d", prov: "deepseek"}) {
+		t.Error("an unmetered provider has no quota window to draw")
 	}
 }
 
@@ -1432,7 +1556,7 @@ func TestUsageProviderAccountsCompactIntoHeading(t *testing.T) {
 			{label: "7 days", pct: 33, dur: 7 * day, prov: "openai-codex"},
 		},
 		{Provider: "anthropic", IdentityKey: "claude"}: {
-			{label: "Claude 7 Day (Fable)", tier: "fable", dur: 7 * day, prov: "anthropic", missing: true},
+			{label: "7 days", id: "7d", dur: 7 * day, prov: "anthropic", missing: true},
 		},
 	}
 
@@ -1845,7 +1969,7 @@ func TestSectionStatePreservation(t *testing.T) {
 
 	// Restoring routing recovers the prior scroll position.
 	sc := layoutModel()
-	id := comboID(defaultSel(), false)
+	id := comboID(defaultSel())
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 40 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -2383,9 +2507,11 @@ func TestUsageLoadingAndRealRowsFillTheSameAssignedGeometry(t *testing.T) {
 		}
 	}
 
-	skeleton := renderUsageRows(80, []usageRowSpec{skeletonUsageRowSpec("7d fable", "  ")})[0]
+	// A tier-scoped tag is the widest label the grammar has to hold, so it is
+	// the one worth comparing the skeleton against.
+	skeleton := renderUsageRows(80, []usageRowSpec{skeletonUsageRowSpec("5h spark", "  ")})[0]
 	missing := renderUsageRows(80, []usageRowSpec{loaded.usageRowSpec(usageWin{
-		label: "Claude 7 Day (Fable)", tier: "fable", missing: true,
+		label: "5 hours (Spark)", id: "5h", tier: "spark", missing: true,
 	}, "  ")})[0]
 	skeletonPlain, missingPlain := stripAnsi(skeleton), stripAnsi(missing)
 	if lipgloss.Width(skeleton) != lipgloss.Width(missing) ||
@@ -2441,8 +2567,12 @@ func TestUsageSkeleton(t *testing.T) {
 	if got := strings.Count(panel, "checking account…"); got != 2 {
 		t.Errorf("skeleton must show one checking state per provider, got %d:\n%s", got, panel)
 	}
-	if got := strings.Count(panel, "··% used"); got != 5 {
-		t.Errorf("want Codex's two rows plus Claude's three including Fable (5 total), got %d:\n%s", got, panel)
+	// The skeleton reserves exactly the windows each provider declares
+	// (SkeletonWins) — two apiece — and nothing more. It used to reserve a third
+	// Anthropic row for a window the provider has since retired, so the panel
+	// kept promising a row that would never come.
+	if got := strings.Count(panel, "··% used"); got != 4 {
+		t.Errorf("want each metered provider's two declared windows (4 total), got %d:\n%s", got, panel)
 	}
 	if regexp.MustCompile(`\d+% used`).MatchString(panel) {
 		t.Errorf("the skeleton must not fabricate numeric values:\n%s", panel)
@@ -2556,7 +2686,7 @@ func TestFirstLoadBarFill(t *testing.T) {
 // facet selection.
 func TestRoutingWheelScroll(t *testing.T) {
 	long := layoutModel()
-	id := comboID(defaultSel(), false)
+	id := comboID(defaultSel())
 	rows := []string{"  thinking medium · fallback on · advisor on"}
 	for i := range 60 {
 		rows = append(rows, fmt.Sprintf("    role%02d     gpt-5.6-terra:medium", i))
@@ -2668,13 +2798,16 @@ func TestMediumFavoredUsageShare(t *testing.T) {
 }
 
 // TestUsageCtrlBlankRow: exactly one blank visual row separates the provider
-// content — including a present fable window — from the bottom refresh/hotkey
-// control line, in the wide band and medium's stacked column alike.
+// content — including an extra window beyond the two a provider declares — from
+// the bottom refresh/hotkey control line, in the wide band and medium's stacked
+// column alike. The extra row is deliberately a tier-scoped window the registry
+// does not model: the panel renders what the payload reports, so a provider
+// adding a window must not change the chrome around the rows.
 func TestUsageCtrlBlankRow(t *testing.T) {
 	m := accountModel()
 	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
 	m.avail.accountUsage[key] = append(m.avail.accountUsage[key],
-		usageWin{label: "Claude 7 Day (Fable)", pct: 40, tier: "fable", secs: 4 * day, dur: 7 * day, prov: "anthropic"})
+		usageWin{label: "Claude 7 Day (Fable)", id: "7d", pct: 40, tier: "fable", secs: 4 * day, dur: 7 * day, prov: "anthropic"})
 	wide, _, _, _ := layoutSizes(t, m)
 	m = resize(t, m, wide.w, wide.h)
 	for _, tc := range []struct{ label, panel string }{
@@ -2683,7 +2816,7 @@ func TestUsageCtrlBlankRow(t *testing.T) {
 	} {
 		lines := strings.Split(tc.panel, "\n")
 		if lineIndex(lines, "7d fable") < 0 {
-			t.Fatalf("%s: fixture fable row missing:\n%s", tc.label, tc.panel)
+			t.Fatalf("%s: fixture extra-window row missing:\n%s", tc.label, tc.panel)
 		}
 		ctrl := lineIndex(lines, "r now")
 		if ctrl < 2 {
@@ -2698,59 +2831,76 @@ func TestUsageCtrlBlankRow(t *testing.T) {
 	}
 }
 
-// TestReconcileUsageFableRetention: a successful refresh that omits the
-// Anthropic fable window keeps the previously observed window — marked stale,
-// with its bucket/reset state carried so down-routing never flips to ok on
-// missing evidence — while every freshly fetched window wins as usual.
-func TestReconcileUsageFableRetention(t *testing.T) {
+// TestReconcileUsageRetainsOmittedAccountAndPrefersFreshWindows is the
+// repointed successor to the fable-window retention test. The provider-specific
+// reservation it defended is gone — window vocabulary belongs to the payload now
+// — but the retention contract underneath it survives at the account seam, and
+// it is the seam that keeps a flaky upstream from wiping known-good data:
+//
+//   - an account the successful payload omits entirely keeps its last observed
+//     rows, marked stale and rendered with their age, so a partial report never
+//     reads as "no usage";
+//   - an account that DID report keeps only what it reported. Retention is
+//     all-or-nothing per account, deliberately: topping a fresh report up with
+//     remembered windows is how a retired window used to survive forever.
+func TestReconcileUsageRetainsOmittedAccountAndPrefersFreshWindows(t *testing.T) {
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
+	codex := accountKey{Provider: "openai-codex", IdentityKey: "codex"}
+	accounts := map[string][]account{
+		"anthropic":    {{Provider: claude.Provider, IdentityKey: claude.IdentityKey, Email: "claude@example.test"}},
+		"openai-codex": {{Provider: codex.Provider, IdentityKey: codex.IdentityKey, Email: "codex@example.test"}},
+	}
+	observed := time.Now().Add(-90 * time.Minute).Unix()
 	prev := availability{
-		ok:     true,
-		bucket: map[string]string{"claude-fable": "maxed", "claude-main": "ok"},
-		reset:  map[string]int64{"claude-fable": 9000},
-		wins: []usageWin{
-			{label: "Claude 5 Hour", pct: 10, secs: 3600, dur: 5 * 3600, prov: "anthropic"},
-			{label: "Claude 7 Day (Fable)", pct: 100, tier: "fable", secs: 9000, dur: 7 * day, prov: "anthropic", observed: 1_752_665_040},
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: accounts,
+		accountUsage: map[accountKey][]usageWin{
+			claude: {
+				{label: "5 hours", id: "5h", pct: 10, secs: 3600, dur: 5 * 3600, prov: "anthropic", observed: observed},
+				{label: "7 days", id: "7d", pct: 100, secs: 9000, dur: 7 * day, prov: "anthropic", observed: observed},
+			},
+			codex: {
+				{label: "5 hours", id: "5h", pct: 12, secs: 3600, dur: 5 * 3600, prov: "openai-codex"},
+				{label: "7 days", id: "7d", pct: 33, secs: 6 * day, dur: 7 * day, prov: "openai-codex"},
+			},
 		},
 	}
 	next := availability{
-		ok:     true,
-		bucket: map[string]string{"claude-fable": "ok", "claude-main": "ok"},
-		reset:  map[string]int64{},
-		wins: []usageWin{
-			{label: "Claude 5 Hour", pct: 20, secs: 3000, dur: 5 * 3600, prov: "anthropic"},
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: accounts,
+		accountUsage: map[accountKey][]usageWin{
+			// Anthropic is missing from this report; Codex reported one window.
+			codex: {{label: "5 hours", id: "5h", pct: 20, secs: 3000, dur: 5 * 3600, prov: "openai-codex"}},
 		},
 	}
 	got, stale := reconcileUsage(prev, next)
 	if stale {
 		t.Fatal("a successful refresh must not mark the whole panel stale")
 	}
-	fable := usageWin{}
-	found := false
-	for _, w := range got.wins {
-		if w.tier == "fable" {
-			fable, found = w, true
+
+	retained := got.accountUsage[claude]
+	if len(retained) != 2 {
+		t.Fatalf("the omitted account's windows must be retained: %+v", retained)
+	}
+	for _, w := range retained {
+		if !w.stale || w.missing || w.observed != observed {
+			t.Errorf("retained row must carry the last observed value marked stale: %+v", w)
 		}
 	}
-	if !found {
-		t.Fatalf("the omitted fable window must be retained: %+v", got.wins)
+	if retained[1].pct != 100 || retained[1].secs != 9000 {
+		t.Errorf("retained values were rewritten: %+v", retained[1])
 	}
-	if !fable.stale || fable.missing || fable.pct != 100 || fable.secs != 9000 {
-		t.Errorf("retained fable row must carry the last observed value marked stale: %+v", fable)
+
+	fresh := got.accountUsage[codex]
+	if len(fresh) != 1 || fresh[0].pct != 20 || fresh[0].stale {
+		t.Errorf("a reporting account must keep exactly what it reported, got %+v", fresh)
 	}
-	if got.bucket["claude-fable"] != "maxed" || got.reset["claude-fable"] != 9000 {
-		t.Errorf("bucket/reset must stay conservative, got %q/%d", got.bucket["claude-fable"], got.reset["claude-fable"])
-	}
-	if !got.down("claude-fable") {
-		t.Error("down-routing must not flip a maxed fable to ok on missing evidence")
-	}
-	for _, w := range got.wins {
-		if w.tier == "" && w.pct != 20 {
-			t.Errorf("freshly fetched windows must win: %+v", w)
-		}
-	}
+
 	m := layoutModel()
-	row := stripAnsi(m.usageRow(fable))
-	if !strings.Contains(row, "7d fable") ||
+	row := stripAnsi(m.usageRow(retained[1]))
+	if !strings.Contains(row, "7d") ||
 		!strings.Contains(row, "cached ") ||
 		!strings.Contains(row, " ago") {
 		t.Errorf("the retained row must carry its relative cache age: %q", row)
@@ -2784,95 +2934,80 @@ func TestFormatCachedAge(t *testing.T) {
 	}
 }
 
-// TestReconcileUsageFablePlaceholder: with no fable window ever observed a
-// successful anthropic payload gains a deterministic unavailable placeholder
-// (no fabricated numbers, real row geometry), a payload with no anthropic
-// windows at all gains nothing, and a payload carrying the fable window
-// passes through untouched.
-func TestReconcileUsageFablePlaceholder(t *testing.T) {
+// TestReconcileUsageFabricatesNoWindows replaces the fable-placeholder test.
+// That seam used to synthesise an "unavailable" row for one provider-specific
+// window that had never been observed, so a late-arriving datum could not pop the
+// panel geometry. The reservation outlived the window: after the provider retired
+// it, the panel kept promising a row that would never come back. What must now be
+// true is the inverse property, and it is worth a test precisely because the old
+// behaviour was deliberate — reconcile passes the payload's windows through and
+// invents nothing.
+func TestReconcileUsageFabricatesNoWindows(t *testing.T) {
+	claude := accountKey{Provider: "anthropic", IdentityKey: "claude"}
 	empty := availability{bucket: map[string]string{}, reset: map[string]int64{}}
 	next := availability{
-		ok:     true,
-		bucket: map[string]string{"claude-fable": "ok"},
-		reset:  map[string]int64{},
-		wins: []usageWin{
-			{label: "Claude 5 Hour", pct: 20, secs: 3000, dur: 5 * 3600, prov: "anthropic"},
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: map[string][]account{
+			"anthropic": {{Provider: claude.Provider, IdentityKey: claude.IdentityKey, Email: "claude@example.test"}},
 		},
+		accountUsage: map[accountKey][]usageWin{
+			claude: {{label: "5 hours", id: "5h", pct: 20, secs: 3000, dur: 5 * 3600, prov: "anthropic"}},
+		},
+		wins: []usageWin{{label: "5 hours", id: "5h", pct: 20, secs: 3000, dur: 5 * 3600, prov: "anthropic"}},
 	}
 	got, stale := reconcileUsage(empty, next)
 	if stale {
 		t.Fatal("a successful first fetch must not read stale")
 	}
-	fable := usageWin{}
-	found := false
-	for _, w := range got.wins {
-		if w.tier == "fable" {
-			fable, found = w, true
+	if len(got.wins) != 1 || len(got.accountUsage[claude]) != 1 {
+		t.Fatalf("reconcile invented a window the payload never reported: wins=%+v account=%+v",
+			got.wins, got.accountUsage[claude])
+	}
+	for _, w := range append(append([]usageWin(nil), got.wins...), got.accountUsage[claude]...) {
+		if w.missing || w.stale {
+			t.Errorf("a freshly reported window must not be marked missing or stale: %+v", w)
 		}
 	}
-	if !found {
-		t.Fatalf("a missing fable window with no prior value must gain a placeholder: %+v", got.wins)
-	}
-	if !fable.missing || fable.stale || fable.pct != 0 {
-		t.Errorf("the placeholder must be marked missing and carry no value: %+v", fable)
-	}
-	m := layoutModel()
-	row := stripAnsi(m.usageRow(fable))
-	if !strings.Contains(row, "7d fable") || !strings.Contains(row, "··%") || !strings.Contains(row, "unavailable") {
-		t.Errorf("placeholder row must read as a deterministic unavailable stand-in: %q", row)
-	}
-	if regexp.MustCompile(`\d+% used`).MatchString(row) || strings.Contains(row, "█") {
-		t.Errorf("the placeholder must not fabricate values: %q", row)
-	}
-
-	// Geometry: swapping the placeholder for a later real value never pops
-	// the stacked column's row count.
-	mp := layoutModel()
-	mp.avail = got
-	real := got
-	real.wins = append([]usageWin(nil), got.wins...)
-	for i := range real.wins {
-		if real.wins[i].missing {
-			real.wins[i] = usageWin{label: "Claude 7 Day (Fable)", pct: 40, tier: "fable", secs: 4 * day, dur: 7 * day, prov: "anthropic"}
-		}
-	}
-	mr := layoutModel()
-	mr.avail = real
-	if hp, hr := lipgloss.Height(mp.usageColumn()), lipgloss.Height(mr.usageColumn()); hp != hr {
-		t.Errorf("placeholder column is %d rows, real column %d — the datum appearing would pop the layout", hp, hr)
-	}
-
-	// No anthropic report at all: nothing to place a row under.
-	gptOnly := availability{ok: true, bucket: map[string]string{}, reset: map[string]int64{},
-		wins: []usageWin{{label: "5 hours", pct: 5, secs: 3600, dur: 5 * 3600, prov: "openai-codex"}}}
-	if got, _ := reconcileUsage(empty, gptOnly); len(got.wins) != 1 {
-		t.Errorf("no anthropic windows → no fable placeholder: %+v", got.wins)
-	}
-
-	// A payload carrying the fable window passes through untouched.
-	withFable := availability{ok: true, bucket: map[string]string{}, reset: map[string]int64{},
-		wins: []usageWin{
-			{label: "Claude 5 Hour", pct: 20, secs: 3000, dur: 5 * 3600, prov: "anthropic"},
-			{label: "Claude 7 Day (Fable)", pct: 7, tier: "fable", secs: 2 * day, dur: 7 * day, prov: "anthropic"},
-		}}
-	got2, _ := reconcileUsage(got, withFable)
-	if len(got2.wins) != 2 || got2.wins[1].stale || got2.wins[1].missing || got2.wins[1].pct != 7 {
-		t.Errorf("a present fable window must pass through fresh: %+v", got2.wins)
+	// A window appearing later is an ordinary payload change, not a slot being
+	// filled: it simply shows up.
+	grown := next
+	grown.accountUsage = map[accountKey][]usageWin{claude: {
+		{label: "5 hours", id: "5h", pct: 22, secs: 3000, dur: 5 * 3600, prov: "anthropic"},
+		{label: "7 days", id: "7d", pct: 7, secs: 2 * day, dur: 7 * day, prov: "anthropic"},
+	}}
+	after, _ := reconcileUsage(got, grown)
+	rows := after.accountUsage[claude]
+	if len(rows) != 2 || rows[1].stale || rows[1].missing || rows[1].pct != 7 {
+		t.Errorf("a newly reported window must pass through fresh: %+v", rows)
 	}
 }
 
-func TestFableSkeletonAndUnavailableStatusStayStable(t *testing.T) {
+// TestUsageMissingAndTightStatusColumnStaysStable: a never-observed window keeps
+// the exact row grammar of a real one, so its status text lands in the same
+// column as "tight" or "maxed". A placeholder that shifted the status column
+// would visibly jump the whole provider group the moment real data landed.
+func TestUsageMissingAndTightStatusColumnStaysStable(t *testing.T) {
 	m := layoutModel()
+	// The skeleton reserves exactly what each provider declares — no more
+	// provider-specific window is reserved on top of that.
 	skeleton := stripAnsi(m.skeletonBody(0))
-	if strings.Count(skeleton, "7d fable") != 1 {
-		t.Fatalf("the pre-fetch skeleton must always reserve one Fable row:\n%s", skeleton)
+	for prov, wins := range skeletonWinsByProvider {
+		for _, w := range wins {
+			if strings.Count(skeleton, w) < 1 {
+				t.Errorf("skeleton omits %s's declared %q window:\n%s", prov, w, skeleton)
+			}
+		}
+	}
+	if got := strings.Count(skeleton, "··%"); got != 4 {
+		t.Fatalf("skeleton reserves %d rows, want the 4 windows the registry declares:\n%s", got, skeleton)
 	}
 
 	missing := stripAnsi(m.usageRow(usageWin{
-		label: "Claude 7 Day (Fable)", tier: "fable", missing: true,
+		label: "7 days", id: "7d", missing: true,
 	}))
 	tight := stripAnsi(m.usageRow(usageWin{
-		label: "Claude 7 Day (Fable)", tier: "fable", pct: 85,
+		label: "7 days", id: "7d", pct: 85,
 		secs: 2 * day, dur: 7 * day,
 	}))
 	missingAt := strings.Index(missing, "unavailable")
@@ -2881,7 +3016,7 @@ func TestFableSkeletonAndUnavailableStatusStayStable(t *testing.T) {
 		t.Fatalf("status labels missing: unavailable=%q tight=%q", missing, tight)
 	}
 	if got, want := lipgloss.Width(missing[:missingAt]), lipgloss.Width(tight[:tightAt]); got != want {
-		t.Fatalf("Fable unavailable status column = %d, want the normal status column %d\nmissing: %s\ntight:   %s",
+		t.Fatalf("unavailable status column = %d, want the normal status column %d\nmissing: %s\ntight:   %s",
 			got, want, missing, tight)
 	}
 }
@@ -3140,7 +3275,9 @@ func TestSelectedAvailabilityAggregatesEnabledMatchedAccounts(t *testing.T) {
 				{label: "mystery window", pct: 100, secs: 1, dur: 5 * 3600, prov: "openai-codex"},
 			},
 			codexDisabled: {{label: "5 hours", pct: 100, secs: 0, dur: 5 * 3600, prov: "openai-codex"}},
-			claude:        {{label: "Claude 7 Day (Fable)", pct: 31, tier: "fable", secs: 2 * day, dur: 7 * day, prov: "anthropic"}},
+			// A tier-scoped window the registry declares no bucket for: still a
+			// real reported window, so it must reach the aggregate rows.
+			claude: {{label: "Claude 7 Day (Fable)", id: "7d", pct: 31, tier: "fable", secs: 2 * day, dur: 7 * day, prov: "anthropic"}},
 		},
 		accountCredits: map[accountKey]resetCredits{
 			codexA:        {avail: 1, exp: []int64{day}},
@@ -3238,7 +3375,7 @@ func TestSelectedAvailabilityRebuildsRoutingBuckets(t *testing.T) {
 		if got.bucket["codex-main"] != "unauthed" || got.bucket["codex-spark"] != "unauthed" {
 			t.Fatalf("provider with no enabled identities remained available: %+v", got.bucket)
 		}
-		if got.bucket["claude-main"] != "ok" || got.bucket["claude-fable"] != "ok" {
+		if got.bucket["claude-main"] != "ok" {
 			t.Fatalf("enabled provider without a real observation must stay unknown/non-down: %+v", got.bucket)
 		}
 	})
@@ -3345,52 +3482,97 @@ func TestRoutingAndFacetAdvisoriesUseCommittedSelection(t *testing.T) {
 	if !m.accountSelections.Activate("No providers") {
 		t.Fatal("all-disabled named preset did not activate")
 	}
-	m.sel["fable"] = "on"
 	lines, _ = m.genLines()
 	text := stripAnsi(strings.Join(lines, "\n"))
-	for _, want := range []string{"Spark unavailable", "Fable unavailable"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("all-disabled selection missing %q advisory:\n%s", want, text)
-		}
+	// Spark is the only special tier with a dial and a quota window of its own,
+	// so it is the only dial that carries an availability advisory.
+	if !strings.Contains(text, "Spark unavailable") {
+		t.Fatalf("all-disabled selection missing the Spark advisory:\n%s", text)
 	}
 }
 
-func TestReconcileUsageRetainsFablePerAccountIdentity(t *testing.T) {
+// TestUndeclaredTierWindowRendersWithoutMaxingTheBucket is the corruption
+// parseAvailability's `if bkt == "" { continue }` exists to prevent, and the
+// property that replaced the whole retired fable-window apparatus.
+//
+// This operator's omp still reports an Anthropic limit scoped to tier "fable" — a
+// carve-out no provider entry declares any more. The window is real and the
+// operator wants to see it, so it renders as its own row; but it owns no bucket,
+// and folding its usedFraction into claude-main would mark Claude maxed at 100%
+// and stop every route through it on the strength of a quota window this build
+// does not model. Both bucket seams (the payload parse and the account-selection
+// rebuild) have to apply the rule.
+func TestUndeclaredTierWindowRendersWithoutMaxingTheBucket(t *testing.T) {
 	key := accountKey{Provider: "anthropic", IdentityKey: "claude"}
-	prevFable := usageWin{label: "Claude 7 Day (Fable)", pct: 72, tier: "fable", secs: 3 * day, dur: 7 * day, prov: "anthropic", observed: 123}
-	prev := availability{
-		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
-		wins: []usageWin{{label: "Claude 5 Hour", pct: 10, secs: 1, dur: 5 * 3600, prov: "anthropic"}, prevFable},
-		accountUsage: map[accountKey][]usageWin{key: {
-			{label: "Claude 5 Hour", pct: 10, secs: 1, dur: 5 * 3600, prov: "anthropic"},
-			prevFable,
-		}},
+	accounts := map[string][]account{
+		"anthropic": {{Provider: key.Provider, IdentityKey: key.IdentityKey, Email: "alex@example.test"}},
 	}
-	next := availability{
-		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
-		wins: []usageWin{{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"}},
-		accountUsage: map[accountKey][]usageWin{key: {
-			{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"},
-		}},
+	resetsAt := (time.Now().Unix() + 3*3600) * 1000
+	payload := fmt.Sprintf(`{"reports":[{"provider":"anthropic","email":"alex@example.test","limits":[
+		{"label":"Claude 5 Hour","scope":{"windowId":"5h"},"amount":{"usedFraction":0.1},
+		 "window":{"id":"5h","resetsAt":%d,"durationMs":18000000}},
+		{"label":"Claude 7 Day (Fable)","scope":{"tier":"fable","windowId":"7d"},"amount":{"usedFraction":1},
+		 "window":{"id":"7d","resetsAt":%d,"durationMs":604800000}}
+	]}]}`, resetsAt, resetsAt)
+
+	a := parseAvailability(accounts, true, []byte(payload), 0)
+	if !a.ok {
+		t.Fatal("fixture payload did not parse")
 	}
-	got, _ := reconcileUsage(prev, next)
-	accountWins := got.accountUsage[key]
-	if len(accountWins) != 2 || !accountWins[1].stale || accountWins[1].missing ||
-		accountWins[1].pct != 72 || accountWins[1].observed != 123 {
-		t.Fatalf("per-account Fable retention = %+v", accountWins)
+	if got := a.bucket["claude-main"]; got != "ok" {
+		t.Fatalf("an undeclared tier's maxed window moved claude-main to %q, want ok", got)
+	}
+	if _, ok := a.reset["claude-main"]; ok {
+		t.Errorf("an undeclared tier's window contributed a main-bucket reset: %+v", a.reset)
+	}
+	if a.down("claude-main") {
+		t.Error("every route through Claude was struck by a window nothing here models")
 	}
 
-	freshNext := availability{
-		ok: true, bucket: map[string]string{}, reset: map[string]int64{},
-		wins: []usageWin{{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"}},
-		accountUsage: map[accountKey][]usageWin{key: {
-			{label: "Claude 5 Hour", pct: 20, secs: 2, dur: 5 * 3600, prov: "anthropic"},
-		}},
+	// It is still a real window: it names itself, so it is drawable and gets a
+	// row of its own, labelled by id plus its tier.
+	var carve usageWin
+	for _, w := range a.wins {
+		if w.tier == "fable" {
+			carve = w
+		}
 	}
-	first, _ := reconcileUsage(availability{bucket: map[string]string{}, reset: map[string]int64{}}, freshNext)
-	firstWins := first.accountUsage[key]
-	if len(firstWins) != 2 || !firstWins[1].missing {
-		t.Fatalf("first missing per-account Fable must be explicit, got %+v", firstWins)
+	if carve.id != "7d" || carve.pct != 100 {
+		t.Fatalf("the tier-scoped window was dropped or mangled: %+v", a.wins)
+	}
+	if !knownUsageWindow(carve) {
+		t.Fatal("a payload-named window on a metered provider must be renderable")
+	}
+	m := layoutModel()
+	if row := stripAnsi(m.usageRow(carve)); !strings.Contains(row, "7d fable") || !strings.Contains(row, "100% used") {
+		t.Errorf("the carve-out must render as its own labelled row: %q", row)
+	}
+
+	// selectedAvailability rebuilds buckets from the enabled identities alone,
+	// so it is a second, independent chance to make the same mistake.
+	sel := selectedAvailability(a, nil)
+	if sel.bucket["claude-main"] != "ok" || sel.down("claude-main") {
+		t.Fatalf("the selection seam maxed claude-main from the carve-out: %+v", sel.bucket)
+	}
+	if got := len(sel.accountUsage[key]); got != 2 {
+		t.Fatalf("selected per-account rows = %d, want both reported windows: %+v", got, sel.accountUsage[key])
+	}
+	// The control: a tier the registry DOES declare still constrains its own
+	// bucket, so the skip is scoped to unrecognised tiers rather than to tiers.
+	spark := availability{
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts: map[string][]account{
+			"openai-codex": {{Provider: "openai-codex", IdentityKey: "codex"}},
+		},
+		accountUsage: map[accountKey][]usageWin{
+			{Provider: "openai-codex", IdentityKey: "codex"}: {
+				{label: "5 hours (Spark)", id: "5h", tier: "spark", pct: 100, secs: 60, dur: 5 * 3600, prov: "openai-codex"},
+			},
+		},
+	}
+	if got := selectedAvailability(spark, nil); !got.down("codex-spark") || got.down("codex-main") {
+		t.Fatalf("a declared tier must max exactly its own bucket: %+v", got.bucket)
 	}
 }
 
@@ -3708,11 +3890,11 @@ func threePoolModel(t *testing.T) model {
 func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 	m := threePoolModel(t)
 	m.sel["lane"] = "ds-led"
-	m.sel["spark"], m.sel["fable"], m.sel["fast"] = "off", "off", "off"
+	m.sel["spark"], m.sel["fast"] = "off", "off"
 	m.sel["advisor"] = "audit"
 
-	if _, ok := m.generated[comboID(m.sel, m.hasRelief)]; !ok {
-		t.Fatalf("no generated block for %s", comboID(m.sel, m.hasRelief))
+	if _, ok := m.generated[comboID(m.sel)]; !ok {
+		t.Fatalf("no generated block for %s", comboID(m.sel))
 	}
 
 	m.ompMajor, m.ompMinor = 17, 3
@@ -3726,8 +3908,8 @@ func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 			t.Errorf("ds-led overlay lacks %q:\n%s", want, got)
 		}
 	}
-	// The relief-tail fallback and cross-pool chains must carry their own
-	// provider prefixes, never a mis-prefixed openai-codex/deepseek-….
+	// Fallback and cross-pool chains must carry their own provider prefixes,
+	// never a mis-prefixed openai-codex/deepseek-….
 	if strings.Contains(got, "openai-codex/deepseek") || strings.Contains(got, "anthropic/deepseek") ||
 		strings.Contains(got, "deepseek/gpt") || strings.Contains(got, "deepseek/claude") {
 		t.Errorf("mis-prefixed model in overlay:\n%s", got)
@@ -3766,12 +3948,12 @@ func TestApplyCatalogGrowsLaneDial(t *testing.T) {
 	}
 
 	m.sel["lane"] = "ds-led"
-	if id := comboID(m.sel, m.hasRelief); m.generated[id] == nil {
+	if id := comboID(m.sel); m.generated[id] == nil {
 		t.Fatalf("ds-led selection resolves to no block: %s", id)
 	}
 
 	two := model{
-		generated: map[string][]string{"gpt-only_fast_low_nosp_nofa": {"    default gpt-5.6-luna:low"}},
+		generated: map[string][]string{"gpt-only_fast_low_nosp": {"    default gpt-5.6-luna:low"}},
 		facets:    facetDefs(defaultGlyphs()),
 		sel:       defaultSel(),
 	}
@@ -3789,11 +3971,11 @@ func TestApplyCatalogGrowsLaneDial(t *testing.T) {
 // between connected providers.
 func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
 	catalog := map[string][]string{
-		"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
-		"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
-		"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
-		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
-		"ds-only_fast_low_nosp_nofa":     {"    default ds:low"},
+		"gpt-only_fast_low_nosp":    {"    default gpt:low"},
+		"gpt-led_fast_low_nosp":     {"    default gpt:low"},
+		"mixed_fast_low_nosp":       {"    default gpt:low"},
+		"claude-only_fast_low_nosp": {"    default claude:low"},
+		"ds-only_fast_low_nosp":     {"    default ds:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
@@ -3859,9 +4041,9 @@ func TestProviderAvailabilityMarksDisconnectedLanes(t *testing.T) {
 // negative cursor behind for a later keypress made once credentials are back.
 func TestAccountlessNavigationIsInert(t *testing.T) {
 	catalog := map[string][]string{
-		"mixed_smart_medium_nosp_nofa":    {"    default gpt:medium"},
-		"gpt-only_smart_medium_nosp_nofa": {"    default gpt:medium"},
-		"claude-only_fast_low_nosp_nofa":  {"    default claude:low"},
+		"mixed_smart_medium_nosp":    {"    default gpt:medium"},
+		"gpt-only_smart_medium_nosp": {"    default gpt:medium"},
+		"claude-only_fast_low_nosp":  {"    default claude:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
@@ -3912,12 +4094,12 @@ func TestAccountlessNavigationIsInert(t *testing.T) {
 // at the edge when everything beyond is unusable.
 func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
 	catalog := map[string][]string{
-		"gpt-only_fast_low_nosp_nofa":    {"    default gpt:low"},
-		"gpt-led_fast_low_nosp_nofa":     {"    default gpt:low"},
-		"mixed_fast_low_nosp_nofa":       {"    default gpt:low"},
-		"claude-led_fast_low_nosp_nofa":  {"    default claude:low"},
-		"claude-only_fast_low_nosp_nofa": {"    default claude:low"},
-		"ds-led_fast_low_nosp_nofa":      {"    default ds:low"},
+		"gpt-only_fast_low_nosp":    {"    default gpt:low"},
+		"gpt-led_fast_low_nosp":     {"    default gpt:low"},
+		"mixed_fast_low_nosp":       {"    default gpt:low"},
+		"claude-led_fast_low_nosp":  {"    default claude:low"},
+		"claude-only_fast_low_nosp": {"    default claude:low"},
+		"ds-led_fast_low_nosp":      {"    default ds:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
@@ -3943,10 +4125,10 @@ func TestCycleFacetSkipsUnusableLeads(t *testing.T) {
 // generated the preferred blend lands on a lane the catalog serves.
 func TestBlendDialListsServedBlends(t *testing.T) {
 	catalog := map[string][]string{
-		"gpt-led_fast_low_nosp_nofa":  {"    default gpt:low"},
-		"gpt-only_fast_low_nosp_nofa": {"    default gpt:low"},
-		"mixed_fast_low_nosp_nofa":    {"    default gpt:low"},
-		"ds-led_fast_low_nosp_nofa":   {"    default ds:low"},
+		"gpt-led_fast_low_nosp":  {"    default gpt:low"},
+		"gpt-only_fast_low_nosp": {"    default gpt:low"},
+		"mixed_fast_low_nosp":    {"    default gpt:low"},
+		"ds-led_fast_low_nosp":   {"    default ds:low"},
 	}
 	m := model{generated: catalog, facets: facetDefs(defaultGlyphs()), sel: defaultSel()}
 	m.applyCatalog()
@@ -4165,14 +4347,37 @@ func TestSegmentGaugeRendersAsMeter(t *testing.T) {
 
 	m.sel["model"] = "normal"
 	mdl := rowFor("model")
-	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 3 {
+	if got := strings.Count(mdl, "▰") + strings.Count(mdl, "▱"); got != 4 {
 		t.Fatalf("model gauge must keep one cell per option, got %d cells: %q", got, mdl)
 	}
 	if got := strings.Count(mdl, "▰"); got != 2 {
-		t.Fatalf("model step 2/3 must light two cells, got %d lit: %q", got, mdl)
+		t.Fatalf("model step 2/4 must light two cells, got %d lit: %q", got, mdl)
 	}
 	if !strings.Contains(mdl, " normal ") || strings.Contains(mdl, "smart") {
 		t.Errorf("model gauge must show only the selected word: %q", mdl)
+	}
+
+	// The track length is the dial's value list, and for the model dial that
+	// list is catalog data (visibleFacets narrows it to m.mtiers). A lane whose
+	// pools stop at tier 3 must therefore render a THREE-cell track: a fourth
+	// unreachable notch would show headroom the catalog has no combo for.
+	shallow := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel(),
+		generated: map[string][]string{
+			"mixed_fast_medium_nosp":   nil,
+			"mixed_normal_medium_nosp": nil,
+			"mixed_smart_medium_nosp":  nil,
+			"__models__":               nil,
+		}}
+	shallow.applyCatalog()
+	lines, _ := shallow.genLines()
+	var shallowRow string
+	for _, ln := range lines {
+		if p := stripAnsi(ln); strings.Contains(p, "model") {
+			shallowRow = p
+		}
+	}
+	if got := strings.Count(shallowRow, "▰") + strings.Count(shallowRow, "▱"); got != 3 {
+		t.Fatalf("a tier-3 lane must render a three-cell model track, got %d: %q", got, shallowRow)
 	}
 
 	// advisor's leading "off" is the zero mark: no cell of its own, empty
@@ -4250,36 +4455,52 @@ func TestLaneSplitDials(t *testing.T) {
 	}
 }
 
-// TestAdvisorAuditReliefTail: audit is the advisor's heavyweight setting, so
-// it follows the same metered logic as the heavyweight roles — with relief on,
-// a metered-led blend's audit chain ends on the optional pool's audit rung;
-// relief off, lighter levels, and optional-led lanes stay untouched.
-func TestAdvisorAuditReliefTail(t *testing.T) {
+// TestAdvisorAuditChainIsTierDerived is the repointed relief-tail test. The
+// relief dial and its optional-pool tail are gone, so an audit chain no longer
+// diverts anywhere: its shape is purely the advisor pool's own ladder
+// (renderAdvisors: t3:high → t2:high → t1:low). That is worth pinning because
+// the tail is exactly what used to hide the failure mode — a heavyweight advisor
+// silently spending a pool the lane never chose.
+func TestAdvisorAuditChainIsTierDerived(t *testing.T) {
+	level := func(tok string) string {
+		if i := strings.LastIndexByte(tok, ':'); i >= 0 {
+			return tok[i+1:]
+		}
+		return ""
+	}
 	m := threePoolModel(t)
+
+	// GPT leads mixed, so the advisor crosses to Claude — and stays there for
+	// every rung of the chain.
 	m.sel["lane"] = "mixed"
-	m.sel["relief"] = "on"
-
 	audit := m.advisorChain("audit")
-	if len(audit) == 0 {
-		t.Fatal("no audit chain on mixed")
+	if len(audit) != 3 {
+		t.Fatalf("audit chain = %v, want three rungs (t3 → t2 → t1)", audit)
 	}
-	if !strings.HasPrefix(audit[len(audit)-1], "deepseek-") {
-		t.Fatalf("relief-on audit chain must tail into the optional pool: %v", audit)
+	for _, tok := range audit {
+		if !strings.HasPrefix(tok, "claude-") {
+			t.Fatalf("audit chain left the advisor's own pool: %v", audit)
+		}
+	}
+	if lvl(level(audit[0])) < lvl(level(audit[len(audit)-1])) {
+		t.Fatalf("audit chain must descend in thinking level, got %v", audit)
+	}
+	// Lighter levels are shorter, not differently routed.
+	if got := m.advisorChain("glance"); len(got) != 1 || !strings.HasPrefix(got[0], "claude-") {
+		t.Fatalf("glance chain = %v, want a single claude rung", got)
 	}
 
-	m.sel["relief"] = "off"
-	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
-		t.Fatalf("relief-off audit chain must stay metered: %v", got)
+	// An optional-led lane crosses the other way, and audit must not tail back
+	// onto the lead pool it was supposed to be independent of.
+	m.sel["lane"] = "ds-led"
+	dsAudit := m.advisorChain("audit")
+	if len(dsAudit) != 3 {
+		t.Fatalf("ds-led audit chain = %v, want three rungs", dsAudit)
 	}
-
-	m.sel["relief"] = "on"
-	if got := m.advisorChain("review"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
-		t.Fatalf("lighter advisor levels take no tail: %v", got)
-	}
-
-	m.sel["lane"] = "ds-led" // optional-led lane already spends DeepSeek deliberately
-	if got := m.advisorChain("audit"); strings.HasPrefix(got[len(got)-1], "deepseek-") {
-		t.Fatalf("relief does not apply on an optional-led lane: %v", got)
+	for _, tok := range dsAudit {
+		if strings.HasPrefix(tok, "deepseek-") {
+			t.Fatalf("the advisor must not sit on the lane's own lead pool: %v", dsAudit)
+		}
 	}
 }
 
@@ -4339,8 +4560,8 @@ func TestTrimLanesResetsVanishedLane(t *testing.T) {
 		},
 		sel: map[string]string{"lane": "ds-only", "thinking": "medium"},
 		generated: map[string][]string{
-			"gpt-only_smart_medium_nosp_nofa": nil,
-			"mixed_smart_medium_nosp_nofa":    nil,
+			"gpt-only_smart_medium_nosp": nil,
+			"mixed_smart_medium_nosp":    nil,
 		},
 	}
 	m.applyCatalog()
