@@ -716,7 +716,7 @@ func selectedAvailability(a availability, disabled map[accountKey]bool) availabi
 	for prov, accounts := range a.accounts {
 		for _, acct := range accounts {
 			key := accountKey{Provider: acct.Provider, IdentityKey: acct.IdentityKey}
-			if disabled[key] {
+			if selectionDisabled(disabled, acct) {
 				continue
 			}
 			selected.accounts[prov] = append(selected.accounts[prov], acct)
@@ -984,6 +984,10 @@ type compactProviderIdentity struct {
 	// without having been disabled, which is what silent covers.
 	fault  string
 	silent bool
+	// blocks are pre-rendered broker rate-limit labels ("blocked 2d12h",
+	// "chat blocked 6d2h"), scope-aware so a meter- or tier-scoped block never
+	// reads as taking the whole provider out of service.
+	blocks []string
 }
 
 // providerIdentities preserves broker snapshot order and collapses repeated
@@ -1024,6 +1028,7 @@ func providerIdentities(a availability, prov string, full bool) []compactProvide
 		if f, ok := a.faults[key]; ok {
 			entry.fault = f.short()
 		}
+		entry.blocks = acct.blockLabels(timeNow())
 		identities = append(identities, entry)
 	}
 	return identities
@@ -1079,6 +1084,9 @@ func providerIdentityBlockFor(a availability, prov string, checking, full bool) 
 				stWarn.Render(identity.fault)+stDim.Render(" · disabled by omp"))
 		case !identity.reporting:
 			unavailable++
+		}
+		if len(identity.blocks) > 0 {
+			rows = append(rows, stBrk.Render("  "+identity.label+": ")+stWarn.Render(strings.Join(identity.blocks, ", ")))
 		}
 	}
 	if unavailable > 0 {

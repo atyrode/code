@@ -53,11 +53,30 @@ func (m model) managerDisplayedDisabled() map[accountKey]bool {
 }
 
 func (m *model) commitAccountSelections(candidate accountSelectionState) error {
+	candidate = pruneAccountSelectionState(candidate, m.avail)
 	if err := writeAccountSelectionState(m.accountState, candidate); err != nil {
 		return err
 	}
 	m.accountSelections = candidate
 	return nil
+}
+
+// pruneAccountSelectionState drops disabled-selection entries with no
+// matching broker account, across the manual selection and every preset. It
+// only prunes when the live snapshot is healthy and current — a broker outage
+// or a cache-backed availability must never be read as "this account is
+// gone" and erase the operator's selection.
+func pruneAccountSelectionState(state accountSelectionState, avail availability) accountSelectionState {
+	if !avail.accountsOK || avail.accountsStale {
+		return state
+	}
+	pruned, _ := pruneSelection(state.ManualDisabled(), avail.accounts)
+	state.SetManualDisabled(pruned)
+	for _, preset := range state.Presets() {
+		prunedPreset, _ := pruneSelection(preset.Disabled, avail.accounts)
+		_ = state.UpsertPreset(preset.Name, prunedPreset)
+	}
+	return state
 }
 
 func (m model) managerPresetNames() []string {
@@ -205,8 +224,19 @@ func (m *model) toggleManagerAccount() error {
 	a := accounts[m.mgrCursor]
 	key := accountKey{Provider: a.Provider, IdentityKey: a.IdentityKey}
 	disabled := copyDisabledAccounts(m.managerDisplayedDisabled())
-	if disabled[key] {
+	if selectionDisabled(disabled, a) {
+		// Enabling: clear the exact key and any stale entry that only matches
+		// via the re-login email widening, so the account does not still
+		// display as disabled afterward.
 		delete(disabled, key)
+		email := selectionEmail(a.IdentityKey)
+		if email != "" {
+			for entryKey := range disabled {
+				if entryKey.Provider == a.Provider && strings.EqualFold(selectionEmail(entryKey.IdentityKey), email) {
+					delete(disabled, entryKey)
+				}
+			}
+		}
 	} else {
 		disabled[key] = true
 	}
@@ -691,7 +721,7 @@ func (m model) managerLines(width int) []managerLine {
 					selectable++
 				}
 				key := accountKey{Provider: a.Provider, IdentityKey: a.IdentityKey}
-				disabled := a.IdentityKey != "" && disabledAccounts[key]
+				disabled := a.IdentityKey != "" && selectionDisabled(disabledAccounts, a)
 				status := "enabled"
 				if disabled {
 					status = "off"
@@ -765,6 +795,16 @@ func (m model) managerLines(width int) []managerLine {
 						group:      group,
 						provider:   provider,
 					})
+				}
+				if labels := a.blockLabels(timeNow()); len(labels) > 0 {
+					for _, label := range labels {
+						lines = append(lines, managerLine{
+							text:       managerClipCell("      "+stWarn.Render(label), lineWidth),
+							selectable: -1,
+							group:      group,
+							provider:   provider,
+						})
+					}
 				}
 				if credits, ok := m.avail.accountCredits[key]; ok {
 					if credit := creditSummary(credits); credit != "" {
@@ -936,6 +976,11 @@ func windowManagerLines(lines []managerLine, cursor, height int) []managerLine {
 	return result
 }
 
+// managerLaunchScopeHint states plainly that an account toggle here does not
+// reach a session already running — it only takes effect for sessions
+// launched from this point on.
+const managerLaunchScopeHint = "Selection applies to sessions launched from now on; running sessions keep the accounts they started with."
+
 func (m model) managerAccountBody(width int, rows []managerLine) string {
 	body := padLeft(m.managerTitle(width), gut)
 	if boxes := managerProviderBoxes(width, rows, m.managerFocusedProvider()); boxes != "" {
@@ -944,6 +989,13 @@ func (m model) managerAccountBody(width int, rows []managerLine) string {
 	if m.accountErr != "" {
 		body += "\n\n" + padLeft(stBrk.Render(m.accountErr), gut)
 	}
+	hint := managerLaunchScopeHint
+	if lipgloss.Width(hint) > width && width > 0 {
+		if before, after, ok := strings.Cut(hint, "; "); ok {
+			hint = before + ";\n" + after
+		}
+	}
+	body += "\n\n" + padLeft(stDim.Render(hint), gut)
 	return body
 }
 

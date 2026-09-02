@@ -2,13 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadAccountsValidatesFiltersAndSortsCentralSnapshot(t *testing.T) {
@@ -49,6 +52,21 @@ func TestLoadAccountsValidatesFiltersAndSortsCentralSnapshot(t *testing.T) {
 	}
 }
 
+func TestLoadAccountsSendsMeterScopeCapability(t *testing.T) {
+	var capability string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capability = r.Header.Get("OMP-Auth-Broker-Capabilities")
+		_, _ = w.Write([]byte(`{"credentials":[]}`))
+	}))
+	defer server.Close()
+	if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if capability != "codex-meter-block-scopes" {
+		t.Fatalf("OMP-Auth-Broker-Capabilities = %q, want codex-meter-block-scopes", capability)
+	}
+}
+
 func TestLoadAccountsRejectsMalformedRelevantIdentities(t *testing.T) {
 	for name, snapshot := range map[string]string{
 		"missing key":      `{"credentials":[{"provider":"anthropic","credential":{"type":"oauth","email":"x"}}]}`,
@@ -63,6 +81,65 @@ func TestLoadAccountsRejectsMalformedRelevantIdentities(t *testing.T) {
 				t.Fatal("malformed snapshot accepted")
 			}
 		})
+	}
+}
+
+func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	old := timeNow
+	timeNow = func() time.Time { return fixed }
+	defer func() { timeNow = old }()
+	snapshot := `{"credentials":[
+		{"provider":"anthropic","identityKey":"alex","credential":{"type":"oauth","email":"a@example.com"},
+		 "blocks":[{"blockScope":"","blockedUntilMs":` + fmt.Sprint(fixed.Add(24*time.Hour).UnixMilli()) + `}]},
+		{"provider":"openai-codex","identityKey":"codex-a","credential":{"type":"oauth","email":"c@example.com"},
+		 "blocks":[
+			{"blockScope":"chat","blockedUntilMs":` + fmt.Sprint(fixed.Add(2*time.Hour).UnixMilli()) + `},
+			{"blockScope":"spark","blockedUntilMs":` + fmt.Sprint(fixed.Add(-time.Hour).UnixMilli()) + `},
+			{"blockScope":"tier:fable","blockedUntilMs":0}
+		 ]}
+	]}`
+	accounts, err := parseAccountSnapshot([]byte(snapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anthropic := accounts[anthropicProvider][0]
+	if until := anthropic.providerBlock(); !until.Equal(fixed.Add(24 * time.Hour)) {
+		t.Fatalf("anthropic providerBlock = %v, want %v", until, fixed.Add(24*time.Hour))
+	}
+	if labels := anthropic.blockLabels(fixed); len(labels) != 1 || !strings.HasPrefix(labels[0], "blocked ") {
+		t.Fatalf("anthropic blockLabels = %#v", labels)
+	}
+	codex := accounts[openAIProvider][0]
+	if !codex.providerBlock().IsZero() {
+		t.Fatalf("chat-only block must not read as provider-wide: %v", codex.providerBlock())
+	}
+	// The expired "spark" block and the zero-timestamp "tier:fable" block are
+	// both dropped at parse time; only the still-in-force "chat" block remains.
+	labels := codex.blockLabels(fixed)
+	if len(labels) != 1 || labels[0] != "chat blocked "+fmtReset(int64(2*time.Hour/time.Second)) {
+		t.Fatalf("codex blockLabels = %#v", labels)
+	}
+}
+
+func TestParseAccountSnapshotCanonicalisesProviderAlias(t *testing.T) {
+	snapshot := `{"credentials":[
+		{"provider":"openai","identityKey":"alias-account","credential":{"type":"oauth","email":"x@example.com"}},
+		{"provider":"openai-codex","identityKey":"canonical-account","credential":{"type":"oauth","email":"y@example.com"}}
+	]}`
+	accounts, err := parseAccountSnapshot([]byte(snapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := accountKeys(accounts[openAIProvider]); !reflect.DeepEqual(keys, []string{"alias-account", "canonical-account"}) {
+		t.Fatalf("alias-named credential missing from canonical provider group: %#v", accounts[openAIProvider])
+	}
+	// Disabling only the canonical-named account must leave the alias-named
+	// one enabled and visible in the pool under the canonical provider id.
+	disabled := map[accountKey]bool{{Provider: openAIProvider, IdentityKey: "canonical-account"}: true}
+	pool, _ := buildAccountPool(accounts, disabled, time.Now())
+	if !reflect.DeepEqual(pool[openAIProvider], []string{"alias-account"}) {
+		t.Fatalf("alias-named credential absent from pool: %#v", pool)
 	}
 }
 
@@ -133,27 +210,89 @@ func TestAccountSelectionUnknownAccountsDefaultEnabledAndProviderKeysAreIsolated
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "shared"}, {Provider: anthropicProvider, IdentityKey: "new"}},
 		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "shared"}},
 	}
-	got := buildAccountPool(accounts, state.CurrentDisabled())
+	got, warnings := buildAccountPool(accounts, state.CurrentDisabled(), time.Now())
 	if !reflect.DeepEqual(got[anthropicProvider], []string{"new"}) {
 		t.Fatalf("anthropic account pool = %#v", got[anthropicProvider])
 	}
-	if !reflect.DeepEqual(got[openAIProvider], []string{"shared"}) {
-		t.Fatalf("same identityKey in another provider must remain enabled: %#v", got[openAIProvider])
+	if _, ok := got[openAIProvider]; ok {
+		t.Fatalf("same identityKey disabled in another provider must leave this one unrestricted (omitted): %#v", got)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
 	}
 }
 
-func TestBuildAccountPoolAllOffKeepsExactProviderArrays(t *testing.T) {
+func TestBuildAccountPoolOmitsUnrestrictedProviders(t *testing.T) {
+	now := time.Now()
+	t.Run("nothing disabled", func(t *testing.T) {
+		accounts := map[string][]account{
+			anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
+			openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
+		}
+		got, warnings := buildAccountPool(accounts, nil, now)
+		if len(got) != 0 {
+			t.Fatalf("unrestricted pool must have no keys: %#v", got)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("unexpected warnings: %#v", warnings)
+		}
+	})
+	t.Run("provider with zero snapshot accounts stays absent", func(t *testing.T) {
+		accounts := map[string][]account{
+			anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}, {Provider: anthropicProvider, IdentityKey: "b"}},
+			openAIProvider:    {},
+		}
+		disabled := map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true}
+		got, _ := buildAccountPool(accounts, disabled, now)
+		if _, ok := got[openAIProvider]; ok {
+			t.Fatalf("provider with no snapshot accounts must stay absent: %#v", got)
+		}
+		if !reflect.DeepEqual(got[anthropicProvider], []string{"a"}) {
+			t.Fatalf("one-of-two disabled = %#v", got[anthropicProvider])
+		}
+	})
+	t.Run("every account of a provider disabled warns and writes empty array", func(t *testing.T) {
+		accounts := map[string][]account{
+			anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
+			openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
+		}
+		disabled := map[accountKey]bool{
+			{Provider: anthropicProvider, IdentityKey: "a"}: true,
+			{Provider: openAIProvider, IdentityKey: "o"}:    true,
+		}
+		got, warnings := buildAccountPool(accounts, disabled, now)
+		if len(got) != 2 || got[anthropicProvider] == nil || got[openAIProvider] == nil ||
+			len(got[anthropicProvider]) != 0 || len(got[openAIProvider]) != 0 {
+			t.Fatalf("all-disabled pool must contain two empty arrays: %#v", got)
+		}
+		if len(warnings) != 2 || warnings[0].Reason != poolAllDisabled || warnings[1].Reason != poolAllDisabled {
+			t.Fatalf("expected two poolAllDisabled warnings: %#v", warnings)
+		}
+	})
+}
+
+func TestBuildAccountPoolWarnsWhenEveryEnabledAccountIsBlocked(t *testing.T) {
+	now := time.Now()
 	accounts := map[string][]account{
-		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
-		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
+		anthropicProvider: {
+			{Provider: anthropicProvider, IdentityKey: "a", blocks: []accountBlock{{Scope: "", Until: now.Add(time.Hour)}}},
+			{Provider: anthropicProvider, IdentityKey: "b", blocks: []accountBlock{{Scope: "", Until: now.Add(2 * time.Hour)}}},
+			{Provider: anthropicProvider, IdentityKey: "c"},
+		},
 	}
-	disabled := map[accountKey]bool{
-		{Provider: anthropicProvider, IdentityKey: "a"}: true,
-		{Provider: openAIProvider, IdentityKey: "o"}:    true,
+	// "c" is disabled by the operator, which is what makes this provider
+	// restricted (present in the pool at all); "a" and "b" stay enabled but
+	// both carry a provider-wide block still in force.
+	disabled := map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "c"}: true}
+	got, warnings := buildAccountPool(accounts, disabled, now)
+	if !reflect.DeepEqual(got[anthropicProvider], []string{"a", "b"}) {
+		t.Fatalf("blocked accounts must stay in the pool: %#v", got[anthropicProvider])
 	}
-	got := buildAccountPool(accounts, disabled)
-	if len(got) != 2 || got[anthropicProvider] == nil || got[openAIProvider] == nil || len(got[anthropicProvider]) != 0 || len(got[openAIProvider]) != 0 {
-		t.Fatalf("all-off account pool must contain two empty arrays: %#v", got)
+	if len(warnings) != 1 || warnings[0].Provider != anthropicProvider || warnings[0].Reason != poolAllBlocked {
+		t.Fatalf("expected one poolAllBlocked warning: %#v", warnings)
+	}
+	if !warnings[0].Until.Equal(now.Add(time.Hour)) {
+		t.Fatalf("warning Until = %v, want the earliest expiry %v", warnings[0].Until, now.Add(time.Hour))
 	}
 }
 
@@ -292,9 +431,12 @@ func TestWriteAccountPoolContentsPermissionsAndIdempotentCleanup(t *testing.T) {
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "b"}, {Provider: anthropicProvider, IdentityKey: "a"}},
 		openAIProvider:    {},
 	}
-	path, cleanup, err := writeAccountPool(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true})
+	path, _, warnings, cleanup, err := writeAccountPool(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true}, time.Now())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -311,7 +453,9 @@ func TestWriteAccountPoolContentsPermissionsAndIdempotentCleanup(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{anthropicProvider: {"a"}, openAIProvider: {}}
+	// openAIProvider has zero snapshot accounts and stays absent — a missing
+	// key is the safe, unrestricted state (#79).
+	want := map[string][]string{anthropicProvider: {"a"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("account pool = %#v, want %#v", got, want)
 	}
@@ -530,7 +674,7 @@ func TestDeepSeekKeyStaysInMemory(t *testing.T) {
 	}
 
 	// The forwarded account pool is OAuth-only; deepseek must not appear.
-	pool := buildAccountPool(accounts, nil)
+	pool, _ := buildAccountPool(accounts, nil, time.Now())
 	if _, ok := pool[deepseekProvider]; ok {
 		t.Fatalf("account pool grew an api_key provider: %#v", pool)
 	}
@@ -555,5 +699,109 @@ func TestDeepSeekKeyStaysInMemory(t *testing.T) {
 	loaded := loadAccountSelectionState(statePath)
 	if !loaded.CurrentDisabled()[accountKey{Provider: deepseekProvider, IdentityKey: "k"}] {
 		t.Fatalf("registry-known provider entry did not round-trip: %#v", loaded.CurrentDisabled())
+	}
+}
+
+func TestSelectionDisabledMatchesReLoginOrgChange(t *testing.T) {
+	disabled := map[accountKey]bool{
+		{Provider: anthropicProvider, IdentityKey: "email:a@b|org:1"}: true,
+		{Provider: openAIProvider, IdentityKey: "codex@example.com"}:  true,
+	}
+	cases := []struct {
+		name string
+		a    account
+		want bool
+	}{
+		{"exact match", account{Provider: anthropicProvider, IdentityKey: "email:a@b|org:1"}, true},
+		{"re-login org change, same email", account{Provider: anthropicProvider, IdentityKey: "email:a@b|org:2"}, true},
+		{"case-insensitive email", account{Provider: anthropicProvider, IdentityKey: "email:A@B|org:2"}, true},
+		{"different email", account{Provider: anthropicProvider, IdentityKey: "email:c@d|org:1"}, false},
+		{"different provider, same email", account{Provider: openAIProvider, IdentityKey: "email:a@b|org:9"}, false},
+		{"bare-email codex key matches itself", account{Provider: openAIProvider, IdentityKey: "codex@example.com"}, true},
+		{"bare-email codex key, different address", account{Provider: openAIProvider, IdentityKey: "other@example.com"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := selectionDisabled(disabled, tc.a); got != tc.want {
+				t.Fatalf("selectionDisabled(%+v) = %v, want %v", tc.a, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPruneSelectionDropsOnlyResolvedProviders(t *testing.T) {
+	disabled := map[accountKey]bool{
+		{Provider: anthropicProvider, IdentityKey: "gone"}:            true,
+		{Provider: anthropicProvider, IdentityKey: "email:a@b|org:1"}: true,
+		{Provider: openAIProvider, IdentityKey: "still-here"}:         true,
+	}
+	accounts := map[string][]account{
+		anthropicProvider: {
+			{Provider: anthropicProvider, IdentityKey: "email:a@b|org:2"}, // re-login of the same account
+		},
+		// openAIProvider is intentionally absent — a partial or failed
+		// enumeration for it must never be read as "these accounts are gone".
+	}
+	pruned, dropped := pruneSelection(disabled, accounts)
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1 (only the stale anthropic entry)", dropped)
+	}
+	if pruned[accountKey{Provider: anthropicProvider, IdentityKey: "gone"}] {
+		t.Fatal("stale entry for a described provider must be dropped")
+	}
+	if !pruned[accountKey{Provider: anthropicProvider, IdentityKey: "email:a@b|org:1"}] {
+		t.Fatal("entry kept alive only by email-component match must be kept")
+	}
+	if !pruned[accountKey{Provider: openAIProvider, IdentityKey: "still-here"}] {
+		t.Fatal("entry for a provider missing from the snapshot must be kept")
+	}
+
+	pruned, dropped = pruneSelection(disabled, map[string][]account{})
+	if dropped != 0 || len(pruned) != len(disabled) {
+		t.Fatalf("empty snapshot must prune nothing: dropped=%d pruned=%#v", dropped, pruned)
+	}
+}
+
+func TestSweepAccountPoolsRemovesOnlyDeadOldDirs(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	mk := func(name string, age time.Duration) {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("code-auth-account-pool-111-live", 2*time.Hour)       // live pid, old — kept
+	mk("code-auth-account-pool-222-dead-old", 2*time.Hour)   // dead pid, old — removed
+	mk("code-auth-account-pool-333-dead-fresh", time.Minute) // dead pid, fresh — kept (grace)
+	mk("not-a-pool-dir", 2*time.Hour)
+	if err := os.WriteFile(filepath.Join(root, "code-auth-account-pool-444-file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	live := map[int]bool{111: true}
+	removed := sweepAccountPools(root, live, now)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	remaining, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(remaining))
+	for _, e := range remaining {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	want := []string{
+		"code-auth-account-pool-111-live",
+		"code-auth-account-pool-333-dead-fresh",
+		"code-auth-account-pool-444-file",
+		"not-a-pool-dir",
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("remaining entries = %#v, want %#v", names, want)
 	}
 }

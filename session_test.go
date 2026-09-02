@@ -44,6 +44,40 @@ func TestSessionRecordIsListedWhileHeld(t *testing.T) {
 	}
 }
 
+func TestSessionHandleUpdatePersistsPool(t *testing.T) {
+	dir := t.TempDir()
+	rec := sessionRecord{PID: os.Getpid(), Profile: "managed", Started: time.Now().Unix()}
+	handle, err := openSession(dir, rec)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	defer handle.Close()
+
+	pool := map[string][]string{"anthropic": {"alex"}}
+	if err := handle.Update(func(r *sessionRecord) {
+		r.Pool = pool
+		r.PoolAt = 42
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	entries := loadSessions(dir)
+	if len(entries) != 1 {
+		t.Fatalf("live session count = %d, want 1", len(entries))
+	}
+	if !reflect.DeepEqual(entries[0].Pool, pool) || entries[0].PoolAt != 42 {
+		t.Fatalf("round-tripped record = %+v, want pool %#v poolAt 42", entries[0].sessionRecord, pool)
+	}
+	if !sessionLive(entries[0].Path) {
+		t.Fatal("Update must not release the liveness lock")
+	}
+
+	var nilHandle *sessionHandle
+	if err := nilHandle.Update(func(r *sessionRecord) { r.Profile = "should not run" }); err != nil {
+		t.Fatalf("nil handle Update must be a no-op, got error: %v", err)
+	}
+}
+
 func TestSessionRecordRemovedOnClose(t *testing.T) {
 	dir := t.TempDir()
 	handle, err := openSession(dir, sessionRecord{PID: os.Getpid(), Profile: "mixed", Started: time.Now().Unix()})

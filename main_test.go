@@ -3401,6 +3401,37 @@ func TestSelectedAvailabilityRebuildsRoutingBuckets(t *testing.T) {
 	})
 }
 
+// A re-login can mint a new org qualifier for the same human account. The
+// disabled selection must keep applying across every surface that reads it —
+// the launch pool, the manager rows, and this usage/routing seam — or a
+// shared account silently returns to rotation on one of them.
+func TestSelectedAvailabilityHonoursReLoginOrgChange(t *testing.T) {
+	reLogged := account{Provider: "anthropic", IdentityKey: "email:shared@example.test|org:new"}
+	a := availability{
+		ok: true, accountsOK: true,
+		bucket: map[string]string{}, reset: map[string]int64{},
+		accounts:       map[string][]account{"anthropic": {reLogged}},
+		accountUsage:   map[accountKey][]usageWin{},
+		accountCredits: map[accountKey]resetCredits{},
+	}
+	staleDisabled := map[accountKey]bool{
+		{Provider: "anthropic", IdentityKey: "email:shared@example.test|org:old"}: true,
+	}
+	got := selectedAvailability(a, staleDisabled)
+	if len(got.accounts["anthropic"]) != 0 {
+		t.Fatalf("re-logged-in account returned to the usage seam despite being disabled: %#v", got.accounts)
+	}
+	// The same input must also keep it out of the launch pool, so the two
+	// surfaces cannot disagree about which accounts are in play.
+	pool, warnings := buildAccountPool(a.accounts, staleDisabled, time.Now())
+	if got, ok := pool["anthropic"]; !ok || len(got) != 0 {
+		t.Fatalf("pool = %#v, want anthropic present and empty (every account disabled)", pool)
+	}
+	if len(warnings) != 1 || warnings[0].Reason != poolAllDisabled {
+		t.Fatalf("warnings = %#v, want one poolAllDisabled", warnings)
+	}
+}
+
 func TestRoutingAndFacetAdvisoriesUseCommittedSelection(t *testing.T) {
 	m := layoutModel()
 	maxed := accountKey{Provider: "openai-codex", IdentityKey: "maxed"}
@@ -3773,7 +3804,7 @@ exit %d
 			selections.SetManualDisabled(map[accountKey]bool{
 				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
 			})
-			status := launchGenerated("models: {}\n", "prompt", nil, broker, selections, "")
+			status := launchGenerated(nil, "models: {}\n", "prompt", nil, broker, selections, "")
 			if status != tc.exit {
 				t.Fatalf("exit status = %d, want %d", status, tc.exit)
 			}
@@ -3798,10 +3829,12 @@ exit %d
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(accountPoolBody), "unmatched-key") ||
-				!strings.Contains(string(accountPoolBody), "anthropic-key") ||
-				!strings.Contains(string(accountPoolBody), "codex-key") {
-				t.Errorf("launch account pool ignored immutable account selection: %s", accountPoolBody)
+			// anthropic has nothing disabled and is unrestricted, so it is
+			// correctly absent from the pool file (#79); only the restricted
+			// openai-codex provider appears, minus the disabled identity.
+			const wantPool = "{\"openai-codex\":[\"codex-key\"]}\n"
+			if string(accountPoolBody) != wantPool {
+				t.Errorf("launch account pool = %q, want %q", accountPoolBody, wantPool)
 			}
 			if strings.Contains(lines[5], "--profile") {
 				t.Errorf("trusted argv forwarded a profile: %q", lines[5])
@@ -3841,7 +3874,7 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 		accountPoolCopy := filepath.Join(dir, label+"-account-pool")
 		t.Setenv("ENV_COPY", envCopy)
 		t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
-		if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", broker, selections, ""); status != 0 {
+		if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", broker, selections, ""); status != 0 {
 			t.Fatalf("%s launch status = %d", label, status)
 		}
 		envBody, err := os.ReadFile(envCopy)
@@ -3856,7 +3889,10 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 	}
 
 	manualEnv, manualAccountPool := launch("manual")
-	const wantManual = "{\"anthropic\":[],\"openai-codex\":[\"codex-key\",\"unmatched-key\"]}\n"
+	// anthropic has its only snapshot account disabled (all-disabled: the pool
+	// genuinely carries an empty array); openai-codex has nothing disabled and
+	// is unrestricted, so it is correctly absent (#79).
+	const wantManual = "{\"anthropic\":[]}\n"
 	if manualAccountPool != wantManual {
 		t.Fatalf("Manual account pool = %q, want %q", manualAccountPool, wantManual)
 	}
@@ -3872,7 +3908,9 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 		t.Fatal("named preset did not activate")
 	}
 	namedEnv, namedAccountPool := launch("named")
-	const wantNamed = "{\"anthropic\":[\"anthropic-key\"],\"openai-codex\":[\"unmatched-key\"]}\n"
+	// Only codex-key is disabled by the "Codex off" preset; anthropic has
+	// nothing disabled under this preset and is unrestricted (#79).
+	const wantNamed = "{\"openai-codex\":[\"unmatched-key\"]}\n"
 	if namedAccountPool != wantNamed {
 		t.Fatalf("named account pool = %q, want %q", namedAccountPool, wantNamed)
 	}
@@ -3908,7 +3946,7 @@ func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	t.Setenv("CAPTURE", capture)
 	t.Setenv("OMP_AUTH_BROKER_URL", "http://incomplete")
 	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/stale-pool")
-	if status := runTrusted("CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), ""); status != 0 {
+	if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), ""); status != 0 {
 		t.Fatalf("direct trusted launch status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	clikit "github.com/atyrode/cli-kit"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1884,5 +1885,46 @@ func TestAuthLoginFinishedRefreshesBrokerAccounts(t *testing.T) {
 	got = next.(model)
 	if got.managerLogin || cmd != nil || !strings.Contains(got.accountErr, "ssh failed") {
 		t.Fatalf("failed login state = login=%v err=%q cmd=%v", got.managerLogin, got.accountErr, cmd)
+	}
+}
+
+func TestManagerRendersBlockedAccountAndLaunchScopeHint(t *testing.T) {
+	m := managerTestModel(t)
+	now := timeNow()
+	m.avail.accounts["anthropic"][0].blocks = []accountBlock{{Scope: "", Until: now.Add(24 * time.Hour)}}
+	m.avail.accounts["openai-codex"][0].blocks = []accountBlock{{Scope: "chat", Until: now.Add(6 * time.Hour)}}
+
+	rows := m.managerLines(100 - gut)
+	var plain strings.Builder
+	for _, row := range rows {
+		plain.WriteString(stripAnsi(row.text))
+		plain.WriteString("\n")
+	}
+	body := plain.String()
+	if !strings.Contains(body, "blocked ") {
+		t.Fatalf("provider-wide blocked account has no marker:\n%s", body)
+	}
+	if !strings.Contains(body, "chat blocked ") {
+		t.Fatalf("chat-scoped blocked account has no scope-aware marker:\n%s", body)
+	}
+	bareBlocked, scopedBlocked := 0, 0
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "chat blocked "):
+			scopedBlocked++
+		case strings.HasPrefix(trimmed, "blocked "):
+			bareBlocked++
+		}
+	}
+	if bareBlocked != 1 || scopedBlocked != 1 {
+		t.Fatalf("blocked markers = bare %d scoped %d, want exactly one of each (no chat-only block reading as provider-wide):\n%s",
+			bareBlocked, scopedBlocked, body)
+	}
+
+	hintBody := m.managerAccountBody(m.w-gut, rows)
+	if !strings.Contains(stripAnsi(hintBody), managerLaunchScopeHint) &&
+		!strings.Contains(stripAnsi(hintBody), "Selection applies to sessions launched from now on") {
+		t.Fatalf("manager body missing launch-scope hint:\n%s", stripAnsi(hintBody))
 	}
 }
