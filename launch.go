@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 func forwardArgv(path string, forwarded []string, prompt string) []string {
@@ -101,7 +102,7 @@ func runUntrustedLauncher(envName string, fallbacks []string, prompt, dir string
 	return childStatus(err)
 }
 
-func runTrusted(envName string, fallbacks []string,
+func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 	argv func(string, []string, string) []string, prompt string,
 	broker brokerConfig, selections accountSelectionState, dir string) int {
 	disabled := selections.CurrentDisabled()
@@ -122,12 +123,27 @@ func runTrusted(envName string, fallbacks []string,
 		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch:", err)
 		return 1
 	}
-	accountPoolPath, cleanup, err := writeAccountPool(accounts, disabled)
+	now := time.Now()
+	accountPoolPath, pool, warnings, cleanup, err := writeAccountPool(accounts, disabled, now)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: account pool unavailable; refusing unrestricted launch:", err)
 		return 1
 	}
 	defer cleanup()
+	for _, w := range warnings {
+		switch w.Reason {
+		case poolAllDisabled:
+			fmt.Fprintf(os.Stderr, "code: every %s account is disabled; this session starts with no %s account\n", w.Provider, w.Provider)
+		case poolAllBlocked:
+			fmt.Fprintf(os.Stderr, "code: all enabled %s accounts are rate-limit blocked for %s\n", w.Provider, fmtReset(int64(w.Until.Sub(now)/time.Second)))
+		}
+	}
+	// Bookkeeping never blocks a launch: the session is the product, the
+	// record is not.
+	_ = session.Update(func(r *sessionRecord) {
+		r.Pool = pool
+		r.PoolAt = time.Now().Unix()
+	})
 	childEnv := withAuthEnv(os.Environ(), broker, accountPoolPath)
 	err = runChild(path, argv(path, os.Args[1:], prompt), childEnv, dir)
 	if err != nil {
@@ -137,7 +153,7 @@ func runTrusted(envName string, fallbacks []string,
 }
 
 // launchGenerated keeps both immutable launch inputs alive only for the child.
-func launchGenerated(cfg, prompt string, flags []string, broker brokerConfig, selections accountSelectionState, dir string) int {
+func launchGenerated(session *sessionHandle, cfg, prompt string, flags []string, broker brokerConfig, selections accountSelectionState, dir string) int {
 	tmp, err := os.CreateTemp("", "code-gen-*.yml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
@@ -154,7 +170,7 @@ func launchGenerated(cfg, prompt string, flags []string, broker brokerConfig, se
 		fmt.Fprintln(os.Stderr, "code: generated config:", err)
 		return 1
 	}
-	return runTrusted("CODE_OMP", []string{"omp"}, func(path string, forwarded []string, prompt string) []string {
+	return runTrusted(session, "CODE_OMP", []string{"omp"}, func(path string, forwarded []string, prompt string) []string {
 		return generatedLaunchArgv(path, cfgPath, flags, forwarded, prompt)
 	}, prompt, broker, selections, dir)
 }

@@ -17,6 +17,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,12 +36,14 @@ const sessionDisabled = "off"
 // `code` process, which is the root of the session's process tree — omp and
 // everything omp spawns (language servers, browsers, workers) descend from it.
 type sessionRecord struct {
-	PID      int    `json:"pid"`
-	Binary   string `json:"binary,omitempty"`
-	Profile  string `json:"profile"`
-	Cwd      string `json:"cwd,omitempty"`
-	Worktree string `json:"worktree,omitempty"`
-	Started  int64  `json:"started"`
+	PID      int                 `json:"pid"`
+	Binary   string              `json:"binary,omitempty"`
+	Profile  string              `json:"profile"`
+	Cwd      string              `json:"cwd,omitempty"`
+	Worktree string              `json:"worktree,omitempty"`
+	Started  int64               `json:"started"`
+	Pool     map[string][]string `json:"pool,omitempty"`
+	PoolAt   int64               `json:"poolAt,omitempty"`
 }
 
 // sessionEntry is a record plus what the registry could determine about it.
@@ -69,10 +72,12 @@ func sessionDir() string {
 }
 
 // sessionHandle owns a live record: the open descriptor holds the flock, so the
-// handle must outlive the session it describes.
+// handle must outlive the session it describes. rec is the last record written
+// so Update can rewrite it in place without the caller re-supplying every field.
 type sessionHandle struct {
 	path string
 	file *os.File
+	rec  sessionRecord
 }
 
 // openSession writes the record and takes its liveness lock. A nil handle is a
@@ -108,7 +113,7 @@ func openSession(dir string, rec sessionRecord) (*sessionHandle, error) {
 		os.Remove(path)
 		return nil, err
 	}
-	return &sessionHandle{path: path, file: f}, nil
+	return &sessionHandle{path: path, file: f, rec: rec}, nil
 }
 
 // Close retires the record. Removing before unlocking keeps any concurrent
@@ -120,6 +125,30 @@ func (h *sessionHandle) Close() {
 	os.Remove(h.path)
 	syscall.Flock(int(h.file.Fd()), syscall.LOCK_UN)
 	h.file.Close()
+}
+
+// Update rewrites the live record in place, keeping the liveness lock the
+// open descriptor holds throughout. A nil handle is a no-op, as with Close —
+// bookkeeping must never fail a launch.
+func (h *sessionHandle) Update(mutate func(*sessionRecord)) error {
+	if h == nil {
+		return nil
+	}
+	mutate(&h.rec)
+	data, err := json.Marshal(h.rec)
+	if err != nil {
+		return err
+	}
+	if err := h.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := h.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := h.file.Write(data); err != nil {
+		return err
+	}
+	return h.file.Sync()
 }
 
 // sessionLive reports whether a record's owner still holds its lock. Acquiring
@@ -201,6 +230,33 @@ func (e sessionEntry) Age(now time.Time) time.Duration {
 		return 0
 	}
 	return now.Sub(time.Unix(e.Started, 0))
+}
+
+// sessionPoolSummary renders the account pool a session launched with:
+// "all" when unrestricted (no key recorded), "none" for a provider whose
+// pool is a genuine empty array, else "provider=id1,id2" per restricted
+// provider joined by ";". Identity keys render as-is — they are what omp
+// matches on and what makes divergence from the current toggle state
+// inspectable.
+func sessionPoolSummary(pool map[string][]string) string {
+	if len(pool) == 0 {
+		return "all"
+	}
+	providers := make([]string, 0, len(pool))
+	for p := range pool {
+		providers = append(providers, p)
+	}
+	sort.Strings(providers)
+	parts := make([]string, 0, len(providers))
+	for _, p := range providers {
+		ids := pool[p]
+		if len(ids) == 0 {
+			parts = append(parts, p+"=none")
+			continue
+		}
+		parts = append(parts, p+"="+strings.Join(ids, ","))
+	}
+	return strings.Join(parts, ";")
 }
 
 // fmtAge renders a duration at two units of precision, which is all a triage
@@ -381,7 +437,7 @@ func runSessionList(args []string) int {
 	current := currentBinary()
 	now := time.Now()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PID\tAGE\tPROFILE\tLAUNCHER\tDIRECTORY")
+	fmt.Fprintln(w, "PID\tAGE\tPROFILE\tLAUNCHER\tACCOUNTS\tDIRECTORY")
 	for _, e := range entries {
 		launcher := "current"
 		if e.Superseded(current) {
@@ -389,7 +445,7 @@ func runSessionList(args []string) int {
 		} else if e.Binary == "" {
 			launcher = "unknown"
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", e.PID, fmtAge(e.Age(now)), e.Profile, launcher, e.Cwd)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", e.PID, fmtAge(e.Age(now)), e.Profile, launcher, sessionPoolSummary(e.Pool), e.Cwd)
 	}
 	w.Flush()
 	return 0
@@ -502,7 +558,7 @@ func runSessionReap(args []string) int {
 // withSession records a launch for the lifetime of its child. Bookkeeping never
 // blocks a launch: the session is the product, the record is not, so a registry
 // failure is silently tolerated rather than surfaced as a launch error.
-func withSession(profile, envName string, fallbacks []string, wt *sessionWorktree, run func() int) int {
+func withSession(profile, envName string, fallbacks []string, wt *sessionWorktree, run func(*sessionHandle) int) int {
 	rec := sessionRecord{
 		PID:     os.Getpid(),
 		Profile: profile,
@@ -521,16 +577,19 @@ func withSession(profile, envName string, fallbacks []string, wt *sessionWorktre
 	if err == nil {
 		defer handle.Close()
 	}
-	return run()
+	return run(handle)
 }
 
 const sessionHelp = `code session — inspect and retire running code sessions
 
   code session list
   code ls
-      List live sessions: age, profile, whether the launcher has since been
-      superseded, and the directory each was started in. Only sessions started
-      by a code that records them appear; older ones are invisible here.
+      List live sessions: age, profile, the accounts each was launched with
+      (ACCOUNTS: "all" when unrestricted, "provider=id1,id2" per restricted
+      provider — the pool is frozen at launch and does not track later
+      toggles), whether the launcher has since been superseded, and the
+      directory each was started in. Only sessions started by a code that
+      records them appear; older ones are invisible here.
 
   code session reap [--older-than DUR] [--superseded] [--all] [--yes]
                     [--grace DUR]

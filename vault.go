@@ -9,22 +9,66 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 // account is one broker credential's identity. apiKey is deliberately
 // unexported: it exists only in memory for direct balance fetches (DeepSeek)
 // and must never reach any serialized artifact — usage cache, account state,
-// or the forwarded account pool.
+// or the forwarded account pool. blocks is unexported for the same reason:
+// the usage cache marshals account values, and a cached block would still
+// read as current after a restart — only the live snapshot may report one.
 type account struct {
 	Provider     string
 	IdentityKey  string
 	Email        string
 	apiKey       string
 	credentialID string
+	blocks       []accountBlock
+}
+
+// accountBlock is one broker rate-limit block. Scope "" is provider-wide;
+// "chat", "spark" and "tier:*" are meter- or tier-scoped and must never be
+// rendered as taking the whole provider out of service.
+type accountBlock struct {
+	Scope string
+	Until time.Time
+}
+
+// timeNow is the injectable clock parseAccountSnapshot uses to drop expired
+// blocks at parse time.
+var timeNow = time.Now
+
+// providerBlock returns the provider-wide block expiry, zero when none.
+func (a account) providerBlock() time.Time {
+	var latest time.Time
+	for _, b := range a.blocks {
+		if b.Scope == "" && b.Until.After(latest) {
+			latest = b.Until
+		}
+	}
+	return latest
+}
+
+// blockLabels renders one short label per block, longest expiry first (the
+// order parseAccountBlocks establishes): "blocked 2d12h", "chat blocked 6d2h".
+func (a account) blockLabels(now time.Time) []string {
+	labels := make([]string, 0, len(a.blocks))
+	for _, b := range a.blocks {
+		dur := fmtReset(int64(b.Until.Sub(now) / time.Second))
+		if b.Scope == "" {
+			labels = append(labels, "blocked "+dur)
+		} else {
+			labels = append(labels, b.Scope+" blocked "+dur)
+		}
+	}
+	return labels
 }
 
 type accountKey struct {
@@ -94,6 +138,7 @@ func loadAccounts(broker brokerConfig) (map[string][]account, error) {
 		return accounts, err
 	}
 	req.Header.Set("Authorization", "Bearer "+broker.Token)
+	req.Header.Set("OMP-Auth-Broker-Capabilities", "codex-meter-block-scopes")
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return accounts, err
@@ -120,6 +165,34 @@ func emptyAccounts() map[string][]account {
 	return accounts
 }
 
+// snapshotBlock is one raw broker rate-limit block entry. providerKey,
+// updatedAtMs and rotatesInMs are not decoded: nothing renders them, and the
+// credential's own provider already identifies the row.
+type snapshotBlock struct {
+	BlockScope     string `json:"blockScope"`
+	BlockedUntilMs int64  `json:"blockedUntilMs"`
+}
+
+// parseAccountBlocks keeps only blocks still in force at now, longest expiry
+// first so the most consequential one leads every row. An expiry at or before
+// now is dropped, which is what makes an unblock clear the marker on the very
+// next refresh.
+func parseAccountBlocks(raw []snapshotBlock, now time.Time) []accountBlock {
+	blocks := make([]accountBlock, 0, len(raw))
+	for _, b := range raw {
+		if b.BlockedUntilMs <= 0 {
+			continue
+		}
+		until := time.UnixMilli(b.BlockedUntilMs)
+		if !until.After(now) {
+			continue
+		}
+		blocks = append(blocks, accountBlock{Scope: b.BlockScope, Until: until})
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i].Until.After(blocks[j].Until) })
+	return blocks
+}
+
 func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 	var snapshot struct {
 		Credentials *[]struct {
@@ -127,6 +200,7 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			Provider    string          `json:"provider"`
 			IdentityKey string          `json:"identityKey"`
 			Credential  json.RawMessage `json:"credential"`
+			Blocks      []snapshotBlock `json:"blocks"`
 		} `json:"credentials"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
@@ -141,8 +215,10 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 	}
 	accounts := emptyAccounts()
 	seen := make(map[accountKey]bool)
+	now := timeNow()
 	for _, item := range *snapshot.Credentials {
-		if providerByID(item.Provider) == nil {
+		p := providerByID(item.Provider)
+		if p == nil {
 			continue
 		}
 		var credential struct {
@@ -151,10 +227,10 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			Key   string `json:"key"`
 		}
 		if len(item.Credential) == 0 || bytes.Equal(item.Credential, []byte("null")) {
-			return nil, fmt.Errorf("broker snapshot account %s/%s has no credential metadata", item.Provider, item.IdentityKey)
+			return nil, fmt.Errorf("broker snapshot account %s/%s has no credential metadata", p.ID, item.IdentityKey)
 		}
 		if err := json.Unmarshal(item.Credential, &credential); err != nil {
-			return nil, fmt.Errorf("invalid credential metadata for %s/%s: %w", item.Provider, item.IdentityKey, err)
+			return nil, fmt.Errorf("invalid credential metadata for %s/%s: %w", p.ID, item.IdentityKey, err)
 		}
 		switch credential.Type {
 		case "oauth":
@@ -164,9 +240,9 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			// (DeepSeek) they are display-only rows whose key is retained in
 			// memory for direct balance fetches; for metered providers they
 			// are skipped exactly as before — OAuth is the only usable shape.
-			if p := providerByID(item.Provider); !p.Metered {
-				accounts[item.Provider] = append(accounts[item.Provider], account{
-					Provider: item.Provider, IdentityKey: item.IdentityKey,
+			if !p.Metered {
+				accounts[p.ID] = append(accounts[p.ID], account{
+					Provider: p.ID, IdentityKey: item.IdentityKey,
 					apiKey: credential.Key, credentialID: strings.Trim(string(item.ID), `"`),
 				})
 			}
@@ -175,15 +251,16 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			continue
 		}
 		if strings.TrimSpace(item.IdentityKey) == "" {
-			return nil, fmt.Errorf("broker snapshot contains %s OAuth account without identityKey", item.Provider)
+			return nil, fmt.Errorf("broker snapshot contains %s OAuth account without identityKey", p.ID)
 		}
-		key := accountKey{Provider: item.Provider, IdentityKey: item.IdentityKey}
+		key := accountKey{Provider: p.ID, IdentityKey: item.IdentityKey}
 		if seen[key] {
-			return nil, fmt.Errorf("broker snapshot contains duplicate account %s/%s", item.Provider, item.IdentityKey)
+			return nil, fmt.Errorf("broker snapshot contains duplicate account %s/%s", p.ID, item.IdentityKey)
 		}
 		seen[key] = true
-		accounts[item.Provider] = append(accounts[item.Provider], account{
-			Provider: item.Provider, IdentityKey: item.IdentityKey, Email: credential.Email,
+		accounts[p.ID] = append(accounts[p.ID], account{
+			Provider: p.ID, IdentityKey: item.IdentityKey, Email: credential.Email,
+			blocks: parseAccountBlocks(item.Blocks, now),
 		})
 	}
 	for _, p := range providerRegistry {
@@ -426,6 +503,82 @@ func encodeAccountStateEntries(disabled map[accountKey]bool) ([]accountStateEntr
 	return entries, nil
 }
 
+// selectionEmail extracts the account-identifying component of an
+// identityKey: "email:a@b.com|org:<uuid>" -> "a@b.com"; a bare "a@b.com"
+// (Codex's shape) -> "a@b.com" unchanged; anything else -> "" (no email
+// component, exact matching only).
+func selectionEmail(identityKey string) string {
+	if rest, ok := strings.CutPrefix(identityKey, "email:"); ok {
+		email, _, _ := strings.Cut(rest, "|")
+		return email
+	}
+	if strings.Contains(identityKey, "@") && !strings.Contains(identityKey, "|") {
+		return identityKey
+	}
+	return ""
+}
+
+// selectionDisabled reports whether the operator has disabled this account.
+// It matches the exact {provider, identityKey} entry, and — because a
+// re-login can mint a new org qualifier for the same human account — also
+// matches a same-provider entry whose email component is equal, case
+// insensitively. The control exists to stop overspending a shared account, so
+// a changed org qualifier must not silently re-enable it.
+func selectionDisabled(disabled map[accountKey]bool, a account) bool {
+	key := accountKey{Provider: a.Provider, IdentityKey: a.IdentityKey}
+	if disabled[key] {
+		return true
+	}
+	email := selectionEmail(a.IdentityKey)
+	if email == "" {
+		return false
+	}
+	for entryKey, isDisabled := range disabled {
+		if !isDisabled || entryKey.Provider != a.Provider {
+			continue
+		}
+		if strings.EqualFold(selectionEmail(entryKey.IdentityKey), email) {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneSelection drops disabled-selection entries with no matching snapshot
+// account, for providers the snapshot actually described. A provider absent
+// from the snapshot, or with zero accounts, is left untouched — a broker
+// outage or partial snapshot must never be read as "this account is gone".
+// An entry kept alive only through selectionDisabled's email-component match
+// (a post-re-login identityKey change) is not stale and is kept.
+func pruneSelection(disabled map[accountKey]bool, accounts map[string][]account) (map[accountKey]bool, int) {
+	pruned := make(map[accountKey]bool, len(disabled))
+	dropped := 0
+	for key, isDisabled := range disabled {
+		if !isDisabled {
+			continue
+		}
+		snapshotAccounts, described := accounts[key.Provider]
+		if !described || len(snapshotAccounts) == 0 {
+			pruned[key] = true
+			continue
+		}
+		stale := true
+		for _, acct := range snapshotAccounts {
+			if acct.IdentityKey == key.IdentityKey ||
+				(selectionEmail(key.IdentityKey) != "" && strings.EqualFold(selectionEmail(acct.IdentityKey), selectionEmail(key.IdentityKey))) {
+				stale = false
+				break
+			}
+		}
+		if stale {
+			dropped++
+			continue
+		}
+		pruned[key] = true
+	}
+	return pruned, dropped
+}
+
 func writeAccountSelectionState(path string, state accountSelectionState) error {
 	if path == "" {
 		return errors.New("account state path is empty")
@@ -515,55 +668,166 @@ func atomicPrivateWrite(path string, body []byte) error {
 	return nil
 }
 
+// poolWarningReason names the launch-time account situation a poolWarning
+// reports.
+type poolWarningReason int
+
+const (
+	// poolAllDisabled: the operator disabled every snapshot account of this
+	// provider; the pool genuinely carries an empty array.
+	poolAllDisabled poolWarningReason = iota
+	// poolAllBlocked: every account left enabled for this provider currently
+	// carries a provider-wide rate-limit block.
+	poolAllBlocked
+)
+
+// poolWarning is a provider whose launch-time account situation the operator
+// must be told about before the child starts.
+type poolWarning struct {
+	Provider string
+	Reason   poolWarningReason
+	Until    time.Time // set only for poolAllBlocked
+}
+
 // buildAccountPool seeds the account-pool file omp routes OAuth identities
 // through. Only metered (OAuth) providers belong: api_key providers have no
 // identity keys and no pool routing.
-func buildAccountPool(accounts map[string][]account, disabled map[accountKey]bool) map[string][]string {
+//
+// Per omp's contract a missing provider key is unrestricted and an empty
+// array hides every OAuth credential for that provider, so a provider is
+// included only when the operator has actually disabled at least one of its
+// snapshot accounts — never as a side effect of failed enumeration. Blocked
+// accounts stay in the pool: a block can expire mid-session, and removing
+// them would freeze that decision for the session's whole life.
+func buildAccountPool(accounts map[string][]account, disabled map[accountKey]bool, now time.Time) (map[string][]string, []poolWarning) {
 	pool := make(map[string][]string, len(providerRegistry))
+	var warnings []poolWarning
 	for _, p := range providerRegistry {
 		if !p.Metered {
 			continue
 		}
 		provider := p.ID
-		pool[provider] = []string{}
+		var snapshotAccounts, enabled []account
 		for _, acct := range accounts[provider] {
-			key := accountKey{Provider: provider, IdentityKey: acct.IdentityKey}
-			if acct.Provider == provider && acct.IdentityKey != "" && !disabled[key] {
-				pool[provider] = append(pool[provider], acct.IdentityKey)
+			if acct.Provider != provider || acct.IdentityKey == "" {
+				continue
+			}
+			snapshotAccounts = append(snapshotAccounts, acct)
+			if !selectionDisabled(disabled, acct) {
+				enabled = append(enabled, acct)
 			}
 		}
-		sort.Strings(pool[provider])
+		if len(snapshotAccounts) == 0 || len(enabled) == len(snapshotAccounts) {
+			// Nothing to restrict, or the provider has no snapshot accounts
+			// at all — a missing key is the safe, unrestricted state.
+			continue
+		}
+		keys := make([]string, 0, len(enabled))
+		for _, acct := range enabled {
+			keys = append(keys, acct.IdentityKey)
+		}
+		sort.Strings(keys)
+		pool[provider] = keys
+		if len(enabled) == 0 {
+			warnings = append(warnings, poolWarning{Provider: provider, Reason: poolAllDisabled})
+			continue
+		}
+		var blockedUntil time.Time
+		allBlocked := true
+		for _, acct := range enabled {
+			until := acct.providerBlock()
+			if until.IsZero() || !until.After(now) {
+				allBlocked = false
+				break
+			}
+			if blockedUntil.IsZero() || until.Before(blockedUntil) {
+				blockedUntil = until
+			}
+		}
+		if allBlocked {
+			warnings = append(warnings, poolWarning{Provider: provider, Reason: poolAllBlocked, Until: blockedUntil})
+		}
 	}
-	return pool
+	sort.Slice(warnings, func(i, j int) bool { return warnings[i].Provider < warnings[j].Provider })
+	return pool, warnings
 }
 
-func writeAccountPool(accounts map[string][]account, disabled map[accountKey]bool) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "code-auth-account-pool-*")
+func writeAccountPool(accounts map[string][]account, disabled map[accountKey]bool, now time.Time) (string, map[string][]string, []poolWarning, func(), error) {
+	dir, err := os.MkdirTemp("", fmt.Sprintf("code-auth-account-pool-%d-*", os.Getpid()))
 	if err != nil {
-		return "", func() {}, err
+		return "", nil, nil, func() {}, err
 	}
 	var once sync.Once
 	cleanup := func() { once.Do(func() { _ = os.RemoveAll(dir) }) }
 	if err := os.Chmod(dir, 0o700); err != nil {
 		cleanup()
-		return "", cleanup, err
+		return "", nil, nil, cleanup, err
 	}
-	body, err := json.Marshal(buildAccountPool(accounts, disabled))
+	pool, warnings := buildAccountPool(accounts, disabled, now)
+	body, err := json.Marshal(pool)
 	if err != nil {
 		cleanup()
-		return "", cleanup, err
+		return "", nil, nil, cleanup, err
 	}
 	body = append(body, '\n')
 	path := filepath.Join(dir, "account-pool.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		cleanup()
-		return "", cleanup, err
+		return "", nil, nil, cleanup, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		cleanup()
-		return "", cleanup, err
+		return "", nil, nil, cleanup, err
 	}
-	return path, cleanup, nil
+	return path, pool, warnings, cleanup, nil
+}
+
+// accountPoolDirPattern matches the pid-tagged temp directories
+// writeAccountPool creates, capturing the owning pid.
+var accountPoolDirPattern = regexp.MustCompile(`^code-auth-account-pool-(\d+)-`)
+
+// poolSweepGrace bounds how long a leaked pool directory survives before
+// sweepAccountPools removes it. It covers launches that record no session
+// (CODE_SESSION_STATE=off) and the gap between MkdirTemp and openSession.
+const poolSweepGrace = time.Hour
+
+// sweepAccountPools removes leaked code-auth-account-pool-* directories: ones
+// whose owning pid holds no live session record and whose mtime is older than
+// poolSweepGrace. It returns the number removed and never returns an error —
+// a stat or removal failure just leaves that entry for the next sweep.
+func sweepAccountPools(root string, live map[int]bool, now time.Time) int {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		m := accountPoolDirPattern.FindStringSubmatch(entry.Name())
+		if m == nil {
+			continue
+		}
+		pid, err := strconv.Atoi(m[1])
+		if err != nil || live[pid] {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if sysStat, ok := info.Sys().(*syscall.Stat_t); ok && sysStat.Uid != uint32(os.Getuid()) {
+			continue
+		}
+		if now.Sub(info.ModTime()) < poolSweepGrace {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 var authEnvKeys = map[string]bool{

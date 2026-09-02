@@ -290,7 +290,7 @@ func TestWorktreeLaunchLifecycle(t *testing.T) {
 	)
 	status := make(chan int, 1)
 	go func() {
-		status <- withSession("managed", "CODE_TEST_LAUNCHER", nil, wt, func() int {
+		status <- withSession("managed", "CODE_TEST_LAUNCHER", nil, wt, func(_ *sessionHandle) int {
 			err := runChild(executable,
 				[]string{executable, "-test.run=^TestWorktreeLaunchChildProcess$"},
 				childEnv, wt.ChildDir)
@@ -445,7 +445,7 @@ func TestWithSessionRecordsWorktree(t *testing.T) {
 		ChildDir: filepath.Join(base, "worktrees", "calm-blue-owl", "child"),
 	}
 	var got sessionRecord
-	status := withSession("managed", "CODE_TEST_LAUNCHER", nil, wt, func() int {
+	status := withSession("managed", "CODE_TEST_LAUNCHER", nil, wt, func(_ *sessionHandle) int {
 		path := filepath.Join(sessionDir(), strconv.Itoa(os.Getpid())+".json")
 		data, err := os.ReadFile(path)
 		if err != nil {

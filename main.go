@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	clikit "github.com/atyrode/cli-kit"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -84,21 +85,21 @@ func main() {
 		// designated for untrusted sessions, and it contains nothing. The one
 		// sandbox in this codebase is the boundary worker mode builds, and the
 		// containment declaration is the only thing entitled to that word.
-		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func() int {
+		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func(_ *sessionHandle) int {
 			return runUntrustedLauncher("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
 		})
 	case fm.launchRuntime != "":
-		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, func() int {
+		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, func(_ *sessionHandle) int {
 			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt, launchDir)
 		})
 	case fm.launchManaged:
-		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, func() int {
-			return runTrusted("CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
+		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, func(sess *sessionHandle) int {
+			return runTrusted(sess, "CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
 				fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
 		})
 	case fm.genConfig != "":
-		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func() int {
-			return launchGenerated(fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, launchDir)
+		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func(sess *sessionHandle) int {
+			return launchGenerated(sess, fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, launchDir)
 		})
 	}
 	if wt != nil {
@@ -180,6 +181,11 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	accountState := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
 	accountSelections := loadAccountSelectionState(accountState)
+	live := make(map[int]bool, 1)
+	for _, e := range loadSessions(sessionDir()) {
+		live[e.PID] = true
+	}
+	_ = sweepAccountPools(os.TempDir(), live, time.Now())
 	runtimeTargets := loadRuntimeTargets()
 	// The local model lane is discovered only while the ceremony has the
 	// operator's terminal. Its dial is the only way to choose a local model, so

@@ -593,7 +593,8 @@ func ompResolveAuth() (ompAuth, error) {
 	// worker that ignored it would route a supervised run through an account
 	// they had deliberately taken out of service.
 	disabled := loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE")).CurrentDisabled()
-	return ompAuth{broker: broker, pool: buildAccountPool(accounts, disabled)}, nil
+	pool, _ := buildAccountPool(accounts, disabled, time.Now())
+	return ompAuth{broker: broker, pool: pool}, nil
 }
 
 // ── the child's environment ──────────────────────────────────────────────────
