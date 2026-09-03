@@ -27,7 +27,7 @@ import (
 // omission drops that model out of both meters with no trace.
 var roleWeight = map[string]float64{
 	"default": 10, "task": 6, "reviewer": 3, "sonic": 3, "plan": 3, "advisor": 4, "slow": 2,
-	"designer": 2, "librarian": 2, "scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
+	"librarian": 2, "scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
 	// security-reviewer routes like reviewer but is spawned far more rarely
 	// (ad-hoc scans), so it barely moves the needle.
 	"security-reviewer": 1,

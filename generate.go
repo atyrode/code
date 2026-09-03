@@ -487,16 +487,16 @@ func (c *catalog) visionCross(pool string, tier int) string {
 // ── the facet grid ────────────────────────────────────────────────────────────
 
 var (
-	genRoleOrder = []string{"default", "task", "plan", "slow", "designer", "reviewer",
+	genRoleOrder = []string{"default", "task", "plan", "slow", "reviewer",
 		"security-reviewer", "librarian", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit"}
 	// The bundled agents this grid routes: every ●-marked role is mirrored
 	// into task.agentModelOverrides. security-reviewer gets reviewer's exact
 	// routing membership; note `omp security` still injects the scan's own
 	// model into task.agentModelOverrides at runtime, superseding this value
 	// inside that workflow — the catalog route covers ad-hoc spawns.
-	genAgentRoles = map[string]bool{"designer": true, "librarian": true, "reviewer": true,
+	genAgentRoles = map[string]bool{"librarian": true, "reviewer": true,
 		"security-reviewer": true, "scout": true, "sonic": true, "task": true}
-	genDelib = map[string]bool{"plan": true, "slow": true, "designer": true,
+	genDelib = map[string]bool{"plan": true, "slow": true,
 		"reviewer": true, "security-reviewer": true}
 	// Anti-tunnel-vision: on a *-led lane the reviewers cross to the opposite
 	// provider so the output always gets an independent second eye (the advisor
@@ -532,7 +532,7 @@ var (
 )
 
 // lanePolicy is a lane's whole role-mapping, as data. primary answers for
-// default/task/librarian; delib hosts plan/slow/designer/reviewer ("" = the
+// default/task/librarian; delib hosts plan/slow/reviewer ("" = the
 // primary); visionSmart overrides the image rung's pool at the top of the model
 // dial (smart or elite — mixed prefers Claude's top rung there). pure lanes
 // never cross: reviewer and advisor stay in-primary.
@@ -759,7 +759,7 @@ func genComboID(lane, mtier, thinking string, spark bool) string {
 //
 // The `elite` notch is gated on the lane's LEAD pool, not its whole pool-set,
 // and the distinction is not pedantic: the deliberative bump (t = base+1,
-// capped at the pool's top rung) already hands plan/slow/designer/reviewer the
+// capped at the pool's top rung) already hands plan/slow/reviewer the
 // tier-4 rung at `smart`, which is precisely the routing the retired `fable`
 // toggle used to produce. So on a lane led by a pool that tops out at 3, every
 // seat elite could change is already saturated at `smart`. On gpt-led and
