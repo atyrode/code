@@ -11,7 +11,7 @@
 
 The `elite` notch is offered only on lanes whose **lead** pool has a tier-4
 rung. That is not the same as "any pool in the lane" — the deliberative bump
-already gives plan/slow/designer/reviewer the top rung at `smart`, so on a lane
+already gives plan/slow/reviewer the top rung at `smart`, so on a lane
 led by a three-rung pool `elite` would render a block identical to `smart`.
 
 ## Dials that set omp's own switches

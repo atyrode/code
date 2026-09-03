@@ -1,5 +1,5 @@
 OMP generated routing — first-principles facet grid
-agent-backed roles: task designer reviewer security-reviewer librarian scout sonic — ● marks a role mirrored into task.agentModelOverrides
+agent-backed roles: task reviewer security-reviewer librarian scout sonic — ● marks a role mirrored into task.agentModelOverrides
 
 __advisors__  advisor dial (level context → chain)
   glance gpt gpt-5.6-luna:low
@@ -25,7 +25,6 @@ gpt-only_fast_minimal_sp  gpt-only · fast · minimal · spark
   ● task       gpt-5.6-luna:low
     plan       gpt-5.6-terra:low        → gpt-5.6-luna:low
     slow       gpt-5.6-terra:low        → gpt-5.6-luna:low
-  ● designer   gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low
@@ -42,7 +41,6 @@ gpt-only_fast_minimal_nosp  gpt-only · fast · minimal
   ● task       gpt-5.6-luna:low
     plan       gpt-5.6-terra:low        → gpt-5.6-luna:low
     slow       gpt-5.6-terra:low        → gpt-5.6-luna:low
-  ● designer   gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-terra:low        → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low
@@ -59,7 +57,6 @@ gpt-only_fast_low_sp  gpt-only · fast · low · spark
   ● task       gpt-5.6-luna:low
     plan       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     slow       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low
@@ -76,7 +73,6 @@ gpt-only_fast_low_nosp  gpt-only · fast · low
   ● task       gpt-5.6-luna:low
     plan       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     slow       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low
@@ -93,7 +89,6 @@ gpt-only_fast_medium_sp  gpt-only · fast · medium · spark
   ● task       gpt-5.6-luna:medium
     plan       gpt-5.6-terra:high       → gpt-5.6-luna:high
     slow       gpt-5.6-terra:high       → gpt-5.6-luna:high
-  ● designer   gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium
@@ -110,7 +105,6 @@ gpt-only_fast_medium_nosp  gpt-only · fast · medium
   ● task       gpt-5.6-luna:medium
     plan       gpt-5.6-terra:high       → gpt-5.6-luna:high
     slow       gpt-5.6-terra:high       → gpt-5.6-luna:high
-  ● designer   gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-terra:high       → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium
@@ -127,7 +121,6 @@ gpt-only_fast_high_sp  gpt-only · fast · high · spark
   ● task       gpt-5.6-luna:high
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high
@@ -144,7 +137,6 @@ gpt-only_fast_high_nosp  gpt-only · fast · high
   ● task       gpt-5.6-luna:high
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high
@@ -161,7 +153,6 @@ gpt-only_fast_xhigh_sp  gpt-only · fast · xhigh · spark
   ● task       gpt-5.6-luna:xhigh
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh
@@ -178,7 +169,6 @@ gpt-only_fast_xhigh_nosp  gpt-only · fast · xhigh
   ● task       gpt-5.6-luna:xhigh
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh
@@ -195,7 +185,6 @@ gpt-only_fast_max_sp  gpt-only · fast · max · spark
   ● task       gpt-5.6-luna:max
     plan       gpt-5.6-terra:max        → gpt-5.6-luna:max
     slow       gpt-5.6-terra:max        → gpt-5.6-luna:max
-  ● designer   gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max
@@ -212,7 +201,6 @@ gpt-only_fast_max_nosp  gpt-only · fast · max
   ● task       gpt-5.6-luna:max
     plan       gpt-5.6-terra:max        → gpt-5.6-luna:max
     slow       gpt-5.6-terra:max        → gpt-5.6-luna:max
-  ● designer   gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-terra:max        → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max
@@ -229,7 +217,6 @@ gpt-only_normal_minimal_sp  gpt-only · normal · minimal · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low
@@ -247,7 +234,6 @@ gpt-only_normal_minimal_nosp  gpt-only · normal · minimal
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low
@@ -265,7 +251,6 @@ gpt-only_normal_low_sp  gpt-only · normal · low · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low
@@ -283,7 +268,6 @@ gpt-only_normal_low_nosp  gpt-only · normal · low
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low
@@ -301,7 +285,6 @@ gpt-only_normal_medium_sp  gpt-only · normal · medium · spark
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium
@@ -319,7 +302,6 @@ gpt-only_normal_medium_nosp  gpt-only · normal · medium
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium
@@ -337,7 +319,6 @@ gpt-only_normal_high_sp  gpt-only · normal · high · spark
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high
@@ -355,7 +336,6 @@ gpt-only_normal_high_nosp  gpt-only · normal · high
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high
@@ -373,7 +353,6 @@ gpt-only_normal_xhigh_sp  gpt-only · normal · xhigh · spark
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
@@ -391,7 +370,6 @@ gpt-only_normal_xhigh_nosp  gpt-only · normal · xhigh
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh
@@ -409,7 +387,6 @@ gpt-only_normal_max_sp  gpt-only · normal · max · spark
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max
@@ -427,7 +404,6 @@ gpt-only_normal_max_nosp  gpt-only · normal · max
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max
@@ -445,7 +421,6 @@ gpt-only_smart_minimal_sp  gpt-only · smart · minimal · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -463,7 +438,6 @@ gpt-only_smart_minimal_nosp  gpt-only · smart · minimal
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -481,7 +455,6 @@ gpt-only_smart_low_sp  gpt-only · smart · low · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -499,7 +472,6 @@ gpt-only_smart_low_nosp  gpt-only · smart · low
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -517,7 +489,6 @@ gpt-only_smart_medium_sp  gpt-only · smart · medium · spark
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
@@ -535,7 +506,6 @@ gpt-only_smart_medium_nosp  gpt-only · smart · medium
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → gpt-5.6-luna:medium
@@ -553,7 +523,6 @@ gpt-only_smart_high_sp  gpt-only · smart · high · spark
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
@@ -571,7 +540,6 @@ gpt-only_smart_high_nosp  gpt-only · smart · high
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → gpt-5.6-luna:high
@@ -589,7 +557,6 @@ gpt-only_smart_xhigh_sp  gpt-only · smart · xhigh · spark
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
@@ -607,7 +574,6 @@ gpt-only_smart_xhigh_nosp  gpt-only · smart · xhigh
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
@@ -625,7 +591,6 @@ gpt-only_smart_max_sp  gpt-only · smart · max · spark
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
@@ -643,7 +608,6 @@ gpt-only_smart_max_nosp  gpt-only · smart · max
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → gpt-5.6-luna:max
@@ -661,7 +625,6 @@ gpt-led_fast_minimal_sp  gpt-led · fast · minimal · spark
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:minimal
     plan       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     slow       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
-  ● designer   gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● reviewer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:minimal
@@ -678,7 +641,6 @@ gpt-led_fast_minimal_nosp  gpt-led · fast · minimal
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:minimal
     plan       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     slow       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
-  ● designer   gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● reviewer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:minimal
@@ -695,7 +657,6 @@ gpt-led_fast_low_sp  gpt-led · fast · low · spark
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:low
     plan       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     slow       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
-  ● designer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● reviewer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:low
@@ -712,7 +673,6 @@ gpt-led_fast_low_nosp  gpt-led · fast · low
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:low
     plan       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     slow       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
-  ● designer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● reviewer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:low
@@ -729,7 +689,6 @@ gpt-led_fast_medium_sp  gpt-led · fast · medium · spark
   ● task       gpt-5.6-luna:medium      → claude-haiku-4-5:medium
     plan       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     slow       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● designer   gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● reviewer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium      → claude-haiku-4-5:medium
@@ -746,7 +705,6 @@ gpt-led_fast_medium_nosp  gpt-led · fast · medium
   ● task       gpt-5.6-luna:medium      → claude-haiku-4-5:medium
     plan       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     slow       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● designer   gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● reviewer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium      → claude-haiku-4-5:medium
@@ -763,7 +721,6 @@ gpt-led_fast_high_sp  gpt-led · fast · high · spark
   ● task       gpt-5.6-luna:high        → claude-haiku-4-5:high
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high        → claude-haiku-4-5:high
@@ -780,7 +737,6 @@ gpt-led_fast_high_nosp  gpt-led · fast · high
   ● task       gpt-5.6-luna:high        → claude-haiku-4-5:high
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high        → claude-haiku-4-5:high
@@ -797,7 +753,6 @@ gpt-led_fast_xhigh_sp  gpt-led · fast · xhigh · spark
   ● task       gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
@@ -814,7 +769,6 @@ gpt-led_fast_xhigh_nosp  gpt-led · fast · xhigh
   ● task       gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
     plan       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
@@ -831,7 +785,6 @@ gpt-led_fast_max_sp  gpt-led · fast · max · spark
   ● task       gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
     plan       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
@@ -848,7 +801,6 @@ gpt-led_fast_max_nosp  gpt-led · fast · max
   ● task       gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
     plan       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     slow       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
-  ● designer   gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
@@ -865,7 +817,6 @@ gpt-led_normal_minimal_sp  gpt-led · normal · minimal · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
@@ -883,7 +834,6 @@ gpt-led_normal_minimal_nosp  gpt-led · normal · minimal
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
@@ -901,7 +851,6 @@ gpt-led_normal_low_sp  gpt-led · normal · low · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
@@ -919,7 +868,6 @@ gpt-led_normal_low_nosp  gpt-led · normal · low
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
@@ -937,7 +885,6 @@ gpt-led_normal_medium_sp  gpt-led · normal · medium · spark
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -955,7 +902,6 @@ gpt-led_normal_medium_nosp  gpt-led · normal · medium
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -973,7 +919,6 @@ gpt-led_normal_high_sp  gpt-led · normal · high · spark
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
@@ -991,7 +936,6 @@ gpt-led_normal_high_nosp  gpt-led · normal · high
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
@@ -1009,7 +953,6 @@ gpt-led_normal_xhigh_sp  gpt-led · normal · xhigh · spark
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
@@ -1027,7 +970,6 @@ gpt-led_normal_xhigh_nosp  gpt-led · normal · xhigh
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
@@ -1045,7 +987,6 @@ gpt-led_normal_max_sp  gpt-led · normal · max · spark
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
@@ -1063,7 +1004,6 @@ gpt-led_normal_max_nosp  gpt-led · normal · max
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
@@ -1081,7 +1021,6 @@ gpt-led_smart_minimal_sp  gpt-led · smart · minimal · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1099,7 +1038,6 @@ gpt-led_smart_minimal_nosp  gpt-led · smart · minimal
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     slow       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1117,7 +1055,6 @@ gpt-led_smart_low_sp  gpt-led · smart · low · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1135,7 +1072,6 @@ gpt-led_smart_low_nosp  gpt-led · smart · low
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     slow       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1153,7 +1089,6 @@ gpt-led_smart_medium_sp  gpt-led · smart · medium · spark
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -1171,7 +1106,6 @@ gpt-led_smart_medium_nosp  gpt-led · smart · medium
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     plan       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     slow       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -1189,7 +1123,6 @@ gpt-led_smart_high_sp  gpt-led · smart · high · spark
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
@@ -1207,7 +1140,6 @@ gpt-led_smart_high_nosp  gpt-led · smart · high
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
@@ -1225,7 +1157,6 @@ gpt-led_smart_xhigh_sp  gpt-led · smart · xhigh · spark
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
@@ -1243,7 +1174,6 @@ gpt-led_smart_xhigh_nosp  gpt-led · smart · xhigh
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     plan       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
@@ -1261,7 +1191,6 @@ gpt-led_smart_max_sp  gpt-led · smart · max · spark
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
@@ -1279,7 +1208,6 @@ gpt-led_smart_max_nosp  gpt-led · smart · max
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     plan       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     slow       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
@@ -1297,7 +1225,6 @@ mixed_fast_minimal_sp  mixed · fast · minimal · spark
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:minimal
     plan       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:minimal
@@ -1314,7 +1241,6 @@ mixed_fast_minimal_nosp  mixed · fast · minimal
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:minimal
     plan       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● security-reviewer claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:minimal
@@ -1331,7 +1257,6 @@ mixed_fast_low_sp  mixed · fast · low · spark
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:low
     plan       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:low
@@ -1348,7 +1273,6 @@ mixed_fast_low_nosp  mixed · fast · low
   ● task       gpt-5.6-luna:low         → claude-haiku-4-5:low
     plan       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● security-reviewer claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● librarian  gpt-5.6-luna:low         → claude-haiku-4-5:low
@@ -1365,7 +1289,6 @@ mixed_fast_medium_sp  mixed · fast · medium · spark
   ● task       gpt-5.6-luna:medium      → claude-haiku-4-5:medium
     plan       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium      → claude-haiku-4-5:medium
@@ -1382,7 +1305,6 @@ mixed_fast_medium_nosp  mixed · fast · medium
   ● task       gpt-5.6-luna:medium      → claude-haiku-4-5:medium
     plan       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● security-reviewer claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● librarian  gpt-5.6-luna:medium      → claude-haiku-4-5:medium
@@ -1399,7 +1321,6 @@ mixed_fast_high_sp  mixed · fast · high · spark
   ● task       gpt-5.6-luna:high        → claude-haiku-4-5:high
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high        → claude-haiku-4-5:high
@@ -1416,7 +1337,6 @@ mixed_fast_high_nosp  mixed · fast · high
   ● task       gpt-5.6-luna:high        → claude-haiku-4-5:high
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:high        → claude-haiku-4-5:high
@@ -1433,7 +1353,6 @@ mixed_fast_xhigh_sp  mixed · fast · xhigh · spark
   ● task       gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
@@ -1450,7 +1369,6 @@ mixed_fast_xhigh_nosp  mixed · fast · xhigh
   ● task       gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● librarian  gpt-5.6-luna:xhigh       → claude-haiku-4-5:xhigh
@@ -1467,7 +1385,6 @@ mixed_fast_max_sp  mixed · fast · max · spark
   ● task       gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
@@ -1484,7 +1401,6 @@ mixed_fast_max_nosp  mixed · fast · max
   ● task       gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● security-reviewer claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● librarian  gpt-5.6-luna:max         → claude-haiku-4-5:xhigh
@@ -1501,7 +1417,6 @@ mixed_normal_minimal_sp  mixed · normal · minimal · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     plan       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
@@ -1519,7 +1434,6 @@ mixed_normal_minimal_nosp  mixed · normal · minimal
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
     plan       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
@@ -1537,7 +1451,6 @@ mixed_normal_low_sp  mixed · normal · low · spark
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
     plan       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
@@ -1555,7 +1468,6 @@ mixed_normal_low_nosp  mixed · normal · low
   ● task       gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
     plan       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:low
@@ -1573,7 +1485,6 @@ mixed_normal_medium_sp  mixed · normal · medium · spark
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -1591,7 +1502,6 @@ mixed_normal_medium_nosp  mixed · normal · medium
   ● task       gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -1609,7 +1519,6 @@ mixed_normal_high_sp  mixed · normal · high · spark
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
@@ -1627,7 +1536,6 @@ mixed_normal_high_nosp  mixed · normal · high
   ● task       gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
@@ -1645,7 +1553,6 @@ mixed_normal_xhigh_sp  mixed · normal · xhigh · spark
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
@@ -1663,7 +1570,6 @@ mixed_normal_xhigh_nosp  mixed · normal · xhigh
   ● task       gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
@@ -1681,7 +1587,6 @@ mixed_normal_max_sp  mixed · normal · max · spark
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     plan       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
@@ -1699,7 +1604,6 @@ mixed_normal_max_nosp  mixed · normal · max
   ● task       gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     plan       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
@@ -1717,7 +1621,6 @@ mixed_smart_minimal_sp  mixed · smart · minimal · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1735,7 +1638,6 @@ mixed_smart_minimal_nosp  mixed · smart · minimal
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1753,7 +1655,6 @@ mixed_smart_low_sp  mixed · smart · low · spark
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1771,7 +1672,6 @@ mixed_smart_low_nosp  mixed · smart · low
   ● task       gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● librarian  gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
@@ -1789,7 +1689,6 @@ mixed_smart_medium_sp  mixed · smart · medium · spark
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -1807,7 +1706,6 @@ mixed_smart_medium_nosp  mixed · smart · medium
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -1825,7 +1723,6 @@ mixed_smart_high_sp  mixed · smart · high · spark
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
@@ -1843,7 +1740,6 @@ mixed_smart_high_nosp  mixed · smart · high
   ● task       gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
@@ -1861,7 +1757,6 @@ mixed_smart_xhigh_sp  mixed · smart · xhigh · spark
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
@@ -1879,7 +1774,6 @@ mixed_smart_xhigh_nosp  mixed · smart · xhigh
   ● task       gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● librarian  gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
@@ -1897,7 +1791,6 @@ mixed_smart_max_sp  mixed · smart · max · spark
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
@@ -1915,7 +1808,6 @@ mixed_smart_max_nosp  mixed · smart · max
   ● task       gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● librarian  gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
@@ -1933,7 +1825,6 @@ claude-led_fast_minimal_sp  claude-led · fast · minimal · spark
   ● task       claude-haiku-4-5:minimal → gpt-5.6-luna:low
     plan       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● security-reviewer gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● librarian  claude-haiku-4-5:minimal → gpt-5.6-luna:low
@@ -1950,7 +1841,6 @@ claude-led_fast_minimal_nosp  claude-led · fast · minimal
   ● task       claude-haiku-4-5:minimal → gpt-5.6-luna:low
     plan       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     slow       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
-  ● designer   claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
   ● reviewer   gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● security-reviewer gpt-5.6-terra:low        → gpt-5.6-luna:low → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● librarian  claude-haiku-4-5:minimal → gpt-5.6-luna:low
@@ -1967,7 +1857,6 @@ claude-led_fast_low_sp  claude-led · fast · low · spark
   ● task       claude-haiku-4-5:low     → gpt-5.6-luna:low
     plan       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● security-reviewer gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● librarian  claude-haiku-4-5:low     → gpt-5.6-luna:low
@@ -1984,7 +1873,6 @@ claude-led_fast_low_nosp  claude-led · fast · low
   ● task       claude-haiku-4-5:low     → gpt-5.6-luna:low
     plan       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     slow       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
-  ● designer   claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
   ● reviewer   gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● security-reviewer gpt-5.6-terra:medium     → gpt-5.6-luna:medium → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● librarian  claude-haiku-4-5:low     → gpt-5.6-luna:low
@@ -2001,7 +1889,6 @@ claude-led_fast_medium_sp  claude-led · fast · medium · spark
   ● task       claude-haiku-4-5:medium  → gpt-5.6-luna:medium
     plan       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● security-reviewer gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● librarian  claude-haiku-4-5:medium  → gpt-5.6-luna:medium
@@ -2018,7 +1905,6 @@ claude-led_fast_medium_nosp  claude-led · fast · medium
   ● task       claude-haiku-4-5:medium  → gpt-5.6-luna:medium
     plan       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     slow       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
-  ● designer   claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
   ● reviewer   gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● security-reviewer gpt-5.6-terra:high       → gpt-5.6-luna:high → claude-sonnet-5:high → claude-haiku-4-5:high
   ● librarian  claude-haiku-4-5:medium  → gpt-5.6-luna:medium
@@ -2035,7 +1921,6 @@ claude-led_fast_high_sp  claude-led · fast · high · spark
   ● task       claude-haiku-4-5:high    → gpt-5.6-luna:high
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:high    → gpt-5.6-luna:high
@@ -2052,7 +1937,6 @@ claude-led_fast_high_nosp  claude-led · fast · high
   ● task       claude-haiku-4-5:high    → gpt-5.6-luna:high
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:high    → gpt-5.6-luna:high
@@ -2069,7 +1953,6 @@ claude-led_fast_xhigh_sp  claude-led · fast · xhigh · spark
   ● task       claude-haiku-4-5:xhigh   → gpt-5.6-luna:xhigh
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh   → gpt-5.6-luna:xhigh
@@ -2086,7 +1969,6 @@ claude-led_fast_xhigh_nosp  claude-led · fast · xhigh
   ● task       claude-haiku-4-5:xhigh   → gpt-5.6-luna:xhigh
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
   ● reviewer   gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:xhigh      → gpt-5.6-luna:xhigh → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh   → gpt-5.6-luna:xhigh
@@ -2103,7 +1985,6 @@ claude-led_fast_max_sp  claude-led · fast · max · spark
   ● task       claude-haiku-4-5:xhigh   → gpt-5.6-luna:max
     plan       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh   → gpt-5.6-luna:max
@@ -2120,7 +2001,6 @@ claude-led_fast_max_nosp  claude-led · fast · max
   ● task       claude-haiku-4-5:xhigh   → gpt-5.6-luna:max
     plan       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     slow       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
-  ● designer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
   ● reviewer   gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● security-reviewer gpt-5.6-terra:max        → gpt-5.6-luna:max → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh   → gpt-5.6-luna:max
@@ -2137,7 +2017,6 @@ claude-led_normal_minimal_sp  claude-led · normal · minimal · spark
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -2155,7 +2034,6 @@ claude-led_normal_minimal_nosp  claude-led · normal · minimal
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:minimal → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -2173,7 +2051,6 @@ claude-led_normal_low_sp  claude-led · normal · low · spark
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -2191,7 +2068,6 @@ claude-led_normal_low_nosp  claude-led · normal · low
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
     plan       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -2209,7 +2085,6 @@ claude-led_normal_medium_sp  claude-led · normal · medium · spark
   ● task       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     plan       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
@@ -2227,7 +2102,6 @@ claude-led_normal_medium_nosp  claude-led · normal · medium
   ● task       claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
     plan       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-sonnet-5:medium   → claude-haiku-4-5:medium → gpt-5.6-terra:medium → gpt-5.6-luna:medium
@@ -2245,7 +2119,6 @@ claude-led_normal_high_sp  claude-led · normal · high · spark
   ● task       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
@@ -2263,7 +2136,6 @@ claude-led_normal_high_nosp  claude-led · normal · high
   ● task       claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-sonnet-5:high     → claude-haiku-4-5:high → gpt-5.6-terra:high → gpt-5.6-luna:high
@@ -2281,7 +2153,6 @@ claude-led_normal_xhigh_sp  claude-led · normal · xhigh · spark
   ● task       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
@@ -2299,7 +2170,6 @@ claude-led_normal_xhigh_nosp  claude-led · normal · xhigh
   ● task       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh → gpt-5.6-terra:xhigh → gpt-5.6-luna:xhigh
@@ -2317,7 +2187,6 @@ claude-led_normal_max_sp  claude-led · normal · max · spark
   ● task       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     plan       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
@@ -2335,7 +2204,6 @@ claude-led_normal_max_nosp  claude-led · normal · max
   ● task       claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
     plan       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-sonnet-5:max      → claude-haiku-4-5:xhigh → gpt-5.6-terra:max → gpt-5.6-luna:max
@@ -2353,7 +2221,6 @@ claude-led_smart_minimal_sp  claude-led · smart · minimal · spark
   ● task       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2371,7 +2238,6 @@ claude-led_smart_minimal_nosp  claude-led · smart · minimal
   ● task       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2389,7 +2255,6 @@ claude-led_smart_low_sp  claude-led · smart · low · spark
   ● task       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2407,7 +2272,6 @@ claude-led_smart_low_nosp  claude-led · smart · low
   ● task       claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2425,7 +2289,6 @@ claude-led_smart_medium_sp  claude-led · smart · medium · spark
   ● task       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
@@ -2443,7 +2306,6 @@ claude-led_smart_medium_nosp  claude-led · smart · medium
   ● task       claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
@@ -2461,7 +2323,6 @@ claude-led_smart_high_sp  claude-led · smart · high · spark
   ● task       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
@@ -2479,7 +2340,6 @@ claude-led_smart_high_nosp  claude-led · smart · high
   ● task       claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:high       → claude-sonnet-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
@@ -2497,7 +2357,6 @@ claude-led_smart_xhigh_sp  claude-led · smart · xhigh · spark
   ● task       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
@@ -2515,7 +2374,6 @@ claude-led_smart_xhigh_nosp  claude-led · smart · xhigh
   ● task       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:xhigh      → claude-sonnet-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
@@ -2533,7 +2391,6 @@ claude-led_smart_max_sp  claude-led · smart · max · spark
   ● task       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
@@ -2551,7 +2408,6 @@ claude-led_smart_max_nosp  claude-led · smart · max
   ● task       claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-opus-5:max        → claude-sonnet-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
@@ -2569,7 +2425,6 @@ claude-led_elite_minimal_sp  claude-led · elite · minimal · spark
   ● task       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2587,7 +2442,6 @@ claude-led_elite_minimal_nosp  claude-led · elite · minimal
   ● task       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     slow       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
   ● reviewer   gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer gpt-5.6-sol:low          → gpt-5.6-terra:low → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2605,7 +2459,6 @@ claude-led_elite_low_sp  claude-led · elite · low · spark
   ● task       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2623,7 +2476,6 @@ claude-led_elite_low_nosp  claude-led · elite · low
   ● task       claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
   ● reviewer   gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-fable-5:low       → claude-opus-5:low → gpt-5.6-sol:low → gpt-5.6-terra:low
@@ -2641,7 +2493,6 @@ claude-led_elite_medium_sp  claude-led · elite · medium · spark
   ● task       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
@@ -2659,7 +2510,6 @@ claude-led_elite_medium_nosp  claude-led · elite · medium
   ● task       claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer gpt-5.6-sol:high         → gpt-5.6-terra:high → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-fable-5:medium    → claude-opus-5:medium → gpt-5.6-sol:medium → gpt-5.6-terra:medium
@@ -2677,7 +2527,6 @@ claude-led_elite_high_sp  claude-led · elite · high · spark
   ● task       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
@@ -2695,7 +2544,6 @@ claude-led_elite_high_nosp  claude-led · elite · high
   ● task       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
@@ -2713,7 +2561,6 @@ claude-led_elite_xhigh_sp  claude-led · elite · xhigh · spark
   ● task       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
@@ -2731,7 +2578,6 @@ claude-led_elite_xhigh_nosp  claude-led · elite · xhigh
   ● task       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
   ● reviewer   gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer gpt-5.6-sol:xhigh        → gpt-5.6-terra:xhigh → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:xhigh     → claude-opus-5:xhigh → gpt-5.6-sol:xhigh → gpt-5.6-terra:xhigh
@@ -2749,7 +2595,6 @@ claude-led_elite_max_sp  claude-led · elite · max · spark
   ● task       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
@@ -2767,7 +2612,6 @@ claude-led_elite_max_nosp  claude-led · elite · max
   ● task       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     plan       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
     slow       claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
   ● reviewer   gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer gpt-5.6-sol:max          → gpt-5.6-terra:max → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-fable-5:max       → claude-opus-5:max → gpt-5.6-sol:max → gpt-5.6-terra:max
@@ -2785,7 +2629,6 @@ claude-only_fast_minimal_nosp  claude-only · fast · minimal
   ● task       claude-haiku-4-5:minimal
     plan       claude-sonnet-5:low      → claude-haiku-4-5:minimal
     slow       claude-sonnet-5:low      → claude-haiku-4-5:minimal
-  ● designer   claude-sonnet-5:low      → claude-haiku-4-5:minimal
   ● reviewer   claude-sonnet-5:low      → claude-haiku-4-5:minimal
   ● security-reviewer claude-sonnet-5:low      → claude-haiku-4-5:minimal
   ● librarian  claude-haiku-4-5:minimal
@@ -2802,7 +2645,6 @@ claude-only_fast_low_nosp  claude-only · fast · low
   ● task       claude-haiku-4-5:low
     plan       claude-sonnet-5:medium   → claude-haiku-4-5:medium
     slow       claude-sonnet-5:medium   → claude-haiku-4-5:medium
-  ● designer   claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● reviewer   claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● security-reviewer claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● librarian  claude-haiku-4-5:low
@@ -2819,7 +2661,6 @@ claude-only_fast_medium_nosp  claude-only · fast · medium
   ● task       claude-haiku-4-5:medium
     plan       claude-sonnet-5:high     → claude-haiku-4-5:high
     slow       claude-sonnet-5:high     → claude-haiku-4-5:high
-  ● designer   claude-sonnet-5:high     → claude-haiku-4-5:high
   ● reviewer   claude-sonnet-5:high     → claude-haiku-4-5:high
   ● security-reviewer claude-sonnet-5:high     → claude-haiku-4-5:high
   ● librarian  claude-haiku-4-5:medium
@@ -2836,7 +2677,6 @@ claude-only_fast_high_nosp  claude-only · fast · high
   ● task       claude-haiku-4-5:high
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:high
@@ -2853,7 +2693,6 @@ claude-only_fast_xhigh_nosp  claude-only · fast · xhigh
   ● task       claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
     slow       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
-  ● designer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● security-reviewer claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh
@@ -2870,7 +2709,6 @@ claude-only_fast_max_nosp  claude-only · fast · max
   ● task       claude-haiku-4-5:xhigh
     plan       claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     slow       claude-sonnet-5:max      → claude-haiku-4-5:xhigh
-  ● designer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● reviewer   claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● security-reviewer claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● librarian  claude-haiku-4-5:xhigh
@@ -2887,7 +2725,6 @@ claude-only_normal_minimal_nosp  claude-only · normal · minimal
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:minimal
     plan       claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
     slow       claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
-  ● designer   claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● reviewer   claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● security-reviewer claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:minimal
@@ -2905,7 +2742,6 @@ claude-only_normal_low_nosp  claude-only · normal · low
   ● task       claude-sonnet-5:low      → claude-haiku-4-5:low
     plan       claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
     slow       claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
-  ● designer   claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● reviewer   claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● security-reviewer claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● librarian  claude-sonnet-5:low      → claude-haiku-4-5:low
@@ -2923,7 +2759,6 @@ claude-only_normal_medium_nosp  claude-only · normal · medium
   ● task       claude-sonnet-5:medium   → claude-haiku-4-5:medium
     plan       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
     slow       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
-  ● designer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● reviewer   claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● security-reviewer claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
   ● librarian  claude-sonnet-5:medium   → claude-haiku-4-5:medium
@@ -2941,7 +2776,6 @@ claude-only_normal_high_nosp  claude-only · normal · high
   ● task       claude-sonnet-5:high     → claude-haiku-4-5:high
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-sonnet-5:high     → claude-haiku-4-5:high
@@ -2959,7 +2793,6 @@ claude-only_normal_xhigh_nosp  claude-only · normal · xhigh
   ● task       claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
     plan       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     slow       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
-  ● designer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● reviewer   claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● security-reviewer claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
   ● librarian  claude-sonnet-5:xhigh    → claude-haiku-4-5:xhigh
@@ -2977,7 +2810,6 @@ claude-only_normal_max_nosp  claude-only · normal · max
   ● task       claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     plan       claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     slow       claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
-  ● designer   claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● reviewer   claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● security-reviewer claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
   ● librarian  claude-sonnet-5:max      → claude-haiku-4-5:xhigh
@@ -2995,7 +2827,6 @@ claude-only_smart_minimal_nosp  claude-only · smart · minimal
   ● task       claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
     plan       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
     slow       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:minimal
@@ -3013,7 +2844,6 @@ claude-only_smart_low_nosp  claude-only · smart · low
   ● task       claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-opus-5:low        → claude-sonnet-5:low → claude-haiku-4-5:low
@@ -3031,7 +2861,6 @@ claude-only_smart_medium_nosp  claude-only · smart · medium
   ● task       claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
     slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -3049,7 +2878,6 @@ claude-only_smart_high_nosp  claude-only · smart · high
   ● task       claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:high       → claude-sonnet-5:high → claude-haiku-4-5:high
@@ -3067,7 +2895,6 @@ claude-only_smart_xhigh_nosp  claude-only · smart · xhigh
   ● task       claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-opus-5:xhigh      → claude-sonnet-5:xhigh → claude-haiku-4-5:xhigh
@@ -3085,7 +2912,6 @@ claude-only_smart_max_nosp  claude-only · smart · max
   ● task       claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
     plan       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-opus-5:max        → claude-sonnet-5:max → claude-haiku-4-5:xhigh
@@ -3103,7 +2929,6 @@ claude-only_elite_minimal_nosp  claude-only · elite · minimal
   ● task       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
     slow       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
-  ● designer   claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● reviewer   claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● security-reviewer claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
   ● librarian  claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
@@ -3121,7 +2946,6 @@ claude-only_elite_low_nosp  claude-only · elite · low
   ● task       claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
     plan       claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
     slow       claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
-  ● designer   claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● reviewer   claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● security-reviewer claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
   ● librarian  claude-fable-5:low       → claude-opus-5:low → claude-sonnet-5:low
@@ -3139,7 +2963,6 @@ claude-only_elite_medium_nosp  claude-only · elite · medium
   ● task       claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
     slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-fable-5:medium    → claude-opus-5:medium → claude-sonnet-5:medium
@@ -3157,7 +2980,6 @@ claude-only_elite_high_nosp  claude-only · elite · high
   ● task       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
@@ -3175,7 +2997,6 @@ claude-only_elite_xhigh_nosp  claude-only · elite · xhigh
   ● task       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     plan       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
     slow       claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
-  ● designer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● reviewer   claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● security-reviewer claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
   ● librarian  claude-fable-5:xhigh     → claude-opus-5:xhigh → claude-sonnet-5:xhigh
@@ -3193,7 +3014,6 @@ claude-only_elite_max_nosp  claude-only · elite · max
   ● task       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     plan       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max

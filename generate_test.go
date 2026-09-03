@@ -147,7 +147,7 @@ const goldenFacts = `__models__  model facts (id in out speed ttft bucket provid
 
 // goldenMixedSmart is the routing the retired `fable` toggle used to produce by
 // hand: on a mixed lane at `smart` the deliberative bump (t = base+1, capped at
-// the pool's own top rung) lands plan/slow/designer/reviewer on pool A's tier-4
+// the pool's own top rung) lands plan/slow/reviewer on pool A's tier-4
 // rung. The toggle is gone; the block it produced must not be.
 const goldenMixedSmart = `mixed_smart_medium_sp  mixed · smart · medium · spark
   thinking medium · fallback on · advisor on
@@ -155,7 +155,6 @@ const goldenMixedSmart = `mixed_smart_medium_sp  mixed · smart · medium · spa
   ● task       gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
@@ -181,7 +180,6 @@ const goldenClaudeElite = `claude-only_elite_max_nosp  claude-only · elite · m
   ● task       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     plan       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● designer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● librarian  claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
@@ -204,7 +202,6 @@ const goldenClaudeSmart = `claude-only_smart_medium_nosp  claude-only · smart �
   ● task       claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
     plan       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
     slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
-  ● designer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
@@ -1665,7 +1662,7 @@ func TestLadderDepthTopAndRung(t *testing.T) {
 
 // The `elite` notch is gated on the lane's LEAD pool declaring a tier-4 rung,
 // not on the lane's whole pool-set. The reason is duplicate suppression: the
-// deliberative bump already lands plan/slow/designer/reviewer on the lead
+// deliberative bump already lands plan/slow/reviewer on the lead
 // pool's top rung at `smart`, so where that pool stops at three there is no
 // seat left for elite to change and the block renders byte-identical to smart.
 // gpt-led is the clean case — proved below by rendering both. mixed is the
@@ -1743,7 +1740,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 	// `smart` on an A-led lane: the deliberative bump reaches tier 4 while the
 	// non-deliberative seats stay on tier 3. That split is the whole point —
 	// the expensive rung goes where the deliberation happens, not everywhere.
-	for _, role := range []string{"plan", "slow", "designer", "reviewer", "security-reviewer"} {
+	for _, role := range []string{"plan", "slow", "reviewer", "security-reviewer"} {
 		if got := lead("claude-only", "smart", role); got != "claude-fable-5" {
 			t.Errorf("claude-only/smart %s = %q, want the tier-4 rung claude-fable-5", role, got)
 		}
@@ -1765,7 +1762,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 	// `elite`: the tier-4 rung takes the default seat too — the old fable+main
 	// pair. The bump is already saturated, so the deliberative seats do not
 	// climb any further.
-	for _, role := range []string{"default", "task", "librarian", "plan", "slow", "designer", "reviewer", "security-reviewer", "vision"} {
+	for _, role := range []string{"default", "task", "librarian", "plan", "slow", "reviewer", "security-reviewer", "vision"} {
 		if got := lead("claude-only", "elite", role); got != "claude-fable-5" {
 			t.Errorf("claude-only/elite %s = %q, want claude-fable-5", role, got)
 		}

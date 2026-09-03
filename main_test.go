@@ -522,7 +522,6 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	rows := []string{
 		"    default    gpt-5.6-sol:high",
 		"    plan       claude-fable-5:xhigh",
-		"  ● designer   claude-fable-5:xhigh → claude-sonnet-5:high",
 		"  ● librarian  gpt-5.6-sol:high",
 		"  ● reviewer   claude-fable-5:xhigh",
 		"  ● sonic      gpt-5.6-luna:minimal",
@@ -539,7 +538,6 @@ func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	// The override block is emitted in row order with a fixed shape; assert it
 	// verbatim so any drift in keys, values, or nesting fails loudly.
 	want := "task:\n  agentModelOverrides:\n" +
-		"    designer: anthropic/claude-fable-5:xhigh\n" +
 		"    librarian: openai-codex/gpt-5.6-sol:high\n" +
 		"    reviewer: anthropic/claude-fable-5:xhigh\n" +
 		"    sonic: openai-codex/gpt-5.6-luna:minimal\n" +
