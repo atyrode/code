@@ -153,6 +153,9 @@ launches it, it doesn't replace it. Authenticate locally with
 `omp auth-broker login <provider>`. For a canonical broker on another machine,
 set `CODE_AUTH_LOGIN_VIA=user@host`; the account manager's `v` → `a` flow then
 runs the same interactive login over SSH and refreshes the account list.
+When a broker cooldown outlives an upstream quota reset, highlight the blocked
+account and press `x` to clear its remembered blocks and refresh live usage; a
+continuing upstream limit recreates the block on the next request.
 API-key providers are broker writes rather than OAuth logins; the
 [atyrode dotfiles](https://github.com/atyrode/dotfiles) expose the secure
 `atyrode auth broker add-api-key <provider>` route.

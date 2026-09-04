@@ -37,6 +37,20 @@ type authLoginFinishedMsg struct {
 	err      error
 }
 
+type credentialBlocksClearedMsg struct {
+	credentialID string
+	err          error
+}
+
+func clearCredentialBlocksCmd(broker brokerConfig, credentialID string) tea.Cmd {
+	return func() tea.Msg {
+		return credentialBlocksClearedMsg{
+			credentialID: credentialID,
+			err:          clearCredentialBlocks(broker, credentialID),
+		}
+	}
+}
+
 func cloneAccountSelectionState(state accountSelectionState) accountSelectionState {
 	return accountSelectionState{
 		active:         state.ActiveName(),
@@ -199,6 +213,19 @@ func (m model) managerAccounts() []account {
 		}
 	}
 	return accounts
+}
+
+func (m model) managerSelectedAccount() (account, bool) {
+	accounts := m.managerAccounts()
+	if m.mgrCursor < 0 || m.mgrCursor >= len(accounts) {
+		return account{}, false
+	}
+	return accounts[m.mgrCursor], true
+}
+
+func (m model) managerSelectedAccountCanRetry() bool {
+	a, ok := m.managerSelectedAccount()
+	return ok && len(a.blocks) > 0 && a.credentialID != ""
 }
 
 func (m *model) clampManagerCursor() {
@@ -464,6 +491,14 @@ func (m model) updateManager(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.fullUsageIDs = !m.fullUsageIDs
 		return m, nil
+	case "x":
+		a, ok := m.managerSelectedAccount()
+		if !ok || len(a.blocks) == 0 || a.credentialID == "" || m.blockRetryingID != "" {
+			return m, nil
+		}
+		m.accountErr = ""
+		m.blockRetryingID = a.credentialID
+		return m, clearCredentialBlocksCmd(m.broker, a.credentialID)
 	case "s":
 		inlineFits := m.managerUsageFitsInline()
 		switch {
@@ -800,6 +835,14 @@ func (m model) managerLines(width int) []managerLine {
 					for _, label := range labels {
 						lines = append(lines, managerLine{
 							text:       managerClipCell("      "+stWarn.Render(label), lineWidth),
+							selectable: -1,
+							group:      group,
+							provider:   provider,
+						})
+					}
+					if m.blockRetryingID == a.credentialID {
+						lines = append(lines, managerLine{
+							text:       managerClipCell("      "+stWarn.Render("retrying now…"), lineWidth),
 							selectable: -1,
 							group:      group,
 							provider:   provider,
@@ -1202,8 +1245,15 @@ func (m model) managerControlsFor(w int, usageAction string) string {
 			clikit.HelpItem{Key: "s", Description: usageAction},
 			clikit.HelpItem{Key: "i", Description: identityAction},
 			clikit.HelpItem{Key: "r", Description: m.managerRefreshDescription()},
-			clikit.HelpItem{Key: "v", Description: "close"},
 		)
+		if m.managerSelectedAccountCanRetry() {
+			retryAction := "retry now"
+			if m.blockRetryingID != "" {
+				retryAction = "retrying…"
+			}
+			items = append(items, clikit.HelpItem{Key: "x", Description: retryAction})
+		}
+		items = append(items, clikit.HelpItem{Key: "v", Description: "close"})
 		if compact {
 			for i := range items {
 				switch items[i].Key {
