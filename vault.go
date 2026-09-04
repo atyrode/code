@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -243,7 +244,7 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 			if !p.Metered {
 				accounts[p.ID] = append(accounts[p.ID], account{
 					Provider: p.ID, IdentityKey: item.IdentityKey,
-					apiKey: credential.Key, credentialID: strings.Trim(string(item.ID), `"`),
+					apiKey: credential.Key, credentialID: strings.Trim(strings.TrimSpace(string(item.ID)), `"`),
 				})
 			}
 			continue
@@ -260,7 +261,8 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 		seen[key] = true
 		accounts[p.ID] = append(accounts[p.ID], account{
 			Provider: p.ID, IdentityKey: item.IdentityKey, Email: credential.Email,
-			blocks: parseAccountBlocks(item.Blocks, now),
+			credentialID: strings.Trim(strings.TrimSpace(string(item.ID)), `"`),
+			blocks:       parseAccountBlocks(item.Blocks, now),
 		})
 	}
 	for _, p := range providerRegistry {
@@ -270,6 +272,37 @@ func parseAccountSnapshot(body []byte) (map[string][]account, error) {
 		})
 	}
 	return accounts, nil
+}
+
+// clearCredentialBlocks removes the broker's remembered backoff for one
+// credential. It is deliberately an explicit operator action: launch must not
+// erase coordination shared by other OMP sessions. A real upstream 429 will
+// recreate the block on the next request.
+func clearCredentialBlocks(broker brokerConfig, credentialID string) error {
+	if !broker.configured() {
+		return errors.New("central auth broker is not configured")
+	}
+	credentialID = strings.TrimSpace(credentialID)
+	if credentialID == "" {
+		return errors.New("credential has no broker id")
+	}
+	endpoint := strings.TrimRight(broker.URL, "/") + "/v1/credential/" +
+		url.PathEscape(credentialID) + "/blocks"
+	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+broker.Token)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("central auth broker block retry returned %s", resp.Status)
+	}
+	return nil
 }
 
 func requireJSONEOF(dec *json.Decoder) error {

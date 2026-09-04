@@ -81,6 +81,7 @@ type model struct {
 	managerPreset      managerPresetState
 	managerLogin       bool
 	managerLoginCursor int
+	blockRetryingID    string
 
 	fetching    bool      // a usage fetch is in flight (manual or auto)
 	nextRefresh time.Time // when the next auto-refresh fires

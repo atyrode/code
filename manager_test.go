@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1926,5 +1928,73 @@ func TestManagerRendersBlockedAccountAndLaunchScopeHint(t *testing.T) {
 	if !strings.Contains(stripAnsi(hintBody), managerLaunchScopeHint) &&
 		!strings.Contains(stripAnsi(hintBody), "Selection applies to sessions launched from now on") {
 		t.Fatalf("manager body missing launch-scope hint:\n%s", stripAnsi(hintBody))
+	}
+}
+
+func TestManagerRetriesOnlyTheSelectedBlockedCredential(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodDelete || r.URL.Path != "/v1/credential/24/blocks" {
+			t.Fatalf("block retry request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer manager-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	m := managerTestModel(t)
+	m.broker.URL = server.URL
+	m.avail.accounts["anthropic"][0].credentialID = "24"
+	m.avail.accounts["anthropic"][0].blocks = []accountBlock{
+		{Scope: "tier:fable", Until: timeNow().Add(6 * time.Hour)},
+	}
+	if controls := stripAnsi(m.managerControls(120)); !strings.Contains(controls, "retry now") {
+		t.Fatalf("blocked selected account has no retry control: %s", controls)
+	}
+
+	m, cmd := managerUpdate(t, m, "x")
+	if cmd == nil || m.blockRetryingID != "24" {
+		t.Fatalf("x did not start the selected credential retry: id=%q cmd=%v", m.blockRetryingID, cmd)
+	}
+	if view := stripAnsi(m.managerView()); !strings.Contains(view, "retrying now…") {
+		t.Fatalf("pending retry is not visible:\n%s", view)
+	}
+	msg, ok := cmd().(credentialBlocksClearedMsg)
+	if !ok || msg.err != nil || msg.credentialID != "24" {
+		t.Fatalf("retry command message = %#v", msg)
+	}
+	next, refresh := m.Update(msg)
+	got := next.(model)
+	if refresh == nil || !got.fetching || got.blockRetryingID != "24" {
+		t.Fatalf("successful retry did not refresh broker state: fetching=%v id=%q cmd=%v",
+			got.fetching, got.blockRetryingID, refresh)
+	}
+	if requests != 1 {
+		t.Fatalf("retry requests = %d, want 1", requests)
+	}
+}
+
+func TestManagerHidesRetryForUnblockedOrUnidentifiedAccounts(t *testing.T) {
+	m := managerTestModel(t)
+	for _, mutate := range []func(*model){
+		func(m *model) {},
+		func(m *model) {
+			m.avail.accounts["anthropic"][0].blocks = []accountBlock{
+				{Scope: "tier:fable", Until: timeNow().Add(time.Hour)},
+			}
+		},
+	} {
+		candidate := m
+		mutate(&candidate)
+		if controls := stripAnsi(candidate.managerControls(120)); strings.Contains(controls, "retry now") {
+			t.Fatalf("account without a retryable broker block exposed retry: %s", controls)
+		}
+		next, cmd := managerUpdate(t, candidate, "x")
+		if cmd != nil || next.blockRetryingID != "" {
+			t.Fatalf("ineligible x started retry: id=%q cmd=%v", next.blockRetryingID, cmd)
+		}
 	}
 }

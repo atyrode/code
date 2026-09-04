@@ -30,6 +30,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case credentialBlocksClearedMsg:
+		if msg.credentialID != m.blockRetryingID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.blockRetryingID = ""
+			m.accountErr = fmt.Sprintf("retry failed: %v", msg.err)
+			return m, nil
+		}
+		m.accountErr = ""
+		if m.broker.configured() {
+			return m, m.startUsageFetch()
+		}
+		m.blockRetryingID = ""
+		return m, nil
 	case authLoginFinishedMsg:
 		m.managerLogin = false
 		if msg.err != nil {
@@ -52,6 +67,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.avail, m.usageStale = scoped, scopedStale
 		m.hadUsage = m.hadUsage || msg.avail.ok
 		m.fetching = false
+		m.blockRetryingID = ""
 		if msg.avail.ok {
 			saveUsageCache(m.usageCache, scoped)
 		}

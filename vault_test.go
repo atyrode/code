@@ -90,7 +90,7 @@ func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
 	timeNow = func() time.Time { return fixed }
 	defer func() { timeNow = old }()
 	snapshot := `{"credentials":[
-		{"provider":"anthropic","identityKey":"alex","credential":{"type":"oauth","email":"a@example.com"},
+		{"id":24,"provider":"anthropic","identityKey":"alex","credential":{"type":"oauth","email":"a@example.com"},
 		 "blocks":[{"blockScope":"","blockedUntilMs":` + fmt.Sprint(fixed.Add(24*time.Hour).UnixMilli()) + `}]},
 		{"provider":"openai-codex","identityKey":"codex-a","credential":{"type":"oauth","email":"c@example.com"},
 		 "blocks":[
@@ -107,6 +107,9 @@ func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
 	if until := anthropic.providerBlock(); !until.Equal(fixed.Add(24 * time.Hour)) {
 		t.Fatalf("anthropic providerBlock = %v, want %v", until, fixed.Add(24*time.Hour))
 	}
+	if anthropic.credentialID != "24" {
+		t.Fatalf("anthropic credentialID = %q, want 24", anthropic.credentialID)
+	}
 	if labels := anthropic.blockLabels(fixed); len(labels) != 1 || !strings.HasPrefix(labels[0], "blocked ") {
 		t.Fatalf("anthropic blockLabels = %#v", labels)
 	}
@@ -119,6 +122,46 @@ func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
 	labels := codex.blockLabels(fixed)
 	if len(labels) != 1 || labels[0] != "chat blocked "+fmtReset(int64(2*time.Hour/time.Second)) {
 		t.Fatalf("codex blockLabels = %#v", labels)
+	}
+}
+
+func TestClearCredentialBlocksUsesAuthenticatedDelete(t *testing.T) {
+	var method, path, authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		path = r.URL.EscapedPath()
+		authorization = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	err := clearCredentialBlocks(
+		brokerConfig{URL: server.URL, Token: "central-secret"},
+		"credential/24",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodDelete || path != "/v1/credential/credential%2F24/blocks" {
+		t.Fatalf("block retry request = %s %s", method, path)
+	}
+	if authorization != "Bearer central-secret" {
+		t.Fatalf("Authorization = %q", authorization)
+	}
+}
+
+func TestClearCredentialBlocksRejectsFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "secret response", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	err := clearCredentialBlocks(brokerConfig{URL: server.URL, Token: "central-secret"}, "24")
+	if err == nil || !strings.Contains(err.Error(), "502 Bad Gateway") {
+		t.Fatalf("block retry error = %v", err)
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "central-secret") {
+		t.Fatalf("block retry error leaked response or token: %v", err)
 	}
 }
 
