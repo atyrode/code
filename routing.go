@@ -243,7 +243,21 @@ func (m model) applyAdvisor(rows []string, level string) []string {
 // value — lead/blend are derived here and recomposed by cycleFacet, and are
 // never persisted (saveSelectionState filters on m.facets, which carries only
 // "lane").
+//
+// The session switches (moreFacets) sit under a synthetic `more` row at the
+// end of the list, and only follow it when the fold is open. The row is the
+// same kind of derived facet lead/blend are: its value lives in m.sel, ←/→
+// turn it, and nothing persists it.
 func (m model) visibleFacets() []facet {
+	shown, _ := m.facetRows()
+	return shown
+}
+
+// facetRows is visibleFacets with the fold's contents alongside: the rows to
+// render, and the lane-filtered facets the `more` row hides while collapsed —
+// which genLines summarises on the row itself, so a switch left on behind the
+// fold is never invisible.
+func (m model) facetRows() (shown, folded []facet) {
 	// A local model answers every role, so the hosted dials — lane, tier,
 	// advisor, spark — describe nothing about this run and are
 	// taken off screen, exactly as a delegated runtime target takes them off.
@@ -259,7 +273,7 @@ func (m model) visibleFacets() []facet {
 				out = append(out, facet{key: f.key, values: localThinkingLevels, glyph: f.glyph})
 			}
 		}
-		return out
+		return out, nil
 	}
 	if _, local := m.selectedRuntime(); local {
 		var out []facet
@@ -268,7 +282,7 @@ func (m model) visibleFacets() []facet {
 				out = append(out, f)
 			}
 		}
-		return out
+		return out, nil
 	}
 	if m.noProviders {
 		// The local lane needs no provider credential, so it is the one dial a
@@ -277,10 +291,10 @@ func (m model) visibleFacets() []facet {
 		// in fact run an analysis.
 		for _, f := range m.facets {
 			if f.key == localFacetKey {
-				return []facet{f}
+				return []facet{f}, nil
 			}
 		}
-		return nil
+		return nil, nil
 	}
 	lane := m.sel["lane"]
 	var out []facet
@@ -348,9 +362,19 @@ func (m model) visibleFacets() []facet {
 				continue
 			}
 		}
+		if moreFacets[f.key] {
+			folded = append(folded, f)
+			continue
+		}
 		out = append(out, f)
 	}
-	return out
+	if len(folded) > 0 {
+		out = append(out, facet{moreFacetKey, []string{moreCollapsed, moreExpanded}, m.glyphs[moreFacetKey]})
+		if m.sel[moreFacetKey] == moreExpanded {
+			out = append(out, folded...)
+		}
+	}
+	return out, folded
 }
 
 // comboID is the catalog key for a dial state: <lane>_<mtier>_<thinking>_<sp|nosp>.

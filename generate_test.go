@@ -697,7 +697,9 @@ func TestShortKeyDisambiguation(t *testing.T) {
 // initJSON models the real catalog's awkward shape: four same-priced Opus
 // variants, a legacy Opus that never got delisted and still lists at 3x the
 // price, two identically priced elites, a text-only spark, dated snapshots, a
-// non-reasoning model, and a free local model.
+// non-reasoning model, a free local model, and a flagship omp lists at $0
+// because its model table has not caught up with the launch (gpt-6-astra,
+// exactly as omp 18.x reports it).
 const initJSON = `{"models":[
  {"provider":"anthropic","id":"claude-haiku-4-5","contextWindow":200000,"reasoning":true,"thinking":["minimal","low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":1,"output":5}},
  {"provider":"anthropic","id":"claude-sonnet-4-5","contextWindow":1000000,"reasoning":true,"thinking":["minimal","low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":3,"output":15}},
@@ -718,6 +720,7 @@ const initJSON = `{"models":[
  {"provider":"openai-codex","id":"gpt-5.4","contextWindow":1000000,"reasoning":true,"thinking":["low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":2.5,"output":15}},
  {"provider":"openai-codex","id":"gpt-5.5","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":5,"output":30}},
  {"provider":"openai-codex","id":"gpt-5.6-sol","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":5,"output":30}},
+ {"provider":"openai-codex","id":"gpt-6-astra","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":0,"output":0}},
  {"provider":"ollama","id":"qwen2.5:3b","contextWindow":32768,"reasoning":false,"thinking":null,"input":["text"],"cost":{"input":0,"output":0}}
 ]}`
 
@@ -867,9 +870,12 @@ func TestGenerateInitScaffold(t *testing.T) {
 	// Pool O ladders to four here purely because this model list offers four
 	// usable rungs — the depth is data, never a constant, which is the whole
 	// point of the pool-generic ladder (a provider shipping a fourth model
-	// lights up its lanes' elite notch with no code change).
+	// lights up its lanes' elite notch with no code change). gpt-6-astra tops
+	// it even though omp lists it at $0: the published list price fills the
+	// blank, and at $10 it outranks sol on the price tiebreak the way
+	// claude-fable-5 outranks opus on pool A.
 	want := map[string][5]string{
-		"O": {"gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"},
+		"O": {"gpt-5.3-codex-spark", "gpt-5.4-mini", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"},
 		"A": {"", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5", "claude-fable-5"},
 	}
 	for pool, ids := range want {
@@ -1155,7 +1161,7 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	// unreachable one slips through. Spot-check both pools and the top rung.
 	// claude-mythos-5 is deliberately NOT here: it is on the skip list, and
 	// TestSkippedModelsNeverProbed asserts its absence from these selectors.
-	for _, id := range []string{"claude-opus-5", "claude-fable-5", "gpt-5.6-sol"} {
+	for _, id := range []string{"claude-opus-5", "claude-fable-5", "gpt-5.6-sol", "gpt-6-astra"} {
 		found := false
 		for _, s := range probe.sels {
 			if strings.HasSuffix(s, "/"+id) {
@@ -1171,6 +1177,53 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	body, _ := os.ReadFile(out)
 	if !strings.Contains(string(body), "probed: true") {
 		t.Errorf("live init must stamp probed: true:\n%s", body)
+	}
+}
+
+// TestScaffoldUnpricedModels: omp's model table lags a launch, so a brand-new
+// flagship lists at $0 with every spec of the pool's top rung. A price-ranked
+// scaffolder used to drop it silently — the one outcome worse than a wrong
+// rung, since the operator's newest model vanished with no trace. Two
+// contracts now: a model with a published list price is filled in and ranked
+// on it, written with that price so the meters do not read it as free; a
+// model with no known price is still dropped, but named in the file.
+func TestScaffoldUnpricedModels(t *testing.T) {
+	stubOmp(t, "")
+	unknown := strings.Replace(initJSON, `"id":"gpt-6-astra"`, `"id":"gpt-7-nova"`, 1)
+	withBoth := strings.Replace(initJSON, "]}", `,
+ {"provider":"openai-codex","id":"gpt-7-nova","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":0,"output":0}}
+]}`, 1)
+	yml, err := scaffoldModels([]byte(withBoth), passingProbe(t, withBoth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(yml, "    id: gpt-6-astra\n    pool: O\n    tier: 4\n    bucket: codex-main\n    cost_in: 10\n    cost_out: 50\n") {
+		t.Errorf("astra must be written as pool O's tier 4 at its list price:\n%s", yml)
+	}
+	if !strings.Contains(yml, "# WARNING — models dropped because omp lists no price") || !strings.Contains(yml, "#   gpt-7-nova\n") {
+		t.Errorf("an unpriced model with no list price must be dropped by name:\n%s", yml)
+	}
+	if strings.Contains(yml, "id: gpt-7-nova") {
+		t.Errorf("an unpriced model must not reach the ladder:\n%s", yml)
+	}
+	// The probe must not be asked about a model the scaffold cannot place —
+	// and must be asked about one it can, or the fill is a hole in the
+	// reachability guarantee.
+	sels, err := benchSelectors([]byte(withBoth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(sels, " ")
+	if !strings.Contains(joined, "openai-codex/gpt-6-astra") || strings.Contains(joined, "gpt-7-nova") {
+		t.Errorf("probe selectors = %v", sels)
+	}
+	// No priced flagship at all: the file still says why the ladder is short.
+	yml, err = scaffoldModels([]byte(unknown), passingProbe(t, unknown))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(yml, "#   gpt-7-nova\n") || strings.Contains(yml, "gpt-6-astra") {
+		t.Errorf("unexpected scaffold:\n%s", yml)
 	}
 }
 

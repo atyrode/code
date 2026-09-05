@@ -23,28 +23,49 @@ func facetDefs(glyphs map[string]string) []facet {
 		// applyCatalog replaces the list with the lanes the catalog generated.
 		{"lane", requiredPoolLanes(), glyphs["lane"]},
 		// The model dial is the capability ladder, one notch per rung. "elite"
-		// reaches a pool's tier-4 rung — pool A's top model today, and any pool
-		// that later gains a fourth. It is only offered on lanes whose combos
-		// actually carry it (visibleFacets narrows the values to m.mtiers): on a
-		// lane whose pools stop at tier 3 the generator writes no elite combo,
-		// because it would be byte-identical to smart.
+		// reaches a pool's tier-4 rung — claude-fable-5 on A, gpt-6-astra on
+		// O, and any pool that later gains a fourth. It is only offered on
+		// lanes whose combos actually carry it (visibleFacets narrows the
+		// values to m.mtiers): on a lane whose lead pool stops at tier 3 the
+		// generator writes no elite combo, because it would be byte-identical
+		// to smart.
 		{"model", []string{"fast", "normal", "smart", "elite"}, glyphs["model"]},
 		{"thinking", []string{"minimal", "low", "medium", "high", "xhigh", "max"}, glyphs["thinking"]},
 		// advisor as a power/cost dial: a quick glance, a proper review, or a
 		// deep (expensive) audit — off spends nothing.
 		{"advisor", []string{"off", "glance", "review", "audit"}, glyphs["advisor"]},
-		{"fast", []string{"on", "off"}, glyphs["fast"]},
 		{"spark", []string{"on", "off"}, glyphs["spark"]},
-		// prewalk and planyolo are omp's own session switches, not routing:
-		// neither appears in comboID, so both leave the generated grid
-		// untouched and are applied where the launch is assembled — prewalk as
-		// omp config keys, planyolo as an argv flag. Both target the "smol"
-		// role by default, which this grid already routes, so there is no
-		// second model to choose.
+		// omp's own session switches, folded under the generator's `more` row
+		// (moreFacets). None of them is routing: fast buys a provider's
+		// priority service tier as an omp `tier:` overlay key, prewalk and
+		// planyolo neither appear in comboID and are applied where the launch
+		// is assembled — prewalk as omp config keys, planyolo as an argv flag.
+		// Both target the "smol" role by default, which this grid already
+		// routes, so there is no second model to choose.
+		{"fast", []string{"on", "off"}, glyphs["fast"]},
 		{"prewalk", []string{"on", "off"}, glyphs["prewalk"]},
 		{"planyolo", []string{"on", "off"}, glyphs["planyolo"]},
 	}
 }
+
+// moreFacetKey names the generator's fold: a synthetic row visibleFacets
+// appends after the routing dials, holding the facets in moreFacets. It is
+// derived, never a facetDefs entry, so it is never persisted (saveSelectionState
+// filters on m.facets) and every run opens with the fold closed. Its value
+// lives in m.sel like lead/blend's do, so ←/→ turn it exactly like any other
+// dial: moreCollapsed on the left, moreExpanded on the right.
+const (
+	moreFacetKey  = "more"
+	moreCollapsed = "collapsed"
+	moreExpanded  = "expanded"
+)
+
+// moreFacets are the dials the fold hides: omp's own session switches, which
+// change how a run behaves but never what the routing grid says. The routing
+// dials above the fold are what an operator turns on nearly every launch;
+// these are opt-in and off by default, and a list that always shows them
+// buries the dials that matter under the ones that rarely change.
+var moreFacets = map[string]bool{"fast": true, "prewalk": true, "planyolo": true}
 
 // parseAdvisors reads the __advisors__ block (rows: "<level> <ctx> <chain>")
 // into a map keyed "level/ctx" — the advisor model table, sourced from

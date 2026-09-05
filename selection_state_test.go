@@ -240,8 +240,8 @@ func TestFacetChangeAndResetPersistSelection(t *testing.T) {
 
 	resetModel, _ := changed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	reset := resetModel.(model)
-	if !reflect.DeepEqual(reset.sel, defaultSel()) {
-		t.Fatalf("reset selection = %v, want defaults", reset.sel)
+	if got := selectionChoices(reset.sel, testFacets()); !reflect.DeepEqual(got, defaultSel()) {
+		t.Fatalf("reset selection = %v, want defaults", got)
 	}
 	if got := loadSelectionState(path, testFacets()); !reflect.DeepEqual(got, defaultSel()) {
 		t.Fatalf("reset persisted %v, want defaults", got)

@@ -577,12 +577,23 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", fmt.Errorf("parsing model list: %w", err)
 	}
-	var unresolved, blocked []string
+	var unresolved, blocked, unpriced []string
 	byPool := map[string][]ompModel{}
 	for _, m := range parsed.Models {
 		pool := poolOf(m.Provider)
 		if pool == "" || !m.Reasoning || len(m.Thinking) == 0 ||
-			m.Cost.Input <= 0 || datedID.MatchString(m.ID) || skipModel(m.ID) {
+			datedID.MatchString(m.ID) || skipModel(m.ID) {
+			continue
+		}
+		// A price-ranked ladder cannot place a model that has no price, and
+		// the meters would read it as free. omp's own table lags a launch by
+		// a release or two, so a brand-new flagship arrives at $0 — which used
+		// to drop it silently, and a silent drop of the operator's newest model
+		// is the one outcome worse than a wrong rung. Fill the blank from the
+		// provider's published rate where one is known; otherwise drop it, but
+		// say so in the file.
+		if !priced(&m) {
+			unpriced = append(unpriced, m.ID)
 			continue
 		}
 		// A model omp lists but the account cannot call is worse than useless on
@@ -781,6 +792,20 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 		}
 		b.WriteString("# Upgrade the client it names, then re-run 'code generate init --refresh'.\n")
 	}
+	// An unpriced model is dropped for the scaffolder's sake, not the
+	// operator's: omp will price it in a later release, and until then the
+	// operator can write the rung in by hand. Name it so they know to.
+	if len(unpriced) > 0 {
+		sort.Strings(unpriced)
+		b.WriteString(`#
+# WARNING — models dropped because omp lists no price for them, and a ladder
+# ranked by price cannot place what it cannot price:
+`)
+		for _, id := range unpriced {
+			b.WriteString("#   " + id + "\n")
+		}
+		b.WriteString("# Add the rung by hand with the provider's published cost_in/cost_out, or\n# upgrade omp once its model table carries a price and re-run 'code generate init --refresh'.\n")
+	}
 	// The marker is the whole point of probing: without it `code generate`
 	// refuses the file, so an offline scaffold can never quietly become live
 	// routing that names a model this account cannot call.
@@ -940,10 +965,9 @@ func runGenerateInit(args []string) int {
 	return 0
 }
 
-// skippedModels are model ids the scaffolder must not even probe. This is the
-// one place in the tree that spells a model id, and it earns the exception by
-// encoding an account fact no metadata expresses: omp lists the model, its
-// specs look top-of-ladder, and the account simply cannot call it.
+// skippedModels are model ids the scaffolder must not even probe. Together with
+// listPrices below these are the only places in the tree that spell a model id,
+// and each earns the exception by encoding a fact no metadata expresses.
 //
 // claude-mythos-5 is the standing case. It advertises claude-fable-5's exact
 // price, context window and thinking range, and 404s here — the operator has
@@ -962,6 +986,32 @@ var skippedModels = map[string]bool{
 
 func skipModel(id string) bool { return skippedModels[strings.ToLower(id)] }
 
+// listPrices are provider-published rates ($/1M tokens in, out) for models
+// omp lists without a price. omp's model table lags a launch: a brand-new
+// flagship arrives with cost 0 and every spec of the pool's top rung, and the
+// scaffolder — which ranks by price — would either drop it or crown it the
+// cheap rung. Neither is the model the operator just paid for. The fill
+// applies only while omp reports no price; once its table catches up the
+// entry is dead weight and should go.
+//
+// gpt-6-astra: OpenAI's standard API rate, per openai.com/index/gpt-6-astra —
+// 2.5× gpt-5.6-sol, and the exact point claude-fable-5 sits at on pool A.
+var listPrices = map[string][2]float64{
+	"gpt-6-astra": {10, 50},
+}
+
+// priced reports whether the model carries a usable price, filling omp's blank
+// from listPrices first. Everything the scaffolder ranks or probes goes through
+// here so the two agree on which models exist.
+func priced(m *ompModel) bool {
+	if m.Cost.Input <= 0 {
+		if lp, ok := listPrices[strings.ToLower(m.ID)]; ok {
+			m.Cost.Input, m.Cost.Output = lp[0], lp[1]
+		}
+	}
+	return m.Cost.Input > 0
+}
+
 // benchSelectors lists every model the scaffolder would consider, as
 // provider-qualified selectors so `omp bench` cannot fuzzy-match the wrong one.
 func benchSelectors(raw []byte) ([]string, error) {
@@ -971,7 +1021,7 @@ func benchSelectors(raw []byte) ([]string, error) {
 	}
 	var out []string
 	for _, m := range parsed.Models {
-		if poolOf(m.Provider) == "" || !m.Reasoning || m.Cost.Input <= 0 ||
+		if poolOf(m.Provider) == "" || !m.Reasoning || !priced(&m) ||
 			datedID.MatchString(m.ID) || skipModel(m.ID) {
 			continue
 		}
