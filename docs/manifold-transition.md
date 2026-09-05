@@ -38,7 +38,7 @@ plugin surface. The final step (§6, step 6) retires the TUI.
 the attempt is an instrument: it discovers what manifold's plugin story lacks
 for an out-of-tree author with a different shape of need — Babel needs a
 process without a PTY, code a PTY with a program in it. Babel's prerequisites
-(atyrode/manifold#151 to #160) are reused by number; what code finds beyond
+(atyrode/manifold#151 to atyrode/manifold#160) are reused by number; what code finds beyond
 them is drafted in §8.
 
 **Settled before this document** (operator, via the orchestrator): manifest
@@ -54,9 +54,9 @@ Babel's record §2 (`~/babel/docs/manifold-transition.md:54-275`) explains the
 axioms, the plane rule, the floor, what a plugin structurally is, loading,
 identity, machines, persistence and release discipline. None of it changed in
 substance at `main@8466628`: `CHANGELOG.md:3-14` shows `[Unreleased]` empty
-and v0.6.2 carrying a macOS agent binary (#176, #181), CI on every pull
-request (#174, #179; Babel's "no CI on PRs into dev" gotcha is obsolete) and
-the hub-then-agents pin handoff (#175, #180). What follows is what a launcher
+and v0.6.2 carrying a macOS agent binary (atyrode/manifold#176, atyrode/manifold#181), CI on every pull
+request (atyrode/manifold#174, atyrode/manifold#179; Babel's "no CI on PRs into dev" gotcha is obsolete) and
+the hub-then-agents pin handoff (atyrode/manifold#175, atyrode/manifold#180). What follows is what a launcher
 author needs and a Babel reader would not have looked at.
 
 ### 2.1 A terminal, on the wire
@@ -176,7 +176,7 @@ unbuilt (`docs/decisions/0016-plugin-isolation.md:4-20`); `entry` is
 `@manifold/plugin`, `@manifold/sdk` and `@manifold/protocol` are `"private":
 true` workspace packages (`packages/plugin/package.json:2-3`,
 `packages/sdk/package.json:2-3`, `packages/protocol/package.json:2-3`).
-Nothing landed toward atyrode/manifold#151 or #152 since Babel's study.
+Nothing landed toward atyrode/manifold#151 or atyrode/manifold#152 since Babel's study.
 
 ### 2.5 Ceilings, current values
 
@@ -364,20 +364,20 @@ draft title from §8 (`[class] Title`).
 
 | Need | Manifold offers | Missing | What code changes | Decision or draft issue |
 | --- | --- | --- | --- | --- |
-| **N1** Identity | exists: one `Principal {kind: "human" \| "agent"}` (`packages/protocol/src/principal.ts:5-7`); agent tokens never expire (`docs/CONTRACTS.md:147-151`); a program in a PTY gets a terminal-scoped `MANIFOLD_TOKEN` (`terminal-broker.ts:542`). | Nothing. | `code publish` runs as an agent-kind principal per machine; the operator is the owner key or a human principal; `code launch` inside the PTY may read `MANIFOLD_TOKEN` to correlate its session record with the terminal. | D3; Babel #143 pattern. |
-| **N2** Machines | exists: `core.machines.list` returns `{id, name, online}` (`packages/plugins/machines/src/index.ts:89-93`; `packages/protocol/src/http.ts:322-338`); `SessionHandle.machines()` (`host.ts:59`); `MACHINES_RESOURCE` feed (`polled-resource.ts:61`). absent: a `machine` node kind (`uri.ts:33-45`). | Per-machine grants; a declared "this machine has `omp` and `code`" fact. | The machine picker is the roster; a single-spoke fleet (`~/nix-dotfiles/fleet/manifold.json:9-11`) picks without asking. | atyrode/manifold#157; #153 (comment, §8.1). |
+| **N1** Identity | exists: one `Principal {kind: "human" \| "agent"}` (`packages/protocol/src/principal.ts:5-7`); agent tokens never expire (`docs/CONTRACTS.md:147-151`); a program in a PTY gets a terminal-scoped `MANIFOLD_TOKEN` (`terminal-broker.ts:542`). | Nothing. | `code publish` runs as an agent-kind principal per machine; the operator is the owner key or a human principal; `code launch` inside the PTY may read `MANIFOLD_TOKEN` to correlate its session record with the terminal. | D3; Babel atyrode/babel#143 pattern. |
+| **N2** Machines | exists: `core.machines.list` returns `{id, name, online}` (`packages/plugins/machines/src/index.ts:89-93`; `packages/protocol/src/http.ts:322-338`); `SessionHandle.machines()` (`host.ts:59`); `MACHINES_RESOURCE` feed (`polled-resource.ts:61`). absent: a `machine` node kind (`uri.ts:33-45`). | Per-machine grants; a declared "this machine has `omp` and `code`" fact. | The machine picker is the roster; a single-spoke fleet (`~/nix-dotfiles/fleet/manifold.json:9-11`) picks without asking. | atyrode/manifold#157; atyrode/manifold#153 (comment, §8.1). |
 | **N3** A terminal on a machine with command, cwd, env | exists: `terminal_open {cwd?, machineId?, placement?}` (`session.ts:192-210`), `$SHELL` only (`agent/terminal.ts:114-129`), env fixed (`terminal-broker.ts:535-543`). absent: a command field on any frame. | `terminal_open` carrying argv. | Interim: open, wait for the shell, type `code launch --selection ...`. End state: the PTY execs it. | D2; `[prerequisite] Session-channel terminal_open should carry a command/argv, not force every PTY through a login shell`. |
-| **N4** Placement beside the launcher | exists: `placement: "tile"` into a composition; `core.space.place`; `navigate`. absent: a terminal leaf in the workspace tree (`shell/src/server.ts:108-109`); a plugin pane inside a composition's tile tree. declared: #134 for third-party tile-tree disciplines. | A composition-shaped discipline hosting a plugin pane beside terminal tiles, without the twelve literals. | Interim: a `code.launcher` panel; the terminal lands in the composition in view or a code-created one, then `navigate`. End: `code.launchpad` discipline. | D4; atyrode/manifold#134; `[prerequisite] A discipline that hosts plugin UI beside a live terminal tile in one addressable view`. |
+| **N4** Placement beside the launcher | exists: `placement: "tile"` into a composition; `core.space.place`; `navigate`. absent: a terminal leaf in the workspace tree (`shell/src/server.ts:108-109`); a plugin pane inside a composition's tile tree. declared: atyrode/manifold#134 for third-party tile-tree disciplines. | A composition-shaped discipline hosting a plugin pane beside terminal tiles, without the twelve literals. | Interim: a `code.launcher` panel; the terminal lands in the composition in view or a code-created one, then `navigate`. End: `code.launchpad` discipline. | D4; atyrode/manifold#134; `[prerequisite] A discipline that hosts plugin UI beside a live terminal tile in one addressable view`. |
 | **N5** Terminal creation from a plugin's browser half | exists, in-realm only: renderers mint a `SessionClient` from `host.token` (`composition-view.tsx:180-182`). absent from `SessionHandle` (`host.ts:52-115`); removed by isolation (`0016:221-231`). | `openTerminal` and `sendTerminalInput` on the plugin-facing handle, or an RPC equivalent. | The interim types keystrokes through whatever handle exists; the end state needs none. | `[prerequisite] SessionHandle has no plugin-facing terminal handle; shipped renderers escape it with a self-minted SessionClient using host.token, which isolated plugins will not have`. |
-| **N6** Live projections (catalog, usage, version, sessions) | exists: `core.*` and `code.*` doors, `ctx.storage`, `ctx.emit` staged on `ok` (`plugin-host.ts:340-349,1207-1210`), `usePolledResource`. absent: a plugin-declarable continuous stream (atyrode/manifold#169). | Nothing for these cadences (5 min usage, per-launch sessions). | `code publish` posts through `code.*` doors, each emitting one event; the browser re-reads. | D3; #169 not on code's path. |
-| **N7** Storage for a 206 KiB catalog | exists: `plugin_kv`, 64 KiB values (`storage.ts:74`); 1 MiB bodies (`http.ts:36`). absent: blobs (atyrode/manifold#159). | Nothing if the catalog is split. | One key per combo (`comboID`, `routing.go:385`) plus an index key; never one key for the file. | D3; `[improvement] MAX_STORAGE_VALUE_BYTES's 64 KiB ceiling has no stated rationale, and no blob class for catalog-sized plugin data` (references #159). |
-| **N8** Settings (default lane, model, thinking) | exists: boolean, per principal, at most 8 (`plugin.ts:104,128-133,402`). | An enum kind and a workspace scope. | The selection state stays a `code.*` projection per principal; a default is a `code.*` door until #158. | atyrode/manifold#158. |
+| **N6** Live projections (catalog, usage, version, sessions) | exists: `core.*` and `code.*` doors, `ctx.storage`, `ctx.emit` staged on `ok` (`plugin-host.ts:340-349,1207-1210`), `usePolledResource`. absent: a plugin-declarable continuous stream (atyrode/manifold#169). | Nothing for these cadences (5 min usage, per-launch sessions). | `code publish` posts through `code.*` doors, each emitting one event; the browser re-reads. | D3; atyrode/manifold#169 not on code's path. |
+| **N7** Storage for a 206 KiB catalog | exists: `plugin_kv`, 64 KiB values (`storage.ts:74`); 1 MiB bodies (`http.ts:36`). absent: blobs (atyrode/manifold#159). | Nothing if the catalog is split. | One key per combo (`comboID`, `routing.go:385`) plus an index key; never one key for the file. | D3; `[improvement] MAX_STORAGE_VALUE_BYTES's 64 KiB ceiling has no stated rationale, and no blob class for catalog-sized plugin data` (references atyrode/manifold#159). |
+| **N8** Settings (default lane, model, thinking) | exists: boolean, per principal, at most 8 (`plugin.ts:104,128-133,402`). | An enum kind and a workspace scope. | The selection state stays a `code.*` projection per principal; a default is a `code.*` door until atyrode/manifold#158. | atyrode/manifold#158. |
 | **N9** Events | exists: declared kinds, flat payloads, no replay (`events.ts:40,73,82,91`). | Nothing. | `code.*` doors emit `catalog_published`, `usage_published`, `sessions_changed`, `launch_requested`. | Settled. |
-| **N10** Loading out of tree | exists: static assembly only (§2.4). declared: ADR 0016 stage 1 and dynamic loading. | The loader; published or pinned SDK packages. | The package lives in `atyrode/code` under `plugin/`; ships as a hashed artifact from code's release. | D1; atyrode/manifold#151, #152, #154. |
-| **N11** Binary dependency on `omp` and `code` on the spoke | absent: a manifest field for an external binary (atyrode/manifold#153). exists: the dotfiles wrapper puts `code` on PATH with its whole environment (`default.nix:1495-1530`). | The declaration; a roster signal when the binary is missing. | The plugin declares `omp` and `code`; until then a missing binary is a shell error in the terminal. | D2; #153 (comment). |
+| **N10** Loading out of tree | exists: static assembly only (§2.4). declared: ADR 0016 stage 1 and dynamic loading. | The loader; published or pinned SDK packages. | The package lives in `atyrode/code` under `plugin/`; ships as a hashed artifact from code's release. | D1; atyrode/manifold#151, atyrode/manifold#152, atyrode/manifold#154. |
+| **N11** Binary dependency on `omp` and `code` on the spoke | absent: a manifest field for an external binary (atyrode/manifold#153). exists: the dotfiles wrapper puts `code` on PATH with its whole environment (`default.nix:1495-1530`). | The declaration; a roster signal when the binary is missing. | The plugin declares `omp` and `code`; until then a missing binary is a shell error in the terminal. | D2; atyrode/manifold#153 (comment). |
 | **N12** Secrets | absent: no vault, no env injection; `SECRET_FIELD` redacts by name (`log.ts:36`). | Nothing requested. | Broker token, DeepSeek key and account pool stay on the machine; no `code.*` door accepts one. | D5. |
 | **N13** Sessions and worktrees liveness | exists: `terminal_exited`, `core.terminals.list` (`terminals/src/index.ts:51,159-162`). absent: a process registry. | Nothing: the flock is the truth and the spoke reads it. | `code publish` projects the registry; `code session reap` stays CLI-only; a manifold terminal exit is a second signal, not a replacement. | D3; D6. |
-| **N14** Onboarding's long probe | absent: any supervised job primitive (atyrode/manifold#156); lifecycle hooks are 2 s (`lifecycle.ts:21`). | A job with progress. | `code generate init` stays CLI-only; its review step is a surface later; `code publish` reports the result. | D6; #156 not on code's path (D2 wants a PTY). |
+| **N14** Onboarding's long probe | absent: any supervised job primitive (atyrode/manifold#156); lifecycle hooks are 2 s (`lifecycle.ts:21`). | A job with progress. | `code generate init` stays CLI-only; its review step is a surface later; `code publish` reports the result. | D6; atyrode/manifold#156 not on code's path (D2 wants a PTY). |
 
 ---
 
@@ -405,9 +405,9 @@ Consequences:
 - `PluginStorage` becomes promise-returning for everybody (`0016:247-248`),
   so `code.*` handlers are async from the start; the capability ceiling is
   drawn from the closed nine (`capabilities.ts:11-22`), and "may launch on
-  machine X" has no name until atyrode/manifold#154 and #157.
+  machine X" has no name until atyrode/manifold#154 and atyrode/manifold#157.
 
-Manifold prerequisites: atyrode/manifold#151, #152, #153, #154, #155. Code
+Manifold prerequisites: atyrode/manifold#151, atyrode/manifold#152, atyrode/manifold#153, atyrode/manifold#154, atyrode/manifold#155. Code
 work: "Plugin package and manifest: `code.<x>` namespace, out-of-tree, no
 vendoring" (atyrode/manifold#192).
 
@@ -556,7 +556,7 @@ service + agent-kind principal" (#97) — the doors, the catalog split, a
 with manifest, `code.*` actions as data, handlers over `ctx.storage`, a flake
 output for the artifact.
 
-Manifold, in parallel: atyrode/manifold#151, #152, #153, #154. The docs/spikes
+Manifold, in parallel: atyrode/manifold#151, atyrode/manifold#152, atyrode/manifold#153, atyrode/manifold#154. The docs/spikes
 entry (D1) sizes atyrode/manifold#160 with code's dials and preview.
 
 Proof: `code launch --selection` from a plain shell launches the same omp
@@ -711,7 +711,7 @@ Every ceiling or rule that bites code specifically, in the order it bites.
   (`placement.ts:339,1588`).
 - **Boolean settings, per principal; closed nine caps.** `SETTING_KINDS =
   ["boolean"]` (`plugin.ts:104`); `terminals:spawn` is the nearest cap for
-  "launch" and does not scope to a machine (#154, #157).
+  "launch" and does not scope to a machine (atyrode/manifold#154, atyrode/manifold#157).
 - **Emission only inside a dispatch.** `ctx.emit` flushes on `ok`
   (`plugin-host.ts:340-349,1207-1210`); `code publish` gets its event by
   calling a door, never by writing storage.
@@ -729,7 +729,7 @@ Every ceiling or rule that bites code specifically, in the order it bites.
 
 ## 8. Draft issues
 
-Numbers were assigned when filed on 2026-09-05 (manifold #185-#213, code #95-#103, babel #158/#160, tyrode-dev/infra#546). Titles are
+Numbers were assigned when filed on 2026-09-05 (atyrode/manifold#185 to atyrode/manifold#213, code #95-#103, atyrode/babel#158 and atyrode/babel#160, tyrode-dev/infra#546). Titles are
 the ones settled with the issue drafts of the same date, so the record and the
 filings agree word for word.
 
@@ -820,7 +820,7 @@ on`** (atyrode/manifold#197). Evidence: `packages/protocol/src/plugin.ts:346-362
 `packages/protocol/src/placement.ts:390-397`;
 `packages/plugin/src/projection.ts:160-183`; the guide never names the kind
 (§2.2). Acceptance: a subsection under §6 with the manifest row, the renderer
-props, and #134's caveat.
+props, and atyrode/manifold#134's caveat.
 
 **`[design] No atomic multi-door composition, and no documented
 compensating-action idiom`** (atyrode/manifold#202). Evidence:
@@ -833,7 +833,7 @@ on failure `removeContainerTile` or kill), or one door does both.
 rationale, and no blob class for catalog-sized plugin data`** (atyrode/manifold#189,
 references atyrode/manifold#159). Evidence: `storage.ts:74`; `http.ts:36`
 (1 MiB bodies); `testdata/two-pool-golden.plain` at 211,213 bytes.
-Acceptance: a comment or ADR line naming the tradeoff; #159 cites a value
+Acceptance: a comment or ADR line naming the tradeoff; atyrode/manifold#159 cites a value
 read whole and written rarely as its second instance.
 
 **`[improvement] Machine roster row (MachineSummary) should expose declared
@@ -841,7 +841,7 @@ host capabilities`** (atyrode/manifold#190, with atyrode/manifold#153). Evidence
 `packages/protocol/src/http.ts:322-338` (`id, name, online, color?, revoked?`);
 the launcher needs "this machine has `omp` ≥ 17.3 and `code`"
 (`routing.go:814-819`). Acceptance: an agent-reported capability list on the
-row, fed by the manifest declaration #153 adds; a machine lacking one is
+row, fed by the manifest declaration atyrode/manifold#153 adds; a machine lacking one is
 greyed in the picker.
 
 **`[improvement] No health/readiness surface for "agent dialed the hub and
@@ -852,24 +852,24 @@ outcome; the machines section renders it; v21 readers are unaffected.
 
 Comments on existing issues, not new filings: atyrode/manifold#160 — widen
 the sizing input with §3.3; atyrode/manifold#156 — a session-channel PTY-exec
-shape is also needed, distinct from #156's no-PTY job; atyrode/manifold#153
+shape is also needed, distinct from atyrode/manifold#156's no-PTY job; atyrode/manifold#153
 — `omp` with a version floor, and `code`; atyrode/manifold#134 — the
 launchpad is its second instance; atyrode/manifold#157 — "may launch on
 machine X" is code's grant.
 
-Filed from the spike record (`docs/spikes/code-launcher.md`, atyrode/manifold PR #199),
+Filed from the spike record (`docs/spikes/code-launcher.md`, atyrode/manifold PR atyrode/manifold#199),
 each with its measurement: no readiness signal on the terminal channel
 (atyrode/manifold#203); the controller lease is per principal in code and per
-connection in the doc (#204); every terminal mints a durable agent principal
-(#205); `place` of an already-tiled terminal adds a second leaf (#206);
+connection in the doc (atyrode/manifold#204); every terminal mints a durable agent principal
+(atyrode/manifold#205); `place` of an already-tiled terminal adds a second leaf (atyrode/manifold#206);
 `terminal_open` demands a geometry the opener cannot know under `placement:
-"tile"` (#207); the channel plane is undocumented (#208); "two places" is five
-files and an install (#209); a later-installed seat is invisible to an
-arranged principal (#210); `vite.config.ts` proxies to a literal `:7777`
-(#211); refusal messages name a kind about nothing (#212); `setLayout` accepts
-an uncontributed panel id (#213). Found landing the docs fixes: gate scripts
-pick server ports at random inside the ephemeral range (#198). Closed on the
-way: #162 (already fixed by #177).
+"tile"` (atyrode/manifold#207); the channel plane is undocumented (atyrode/manifold#208); "two places" is five
+files and an install (atyrode/manifold#209); a later-installed seat is invisible to an
+arranged principal (atyrode/manifold#210); `vite.config.ts` proxies to a literal `:7777`
+(atyrode/manifold#211); refusal messages name a kind about nothing (atyrode/manifold#212); `setLayout` accepts
+an uncontributed panel id (atyrode/manifold#213). Found landing the docs fixes: gate scripts
+pick server ports at random inside the ephemeral range (atyrode/manifold#198). Closed on the
+way: atyrode/manifold#162 (already fixed by atyrode/manifold#177).
 
 ### 8.2 Code
 
