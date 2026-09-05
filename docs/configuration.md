@@ -5,7 +5,7 @@
 | column | meaning |
 | --- | --- |
 | `pool` | `O` (OpenAI/Codex), `A` (Anthropic), or `D` (DeepSeek). `O` and `A` must fill tiers 1..3; `D` is optional — one verified model is enough, missing tiers borrow the nearest rung |
-| `tier` | position on the pool's capability ladder. `1` cheap, `2` regular, `3` smart, and an optional `4` — a fourth rung the model dial's `elite` notch reaches. Ladder depth is per pool: Anthropic ladders to 4 today, Codex to 3, and a provider shipping a fourth model needs no code change to light its own `elite` up. `0` is off the ladder entirely: the fast idle-bucket model the `spark` toggle drains |
+| `tier` | position on the pool's capability ladder. `1` cheap, `2` regular, `3` smart, and an optional `4` — a fourth rung the model dial's `elite` notch reaches. Ladder depth is per pool, and a provider shipping a fourth model needs no code change to light its own `elite` up: Anthropic's is `claude-fable-5`, OpenAI's `gpt-6-astra`. `0` is off the ladder entirely: the fast idle-bucket model the `spark` toggle drains |
 | `bucket` | the quota window the model draws — drives the usage meter |
 | `image` | `false` marks a text-only model, which the vision role then avoids |
 
@@ -14,12 +14,28 @@ rung. That is not the same as "any pool in the lane" — the deliberative bump
 already gives plan/slow/reviewer the top rung at `smart`, so on a lane
 led by a three-rung pool `elite` would render a block identical to `smart`.
 
+`code generate init` ranks a pool's ladder by price, so it needs one for every
+model. omp's model table lags a launch by a release or two — a brand-new
+flagship arrives listed at `$0` — and a scaffold used to drop such a model
+without a word. It now fills the blank from the provider's published rate where
+one is known (`listPrices` in `generate_init.go`; `gpt-6-astra` at $10/$50 is
+the standing entry, and it should go once omp prices the model), and names any
+other unpriced model in a warning at the top of `models.yml` so you can write
+the rung in by hand.
+
 ## Dials that set omp's own switches
 
 Most dials pick models, so they select a pre-computed routing block. Three do
 not: they choose a value for a switch omp already owns, and this tool's only job
 is to put that value where omp reads it. None of them appears in the combo id,
 so the generated grid is byte-identical whatever they are set to.
+
+In the generator they sit behind a `more` row at the end of the dial list,
+closed on every open: `→` on that row opens it, `←` closes it, and while it is
+closed the row names what it hides and spells any switch left on (`prewalk on`),
+so nothing behind the fold can change a launch without saying so on screen. The
+fold is a view state — a `d` reset turns the switches back off but leaves it
+open, and it is never persisted with the dials.
 
 | dial | omp surface | effect |
 | --- | --- | --- |

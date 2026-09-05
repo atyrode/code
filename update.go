@@ -180,7 +180,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.help.ShowAll = !m.help.ShowAll
 			m.relayout() // the taller/shorter footer changes the body height
 		case "d":
+			// The fold is view state, not a dial: a reset turns every dial
+			// back, it does not close the section the cursor is sitting in.
+			fold := m.sel[moreFacetKey]
 			m.sel = defaultSel()
+			if fold != "" {
+				m.sel[moreFacetKey] = fold
+			}
 			if len(m.runtimeTargets) > 0 {
 				m.sel["runtime"] = "hosted"
 			}
@@ -188,6 +194,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sel[localFacetKey] = localOff
 			}
 			m.clampSel() // the defaults assume a full catalog; this one may not be
+			m.clampFacetCursor(len(m.visibleFacets()))
 			m.persistSelection()
 			m.syncPreview()
 		case "f":

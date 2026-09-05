@@ -567,6 +567,7 @@ func TestDefaultGlyphs(t *testing.T) {
 		"thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fast": 0xf0e7,
 		"prewalk": 0xf063, "planyolo": 0xf04b,
+		"more": 0xf141,
 	}
 	tables := map[string]map[string]string{
 		"nerd": defaultGlyphs(), "unicode": unicodeGlyphs(), "ascii": asciiGlyphs(),
@@ -641,6 +642,85 @@ func TestGenLinesChildRow(t *testing.T) {
 		if p := stripAnsi(ln); strings.Contains(p, "blend") {
 			t.Errorf("mixed must render no blend child, got %q", p)
 		}
+	}
+}
+
+// TestGenLinesMoreFold: omp's session switches sit behind a `more` row at the
+// end of the dial list. The row is closed on every open, names what it hides
+// (a switch left on behind it lights up, so a hidden "on" is never a surprise
+// at launch), opens with → and closes with ← like any other dial, hangs its
+// children off tree connectors, and never reaches the persisted selection.
+func TestGenLinesMoreFold(t *testing.T) {
+	m := model{facets: facetDefs(defaultGlyphs()), sel: defaultSel(), glyphs: defaultGlyphs()}
+	m.sel["lane"] = "gpt-led"
+	m.sel["prewalk"] = "on"
+	plain := func() []string {
+		lines, _ := m.genLines()
+		out := make([]string, len(lines))
+		for i, l := range lines {
+			out[i] = stripAnsi(l)
+		}
+		return out
+	}
+	lines := plain()
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, "more") || !strings.Contains(last, "▸") {
+		t.Fatalf("the fold must close the list, collapsed:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, hidden := range []string{"fast", "prewalk", "planyolo"} {
+		if !strings.Contains(last, hidden) {
+			t.Errorf("collapsed row must name the hidden %q dial, got %q", hidden, last)
+		}
+	}
+	for _, ln := range lines[:len(lines)-1] {
+		if strings.Contains(ln, "prewalk") || strings.Contains(ln, "planyolo") || strings.Contains(ln, "fast") {
+			t.Errorf("a folded dial rendered as its own row while collapsed: %q", ln)
+		}
+	}
+	// The summary is the only trace of prewalk:on while collapsed, so the on
+	// state is spelled there — colour alone would vanish in a pipe.
+	if !strings.Contains(last, "prewalk on") || strings.Contains(last, "fast on") || strings.Contains(last, "planyolo on") {
+		t.Errorf("collapsed summary must spell exactly the on switches, got %q", last)
+	}
+
+	m.fcur = len(m.visibleFacets()) - 1
+	m.cycleFacet(1)
+	lines = plain()
+	tail := lines[len(lines)-4:]
+	for i, want := range []string{"more", "├ ", "├ ", "└ "} {
+		if !strings.Contains(tail[i], want) {
+			t.Errorf("expanded fold row %d = %q, want it to carry %q", i, tail[i], want)
+		}
+	}
+	if !strings.Contains(tail[1], "fast") || !strings.Contains(tail[2], "prewalk") || !strings.Contains(tail[3], "planyolo") {
+		t.Errorf("children must follow facetDefs order under the fold:\n%s", strings.Join(tail, "\n"))
+	}
+	if _, ok := selectionChoices(m.sel, m.facets)[moreFacetKey]; ok {
+		t.Error("the fold's state must never be persisted with the dials")
+	}
+	// A reset turns the dials back but leaves the section the cursor is in
+	// open, and keeps the cursor on a row that still exists.
+	m.moveDown()
+	m.moveDown()
+	m.moveDown()
+	reset, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = reset.(model)
+	if m.sel[moreFacetKey] != moreExpanded {
+		t.Errorf("reset closed the fold: %q", m.sel[moreFacetKey])
+	}
+	if vf := m.visibleFacets(); m.fcur != len(vf)-1 || vf[m.fcur].key != "planyolo" {
+		t.Errorf("cursor after reset = %d over %d rows", m.fcur, len(vf))
+	}
+	m.fcur = 0
+	for i, f := range m.visibleFacets() {
+		if f.key == moreFacetKey {
+			m.fcur = i
+		}
+	}
+	m.cycleFacet(-1)
+	lines = plain()
+	if last := lines[len(lines)-1]; !strings.Contains(last, "more") || !strings.Contains(last, "▸") {
+		t.Errorf("← must close the fold, got %q", last)
 	}
 }
 
@@ -4788,8 +4868,11 @@ func TestServiceTierIsProviderGeneric(t *testing.T) {
 
 	m := layoutModel()
 	m.sel["lane"], m.sel["fast"] = "claude-only", "on"
+	// fast lives under the generator's fold, so "offered" means present on
+	// either side of it.
 	offered := func() bool {
-		for _, f := range m.visibleFacets() {
+		shown, folded := m.facetRows()
+		for _, f := range append(shown, folded...) {
 			if f.key == "fast" {
 				return true
 			}

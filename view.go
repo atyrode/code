@@ -316,12 +316,22 @@ func (m model) View() string {
 		lipgloss.JoinVertical(lipgloss.Left, body, foot))
 }
 
+// labelW is the facet label column: wide enough for the longest key
+// ("planyolo") to sit in a child slot, where the tree connector takes two
+// cells off the front.
+const labelW = 10
+
 func (m model) genLines() ([]string, int) {
 	acc := m.accent()
 	var lines []string
 	cursor := 0
 	selected := m.selectedLaunchAvailability()
-	for i, f := range m.visibleFacets() {
+	shown, folded := m.facetRows()
+	lastFolded := ""
+	if len(folded) > 0 {
+		lastFolded = folded[len(folded)-1].key
+	}
+	for i, f := range shown {
 		onRow := i == m.fcur
 		glyCol := laneColor(m.sel["lane"])
 		gly := lipgloss.NewStyle().Foreground(lipgloss.Color(glyCol)).Width(2).Render(f.glyph)
@@ -330,16 +340,24 @@ func (m model) genLines() ([]string, int) {
 			ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Render("▸ ")
 			cursor = len(lines)
 		}
+		// Child rows carry a tree connector before the glyph, like the `tree`
+		// CLI: blend is lane's sub-setting (the lead row picks who drives,
+		// this child picks how exclusively), and the folded switches hang off
+		// the `more` row, the last one closing the branch.
 		label, childPad, childW := f.key, "", 0
-		if f.key == "blend" {
-			// blend is lane's sub-setting: the lead row picks who drives,
-			// this child picks how exclusively.
+		switch {
+		case f.key == "blend", f.key == lastFolded:
 			childPad, childW = stDim.Render("└ "), 2
+		case moreFacets[f.key]:
+			childPad, childW = stDim.Render("├ "), 2
 		}
-		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, 9-childW)))
-		if f.key == "thinking" || f.key == "model" || f.key == "advisor" {
+		row := fmt.Sprintf("%s%s%s%s", ptr, childPad, gly, stDim.Render(pad(label, labelW-childW)))
+		switch {
+		case f.key == "thinking", f.key == "model", f.key == "advisor":
 			row += "  " + m.segmentGauge(f, onRow, acc)
-		} else {
+		case f.key == moreFacetKey:
+			row += "  " + m.moreCell(folded, onRow, acc)
+		default:
 			for _, v := range f.values {
 				display := v
 				if f.key == "runtime" {
@@ -449,6 +467,41 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 	return b.String() + " " + word.Render(" "+label+" ")
 }
 
+// moreCell renders the fold row's value: a chevron pointing where the hidden
+// rows are (right while collapsed, down once open), followed — only while
+// collapsed — by the names of the switches it hides, each lit when on. The
+// fold exists to keep rarely-turned switches out of the way, not out of
+// sight: a switch an operator (or a ctrl+o suggestion) left on behind it has
+// to read from the row itself, or the launch does something the dials on
+// screen do not say.
+func (m model) moreCell(folded []facet, onRow bool, acc string) string {
+	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
+	pill := lit
+	if onRow {
+		pill = pill.Background(lipgloss.Color(cSelBg))
+	}
+	if m.sel[moreFacetKey] == moreExpanded {
+		return pill.Render(" ▾ ")
+	}
+	var b strings.Builder
+	b.WriteString(pill.Render(" ▸ "))
+	for i, f := range folded {
+		if i == 0 {
+			b.WriteString("  ")
+		} else {
+			b.WriteString(stDim.Render(" · "))
+		}
+		// The on state is spelled, not merely coloured: a pipe, an ascii
+		// terminal, or a headless capture has to read it too.
+		if m.sel[f.key] == "on" {
+			b.WriteString(lit.Render(f.key + " on"))
+		} else {
+			b.WriteString(stDim.Render(f.key))
+		}
+	}
+	return b.String()
+}
+
 // The facet-glyph presets. Every table MUST define every glyph key, because a
 // missing entry renders as an empty cell in a two-column slot and silently
 // misaligns the whole dial list; resolveGlyphs (main.go) picks between them.
@@ -460,13 +513,14 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 //
 //	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)
 //	thinking 💡 (f0eb)  advisor 🧭 (f14e)  spark 🚀 (f135)  fast ⚡ (f0e7)
-//	prewalk ↓ (f063)  planyolo ▶ (f04b)
+//	prewalk ↓ (f063)  planyolo ▶ (f04b)  more ⋯ (f141)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
 		"runtime": "\uf108", "local": "\uf109", "lane": "\uf127", "model": "\uf085",
 		"thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fast": "\uf0e7",
 		"prewalk": "\uf063", "planyolo": "\uf04b",
+		moreFacetKey: "\uf141",
 	}
 }
 
@@ -481,6 +535,7 @@ func unicodeGlyphs() map[string]string {
 		"thinking": "✦", "advisor": "◎",
 		"spark": "✧", "fast": "»",
 		"prewalk": "↓", "planyolo": "›",
+		moreFacetKey: "⋯",
 	}
 }
 
@@ -499,5 +554,6 @@ func asciiGlyphs() map[string]string {
 		"thinking": "t", "advisor": "a",
 		"spark": "s", "fast": "f",
 		"prewalk": "p", "planyolo": "y",
+		moreFacetKey: "o",
 	}
 }

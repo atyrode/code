@@ -89,15 +89,17 @@ listed, with their `ROOT` column marked `legacy`, and `code wt rm` retires them
   for model tier and thinking depth, advisor level, plus the spark toggle;
   every combination maps to a pre-computed routing. Optional pools plug in
   as their own lanes. The model slider's top notch, **elite**, appears only
-  on lanes whose pools ladder to a fourth rung — it reaches a provider's
-  best model, and is simply absent where that would duplicate `smart`.
-- **omp's own switches, on the same dials** — `prewalk` hands the run to the
-  cheap `smol` role at the first edit once the plan's todo list exists, and
-  `planyolo` starts read-only in plan mode, auto-approves, then implements.
-  Both are omp features; this tool only puts the value where omp reads it —
-  config keys for one, an argv flag for the other — so neither changes the
-  routing grid. The `fast` dial is the same story for a provider's priority
-  service tier, and it appears on exactly the lanes whose pools sell one.
+  on lanes whose lead pool ladders to a fourth rung — a provider's best
+  model (`claude-fable-5`, `gpt-6-astra`) — and is simply absent where that
+  would duplicate `smart`.
+- **omp's own switches, behind a fold** — a `more` row at the end of the
+  dial list opens onto `fast` (a provider's priority service tier), `prewalk`
+  (hand the run to the cheap `smol` role at the first edit once the plan's
+  todo list exists) and `planyolo` (start read-only in plan mode,
+  auto-approve, then implement). All three are omp features; this tool only
+  puts the value where omp reads it — an overlay key or an argv flag — so
+  none of them changes the routing grid. The row stays closed until you open
+  it, and names any switch left on behind it.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
   launch without mixing cloud credentials into the session. Babel's

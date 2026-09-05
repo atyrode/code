@@ -762,14 +762,17 @@ func genComboID(lane, mtier, thinking string, spark bool) string {
 // capped at the pool's top rung) already hands plan/slow/reviewer the
 // tier-4 rung at `smart`, which is precisely the routing the retired `fable`
 // toggle used to produce. So on a lane led by a pool that tops out at 3, every
-// seat elite could change is already saturated at `smart`. On gpt-led and
-// gpt-only that makes elite render byte-identical to smart. On mixed one seat
-// does diverge — its visionSmart override points at A, so the vision role would
-// lead on the tier-4 rung — but a whole notch of the model dial whose only
-// effect is which model describes an image is not a routing choice worth
-// offering, and it would carry a full grid of otherwise-identical blocks.
-// What elite genuinely means is "put the lead pool's best model in the lead
-// seats", so it exists only where the lead pool has a fourth rung to give.
+// seat elite could change is already saturated at `smart`, and elite would
+// render byte-identical to it — which is what the O-led lanes looked like
+// before gpt-6-astra gave pool O a fourth rung, and what the D-led lanes
+// still look like. On a blend the lead pool's depth alone decides: mixed with a
+// three-rung lead would diverge in one seat only — its visionSmart override
+// points at A, so the vision role would lead on A's tier-4 rung — but a whole
+// notch of the model dial whose only effect is which model describes an image
+// is not a routing choice worth offering, and it would carry a full grid of
+// otherwise-identical blocks. What elite genuinely means is "put the lead
+// pool's best model in the lead seats", so it exists only where the lead pool
+// has a fourth rung to give.
 func (c *catalog) genValid(lane, mtier string, spark bool) bool {
 	if spark && !laneHostsSpecial(lane, "spark") {
 		return false // no spark outside its pool's lanes
