@@ -1,0 +1,15 @@
+{
+  "id": "atyrode.code",
+  "version": "0.1.0",
+  "title": "code",
+  "description": "The code launcher's baseline: the door that authorizes a launch of code on an enrolled machine and records it, and the ledger of the launches it recorded.",
+  "capabilities": ["terminals:spawn"],
+  "contributes": {
+    "panels": [],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": [{ "id": "launch_recorded", "title": "Launch recorded" }]
+  },
+  "entry": { "server": true, "web": "web.js" }
+}

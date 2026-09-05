@@ -884,6 +884,8 @@ way: atyrode/manifold#162 (already fixed by atyrode/manifold#177).
 | Routing preview, suggest box and onboarding review as plugin surfaces (#103) | 5 | Every `keys.go` binding has a browser equivalent or a recorded retirement. |
 | Retire the TUI (#101) | 6 | Bubble Tea and the rendering files deleted; bare `code` prints status; the ceremony no longer needs the TUI. |
 | Dotfiles follow-ups for the launcher plugin (#102) | 2 | The §8.4 items, tracked from code's side. |
+| `atyrode.code.usage`: broker quota panel (#105, filed 2026-09-05 with §9) | 4 | The reserved read-only sub-plugin over the usage projection; §9.5. |
+| `atyrode.code.accounts`: credential manager (#106, filed 2026-09-05 with §9) | 4 | The reserved write sub-plugin for the non-secret account surface; §9.5. |
 
 ### 8.3 Babel follow-ups
 
@@ -911,3 +913,182 @@ way: atyrode/manifold#162 (already fixed by atyrode/manifold#177).
   127.0.0.1:7777` on dev-01 (`modules/machines/tyrode-dev-01-manifold.nix:6,14`
   at `1ae15d7`) contradicts `fleet/manifold.json:3` and
   `modules/nixos/manifold-dev-hub.nix:1-5`. (tyrode-dev/infra#546)
+
+---
+
+## 9. Topology and first plugin (2026-09-05)
+
+Recorded the night the authoring kit landed: every manifold fact in this
+section was read at manifold `main` @ `d8ec7aa` ("plugin-kit: the out-of-tree
+authoring SDK", atyrode/manifold#230), which ships `packages/plugin-kit`
+(`defineServerPlugin`, `defineWebPlugin`, the vocabulary builders, `pack`),
+`engine.plugins.install` and the isolate supervisor
+(`packages/server/src/isolate/`). What this section records is built, tested
+and packed in `plugins/` on this branch; nothing here is a draft.
+
+### 9.1 The topology
+
+Operator direction, ratified tonight: each product ships a **baseline** plugin
+plus independently enable-able **sub-plugins**, so a hub operator enables only
+what they need and grants each part only what it needs.
+
+- **Flat ids, one `dependencies` edge.** The engine has no parent notion and
+  needs none: `atyrode.code.generator` declares
+  `dependencies: { "atyrode.code": { type: "required" } }`, and the refusals
+  already exist (`missing_dependency`, `dependency_disabled`,
+  `plugin.ts:687-691`; graded in `assemble.ts:880`). Ids are owner-prefixed —
+  `atyrode.code`, not the `code.<x>` D1/D4 and §8.2 spelled — because a
+  plugin id names its author the way `core.` does (`plugin.ts:40-55`); this
+  supersedes the `code.*` spelling above.
+- **The baseline is not a library.** The kit inlines shared code into every
+  bundle, so nothing is imported across plugins. The baseline owns shared
+  STATE and ARBITRATION as doors; a sub-plugin is a view over those doors,
+  calling them through the host's `action` method with the viewer's authority.
+- **Split where the capability ceiling or independent use genuinely differs,
+  never deeper.** Four ids, two built:
+
+| Id                       | Directory                           | Status   | Ceiling             |
+| ------------------------ | ----------------------------------- | -------- | ------------------- |
+| `atyrode.code`           | `plugins/atyrode.code/`             | built    | `["terminals:spawn"]` |
+| `atyrode.code.generator` | `plugins/atyrode.code/generator/`   | built    | `[]`                |
+| `atyrode.code.usage`     | `plugins/atyrode.code/usage/`       | reserved (#105) | reads only    |
+| `atyrode.code.accounts`  | `plugins/atyrode.code/accounts/`    | reserved (#106) | writes, highest risk |
+
+- **Layout rule.** A child is a DIRECTORY inside its parent's plugin directory
+  (`atyrode.code/generator/`), one `manifest.json` + halves per directory, and
+  every id, door name, storage key, event kind and panel id is spelled once in
+  `plugins/atyrode.code/contract.ts`, which both halves of every bundle import
+  (`plugins/test/contract.test.ts` pins the manifests to it).
+- **One cut.** All of this repo's bundles are packed together by
+  `plugins/pack.sh` from one tree (`dist/<id>.manifold-plugin.json` +
+  `dist/SHA256SUMS`); `.github/workflows/manifold-plugins.yml` does it on every
+  push touching `plugins/` and uploads `dist/`. Both manifests are at
+  `0.1.0`.
+- **The SDK is a sibling checkout** until the kit ships as a release asset:
+  `plugins/tsconfig.json` maps `@manifold/plugin-kit` and `@manifold/protocol`
+  to `../../manifold/packages/*/src`, pinned by `plugins/MANIFOLD_REV`
+  (`d8ec7aa`). `plugins/README.md` explains the layout.
+
+### 9.2 The baseline, `atyrode.code`
+
+`entry: { server: true, web: "web.js" }`; no panel (the web half answers
+`ready { panels: [] }` and is otherwise idle); one event,
+`launch_recorded`. Two doors:
+
+- **`atyrode.code.launch`** — caps `["terminals:spawn"]`, workspace scope.
+  Input `{ machineId: string; argv: [string, ...string[]]; label?: string }`
+  (`argv` is the terminal wire's own `TerminalProgramSchema.shape.argv`, so a
+  launch is measured as the PTY will measure it). Result
+  `{ launchId, argv, recordedAt }`. Refusals, in order, all `rule: "refused"`:
+  `only the code launcher may be launched` when `argv[0] !== "code"`, then
+  `machine <id> is offline` from `ctx.machines.isOnline`. On success it
+  writes one row, `launches/<recordedAt>-<launchId>` →
+  `{ launchId, machineId, argv, label?, recordedAt, by }` (`by` is the
+  dispatching principal's id, as `TerminalInfo.createdBy` attributes a PTY),
+  prunes the ledger to its newest 50 rows by the clock the key carries (not
+  by key string order), and emits `launch_recorded { launchId, machineId,
+  recordedAt }` on `manifold://plugin/atyrode.code`.
+- **`atyrode.code.listLaunches`** — caps `[]`, input `{}`, result
+  `{ launches: LaunchRecord[] }` newest first. Spelled `listLaunches`, not
+  `launches.list`: a local action name admits no dot (`LOCAL_NAME_PATTERN`,
+  `plugin.ts:70`), and `listX` is the shipped convention
+  (`core.access.listCredentials`, `core.terminals.listAll`).
+
+**What the door does not do.** It does not birth the terminal. Stage 1 serves
+a server half exactly `ISOLATE_CTX_METHODS` (`CONTRACTS.md` §Isolated plugins):
+storage, `auth.allows`, `outsideScope`, `newId`, `machines.isOnline`,
+`placement.place`, `host.roster`, `host.enabled` — no terminal verb and no
+cross-plugin dispatch. So the door is the arbitration and the ledger, and the
+PTY is opened by the caller with its own authority (below). The door carries
+`terminals:spawn` so that a caller who could not open a terminal is refused
+at the door, before a row is written; the spawn itself is graded a second time
+at `core.terminals.open`, container-scoped, as the viewer — the grading this
+door cannot do because it knows no container.
+
+### 9.3 The first sub-plugin, `atyrode.code.generator`
+
+`entry: { web: "web.js" }`, no server half, ceiling `[]` (it declares no
+door; the manifest ceiling grades doors, and its terminal is opened with the
+viewer's authority). One panel, `launcher` (title "code"). This is the interim
+launcher D4 named (`code.launcher`, #98), and its exact behaviour tonight:
+
+- **Mount.** `host.machines()`, then `atyrode.code.listLaunches`. The picker
+  lists machines that are `online` and not `revoked`; the first is preselected
+  (with `spokes: ["dev-01"]` the list is one, §7). No launchable machine: the
+  picker is an empty state and the button is disabled.
+- **"Open code here"** (the button's `action` is `atyrode.code.launch`, painted
+  as `data-action`): `host.action("atyrode.code.launch", { machineId, argv:
+  ["code"], label: "code (interactive)" })`. A denial at any rung is shown as
+  the ladder's own sentence (tone `danger`) and nothing is opened. On `ok`:
+  `host.openTerminal({ elementId: crypto.randomUUID(), cols: 120, rows: 40,
+  machineId, placement: "tile", program: { argv } })` with the argv the door
+  echoed back — so the panel runs exactly what the door authorized — and the
+  status reads `code is running in terminal <name|id> on <machine>.` A host
+  refusal (no mounted composition view in the panel's container; no
+  `terminals:spawn` for the viewer there) is shown verbatim as `Launch <id>
+  was recorded, but no terminal was opened: <the host's sentence>`. After
+  either outcome the ledger is re-read.
+- **The terminal runs `code` itself.** `terminal_open.program.argv` exists at
+  `d8ec7aa` (`machine.ts:33-40`, atyrode/manifold#192 landed), so the PTY
+  execs `code` on the chosen machine with the agent's PATH — on dev-01 the
+  dotfiles wrapper's `code`, with its whole `CODE_*`/`OMP_AUTH_BROKER_*`
+  environment (§7). D2's keystroke interim (wait for the prompt, type a
+  command) is NOT what shipped and its race is moot; nothing is typed.
+- **No dials in the panel.** `argv` is `["code"]`: the TUI's dials run in the
+  tile and are the whole selection surface until `code launch --selection`
+  (#96) exists. Dials in the vocabulary, and a launch that carries a selection
+  document, are the next step, not this one.
+- **Recent launches.** The ledger, newest first: `label` (or the argv), the
+  machine's name and a relative time. It is re-read at mount and after the
+  viewer's own launch; other viewers' launches appear on the next mount,
+  because no event subscription reaches a worker tonight (`WEB_HOST_METHODS`
+  has no subscribe). The only timer is `subscribe`'s ten-second re-poll of
+  `host.machines()` — a host method, not a door, and the place the kit says a
+  poll lives.
+
+**Known gap, named.** The row is written when the door authorizes, before
+the terminal is born; a launch whose `openTerminal` the host refuses leaves a
+row. The ledger therefore records AUTHORIZATIONS, and the panel says so in
+its refusal sentence. It closes when the door itself births the terminal —
+either a terminal verb served to the server half or the
+`actions.dispatch` stage-1 ctx method filed against manifold in the topology
+note — at which point the row is written after the PTY exists.
+
+### 9.4 Proof
+
+`plugins/`: `bun run check` (tsc, strict, the kit's own options), `bun test`
+(21 tests: the manifests against the contract; `launch`'s refusals, row,
+attribution, emission and the 50-row prune across the `999 → 1000` string-order
+trap; `listLaunches` newest first; the `loaded` frame and a dispatch through
+the kit's own transport, including `invalid_args` for an empty argv; the
+panel's init/view/update against a fake `GuestHost` with every tree parsed by
+`UiNodeSchema`, the exact `openTerminal` request, the door refusal, the host
+refusal, the machine poll, `relativeTime`'s boundaries), then `./pack.sh`. The
+packed `server.js` was also run as the supervisor runs it
+(`Bun.spawn(["bun", "--smol", …], { ipc, serialization: "json" })`): `loaded`
+publishes both doors, a `bash` launch is refused, a `code` launch rides the
+boundary as `machines.isOnline` → `newId` → `storage.set` → `storage.keys`
+and comes back `ok` with its emission; the packed `web.js` was driven through
+the kit's worker port: `ready { panels: ["launcher"] }`, a mount, a launch
+the host refuses, a launch the host accepts. Not done tonight: installing on
+the hub (the operator's step; `engine.plugins.install { source, sha256 }`,
+root only, baseline first because of the edge).
+
+### 9.5 Reserved, and what they wait on
+
+- **`atyrode.code.usage` — broker quota panel (#105).** Read-only: the
+  windows, countdowns, blocks and balance `usage.go` renders, from the
+  projection `code publish` posts (#97, D3, D5) through a baseline read door.
+  Its own plugin because its ceiling is a read while the generator's launch
+  door is `terminals:spawn`. Waits on #97 and step 4 (#100).
+- **`atyrode.code.accounts` — credential manager (#106).** The non-secret
+  toggles and presets (D5) through baseline write doors, applied on the machine
+  by `code publish`; login stays CLI-only. Its own plugin because it is the
+  highest-risk surface of the family and must be disable-able on its own.
+  Waits on #97 and step 4 (#100).
+
+Manifold follow-ups from the same night, filed by the topology note rather
+than here: a stage-1 `actions.dispatch(name, args)` ctx method so a
+sub-plugin's server half can call the baseline's doors; `engine.plugins.install`
+over a bundle SET so a baseline and its sub-plugins install atomically in
+dependency order; dependency version ranges.

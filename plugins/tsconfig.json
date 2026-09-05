@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["bun"],
+    "baseUrl": ".",
+    "paths": {
+      "@manifold/plugin-kit": ["../../manifold/packages/plugin-kit/src/index.ts"],
+      "@manifold/plugin-kit/*": ["../../manifold/packages/plugin-kit/src/*.ts"],
+      "@manifold/protocol": ["../../manifold/packages/protocol/src/index.ts"]
+    }
+  },
+  "include": ["atyrode.code/**/*", "test/**/*"]
+}

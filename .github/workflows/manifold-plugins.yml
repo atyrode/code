@@ -1,0 +1,48 @@
+name: manifold plugins
+
+on:
+  push:
+    branches: [main]
+    paths: ["plugins/**", ".github/workflows/manifold-plugins.yml"]
+  pull_request:
+    paths: ["plugins/**", ".github/workflows/manifold-plugins.yml"]
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - name: Read the manifold revision the plugins are written against
+        id: manifold
+        run: echo "rev=$(cat code/plugins/MANIFOLD_REV)" >> "$GITHUB_OUTPUT"
+      # The kit is not published yet: the sibling checkout is the SDK (plugins/README.md).
+      - uses: actions/checkout@v4
+        with:
+          repository: atyrode/manifold
+          ref: ${{ steps.manifold.outputs.rev }}
+          path: manifold
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install the kit's workspace
+        run: bun install --frozen-lockfile
+        working-directory: manifold
+      - name: Install
+        run: bun install --frozen-lockfile
+        working-directory: code/plugins
+      - name: Typecheck
+        run: bun run check
+        working-directory: code/plugins
+      - name: Test
+        run: bun test
+        working-directory: code/plugins
+      - name: Pack
+        run: ./pack.sh
+        working-directory: code/plugins
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifold-plugins
+          path: code/plugins/dist/
+          if-no-files-found: error
