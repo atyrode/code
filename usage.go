@@ -285,6 +285,12 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 		}
 		return accountKey{}, false
 	}
+	// Every report's windows, kept apart per report: the bucket verdict is a
+	// question about accounts (is anyone left with headroom?), not about
+	// windows, so it is folded once below by bucketVerdicts rather than
+	// window by window here. Reports the snapshot cannot match to an account
+	// still vote — they are real credentials omp will rotate through.
+	var byReport [][]usageWin
 	for _, r := range doc.Reports {
 		provSeen[r.Provider] = true
 		reportWins := make([]usageWin, 0, len(r.Limits))
@@ -301,25 +307,19 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 				prov: r.Provider, observed: observedAt}
 			reportWins = append(reportWins, win)
 			a.wins = append(a.wins, win)
-			bkt := bucketForProviderTier(r.Provider, l.Scope.Tier)
-			if bkt == "" {
-				// A tier no provider entry declares owns no bucket, so this
-				// window takes part in no bucket accounting at all: it renders
-				// as its own row and nothing more. The skip is load-bearing —
-				// providers keep emitting tier-scoped limits for carve-outs
-				// this build does not model, and folding an unrecognised
-				// tier's usedFraction into the provider's MAIN bucket would
-				// mark that provider maxed — stopping every route through it —
-				// on the strength of a quota window nothing here understands.
-				continue
-			}
-			if pct >= 100 {
-				a.bucket[bkt] = "maxed"
-				a.reset[bkt] = l.Window.ResetsAt/1000 - now
-			} else if a.bucket[bkt] != "maxed" {
+			// A tier no provider entry declares owns no bucket, so its window
+			// takes part in no bucket accounting at all: it renders as its own
+			// row and nothing more. bucketVerdicts applies the same skip, and
+			// it is load-bearing — providers keep emitting tier-scoped limits
+			// for carve-outs this build does not model, and folding an
+			// unrecognised tier's usedFraction into the provider's MAIN bucket
+			// would mark that provider maxed — stopping every route through it
+			// — on the strength of a quota window nothing here understands.
+			if bkt := bucketForProviderTier(r.Provider, l.Scope.Tier); bkt != "" {
 				a.bucket[bkt] = "ok"
 			}
 		}
+		byReport = append(byReport, reportWins)
 		matchedKey, matched := match(r.identity)
 		if matched {
 			a.accountUsage[matchedKey] = append(a.accountUsage[matchedKey], reportWins...)
@@ -354,13 +354,16 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 			a.silent[key] = true
 		}
 	}
-	// omp's capacity block is the authority on whether a provider's MAIN bucket
-	// has run out, because it is aggregated across that provider's accounts:
-	// remainingAccounts > 0 means somebody still has headroom. Folding per
-	// report cannot see that — one account at 100% used to mark the bucket
-	// maxed and strike every route through the provider while a sibling account
-	// sat idle. capacity carries no tier, so the tier-scoped buckets keep their
-	// per-report verdict; this speaks only for the main one.
+	for bkt, secs := range bucketVerdicts(byReport) {
+		a.bucket[bkt] = "maxed"
+		a.reset[bkt] = secs
+	}
+	// omp's capacity block, when the payload carries one, is the authority on
+	// a provider's MAIN bucket: it is omp's own cross-account aggregate, and
+	// remainingAccounts > 0 means somebody still has headroom. It carries no
+	// tier, so the tier-scoped buckets keep the per-account verdict; and the
+	// per-account verdict already asks the same question, so a payload
+	// without the block (omp 18.1 emits none) reaches the same answer.
 	for prov, windows := range doc.Capacity {
 		p := providerByID(prov)
 		if p == nil || !p.Metered || len(windows) == 0 {
@@ -561,6 +564,58 @@ func bucketForProviderTier(prov, tier string) string {
 
 func (a availability) down(bucket string) bool {
 	return a.bucket[bucket] == "maxed" || a.bucket[bucket] == "unauthed"
+}
+
+// bucketVerdicts folds windows, grouped by the account that reported them,
+// into the buckets that are out: bucket → seconds until it is usable again.
+//
+// An account is exhausted for a bucket when any of its windows drawing that
+// bucket is at 100% — a maxed 5h blocks the account while its 7d still has
+// room. The bucket is maxed only when every account reporting a window for it
+// is exhausted: a sibling with headroom is exactly the account omp rotates to,
+// so striking the provider on one account's 100% claims a model will not run
+// when it will. The reset is the earliest moment any exhausted account frees
+// up, which is when the bucket is usable again — not the longest window in
+// sight. Missing placeholders are not observations and do not vote; an
+// account with no window for a bucket has no say on it either way.
+func bucketVerdicts(byAccount [][]usageWin) map[string]int64 {
+	free := map[string]bool{}
+	reset := map[string]int64{}
+	for _, wins := range byAccount {
+		exhausted := map[string]bool{}
+		clears := map[string]int64{} // the account's last blocking window
+		voted := map[string]bool{}
+		for _, w := range wins {
+			if w.missing {
+				continue
+			}
+			bkt := bucketForProviderTier(w.prov, w.tier)
+			if bkt == "" {
+				continue
+			}
+			voted[bkt] = true
+			if w.pct < 100 {
+				continue
+			}
+			if !exhausted[bkt] || w.secs > clears[bkt] {
+				clears[bkt] = w.secs
+			}
+			exhausted[bkt] = true
+		}
+		for bkt := range voted {
+			if !exhausted[bkt] {
+				free[bkt] = true
+				continue
+			}
+			if cur, ok := reset[bkt]; !ok || clears[bkt] < cur {
+				reset[bkt] = clears[bkt]
+			}
+		}
+	}
+	for bkt := range free {
+		delete(reset, bkt)
+	}
+	return reset
 }
 
 // reconcileUsage folds a freshly fetched availability over the one currently
@@ -794,18 +849,17 @@ func selectedAvailability(a availability, disabled map[accountKey]bool) availabi
 			}
 		}
 	}
-	for _, win := range selected.wins {
-		bucket := bucketForProviderTier(win.prov, win.tier)
-		if bucket == "" || win.missing || win.pct < 100 {
-			continue
-		}
+	// The bucket verdict is per account, never per aggregate: the panel's
+	// averaged group hides which account is out, and a window shape only one
+	// account has (a 30d plan beside 7d ones) would be a group of one whose
+	// 100% struck the whole provider while its siblings sat idle.
+	byAccount := make([][]usageWin, 0, len(selected.accountUsage))
+	for _, wins := range selected.accountUsage {
+		byAccount = append(byAccount, wins)
+	}
+	for bucket, secs := range bucketVerdicts(byAccount) {
 		selected.bucket[bucket] = "maxed"
-		// Multiple quota windows can constrain one route. The route becomes
-		// usable only after the last maxed aggregate resets, so retain the
-		// longest selected reset rather than whichever account/map came last.
-		if win.secs > selected.reset[bucket] {
-			selected.reset[bucket] = win.secs
-		}
+		selected.reset[bucket] = secs
 	}
 	return selected
 }

@@ -3466,15 +3466,49 @@ func TestSelectedAvailabilityRebuildsRoutingBuckets(t *testing.T) {
 		}
 	})
 
-	t.Run("all selected maxed uses aggregate reset", func(t *testing.T) {
+	// The verdict is per account, not per aggregate. Above, both accounts
+	// share a window shape, so the averaged group happened to land under
+	// 100% either way. This is the live payload that did not: a 30d plan
+	// beside 7d ones is a group of one, and its 100% struck every OpenAI
+	// route while the 7d account sat at 15%.
+	t.Run("an exhausted account with a window shape of its own is not the provider", func(t *testing.T) {
+		shapes := base
+		shapes.accountUsage = map[accountKey][]usageWin{
+			maxed:     {{label: "30 days", id: "30d", pct: 100, secs: 300 * 3600, dur: 30 * day, prov: "openai-codex"}},
+			remaining: {{label: "7 days", id: "7d", pct: 15, secs: 140 * 3600, dur: 7 * day, prov: "openai-codex"}},
+		}
+		got := selectedAvailability(shapes, nil)
+		if got.bucket["codex-main"] != "ok" {
+			t.Fatalf("a sibling with headroom is exactly the account omp rotates to; got %+v", got.bucket)
+		}
+		if _, ok := got.reset["codex-main"]; ok {
+			t.Fatalf("a usable bucket carries no reset: %+v", got.reset)
+		}
+	})
+
+	t.Run("one account is blocked by any of its maxed windows", func(t *testing.T) {
+		one := base
+		one.accountUsage = map[accountKey][]usageWin{
+			maxed: {
+				{label: "5 hours", id: "5h", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"},
+				{label: "7 days", id: "7d", pct: 10, secs: 600, dur: 7 * day, prov: "openai-codex"},
+			},
+		}
+		got := selectedAvailability(one, map[accountKey]bool{remaining: true})
+		if got.bucket["codex-main"] != "maxed" || got.reset["codex-main"] != 100 {
+			t.Fatalf("a maxed 5h blocks the account whatever its 7d says; got %q/%d", got.bucket["codex-main"], got.reset["codex-main"])
+		}
+	})
+
+	t.Run("all selected maxed frees with the first account", func(t *testing.T) {
 		allMaxed := base
 		allMaxed.accountUsage = map[accountKey][]usageWin{
 			maxed:     {{label: "5 hours", pct: 100, secs: 100, dur: 5 * 3600, prov: "openai-codex"}},
 			remaining: {{label: "5 hours", pct: 100, secs: 200, dur: 5 * 3600, prov: "openai-codex"}},
 		}
 		got := selectedAvailability(allMaxed, nil)
-		if got.bucket["codex-main"] != "maxed" || got.reset["codex-main"] != 150 {
-			t.Fatalf("selected aggregate bucket/reset = %q/%d, want maxed/150", got.bucket["codex-main"], got.reset["codex-main"])
+		if got.bucket["codex-main"] != "maxed" || got.reset["codex-main"] != 100 {
+			t.Fatalf("selected bucket/reset = %q/%d, want maxed/100 - the route is usable once the first account frees", got.bucket["codex-main"], got.reset["codex-main"])
 		}
 	})
 }
@@ -3598,6 +3632,47 @@ func TestRoutingAndFacetAdvisoriesUseCommittedSelection(t *testing.T) {
 	// so it is the only dial that carries an availability advisory.
 	if !strings.Contains(text, "Spark unavailable") {
 		t.Fatalf("all-disabled selection missing the Spark advisory:\n%s", text)
+	}
+}
+
+// TestParseAvailabilityVerdictIsPerAccount is the live payload that struck
+// every OpenAI route: omp 18.1 sends no capacity block, and the parse seam
+// folded windows report by report, so one account's exhausted 30d marked
+// codex-main maxed while a sibling sat at 15%. A bucket is out only when no
+// enabled account has headroom for it.
+func TestParseAvailabilityVerdictIsPerAccount(t *testing.T) {
+	accounts := map[string][]account{
+		"openai-codex": {
+			{Provider: "openai-codex", IdentityKey: "plus", Email: "plus@example.test"},
+			{Provider: "openai-codex", IdentityKey: "pro", Email: "pro@example.test"},
+		},
+	}
+	in := func(h int64) int64 { return (time.Now().Unix() + h*3600) * 1000 }
+	payload := fmt.Sprintf(`{"reports":[
+		{"provider":"openai-codex","email":"plus@example.test","limits":[
+			{"label":"30 days","scope":{"windowId":"30d"},"amount":{"usedFraction":1},
+			 "window":{"id":"30d","resetsAt":%d,"durationMs":2592000000}}]},
+		{"provider":"openai-codex","email":"pro@example.test","limits":[
+			{"label":"7 days","scope":{"windowId":"7d"},"amount":{"usedFraction":0.15},
+			 "window":{"id":"7d","resetsAt":%d,"durationMs":604800000}},
+			{"label":"7 days (gpt-reserve)","scope":{"tier":"base-model-inference","windowId":"7d"},"amount":{"usedFraction":0},
+			 "window":{"id":"7d","resetsAt":%d,"durationMs":604800000}}]}
+	]}`, in(373), in(140), in(167))
+	a := parseAvailability(accounts, true, []byte(payload), 0)
+	if !a.ok {
+		t.Fatal("fixture payload did not parse")
+	}
+	if a.down("codex-main") {
+		t.Fatalf("one account's exhausted 30d struck the provider while its sibling had headroom: %+v", a.bucket)
+	}
+	if _, ok := a.reset["codex-main"]; ok {
+		t.Errorf("a usable bucket carries no reset: %+v", a.reset)
+	}
+	// Disable the account with headroom and the verdict flips: now nobody is
+	// left, and the reset is the exhausted account's own.
+	sel := selectedAvailability(a, map[accountKey]bool{{Provider: "openai-codex", IdentityKey: "pro"}: true})
+	if !sel.down("codex-main") || sel.reset["codex-main"] < 372*3600 {
+		t.Fatalf("with the only free account disabled the bucket must be maxed until the 30d resets: %q/%d", sel.bucket["codex-main"], sel.reset["codex-main"])
 	}
 }
 
