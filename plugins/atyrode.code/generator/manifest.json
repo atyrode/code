@@ -1,0 +1,21 @@
+{
+  "id": "atyrode.code.generator",
+  "version": "0.1.0",
+  "title": "code generator",
+  "description": "The launch panel: pick an online machine and open code in a terminal tile, through the baseline's launch door; shows the launches the baseline recorded.",
+  "capabilities": [],
+  "contributes": {
+    "panels": [{ "id": "launcher", "title": "code" }],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": {
+      "type": "required",
+      "reason": "The launch door and the launch ledger live in the baseline."
+    }
+  },
+  "entry": { "web": "web.js" }
+}
