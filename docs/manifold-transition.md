@@ -409,7 +409,7 @@ Consequences:
 
 Manifold prerequisites: atyrode/manifold#151, #152, #153, #154, #155. Code
 work: "Plugin package and manifest: `code.<x>` namespace, out-of-tree, no
-vendoring" (#TBD).
+vendoring" (atyrode/manifold#192).
 
 ### D2 Launch authority stays on the spoke
 
@@ -442,9 +442,9 @@ Consequences:
   and needs `code` on the PATH of a non-login interactive `$SHELL`.
 
 Manifold prerequisites: "Session-channel `terminal_open` should carry a
-command/argv" (#TBD); "`SessionHandle` has no plugin-facing terminal handle"
-(#TBD); atyrode/manifold#153. Code work: "Headless `code launch --selection
-<json>`" (#TBD), which owns the selection document's schema and the TUI
+command/argv" (atyrode/manifold#196); "`SessionHandle` has no plugin-facing terminal handle"
+(atyrode/manifold#201); atyrode/manifold#153. Code work: "Headless `code launch --selection
+<json>`" (atyrode/manifold#189), which owns the selection document's schema and the TUI
 parity test.
 
 ### D3 Projections flow spoke to hub, Babel's D2 shape
@@ -470,7 +470,7 @@ Consequences:
 Manifold prerequisites: none for the doors; atyrode/manifold#155 for an
 isolated server half that must read a local companion (code's does not: the
 spoke pushes). Code work: "`code publish` projections service + agent-kind
-principal" (#TBD), which owns the catalog projection shape. Dotfiles: §8.4.
+principal" (#95), which owns the catalog projection shape. Dotfiles: §8.4.
 
 ### D4 UI shape: `code.launcher` now, `code.launchpad` later
 
@@ -492,10 +492,10 @@ Consequences:
   renderer is written against whatever the isolation runner offers.
 
 Manifold prerequisites: atyrode/manifold#134; "A discipline that hosts plugin
-UI beside a live terminal tile in one addressable view" (#TBD);
+UI beside a live terminal tile in one addressable view" (#96);
 atyrode/manifold#160 (widened with code's inventory, §8.1). Code work:
-"Interim panel launcher (`code.launcher`)" (#TBD); "Launchpad discipline
-(`code.launchpad`), end state" (#TBD).
+"Interim panel launcher (`code.launcher`)" (#97); "Launchpad discipline
+(`code.launchpad`), end state" (#98).
 
 ### D5 Secrets never enter manifold
 
@@ -513,8 +513,8 @@ Consequences:
 - `withAuthEnv` (`vault.go:881-889`) runs only inside `code launch` on the
   spoke.
 
-Manifold prerequisites: none. Code work: folded into "`code publish`" (#TBD)
-and "Usage/account surfaces as browser-rendered plugin UI" (#TBD).
+Manifold prerequisites: none. Code work: folded into "`code publish`" (#99)
+and "Usage/account surfaces as browser-rendered plugin UI" (#100).
 
 ### D6 Scope
 
@@ -549,10 +549,10 @@ in the workspace tree, no plugin-facing `openTerminal`, boolean settings, and
 
 ### Step 1. Headless launch, projections, package skeleton (host-independent)
 
-Code: "Headless `code launch --selection <json>`" (#TBD) — the document's
+Code: "Headless `code launch --selection <json>`" (#96) — the document's
 schema, the verb, and the TUI's Enter calling it; "`code publish` projections
-service + agent-kind principal" (#TBD) — the doors, the catalog split, a
-`--once` mode for tests; "Plugin package and manifest" (#TBD) — `plugin/`
+service + agent-kind principal" (#97) — the doors, the catalog split, a
+`--once` mode for tests; "Plugin package and manifest" (#95) — `plugin/`
 with manifest, `code.*` actions as data, handlers over `ctx.storage`, a flake
 output for the artifact.
 
@@ -570,10 +570,10 @@ that is not in the verb.
 
 ### Step 2. Interim panel launcher over keystrokes
 
-Manifold: "`SessionHandle` has no plugin-facing terminal handle" (#TBD), or
+Manifold: "`SessionHandle` has no plugin-facing terminal handle" (atyrode/manifold#196), or
 the in-realm `host.token` path while it exists; atyrode/manifold#153.
 
-Code: "Interim panel launcher (`code.launcher`)" (#TBD) — dials from the catalog
+Code: "Interim panel launcher (`code.launcher`)" (#98) — dials from the catalog
 projection, a machine picker from `client.machines()`, a launch that opens a
 terminal with `placement: "tile"` into the composition in view or a
 code-created one, waits for the prompt, types `code launch --selection`, and
@@ -590,10 +590,10 @@ Retired: nothing; the TUI stays.
 ### Step 3. The launchpad discipline
 
 Manifold: atyrode/manifold#134; "A discipline that hosts plugin UI beside a
-live terminal tile in one addressable view" (#TBD); "Session-channel
-`terminal_open` should carry a command/argv" (#TBD).
+live terminal tile in one addressable view" (atyrode/manifold#201); "Session-channel
+`terminal_open` should carry a command/argv" (atyrode/manifold#192).
 
-Code: "Launchpad discipline (`code.launchpad`), end state" (#TBD) — the container shows the dial pane
+Code: "Launchpad discipline (`code.launchpad`), end state" (#99) — the container shows the dial pane
 and the launched terminals in one tile tree, terminal above the launcher; a
 launch execs `code launch` in the PTY directly.
 
@@ -607,7 +607,7 @@ Retired: the keystroke path and its label.
 
 Manifold: atyrode/manifold#158 for a default-lane setting pane.
 
-Code: "Usage/account surfaces as browser-rendered plugin UI" (#TBD): windows
+Code: "Usage/account surfaces as browser-rendered plugin UI" (#100): windows
 and blocks from the projection; toggles and presets through `code.*` doors;
 login CLI-only.
 
@@ -624,7 +624,7 @@ Retired: nothing yet.
 Manifold: atyrode/manifold#160.
 
 Code: "Routing preview, suggest box and onboarding review as plugin surfaces"
-(#TBD). The suggest box calls the machine's Ollama through `code publish`;
+(#103). The suggest box calls the machine's Ollama through `code publish`;
 onboarding's review reads a scaffold `code generate init` produced on the
 machine.
 
@@ -635,7 +635,7 @@ Retired: nothing yet; the TUI stays until this proof is recorded.
 
 ### Step 6. Retire the TUI
 
-Code: "Retire the TUI" (#TBD). Bubble Tea,
+Code: "Retire the TUI" (#101). Bubble Tea,
 `view.go`, `layout.go`, `render.go`, `wheel.go`, the glyph tables and
 `CODE_SYMBOLS`/`CODE_FACET_GLYPHS` go; bare `code` becomes a headless status
 overview. Babel: the ceremony consumes a selection document (§8.3) before
@@ -729,7 +729,7 @@ Every ceiling or rule that bites code specifically, in the order it bites.
 
 ## 8. Draft issues
 
-Numbers are assigned when filed; every `(#TBD)` below becomes one. Titles are
+Numbers were assigned when filed on 2026-09-05 (manifold #185-#213, code #95-#103, babel #158/#160, tyrode-dev/infra#546). Titles are
 the ones settled with the issue drafts of the same date, so the record and the
 filings agree word for word.
 
@@ -739,7 +739,7 @@ Classes: `[prerequisite]` (code cannot reach a step without it), `[design]` (a
 contradiction or smell worth raising regardless), `[improvement]` (general).
 
 **`[prerequisite] Session-channel terminal_open should carry a command/argv,
-not force every PTY through a login shell`** (#TBD, step 3). Problem: the only
+not force every PTY through a login shell`** (atyrode/manifold#192, step 3). Problem: the only
 thing a PTY can run is `$SHELL`; a launcher must type its command after a
 prompt it cannot detect reliably. Evidence: `packages/protocol/src/session.ts:192-210`
 (no command field); `packages/protocol/src/machine.ts:76-86` (`create` has
@@ -755,7 +755,7 @@ commit; a testkit e2e runs `/bin/echo` in a terminal and reads its exit;
 
 **`[prerequisite] SessionHandle has no plugin-facing terminal handle; shipped
 renderers escape it with a self-minted SessionClient using host.token, which
-isolated plugins will not have`** (#TBD, step 2). Evidence:
+isolated plugins will not have`** (atyrode/manifold#196, step 2). Evidence:
 `packages/plugin/src/host.ts:49,52-115`;
 `packages/plugins/compositions/src/composition-view.tsx:180-182`;
 `packages/plugins/terminals/src/terminal-view.tsx:41,432`;
@@ -766,7 +766,7 @@ gated by `terminals:spawn` and the controller lease; the shipped renderers
 use it instead of a private client; `docs/PLUGINS.md` §Host services names it.
 
 **`[prerequisite] A discipline that hosts plugin UI beside a live terminal
-tile in one addressable view`** (#TBD, step 3). Problem: a plugin pane can be
+tile in one addressable view`** (atyrode/manifold#201, step 3). Problem: a plugin pane can be
 a workspace leaf and a terminal a composition leaf, but no tree may hold
 both. Evidence: `packages/protocol/src/layout.ts:85-108` (one `TileRef`
 union); `packages/plugins/shell/src/server.ts:103-111` (workspace refuses
@@ -779,7 +779,7 @@ renderer receives its pane as a leaf and terminal tiles as projections;
 atyrode/manifold#134's `acme.sheets` fixture covers it.
 
 **`[design] HTTP-reachable terminal creation, so axiom A2 holds for terminals
-as it does for every other door`** (#TBD). Evidence:
+as it does for every other door`** (atyrode/manifold#185). Evidence:
 `packages/protocol/src/session.ts:192-210` (socket only);
 `packages/plugins/terminals/src/server.ts:56-68` (the action returns `{}`);
 `AXIOMS.md:41-44` ("no API-only path"; there is a socket-only path).
@@ -787,7 +787,7 @@ Acceptance: either an HTTP path creates a terminal, or `AXIOMS.md` names the
 PTY plane's exception.
 
 **`[design, docs fix] core.terminals.open's own comment reads as though the
-action creates the terminal`** (#TBD). Evidence:
+action creates the terminal`** (atyrode/manifold#186). Evidence:
 `packages/plugins/terminals/src/index.ts:87-100` ("Everything a policy could
 want to judge is in the arguments ... lands here and nowhere else");
 `docs/PLUGINS.md:3-4` (an author is told not to read the source). Acceptance:
@@ -799,7 +799,7 @@ The one-`TileRef`-two-vocabularies smell (`layout.ts:85-108` against
 is not filed on its own: the discipline issue above resolves and documents it.
 
 **`[design] PluginStorage's "synchronous on purpose" doc contradicts ADR
-0016's ratified async migration, with no stated migration story`** (#TBD).
+0016's ratified async migration, with no stated migration story`** (atyrode/manifold#187).
 Evidence: `packages/plugin/src/storage.ts:12-14`;
 `docs/decisions/0016-plugin-isolation.md:10-11,247-248`; `docs/PLUGINS.md:485-550`
 (no mention). Acceptance: §Your data states the scheduled change, or the
@@ -807,7 +807,7 @@ promise-returning interface lands ahead of the runner as its own change.
 
 **`[design, docs fix] docs/PLUGINS.md promises source-free authorship while
 its own text tells the reader to go read manifold's source, and never states
-the current channel is in-tree-only`** (#TBD). Evidence: `docs/PLUGINS.md:3-4`
+the current channel is in-tree-only`** (atyrode/manifold#188). Evidence: `docs/PLUGINS.md:3-4`
 against `:1103` ("Read `packages/web/src/assembly.ts` ... for the shapes");
 `AXIOMS.md:53-56,304-312` (the authoring half is "unproven");
 `packages/server/src/assembly.ts:61-63`. Acceptance: the guide states that
@@ -816,28 +816,28 @@ and points at atyrode/manifold#151/#152.
 
 **`[improvement] contributes.disciplines is never documented in
 docs/PLUGINS.md, despite being what a third-party tile-tree discipline depends
-on`** (#TBD). Evidence: `packages/protocol/src/plugin.ts:346-362`;
+on`** (atyrode/manifold#197). Evidence: `packages/protocol/src/plugin.ts:346-362`;
 `packages/protocol/src/placement.ts:390-397`;
 `packages/plugin/src/projection.ts:160-183`; the guide never names the kind
 (§2.2). Acceptance: a subsection under §6 with the manifest row, the renderer
 props, and #134's caveat.
 
 **`[design] No atomic multi-door composition, and no documented
-compensating-action idiom`** (#TBD). Evidence:
+compensating-action idiom`** (atyrode/manifold#202). Evidence:
 `packages/server/src/plugin-host.ts:249-350` (no `ctx.dispatch`);
 `host.ts:53-56`; `docs/CONTRACTS.md:1415-1418` (an unplaced terminal is legal
 in its solo home). Acceptance: `docs/PLUGINS.md` names the idiom (open, place,
 on failure `removeContainerTile` or kill), or one door does both.
 
 **`[improvement] MAX_STORAGE_VALUE_BYTES's 64 KiB ceiling has no stated
-rationale, and no blob class for catalog-sized plugin data`** (#TBD,
+rationale, and no blob class for catalog-sized plugin data`** (atyrode/manifold#189,
 references atyrode/manifold#159). Evidence: `storage.ts:74`; `http.ts:36`
 (1 MiB bodies); `testdata/two-pool-golden.plain` at 211,213 bytes.
 Acceptance: a comment or ADR line naming the tradeoff; #159 cites a value
 read whole and written rarely as its second instance.
 
 **`[improvement] Machine roster row (MachineSummary) should expose declared
-host capabilities`** (#TBD, with atyrode/manifold#153). Evidence:
+host capabilities`** (atyrode/manifold#190, with atyrode/manifold#153). Evidence:
 `packages/protocol/src/http.ts:322-338` (`id, name, online, color?, revoked?`);
 the launcher needs "this machine has `omp` ≥ 17.3 and `code`"
 (`routing.go:814-819`). Acceptance: an agent-reported capability list on the
@@ -845,7 +845,7 @@ row, fed by the manifest declaration #153 adds; a machine lacking one is
 greyed in the picker.
 
 **`[improvement] No health/readiness surface for "agent dialed the hub and
-was rejected" (4409 is silent)`** (#TBD). Evidence: `http.ts:322-338`
+was rejected" (4409 is silent)`** (atyrode/manifold#191). Evidence: `http.ts:322-338`
 (`online` only); `docs/ENROLL.md:155-174`; `~/nix-dotfiles/docs/manifold.md`
 "Protocol mismatch is silent". Acceptance: the row carries the last dial's
 outcome; the machines section renders it; v21 readers are unaffected.
@@ -857,43 +857,57 @@ shape is also needed, distinct from #156's no-PTY job; atyrode/manifold#153
 launchpad is its second instance; atyrode/manifold#157 — "may launch on
 machine X" is code's grant.
 
+Filed from the spike record (`docs/spikes/code-launcher.md`, atyrode/manifold PR #199),
+each with its measurement: no readiness signal on the terminal channel
+(atyrode/manifold#203); the controller lease is per principal in code and per
+connection in the doc (#204); every terminal mints a durable agent principal
+(#205); `place` of an already-tiled terminal adds a second leaf (#206);
+`terminal_open` demands a geometry the opener cannot know under `placement:
+"tile"` (#207); the channel plane is undocumented (#208); "two places" is five
+files and an install (#209); a later-installed seat is invisible to an
+arranged principal (#210); `vite.config.ts` proxies to a literal `:7777`
+(#211); refusal messages name a kind about nothing (#212); `setLayout` accepts
+an uncontributed panel id (#213). Found landing the docs fixes: gate scripts
+pick server ports at random inside the ephemeral range (#198). Closed on the
+way: #162 (already fixed by #177).
+
 ### 8.2 Code
 
 | Title | Step | Acceptance |
 | --- | --- | --- |
-| Plugin package and manifest: `code.<x>` namespace, out-of-tree, no vendoring (#TBD) | 1 | `plugin/` with manifest `code.launcher`, `code.*` actions as data, handlers over `ctx.storage`, events declared; builds to a hashed artifact from the flake; manifests parse against `@manifold/protocol` at 21. |
-| Headless `code launch --selection <json>` (#TBD) | 1 | A versioned document (facets, launch kind, worktree, first prompt, forwarded argv; unknown keys refused; `-` reads stdin); the verb builds the overlay and flags, creates the worktree if asked, opens the session record, runs the child as `runChild` does, exits with its status; the TUI's Enter calls it; a parity test feeds one document to both paths and compares argv, env keys and overlay bytes. |
-| `code publish` projections service + agent-kind principal (#TBD) | 1 | Runs from a token file; posts catalog (one key per combo under 64 KiB, an index key, a content hash), usage (non-secret), omp version and sessions through `code.*` doors on the usage cadence and on registry change; `--once` for tests; backoff; never logs a token; a secret-field lint on every payload; the two-pool golden fits. |
-| Interim panel launcher (`code.launcher`) (#TBD) | 2 | Dials from the projection; machine picker; launch opens a terminal on the machine with `placement: "tile"`, waits for output, types the verb once; labelled interim; step 2's proof recorded. |
-| Launchpad discipline (`code.launchpad`), end state (#TBD) | 3 | A container with the dial pane and terminal tiles; launch execs the verb through the command field; step 3's proof recorded. |
-| Usage/account surfaces as browser-rendered plugin UI (#TBD) | 4 | Windows, countdowns, blocks and balance from the projection with no browser timer, parity with `usage.go` on a fixture; toggles and presets through `code.*` doors change `CODE_AUTH_ACCOUNT_STATE` on the machine; login stays CLI. |
-| Routing preview, suggest box and onboarding review as plugin surfaces (#TBD) | 5 | Every `keys.go` binding has a browser equivalent or a recorded retirement. |
-| Retire the TUI (#TBD) | 6 | Bubble Tea and the rendering files deleted; bare `code` prints status; the ceremony no longer needs the TUI. |
-| Dotfiles follow-ups for the launcher plugin (#TBD) | 2 | The §8.4 items, tracked from code's side. |
+| Plugin package and manifest: `code.<x>` namespace, out-of-tree, no vendoring (#95) | 1 | `plugin/` with manifest `code.launcher`, `code.*` actions as data, handlers over `ctx.storage`, events declared; builds to a hashed artifact from the flake; manifests parse against `@manifold/protocol` at 21. |
+| Headless `code launch --selection <json>` (#96) | 1 | A versioned document (facets, launch kind, worktree, first prompt, forwarded argv; unknown keys refused; `-` reads stdin); the verb builds the overlay and flags, creates the worktree if asked, opens the session record, runs the child as `runChild` does, exits with its status; the TUI's Enter calls it; a parity test feeds one document to both paths and compares argv, env keys and overlay bytes. |
+| `code publish` projections service + agent-kind principal (#97) | 1 | Runs from a token file; posts catalog (one key per combo under 64 KiB, an index key, a content hash), usage (non-secret), omp version and sessions through `code.*` doors on the usage cadence and on registry change; `--once` for tests; backoff; never logs a token; a secret-field lint on every payload; the two-pool golden fits. |
+| Interim panel launcher (`code.launcher`) (#98) | 2 | Dials from the projection; machine picker; launch opens a terminal on the machine with `placement: "tile"`, waits for output, types the verb once; labelled interim; step 2's proof recorded. |
+| Launchpad discipline (`code.launchpad`), end state (#99) | 3 | A container with the dial pane and terminal tiles; launch execs the verb through the command field; step 3's proof recorded. |
+| Usage/account surfaces as browser-rendered plugin UI (#100) | 4 | Windows, countdowns, blocks and balance from the projection with no browser timer, parity with `usage.go` on a fixture; toggles and presets through `code.*` doors change `CODE_AUTH_ACCOUNT_STATE` on the machine; login stays CLI. |
+| Routing preview, suggest box and onboarding review as plugin surfaces (#103) | 5 | Every `keys.go` binding has a browser equivalent or a recorded retirement. |
+| Retire the TUI (#101) | 6 | Bubble Tea and the rendering files deleted; bare `code` prints status; the ceremony no longer needs the TUI. |
+| Dotfiles follow-ups for the launcher plugin (#102) | 2 | The §8.4 items, tracked from code's side. |
 
 ### 8.3 Babel follow-ups
 
 - Transition record cites retired `dev@68f102e`; re-pin to `main@8466628`
   (v0.6.2). Several line numbers moved: `uri.ts:33-45`,
   `agent/terminal.ts:114-129`, `machine.ts:36-92`, `CONTRACTS.md:147-151`,
-  `assembly.ts:61-76`. (#TBD)
+  `assembly.ts:61-76`. (atyrode/babel#158)
 - The configure ceremony drives code's TUI directly; it must consume the D2
   selection document instead, before code's TUI retires. `analysis profile
   configure` hands the terminal to `code babel --configure`
   (`babelconfigure.go:3,113-117`); Babel's conformance suite must pass
-  without a TTY. (#TBD)
+  without a TTY. (atyrode/babel#160)
 
 ### 8.4 Dotfiles and infra follow-ups
 
 - A `code publish` user service beside `manifold-agent`
   (`modules/home/profiles/manifold-node.nix:27,34-44` is the pattern), and
-  the ceremony that mints its agent-kind token beside the machine token. (#TBD)
+  the ceremony that mints its agent-kind token beside the machine token. (atyrode/code#102)
 - A check that `code` resolves on the PATH of a non-login interactive
-  `$SHELL`, on every spoke. (#TBD)
+  `$SHELL`, on every spoke. (atyrode/code#102)
 - Enroll `macbook` and `wsl`: v0.6.2 ships `manifold-agent-darwin-arm64`
   (`CHANGELOG.md:9`), so `supportedSystems` (`fleet/manifold.json:6-8`) can
-  widen; the picker is otherwise a list of one. (#TBD)
+  widen; the picker is otherwise a list of one. (atyrode/code#102)
 - atyrode/tyrode-infra: the stale production vhost `manifold.tyrode.dev ->
   127.0.0.1:7777` on dev-01 (`modules/machines/tyrode-dev-01-manifold.nix:6,14`
   at `1ae15d7`) contradicts `fleet/manifold.json:3` and
-  `modules/nixos/manifold-dev-hub.nix:1-5`. (#TBD)
+  `modules/nixos/manifold-dev-hub.nix:1-5`. (tyrode-dev/infra#546)
