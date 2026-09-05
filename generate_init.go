@@ -579,6 +579,7 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	}
 	var unresolved, blocked, unpriced []string
 	byPool := map[string][]ompModel{}
+	siblings := siblingPrices(parsed.Models)
 	for _, m := range parsed.Models {
 		pool := poolOf(m.Provider)
 		if pool == "" || !m.Reasoning || len(m.Thinking) == 0 ||
@@ -590,9 +591,9 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 		// a release or two, so a brand-new flagship arrives at $0 — which used
 		// to drop it silently, and a silent drop of the operator's newest model
 		// is the one outcome worse than a wrong rung. Fill the blank from the
-		// provider's published rate where one is known; otherwise drop it, but
-		// say so in the file.
-		if !priced(&m) {
+		// same model's priced row under another provider (siblingPrices);
+		// otherwise drop it, but say so in the file.
+		if !priced(&m, siblings) {
 			unpriced = append(unpriced, m.ID)
 			continue
 		}
@@ -798,8 +799,8 @@ func scaffoldModels(raw []byte, probe map[string]benchFact) (string, error) {
 	if len(unpriced) > 0 {
 		sort.Strings(unpriced)
 		b.WriteString(`#
-# WARNING — models dropped because omp lists no price for them, and a ladder
-# ranked by price cannot place what it cannot price:
+# WARNING — models dropped because omp lists no price for them under any
+# provider, and a ladder ranked by price cannot place what it cannot price:
 `)
 		for _, id := range unpriced {
 			b.WriteString("#   " + id + "\n")
@@ -965,9 +966,9 @@ func runGenerateInit(args []string) int {
 	return 0
 }
 
-// skippedModels are model ids the scaffolder must not even probe. Together with
-// listPrices below these are the only places in the tree that spell a model id,
-// and each earns the exception by encoding a fact no metadata expresses.
+// skippedModels are model ids the scaffolder must not even probe. This is the
+// only place in the tree that spells a model id, and it earns the exception
+// by encoding a fact no metadata expresses.
 //
 // claude-mythos-5 is the standing case. It advertises claude-fable-5's exact
 // price, context window and thinking range, and 404s here — the operator has
@@ -986,27 +987,42 @@ var skippedModels = map[string]bool{
 
 func skipModel(id string) bool { return skippedModels[strings.ToLower(id)] }
 
-// listPrices are provider-published rates ($/1M tokens in, out) for models
-// omp lists without a price. omp's model table lags a launch: a brand-new
-// flagship arrives with cost 0 and every spec of the pool's top rung, and the
-// scaffolder — which ranks by price — would either drop it or crown it the
-// cheap rung. Neither is the model the operator just paid for. The fill
-// applies only while omp reports no price; once its table catches up the
-// entry is dead weight and should go.
+// siblingPrices indexes every priced row of the payload by bare model id — the
+// id with any reseller prefix stripped, so openrouter's "openai/gpt-6-astra"
+// files under "gpt-6-astra". It is the fill for a pool row omp lists at $0.
 //
-// gpt-6-astra: OpenAI's standard API rate, per openai.com/index/gpt-6-astra —
-// 2.5× gpt-5.6-sol, and the exact point claude-fable-5 sits at on pool A.
-var listPrices = map[string][2]float64{
-	"gpt-6-astra": {10, 50},
+// omp's model table lags a launch, but unevenly: the provider's own row
+// (openai-codex, the one the pool registry reads) arrived with cost 0 and every
+// spec of the top rung, while the same model under openrouter carried the
+// price from day one. A price-ranked scaffolder would drop the flagship or
+// crown it the cheap rung; asking omp's other rows keeps omp the only source
+// of prices and needs no table of rates to retire when the row catches up.
+// Where siblings disagree the highest wins: a reseller discounts, it does not
+// mark up, so the highest is the one nearest the provider's own rate.
+func siblingPrices(models []ompModel) map[string][2]float64 {
+	out := map[string][2]float64{}
+	for _, m := range models {
+		if m.Cost.Input <= 0 {
+			continue
+		}
+		id := strings.ToLower(m.ID)
+		if i := strings.LastIndexByte(id, '/'); i >= 0 {
+			id = id[i+1:]
+		}
+		if cur, ok := out[id]; !ok || m.Cost.Input > cur[0] {
+			out[id] = [2]float64{m.Cost.Input, m.Cost.Output}
+		}
+	}
+	return out
 }
 
 // priced reports whether the model carries a usable price, filling omp's blank
-// from listPrices first. Everything the scaffolder ranks or probes goes through
-// here so the two agree on which models exist.
-func priced(m *ompModel) bool {
+// from a priced sibling row first. Everything the scaffolder ranks or probes
+// goes through here so the two agree on which models exist.
+func priced(m *ompModel, siblings map[string][2]float64) bool {
 	if m.Cost.Input <= 0 {
-		if lp, ok := listPrices[strings.ToLower(m.ID)]; ok {
-			m.Cost.Input, m.Cost.Output = lp[0], lp[1]
+		if sp, ok := siblings[strings.ToLower(m.ID)]; ok {
+			m.Cost.Input, m.Cost.Output = sp[0], sp[1]
 		}
 	}
 	return m.Cost.Input > 0
@@ -1020,8 +1036,9 @@ func benchSelectors(raw []byte) ([]string, error) {
 		return nil, fmt.Errorf("parsing model list: %w", err)
 	}
 	var out []string
+	siblings := siblingPrices(parsed.Models)
 	for _, m := range parsed.Models {
-		if poolOf(m.Provider) == "" || !m.Reasoning || !priced(&m) ||
+		if poolOf(m.Provider) == "" || !m.Reasoning || !priced(&m, siblings) ||
 			datedID.MatchString(m.ID) || skipModel(m.ID) {
 			continue
 		}
