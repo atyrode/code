@@ -178,6 +178,8 @@ file) and `code generate` (re-render the catalog after you edit it).
 - [Configuration](docs/configuration.md) — every key and environment variable
 - [Status & caveats](docs/status.md) — what works out of the box, what is
   still shaped by the author's setup, and where this is going
+- [Manifold transition](docs/manifold-transition.md) — the direction: `code`
+  as a manifold plugin, the decisions, the steps, and what manifold still lacks
 
 [MIT](./LICENSE) — extracted from
 [atyrode/dotfiles](https://github.com/atyrode/dotfiles).
