@@ -15,13 +15,13 @@ already gives plan/slow/reviewer the top rung at `smart`, so on a lane
 led by a three-rung pool `elite` would render a block identical to `smart`.
 
 `code generate init` ranks a pool's ladder by price, so it needs one for every
-model. omp's model table lags a launch by a release or two — a brand-new
-flagship arrives listed at `$0` — and a scaffold used to drop such a model
-without a word. It now fills the blank from the provider's published rate where
-one is known (`listPrices` in `generate_init.go`; `gpt-6-astra` at $10/$50 is
-the standing entry, and it should go once omp prices the model), and names any
-other unpriced model in a warning at the top of `models.yml` so you can write
-the rung in by hand.
+model. omp's model table lags a launch unevenly — a brand-new flagship arrives
+at `$0` under its own provider while a reseller row of the same model
+(openrouter's `openai/gpt-6-astra`) carries the price from day one — and a
+scaffold used to drop such a model without a word. It now fills the blank from
+the same model's priced row under any other provider omp lists (exact bare id,
+highest price where resellers disagree), and names any model no row prices in a
+warning at the top of `models.yml` so you can write the rung in by hand.
 
 ## Dials that set omp's own switches
 

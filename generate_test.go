@@ -697,9 +697,12 @@ func TestShortKeyDisambiguation(t *testing.T) {
 // initJSON models the real catalog's awkward shape: four same-priced Opus
 // variants, a legacy Opus that never got delisted and still lists at 3x the
 // price, two identically priced elites, a text-only spark, dated snapshots, a
-// non-reasoning model, a free local model, and a flagship omp lists at $0
-// because its model table has not caught up with the launch (gpt-6-astra,
-// exactly as omp 18.x reports it).
+// non-reasoning model, a free local model, a flagship omp lists at $0 under
+// its own provider because that row has not caught up with the launch
+// (gpt-6-astra, exactly as omp 18.1 reports it), and the reseller rows that
+// carry the same models priced — openrouter, outside every pool, with a
+// discounted sol, a full-price astra, and a -pro variant that must not be
+// mistaken for it.
 const initJSON = `{"models":[
  {"provider":"anthropic","id":"claude-haiku-4-5","contextWindow":200000,"reasoning":true,"thinking":["minimal","low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":1,"output":5}},
  {"provider":"anthropic","id":"claude-sonnet-4-5","contextWindow":1000000,"reasoning":true,"thinking":["minimal","low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":3,"output":15}},
@@ -721,6 +724,9 @@ const initJSON = `{"models":[
  {"provider":"openai-codex","id":"gpt-5.5","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh"],"input":["text","image"],"cost":{"input":5,"output":30}},
  {"provider":"openai-codex","id":"gpt-5.6-sol","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":5,"output":30}},
  {"provider":"openai-codex","id":"gpt-6-astra","contextWindow":272000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":0,"output":0}},
+ {"provider":"openrouter","id":"openai/gpt-5.6-sol","contextWindow":1050000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":2,"output":10}},
+ {"provider":"openrouter","id":"openai/gpt-6-astra","contextWindow":1050000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":10,"output":50}},
+ {"provider":"openrouter","id":"openai/gpt-6-astra-pro","contextWindow":1050000,"reasoning":true,"thinking":["low","medium","high","xhigh","max"],"input":["text","image"],"cost":{"input":30,"output":150}},
  {"provider":"ollama","id":"qwen2.5:3b","contextWindow":32768,"reasoning":false,"thinking":null,"input":["text"],"cost":{"input":0,"output":0}}
 ]}`
 
@@ -1180,13 +1186,16 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	}
 }
 
-// TestScaffoldUnpricedModels: omp's model table lags a launch, so a brand-new
-// flagship lists at $0 with every spec of the pool's top rung. A price-ranked
-// scaffolder used to drop it silently — the one outcome worse than a wrong
-// rung, since the operator's newest model vanished with no trace. Two
-// contracts now: a model with a published list price is filled in and ranked
-// on it, written with that price so the meters do not read it as free; a
-// model with no known price is still dropped, but named in the file.
+// TestScaffoldUnpricedModels: omp's model table lags a launch unevenly — the
+// provider's own row lists a brand-new flagship at $0 with every spec of the
+// pool's top rung, while a reseller row of the same model carries the price.
+// A price-ranked scaffolder used to drop it silently — the one outcome worse
+// than a wrong rung, since the operator's newest model vanished with no trace.
+// Two contracts now: a $0 row is filled from its priced sibling (exact bare
+// id, so the -pro variant is not it) and ranked on that price, written with
+// it so the meters do not read it as free; a model no row prices is still
+// dropped, but named in the file. A sibling only fills — sol's own row keeps
+// its $5 over openrouter's discounted $2.
 func TestScaffoldUnpricedModels(t *testing.T) {
 	stubOmp(t, "")
 	unknown := strings.Replace(initJSON, `"id":"gpt-6-astra"`, `"id":"gpt-7-nova"`, 1)
@@ -1198,7 +1207,10 @@ func TestScaffoldUnpricedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(yml, "    id: gpt-6-astra\n    pool: O\n    tier: 4\n    bucket: codex-main\n    cost_in: 10\n    cost_out: 50\n") {
-		t.Errorf("astra must be written as pool O's tier 4 at its list price:\n%s", yml)
+		t.Errorf("astra must be written as pool O's tier 4 at its sibling row's price, not the -pro variant's:\n%s", yml)
+	}
+	if !strings.Contains(yml, "    id: gpt-5.6-sol\n    pool: O\n    tier: 3\n    bucket: codex-main\n    cost_in: 5\n    cost_out: 30\n") {
+		t.Errorf("a priced row keeps its own price over a discounted reseller sibling:\n%s", yml)
 	}
 	if !strings.Contains(yml, "# WARNING — models dropped because omp lists no price") || !strings.Contains(yml, "#   gpt-7-nova\n") {
 		t.Errorf("an unpriced model with no list price must be dropped by name:\n%s", yml)
