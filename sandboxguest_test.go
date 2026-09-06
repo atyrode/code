@@ -30,6 +30,9 @@ import (
 // be testing a command line production never uses.
 const sandboxFakeOmpEnv = "CODE_SANDBOX_FAKE_OMP"
 
+// sandboxFakeHostPathEnv asks the guest to try reading an ungranted host file.
+const sandboxFakeHostPathEnv = "CODE_SANDBOX_FAKE_HOST_PATH"
+
 // sandboxFakeLoadEnv asks the stand-in OMP to consume a measurable amount of
 // each thing the ceilings bound: mebibytes of resident anonymous memory, the
 // same number of mebibytes written to the run's scratch tmpfs, and a fixed
@@ -92,7 +95,7 @@ type sandboxGuestView struct {
 	Routes         int      `json:"routes"`
 	BrokerStatus   string   `json:"broker_status"`
 	RefusedStatus  string   `json:"refused_status"`
-	Root           []string `json:"root"`
+	HostReadDenied bool     `json:"host_read_denied"`
 	Argv           []string `json:"argv"`
 	TokenOnArgv    bool     `json:"token_on_argv"`
 }
@@ -134,8 +137,11 @@ func sandboxObserveGuest() sandboxGuestView {
 		BrokerURL: os.Getenv("OMP_AUTH_BROKER_URL"),
 		PoolPath:  os.Getenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE"),
 		Routes:    sandboxRouteCount(),
-		Root:      sandboxRootEntries(),
 		Argv:      os.Args,
+	}
+	if path := os.Getenv(sandboxFakeHostPathEnv); path != "" {
+		_, err := os.ReadFile(path)
+		view.HostReadDenied = os.IsNotExist(err) || os.IsPermission(err)
 	}
 	if _, err := os.ReadFile(view.PoolPath); err == nil {
 		view.PoolReadable = true
