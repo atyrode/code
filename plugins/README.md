@@ -29,15 +29,23 @@ packages to `../../manifold/packages/{plugin-kit,protocol}/src`, so the layout i
 `typescript`; the manifold checkout needs its own `bun install --frozen-lockfile` once, because the
 kit resolves the protocol and zod from its workspace.
 
+The pinned SDK supports two install modes. The baseline server default-exports its
+`ServerPluginDef` for normal module loading and calls `defineServerPlugin` to bind IPC
+when loaded as a hardened child. The latter call is inert on a normal import; it does
+not supply the default export. The generator remains web-only and uses the baseline's
+doors. Packing never selects trust: the installer chooses hardened isolation with
+Manifold's existing consent rules. The local verification gate exercises both modes
+on disposable hubs, not the integrated preview.
+
 ## Commands
 
 ```sh
 bun install            # zod + typescript
 bun run check          # tsc over the plugins and the tests
-bun test               # panel programs against a fake host, doors against a fake ctx
+bun test               # panel programs, doors and an imported packed server definition
 bun run pack           # dist/<id>.manifold-plugin.json for every plugin + dist/SHA256SUMS
-bun run verify         # the kit spawns a real manifold server, installs every bundle in dist/,
-                       # dispatches every door, uninstalls; the gate an author runs before pushing
+bun run verify         # real throwaway hubs: install both bundles normally, then hardened;
+                       # dispatch every door and uninstall in each mode
 bun run dev -- --hub http://127.0.0.1:7912 --deliver docker:manifold-dev-manifold-1
                        # from dev-01: pack + install on the integrated preview, parents before
                        # parts, then watch this directory and reinstall whatever changed

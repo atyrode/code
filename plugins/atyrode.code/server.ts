@@ -38,8 +38,8 @@ import manifestJson from "./manifest.json";
     open a terminal is refused here, before a row is written.
   - `atyrode.code.listLaunches` reads the ledger back, newest first.
 
-  Both are async end to end: every storage verb and every question to the host crosses the
-  process boundary as a `call` frame.
+  Both are async end to end, whether the normal host serves a verb directly or the hardened
+  child crosses the process boundary as a `call` frame.
  */
 
 const launch = defineServerAction({
@@ -108,11 +108,13 @@ export const handlers = {
   },
 };
 
-/** The whole definition, exported so a test can drive it through the kit's own transport. */
-export const plugin: ServerPluginDef = {
+/** Normal installs import this definition; hardened installs bind it to the IPC transport below. */
+const plugin: ServerPluginDef = {
   manifest: PluginManifestSchema.parse(manifestJson),
   actions: [launch, listLaunches],
   handlers,
 };
+
+export default plugin;
 
 defineServerPlugin(plugin);
