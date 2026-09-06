@@ -46,17 +46,6 @@ type accountBlock struct {
 // blocks at parse time.
 var timeNow = time.Now
 
-// providerBlock returns the provider-wide block expiry, zero when none.
-func (a account) providerBlock() time.Time {
-	var latest time.Time
-	for _, b := range a.blocks {
-		if b.Scope == "" && b.Until.After(latest) {
-			latest = b.Until
-		}
-	}
-	return latest
-}
-
 // blockLabels renders one short label per block, longest expiry first (the
 // order parseAccountBlocks establishes): "blocked 2d12h", "chat blocked 6d2h".
 func (a account) blockLabels(now time.Time) []string {
@@ -701,118 +690,37 @@ func atomicPrivateWrite(path string, body []byte) error {
 	return nil
 }
 
-// poolWarningReason names the launch-time account situation a poolWarning
-// reports.
-type poolWarningReason int
-
-const (
-	// poolAllDisabled: the operator disabled every snapshot account of this
-	// provider; the pool genuinely carries an empty array.
-	poolAllDisabled poolWarningReason = iota
-	// poolAllBlocked: every account left enabled for this provider currently
-	// carries a provider-wide rate-limit block.
-	poolAllBlocked
-)
-
-// poolWarning is a provider whose launch-time account situation the operator
-// must be told about before the child starts.
-type poolWarning struct {
-	Provider string
-	Reason   poolWarningReason
-	Until    time.Time // set only for poolAllBlocked
-}
-
-// buildAccountPool seeds the account-pool file omp routes OAuth identities
-// through. Only metered (OAuth) providers belong: api_key providers have no
-// identity keys and no pool routing.
-//
-// Per omp's contract a missing provider key is unrestricted and an empty
-// array hides every OAuth credential for that provider, so a provider is
-// included only when the operator has actually disabled at least one of its
-// snapshot accounts — never as a side effect of failed enumeration. Blocked
-// accounts stay in the pool: a block can expire mid-session, and removing
-// them would freeze that decision for the session's whole life.
-func buildAccountPool(accounts map[string][]account, disabled map[accountKey]bool, now time.Time) (map[string][]string, []poolWarning) {
-	pool := make(map[string][]string, len(providerRegistry))
-	var warnings []poolWarning
-	for _, p := range providerRegistry {
-		if !p.Metered {
-			continue
-		}
-		provider := p.ID
-		var snapshotAccounts, enabled []account
-		for _, acct := range accounts[provider] {
-			if acct.Provider != provider || acct.IdentityKey == "" {
-				continue
-			}
-			snapshotAccounts = append(snapshotAccounts, acct)
-			if !selectionDisabled(disabled, acct) {
-				enabled = append(enabled, acct)
-			}
-		}
-		if len(snapshotAccounts) == 0 || len(enabled) == len(snapshotAccounts) {
-			// Nothing to restrict, or the provider has no snapshot accounts
-			// at all — a missing key is the safe, unrestricted state.
-			continue
-		}
-		keys := make([]string, 0, len(enabled))
-		for _, acct := range enabled {
-			keys = append(keys, acct.IdentityKey)
-		}
-		sort.Strings(keys)
-		pool[provider] = keys
-		if len(enabled) == 0 {
-			warnings = append(warnings, poolWarning{Provider: provider, Reason: poolAllDisabled})
-			continue
-		}
-		var blockedUntil time.Time
-		allBlocked := true
-		for _, acct := range enabled {
-			until := acct.providerBlock()
-			if until.IsZero() || !until.After(now) {
-				allBlocked = false
-				break
-			}
-			if blockedUntil.IsZero() || until.Before(blockedUntil) {
-				blockedUntil = until
-			}
-		}
-		if allBlocked {
-			warnings = append(warnings, poolWarning{Provider: provider, Reason: poolAllBlocked, Until: blockedUntil})
-		}
-	}
-	sort.Slice(warnings, func(i, j int) bool { return warnings[i].Provider < warnings[j].Provider })
-	return pool, warnings
-}
-
-func writeAccountPool(accounts map[string][]account, disabled map[accountKey]bool, now time.Time) (string, map[string][]string, []poolWarning, func(), error) {
+// writeAccountPool materialises the pool document launchAccountReport
+// produced where omp's auth broker can read it: 0600 inside a 0700 pid-tagged
+// temporary directory, removed by the returned cleanup. The judgement of who
+// belongs in the pool lives with the report, not here.
+func writeAccountPool(pool map[string][]string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", fmt.Sprintf("code-auth-account-pool-%d-*", os.Getpid()))
 	if err != nil {
-		return "", nil, nil, func() {}, err
+		return "", func() {}, err
 	}
 	var once sync.Once
 	cleanup := func() { once.Do(func() { _ = os.RemoveAll(dir) }) }
 	if err := os.Chmod(dir, 0o700); err != nil {
 		cleanup()
-		return "", nil, nil, cleanup, err
+		return "", cleanup, err
 	}
-	pool, warnings := buildAccountPool(accounts, disabled, now)
 	body, err := json.Marshal(pool)
 	if err != nil {
 		cleanup()
-		return "", nil, nil, cleanup, err
+		return "", cleanup, err
 	}
 	body = append(body, '\n')
 	path := filepath.Join(dir, "account-pool.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		cleanup()
-		return "", nil, nil, cleanup, err
+		return "", cleanup, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		cleanup()
-		return "", nil, nil, cleanup, err
+		return "", cleanup, err
 	}
-	return path, pool, warnings, cleanup, nil
+	return path, cleanup, nil
 }
 
 // accountPoolDirPattern matches the pid-tagged temp directories

@@ -214,7 +214,7 @@ this record's scope (D6). The launcher half:
 | File | Responsibility |
 | --- | --- |
 | `main.go` | argv dispatch (`:38-56`), the interactive app, the post-loop launch switch (`:63-104`), glyph tables (`:113-134`) |
-| `launch.go` | argv assembly (`:11-44`), binary resolution (`:46-57`), `runChild` (`:63-75`), overlay temp file (`:156-163`) |
+| `launch.go` | launch intent and the tier-aware account report — pool document, per-identity eligibility, stale-block contradiction (`:47,180-189`); argv assembly (`:372-405`), binary resolution (`:407`), `runChild` (`:424`), overlay temp file (`:517`) |
 | `model.go` | the `model` struct (`:34-114`), the 1 s tick and 5 min usage cadence (`:118-123`) |
 | `update.go` | every key (`:135-289`), Enter (`:252-288`) |
 | `view.go`, `render.go`, `layout.go` | rendering and responsive size classes |
@@ -224,7 +224,7 @@ this record's scope (D6). The launcher half:
 | `generate.go`, `generate_init.go` | `code generate [init]`; `omp models --json` probe (`generate_init.go:41-43,878-918`) |
 | `usage.go` | broker usage fetch (`:134`), usage cache (`:440,498`), the usage panel |
 | `manager.go` | account manager UI; OAuth login via `tea.ExecProcess` (`:309-317`) |
-| `vault.go` | accounts, broker resolution (`:93-98`), account pool file (`:788-789`), auth env (`:866-893`), DeepSeek balance (`:938-956`) |
+| `vault.go` | accounts, broker resolution (`:93-98`), account pool file writer (`:697`), auth env (`:789-801`), DeepSeek balance |
 | `providers.go` | provider, pool, lane and tier registry |
 | `session.go` | flock-based session registry (`:85-102,156-167`), reap (`:363-389`), `withSession` (`:561`) |
 | `worktree.go` | `code/<adj>-<color>-<animal>` worktrees under code's own state root (`:103,261-300`) |

@@ -104,8 +104,8 @@ func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	anthropic := accounts[anthropicProvider][0]
-	if until := anthropic.providerBlock(); !until.Equal(fixed.Add(24 * time.Hour)) {
-		t.Fatalf("anthropic providerBlock = %v, want %v", until, fixed.Add(24*time.Hour))
+	if judged := judgeIdentity(anthropic, launchTierMain, nil, fixed); judged.BlockScope != "" || !judged.BlockedUntil.Equal(fixed.Add(24*time.Hour)) {
+		t.Fatalf("anthropic provider-wide block judged as %q until %v, want \"\" until %v", judged.BlockScope, judged.BlockedUntil, fixed.Add(24*time.Hour))
 	}
 	if anthropic.credentialID != "24" {
 		t.Fatalf("anthropic credentialID = %q, want 24", anthropic.credentialID)
@@ -114,8 +114,13 @@ func TestParseAccountSnapshotDecodesBlocks(t *testing.T) {
 		t.Fatalf("anthropic blockLabels = %#v", labels)
 	}
 	codex := accounts[openAIProvider][0]
-	if !codex.providerBlock().IsZero() {
-		t.Fatalf("chat-only block must not read as provider-wide: %v", codex.providerBlock())
+	// "chat" is omp's scope for every Codex request that is not spark, so it
+	// keeps the account off the main tier and off the main tier only.
+	if judged := judgeIdentity(codex, launchTierMain, nil, fixed); judged.BlockScope != "chat" {
+		t.Fatalf("chat block must keep the account off the main tier: %#v", judged)
+	}
+	if judged := judgeIdentity(codex, "spark", nil, fixed); !judged.eligible() {
+		t.Fatalf("chat-only block must not read as blocking spark: %#v", judged)
 	}
 	// The expired "spark" block and the zero-timestamp "tier:fable" block are
 	// both dropped at parse time; only the still-in-force "chat" block remains.
@@ -180,7 +185,7 @@ func TestParseAccountSnapshotCanonicalisesProviderAlias(t *testing.T) {
 	// Disabling only the canonical-named account must leave the alias-named
 	// one enabled and visible in the pool under the canonical provider id.
 	disabled := map[accountKey]bool{{Provider: openAIProvider, IdentityKey: "canonical-account"}: true}
-	pool, _ := buildAccountPool(accounts, disabled, time.Now())
+	pool := launchAccountReport(accounts, disabled, launchIntent{}, time.Now()).pool()
 	if !reflect.DeepEqual(pool[openAIProvider], []string{"alias-account"}) {
 		t.Fatalf("alias-named credential absent from pool: %#v", pool)
 	}
@@ -253,14 +258,15 @@ func TestAccountSelectionUnknownAccountsDefaultEnabledAndProviderKeysAreIsolated
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "shared"}, {Provider: anthropicProvider, IdentityKey: "new"}},
 		openAIProvider:    {{Provider: openAIProvider, IdentityKey: "shared"}},
 	}
-	got, warnings := buildAccountPool(accounts, state.CurrentDisabled(), time.Now())
+	report := launchAccountReport(accounts, state.CurrentDisabled(), launchIntent{}, time.Now())
+	got := report.pool()
 	if !reflect.DeepEqual(got[anthropicProvider], []string{"new"}) {
 		t.Fatalf("anthropic account pool = %#v", got[anthropicProvider])
 	}
 	if _, ok := got[openAIProvider]; ok {
 		t.Fatalf("same identityKey disabled in another provider must leave this one unrestricted (omitted): %#v", got)
 	}
-	if len(warnings) != 0 {
+	if warnings := report.warnings(time.Now()); len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %#v", warnings)
 	}
 }
@@ -272,12 +278,18 @@ func TestBuildAccountPoolOmitsUnrestrictedProviders(t *testing.T) {
 			anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "a"}},
 			openAIProvider:    {{Provider: openAIProvider, IdentityKey: "o"}},
 		}
-		got, warnings := buildAccountPool(accounts, nil, now)
-		if len(got) != 0 {
+		report := launchAccountReport(accounts, nil, launchIntent{}, now)
+		if got := report.pool(); len(got) != 0 {
 			t.Fatalf("unrestricted pool must have no keys: %#v", got)
 		}
-		if len(warnings) != 0 {
+		if warnings := report.warnings(now); len(warnings) != 0 {
 			t.Fatalf("unexpected warnings: %#v", warnings)
+		}
+		// Unrestricted is not unreported: the operator still sees the pool
+		// omp will enumerate on its own.
+		lines := report.poolLines(now)
+		if len(lines) != 3 || !strings.Contains(lines[1], "Anthropic pool (every account, no restriction written): a") {
+			t.Fatalf("pool lines = %#v", lines)
 		}
 	})
 	t.Run("provider with zero snapshot accounts stays absent", func(t *testing.T) {
@@ -286,7 +298,7 @@ func TestBuildAccountPoolOmitsUnrestrictedProviders(t *testing.T) {
 			openAIProvider:    {},
 		}
 		disabled := map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true}
-		got, _ := buildAccountPool(accounts, disabled, now)
+		got := launchAccountReport(accounts, disabled, launchIntent{}, now).pool()
 		if _, ok := got[openAIProvider]; ok {
 			t.Fatalf("provider with no snapshot accounts must stay absent: %#v", got)
 		}
@@ -303,40 +315,17 @@ func TestBuildAccountPoolOmitsUnrestrictedProviders(t *testing.T) {
 			{Provider: anthropicProvider, IdentityKey: "a"}: true,
 			{Provider: openAIProvider, IdentityKey: "o"}:    true,
 		}
-		got, warnings := buildAccountPool(accounts, disabled, now)
+		report := launchAccountReport(accounts, disabled, launchIntent{}, now)
+		got := report.pool()
 		if len(got) != 2 || got[anthropicProvider] == nil || got[openAIProvider] == nil ||
 			len(got[anthropicProvider]) != 0 || len(got[openAIProvider]) != 0 {
 			t.Fatalf("all-disabled pool must contain two empty arrays: %#v", got)
 		}
-		if len(warnings) != 2 || warnings[0].Reason != poolAllDisabled || warnings[1].Reason != poolAllDisabled {
-			t.Fatalf("expected two poolAllDisabled warnings: %#v", warnings)
+		warnings := report.warnings(now)
+		if len(warnings) != 2 || !strings.Contains(warnings[0], "every Anthropic account is disabled") || !strings.Contains(warnings[1], "every OpenAI account is disabled") {
+			t.Fatalf("expected two all-disabled warnings: %#v", warnings)
 		}
 	})
-}
-
-func TestBuildAccountPoolWarnsWhenEveryEnabledAccountIsBlocked(t *testing.T) {
-	now := time.Now()
-	accounts := map[string][]account{
-		anthropicProvider: {
-			{Provider: anthropicProvider, IdentityKey: "a", blocks: []accountBlock{{Scope: "", Until: now.Add(time.Hour)}}},
-			{Provider: anthropicProvider, IdentityKey: "b", blocks: []accountBlock{{Scope: "", Until: now.Add(2 * time.Hour)}}},
-			{Provider: anthropicProvider, IdentityKey: "c"},
-		},
-	}
-	// "c" is disabled by the operator, which is what makes this provider
-	// restricted (present in the pool at all); "a" and "b" stay enabled but
-	// both carry a provider-wide block still in force.
-	disabled := map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "c"}: true}
-	got, warnings := buildAccountPool(accounts, disabled, now)
-	if !reflect.DeepEqual(got[anthropicProvider], []string{"a", "b"}) {
-		t.Fatalf("blocked accounts must stay in the pool: %#v", got[anthropicProvider])
-	}
-	if len(warnings) != 1 || warnings[0].Provider != anthropicProvider || warnings[0].Reason != poolAllBlocked {
-		t.Fatalf("expected one poolAllBlocked warning: %#v", warnings)
-	}
-	if !warnings[0].Until.Equal(now.Add(time.Hour)) {
-		t.Fatalf("warning Until = %v, want the earliest expiry %v", warnings[0].Until, now.Add(time.Hour))
-	}
 }
 
 func TestLoadAccountSelectionStateNormalizesPresetsAndUnknownActive(t *testing.T) {
@@ -474,12 +463,13 @@ func TestWriteAccountPoolContentsPermissionsAndIdempotentCleanup(t *testing.T) {
 		anthropicProvider: {{Provider: anthropicProvider, IdentityKey: "b"}, {Provider: anthropicProvider, IdentityKey: "a"}},
 		openAIProvider:    {},
 	}
-	path, _, warnings, cleanup, err := writeAccountPool(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true}, time.Now())
+	report := launchAccountReport(accounts, map[accountKey]bool{{Provider: anthropicProvider, IdentityKey: "b"}: true}, launchIntent{}, time.Now())
+	if warnings := report.warnings(time.Now()); len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+	path, cleanup, err := writeAccountPool(report.pool())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected warnings: %#v", warnings)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -717,7 +707,7 @@ func TestDeepSeekKeyStaysInMemory(t *testing.T) {
 	}
 
 	// The forwarded account pool is OAuth-only; deepseek must not appear.
-	pool, _ := buildAccountPool(accounts, nil, time.Now())
+	pool := launchAccountReport(accounts, nil, launchIntent{}, time.Now()).pool()
 	if _, ok := pool[deepseekProvider]; ok {
 		t.Fatalf("account pool grew an api_key provider: %#v", pool)
 	}

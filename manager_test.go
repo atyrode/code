@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1996,5 +1997,48 @@ func TestManagerHidesRetryForUnblockedOrUnidentifiedAccounts(t *testing.T) {
 		if cmd != nil || next.blockRetryingID != "" {
 			t.Fatalf("ineligible x started retry: id=%q cmd=%v", next.blockRetryingID, cmd)
 		}
+	}
+}
+
+// The manager renders the launch layer's verdict: with Fable as the default
+// lead and every enabled Anthropic account blocked on tier:fable only, the
+// warning names Fable and says the pool, never that Anthropic is blocked; a
+// fresh Fable window with headroom turns the block into a stale-state
+// warning that names the retry key.
+func TestManagerRendersTierAwareLaunchWarning(t *testing.T) {
+	m := managerTestModel(t)
+	// Tall enough for the pool lines: on a tight screen they yield to the
+	// account rows and only the warnings stay.
+	m.h = 60
+	m.facts = map[string]modelFact{"claude-fable-1": {bucket: "claude-fable", pool: "A"}}
+	m.generated[comboID(m.sel)] = []string{"  ● default    claude-fable-1:high"}
+	until := timeNow().Add(6 * time.Hour)
+	for i := range m.avail.accounts["anthropic"] {
+		m.avail.accounts["anthropic"][i].blocks = []accountBlock{{Scope: "tier:fable", Until: until}}
+	}
+	m.avail.accountUsage[accountKey{Provider: "anthropic", IdentityKey: "anthropic-a"}] = []usageWin{
+		{label: "Claude 7 Day (Fable)", id: "7d", tier: "fable", pct: 0, secs: 4 * day, dur: 7 * day, prov: "anthropic"},
+	}
+	flat := regexp.MustCompile(`\s+`).ReplaceAllString(stripAnsi(m.managerView()), " ")
+	for _, want := range []string{
+		"Enabled accounts form a pool omp rotates through",
+		"Anthropic pool (every account, no restriction written): anthropic-a <a.claude@example.test> [tier:fable blocked",
+		"Fable is rate-limit blocked on every enabled Anthropic account (anthropic-a, anthropic-b, anthropic-c)",
+		"Anthropic itself is not blocked",
+		"Anthropic anthropic-a: fresh usage shows Fable headroom while the broker still holds a tier:fable block",
+		"press x (retry now)",
+	} {
+		if !strings.Contains(flat, want) {
+			t.Fatalf("manager view lacks %q:\n%s", want, stripAnsi(m.managerView()))
+		}
+	}
+	if strings.Contains(flat, "account (anthropic-a, anthropic-b, anthropic-c) is rate-limit blocked") {
+		t.Fatalf("tier-only blocks rendered as a provider-wide block:\n%s", stripAnsi(m.managerView()))
+	}
+	// The same blocks with an ordinary lead are not the launch's problem.
+	m.generated[comboID(m.sel)] = []string{"  ● default    claude-opus-5:high"}
+	m.facts["claude-opus-5"] = modelFact{bucket: "claude-main", pool: "A"}
+	if flat := stripAnsi(m.managerView()); strings.Contains(flat, "rate-limit blocked on every") {
+		t.Fatalf("unrequested tier block warned:\n%s", flat)
 	}
 }
