@@ -10,6 +10,20 @@ If you run omp with more than one provider subscription and care which model
 chain answers which task, this tool is for you. If you run omp on one
 provider with defaults, you probably don't need it.
 
+## Direction
+
+`code` is becoming a [manifold](https://github.com/atyrode/manifold) plugin:
+a small launcher UI in the browser that opens omp-ready terminals on enrolled
+machines, with the dials, routing preview, usage panel and account manager
+rendered there. The TUI stays until every one of its surfaces has a plugin
+equivalent, and from 2026-09-05 nothing new lands TUI-only.
+
+[`manifold-transition.md`](./manifold-transition.md) is the record: the
+decisions (§5), the six steps (§6) and, in §6's ledger, which step is where —
+that table is the only progress tracker, and the PR that moves a step updates
+it. Work items carry the `manifold-transition` label in the issue tracker.
+What has shipped so far is under `plugins/` (`plugins/README.md`).
+
 ## The catalog
 
 The dials map to pre-generated routing blocks. `code generate init` scaffolds
