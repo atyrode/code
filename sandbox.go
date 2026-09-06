@@ -1,17 +1,17 @@
 package main
 
-// The analysis sandbox: what `code babel` actually contains an OMP session in,
-// and what it tells Babel about that containment.
+// The sandbox: what `code engine` actually contains an OMP session in, and
+// what it tells the client about that containment.
 //
-// Babel cannot inspect this process, so the babelContainment declaration Code
-// writes at the first event of a run is the whole basis on which a reviewer
-// later trusts — or discounts — the evidence the run produced. That makes one
+// The client cannot inspect this process, so the declaration Code writes to
+// the runtime report before it forwards a byte is the whole basis on which a
+// reviewer later trusts — or discounts — what the run produced. That makes one
 // rule absolute here: nothing in this file may state a property the machine did
 // not establish. Every boolean in the declaration is read off a probe that ran
 // the real backend moments earlier and looked, from inside the sandbox and from
 // the host's cgroup tree, for the thing it is about to claim. A property the
-// probe could not establish is declared false and Babel refuses the run, which
-// is the mechanism working rather than a defect to route around.
+// probe could not establish is declared false and the client refuses the run,
+// which is the mechanism working rather than a defect to route around.
 //
 // This file is the portable half: the ceilings, the guest filesystem layout,
 // the declaration, the provider endpoint the egress allowlist is resolved from,
@@ -39,12 +39,11 @@ import (
 // installed by the transient systemd user scope on the run's cgroup, and one
 // installed by bubblewrap on every writable mount.
 //
-// Babel supplies none of them, and that is a fact about the wire contract
-// rather than an omission here: the accept message carries babelLimits, which
-// bounds the protocol — line bytes, event count, tool requests, idle seconds,
-// exit grace — and names no memory, CPU, task or disk dimension at all. There
-// is therefore nothing in a job to derive a ceiling from, so these are Code's
-// own defaults and are documented as such:
+// The client supplies none of them, and that is deliberate: a supervising
+// client bounds the run it can see — its own line budgets, its own idle and
+// exit grace — and has no basis for naming a memory, CPU, task or disk
+// dimension on a machine it does not run on. So these are Code's own defaults
+// and are documented as such:
 //
 //   - 4 GiB of memory, with swap denied. A driven OMP session with a few
 //     subagents peaks well under a gigabyte; four leaves room for a large
@@ -164,32 +163,23 @@ func (u runUsage) fillFrom(other runUsage) runUsage {
 	return u
 }
 
-// since turns a pair of readings of the same cumulative counter into the span
-// between them, which is what a run's own CPU time is when the process doing
-// the work outlives the run.
-//
-// Only CPU is a difference. A peak is a high-water mark and the difference of
-// two high-water marks is not a smaller peak, it is nothing at all, so the
-// later reading is kept and its source says whose peak it is. The clamp is not
-// a fallback: utime and stime are monotonic, so a negative span would mean the
-// kernel contradicted itself, and the one thing that must never leave here is a
-// negative counter.
-func (u runUsage) since(start runUsage) runUsage {
-	if u.cpuSource == "" || start.cpuSource == "" {
-		return u
-	}
-	if u.cpuSeconds -= start.cpuSeconds; u.cpuSeconds < 0 {
-		u.cpuSeconds = 0
-	}
-	return u
+// runResources is the report's resource object: self-reported use, every
+// unmeasured dimension left off. A client treats an absent value as unknown
+// rather than zero, so reporting nothing is honest and reporting zero is a
+// claim. The pointers are what put that distinction on the wire: a dimension
+// this run had no way to measure is absent from the JSON, and a dimension
+// measured as zero is present as zero, so the bytes a reviewer reads keep
+// "nothing wrote anything" apart from "nobody looked".
+type runResources struct {
+	CPUSeconds          *float64 `json:"cpu_seconds,omitempty"`
+	MaxRSSBytes         *int64   `json:"max_rss_bytes,omitempty"`
+	SandboxBytesWritten *int64   `json:"sandbox_bytes_written,omitempty"`
 }
 
-// report renders what was measured into the wire's resource object, with every
-// unmeasured dimension left off. calls is passed separately because it is not a
-// resource reading at all: the driver counts every request it puts to Babel, so
-// it is known whatever the machine could measure.
-func (u runUsage) report(calls int) *babelResources {
-	out := &babelResources{ToolCalls: calls}
+// report renders what was measured into the runtime report's resource object,
+// with every unmeasured dimension left off.
+func (u runUsage) report() *runResources {
+	out := &runResources{}
 	if u.cpuSource != "" {
 		out.CPUSeconds = &u.cpuSeconds
 	}
@@ -366,7 +356,7 @@ func sandboxProxyEnv(base []string) []string {
 
 // ── the declaration ──────────────────────────────────────────────────────────
 
-// Backend names. They are the string Babel records and a reviewer reads, so
+// Backend names. They are the string the client records and a reviewer reads, so
 // each one names a mechanism rather than an intention: "bwrap+systemd-scope" is
 // namespaces plus an enforced cgroup, "bwrap" is namespaces with no ceilings,
 // and "process" is no boundary at all.
@@ -398,10 +388,26 @@ func (f sandboxFacts) contained() bool {
 	return f.filesystemIsolation && f.networkDefaultDeny && f.disposable
 }
 
-// declare renders the containment Babel is held to. Nothing is added here that
-// the probe did not establish; the prose only explains what the booleans mean.
-func (f sandboxFacts) declare(egress sandboxEgressDescription) babelContainment {
-	return babelContainment{
+// sandboxDeclaration is the containment a launch declares it provides, as the
+// runtime report carries it. Every field is a claim Code makes about itself
+// that a client cannot verify from outside the process, which is exactly why
+// Escape is mandatory and may not be empty: a sandbox whose author claims no
+// residual risk has not been examined. Declaring less than is true is safe;
+// declaring more is a lie that ends up in a record a reviewer will trust.
+type sandboxDeclaration struct {
+	Backend             string `json:"backend"`
+	FilesystemIsolation bool   `json:"filesystem_isolation"`
+	NetworkDefaultDeny  bool   `json:"network_default_deny"`
+	ResourceCeilings    bool   `json:"resource_ceilings"`
+	Disposable          bool   `json:"disposable"`
+	Escape              string `json:"escape"`
+}
+
+// declare renders the containment the client is told about and holds the run
+// to. Nothing is added here that the probe did not establish; the prose only
+// explains what the booleans mean.
+func (f sandboxFacts) declare(egress sandboxEgressDescription) sandboxDeclaration {
+	return sandboxDeclaration{
 		Backend:             f.backend,
 		FilesystemIsolation: f.filesystemIsolation,
 		NetworkDefaultDeny:  f.networkDefaultDeny,
@@ -461,7 +467,7 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 	}
 	b.WriteString("The only host paths inside are read-only: the binaries the run executes and the " +
 		"directories they load their interpreter and libraries from, the profile's OMP overlay, the run's " +
-		"account pool, the system CA bundle, and the corpus paths the run's grant named. That set is " +
+		"account pool, the system CA bundle, and the input paths the client approved. That set is " +
 		"derived from the programs themselves — a shebang line, an ELF program header, a dynamic section " +
 		"— so it is what this machine actually needs rather than what some other machine would have had. " +
 		"The session's home and working directory are tmpfs and go away with the mount " +
@@ -531,7 +537,7 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 			"and the space each writable mount can hold, but not I/O bandwidth: the io controller is not " +
 			"delegated into the user manager's slice on this class of host, and systemd accepts an " +
 			"IOReadBandwidthMax with exit status 0 and then drops it, so no such ceiling is set rather " +
-			"than declared and not installed. A run can therefore saturate the disk it reads the corpus " +
+			"than declared and not installed. A run can therefore saturate the disk it reads its inputs " +
 			"from, which slows the machine without exhausting it.")
 	}
 
@@ -547,14 +553,14 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 
 // sandboxRequest is everything a contained launch needs that is not fixed by
 // the guest layout: which binaries and files the run has to be able to read,
-// which corpus paths the grant named, the environment the session runs with,
+// which input paths the client approved, the environment the session runs with,
 // and the egress it is allowed to talk through.
 type sandboxRequest struct {
 	ompBinary  string
 	configHost string
 	poolHost   string
 	caBundle   string
-	corpus     []string
+	inputs     []string
 	egress     *sandboxEgress
 }
 
@@ -591,6 +597,12 @@ type sandboxRun struct {
 	// which is what keeps the declaration and the report describing the same
 	// machine.
 	cgroup string
+	// The helper holds the scope alive until the host has captured its final
+	// counters. Closing exitDone publishes both measurements to readers.
+	exitDone     chan struct{}
+	exitReport   sandboxExitReport
+	exitReported bool
+	finalUsage   runUsage
 }
 
 // command puts the guest argv inside the boundary.
@@ -620,28 +632,34 @@ func (r *sandboxRun) extraFiles() []*os.File {
 //
 // A failed verification is a hard error rather than a downgrade. The
 // declaration went out before the launch, so a run that cannot establish what
-// it claimed must not proceed: Babel has already recorded the claim.
+// it claimed must not proceed: the client has already recorded the claim.
 func (r *sandboxRun) started(pid int) error {
 	if r.reportW != nil {
 		_ = r.reportW.Close()
 		r.reportW = nil
 	}
-	if r.verify == nil {
-		return nil
+	if r.verify != nil {
+		cgroup, err := r.verify(pid)
+		if err != nil {
+			return fmt.Errorf("this run declared resource ceilings and the sandbox did not install them, so "+
+				"it is refused rather than run outside the boundary the client was told about: %w", err)
+		}
+		r.cgroup = cgroup
 	}
-	cgroup, err := r.verify(pid)
-	if err != nil {
-		return fmt.Errorf("this run declared resource ceilings and the sandbox did not install them, so "+
-			"it is refused rather than run outside the boundary Babel was told about: %w", err)
+	if report := r.reportR; report != nil {
+		r.exitDone = make(chan struct{})
+		go func() {
+			r.exitReport, r.exitReported = sandboxReadExitReport(context.Background(), report)
+			r.finalUsage = sandboxCgroupUsage(r.cgroup)
+			_, _ = report.Write([]byte{1})
+			close(r.exitDone)
+		}()
 	}
-	r.cgroup = cgroup
 	return nil
 }
 
-// usage is what the run's own cgroup says it used. It must be read while the
-// tree is still alive: the transient scope is collected when its last task
-// exits, and the cgroup directory goes with it, so a caller that stops the
-// session first finds nothing to read.
+// usage reads the live counters, or the final counters captured before the
+// helper acknowledged shutdown and let systemd collect its transient scope.
 //
 // A run with no cgroup — the bubblewrap-only tier, or any platform with no
 // backend — returns an unmeasured reading rather than a zero one. That is the
@@ -652,6 +670,13 @@ func (r *sandboxRun) usage() runUsage {
 	if r == nil {
 		return runUsage{}
 	}
+	if r.exitDone != nil {
+		select {
+		case <-r.exitDone:
+			return r.finalUsage
+		default:
+		}
+	}
 	return sandboxCgroupUsage(r.cgroup)
 }
 
@@ -660,8 +685,15 @@ func (r *sandboxRun) usage() runUsage {
 // the mount namespace is gone, which is exactly the property that makes the
 // sandbox disposable.
 func (r *sandboxRun) bytesWritten(ctx context.Context) (int64, bool) {
-	report, ok := sandboxReadExitReport(ctx, r.reportR)
-	return report.BytesWritten, ok
+	if r.exitDone == nil {
+		return 0, false
+	}
+	select {
+	case <-r.exitDone:
+		return r.exitReport.BytesWritten, r.exitReported
+	case <-ctx.Done():
+		return 0, false
+	}
 }
 
 // egressLog is every CONNECT the sandbox attempted, allowed or refused.
@@ -684,6 +716,9 @@ func (r *sandboxRun) close() {
 		_ = r.reportR.Close()
 		r.reportR = nil
 	}
+	if r.exitDone != nil {
+		<-r.exitDone
+	}
 	if r.egress != nil {
 		r.egress.close()
 	}
@@ -693,7 +728,7 @@ func (r *sandboxRun) close() {
 
 // sandboxProviderEndpoints maps a provider in Code's registry to the host its
 // API is served from. The allowlist is resolved through this table from the
-// profile Babel's job named, so the boundary follows the run's own provider
+// profile the launch named, so the boundary follows the run's own provider
 // rather than a vendor chosen here — and a provider with no entry is a refusal
 // rather than a proxy that would forward anywhere.
 //
@@ -767,46 +802,45 @@ func sandboxRunEgress(profile resolvedProfile, brokerURL string) (string, sandbo
 	return provider, policy, err
 }
 
-// ── the corpus the grant named ───────────────────────────────────────────────
+// ── approved inputs ──────────────────────────────────────────────────────────
 
-// sandboxCorpusPaths is the set of host paths the run's sources name, cleaned
-// and deduplicated, that exist and can therefore be bound read-only.
+// sandboxInputPaths is the set of host paths a launch's --input flags name,
+// cleaned and deduplicated, that exist and can therefore be bound read-only.
 //
-// A selector that is not an absolute path — a URL, a repository name, an index
-// key — binds nothing. That is not a silent drop: the model reaches such a
-// source through Babel's brokered evidence tools, which is the route the grant
-// exists for, and mounting the filesystem under a guess about a selector's
-// shape would widen the boundary on a guess.
+// Inputs must be existing absolute paths. An invalid path refuses the launch
+// rather than silently removing context the caller expected to be available.
 //
 // Nothing is ever bound inside sandboxRoot, and that rule is load-bearing
 // rather than tidy. OMP registers MCP servers from a config file sitting at the
 // root of its working directory — measured against omp 18.0.11 across a dozen
-// file shapes — and an MCP tool reaches the network without passing Babel's
-// evidence broker at all. Archive content is untrusted by contract, so a corpus
-// that landed at the session's working directory would let a `.mcp.json` in
-// archived material register unbrokered egress before the model is even asked
-// anything. The working directory is a tmpfs the sandbox creates empty, the
-// corpus is bound at its own path, and discovery neither ascends nor descends,
-// so the two can never meet.
-func sandboxCorpusPaths(sources []babelSource) []string {
-	seen := make(map[string]bool, len(sources))
-	paths := make([]string, 0, len(sources))
-	for _, source := range sources {
-		selector := strings.TrimSpace(source.Selector)
-		if selector == "" || !filepath.IsAbs(selector) {
-			continue
+// file shapes — and an MCP tool reaches the network without passing any host
+// tool the client authorizes. Approved input is untrusted content by
+// contract, so an input that landed at the session's working directory would
+// let a `.mcp.json` in it register unbrokered egress before the model is even
+// asked anything. The working directory is a tmpfs the sandbox creates empty,
+// the input is bound at its own path, and discovery neither ascends nor
+// descends, so the two can never meet.
+func sandboxInputPaths(inputs []string) ([]string, error) {
+	seen := make(map[string]bool, len(inputs))
+	paths := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if input == "" || !filepath.IsAbs(input) {
+			return nil, fmt.Errorf("--input %q must be an absolute path", input)
 		}
-		path := filepath.Clean(selector)
-		if seen[path] || path == sandboxRoot || strings.HasPrefix(path, sandboxRoot+"/") {
+		path := filepath.Clean(input)
+		if path == sandboxRoot || strings.HasPrefix(path, sandboxRoot+"/") {
+			return nil, fmt.Errorf("--input %q overlaps the sandbox's own layout", input)
+		}
+		if seen[path] {
 			continue
 		}
 		if _, err := os.Stat(path); err != nil {
-			continue
+			return nil, fmt.Errorf("--input %q: %w", input, err)
 		}
 		seen[path] = true
 		paths = append(paths, path)
 	}
-	return paths
+	return paths, nil
 }
 
 // sandboxCABundle locates the trust store the session needs. The CONNECT proxy
@@ -849,10 +883,9 @@ const (
 // consistency with everything else in this worker, not because it needs to.
 const sandboxSpecEnv = "CODE_SANDBOX_SPEC"
 
-// sandboxReportFD is the descriptor the helper writes its exit report on. It is
-// a pipe Code holds the read end of: stdout is the OMP session's RPC stream and
-// stderr is diagnostics, so a third channel is the only way the inside of the
-// sandbox can report a measurement without corrupting either.
+// sandboxReportFD carries the helper's exit report and the host's accounting
+// acknowledgement. Keeping this off stdout preserves OMP's native RPC stream,
+// and the acknowledgement keeps the scope alive until its counters are read.
 const sandboxReportFD = 3
 
 // sandboxSpec is what the helper is told. Scratch is measured at exit so the

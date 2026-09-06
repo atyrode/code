@@ -280,9 +280,9 @@ func TestSelectionStateDisabledPath(t *testing.T) {
 	}
 }
 
-// TestSelectionStatePathResolution pins the resolution order the Babel seam
-// depends on. The default location is what makes worker mode possible at all —
-// Babel strips CODE_SELECTION_STATE — so an unset variable must resolve to a
+// TestSelectionStatePathResolution pins the resolution order the engine
+// depends on. The default location is what makes an engine launch possible at all —
+// a client strips CODE_SELECTION_STATE — so an unset variable must resolve to a
 // path under the state root rather than to the old "stateless" empty string.
 func TestSelectionStatePathResolution(t *testing.T) {
 	state, home := t.TempDir(), t.TempDir()
@@ -346,8 +346,8 @@ func TestInteractiveDialChangeWritesTheDefaultLocation(t *testing.T) {
 
 // TestRelocatedSelectionIsMirroredForTheWorker is the case the operator is
 // actually in: his wrapper points CODE_SELECTION_STATE at a path of its own, and
-// Babel's worker is handed no such variable. The override still owns the read, so
-// the default location has to be kept current or configure mode would keep
+// an engine launch is handed no such variable. The override still owns the read, so
+// the default location has to be kept current or --describe would keep
 // reporting defaults while the TUI showed something else.
 func TestRelocatedSelectionIsMirroredForTheWorker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

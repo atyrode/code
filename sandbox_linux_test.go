@@ -25,6 +25,8 @@ package main
 // failure this file exists to prevent.
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"debug/elf"
 	"encoding/json"
@@ -261,7 +263,7 @@ func errText(err error) string {
 // thing that must not pass unnoticed.
 //
 // In CI that is not enough. A skip there retires the gate for everyone: the
-// escape scenarios are the only evidence that the boundary Babel refuses runs
+// escape scenarios are the only evidence that the boundary a client refuses runs
 // without actually holds, so a green pipeline that ran none of them is worse
 // than a red one. Where CI is set, or where the operator asks for the
 // guarantee explicitly, an absent backend is a failure instead.
@@ -338,8 +340,8 @@ func sandboxRunInside(t *testing.T, backend *sandboxBackend, mounts sandboxMount
 ) sandboxOutcome {
 	t.Helper()
 	argv := backend.enter(mounts, cwd, sandboxPayloadArgv(args...)...)
-	// The transient scope is registered over the user session bus, which Babel
-	// strips from a worker's environment and sandboxScopeTool therefore derives
+	// The transient scope is registered over the user session bus, which a client
+	// may strip from the engine's environment and sandboxScopeTool therefore derives
 	// — so a launch carries it explicitly, and so must this one.
 	return sandboxRunArgv(t, argv, append(append([]string(nil), backend.scopeEnv...), env...), timeout, nil)
 }
@@ -494,10 +496,10 @@ func TestSandboxBindsTheGrantsCorpusReadOnly(t *testing.T) {
 //
 // OMP registers MCP servers from a config file at the root of its working
 // directory, even under a private HOME, and an MCP tool reaches the network
-// without passing Babel's evidence broker. Archive content is untrusted by
-// contract, so a corpus mounted at the working directory would let a .mcp.json
-// in archived material register unbrokered egress before the model is asked
-// anything at all. The control runs the same corpus as the working directory
+// without passing any client-authorized tool. Approved input is untrusted by
+// contract, so an input mounted at the working directory would let a .mcp.json
+// in it register unbrokered egress before the model is asked
+// anything at all. The control runs the same input as the working directory
 // and shows the file does appear at cwd root there, which is what makes this a
 // test of the layout rather than of the fixture.
 func TestSandboxKeepsTheCorpusOutOfTheWorkingDirectory(t *testing.T) {
@@ -804,7 +806,7 @@ func TestSandboxLeavesNothingBehind(t *testing.T) {
 
 // ── 6. cancellation ──────────────────────────────────────────────────────────
 
-// TestSandboxCancellationReapsTheWholeTree kills the launch the way Babel kills
+// TestSandboxCancellationReapsTheWholeTree kills the launch the way a client kills
 // a run and then asks the kernel, not the process, whether anything is left.
 //
 // The scope's cgroup is the right place to ask: it enumerates every process in
@@ -995,7 +997,7 @@ func TestSandboxBackendComesUpWhereItsPrerequisitesDo(t *testing.T) {
 }
 
 // TestSandboxDeclaresWhatItEstablished is the tie between the six scenarios
-// above and the thing Babel actually records. Each scenario proves a property;
+// above and the thing a client actually records. Each scenario proves a property;
 // this proves the declaration reports those properties and no others.
 func TestSandboxDeclaresWhatItEstablished(t *testing.T) {
 	backend := sandboxTestBackend(t)
@@ -1040,7 +1042,7 @@ func TestSandboxDeclaresWhatItEstablished(t *testing.T) {
 
 // TestSandboxRefusesToRunWithoutTheCeilingsItDeclared is the failure path the
 // declaration depends on: a launch that claims ceilings and does not get them
-// must not proceed, because Babel has already recorded the claim.
+// must not proceed, because the client has already recorded the claim.
 func TestSandboxRefusesToRunWithoutTheCeilingsItDeclared(t *testing.T) {
 	backend := sandboxTestBackend(t)
 	// A ceiling the running scope cannot be carrying, checked against this
@@ -1067,7 +1069,7 @@ func TestSandboxRefusesToRunWithoutTheCeilingsItDeclared(t *testing.T) {
 // when a bind source is missing, and it refuses for the whole plan: one
 // unconditional path that a machine does not happen to have — a Nix store on a
 // distribution that has none — takes the entire boundary down, degrades all
-// four properties to false, and makes Babel refuse every run with a reason that
+// four properties to false, and makes a client refuse every run with a reason that
 // reads as a missing directory rather than as the portability gap it is. So no
 // path the plan names may be absent.
 //
@@ -1116,7 +1118,7 @@ func TestSandboxMountPlanNamesOnlyWhatItNeedsAndOnlyWhatIsThere(t *testing.T) {
 		configHost: config,
 		poolHost:   pool,
 		caBundle:   sandboxCABundle(),
-		corpus:     []string{corpus},
+		inputs:     []string{corpus},
 		egress:     egress,
 	})
 	if err != nil || run == nil {
@@ -1354,16 +1356,96 @@ func TestSandboxComesUpWithNoNixStoreInItsMountPlan(t *testing.T) {
 
 // ── the production launch path ───────────────────────────────────────────────
 
-// TestOmpDriveLaunchesTheSessionInsideTheSandbox is the production path,
-// end to end: the driver resolves a profile, opens the run's egress, builds the
-// boundary, and starts a session inside it.
+// containedLaunch drives one `code engine` launch of the stand-in OMP inside
+// the real backend, with the client's side of the stream held open until the
+// guest has reported, and returns the guest's view of the sandbox, the
+// finished runtime report and the launch's own stderr.
 //
-// The six escape scenarios above prove the boundary holds. This proves the
-// session is actually put behind it — that the working directory, home, config,
-// account pool, proxy and broker the child sees are the sandbox's and not the
-// host's — which no amount of boundary testing would catch if the launch went
-// around it.
-func TestOmpDriveLaunchesTheSessionInsideTheSandbox(t *testing.T) {
+// It calls the production launch rather than restating it: the point of these
+// tests is that the session is actually put behind the boundary the six
+// escape scenarios prove, which no amount of boundary testing would catch if
+// the launch went around it.
+func containedLaunch(t *testing.T, backend *sandboxBackend, brokerURL string, extraEnv ...string,
+) (sandboxGuestView, runtimeReport, string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := newOmpLauncher(&fakeProfiles{profile: testProfile()})
+	l.probe = func(sandboxCeilings) *sandboxBackend { return backend }
+	l.lookOmp = func() (string, error) { return self, nil }
+	l.environ = func() []string {
+		return append(append(os.Environ(), sandboxFakeOmpEnv+"=1"), extraEnv...)
+	}
+	l.auth = func() (ompAuth, error) {
+		auth := testAuth()
+		auth.broker.URL = brokerURL + "/auth"
+		return auth, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	opts := engineOptions{
+		profile:     testProfile().Ref,
+		runtimeInfo: filepath.Join(t.TempDir(), "runtime.json"),
+	}
+	// The client's stdin stays open until the guest has reported, then closes,
+	// which is how a client ends a run; the guest exits on that, and the
+	// launch measures it and writes the finished report.
+	stdinR, stdinW := io.Pipe()
+	outR, outW := io.Pipe()
+	var errw bytes.Buffer
+	done := make(chan struct{})
+	var status int
+	var serveErr error
+	go func() {
+		defer close(done)
+		status, serveErr = l.serve(ctx, opts, stdinR, outW, &errw)
+		outW.Close()
+	}()
+
+	var view sandboxGuestView
+	found := false
+	lines := bufio.NewScanner(outR)
+	lines.Buffer(make([]byte, 0, 64<<10), ompFrameBytes)
+	for lines.Scan() {
+		var frame struct {
+			Type string           `json:"type"`
+			View sandboxGuestView `json:"view"`
+		}
+		if json.Unmarshal(lines.Bytes(), &frame) == nil && frame.Type == sandboxGuestFrame {
+			view, found = frame.View, true
+			stdinW.Close()
+		}
+	}
+	<-done
+	if serveErr != nil || status != 0 {
+		t.Fatalf("the contained launch ended %d, %v; stderr: %s", status, serveErr, errw.String())
+	}
+	if !found {
+		t.Fatalf("the session never reported a guest view; stderr: %s", errw.String())
+	}
+	data, err := os.ReadFile(opts.runtimeInfo)
+	if err != nil {
+		t.Fatalf("reading the runtime report: %v", err)
+	}
+	var report runtimeReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("the runtime report does not parse: %v", err)
+	}
+	if report.Finished == nil || !*report.Finished {
+		t.Fatalf("the runtime report was not finished: %s", data)
+	}
+	return view, report, errw.String()
+}
+
+// TestEngineLaunchesTheSessionInsideTheSandbox is the production path, end to
+// end: the launch resolves a profile, opens the run's egress, builds the
+// boundary, and starts a session inside it. It proves the working directory,
+// home, config, account pool, proxy and broker the child sees are the
+// sandbox's and not the host's.
+func TestEngineLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 	backend := sandboxTestBackend(t)
 
 	// A host-side auth broker on loopback, which is the shape Code resolves in
@@ -1374,58 +1456,21 @@ func TestOmpDriveLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 	}))
 	defer broker.Close()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
 	host := t.TempDir()
 	secret := filepath.Join(host, "host-state")
 	if err := os.WriteFile(secret, []byte("host state\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	inv := newOmpInvestigator(&fakeProfiles{profile: testProfile()})
-	inv.probe = func(sandboxCeilings) *sandboxBackend { return backend }
-	inv.lookOmp = func() (string, error) { return self, nil }
-	inv.environ = func() []string {
-		return append(os.Environ(), sandboxFakeOmpEnv+"=1")
-	}
-	inv.auth = func() (ompAuth, error) {
-		auth := testAuth()
-		auth.broker.URL = broker.URL + "/auth"
-		return auth, nil
-	}
-	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
-		t.Fatalf("resolving the credential: %v", err)
-	}
+	view, report, _ := containedLaunch(t, backend, broker.URL)
 
-	// The declaration goes out before the run, and it has to be the full one:
-	// a run that launched contained while declaring less would be the failure
-	// this whole subsystem exists to prevent, in the safe direction.
-	declared := inv.containment()
-	if !declared.FilesystemIsolation || !declared.NetworkDefaultDeny ||
+	// The declaration in the report is the full one: a run that launched
+	// contained while declaring less would be the failure this whole
+	// subsystem exists to prevent, in the safe direction.
+	declared := report.Containment
+	if declared == nil || !declared.FilesystemIsolation || !declared.NetworkDefaultDeny ||
 		!declared.ResourceCeilings || !declared.Disposable {
-		t.Fatalf("the driver declared less than the backend established: %+v", declared)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	silent := func(string, string, float64) {}
-	deny := func(string, string, string, json.RawMessage) babelDecision {
-		return babelDecision{Decision: babelDecisionDeny}
-	}
-	result, err := inv.drive(ctx, testJob(""), silent, deny)
-	if err != nil {
-		t.Fatalf("the contained run failed: %v", err)
-	}
-
-	var findings ompFindings
-	if err := json.Unmarshal(result.Payload, &findings); err != nil {
-		t.Fatalf("the result payload does not parse: %v", err)
-	}
-	var view sandboxGuestView
-	if err := json.Unmarshal([]byte(findings.Analysis), &view); err != nil {
-		t.Fatalf("the session reported %q, which is not a guest view: %v", findings.Analysis, err)
+		t.Fatalf("the launch declared less than the backend established: %+v", declared)
 	}
 
 	if view.Cwd != sandboxWorkPath {
@@ -1470,22 +1515,22 @@ func TestOmpDriveLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 			view.RefusedStatus)
 	}
 
-	// And the refusal is in the payload, where a reviewer reads it.
+	// And the refusal is in the report, where a reviewer reads it.
 	var recorded bool
-	for _, attempt := range findings.Egress {
+	for _, attempt := range report.Egress {
 		if attempt.Target == "example.invalid:443" && !attempt.Allowed {
 			recorded = true
 		}
 	}
 	if !recorded {
-		t.Errorf("the refused CONNECT is not in the run's egress record: %+v", findings.Egress)
+		t.Errorf("the refused CONNECT is not in the run's egress record: %+v", report.Egress)
 	}
 	// Every dimension the full backend can measure has to be there, because
 	// this tier declared resource ceilings and a ceiling is enforced by
 	// measuring what it bounds. The sources are the scope's own cgroup for CPU
 	// and peak memory and the guest's own walk for the scratch bytes; a nil
 	// pointer here means the reporting path stopped reading one of them.
-	resources := result.Resources
+	resources := report.Resources
 	switch {
 	case resources == nil:
 		t.Fatal("a contained run that declared resource ceilings reported no resource use at all")
@@ -1503,6 +1548,9 @@ func TestOmpDriveLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 		if resources.SandboxBytesWritten == nil {
 			t.Error("no sandbox_bytes_written: the in-sandbox helper's scratch measurement never came back")
 		}
+	}
+	if !strings.Contains(report.ResourcesProvenance, "cgroup") {
+		t.Errorf("the report does not say its figures came from the scope's cgroup: %q", report.ResourcesProvenance)
 	}
 }
 
@@ -1533,39 +1581,13 @@ func TestContainedRunMeasuresWhatItActuallyUsed(t *testing.T) {
 	// how long it spins, are all in the guest. All the host does is ask.
 	const loadMiB = 128
 
-	drive := func(t *testing.T, load string) babelResources {
+	drive := func(t *testing.T, load string) runResources {
 		t.Helper()
-		self, err := os.Executable()
-		if err != nil {
-			t.Fatal(err)
-		}
-		inv := newOmpInvestigator(&fakeProfiles{profile: testProfile()})
-		inv.probe = func(sandboxCeilings) *sandboxBackend { return backend }
-		inv.lookOmp = func() (string, error) { return self, nil }
-		inv.environ = func() []string {
-			return append(os.Environ(), sandboxFakeOmpEnv+"=1", sandboxFakeLoadEnv+"="+load)
-		}
-		inv.auth = func() (ompAuth, error) {
-			auth := testAuth()
-			auth.broker.URL = broker.URL + "/auth"
-			return auth, nil
-		}
-		if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
-			t.Fatalf("resolving the credential: %v", err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-		result, err := inv.drive(ctx, testJob(""), func(string, string, float64) {},
-			func(string, string, string, json.RawMessage) babelDecision {
-				return babelDecision{Decision: babelDecisionDeny}
-			})
-		if err != nil {
-			t.Fatalf("the contained run failed: %v", err)
-		}
-		if result.Resources == nil {
+		_, report, _ := containedLaunch(t, backend, broker.URL, sandboxFakeLoadEnv+"="+load)
+		if report.Resources == nil {
 			t.Fatal("the contained run reported no resource use")
 		}
-		return *result.Resources
+		return *report.Resources
 	}
 
 	idle := drive(t, "0")
@@ -1611,22 +1633,16 @@ func TestContainedRunMeasuresWhatItActuallyUsed(t *testing.T) {
 	}
 }
 
-// TestBwrapOnlyTierReportsNoCeilingFigure holds the middle tier to the same
-// standard as the declaration.
-//
-// bubblewrap without a transient scope is a real boundary with no enforced
-// ceiling, so it declares resource_ceilings false — and it therefore has no
-// cgroup to read a ceiling-derived figure out of. The failure this guards
-// against is a reporting path that keeps reaching for the cgroup anyway and
-// lands on some ancestor's counters: the numbers would look fine and would
-// describe a different process tree, while the declaration said no ceiling
-// existed. What this tier can honestly see is the child's own rusage and the
-// guest's own scratch measurement, so that is what it reports and it says so.
+// TestBwrapOnlyTierReportsNoCeilingFigure is the coherence rule at the
+// reporting end: a tier that installed no ceiling has no cgroup to read a
+// ceiling-derived figure out of, so it reports the child's own rusage and the
+// guest's own scratch walk, and says so, rather than a cgroup number that was
+// never there.
 func TestBwrapOnlyTierReportsNoCeilingFigure(t *testing.T) {
 	full := sandboxTestBackend(t)
-
-	// The same machine, one tier down: bubblewrap exactly as before, with the
-	// scope withheld. Nothing else about the launch changes, which is what
+	// The same backend with the scope stripped away: bubblewrap alone, which
+	// is exactly what a machine without a user systemd session gets. Deriving
+	// it from the working backend rather than probing a second time is what
 	// makes this a test of the tier rather than of a different backend.
 	degraded := *full
 	degraded.systemd, degraded.scopeEnv = "", nil
@@ -1639,54 +1655,24 @@ func TestBwrapOnlyTierReportsNoCeilingFigure(t *testing.T) {
 	}))
 	defer broker.Close()
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	inv := newOmpInvestigator(&fakeProfiles{profile: testProfile()})
-	inv.probe = func(sandboxCeilings) *sandboxBackend { return &degraded }
-	inv.lookOmp = func() (string, error) { return self, nil }
-	inv.environ = func() []string {
-		return append(os.Environ(), sandboxFakeOmpEnv+"=1")
-	}
-	inv.auth = func() (ompAuth, error) {
-		auth := testAuth()
-		auth.broker.URL = broker.URL + "/auth"
-		return auth, nil
-	}
-	if _, err := inv.resolveCredential(testProfile().Ref); err != nil {
-		t.Fatalf("resolving the credential: %v", err)
-	}
-
-	declared := inv.containment()
-	if declared.ResourceCeilings {
-		t.Fatal("the bubblewrap-only tier declared a ceiling it cannot install")
+	_, report, _ := containedLaunch(t, &degraded, broker.URL)
+	declared := report.Containment
+	if declared == nil || declared.ResourceCeilings {
+		t.Fatalf("the bubblewrap-only tier declared a ceiling it cannot install: %+v", declared)
 	}
 	if !declared.FilesystemIsolation || !declared.NetworkDefaultDeny || !declared.Disposable {
 		t.Fatalf("the tier lost the three properties bubblewrap does establish: %+v", declared)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	rec := &recorder{}
-	result, err := inv.drive(ctx, testJob(""), rec.emit,
-		func(string, string, string, json.RawMessage) babelDecision {
-			return babelDecision{Decision: babelDecisionDeny}
-		})
-	if err != nil {
-		t.Fatalf("the bubblewrap-only run failed: %v", err)
-	}
-	if result.Resources == nil {
+	if report.Resources == nil {
 		t.Fatal("the run reported no resource use, though its child's rusage was there to read")
 	}
-	if result.Resources.CPUSeconds == nil || result.Resources.MaxRSSBytes == nil {
-		t.Errorf("the child's rusage went unreported: %+v", result.Resources)
+	if report.Resources.CPUSeconds == nil || report.Resources.MaxRSSBytes == nil {
+		t.Errorf("the child's rusage went unreported: %+v", report.Resources)
 	}
-	if result.Resources.SandboxBytesWritten == nil {
+	if report.Resources.SandboxBytesWritten == nil {
 		t.Error("the guest measured its own scratch and the figure was dropped")
 	}
-
-	provenance := strings.Join(rec.messages, "\n")
+	provenance := report.ResourcesProvenance
 	if strings.Contains(provenance, "cgroup") {
 		t.Errorf("a tier that installed no ceiling reported a cgroup figure: %s", provenance)
 	}

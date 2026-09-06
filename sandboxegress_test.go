@@ -261,24 +261,22 @@ func TestSandboxProviderEndpointFollowsTheProfile(t *testing.T) {
 	}
 }
 
-// ── the corpus ───────────────────────────────────────────────────────────────
+// ── approved inputs ──────────────────────────────────────────────────────────
 
-func TestSandboxCorpusPathsBindOnlyRealPathsOutsideTheGuestLayout(t *testing.T) {
+func TestSandboxInputPathsBindOnlyRealPathsOutsideTheGuestLayout(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "transcript.jsonl")
 	if err := os.WriteFile(file, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := sandboxCorpusPaths([]babelSource{
-		{Kind: "path", Selector: dir},
-		{Kind: "path", Selector: dir}, // a duplicate binds once
-		{Kind: "path", Selector: file},
-		{Kind: "session", Selector: "omp/synthetic-session"},     // not a path
-		{Kind: "url", Selector: "https://example.invalid/thing"}, // not a path
-		{Kind: "path", Selector: filepath.Join(dir, "absent")},   // does not exist
-		{Kind: "path", Selector: sandboxWorkPath},                // the session's own cwd
-		{Kind: "path", Selector: sandboxRoot},                    // the guest layout itself
+	got, err := sandboxInputPaths([]string{
+		dir,
+		dir, // a duplicate binds once
+		file,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{dir, file}
 	if len(got) != len(want) {
 		t.Fatalf("bound %v, want %v", got, want)
@@ -288,25 +286,30 @@ func TestSandboxCorpusPathsBindOnlyRealPathsOutsideTheGuestLayout(t *testing.T) 
 			t.Errorf("bound[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+	for _, input := range []string{"", "relative/input", filepath.Join(dir, "absent")} {
+		if _, err := sandboxInputPaths([]string{file, input}); err == nil {
+			t.Errorf("invalid input %q was silently dropped from the launch", input)
+		}
+	}
 }
 
-// TestSandboxCorpusNeverLandsOnTheSessionsWorkingDirectory is the rule that
-// keeps untrusted archive material out of OMP's MCP discovery path. OMP
-// registers MCP servers — which reach the network without passing Babel's
-// evidence broker — from a config file at the root of its working directory,
-// and archive content is untrusted by contract, so a corpus path that resolved
+// TestSandboxInputNeverLandsOnTheSessionsWorkingDirectory is the rule that
+// keeps untrusted input out of OMP's MCP discovery path. OMP registers MCP
+// servers — which reach the network without passing any client-authorized
+// tool — from a config file at the root of its working directory, and
+// approved input is untrusted by contract, so an input path that resolved
 // into the guest layout would be a disclosure route opened by a file rather
 // than by a decision.
-func TestSandboxCorpusNeverLandsOnTheSessionsWorkingDirectory(t *testing.T) {
-	for _, selector := range []string{
+func TestSandboxInputNeverLandsOnTheSessionsWorkingDirectory(t *testing.T) {
+	for _, path := range []string{
 		sandboxRoot,
 		sandboxWorkPath,
 		sandboxHomePath,
 		sandboxEgressDir,
-		sandboxWorkPath + "/nested/corpus",
+		sandboxWorkPath + "/nested/input",
 	} {
-		if got := sandboxCorpusPaths([]babelSource{{Kind: "path", Selector: selector}}); len(got) != 0 {
-			t.Errorf("selector %q was bound as corpus at %v, inside the sandbox's own layout", selector, got)
+		if got, err := sandboxInputPaths([]string{path}); err == nil {
+			t.Errorf("input %q was accepted at %v, inside the sandbox's own layout", path, got)
 		}
 	}
 }

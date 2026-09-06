@@ -1,33 +1,26 @@
 package main
 
-// OMP's RPC transport, as much of it as driving one analysis run needs.
+// Launching `omp --mode rpc` as a supervised child.
 //
-// `omp --mode rpc` is newline-delimited JSON over stdin/stdout: OMP opens with a
-// ready frame, answers commands correlated by id, streams session events, and —
-// the mechanism this whole file exists for — calls back out to host-owned tools
-// registered with set_host_tools. That callback is what makes brokered evidence
-// possible: the model can only reach material the host chooses to serve, and the
-// host is Code, which asks Babel first.
+// The engine does not speak OMP's RPC protocol; the client on the other end of
+// `code engine` does, natively, and this process forwards the bytes. What this
+// file owns is everything around the child rather than anything in its
+// stream: the private run directory and configuration overlay, the process
+// group and its shutdown, the environment that keeps the operator's own OMP
+// configuration out of the run and the run's provider credential in it, and
+// the bounded tail of stderr that names a failure.
 //
-// Only the surface the driver uses is modelled, and every struct ignores fields
-// it does not know, because OMP's protocol grows between releases and an unknown
-// field must never be fatal (docs/rpc.md, "Error Model and Recoverability").
-//
-// Protocol v2 is deliberately not negotiated. v2 exists to carry stdout objects
-// above 1 MiB losslessly by chunking them, and Babel caps a worker's own line
-// length far below that; staying on v1 keeps one framing rule in play instead of
-// two, and an rpc_chunk frame arriving unrequested is treated as a protocol
-// violation rather than silently dropped.
+// Nothing here parses a frame. OMP's protocol grows between releases and a
+// client may negotiate any version of it; a wrapper that decoded the stream in
+// order to forward it would be one more implementation of that protocol to
+// keep in step, and would be the one nobody asked for.
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,136 +29,24 @@ import (
 	"time"
 )
 
-// OMP frame and command types this driver speaks.
-const (
-	ompFrameReady          = "ready"
-	ompFrameResponse       = "response"
-	ompFrameChunk          = "rpc_chunk"
-	ompFrameHostToolCall   = "host_tool_call"
-	ompFrameHostToolCancel = "host_tool_cancel"
-	ompFrameHostToolResult = "host_tool_result"
-	ompFrameAgentStart     = "agent_start"
-	ompFrameAgentEnd       = "agent_end"
-	ompFrameTurnStart      = "turn_start"
-	ompFrameTurnEnd        = "turn_end"
-	ompFrameMessageUpdate  = "message_update"
-	ompFrameToolStart      = "tool_execution_start"
-	ompFrameToolEnd        = "tool_execution_end"
-
-	ompCommandSetHostTools = "set_host_tools"
-	ompCommandPrompt       = "prompt"
-)
-
-// ompTextDelta is the assistantMessageEvent kind that carries visible output.
-// Thinking deltas arrive on the same channel and are not the analysis, so the
-// accumulator matches on this exactly rather than on any delta at all.
-const ompTextDelta = "text_delta"
-
-// Budgets for the child. The run's own deadline lives in the context Babel
-// supervises; these bound only the shutdown handshake, so a wedged OMP cannot
-// hold a cancelled run open.
+// Budgets for the child. The run's own deadline lives with the client that
+// supervises it; these bound only the shutdown handshake, so a wedged OMP
+// cannot hold a finished run open.
 const (
 	// ompExitGrace is how long a closed stdin is given to end the child on its
 	// own. docs/rpc.md: when stdin closes, OMP drains, disposes the session and
 	// exits 0.
 	ompExitGrace = 5 * time.Second
-	// ompKillGrace is how long SIGTERM is given before SIGKILL. Babel's own
-	// exit grace is longer, so the tree is gone before Babel starts counting.
+	// ompKillGrace is how long SIGTERM is given before SIGKILL. A client's own
+	// exit grace is longer, so the tree is gone before it starts counting.
 	ompKillGrace = 2 * time.Second
-	// ompFrameBytes bounds one inbound line. OMP caps a physical stdout frame
-	// at 1 MiB (advertised in the ready frame); the slack absorbs a frame at
-	// exactly that size plus its envelope.
+	// ompFrameBytes bounds one line of the child's stdout as the redaction
+	// pass buffers it. OMP caps a physical stdout frame at 1 MiB (advertised
+	// in the ready frame); the slack absorbs a frame at exactly that size
+	// plus its envelope. A longer line is forwarded in pieces rather than
+	// refused, because the stream is the client's to judge.
 	ompFrameBytes = 2 << 20
 )
-
-// ── frames ───────────────────────────────────────────────────────────────────
-
-// ompFrame is one line of OMP's stdout, decoded down to the fields the driver
-// acts on. Everything else is ignored by construction.
-type ompFrame struct {
-	Type    string `json:"type"`
-	ID      string `json:"id"`
-	Command string `json:"command"`
-	// Success is a pointer so a missing field reads as "not a command
-	// response" rather than as a failure.
-	Success *bool           `json:"success"`
-	Error   string          `json:"error"`
-	Code    string          `json:"code"`
-	Data    json.RawMessage `json:"data"`
-
-	// Host-tool callback fields.
-	ToolCallID string          `json:"toolCallId"`
-	ToolName   string          `json:"toolName"`
-	Arguments  json.RawMessage `json:"arguments"`
-	TargetID   string          `json:"targetId"`
-
-	// Session-event fields.
-	Assistant  *ompAssistantEvent `json:"assistantMessageEvent"`
-	IsTerminal *bool              `json:"isTerminal"`
-}
-
-// ompAssistantEvent is the streaming delta carried by message_update.
-type ompAssistantEvent struct {
-	Type  string `json:"type"`
-	Delta string `json:"delta"`
-}
-
-func (f *ompFrame) succeeded() bool { return f.Success != nil && *f.Success }
-
-// terminal reports whether an agent_end frame ends the run. isTerminal:false
-// means maintenance or async delivery scheduled more work, so the session will
-// resume; an absent field is terminal, which keeps older OMPs compatible.
-func (f *ompFrame) terminal() bool { return f.IsTerminal == nil || *f.IsTerminal }
-
-// ompSetHostToolsCommand registers the host-owned tools for the session. OMP
-// adds them to the tool registry before the next model call, and re-sending
-// replaces the previous set.
-type ompSetHostToolsCommand struct {
-	ID    string            `json:"id"`
-	Type  string            `json:"type"`
-	Tools []ompHostToolWire `json:"tools"`
-}
-
-// ompHostToolWire is one host tool as OMP wants it declared.
-type ompHostToolWire struct {
-	Name        string          `json:"name"`
-	Label       string          `json:"label,omitempty"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-	// LoadMode "essential" keeps a brokered tool in the model's initial tool
-	// set. The default for a host tool is "discoverable", which would hide the
-	// only evidence route this run has behind a discovery step.
-	LoadMode string `json:"loadMode,omitempty"`
-}
-
-type ompPromptCommand struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-// ompHostToolResult completes one host_tool_call. IsError rejects the call and
-// surfaces the text to the model as a tool error, which is exactly the shape a
-// refusal needs: the model sees why, adapts, and keeps working.
-type ompHostToolResult struct {
-	Type    string            `json:"type"`
-	ID      string            `json:"id"`
-	IsError bool              `json:"isError,omitempty"`
-	Result  ompHostToolOutput `json:"result"`
-}
-
-type ompHostToolOutput struct {
-	Content []ompHostToolText `json:"content"`
-}
-
-type ompHostToolText struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-func ompToolText(text string) ompHostToolOutput {
-	return ompHostToolOutput{Content: []ompHostToolText{{Type: "text", Text: text}}}
-}
 
 // ── the child ────────────────────────────────────────────────────────────────
 
@@ -175,8 +56,7 @@ type ompSession struct {
 	cmd    *exec.Cmd
 	pgid   int
 	stdin  io.WriteCloser
-	enc    *json.Encoder
-	lines  *bufio.Scanner
+	stdout io.Reader
 	stderr *ompTail
 
 	stopWatch chan struct{}
@@ -193,8 +73,8 @@ type ompSession struct {
 // rather than on the host: the boundary binds Code's files in at fixed places
 // and the session never sees where they came from. A nil contain is a launch
 // with no boundary at all, which happens only when the backend established
-// none — and Code declares exactly that, so such a run reaches here only for an
-// operator who relaxed it deliberately.
+// none — and Code declares exactly that, so such a run reaches here only for a
+// client that accepted the declaration anyway.
 type ompLaunch struct {
 	binary  string
 	config  string
@@ -202,6 +82,10 @@ type ompLaunch struct {
 	work    string
 	env     []string
 	contain *sandboxRun
+	// stderr, when set, receives the child's diagnostics as they are written,
+	// beside the tail the session keeps for itself. The engine hands it the
+	// redacting writer that fronts its own stderr.
+	stderr io.Writer
 }
 
 // cwdHostDir names the host directory whose contents become the child's
@@ -219,7 +103,7 @@ func (l ompLaunch) cwdHostDir() (string, bool) {
 
 // ompStartSession launches OMP with built-in tools disabled and a private OMP
 // home, so the session's tool registry holds nothing but the host tools the
-// grant produced.
+// client registers.
 //
 // --no-tools alone is not that lockdown. Measured against omp/18.0.11, it drops
 // the documented built-ins but leaves learn, manage_skill, tts and every
@@ -259,14 +143,18 @@ func ompStartSession(ctx context.Context, launch ompLaunch) (*ompSession, error)
 		return nil, err
 	}
 	tail := &ompTail{}
-	cmd.Stderr = tail
+	if launch.stderr != nil {
+		cmd.Stderr = io.MultiWriter(tail, launch.stderr)
+	} else {
+		cmd.Stderr = tail
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("omp did not start: %w", err)
 	}
 	// The boundary is checked before the session is used, not after: a run that
 	// declared ceilings it did not get is torn down here rather than allowed to
-	// produce evidence behind a weaker boundary than Babel recorded.
+	// run behind a weaker boundary than the client was told about.
 	if launch.contain != nil {
 		if err := launch.contain.started(cmd.Process.Pid); err != nil {
 			pgid := ompProcessGroup(cmd)
@@ -275,15 +163,12 @@ func ompStartSession(ctx context.Context, launch ompLaunch) (*ompSession, error)
 			return nil, err
 		}
 	}
-	lines := bufio.NewScanner(stdout)
-	lines.Buffer(make([]byte, 0, 64<<10), ompFrameBytes)
 
 	session := &ompSession{
 		cmd:       cmd,
 		pgid:      ompProcessGroup(cmd),
 		stdin:     stdin,
-		enc:       json.NewEncoder(stdin),
-		lines:     lines,
+		stdout:    stdout,
 		stderr:    tail,
 		stopWatch: make(chan struct{}),
 	}
@@ -292,14 +177,14 @@ func ompStartSession(ctx context.Context, launch ompLaunch) (*ompSession, error)
 }
 
 // ompArgv is the child's command line, and a fixed list on purpose. It carries
-// no secret and never will: argv is visible in any process listing, so the job
-// — and therefore the run-scoped broker credential — reaches this process on
-// stdin and reaches OMP not at all, while the provider credential reaches OMP
-// through its environment, which a process listing does not read.
+// no secret and never will: argv is visible in any process listing, so the
+// provider credential reaches OMP through its environment, which a process
+// listing does not read, and nothing a client sends reaches argv at all.
 //
 // --auto-approve is safe here and nowhere else: the only tools in the registry
-// are Babel-brokered, and Babel is the authorizer. An approval prompt would ask
-// a question no RPC host in this design can answer, and would deadlock the run.
+// are the host tools the client registers, and the client is the authorizer
+// of every call on them. An approval prompt would ask a question no RPC host
+// in this design can answer, and would deadlock the run.
 func ompArgv(launch ompLaunch) []string {
 	return []string{
 		launch.binary,
@@ -318,8 +203,8 @@ func ompArgv(launch ompLaunch) []string {
 }
 
 // watch turns a cancelled context into a dead process tree: SIGTERM to the
-// group, then SIGKILL if the group is still there. Babel will kill what remains
-// anyway, so the only thing at stake is whether Code leaves it to.
+// group, then SIGKILL if the group is still there. A client will kill what
+// remains anyway, so the only thing at stake is whether Code leaves it to.
 func (s *ompSession) watch(ctx context.Context) {
 	select {
 	case <-ctx.Done():
@@ -334,35 +219,6 @@ func (s *ompSession) watch(ctx context.Context) {
 		_ = ompTerminateTree(s.cmd, s.pgid, false)
 	case <-s.stopWatch:
 	}
-}
-
-func (s *ompSession) send(command any) error {
-	return s.enc.Encode(command)
-}
-
-// next reads the next frame. A line that does not parse is a protocol
-// violation rather than something to skip: the driver's whole grip on the run
-// is this stream, and guessing past a malformed frame would mean guessing about
-// a tool call.
-func (s *ompSession) next() (*ompFrame, error) {
-	for s.lines.Scan() {
-		line := bytes.TrimSpace(s.lines.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var frame ompFrame
-		if err := json.Unmarshal(line, &frame); err != nil {
-			return nil, fmt.Errorf("omp wrote an unparseable frame: %w", err)
-		}
-		if frame.Type == ompFrameChunk {
-			return nil, errors.New("omp chunked a frame on protocol v1, which was never negotiated")
-		}
-		return &frame, nil
-	}
-	if err := s.lines.Err(); err != nil {
-		return nil, fmt.Errorf("omp stream ended: %w", err)
-	}
-	return nil, io.EOF
 }
 
 // stop releases the child: stdin is closed so OMP can exit on its own, and the
@@ -394,8 +250,18 @@ func (s *ompSession) wait() {
 	s.waitOnce.Do(func() { s.waitErr = s.cmd.Wait() })
 }
 
-// diagnostics is the tail of OMP's stderr, for naming a failure. It cannot
-// carry the run's broker credential, because OMP is never given it.
+// exitCode is the child's exit status once it has been reaped: -1 for a child
+// that a signal ended, which is what a client reads as "the tree was torn
+// down" rather than as an answer OMP gave.
+func (s *ompSession) exitCode() int {
+	s.wait()
+	if s.cmd.ProcessState == nil {
+		return -1
+	}
+	return s.cmd.ProcessState.ExitCode()
+}
+
+// diagnostics is the tail of OMP's stderr, for naming a failure.
 func (s *ompSession) diagnostics() string { return s.stderr.String() }
 
 // ── bounded diagnostics ──────────────────────────────────────────────────────
@@ -416,8 +282,8 @@ func (t *ompTail) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.buf = append(t.buf, p...)
-	if extra := len(t.buf) - ompTailBytes; extra > 0 {
-		t.buf = t.buf[:copy(t.buf, t.buf[extra:])]
+	if len(t.buf) > ompTailBytes {
+		t.buf = t.buf[len(t.buf)-ompTailBytes:]
 	}
 	return len(p), nil
 }
@@ -445,7 +311,7 @@ type ompRunDir struct {
 }
 
 func ompNewRunDir(configYAML string) (*ompRunDir, error) {
-	root, err := os.MkdirTemp("", "code-babel-run-*")
+	root, err := os.MkdirTemp("", "code-engine-run-*")
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +364,7 @@ func (d *ompRunDir) writeAccountPool(pool map[string][]string) (string, error) {
 	return path, nil
 }
 
-// bytesWritten sums what the run left in its private directory, so the receipt
+// bytesWritten sums what the run left in its private directory, so the report
 // carries a measured figure rather than an assumption. An unreadable entry is
 // skipped: a partial sum is worth more than none, and this is a report rather
 // than a limit.
@@ -522,12 +388,13 @@ func (d *ompRunDir) bytesWritten() int64 {
 // for provider tokens, and the pool of account identities the operator's
 // selection leaves enabled.
 //
-// Worker mode has to resolve this for itself. An interactive `code` inherits
-// the broker variables from the operator's shell, but Babel spawns a worker
-// with a curated environment — HOME, PATH, TMPDIR, LANG — precisely so that no
-// credential rides in ambiently, and ompChildEnv then replaces HOME so the
-// child discovers nothing of its own either. Between those two, a run that did
-// not resolve a credential here would reach the provider with nothing at all.
+// The engine has to resolve this for itself. An interactive `code` inherits
+// the broker variables from the operator's shell, but a supervising client
+// spawns the engine with a curated environment — HOME, PATH, TMPDIR, LANG —
+// precisely so that no credential rides in ambiently, and ompChildEnv then
+// replaces HOME so the child discovers nothing of its own either. Between
+// those two, a run that did not resolve a credential here would reach the
+// provider with nothing at all.
 type ompAuth struct {
 	broker brokerConfig
 	// pool is the account-pool document, keyed by provider: the OAuth
@@ -542,13 +409,13 @@ type ompAuth struct {
 
 func (a ompAuth) configured() bool { return a.broker.configured() }
 
-// errOmpNoCredential is the terminal failure a run with nothing to authenticate
-// with ends in, and it names the remedy. The alternative is an OMP child that
-// starts, fails its first model call, and reports that as an analysis failure
-// in a receipt where nobody can connect it to a missing credential.
-var errOmpNoCredential = errors.New("no provider credential is resolvable, so the analysis could not " +
+// errOmpNoCredential is the failure a run with nothing to authenticate with
+// ends in before anything is launched, and it names the remedy. The
+// alternative is an OMP child that starts and fails its first model call for a
+// reason nobody can connect to a missing credential.
+var errOmpNoCredential = errors.New("no provider credential is resolvable, so the run could not " +
 	"authenticate: export OMP_AUTH_BROKER_URL and OMP_AUTH_BROKER_TOKEN into the environment this " +
-	"worker is spawned with, or leave Code's vault manifest readable at " +
+	"engine is spawned with, or leave Code's vault manifest readable at " +
 	"${XDG_CONFIG_HOME:-$HOME/.config}/code/" + ompVaultManifestName + " (CODE_AUTH_VAULTS_FILE overrides " +
 	"the path); neither route resolved a broker")
 
@@ -556,11 +423,11 @@ var errOmpNoCredential = errors.New("no provider credential is resolvable, so th
 // directory beside models.yml.
 const ompVaultManifestName = "auth-vaults.json"
 
-// ompVaultManifest locates that store. Worker mode needs a HOME-relative
+// ompVaultManifest locates that store. The engine needs a HOME-relative
 // default where the interactive path needs none: an operator's shell exports
-// the broker variables, and Babel's curated environment is exactly what leaves
-// them out — but Babel does hand the worker the operator's real HOME, so the
-// manifest and the token file it names are still reachable.
+// the broker variables, and a client's curated environment is exactly what
+// leaves them out — but the client does hand the engine the operator's real
+// HOME, so the manifest and the token file it names are still reachable.
 func ompVaultManifest() string {
 	if path := os.Getenv("CODE_AUTH_VAULTS_FILE"); path != "" {
 		return path
@@ -575,12 +442,12 @@ func ompVaultManifest() string {
 // ompResolveAuth resolves the run's credential the way an interactive trusted
 // launch resolves it — the same broker, the same account snapshot, the same
 // disabled-account selection — rather than growing a second resolution beside
-// it. The environment names are main's, repeated here because a worker has no
-// model to read them through.
+// it. The environment names are main's, repeated here because the engine has
+// no model to read them through.
 func ompResolveAuth() (ompAuth, error) {
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), ompVaultManifest())
 	if !broker.configured() {
-		return ompAuth{}, errOmpNoCredential
+		return ompAuth{}, nil
 	}
 	accounts, err := loadAccounts(broker)
 	if err != nil {
@@ -589,9 +456,9 @@ func ompResolveAuth() (ompAuth, error) {
 		return ompAuth{}, fmt.Errorf("the account snapshot is unavailable, so the run would launch "+
 			"with no account policy at all: %w", err)
 	}
-	// A disabled account stays disabled. The selection is the operator's, and a
-	// worker that ignored it would route a supervised run through an account
-	// they had deliberately taken out of service.
+	// A disabled account stays disabled. The selection is the operator's, and
+	// an engine that ignored it would route a supervised run through an
+	// account they had deliberately taken out of service.
 	disabled := loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE")).CurrentDisabled()
 	pool := launchAccountReport(accounts, disabled, launchIntent{}, time.Now()).pool()
 	return ompAuth{broker: broker, pool: pool}, nil
@@ -615,19 +482,11 @@ var ompPrivateEnvKeys = map[string]bool{
 }
 
 // ompChildEnv builds the child's environment: the inherited one with the
-// private-home keys replaced, any entry whose value carries a job secret
-// dropped, and the run's own provider credential added.
+// private-home keys replaced, and the run's own provider credential added.
 //
-// The drop is a guard, not a transport. The run-scoped broker credential
-// arrives on stdin and stays in this process's memory; it reaches Babel's
-// evidence API through an HTTP request Code makes itself, and reaches OMP only
-// as the response body of a host tool. Nothing in this design would ever put it
-// in the environment — which is exactly why the guard is cheap to keep and
-// worth keeping, because "never" is a property to enforce rather than assume.
-//
-// The provider credential is the one secret that is added rather than removed,
-// and withAuthEnv is the single place that names it. That it strips the
-// inherited auth-broker variables first is the load-bearing part: an ambient
+// The provider credential is the one secret that is added, and withAuthEnv is
+// the single place that names it. That it strips the inherited auth-broker
+// variables first is the load-bearing part: an ambient
 // OMP_AUTH_BROKER_ACCOUNT_POOL_FILE from an operator's shell would otherwise
 // survive into a supervised run and route it through a pool this run's account
 // policy never approved.
@@ -636,14 +495,13 @@ var ompPrivateEnvKeys = map[string]bool{
 // writes it: it exists here as broker.Token, is formatted exactly once — into
 // the entry below — and a child's environment is not something Code logs,
 // reports or puts on the wire. What OMP itself prints is a separate question,
-// and the protocol layer answers it by registering this credential with the
-// scrubber that already covers the job's (see credentialResolver).
-func ompChildEnv(base []string, home string, job babelJob, auth ompAuth) []string {
-	secrets := job.secrets()
+// and the engine answers it by redacting the credential from every byte of the
+// child's output it forwards (engineredact.go).
+func ompChildEnv(base []string, home string, auth ompAuth) []string {
 	out := make([]string, 0, len(base)+len(ompPrivateEnvKeys)+len(authEnvKeys))
 	for _, entry := range base {
-		key, value, _ := strings.Cut(entry, "=")
-		if ompPrivateEnvKeys[key] || ompCarriesSecret(value, secrets) {
+		key, _, _ := strings.Cut(entry, "=")
+		if ompPrivateEnvKeys[key] {
 			continue
 		}
 		out = append(out, entry)
@@ -665,89 +523,4 @@ func ompChildEnv(base []string, home string, job babelJob, auth ompAuth) []strin
 		return out
 	}
 	return withAuthEnv(out, auth.broker, auth.poolPath)
-}
-
-func ompCarriesSecret(value string, secrets []string) bool {
-	for _, secret := range secrets {
-		if secret != "" && strings.Contains(value, secret) {
-			return true
-		}
-	}
-	return false
-}
-
-// ── Babel's evidence API ─────────────────────────────────────────────────────
-
-// ompEvidenceTimeout bounds one brokered request. A blocked broker must not
-// hold a host tool open indefinitely: OMP is waiting for the result, and the
-// model can be told the evidence was unavailable and carry on.
-const ompEvidenceTimeout = 30 * time.Second
-
-// ompEvidenceBody is the maximum evidence a single request may return. Babel
-// caps a worker's line length, and an unbounded body would let the broker
-// dictate this process's memory.
-const ompEvidenceBody = 256 << 10
-
-// ompEvidenceRequest is one allowed evidence request, as Babel's broker
-// receives it.
-type ompEvidenceRequest struct {
-	RunID      string          `json:"run_id"`
-	JobID      string          `json:"job_id"`
-	Capability string          `json:"capability"`
-	Tool       string          `json:"tool"`
-	Arguments  json.RawMessage `json:"arguments,omitempty"`
-}
-
-// ompEvidenceClient is a transport of its own rather than the shared default,
-// so broker traffic — the only traffic carrying the run-scoped credential —
-// never shares a connection pool with anything else Code talks to.
-var ompEvidenceClient = &http.Client{}
-
-// fetchBrokeredEvidence services one allowed request against Babel's
-// capability-gated evidence API and returns the evidence as text.
-//
-// This is the whole reason the credential never needs to leave the process. The
-// bearer token is placed on a request Code makes itself; OMP receives only the
-// response body, over the stdio it is already answering a host tool on. There
-// is no file, no argument and no environment variable in the path.
-//
-// A non-2xx answer is reported by status alone. The body might explain more,
-// but a credential coming back to the model is the one failure that has to be
-// impossible rather than unlikely, and a broker that echoed the Authorization
-// header into an error page would otherwise do exactly that.
-func fetchBrokeredEvidence(ctx context.Context, broker babelBroker, evidence ompEvidenceRequest) (string, error) {
-	if strings.TrimSpace(broker.Endpoint) == "" {
-		return "", errors.New("the job named no evidence broker")
-	}
-	body, err := json.Marshal(evidence)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(ctx, ompEvidenceTimeout)
-	defer cancel()
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, broker.Endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/plain, application/json")
-	if broker.Token != "" {
-		request.Header.Set("Authorization", "Bearer "+broker.Token)
-	}
-	response, err := ompEvidenceClient.Do(request)
-	if err != nil {
-		// url.Error renders the endpoint, never a header, so this is safe to
-		// pass on to the model as the reason the evidence is missing.
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", fmt.Errorf("the evidence broker answered %s", response.Status)
-	}
-	served, err := io.ReadAll(io.LimitReader(response.Body, ompEvidenceBody))
-	if err != nil {
-		return "", err
-	}
-	return string(served), nil
 }

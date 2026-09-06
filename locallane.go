@@ -1,7 +1,7 @@
 package main
 
 // The local model lane — an analysis run by a model served on this machine
-// (atyrode/babel#95).
+// (atyrode/babel#95 was the client request that motivated it).
 //
 // Every other lane Code offers is a hosted one: the catalog names models, a
 // provider bills for them, and a credential from the central broker is what
@@ -13,8 +13,8 @@ package main
 // Three properties are load-bearing.
 //
 // It is reachable only through the configuration ceremony. The lane is a dial
-// like any other, and the dial only exists while `code babel --configure` has
-// the operator's terminal (main.go): worker mode never builds it, so no
+// like any other, and the dial only exists while `code engine --configure` has
+// the operator's terminal (main.go): an engine launch never builds it, so no
 // environment variable and no flag can put a local model into a run. What the
 // operator confirms is minted into a profile revision, and the recorded
 // endpoint — not the environment the worker happens to be spawned with — is
@@ -28,10 +28,10 @@ package main
 // regenerating anything.
 //
 // A profile is minted only against an endpoint that answers, and only for a
-// model it still serves (babelMintProfile). The alternative — minting now and
-// hoping the daemon is up when Babel next schedules a run — buys nothing: the
+// model it still serves (mintProfile). The alternative — minting now and
+// hoping the daemon is up when a client next schedules a run — buys nothing: the
 // profile would resolve, the run would launch, and the failure would land in a
-// receipt as an analysis that failed for no stated reason. Refusing at mint
+// record as a run that failed for no stated reason. Refusing at mint
 // time is the same judgement the ceremony already makes about a combination the
 // catalog does not generate.
 
@@ -376,7 +376,7 @@ func localThinking(level string) string {
 
 // The metadata keys a local profile records beside the provider/model/thinking
 // triple every profile carries. They are the whole configuration of this lane:
-// worker mode rebuilds the overlay and the endpoint from them, so a profile
+// the engine rebuilds the overlay and the endpoint from them, so a profile
 // minted months ago runs against the daemon the operator confirmed rather than
 // whatever the environment says today.
 const (
@@ -439,7 +439,7 @@ func localTargetOf(metadata map[string]string) (localTarget, error) {
 
 // localRunProfile reads the lane out of a resolved profile, for the two places
 // that have to know before anything is launched: where the child's endpoint
-// variable points, and which hole the boundary opens (ompinvestigator.go,
+// variable points, and which hole the boundary opens (engine.go,
 // sandbox.go).
 //
 // A profile that declares the lane and cannot be read is an error rather than a
@@ -456,11 +456,11 @@ func localRunProfile(profile resolvedProfile) (localTarget, bool, error) {
 	return target, true, nil
 }
 
-// describeLocalDials records the local lane as the profile Babel keeps.
+// describeLocalDials records the local lane as the profile a client keeps.
 //
 // The cost is zero and says why in a field of its own; the disclosure is local
 // and redaction is therefore not required, which is the same reasoning a
-// delegated runtime target gets (babelDescribeDials) and for the same reason:
+// delegated runtime target gets (describeDials) and for the same reason:
 // material that never leaves the machine has no third party to be redacted
 // for.
 //
@@ -479,11 +479,11 @@ func describeLocalDials(m model, id, chosen string) codeProfile {
 		ID:         id,
 		Selection:  selection,
 		ComboID:    combo,
-		Disclosure: babelDisclosureLocal,
+		Disclosure: disclosureLocal,
 		// Nothing leaves this machine, so there is nothing to redact before it
 		// does.
 		RedactionRequired: false,
-		Cost:              babelCost{Currency: "USD"},
+		Cost:              profileCost{Currency: "USD"},
 		Metadata: map[string]string{
 			"lane":             localProvider,
 			"provider":         localProvider,

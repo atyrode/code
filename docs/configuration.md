@@ -97,10 +97,23 @@ or `$HOME/.local/state` when that is unset — in `code/`:
 | `code/sessions` | live session records, used for liveness | `CODE_SESSION_STATE` (`off` disables) |
 | `code/worktrees` | one JSON record per session worktree | `CODE_WORKTREE_STATE` |
 | `code/wt` | the session worktrees themselves | `CODE_WORKTREE_DIR` |
+| `code/profiles` | immutable profile revisions the engine launches under | `CODE_PROFILE_STATE` |
 
 `CODE_WORKTREE_DIR` must be an absolute path (a leading `~` is expanded); a
 relative value is ignored, because the process chdirs into the worktree it
 creates and a relative root would not name the same directory afterwards.
+
+`code/profiles` holds the immutable profile revisions `code engine
+--configure` mints and `code engine` launches under, one directory per
+profile id holding `NNNNNNNN.json` files that are written once and never
+rewritten; `CODE_PROFILE_STATE` names the directory outright. A profile
+directory laid out the same way at some other path — an earlier per-client
+location, another machine's store — is carried over with `code engine
+--import-profiles DIR`: every revision is copied verbatim with its number
+intact, a revision already present with the same content is skipped, and one
+present with different content refuses the import, so a reference a client
+recorded keeps meaning exactly what it meant. Nothing is migrated on its own;
+the old directory is untouched until the operator names it.
 
 ### Saved omp sessions
 

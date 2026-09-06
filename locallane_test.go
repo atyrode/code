@@ -10,7 +10,6 @@ package main
 // reach, and a real model would only make those slower to observe.
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -88,8 +87,8 @@ func localMintedProfile(t *testing.T, store string, m model) codeProfile {
 	if !final.configureConfirmed() {
 		t.Fatal("Enter did not confirm the local model the operator selected")
 	}
-	if status := babelCommitConfiguration(final, babelOptions{
-		profileID: defaultBabelProfileID, resultFile: result,
+	if status := commitConfiguration(final, engineOptions{
+		profile: profileRef{ID: defaultProfileID}, resultFile: result,
 	}); status != 0 {
 		t.Fatalf("committing a confirmed local ceremony exited %d, want 0", status)
 	}
@@ -97,7 +96,7 @@ func localMintedProfile(t *testing.T, store string, m model) codeProfile {
 	if err != nil {
 		t.Fatalf("reading the reference the ceremony wrote: %v", err)
 	}
-	var reference babelConfigureResult
+	var reference configureResult
 	if err := json.Unmarshal(answer, &reference); err != nil {
 		t.Fatalf("the reference does not decode: %v (%s)", err, answer)
 	}
@@ -116,8 +115,8 @@ func localTestProfile(t *testing.T, endpoint, model string) resolvedProfile {
 	profile := codeProfile{
 		ID:         "local",
 		Revision:   3,
-		Disclosure: babelDisclosureLocal,
-		Cost:       babelCost{Currency: "USD"},
+		Disclosure: disclosureLocal,
+		Cost:       profileCost{Currency: "USD"},
 		Metadata: map[string]string{
 			"lane":             localProvider,
 			"provider":         localProvider,
@@ -215,7 +214,7 @@ func TestLocalLaneDiscoversAnOpenAICompatibleEndpoint(t *testing.T) {
 }
 
 // TestLocalLaneRefusesAnEndpointItCouldNotCallLocal is the disclosure rule as
-// code. A local profile tells Babel that nothing left the machine and that no
+// code. A local profile tells a client that nothing left the machine and that no
 // redaction was needed, so an endpoint on the public internet — or one behind
 // TLS that a loopback relay could never be checked against — is not this lane.
 func TestLocalLaneRefusesAnEndpointItCouldNotCallLocal(t *testing.T) {
@@ -244,11 +243,11 @@ func TestLocalLaneRefusesAnEndpointItCouldNotCallLocal(t *testing.T) {
 // TestLocalDialExistsOnlyInTheCeremony is decision one of this lane: a local
 // model is chosen by a human at the dials or not at all. An ordinary `code`
 // never builds the dial, so no environment variable can put a local model into
-// a launch — and worker mode, which builds its dial model from the catalog
-// alone (babelCatalogModel), never sees one either.
+// a launch — and an engine launch, which builds its dial model from the catalog
+// alone (engineCatalogModel), never sees one either.
 func TestLocalDialExistsOnlyInTheCeremony(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 	t.Setenv(localEndpointEnv, stub.url())
 
@@ -275,9 +274,9 @@ func TestLocalDialExistsOnlyInTheCeremony(t *testing.T) {
 		t.Error("the ceremony opened with a local model already selected")
 	}
 
-	worker := babelCatalogModel()
+	worker := engineCatalogModel()
 	if facetIndex(worker.facets, localFacetKey) >= 0 || worker.local.offered() {
-		t.Error("worker mode built a local dial, which no operator turned")
+		t.Error("the engine built a local dial, which no operator turned")
 	}
 }
 
@@ -285,8 +284,8 @@ func TestLocalDialExistsOnlyInTheCeremony(t *testing.T) {
 // with no daemon: no dial rather than a dial whose every value names a model
 // nothing could load.
 func TestLocalDialIsAbsentWithoutAnEndpoint(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	// An endpoint that answers but serves nothing is the same absence.
 	empty := newLocalStub(t)
 	for _, endpoint := range []string{"http://127.0.0.1:1", empty.url()} {
@@ -301,8 +300,8 @@ func TestLocalDialIsAbsentWithoutAnEndpoint(t *testing.T) {
 // so the lane, tier and advisor dials describe nothing about the run. Thinking
 // stays, narrowed to the levels a local endpoint can honestly be asked for.
 func TestLocalDialTakesTheHostedDialsOffScreen(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 	m := localCeremony(t, stub.url())
 	m.sel["thinking"] = "max"
@@ -334,8 +333,8 @@ func TestLocalDialTakesTheHostedDialsOffScreen(t *testing.T) {
 // hosted dials are gone there — nothing they name could run — and the local one
 // must not go with them.
 func TestLocalDialSurvivesWithNoConnectedProvider(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 	m := localCeremony(t, stub.url())
 	m.applyProviderAvailability(map[string]bool{})
@@ -360,24 +359,24 @@ func facetIndex(facets []facet, key string) int {
 // ── minting ──────────────────────────────────────────────────────────────────
 
 // TestLocalCeremonyMintsWhatTheEndpointServes is the mint: the operator turns
-// the local dial, confirms, and the profile Babel gets a reference to records
+// the local dial, confirms, and the profile the client gets a reference to records
 // the endpoint, the engine, the model and a zero cost that says why it is zero.
 func TestLocalCeremonyMintsWhatTheEndpointServes(t *testing.T) {
-	store := isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	store := isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 
 	m := localCeremony(t, stub.url())
 	m = turnDial(t, m, localFacetKey)
 	saved := localMintedProfile(t, store, m)
 
-	if saved.Disclosure != babelDisclosureLocal {
-		t.Errorf("disclosure = %q, want %q", saved.Disclosure, babelDisclosureLocal)
+	if saved.Disclosure != disclosureLocal {
+		t.Errorf("disclosure = %q, want %q", saved.Disclosure, disclosureLocal)
 	}
 	if saved.RedactionRequired {
 		t.Error("a profile that sends nothing off the machine still requires redaction")
 	}
-	if saved.Cost != (babelCost{Currency: "USD"}) {
+	if saved.Cost != (profileCost{Currency: "USD"}) {
 		t.Errorf("cost = %+v, want zero in USD", saved.Cost)
 	}
 	want := map[string]string{
@@ -404,14 +403,14 @@ func TestLocalCeremonyMintsWhatTheEndpointServes(t *testing.T) {
 		t.Errorf("the minted profile declares credential-shaped keys %v", names)
 	}
 
-	// The same reference resolves back through the mode Babel's conformance
-	// suite grades, and renders an overlay pinned to the local model.
-	reported, err := babelStoredProfile(saved.ID)
+	// The same reference resolves back through the store --describe reads,
+	// and renders an overlay pinned to the local model.
+	reported, err := newProfileStore("").load(saved.ID, 0)
 	if err != nil {
-		t.Fatalf("configure mode cannot report the local profile: %v", err)
+		t.Fatalf("--describe cannot report the local profile: %v", err)
 	}
 	if reported.Revision != saved.Revision {
-		t.Errorf("configure mode reports revision %d, want %d", reported.Revision, saved.Revision)
+		t.Errorf("--describe reports revision %d, want %d", reported.Revision, saved.Revision)
 	}
 	overlay, err := profileOverlay(saved)
 	if err != nil {
@@ -440,7 +439,7 @@ func TestLocalCeremonyMintsWhatTheEndpointServes(t *testing.T) {
 	again := localCeremony(t, stub.url())
 	again.sel[localFacetKey] = "qwen2.5:3b"
 	again.sel["thinking"] = saved.Metadata["thinking"]
-	repeat, err := babelMintProfile(confirm(t, again), saved.ID)
+	repeat, err := mintProfile(confirm(t, again), saved.ID)
 	if err != nil {
 		t.Fatalf("re-minting the same local configuration: %v", err)
 	}
@@ -454,8 +453,8 @@ func TestLocalCeremonyMintsWhatTheEndpointServes(t *testing.T) {
 // gone away would resolve, launch, and fail — and the receipt could only report
 // that the analysis did not work.
 func TestLocalCeremonyRefusesADeadEndpoint(t *testing.T) {
-	store := isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	store := isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 
 	m := localCeremony(t, stub.url())
@@ -468,15 +467,15 @@ func TestLocalCeremonyRefusesADeadEndpoint(t *testing.T) {
 	stub.close()
 
 	result := filepath.Join(t.TempDir(), "result.json")
-	if status := babelCommitConfiguration(final, babelOptions{
-		profileID: defaultBabelProfileID, resultFile: result,
+	if status := commitConfiguration(final, engineOptions{
+		profile: profileRef{ID: defaultProfileID}, resultFile: result,
 	}); status != 1 {
 		t.Fatalf("committing against a dead endpoint exited %d, want 1 (configuration unchanged)", status)
 	}
 	if _, err := os.Stat(result); err == nil {
 		t.Error("a reference was written for a profile that could not be minted")
 	}
-	if _, err := newProfileStore(store).load(defaultBabelProfileID, 0); err == nil {
+	if _, err := newProfileStore(store).load(defaultProfileID, 0); err == nil {
 		t.Error("a revision was written against an endpoint that is not answering")
 	}
 }
@@ -484,8 +483,8 @@ func TestLocalCeremonyRefusesADeadEndpoint(t *testing.T) {
 // TestLocalCeremonyRefusesAModelTheEndpointDropped is the other half of the
 // same check: the daemon answers, but no longer serves what was dialled.
 func TestLocalCeremonyRefusesAModelTheEndpointDropped(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	stub := newLocalStub(t, "qwen2.5:3b")
 
 	m := localCeremony(t, stub.url())
@@ -493,7 +492,7 @@ func TestLocalCeremonyRefusesAModelTheEndpointDropped(t *testing.T) {
 	final := confirm(t, m)
 	stub.serve("llama3.2:1b")
 
-	_, err := babelMintProfile(final, defaultBabelProfileID)
+	_, err := mintProfile(final, defaultProfileID)
 	if err == nil {
 		t.Fatal("a model the endpoint no longer serves was minted")
 	}
@@ -508,7 +507,7 @@ func TestLocalCeremonyRefusesAModelTheEndpointDropped(t *testing.T) {
 // only during a ceremony, and Enter on it there is a confirmation; an
 // inconsistent model that reached the launch path must start nothing.
 func TestLocalCeremonyLaunchesNothing(t *testing.T) {
-	isolateBabelEnv(t)
+	isolateEngineEnv(t)
 	stub := newLocalStub(t, "qwen2.5:3b")
 	m := model{
 		local: discoverLocalLane(stub.url()),
@@ -546,37 +545,34 @@ func TestLocalProfileOverlayRefusesBrokenMetadata(t *testing.T) {
 
 // ── the run ──────────────────────────────────────────────────────────────────
 
-// TestLocalRunNeedsNoCredential is the credential gate's exception. Worker mode
-// refuses a run it cannot authenticate before it launches anything, and a local
-// profile is the one configuration that authenticates with nothing — so the
-// gate has to ask about the profile rather than about the machine.
+// TestLocalRunNeedsNoCredential is the credential gate's exception. The engine
+// refuses a launch it cannot authenticate before it starts anything, and a
+// local profile is the one configuration that authenticates with nothing — so
+// the gate has to ask about the profile rather than about the machine.
 func TestLocalRunNeedsNoCredential(t *testing.T) {
 	stub := newLocalStub(t, "qwen2.5:3b")
 	profile := localTestProfile(t, stub.url(), "qwen2.5:3b")
-	inv := newOmpInvestigator(&fakeProfiles{profile: profile})
-	inv.probe = noSandboxBackend
-	inv.auth = func() (ompAuth, error) {
+	l := newOmpLauncher(&fakeProfiles{profile: profile})
+	l.probe = noSandboxBackend
+	l.auth = func() (ompAuth, error) {
 		t.Error("a local run asked the auth broker for a credential")
 		return ompAuth{}, errOmpNoCredential
 	}
-
-	secrets, err := inv.resolveCredential(profile.Ref)
-	if err != nil {
+	if err := l.resolveCredential(profile.Ref); err != nil {
 		t.Fatalf("resolving a local profile's credential: %v", err)
 	}
-	if len(secrets) != 0 {
-		t.Errorf("a keyless run reported %d secrets to scrub", len(secrets))
+	if l.redactor.active() {
+		t.Error("a keyless run registered secrets to redact")
 	}
-	if !inv.keyless {
-		t.Error("the run did not record that it is keyless, so drive would refuse to launch it")
+	if !l.keyless {
+		t.Error("the run did not record that it is keyless, so the launch would refuse it")
 	}
 
-	// A hosted profile on the same investigator still needs one: the exception
-	// is the profile's, not the investigator's.
-	hosted := &fakeProfiles{profile: testProfile()}
-	strict := newOmpInvestigator(hosted)
+	// A hosted profile on the same launcher still needs one: the exception is
+	// the profile's, not the launcher's.
+	strict := newOmpLauncher(&fakeProfiles{profile: testProfile()})
 	strict.auth = func() (ompAuth, error) { return ompAuth{}, errOmpNoCredential }
-	if _, err := strict.resolveCredential(testProfile().Ref); !errors.Is(err, errOmpNoCredential) {
+	if err := strict.resolveCredential(testProfile().Ref); !errors.Is(err, errOmpNoCredential) {
 		t.Fatalf("a hosted profile resolved without a credential: %v", err)
 	}
 }
@@ -588,33 +584,24 @@ func TestLocalRunNeedsNoCredential(t *testing.T) {
 func TestLocalRunReachesTheEndpointItRecorded(t *testing.T) {
 	stub := newLocalStub(t, "qwen2.5:3b")
 	profile := localTestProfile(t, stub.url(), "qwen2.5:3b")
-	inv := newOmpInvestigator(&fakeProfiles{profile: profile})
-	inv.probe = noSandboxBackend
-	inv.auth = func() (ompAuth, error) { return ompAuth{}, errOmpNoCredential }
-	fake, record := ompFakeBinary(t, "localmodel")
-	inv.lookOmp = func() (string, error) { return fake, nil }
+	l := newOmpLauncher(&fakeProfiles{profile: profile})
+	l.probe = noSandboxBackend
+	l.auth = func() (ompAuth, error) { return ompAuth{}, errOmpNoCredential }
 	// Nothing ambient: an endpoint in the child's environment can only have
 	// come from the profile, and an inherited one must not survive.
-	inv.environ = func() []string {
+	l.environ = func() []string {
 		return []string{"PATH=" + os.Getenv("PATH"), "OLLAMA_BASE_URL=http://127.0.0.1:9/decoy",
 			"OLLAMA_HOST=127.0.0.1:9"}
 	}
-	if _, err := inv.resolveCredential(profile.Ref); err != nil {
-		t.Fatalf("resolving a local profile's credential: %v", err)
+	run := serveFake(t, l, "localmodel", "")
+	if run.err != nil || run.status != 0 {
+		t.Fatalf("launching a local run: %d, %v", run.status, run.err)
+	}
+	if run.report.Privacy.Disclosure != disclosureLocal || run.report.Privacy.RedactionRequired {
+		t.Errorf("the report's privacy = %+v, want a local disclosure needing no redaction", run.report.Privacy)
 	}
 
-	job := testJob("", babelCapabilityCorpusSearch)
-	job.Profile = profile.Ref
-	rec := &recorder{}
-	result, err := inv.investigate(context.Background(), job, rec.emit, rec.request)
-	if err != nil {
-		t.Fatalf("driving a local run: %v", err)
-	}
-	if result.Status == "" {
-		t.Error("a local run produced a result with no status")
-	}
-
-	got := ompFakeRead(t, record)
+	got := ompFakeRead(t, run.record)
 	if got.ModelEndpoint != stub.url() {
 		t.Errorf("the child was told the model is at %q, want the profile's %q", got.ModelEndpoint, stub.url())
 	}
@@ -632,16 +619,20 @@ func TestLocalRunReachesTheEndpointItRecorded(t *testing.T) {
 	}
 }
 
-// TestLocalRunBinaryEmitsALocalConfiguration drives the built executable the
-// way Babel does, over real pipes, with a local profile in its store and no
+// TestLocalRunBinaryWritesALocalReport drives the built executable the way a
+// client does, over real pipes, with a local profile in its store and no
 // broker credential anywhere in its environment.
 //
 // That last part is the whole point. Every other test here shares a process
-// with the seam it drives; this one proves the protocol layer's credential gate
-// — which refuses a run it cannot authenticate before anything is launched —
-// lets a local profile through, and that the configuration Babel builds its
-// receipt around says local, costs nothing, and names the endpoint.
-func TestLocalRunBinaryEmitsALocalConfiguration(t *testing.T) {
+// with the seam it drives; this one proves the launch's credential gate —
+// which refuses a run it cannot authenticate before anything is launched —
+// lets a local profile through, and that the runtime report a client builds
+// its record around says local, costs nothing, and names the endpoint.
+//
+// The stream is not read: OMP itself is not on PATH here, so the launch ends
+// as soon as the child cannot start, and what this test measures is the
+// report the launch wrote before that and the reason it gave on stderr.
+func TestLocalRunBinaryWritesALocalReport(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go toolchain on PATH to build the binary with")
 	}
@@ -654,20 +645,28 @@ func TestLocalRunBinaryEmitsALocalConfiguration(t *testing.T) {
 
 	stub := newLocalStub(t, "qwen2.5:3b")
 	store := t.TempDir()
-	t.Setenv(babelProfileStateEnv, store)
+	t.Setenv(profileStateEnv, store)
 	dials := model{local: discoverLocalLane(stub.url()), sel: map[string]string{
 		localFacetKey: "qwen2.5:3b", "thinking": "minimal",
 	}}
 	minted, err := newProfileStore(store).save(describeLocalDials(dials, "local-e2e", "qwen2.5:3b"))
 	if err != nil {
-		t.Fatalf("minting the local profile the worker resolves: %v", err)
+		t.Fatalf("minting the local profile the engine resolves: %v", err)
 	}
 
-	cmd := exec.Command(binary, "babel", "--profile", minted.ID)
+	// A stand-in omp that announces itself and waits for stdin to close, so
+	// the launch runs to a finished report on a machine with no omp.
+	fakeOmp := filepath.Join(t.TempDir(), "omp")
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"type\":\"ready\",\"protocolVersion\":1}'\nwhile IFS= read -r line; do :; done\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info := filepath.Join(t.TempDir(), "runtime.json")
+	cmd := exec.Command(binary, "engine", "--profile", minted.ID, "--runtime-info", info)
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
-		babelProfileStateEnv + "=" + store,
+		"CODE_OMP=" + fakeOmp,
+		profileStateEnv + "=" + store,
 		"CODE_GENERATED=" + filepath.Join(t.TempDir(), "absent.plain"),
 		"CODE_SELECTION_STATE=",
 		"XDG_STATE_HOME=" + t.TempDir(),
@@ -677,110 +676,49 @@ func TestLocalRunBinaryEmitsALocalConfiguration(t *testing.T) {
 		"CODE_AUTH_VAULTS=",
 		"CODE_AUTH_VAULTS_FILE=" + filepath.Join(t.TempDir(), "absent.json"),
 	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
+	cmd.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("code engine: %v (stderr: %s)", err, stderr.String())
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
+	if !strings.HasPrefix(stdout.String(), `{"type":"ready"`) {
+		t.Errorf("stdout is not the child's stream: %q", stdout.String())
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	scan := bufio.NewScanner(stdout)
-	scan.Buffer(make([]byte, 0, 64<<10), 8<<20)
-	readLine := func() map[string]any {
-		t.Helper()
-		if !scan.Scan() {
-			t.Fatalf("the worker stopped writing: %v (stderr: %s)", scan.Err(), stderr.String())
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal(scan.Bytes(), &decoded); err != nil {
-			t.Fatalf("undecodable line %q: %v", scan.Text(), err)
-		}
-		return decoded
-	}
-	writeLine := func(v any) {
-		t.Helper()
-		data, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := stdin.Write(append(data, '\n')); err != nil {
-			t.Fatalf("writing to the worker: %v", err)
-		}
+	if strings.Contains(stderr.String(), errOmpNoCredential.Error()) {
+		t.Errorf("a local run was refused for want of a credential: %s", stderr.String())
 	}
 
-	if hello := readLine(); hello["type"] != babelMessageHello {
-		t.Fatalf("first line is %v, want hello", hello["type"])
+	data, err := os.ReadFile(info)
+	if err != nil {
+		t.Fatalf("the launch wrote no runtime report: %v (stderr: %s)", err, stderr.String())
 	}
-	writeLine(babelAcceptLine(babelModeWorker))
-	job := babelTestJob("")
-	delete(job, "params")
-	job["profile"] = map[string]any{"id": minted.ID, "revision": minted.Revision}
-	// Only the preamble: this test reads the declaration, which is the answer to
-	// it, and never needs the material Babel would write afterwards.
-	preamble, _ := babelStageJob(job)
-	writeLine(preamble)
-
-	// The first event is the one Babel builds its receipt around. Anything
-	// after it belongs to a launch this test does not need: an endpoint that
-	// serves no model cannot finish an analysis, and the launch itself is
-	// covered against a fake OMP above.
-	event := readLine()
-	if event["type"] != babelMessageConfiguration {
-		t.Fatalf("first event is %v, want the configuration (stderr: %s)", event["type"], stderr.String())
+	var report runtimeReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("the runtime report does not parse: %v", err)
 	}
-	privacy, _ := event["privacy"].(map[string]any)
-	if privacy["disclosure"] != babelDisclosureLocal || privacy["redaction_required"] != false {
-		t.Errorf("privacy = %v, want a local disclosure needing no redaction", privacy)
+	if report.Privacy.Disclosure != disclosureLocal || report.Privacy.RedactionRequired {
+		t.Errorf("privacy = %+v, want a local disclosure needing no redaction", report.Privacy)
 	}
-	cost, _ := event["cost"].(map[string]any)
-	for _, key := range []string{"input_per_1k", "output_per_1k"} {
-		if rate, _ := cost[key].(float64); rate != 0 {
-			t.Errorf("cost[%q] = %v, want zero for a model nobody bills for", key, rate)
-		}
+	if report.Cost.InputPer1K != 0 || report.Cost.OutputPer1K != 0 {
+		t.Errorf("cost = %+v, want zero for a model nobody bills for", report.Cost)
 	}
-	metadata, _ := event["metadata"].(map[string]any)
-	for key, want := range map[string]any{
+	for key, want := range map[string]string{
 		"provider":         localProvider,
 		"model":            "qwen2.5:3b",
 		localMetaEngine:    localEngineOllama,
 		localMetaEndpoint:  stub.url(),
 		localMetaCostBasis: localCostBasis,
 	} {
-		if metadata[key] != want {
-			t.Errorf("metadata[%q] = %v, want %v", key, metadata[key], want)
+		if report.Metadata[key] != want {
+			t.Errorf("metadata[%q] = %q, want %q", key, report.Metadata[key], want)
 		}
 	}
-	if containment, _ := event["containment"].(map[string]any); containment == nil {
-		t.Error("the configuration declared no containment")
-	} else if escape, _ := containment["escape"].(string); escape == "" {
-		t.Error("the containment declared no escape assumption")
+	if report.Containment == nil || report.Containment.Escape == "" {
+		t.Error("the report declared no containment, or one with no escape assumption")
 	}
-
-	// Babel tearing a run down closes the worker's stdin, which is a
-	// cancellation the worker owes a terminal event for.
-	stdin.Close()
-	var terminal map[string]any
-	for scan.Scan() {
-		var decoded map[string]any
-		if json.Unmarshal(scan.Bytes(), &decoded) == nil {
-			terminal = decoded
-		}
-	}
-	_ = cmd.Wait()
-	if terminal == nil {
-		t.Fatalf("the worker wrote no terminal event (stderr: %s)", stderr.String())
-	}
-	if kind := terminal["type"]; kind != babelMessageError && kind != babelMessageResult {
-		t.Errorf("last event is %v, want a terminal one", kind)
-	}
-	if strings.Contains(stderr.String(), errOmpNoCredential.Error()) {
-		t.Errorf("a local run was refused for want of a credential: %s", stderr.String())
+	if report.Finished == nil || !*report.Finished || report.ExitCode == nil {
+		t.Errorf("the report was not finished with the child's status: %s", data)
 	}
 }
 

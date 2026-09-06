@@ -383,7 +383,7 @@ func managedLaunchArgv(path string, forwarded []string, prompt string) []string 
 
 // untrustedLaunchArgv is the `u` key's launcher command line. It is the
 // operator's own untrusted-session binary (ompu), not a containment mechanism:
-// Code's sandbox is the one worker mode builds in sandbox.go, and naming two
+// Code's sandbox is the one the engine builds in sandbox.go, and naming two
 // unrelated things "sandbox" is how the containment declaration came to say
 // something Code did not do.
 func untrustedLaunchArgv(path string, forwarded []string, prompt string) []string {

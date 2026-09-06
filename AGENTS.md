@@ -6,7 +6,9 @@ routing that selection produces, and then exec `omp` with that routing as a
 one-shot `--config` overlay (README.md, `main.go:58-104`). It never edits an omp
 configuration. Around the launcher sit a session registry, whole-session operator
 worktrees, an account manager over the auth broker, a catalog generator, and a
-second half — `code babel` — that runs contained analysis for atyrode/babel. Its
+second half — `code engine` — that launches a contained, credentialed native
+`omp --mode rpc` under a confirmed profile for a supervising client such as
+atyrode/babel. Its
 final form is a manifold plugin (`docs/manifold-transition.md` §1); `plugins/`
 is where that lands. `CLAUDE.md` points here and is never edited.
 
@@ -122,7 +124,8 @@ tag-immutability rule applies there.
 | `code generate [init]` | headless catalog: `init` scaffolds and probes `models.yml`, bare `generate` renders it (`generate.go`, `generate_init.go`) |
 | `code session` / `code ls` / `code session reap` | the cross-launch session registry: list, and retire whole process trees (`session.go`) |
 | `code worktree` / `code wt [rm\|prune\|resume <worktree\|id-prefix>]` | whole-session operator worktrees on `code/<adj>-<color>-<animal>` branches; `resume` reopens an interrupted omp session in its original worktree (`worktree.go`, `history.go`) |
-| `code babel [--configure]` | Babel's analysis-worker protocol on stdio; `--configure` mints a profile revision from the same dials (`babelworker.go`, `babelconfigure.go`) |
+| `code engine --profile ID[@REV] --runtime-info PATH [--input PATH]` | a contained `omp --mode rpc` under a saved profile: stdin/stdout are omp's native RPC forwarded byte for byte with the provider credential redacted, and the runtime report (`code.runtime/1`) is written to PATH before the first byte and rewritten with exit status and resource use after the last (`engine.go`, `engineredact.go`) |
+| `code engine --describe` / `--configure --result-file PATH` / `--import-profiles DIR` | report a saved profile without launching; mint a profile revision from the dials on the operator's terminal; copy immutable revisions from another directory into the store (`engine.go`, `configure.go`, `profile.go`) |
 | hidden sandbox helper | Code re-entering itself inside its own sandbox; spawned only by the containment backend, undocumented on purpose (`main.go:48-53`) |
 
 Environment: `main.go:1-19` is the manifest of what the launcher reads
@@ -130,7 +133,8 @@ Environment: `main.go:1-19` is the manifest of what the launcher reads
 `CODE_AUTH_ACCOUNT_STATE`, `CODE_AUTH_LOGIN_VIA`, `CODE_SYMBOLS`,
 `CODE_FACET_GLYPHS`, `CODE_OLLAMA_ENDPOINT`, `OMP_AUTH_BROKER_*`);
 `docs/configuration.md` is the operator-facing list, with the state overrides
-(`CODE_SESSION_STATE`, `CODE_WORKTREE_STATE`, `CODE_WORKTREE_DIR`).
+(`CODE_SESSION_STATE`, `CODE_WORKTREE_STATE`, `CODE_WORKTREE_DIR`,
+`CODE_PROFILE_STATE`).
 `CODE_RUNTIME_BROKER` names the runtime broker command (`runtime.go`);
 `CODE_REQUIRE_SANDBOX` and `CODE_TEST_REQUIRE_OMP` are the test gates above. The
 dotfiles wrapper (`pkgs/omp-configured/default.nix`, `codeLauncher`) exports
@@ -154,15 +158,16 @@ Thirty-nine non-test Go files in one `package main`; `docs/manifold-transition.m
 | `session.go`, `worktree.go`, `history.go`, `selection_state.go` | flock-based session registry and `reap`; `code/<adj>-<color>-<animal>` worktrees under code's own state root; saved-session discovery over omp's transcript headers (the metadata allowlist, ranking, prefix resolution); `CODE_SELECTION_STATE` load/save and the ceremony handoff mirror |
 | `vault.go`, `usage.go`, `manager.go` | the broker half: accounts, `OMP_AUTH_BROKER_*` resolution, the 0600 account-pool file, DeepSeek balance; quota fetch and the usage panel; the account manager UI |
 | `runtime.go`, `onboarding.go`, `suggest.go` | the delegated runtime broker (`CODE_RUNTIME_BROKER`); first-run scaffold when no catalog exists; `ctrl+o` prompt-to-profile over loopback Ollama |
-| `babelwire.go`, `babelworker.go`, `babelprofile.go`, `babelconfigure.go` | Babel's analysis-worker protocol (Code's side), handshake and modes, profile revisions, the configuration ceremony |
-| `omprpc.go`, `ompinvestigator.go`, `ompprocess_{unix,other}.go` | `omp --mode rpc` transport, the investigator that drives one analysis run, process-group control for the omp child |
+| `engine.go`, `engineredact.go`, `profile.go`, `configure.go` | `code engine`: the launch, the runtime report and the passthrough; credential redaction over the forwarded stream, rpc_chunk frames included; immutable profile revisions, their store and import; the configuration ceremony |
+| `omprpc.go`, `ompprocess_{unix,other}.go` | launching `omp --mode rpc` as a child: argv, the private run directory, the child's environment and credential, process-group control and shutdown |
 | `sandbox.go`, `sandbox_{linux,other}.go`, `sandboxegress.go`, `locallane.go` | the containment backend (bubblewrap in a transient systemd scope) and its declaration; the one egress relay; the local model lane |
 | `plugins/` | the manifold plugins (below) |
 
 State on disk (`docs/configuration.md` §State on disk; `code wt --help`): under
 `$XDG_STATE_HOME/code` — `selection.json` (`CODE_SELECTION_STATE`), `sessions`
 (`CODE_SESSION_STATE`), `worktrees` (`CODE_WORKTREE_STATE`), `wt`
-(`CODE_WORKTREE_DIR`). The catalog is wherever `CODE_GENERATED` points, else
+(`CODE_WORKTREE_DIR`), `profiles` (`CODE_PROFILE_STATE`; `code engine
+--import-profiles DIR` carries an older store over). The catalog is wherever `CODE_GENERATED` points, else
 `$XDG_DATA_HOME/code/generated.plain`; `models.yml` is
 `$XDG_CONFIG_HOME/code/models.yml` (`code generate --help`). omp's own session
 store (`~/.omp/agent/sessions` here, plus every profile root) is omp's to
@@ -203,7 +208,7 @@ transcript — id, timestamp, cwd, title — never a body, and `ompu` roots neve
    found on PATH: the probe variables `ompModelsJSON`, `ompUsageJSON`,
    `ompBenchJSON` (`generate_init.go`; `stubOmp`/`stubModels`/`stubBench`),
    `CODE_OMP` pointed at a script or at the test binary re-exec'd as a fake
-   (`main_test.go`; `ompFakeStaticBinary`, `ompinvestigator_test.go`),
+   (`main_test.go`; `ompFakeBinary`, `engine_test.go`),
    `httptest` servers for the broker and the balance endpoint. The one
    measurement of the real omp is `omptools_test.go`'s tool-registry canary, and
    it says so when it skips. Do not add a seam to production code for a test's
@@ -213,8 +218,9 @@ transcript — id, timestamp, cwd, title — never a body, and `ompu` roots neve
    dimensions — and a catalog change against the golden
    (`testdata/two-pool-golden.plain`), re-recorded deliberately and reviewed,
    never regenerated to make a test pass.
-8. **The sandbox declaration is the truth.** What `code babel` tells Babel it
-   established (`sandbox.go`) is the whole basis on which a reviewer trusts a
+8. **The sandbox declaration is the truth.** What `code engine` writes to the
+   runtime report about the containment it established (`sandbox.go`) is the
+   whole basis on which a reviewer trusts a
    run; the escape scenarios are the only evidence it holds, so they fail rather
    than skip wherever CI is set (`sandbox_linux_test.go`). Never weaken them; a
    machine that cannot provide the backend refuses it rather than degrading it

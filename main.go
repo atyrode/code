@@ -43,8 +43,8 @@ func main() {
 			os.Exit(runSession(os.Args[2:]))
 		case "worktree", "wt":
 			os.Exit(runWorktree(os.Args[2:]))
-		case "babel":
-			os.Exit(runBabel(os.Args[2:]))
+		case "engine":
+			os.Exit(runEngine(os.Args[2:]))
 		case sandboxHelperCommand:
 			// Code re-entering itself inside its own sandbox. Nothing but the
 			// containment backend spawns this, and it is undocumented on
@@ -83,7 +83,7 @@ func main() {
 	case fm.launchUntrusted:
 		// "untrusted", not "sandbox": this is the launcher the operator
 		// designated for untrusted sessions, and it contains nothing. The one
-		// sandbox in this codebase is the boundary worker mode builds, and the
+		// sandbox in this codebase is the boundary the engine builds, and the
 		// containment declaration is the only thing entitled to that word.
 		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func(_ *sessionHandle) int {
 			return runUntrustedLauncher("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
@@ -154,9 +154,9 @@ func resolveGlyphs() map[string]string {
 
 // interactiveMode says what confirming a selection means. The dial UI is the
 // same either way — that it is the same UI is the whole point of the
-// configuration ceremony (babelconfigure.go) — but a launch hands the selection
+// configuration ceremony (configure.go) — but a launch hands the selection
 // to omp, while a ceremony mints an immutable profile revision out of it and
-// hands Babel the reference. The keys that only make sense for a launch are
+// hands the client the reference. The keys that only make sense for a launch are
 // inert in the latter, and the environment is not allowed to decide which dials
 // the operator is shown.
 type interactiveMode int
@@ -192,7 +192,7 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	runtimeTargets := loadRuntimeTargets()
 	// The local model lane is discovered only while the ceremony has the
 	// operator's terminal. Its dial is the only way to choose a local model, so
-	// building it anywhere else — a launch, worker mode — would be a route to
+	// building it anywhere else — a launch, an engine launch — would be a route to
 	// one that nobody in the room confirmed (locallane.go).
 	var local localLane
 	if mode == interactiveConfigure {
@@ -205,10 +205,10 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	if local.offered() {
 		facets = append([]facet{localFacet(glyphs[localFacetKey], local)}, facets...)
 	}
-	// The interactive run is the only thing that writes a selection, and worker
-	// mode under Babel is the caller that most needs to read one, so an unset
+	// The interactive run is the only thing that writes a selection, and an engine
+	// launch is the caller that most needs to read one, so an unset
 	// variable now means the default location rather than statelessness — and an
-	// override, which the worker can never be told about, is mirrored there too.
+	// override, which the engine can never be told about, is mirrored there too.
 	selectionState, selectionHandoff := selectionStateTargets()
 	if mode == interactiveConfigure {
 		// The ceremony reads and writes the default location and nothing else.
@@ -216,7 +216,7 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 		// set, so honouring it here would let a dial position nobody in the
 		// room chose be the one the operator is asked to confirm — and the
 		// profile minted from it would carry that confirmation into every
-		// receipt (atyrode/babel#86). The default location is where an
+		// record (atyrode/babel#86). The default location is where an
 		// interactive `code` writes, so the ceremony still opens on the dials
 		// this operator last turned and leaves them where the next `code`
 		// finds them.
@@ -248,7 +248,7 @@ func newInteractiveApp(mode interactiveMode) tea.Model {
 	if mode == interactiveConfigure {
 		// A ceremony ends in a profile or in nothing. The launch keys mint no
 		// profile, so they are inert here rather than quietly starting a
-		// session Babel is holding the terminal open for; Enter is relabelled
+		// session the client is holding the terminal open for; Enter is relabelled
 		// because it is now the only key that ends this run with a
 		// configuration.
 		keys.Managed.SetEnabled(false)

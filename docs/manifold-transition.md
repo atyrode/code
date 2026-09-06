@@ -206,10 +206,10 @@ Nothing landed toward atyrode/manifold#151 or atyrode/manifold#152 since Babel's
 ### 3.1 Subsystem map
 
 Non-test Go is 864,806 bytes across 39 files (`wc -c *.go`, tests excluded).
-The Babel-worker half — `babelwire.go`, `babelworker.go`, `babelprofile.go`,
-`babelconfigure.go`, `ompinvestigator.go`, `omprpc.go`, `ompprocess_*.go`,
-`sandbox*.go`, `locallane.go` — is 446,452 bytes, 51.6 % of it, and is out of
-this record's scope (D6). The launcher half:
+The engine half — since atyrode/code#123 `engine.go`, `engineredact.go`,
+`profile.go`, `configure.go`, `omprpc.go`, `ompprocess_*.go`, `sandbox*.go`,
+`locallane.go`; the byte figure below predates that cutover — is 446,452
+bytes, 51.6 % of it, and is out of this record's scope (D6). The launcher half:
 
 | File | Responsibility |
 | --- | --- |
@@ -242,7 +242,7 @@ this record's scope (D6). The launcher half:
 | `code generate init` | headless, minutes: probes every model through `omp models --json` and `omp bench` | `generate_init.go:878-918,814-815` |
 | `code session` / `code ls` / `code session reap` | headless: registry, whole-tree reap | `main.go:42-43,54-55`; `session.go:402-454` |
 | `code worktree` / `code wt [remove\|prune]` | headless | `main.go:44-45`; `worktree.go:439-570` |
-| `code babel [...]` / `--configure --result-file P` | Babel wire protocol on stdio / interactive ceremony, refuses without a TTY | `main.go:46-47`; `babelconfigure.go:3,58-63,113-117` |
+| `code engine [...]` / `--configure --result-file P` | native omp RPC passthrough under a saved profile / interactive ceremony, refuses without a TTY | `main.go:46-47`; `configure.go` |
 | hidden `__sandbox` | in-guest helper | `main.go:48-53` |
 
 ### 3.3 TUI surfaces and keys
@@ -342,13 +342,13 @@ this record's scope (D6). The launcher half:
 | Account toggles and presets | browser half over `code.*` doors | non-secret (`vault.go:461-490`) |
 | OAuth login `a`, `CODE_AUTH_LOGIN_VIA` | CLI-only | hands the terminal to omp (`manager.go:309-317`) |
 | Onboarding review step | browser half; the probe is a spoke job | `obScan` shells to omp for minutes (`onboarding.go:71-92`) |
-| `code generate [init]`, `code session`, `code wt`, `code babel*` | CLI-only | recovery, and D6 |
+| `code generate [init]`, `code session`, `code wt`, `code engine*` | CLI-only | recovery, and D6 |
 | Glyph tables, `CODE_SYMBOLS`, wheel filter | retired | terminal-font and mouse-protocol workarounds (`main.go:113-134`; `wheel.go:17-18`) |
 
 **Four load-bearing terminal assumptions.** (1) `runChild` owns the
 controlling terminal from before Bubble Tea mounts to after the child exits
 (`launch.go:63-75`). (2) `requireOperatorTerminal` refuses the ceremony
-without a TTY on both ends (`babelconfigure.go:113-117`). (3) `tea.NewProgram`
+without a TTY on both ends (`configure.go`). (3) `tea.NewProgram`
 assumes an interactive terminal for the whole dial session (`main.go:302`).
 (4) Onboarding probes omp synchronously inside the TUI, spinner-gated
 (`onboarding.go:105-106`). D2 removes (1) from the plugin's path by keeping it
@@ -518,15 +518,15 @@ and "Usage/account surfaces as browser-rendered plugin UI" (#100).
 
 ### D6 Scope
 
-The Babel-worker half (§3.1, 51.6 % of non-test bytes) belongs to Babel's
-transition, not to the launcher plugin. Stays CLI-only: `code generate
-[init]`, `code session` / `code ls` / `reap`, `code wt`, the onboarding
-scaffold, `code babel*`.
+The engine half (§3.1, 51.6 % of non-test bytes) serves supervising clients
+such as Babel and belongs to their transitions, not to the launcher plugin.
+Stays CLI-only: `code generate [init]`, `code session` / `code ls` / `reap`,
+`code wt`, the onboarding scaffold, `code engine*`.
 
 Consequences:
 
-- The ceremony (`code babel --configure`) drives the same generator TUI
-  (`babelconfigure.go:3`); when step 6 retires the TUI the ceremony must
+- The ceremony (`code engine --configure`) drives the same generator TUI
+  (`configure.go:3`); when step 6 retires the TUI the ceremony must
   consume a selection document instead, which is a Babel follow-up (§8.3).
 - Onboarding's review step may become a surface at step 5; its probe never
   does.
@@ -658,7 +658,7 @@ Code: "Retire the TUI" (#101). Bubble Tea,
 `view.go`, `layout.go`, `render.go`, `wheel.go`, the glyph tables and
 `CODE_SYMBOLS`/`CODE_FACET_GLYPHS` go; bare `code` becomes a headless status
 overview. Babel: the ceremony consumes a selection document (§8.3) before
-`babelconfigure.go`'s TUI use is removed.
+`configure.go`'s TUI use is removed.
 
 Proof: `code` with no arguments prints status and launches nothing; `code
 launch --selection` is the only launcher; the ceremony passes Babel's
@@ -673,7 +673,7 @@ session reap` (flock liveness and process signals on one machine,
 a PID); `code wt`, `remove`, `prune` (git on a local checkout); `code
 generate [init]` (minutes of probing through `omp`,
 `generate_init.go:878-918`; the result is published, the run is not driven);
-`code babel ...` and the ceremony (D6); OAuth login and `CODE_AUTH_LOGIN_VIA`
+`code engine ...` and the ceremony (D6); OAuth login and `CODE_AUTH_LOGIN_VIA`
 (interactive, credential-bearing, D5); `code publish` itself (an
 OS-supervised service, driven by dotfiles).
 
@@ -914,8 +914,8 @@ way: atyrode/manifold#162 (already fixed by atyrode/manifold#177).
   `assembly.ts:61-76`. (atyrode/babel#158)
 - The configure ceremony drives code's TUI directly; it must consume the D2
   selection document instead, before code's TUI retires. `analysis profile
-  configure` hands the terminal to `code babel --configure`
-  (`babelconfigure.go:3,113-117`); Babel's conformance suite must pass
+  configure` hands the terminal to `code engine --configure`
+  (`configure.go`); Babel's conformance suite must pass
   without a TTY. (atyrode/babel#160)
 
 ### 8.4 Dotfiles and infra follow-ups
