@@ -61,7 +61,7 @@ type model struct {
 	sel            map[string]string
 	selectionState string // resolved by selectionStatePath; empty is the "off" opt-out
 	// selectionHandoff is the default location a relocated selection is also
-	// mirrored to, because Babel's worker sees no CODE_SELECTION_STATE at all.
+	// mirrored to, because an engine launch sees no CODE_SELECTION_STATE at all.
 	// Empty when the resolved path is already the default one.
 	selectionHandoff string
 
@@ -97,9 +97,9 @@ type model struct {
 	// with a configuration rather than starting a session, because there is no
 	// session here to start.
 	localConfirmed string
-	// configuring is the configuration ceremony: this run mints a Babel profile
+	// configuring is the configuration ceremony: this run mints a profile
 	// out of the dials the operator confirms and launches nothing at all
-	// (babelconfigure.go). Every key that would start a session instead of
+	// (configure.go). Every key that would start a session instead of
 	// answering the ceremony is inert while it is set.
 	configuring        bool
 	hasSandbox         bool              // a sandbox binary exists; gates the u key

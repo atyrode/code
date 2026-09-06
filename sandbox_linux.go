@@ -19,7 +19,7 @@ package main
 // the mount plan bound read-only, and to find a route off the machine — and the
 // parent reads the scope's own cgroup files back to see that the ceilings it
 // asked for are the ones the kernel installed. A property that survives that is
-// declared; a property that does not is declared false, and Babel refuses the
+// declared; a property that does not is declared false, and the client refuses the
 // run.
 
 import (
@@ -119,7 +119,7 @@ func newSandboxBackend(ceilings sandboxCeilings) *sandboxBackend {
 	}
 
 	// bubblewrap alone. Three of the four properties are still real, and saying
-	// so beats claiming a ceiling that was never installed — Babel refuses this
+	// so beats claiming a ceiling that was never installed — a client refuses this
 	// declaration under the strict default, which is the correct outcome, and
 	// an operator who relaxes a run deliberately still gets the boundary.
 	report, _, err := b.probe(false)
@@ -192,8 +192,8 @@ func sandboxProbeGaps(report sandboxProbeReport) []string {
 // sandboxLookTool finds one of the backend's binaries.
 //
 // PATH first, then the two places a Nix-provisioned machine keeps them. The
-// fallback exists because Babel spawns this worker with a curated environment
-// carrying only HOME, PATH, TMPDIR and LANG, and that PATH is whatever Babel
+// fallback exists because a supervising client spawns the engine with a curated environment
+// carrying only HOME, PATH, TMPDIR and LANG, and that PATH is whatever the client
 // itself inherited — which on a machine where these tools live in a user
 // profile may well not include them. Nothing is claimed on the strength of a
 // path being found: the probe still has to run.
@@ -217,8 +217,8 @@ func sandboxLookTool(name string) (string, error) {
 
 // sandboxScopeTool locates systemd-run and the session bus it needs.
 //
-// The bus address is derived rather than required, for the same reason: Babel
-// strips XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS from the worker's
+// The bus address is derived rather than required, for the same reason: a client
+// may strip XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS from the engine's
 // environment, so insisting on them would refuse a ceiling this machine can
 // perfectly well install. The derivation is the documented one — the user
 // manager's runtime directory is /run/user/$UID and its bus socket is `bus`
@@ -264,7 +264,7 @@ func sandboxScopeTool() (string, []string, error) {
 // distinction is the difference between a backend that works and one that does
 // not: naming a path unconditionally makes bubblewrap refuse to start on every
 // machine that does not have it, which degrades the declaration to no boundary
-// at all and makes Babel refuse the run — for a reason that reads as a missing
+// at all and makes the client refuse the run — for a reason that reads as a missing
 // directory rather than as the portability gap it is.
 //
 // The derivation resolves each executable to its real path and then reads what
@@ -342,7 +342,7 @@ const sandboxClosureBudget = 512
 //
 // Every one of those misses has the same consequence and it is the safe one:
 // the probe cannot execute its payload, the backend degrades with the reason
-// bubblewrap or the loader gave, and Babel refuses the run. None of them can
+// bubblewrap or the loader gave, and the client refuses the run. None of them can
 // widen the boundary.
 func sandboxRuntimePaths(named, relocated []string) []string {
 	closure := &sandboxRuntimeClosure{
@@ -741,9 +741,9 @@ func sandboxIsFile(path string) bool {
 // filesystem because no writable host path is ever in this structure.
 type sandboxMounts struct {
 	// same binds a host path read-only at the identical path inside, which is
-	// what the derived runtime paths, the CA bundle and the grant's corpus
+	// what the derived runtime paths, the CA bundle and the approved input
 	// need: a program resolves the absolute path it was launched from, and a
-	// corpus path a finding cites must mean the same thing on both sides.
+	// input path a result cites must mean the same thing on both sides.
 	same []string
 	// at binds a host path read-only somewhere else inside, in insertion order.
 	at []sandboxBind
@@ -761,7 +761,7 @@ type sandboxBind struct{ host, guest string }
 // a machine without one optional path — a Nix store, a CA bundle, a library
 // directory another distribution keeps elsewhere — an unconditional bind takes
 // the entire boundary down with it, the declaration degrades to no containment
-// at all, and Babel refuses every run with a reason that names a directory
+// at all, and the client refuses every run with a reason that names a directory
 // rather than the portability gap it actually is. So a path that is not there
 // is not a bind.
 func (m *sandboxMounts) bindSame(host string) {
@@ -848,7 +848,7 @@ const sandboxRootTmpfsBytes = 8 << 20
 
 // contain resolves one launch into the command prefix that puts it inside the
 // boundary. A backend that established no boundary returns nil, and the caller
-// launches OMP directly — which Babel only ever allows for a run the operator
+// launches OMP directly — which a client only ever accepts for a run the operator
 // explicitly relaxed, because the declaration says exactly that.
 func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 	if b.facts.backend == sandboxBackendNone {
@@ -865,7 +865,7 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 		mounts.bindSame(path)
 	}
 	mounts.bindSame(request.caBundle)
-	for _, path := range request.corpus {
+	for _, path := range request.inputs {
 		mounts.bindSame(path)
 	}
 	mounts.bindAt(b.helper, sandboxHelperPath)
@@ -905,10 +905,12 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 		return nil, err
 	}
 
-	reportR, reportW, err := os.Pipe()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
+	reportR := os.NewFile(uintptr(fds[0]), "sandbox-report-host")
+	reportW := os.NewFile(uintptr(fds[1]), "sandbox-report-guest")
 	run := &sandboxRun{
 		egress:  request.egress,
 		spec:    spec,
@@ -931,9 +933,9 @@ func (b *sandboxBackend) contain(request sandboxRequest) (*sandboxRun, error) {
 // cwd is the working directory the guest starts in. It is a parameter rather
 // than a constant because the escape scenarios have to be able to point it
 // somewhere else to show that where it points matters: OMP registers MCP
-// servers — which reach the network without passing Babel's broker — from a
-// config file at the root of its working directory, so a run whose cwd was the
-// corpus would let archived material register unbrokered egress. Every
+// servers — which reach the network without passing any client-authorized tool — from a
+// config file at the root of its working directory, so a run whose cwd was an
+// approved input would let untrusted content register unbrokered egress. Every
 // production launch passes sandboxWorkPath, a tmpfs the sandbox creates empty.
 func (b *sandboxBackend) enter(mounts sandboxMounts, cwd string, guest ...string) []string {
 	var argv []string

@@ -15,9 +15,9 @@ import (
 
 // ── the tool-surface obligation ──────────────────────────────────────────────
 //
-// Babel's whole disclosure argument is that the model reaches evidence only
-// through the broker: Code asks Babel, Babel decides, and the answer comes back
-// as a host-tool result. A tool in OMP's registry that Code did not broker
+// A client's whole disclosure argument is that the model reaches evidence only
+// through host tools the client serves: the model asks, the client decides, and
+// the answer comes back as a host-tool result. Any other tool in OMP's registry
 // breaks that argument outright, because it moves bytes without asking.
 //
 // `--no-tools` is not by itself that guarantee. Measured against omp 18.0.11
@@ -69,7 +69,7 @@ import (
 // Egress, per tool that OMP can register here, determined from OMP's own docs:
 //
 //	mcp__*       yes, by construction. An MCP server is an arbitrary command
-//	             holding the child's network; nothing routes it through Babel.
+//	             holding the child's network; nothing routes it through the client.
 //	tts          yes when providers.tts is xai or deepinfra, which POST the
 //	             (model-chosen) text to a third-party speech API; the local
 //	             Kokoro backend is on-device. auto prefers local but routes an
@@ -98,7 +98,7 @@ const ompMcpProbeSentinel = "code-mcp-probe-server"
 // composition rule OMP is free to change.
 const ompMcpProbeToolName = "unbrokered_egress_canary"
 
-// ompWorkerLaunch builds exactly what drive() launches: the run's private
+// ompWorkerLaunch builds exactly what the engine launches: the run's private
 // directory, the child environment ompChildEnv derives, and the argv ompArgv
 // fixes. It deliberately calls the production functions rather than restating
 // them — if the launch path changes where the child's home, cwd or flags come
@@ -117,7 +117,7 @@ func ompWorkerLaunch(t *testing.T) (ompLaunch, *ompRunDir) {
 	}
 	t.Cleanup(dir.remove)
 
-	// The zero job carries no broker token, and the zero auth is unconfigured,
+	// The zero auth is unconfigured,
 	// so ompChildEnv adds no broker variables. Both are what this measurement
 	// wants: the environment's tool-surface properties, with no credential in it.
 	return ompLaunch{
@@ -125,7 +125,7 @@ func ompWorkerLaunch(t *testing.T) (ompLaunch, *ompRunDir) {
 		config: dir.config,
 		home:   dir.home,
 		work:   dir.work,
-		env:    ompChildEnv(os.Environ(), dir.home, babelJob{}, ompAuth{}),
+		env:    ompChildEnv(os.Environ(), dir.home, ompAuth{}),
 	}, dir
 }
 
@@ -293,12 +293,12 @@ func TestOmpWorkerModeRegistersNothingCodeDidNotBroker(t *testing.T) {
 	if len(unbrokered) > 0 {
 		t.Fatalf("MCP-discovered tools are registered in a supervised run: %v.\n"+
 			"An MCP server is an arbitrary process holding the child's network, so these "+
-			"move bytes without asking Babel. Find the configuration they were discovered "+
+			"move bytes without asking the client. Find the configuration they were discovered "+
 			"from (omp://mcp-config.md lists every source) and make it undiscoverable.\n"+
 			"Full registry: %v", unbrokered, got)
 	}
 	t.Fatalf("omp registered %d tool(s) Code did not broker: %v.\n"+
-		"Every tool in a supervised run is supposed to be one Babel authorized. Establish "+
+		"Every tool in a supervised run is supposed to be one the client registered. Establish "+
 		"for each of these whether it can reach the network or the filesystem outside the "+
 		"run directory; if it can, the containment declaration overstates the boundary and "+
 		"the tool has to be disabled rather than tolerated.", len(got), got)
@@ -408,7 +408,7 @@ func TestOmpWorkerLaunchDirectoryCarriesNoDiscoverableConfig(t *testing.T) {
 		ompUnverified(t, fmt.Sprintf("the child's working directory %q does not exist on "+
 			"the host, so whether it is empty at launch was not measured. It is presumably "+
 			"created inside a sandbox; point this guard at the host directory backing it, "+
-			"or OMP may discover an MCP server there and egress without asking Babel", work))
+			"or OMP may discover an MCP server there and egress without asking the client", work))
 	}
 	if err != nil {
 		t.Fatalf("reading the child's working directory: %v", err)
@@ -422,7 +422,7 @@ func TestOmpWorkerLaunchDirectoryCarriesNoDiscoverableConfig(t *testing.T) {
 	}
 	t.Fatalf("the child's working directory %q is not empty at launch: %v.\n"+
 		"OMP discovers MCP servers from the working directory, and a discovered MCP "+
-		"server egresses without asking Babel. Whatever put these here has to be moved "+
+		"server egresses without asking the client. Whatever put these here has to be moved "+
 		"out of the cwd, or every MCP config source OMP reads from a project root has to "+
 		"be provably absent from it (omp://mcp-config.md enumerates them).", work, names)
 }

@@ -11,8 +11,8 @@ package main
 // is prose, and prose in a receipt is the thing this whole subsystem exists to
 // replace.
 //
-// So on any other platform the facts say so, every boolean is false, and Babel
-// refuses an exploration run under its strict default. Everything that does not
+// So on any other platform the facts say so, every boolean is false, and a client
+// refuses a contained run under a strict default. Everything that does not
 // execute a model — archival, browsing, review, fetch — is unaffected, because
 // none of it comes through here.
 

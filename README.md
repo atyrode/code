@@ -99,6 +99,31 @@ from deletion. Worktrees an older build left in omp's directory are still
 listed, with their `ROOT` column marked `legacy`, and `code wt rm` retires them
 — see [configuration](docs/configuration.md#state-on-disk).
 
+## The engine
+
+`code engine` is what a supervising program — [Babel](https://github.com/atyrode/babel)
+is one — runs when it needs a contained, credentialed omp it did not configure
+itself. stdin and stdout are omp's own `--mode rpc` protocol, forwarded byte
+for byte; Code adds nothing to it and reads nothing out of it. What Code
+contributes is the profile the session launches under, the provider
+credential it authenticates with (redacted from every forwarded byte), the
+sandbox it runs inside, and a runtime report beside the stream:
+
+```bash
+code engine --profile code --runtime-info /run/user/1000/job/runtime.json
+                                        # native omp RPC on stdio; the report
+                                        # (schema code.runtime/1) is written before
+                                        # the first byte and rewritten with the exit
+                                        # status and resource use after the last
+code engine --describe --profile code@3 # the report's profile half, no launch
+code engine --configure --result-file P # mint a profile revision on your terminal
+code engine --import-profiles DIR       # carry an older profile store over, verbatim
+```
+
+A profile is an immutable revision an operator confirmed in Code's own dial UI;
+no flag or environment variable sets one. Closing stdin ends the run and tears
+the whole process tree down.
+
 ## Features
 
 - **Dials, not config files** — a provider **lead** dial with a led/only
@@ -120,8 +145,8 @@ listed, with their `ROOT` column marked `legacy`, and `code wt rm` retires them
   stays closed until you open it, and names any switch turned behind it.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
-  launch without mixing cloud credentials into the session. Babel's
-  configuration ceremony (`code babel --configure`) adds a **local model** dial
+  launch without mixing cloud credentials into the session. The engine's
+  configuration ceremony (`code engine --configure`) adds a **local model** dial
   when a loopback OpenAI-compatible daemon answers — [ollama](https://ollama.com),
   llama.cpp, LM Studio, oMLX (`CODE_OLLAMA_ENDPOINT` relocates it): every tag it
   serves is offered, the profile it mints needs no API key and costs nothing, and

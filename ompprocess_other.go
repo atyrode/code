@@ -8,7 +8,7 @@ import "os/exec"
 //
 // Code ships on Linux and macOS, both Unix. This file exists so the package
 // still compiles elsewhere, and it deliberately does not pretend to offer the
-// process-tree guarantee Babel requires: without a process group there is
+// process-tree guarantee a client requires: without a process group there is
 // nothing portable to signal but the direct child.
 func ompSetProcessGroup(*exec.Cmd) {}
 
@@ -26,12 +26,10 @@ func ompTerminateTree(cmd *exec.Cmd, _ int, _ bool) error {
 	return cmd.Process.Kill()
 }
 
-// ompChildUsage and ompSelfUsage report nothing. Off Unix there is no rusage to
-// read, and reporting zeroes would turn "unknown" into a claim in Babel's
-// receipt. A run on this platform therefore reports only the tool calls it
-// counted and the bytes it can see on disk, which is exactly as much as this
-// platform can honestly say — and it declares no containment at all, so there
-// is no ceiling here whose enforcement a missing figure would leave unproven.
+// ompChildUsage reports nothing. Off Unix there is no rusage to read, and
+// reporting zeroes would turn "unknown" into a claim in the client's record. A
+// run on this platform therefore reports only the bytes it can see on disk,
+// which is exactly as much as this platform can honestly say — and it declares
+// no containment at all, so there is no ceiling here whose enforcement a
+// missing figure would leave unproven.
 func ompChildUsage(*exec.Cmd) runUsage { return runUsage{} }
-
-func ompSelfUsage() runUsage { return runUsage{} }

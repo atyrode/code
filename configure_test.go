@@ -37,7 +37,7 @@ func keepKeybindings(t *testing.T) {
 	})
 }
 
-// ceremonyModel builds the ceremony's UI the way `code babel --configure` does,
+// ceremonyModel builds the ceremony's UI the way `code engine --configure` does,
 // against an isolated store, catalog and state root.
 func ceremonyModel(t *testing.T) model {
 	t.Helper()
@@ -84,12 +84,12 @@ func turnDial(t *testing.T, m model, dial string) model {
 	return m
 }
 
-// TestBabelConfigureCeremonyMintsWhatTheOperatorConfirmed is the ceremony end to
-// end, minus the terminal: the operator turns a dial, confirms, and Babel gets a
+// TestConfigureCeremonyMintsWhatTheOperatorConfirmed is the ceremony end to
+// end, minus the terminal: the operator turns a dial, confirms, and the client gets a
 // reference to a revision that carries exactly what was on screen.
-func TestBabelConfigureCeremonyMintsWhatTheOperatorConfirmed(t *testing.T) {
-	store := isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+func TestConfigureCeremonyMintsWhatTheOperatorConfirmed(t *testing.T) {
+	store := isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	result := filepath.Join(t.TempDir(), "result.json")
 
 	m := ceremonyModel(t)
@@ -104,24 +104,24 @@ func TestBabelConfigureCeremonyMintsWhatTheOperatorConfirmed(t *testing.T) {
 	if !final.configureConfirmed() {
 		t.Fatal("Enter did not confirm the configuration")
 	}
-	if status := babelCommitConfiguration(final, babelOptions{
-		profileID: defaultBabelProfileID, resultFile: result,
+	if status := commitConfiguration(final, engineOptions{
+		profile: profileRef{ID: defaultProfileID}, resultFile: result,
 	}); status != 0 {
 		t.Fatalf("committing a confirmed ceremony exited %d, want 0", status)
 	}
 
-	// Babel's half: the file it reads, and the reference it stores.
+	// The client's half: the file it reads, and the reference it stores.
 	answer, err := os.ReadFile(result)
 	if err != nil {
 		t.Fatalf("reading the reference the ceremony wrote: %v", err)
 	}
-	var reference babelConfigureResult
+	var reference configureResult
 	if err := json.Unmarshal(answer, &reference); err != nil {
 		t.Fatalf("the reference does not decode: %v (%s)", err, answer)
 	}
-	if reference.Profile != defaultBabelProfileID || reference.Revision < 1 {
+	if reference.Profile != defaultProfileID || reference.Revision < 1 {
 		t.Errorf("reference = %+v, want profile %q at a positive revision",
-			reference, defaultBabelProfileID)
+			reference, defaultProfileID)
 	}
 	info, err := os.Stat(result)
 	if err != nil {
@@ -147,25 +147,25 @@ func TestBabelConfigureCeremonyMintsWhatTheOperatorConfirmed(t *testing.T) {
 		t.Errorf("the minted profile declares credential-shaped keys %v", names)
 	}
 
-	// And the protocol mode Babel's conformance suite grades now has something
-	// to report: the same reference, unchanged.
-	reported, err := babelStoredProfile(reference.Profile)
+	// And --describe now has something to report: the same reference,
+	// unchanged.
+	reported, err := newProfileStore("").load(reference.Profile, 0)
 	if err != nil {
-		t.Fatalf("configure mode cannot report the profile the ceremony minted: %v", err)
+		t.Fatalf("--describe cannot report the profile the ceremony minted: %v", err)
 	}
-	if reported.ref() != (babelProfileRef{ID: reference.Profile, Revision: reference.Revision}) {
-		t.Errorf("configure mode reports %+v, want the minted %+v", reported.ref(), reference)
+	if reported.ref() != (profileRef{ID: reference.Profile, Revision: reference.Revision}) {
+		t.Errorf("--describe reports %+v, want the minted %+v", reported.ref(), reference)
 	}
 }
 
-// TestBabelConfigureCeremonyCancelledChangesNothing is the outcome that has to
+// TestConfigureCeremonyCancelledChangesNothing is the outcome that has to
 // be cheap. An operator who opens the ceremony to look at the dials and leaves
-// must not change what Babel is holding, so no revision is minted and no
-// reference file exists for Babel to read — which is how it reports the
+// must not change what the client is holding, so no revision is minted and no
+// reference file exists for the client to read — which is how it reports the
 // configuration unchanged.
-func TestBabelConfigureCeremonyCancelledChangesNothing(t *testing.T) {
-	store := isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+func TestConfigureCeremonyCancelledChangesNothing(t *testing.T) {
+	store := isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	result := filepath.Join(t.TempDir(), "result.json")
 
 	m := ceremonyModel(t)
@@ -173,27 +173,27 @@ func TestBabelConfigureCeremonyCancelledChangesNothing(t *testing.T) {
 	if m.configureConfirmed() {
 		t.Fatal("turning a dial confirmed the configuration on its own")
 	}
-	if status := babelCommitConfiguration(m, babelOptions{
-		profileID: defaultBabelProfileID, resultFile: result,
+	if status := commitConfiguration(m, engineOptions{
+		profile: profileRef{ID: defaultProfileID}, resultFile: result,
 	}); status == 0 {
-		t.Error("an unconfirmed ceremony exited 0, which Babel reads as a new configuration")
+		t.Error("an unconfirmed ceremony exited 0, which a client reads as a new configuration")
 	}
 	if _, err := os.Stat(result); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("an unconfirmed ceremony wrote a reference file: %v", err)
 	}
-	if latest, err := newProfileStore(store).latestRevision(defaultBabelProfileID); err != nil || latest != 0 {
+	if latest, err := newProfileStore(store).latestRevision(defaultProfileID); err != nil || latest != 0 {
 		t.Errorf("latest revision = %d (%v), want none: nothing was confirmed", latest, err)
 	}
 }
 
-// TestBabelConfigureCeremonyLaunchesNothing keeps the ceremony from ending in a
+// TestConfigureCeremonyLaunchesNothing keeps the ceremony from ending in a
 // session. The dial UI's other exits start omp — the managed defaults, the
 // untrusted launcher, an isolated worktree — and none of them produces a profile
 // Code could describe, so during a ceremony they are inert rather than quietly
-// starting something Babel is holding the operator's terminal open for.
-func TestBabelConfigureCeremonyLaunchesNothing(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+// starting something the client is holding the operator's terminal open for.
+func TestConfigureCeremonyLaunchesNothing(t *testing.T) {
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 
 	// The label Enter carries outside a ceremony, so the relabel below is
 	// measured against something rather than asserted in a vacuum.
@@ -230,15 +230,15 @@ func TestBabelConfigureCeremonyLaunchesNothing(t *testing.T) {
 	}
 }
 
-// TestBabelConfigureCeremonyIgnoresTheSelectionEnvironment is decision 1's rule
+// TestConfigureCeremonyIgnoresTheSelectionEnvironment is decision 1's rule
 // on this side of the boundary: CODE_SELECTION_STATE does not choose what the
 // operator is asked to confirm. Anything in the process tree can set it, so a
 // ceremony that honoured it could show — and mint — a dial position nobody in
 // the room chose. The default location, which is where an interactive `code`
 // writes, is what the ceremony opens on instead.
-func TestBabelConfigureCeremonyIgnoresTheSelectionEnvironment(t *testing.T) {
-	isolateBabelEnv(t)
-	t.Setenv("CODE_GENERATED", babelCatalogFixture(t))
+func TestConfigureCeremonyIgnoresTheSelectionEnvironment(t *testing.T) {
+	isolateEngineEnv(t)
+	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 
 	// The operator's own dials, where `code` leaves them.
 	writeSelectionFixture(t, defaultSelectionStatePath(),
@@ -283,54 +283,54 @@ func TestBabelConfigureCeremonyIgnoresTheSelectionEnvironment(t *testing.T) {
 	}
 }
 
-// TestBabelConfigureRefusesWithoutATerminal reaches this mode the way an
+// TestConfigureRefusesWithoutATerminal reaches this mode the way an
 // unattended caller would: `go test` runs with pipes, not a tty, which is
-// exactly the shape Babel hands a worker in every other mode. The refusal is the
+// exactly the shape a client hands the engine in every other mode. The refusal is the
 // point — there is no fallback left that could mint a profile without a human —
 // and it must come before anything is written.
-func TestBabelConfigureRefusesWithoutATerminal(t *testing.T) {
-	store := isolateBabelEnv(t)
+func TestConfigureRefusesWithoutATerminal(t *testing.T) {
+	store := isolateEngineEnv(t)
 	result := filepath.Join(t.TempDir(), "result.json")
 
 	if err := requireOperatorTerminal(); !errors.Is(err, errNoOperatorTerminal) {
 		t.Skipf("this test process has a terminal on stdin and stdout (%v), so it cannot "+
 			"exercise the refusal", err)
 	}
-	if status := runBabelConfigure(babelOptions{
-		profileID: defaultBabelProfileID, configure: true, resultFile: result,
+	if status := runEngineConfigure(engineOptions{
+		profile: profileRef{ID: defaultProfileID}, configure: true, resultFile: result,
 	}); status == 0 {
 		t.Error("the ceremony exited 0 with no terminal to confirm anything on")
 	}
 	if _, err := os.Stat(result); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a refused ceremony wrote a reference file: %v", err)
 	}
-	if latest, err := newProfileStore(store).latestRevision(defaultBabelProfileID); err != nil || latest != 0 {
+	if latest, err := newProfileStore(store).latestRevision(defaultProfileID); err != nil || latest != 0 {
 		t.Errorf("latest revision = %d (%v), want none: a refused ceremony mints nothing",
 			latest, err)
 	}
 
 	t.Run("and it needs somewhere to answer", func(t *testing.T) {
-		if status := runBabelConfigure(babelOptions{
-			profileID: defaultBabelProfileID, configure: true,
+		if status := runEngineConfigure(engineOptions{
+			profile: profileRef{ID: defaultProfileID}, configure: true,
 		}); status == 0 {
 			t.Error("the ceremony exited 0 with no --result-file to answer through")
 		}
 	})
 }
 
-// TestBabelConfigureResultFileTightensPermissions covers the file Babel creates
-// for this process to answer through. Babel makes it 0600 in a private
-// directory; a worker that widened it — by writing through a mode the umask
+// TestConfigureResultFileTightensPermissions covers the file a client creates
+// for this process to answer through. A client keeps it 0600 in a private
+// directory; an engine that widened it — by writing through a mode the umask
 // relaxed, or by leaving a mode someone else set — would be the one weakening
 // that, so the mode is asserted against a deliberately open starting point.
-func TestBabelConfigureResultFileTightensPermissions(t *testing.T) {
+func TestConfigureResultFileTightensPermissions(t *testing.T) {
 	result := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(result, []byte("stale"), 0o666); err != nil {
 		t.Fatal(err)
 	}
-	ref := babelProfileRef{ID: "code", Revision: 7}
-	if err := writeBabelConfigureResult(result, ref); err != nil {
-		t.Fatalf("writeBabelConfigureResult: %v", err)
+	ref := profileRef{ID: "code", Revision: 7}
+	if err := writeConfigureResult(result, ref); err != nil {
+		t.Fatalf("writeConfigureResult: %v", err)
 	}
 	info, err := os.Stat(result)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestBabelConfigureResultFileTightensPermissions(t *testing.T) {
 	if err := json.Unmarshal(answer, &decoded); err != nil {
 		t.Fatalf("the answer does not decode: %v (%s)", err, answer)
 	}
-	// Babel reads exactly these two keys, under exactly these names.
+	// A client reads exactly these two keys, under exactly these names.
 	if decoded["profile"] != "code" || decoded["revision"] != float64(7) {
 		t.Errorf("answer = %v, want the reference under profile/revision", decoded)
 	}

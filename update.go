@@ -228,7 +228,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// no sandbox binary exists (the help hides the key too), so a stranger
 			// can't kill the TUI with a stray keypress.
 			// A ceremony is answered with a profile, and this launcher owns its
-			// own routing: there is nothing here Code could describe to Babel.
+			// own routing: there is nothing here Code could describe to a client.
 			if !m.hasSandbox || m.configuring {
 				return m, nil
 			}

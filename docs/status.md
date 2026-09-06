@@ -72,7 +72,7 @@ a ladder around a model that never answered.
   Windows that are not tier-scoped are the account's ordinary quota and always
   render, and a catalog-less run knows no buckets so it shows everything.
   Routing is unaffected either way: a bucket no model declares strikes no rung.
-- The local model lane (Babel's configuration ceremony) offers whatever the
+- The local model lane (the engine's configuration ceremony) offers whatever the
   daemon reports and verifies only that the endpoint answers and still serves
   the chosen tag. Nothing probes whether that model can carry an analysis — the
   catalog's rungs are `omp bench`-verified, these are not — so a 1B model is as

@@ -78,8 +78,9 @@ func sandboxApplyGuestLoad() {
 }
 
 // sandboxGuestView is what the fake OMP reports about the world it woke up in.
-// It travels back as the session's assistant text, which is the only channel
-// out of a sandbox whose filesystem is destroyed at teardown.
+// It travels back as a frame on the session's stdout, which the engine
+// forwards to the test unchanged — the only channel out of a sandbox whose
+// filesystem is destroyed at teardown.
 type sandboxGuestView struct {
 	Cwd            string   `json:"cwd"`
 	Home           string   `json:"home"`
@@ -96,59 +97,30 @@ type sandboxGuestView struct {
 	TokenOnArgv    bool     `json:"token_on_argv"`
 }
 
-// runSandboxFakeOmp speaks just enough of OMP's RPC protocol to be driven to a
-// terminal event, and spends its one assistant message describing the sandbox
-// it is running in.
+// sandboxGuestFrame is the frame the fake writes its view in. The engine
+// forwards frames rather than reading them, so the type is the test's own
+// and nothing in production knows it.
+const sandboxGuestFrame = "guest_view"
+
+// runSandboxFakeOmp opens with OMP's ready frame, describes the sandbox it is
+// running in as one frame, and then waits for stdin to close, which is how a
+// client ends a run.
 func runSandboxFakeOmp() int {
 	emit := func(line string) {
 		fmt.Fprintln(os.Stdout, line)
 	}
 	emit(`{"type":"ready","protocolVersion":1}`)
+	// Before the view is reported, because the parent reads the cgroup while
+	// this process is still inside it.
+	sandboxApplyGuestLoad()
+	view, err := json.Marshal(sandboxObserveGuest())
+	if err != nil {
+		view = []byte(`{}`)
+	}
+	emit(`{"type":"` + sandboxGuestFrame + `","view":` + string(view) + `}`)
 	lines := bufio.NewScanner(os.Stdin)
 	lines.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for lines.Scan() {
-		var command struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(lines.Bytes(), &command) != nil {
-			continue
-		}
-		switch command.Type {
-		case ompCommandSetHostTools:
-			emit(`{"id":"` + command.ID + `","type":"response","command":"set_host_tools",` +
-				`"success":true,"data":{"toolNames":[]}}`)
-		case ompCommandPrompt:
-			emit(`{"id":"` + command.ID + `","type":"response","command":"prompt",` +
-				`"success":true,"data":{"agentInvoked":true}}`)
-			emit(`{"type":"agent_start"}`)
-			emit(`{"type":"turn_start"}`)
-			// Before the view is reported, because the parent reads the
-			// cgroup while this process is still inside it.
-			sandboxApplyGuestLoad()
-			view, err := json.Marshal(sandboxObserveGuest())
-			if err != nil {
-				view = []byte(`{}`)
-			}
-			delta, err := json.Marshal(string(view))
-			if err != nil {
-				delta = []byte(`"{}"`)
-			}
-			emit(`{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":` +
-				string(delta) + `},"message":{"role":"assistant","content":[]}}`)
-			// One recorded candidate, so the run has the durable output the
-			// driver requires and does not spend a follow-up turn asking for
-			// one. The statement is about the boundary because that is the
-			// only thing this stand-in knows anything about.
-			emit(`{"type":"host_tool_call","id":"host_1","toolCallId":"toolu_1",` +
-				`"toolName":"babel_record_hypothesis","arguments":{` +
-				`"statement":"the session woke up inside the boundary Code declared",` +
-				`"novelty":0.5,"priority":0.5}}`)
-		case ompFrameHostToolResult:
-			emit(`{"type":"turn_end"}`)
-			emit(`{"type":"agent_end","messages":[],"isTerminal":true}`)
-			return 0
-		}
 	}
 	return 0
 }

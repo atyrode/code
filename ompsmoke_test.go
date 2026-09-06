@@ -47,7 +47,7 @@ type smokeOmp struct {
 
 // newSmokeOmp resolves the binary the way Enter does and gives it a private
 // home: every key omp would otherwise read the operator's state from is
-// replaced (the same set the supervised Babel run replaces), and the broker
+// replaced (the same set a supervised engine launch replaces), and the broker
 // variables are cleared so no account leaks into the run.
 func newSmokeOmp(t *testing.T) *smokeOmp {
 	t.Helper()

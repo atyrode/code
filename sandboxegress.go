@@ -86,7 +86,7 @@ type sandboxEgress struct {
 
 // sandboxEgressPolicy is what the run may reach, decided before any socket
 // exists. It is separated from the listeners because the containment
-// declaration has to describe the boundary before Babel has accepted the run,
+// declaration has to describe the boundary before the client has accepted the run,
 // and opening a proxy for a run that is then refused would be a hole punched
 // for nothing.
 type sandboxEgressPolicy struct {
@@ -451,7 +451,7 @@ func sandboxSpliceReader(a net.Conn, aRead io.Reader, b net.Conn) {
 // runSandboxEgressHelper is Code, inside the sandbox, wrapping the OMP session.
 //
 // It exists because two things have to be true at once in there: a loopback
-// address has to answer as a proxy, and the process Babel is really interested
+// address has to answer as a proxy, and the process the client is really interested
 // in has to own stdin, stdout and stderr. So this starts the forwarders, spawns
 // OMP with the descriptors it was given, and becomes a thin parent that
 // forwards a signal down and exits with the child's status.
@@ -533,9 +533,9 @@ func sandboxForward(port int, socket string) error {
 	return nil
 }
 
-// sandboxWriteExitReport hands the scratch measurement back over the descriptor
-// Code kept the read end of. A closed or absent descriptor is not an error: the
-// report is a nicety and the run's outcome does not depend on it.
+// sandboxWriteExitReport reports scratch use, then holds the scope alive until
+// the host has read its final cgroup counters. Host death closes the socket,
+// so the accounting acknowledgement cannot orphan a helper.
 func sandboxWriteExitReport(spec sandboxSpec) {
 	if len(spec.Scratch) == 0 {
 		return
@@ -549,7 +549,10 @@ func sandboxWriteExitReport(spec sandboxSpec) {
 	if err != nil {
 		return
 	}
-	_, _ = pipe.Write(append(body, '\n'))
+	if _, err := pipe.Write(append(body, '\n')); err == nil {
+		var ack [1]byte
+		_, _ = pipe.Read(ack[:])
+	}
 }
 
 // sandboxReadExitReport reads what the helper wrote, bounded and without
@@ -565,13 +568,8 @@ func sandboxReadExitReport(ctx context.Context, pipe *os.File) (sandboxExitRepor
 	}
 	results := make(chan outcome, 1)
 	go func() {
-		body, err := io.ReadAll(io.LimitReader(pipe, 4<<10))
-		if err != nil || len(body) == 0 {
-			results <- outcome{}
-			return
-		}
 		var report sandboxExitReport
-		if json.Unmarshal([]byte(strings.TrimSpace(string(body))), &report) != nil {
+		if json.NewDecoder(io.LimitReader(pipe, 4<<10)).Decode(&report) != nil {
 			results <- outcome{}
 			return
 		}

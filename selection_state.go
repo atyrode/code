@@ -12,7 +12,7 @@ import (
 // An empty value used to mean "no persistence at all", which quietly made the
 // selection unreachable from the one caller that needs it most: the
 // configuration ceremony, which opens Code's dial UI on the operator's terminal
-// and mints the profile Babel records (babelconfigure.go). The ceremony reads the
+// and mints the profile a client records (configure.go). The ceremony reads the
 // default location and only the default location — a variable anything in the
 // process tree can set must not decide which dials an operator is asked to
 // confirm (atyrode/babel#86) — so the dials it shows have to have a place on
@@ -29,7 +29,7 @@ const codeSelectionStateEnv = "CODE_SELECTION_STATE"
 const codeSelectionDisabled = "off"
 
 // defaultSelectionStatePath derives the choice file exactly the way the profile
-// store derives its directory (defaultBabelProfileDir): XDG_STATE_HOME, else
+// store derives its directory (defaultProfileDir): XDG_STATE_HOME, else
 // $HOME/.local/state, then under code/. HOME is all a stripped environment
 // carries, so a path rooted there is the one seam every mode can derive.
 func defaultSelectionStatePath() string {
