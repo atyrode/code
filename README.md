@@ -112,11 +112,12 @@ listed, with their `ROOT` column marked `legacy`, and `code wt rm` retires them
 - **omp's own switches, behind a fold** — a `more` row at the end of the
   dial list opens onto `fast` (a provider's priority service tier), `prewalk`
   (hand the run to the cheap `smol` role at the first edit once the plan's
-  todo list exists) and `planyolo` (start read-only in plan mode,
-  auto-approve, then implement). All three are omp features; this tool only
-  puts the value where omp reads it — an overlay key or an argv flag — so
-  none of them changes the routing grid. The row stays closed until you open
-  it, and names any switch left on behind it.
+  todo list exists), `planyolo` (start read-only in plan mode, auto-approve,
+  then implement) and `fallback` (on by default; off keeps every role on its
+  lead — omp's model fallback, not the account fallback). All four are omp
+  features; this tool only puts the value where omp reads it — an overlay
+  key or an argv flag — so none of them changes the routing grid. The row
+  stays closed until you open it, and names any switch turned behind it.
 - **Hosted or local** — an optional runtime broker can advertise only the local
   targets this machine supports; selecting one delegates first-use setup and
   launch without mixing cloud credentials into the session. Babel's

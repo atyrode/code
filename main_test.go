@@ -566,7 +566,7 @@ func TestDefaultGlyphs(t *testing.T) {
 		"runtime": 0xf108, "local": 0xf109, "lane": 0xf127, "model": 0xf085,
 		"thinking": 0xf0eb, "advisor": 0xf14e,
 		"spark": 0xf135, "fast": 0xf0e7,
-		"prewalk": 0xf063, "planyolo": 0xf04b,
+		"prewalk": 0xf063, "planyolo": 0xf04b, "fallback": 0xf1cd,
 		"more": 0xf141,
 	}
 	tables := map[string]map[string]string{
@@ -667,32 +667,39 @@ func TestGenLinesMoreFold(t *testing.T) {
 	if !strings.Contains(last, "more") || !strings.Contains(last, "▸") {
 		t.Fatalf("the fold must close the list, collapsed:\n%s", strings.Join(lines, "\n"))
 	}
-	for _, hidden := range []string{"fast", "prewalk", "planyolo"} {
+	for _, hidden := range []string{"fast", "prewalk", "planyolo", "fallback"} {
 		if !strings.Contains(last, hidden) {
 			t.Errorf("collapsed row must name the hidden %q dial, got %q", hidden, last)
 		}
 	}
 	for _, ln := range lines[:len(lines)-1] {
-		if strings.Contains(ln, "prewalk") || strings.Contains(ln, "planyolo") || strings.Contains(ln, "fast") {
+		if strings.Contains(ln, "prewalk") || strings.Contains(ln, "planyolo") || strings.Contains(ln, "fast") || strings.Contains(ln, "fallback") {
 			t.Errorf("a folded dial rendered as its own row while collapsed: %q", ln)
 		}
 	}
-	// The summary is the only trace of prewalk:on while collapsed, so the on
-	// state is spelled there — colour alone would vanish in a pipe.
-	if !strings.Contains(last, "prewalk on") || strings.Contains(last, "fast on") || strings.Contains(last, "planyolo on") {
-		t.Errorf("collapsed summary must spell exactly the on switches, got %q", last)
+	// The summary is the only trace of a turned switch while collapsed, so
+	// the turned state is spelled there — colour alone would vanish in a
+	// pipe. Turned means away from the default: fallback is on by default,
+	// so it is spelled only when off.
+	if !strings.Contains(last, "prewalk on") || strings.Contains(last, "fast on") || strings.Contains(last, "planyolo on") || strings.Contains(last, "fallback on") {
+		t.Errorf("collapsed summary must spell exactly the turned switches, got %q", last)
 	}
+	m.sel["fallback"] = "off"
+	if last := plain()[len(lines)-1]; !strings.Contains(last, "fallback off") {
+		t.Errorf("collapsed summary must spell fallback off, got %q", last)
+	}
+	m.sel["fallback"] = "on"
 
 	m.fcur = len(m.visibleFacets()) - 1
 	m.cycleFacet(1)
 	lines = plain()
-	tail := lines[len(lines)-4:]
-	for i, want := range []string{"more", "├ ", "├ ", "└ "} {
+	tail := lines[len(lines)-5:]
+	for i, want := range []string{"more", "├ ", "├ ", "├ ", "└ "} {
 		if !strings.Contains(tail[i], want) {
 			t.Errorf("expanded fold row %d = %q, want it to carry %q", i, tail[i], want)
 		}
 	}
-	if !strings.Contains(tail[1], "fast") || !strings.Contains(tail[2], "prewalk") || !strings.Contains(tail[3], "planyolo") {
+	if !strings.Contains(tail[1], "fast") || !strings.Contains(tail[2], "prewalk") || !strings.Contains(tail[3], "planyolo") || !strings.Contains(tail[4], "fallback") {
 		t.Errorf("children must follow facetDefs order under the fold:\n%s", strings.Join(tail, "\n"))
 	}
 	if _, ok := selectionChoices(m.sel, m.facets)[moreFacetKey]; ok {
@@ -703,12 +710,13 @@ func TestGenLinesMoreFold(t *testing.T) {
 	m.moveDown()
 	m.moveDown()
 	m.moveDown()
+	m.moveDown()
 	reset, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = reset.(model)
 	if m.sel[moreFacetKey] != moreExpanded {
 		t.Errorf("reset closed the fold: %q", m.sel[moreFacetKey])
 	}
-	if vf := m.visibleFacets(); m.fcur != len(vf)-1 || vf[m.fcur].key != "planyolo" {
+	if vf := m.visibleFacets(); m.fcur != len(vf)-1 || vf[m.fcur].key != "fallback" {
 		t.Errorf("cursor after reset = %d over %d rows", m.fcur, len(vf))
 	}
 	m.fcur = 0
@@ -929,6 +937,76 @@ func assertLayoutInvariants(t *testing.T, m model, label string) {
 	}
 	if last := lines[len(lines)-1]; !strings.Contains(last, "move") {
 		t.Errorf("%s: help footer not pinned to the last row: %q", label, last)
+	}
+}
+
+// TestFallbackDialTurnsOmpModelFallbackOff: the fallback dial is omp's
+// retry.modelFallback. Off writes it false and drops the chains (inert under
+// it, and a route the operator must not be shown); nothing else in the overlay
+// moves, retries stay enabled, and the default — on, or a selection persisted
+// before the dial existed — is byte-for-byte what launched before.
+func TestFallbackDialTurnsOmpModelFallbackOff(t *testing.T) {
+	m := layoutModel()
+	delete(m.sel, "fallback")
+	legacy := m.genConfigYAML()
+	m.sel["fallback"] = "on"
+	on := m.genConfigYAML()
+	if on != legacy {
+		t.Errorf("a selection without the dial must launch as fallback on:\n--- no key ---\n%s\n--- on ---\n%s", legacy, on)
+	}
+	const chains = "retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" +
+		"    default: [openai-codex/gpt-5.6-luna:medium, anthropic/claude-sonnet-5:medium]\n" +
+		"    task: [openai-codex/gpt-5.6-luna:medium, anthropic/claude-sonnet-5:medium]\n" +
+		"    scout: [anthropic/claude-haiku-4-5:low]\n"
+	if !strings.Contains(on, chains) {
+		t.Fatalf("fallback on must write the chains it always did:\n%s", on)
+	}
+	m.sel["fallback"] = "off"
+	off := m.genConfigYAML()
+	const none = "retry:\n  enabled: true\n  modelFallback: false\n"
+	if !strings.Contains(off, none) {
+		t.Errorf("fallback off must write modelFallback: false under an enabled retry block:\n%s", off)
+	}
+	if strings.Contains(off, "fallbackChains") || strings.Contains(off, "fallbackRevertPolicy") {
+		t.Errorf("fallback off must not carry chains:\n%s", off)
+	}
+	if want := strings.Replace(on, chains, none, 1); off != want {
+		t.Errorf("fallback off changed more than the retry block:\n--- got ---\n%s\n--- want ---\n%s", off, want)
+	}
+}
+
+// TestFallbackOffPreviewShowsLeadsOnly: with the dial off the chains will not
+// run, so the preview must not show them whatever the f toggle says, and the
+// toggle's cue gives way to a note saying why.
+func TestFallbackOffPreviewShowsLeadsOnly(t *testing.T) {
+	m := layoutModel()
+	m.rdy = true
+	m.vp = viewport.New(80, 8)
+	m.depth = 1
+	m.sel["fallback"] = "on"
+	m.syncPreview()
+	if plain := stripAnsi(m.previewColumn()); !strings.Contains(plain, "→") || !strings.Contains(plain, "f · hide fallback chains") {
+		t.Fatalf("fallback on at full depth must show the chains and the toggle:\n%s", plain)
+	}
+	m.sel["fallback"] = "off"
+	m.syncPreview()
+	plain := stripAnsi(m.previewColumn())
+	if strings.Contains(plain, "→") || !strings.Contains(plain, "default    terra:medium") {
+		t.Errorf("fallback off must render leads only, whatever f says:\n%s", plain)
+	}
+	if strings.Contains(plain, "fallback chains") || !strings.Contains(plain, "fallback off · chains disabled for this launch") {
+		t.Errorf("the chain toggle must give way to the disabled note:\n%s", plain)
+	}
+	m.sel[moreFacetKey] = moreExpanded
+	lines, _ := m.genLines()
+	found := false
+	for _, ln := range lines {
+		if p := stripAnsi(ln); strings.Contains(p, "fallback") && strings.Contains(p, "same-model retries stay") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the fallback row must say what stays when off:\n%s", stripAnsi(strings.Join(lines, "\n")))
 	}
 }
 

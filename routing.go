@@ -762,12 +762,12 @@ func (m model) poolOfModel(id string) string {
 }
 
 // genConfigYAML reconstructs an omp config (modelRoles, task-agent model
-// overrides for the ●-marked agent-backed roles, fallback chains, thinking,
-// advisor, and the priority tier when fast is on) from the generated routing
-// block for the current facets — what Enter launches omp with. The agent
-// overrides mirror the preview: without them the static managed defaults
-// would keep the five agent-backed types pinned regardless of the generated
-// profile (issue atyrode/dotfiles#173).
+// overrides for the ●-marked agent-backed roles, fallback chains unless the
+// fallback dial is off, thinking, advisor, and the priority tier when fast is
+// on) from the generated routing block for the current facets — what Enter
+// launches omp with. The agent overrides mirror the preview: without them the
+// static managed defaults would keep the five agent-backed types pinned
+// regardless of the generated profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
 	rows := m.currentRows()
 	var mr, fc, ao strings.Builder
@@ -810,7 +810,20 @@ func (m model) genConfigYAML() string {
 	}
 	var b strings.Builder
 	b.WriteString("modelRoles:\n" + mr.String())
-	b.WriteString("retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" + fc.String())
+	// The fallback dial is omp's retry.modelFallback: every model switch omp
+	// makes on retry — the error path, the usage-aware preflight, the
+	// advisor's — is gated on that one key (verified against the 18.1.10
+	// bundle), so false is enough to keep every role on its lead. The chains
+	// are left out rather than emptied because they are inert under it, and
+	// an overlay that carried them would put a route in front of the operator
+	// that cannot run. retry.enabled stays: same-model retries are not
+	// fallback, and turning them off would make a transient error terminal.
+	// The account/broker fallback is a different system and is untouched.
+	if m.sel["fallback"] == "off" {
+		b.WriteString("retry:\n  enabled: true\n  modelFallback: false\n")
+	} else {
+		b.WriteString("retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" + fc.String())
+	}
 	// task.agentAdvisor (omp ≥ 17.3; earlier omps hard-error on the unknown
 	// key, and CODE_OMP wrappers can lag the store during a dotfiles rollout,
 	// so the probed version gates the emission): at the audit dial, spawned

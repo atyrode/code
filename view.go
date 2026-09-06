@@ -219,13 +219,20 @@ const prevChromeRows = headRows + 1
 // the section-local collapse cue (p · hide), the scrolling routing viewport,
 // then the display cues pinned at the section's bottom edge — bottom chrome,
 // where the chains they toggle end. The f wording makes clear it only
-// changes what is DISPLAYED: the launched profile always keeps its fallback
-// chains. n reads the same way: it swaps the short model keys for the
-// catalog's full ids, and routes nothing differently.
+// changes what is DISPLAYED: the launched profile keeps its fallback chains
+// whatever f says. With the fallback dial off there are no chains to show —
+// the launch will not run them — so the cue gives way to a note saying so,
+// and the viewport holds leads only. n reads the same way: it swaps the
+// short model keys for the catalog's full ids, and routes nothing
+// differently.
 func (m model) previewColumn() string {
 	verb := "show"
 	if m.depth == 1 {
 		verb = "hide"
+	}
+	chains := stKey.Render("f") + stDim.Render(" · "+verb+" fallback chains")
+	if m.sel["fallback"] == "off" {
+		chains = stDim.Render("fallback off · chains disabled for this launch")
 	}
 	ids := "full ids"
 	if m.showFullIDs {
@@ -233,8 +240,7 @@ func (m model) previewColumn() string {
 	}
 	return m.pill("routing") + "  " + stCueKey.Render("p") + stCue.Render(" · hide") + "\n\n" +
 		m.vp.View() + "\n" +
-		stKey.Render("f") + stDim.Render(" · "+verb+" fallback chains") +
-		"   " + stKey.Render("n") + stDim.Render(" · "+ids)
+		chains + "   " + stKey.Render("n") + stDim.Render(" · "+ids)
 }
 
 // leftColumn renders the pinned section head plus the scrolling list body, the
@@ -416,6 +422,10 @@ func (m model) genLines() ([]string, int) {
 			}
 		case f.key == "fast" && m.sel["fast"] == "on":
 			row += "   " + stDim.Render("GPT only")
+		case f.key == "fallback" && m.sel["fallback"] == "off":
+			// Say what stays: turning the chains off is not turning retries
+			// off, and an operator weighing the dial needs that distinction.
+			row += "   " + stDim.Render("leads only · same-model retries stay")
 		}
 		lines = append(lines, row)
 	}
@@ -469,11 +479,11 @@ func (m model) segmentGauge(f facet, onRow bool, acc string) string {
 
 // moreCell renders the fold row's value: a chevron pointing where the hidden
 // rows are (right while collapsed, down once open), followed — only while
-// collapsed — by the names of the switches it hides, each lit when on. The
-// fold exists to keep rarely-turned switches out of the way, not out of
-// sight: a switch an operator (or a ctrl+o suggestion) left on behind it has
-// to read from the row itself, or the launch does something the dials on
-// screen do not say.
+// collapsed — by the names of the switches it hides, each lit when it is
+// away from its default. The fold exists to keep rarely-turned switches out
+// of the way, not out of sight: a switch an operator (or a ctrl+o
+// suggestion) left turned behind it has to read from the row itself, or the
+// launch does something the dials on screen do not say.
 func (m model) moreCell(folded []facet, onRow bool, acc string) string {
 	lit := lipgloss.NewStyle().Foreground(lipgloss.Color(acc)).Bold(true)
 	pill := lit
@@ -483,6 +493,7 @@ func (m model) moreCell(folded []facet, onRow bool, acc string) string {
 	if m.sel[moreFacetKey] == moreExpanded {
 		return pill.Render(" ▾ ")
 	}
+	def := defaultSel()
 	var b strings.Builder
 	b.WriteString(pill.Render(" ▸ "))
 	for i, f := range folded {
@@ -491,10 +502,11 @@ func (m model) moreCell(folded []facet, onRow bool, acc string) string {
 		} else {
 			b.WriteString(stDim.Render(" · "))
 		}
-		// The on state is spelled, not merely coloured: a pipe, an ascii
-		// terminal, or a headless capture has to read it too.
-		if m.sel[f.key] == "on" {
-			b.WriteString(lit.Render(f.key + " on"))
+		// The turned state is spelled ("prewalk on", "fallback off"), not
+		// merely coloured: a pipe, an ascii terminal, or a headless capture
+		// has to read it too.
+		if v := m.sel[f.key]; v != def[f.key] {
+			b.WriteString(lit.Render(f.key + " " + v))
 		} else {
 			b.WriteString(stDim.Render(f.key))
 		}
@@ -513,13 +525,13 @@ func (m model) moreCell(folded []facet, onRow bool, acc string) string {
 //
 //	runtime 🖥 (f108)  local 💻 (f109)  lane ⇄ (f127)  model ⚙ (f085)
 //	thinking 💡 (f0eb)  advisor 🧭 (f14e)  spark 🚀 (f135)  fast ⚡ (f0e7)
-//	prewalk ↓ (f063)  planyolo ▶ (f04b)  more ⋯ (f141)
+//	prewalk ↓ (f063)  planyolo ▶ (f04b)  fallback 🛟 (f1cd)  more ⋯ (f141)
 func defaultGlyphs() map[string]string {
 	return map[string]string{
 		"runtime": "\uf108", "local": "\uf109", "lane": "\uf127", "model": "\uf085",
 		"thinking": "\uf0eb", "advisor": "\uf14e",
 		"spark": "\uf135", "fast": "\uf0e7",
-		"prewalk": "\uf063", "planyolo": "\uf04b",
+		"prewalk": "\uf063", "planyolo": "\uf04b", "fallback": "\uf1cd",
 		moreFacetKey: "\uf141",
 	}
 }
@@ -534,7 +546,7 @@ func unicodeGlyphs() map[string]string {
 		"runtime": "▣", "local": "▢", "lane": "⇄", "model": "⚙",
 		"thinking": "✦", "advisor": "◎",
 		"spark": "✧", "fast": "»",
-		"prewalk": "↓", "planyolo": "›",
+		"prewalk": "↓", "planyolo": "›", "fallback": "⇢",
 		moreFacetKey: "⋯",
 	}
 }
@@ -553,7 +565,7 @@ func asciiGlyphs() map[string]string {
 		"runtime": "r", "local": "l", "lane": "n", "model": "m",
 		"thinking": "t", "advisor": "a",
 		"spark": "s", "fast": "f",
-		"prewalk": "p", "planyolo": "y",
+		"prewalk": "p", "planyolo": "y", "fallback": "b",
 		moreFacetKey: "o",
 	}
 }

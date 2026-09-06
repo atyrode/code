@@ -41,10 +41,15 @@ func facetDefs(glyphs map[string]string) []facet {
 		// planyolo neither appear in comboID and are applied where the launch
 		// is assembled — prewalk as omp config keys, planyolo as an argv flag.
 		// Both target the "smol" role by default, which this grid already
-		// routes, so there is no second model to choose.
+		// routes, so there is no second model to choose. fallback is the same
+		// kind of switch pointed the other way: on by default, and off turns
+		// omp's model fallback (retry.modelFallback) off for the launch, so
+		// every role stays on its lead. The catalog block is untouched — the
+		// chains it carries simply do not reach the overlay.
 		{"fast", []string{"on", "off"}, glyphs["fast"]},
 		{"prewalk", []string{"on", "off"}, glyphs["prewalk"]},
 		{"planyolo", []string{"on", "off"}, glyphs["planyolo"]},
+		{"fallback", []string{"on", "off"}, glyphs["fallback"]},
 	}
 }
 
@@ -63,9 +68,10 @@ const (
 // moreFacets are the dials the fold hides: omp's own session switches, which
 // change how a run behaves but never what the routing grid says. The routing
 // dials above the fold are what an operator turns on nearly every launch;
-// these are opt-in and off by default, and a list that always shows them
-// buries the dials that matter under the ones that rarely change.
-var moreFacets = map[string]bool{"fast": true, "prewalk": true, "planyolo": true}
+// these are opt-in (fallback: opt-out) and sit at their default on nearly
+// every launch, and a list that always shows them buries the dials that
+// matter under the ones that rarely change.
+var moreFacets = map[string]bool{"fast": true, "prewalk": true, "planyolo": true, "fallback": true}
 
 // parseAdvisors reads the __advisors__ block (rows: "<level> <ctx> <chain>")
 // into a map keyed "level/ctx" — the advisor model table, sourced from

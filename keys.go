@@ -46,7 +46,9 @@ var keys = keyMap{
 // used both to seed the model and to restore it via the reset key.
 func defaultSel() map[string]string {
 	return map[string]string{"lane": "mixed", "model": "smart", "thinking": "medium", "advisor": "glance", "spark": "on", "fast": "off",
-		// omp's own session switches, both off by default: neither changes
-		// routing, and both change how a run behaves, so they are opt-in.
-		"prewalk": "off", "planyolo": "off"}
+		// omp's own session switches. prewalk and planyolo are off by default:
+		// neither changes routing, and both change how a run behaves, so they
+		// are opt-in. fallback is on: the catalog's chains run unless the
+		// operator turns them off for a launch.
+		"prewalk": "off", "planyolo": "off", "fallback": "on"}
 }
