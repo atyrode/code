@@ -38,6 +38,7 @@ function fake(online: readonly string[], startAt = 1_000): Fake {
     throw new Error(`${name} is not part of this test`);
   };
   const ctx: GuestCtx = {
+    traceId: 1,
     pluginId: CODE_PLUGIN_ID,
     principal,
     auth: {
@@ -216,6 +217,7 @@ async function loaded(fake: FakeHost): Promise<Extract<IsolateChildFrame, { t: "
 }
 
 const dispatchCtx: IsolateDispatchCtx = {
+  traceId: 1,
   principal,
   caps: ["terminals:spawn"],
   isRoot: false,
