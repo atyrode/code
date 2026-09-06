@@ -539,6 +539,25 @@ Each step names its manifold prerequisites and code work by draft title, its
 proof, and what it retires; the two halves run in parallel and a step is done
 only when both are.
 
+**Ledger.** The one place progress is recorded; the steps below are the plan
+and do not change as work lands. A row moves `not started` → `in progress`
+→ `shipped` (the code is on `main`) → `proven` (the step's proof was
+performed and its date written here). Update the row in the PR that moves it.
+
+| Step | Status | Evidence, and what is left |
+| --- | --- | --- |
+| 0 | superseded | — |
+| 1 | in progress | Package skeleton: `plugins/` on `main` (#107, 2026-09-05; §9). Not done: a flake output for the bundles (they are CI artifacts only, `manifold-plugins.yml`); the SDK is a sibling checkout pinned by `MANIFOLD_REV`, not a release asset. Headless launch (#96): not started. `code publish` (#97): not started. |
+| 2 | shipped, not proven | `atyrode.code.generator`'s `launcher` panel (#107; §9.3). Shipped better than planned: the PTY execs `code` directly (atyrode/manifold#192 landed), nothing is typed. Shipped narrower than planned: no dials, `argv` is `["code"]`, so the TUI in the tile is the whole selection surface until #96. Not proven: never installed on a hub (`engine.plugins.install`, §9.4); the browser-to-omp proof is unrecorded. #98 stays open for the dial-carrying launch. |
+| 3 | not started | #99; waits on atyrode/manifold#134, atyrode/manifold#201. |
+| 4 | not started | #100; sub-plugins reserved as #105, #106; waits on #97. |
+| 5 | not started | #103; waits on #97, atyrode/manifold#160. |
+| 6 | not started | #101; waits on 2–5 proven. |
+
+Ids in the steps and in §8 are spelled `code.<x>` as first drafted; §9.1
+superseded that to `atyrode.code.*` and the issues were re-spelled on
+2026-09-06. The step text is left as filed so the issue numbers still match.
+
 ### Step 0. Today
 
 Code is a Go binary whose only launcher is a Bubble Tea TUI (`main.go:58`)
