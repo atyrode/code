@@ -124,6 +124,20 @@ A profile is an immutable revision an operator confirmed in Code's own dial UI;
 no flag or environment variable sets one. Closing stdin ends the run and tears
 the whole process tree down.
 
+The minimum-tested native engine runtime is **omp 18.1.12**, pinned in
+[`nix/omp.nix`](nix/omp.nix) for both `#with-omp` and required PR CI. Code uses
+OMP's native `--mode rpc`, `--no-tools` and discovery-disabling flags, together
+with a disposable HOME and empty working directory. For contained launches,
+the OS sandbox constrains mounts and creates the working directory as an empty
+tmpfs; the private directories alone are not containment. These properties,
+not `--no-tools` alone, keep ambient tools out of the measured startup registry.
+
+OMP's SDK has a restricted-session option (`restrictToolNames`), but the
+CLI/RPC exposure Code needs remains tracked in
+[#124](https://github.com/atyrode/code/issues/124). The pin and required canaries
+do not implement that upstream API. Code does not filter OMP's registry or add
+a client-specific protocol; native RPC and OS containment retain their owners.
+
 ## Features
 
 - **Dials, not config files** — a provider **lead** dial with a led/only
@@ -211,13 +225,25 @@ API-key providers are broker writes rather than OAuth logins; the
 [atyrode dotfiles](https://github.com/atyrode/dotfiles) expose the secure
 `atyrode auth broker add-api-key <provider>` route.
 
-This release was tested against **omp 18.1.10**. omp releases near-daily and
-ignores overlay keys it no longer knows, so a weekly workflow
-([`omp-smoke.yml`](.github/workflows/omp-smoke.yml)) reruns the check against
-the latest upstream release and opens an `omp-drift` issue when something
-stopped applying. The line above is maintained by hand when a release is cut,
-not by that workflow: a bot commit for every green week would be noise, and a
-red week is not a version to advertise.
+Required [CI](.github/workflows/ci.yml) builds the bundled OMP derivation and
+sets `CODE_TEST_REQUIRE_OMP=1`: a missing binary is a failure, not a skip.
+The real native tool-registry canaries in `omptools_test.go` require an empty
+startup registry and separately plant a discoverable MCP server whose tool
+must be enumerated, so an empty or missing enumeration cannot pass vacuously.
+No model call or real credential is needed. To run the same local gate:
+
+```bash
+nix build .#omp
+PATH="$PWD/result/bin:$PATH" CODE_TEST_REQUIRE_OMP=1 CODE_REQUIRE_SANDBOX=1 scripts/gate.sh
+```
+
+The containment scenarios also require bubblewrap and a user systemd session.
+Without the required flags, local runs loudly skip unavailable prerequisites.
+Separately, omp releases near-daily and ignores overlay keys it no longer
+knows, so the weekly [`omp-smoke.yml`](.github/workflows/omp-smoke.yml) checks
+configuration/schema drift against the **latest upstream** release and opens
+an `omp-drift` issue on failure. It does not advance the bundled pin or replace
+the required pinned-runtime canaries.
 
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you

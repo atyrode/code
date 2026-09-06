@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The gate CI runs (.github/workflows/ci.yml), as one command: gofmt drift,
-# vet, then the test suite. Nothing here is missing from CI and nothing in CI
-# is missing here except the containment backend CI provisions for itself: on
-# a machine without bubblewrap and a user systemd session the sandbox
-# scenarios skip with an UNVERIFIED line on stderr instead of failing, and
-# CODE_REQUIRE_SANDBOX=1 restores CI's behaviour (sandbox_linux_test.go).
+# vet, then the test suite. CI provisions both the containment backend and the
+# bundled OMP pin. Locally, unavailable bubblewrap/user systemd or omp skips
+# their scenarios with an UNVERIFIED line; CODE_REQUIRE_SANDBOX=1 and
+# CODE_TEST_REQUIRE_OMP=1 restore CI's required measurements. Build .#omp and
+# put its bin directory on PATH to measure the same runtime as CI.
 #
 # Extra arguments go to `go test`, so `scripts/gate.sh -run TestX` is the
 # quick loop and a bare run is the whole gate.
@@ -16,6 +16,9 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 export CGO_ENABLED=0
+if [ -n "${CI:-}" ]; then
+  export CODE_TEST_REQUIRE_OMP=1
+fi
 
 if command -v go >/dev/null 2>&1; then
   run() { "$@"; }
