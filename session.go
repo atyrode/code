@@ -36,14 +36,18 @@ const sessionDisabled = "off"
 // `code` process, which is the root of the session's process tree — omp and
 // everything omp spawns (language servers, browsers, workers) descend from it.
 type sessionRecord struct {
-	PID      int                 `json:"pid"`
-	Binary   string              `json:"binary,omitempty"`
-	Profile  string              `json:"profile"`
-	Cwd      string              `json:"cwd,omitempty"`
-	Worktree string              `json:"worktree,omitempty"`
-	Started  int64               `json:"started"`
-	Pool     map[string][]string `json:"pool,omitempty"`
-	PoolAt   int64               `json:"poolAt,omitempty"`
+	PID      int    `json:"pid"`
+	Binary   string `json:"binary,omitempty"`
+	Profile  string `json:"profile"`
+	Cwd      string `json:"cwd,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	// Resume is the saved omp session this launch continues, when it is a
+	// resume: it is what lets discovery mark that session live rather than
+	// interrupted while this process holds the lock.
+	Resume  string              `json:"resume,omitempty"`
+	Started int64               `json:"started"`
+	Pool    map[string][]string `json:"pool,omitempty"`
+	PoolAt  int64               `json:"poolAt,omitempty"`
 }
 
 // sessionEntry is a record plus what the registry could determine about it.
@@ -430,25 +434,55 @@ func runSessionList(args []string) int {
 		}
 	}
 	entries := loadSessions(sessionDir())
+	now := time.Now()
 	if len(entries) == 0 {
 		fmt.Println("no live sessions")
-		return 0
-	}
-	current := currentBinary()
-	now := time.Now()
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PID\tAGE\tPROFILE\tLAUNCHER\tACCOUNTS\tDIRECTORY")
-	for _, e := range entries {
-		launcher := "current"
-		if e.Superseded(current) {
-			launcher = "superseded"
-		} else if e.Binary == "" {
-			launcher = "unknown"
+	} else {
+		current := currentBinary()
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "PID\tAGE\tPROFILE\tLAUNCHER\tACCOUNTS\tDIRECTORY")
+		for _, e := range entries {
+			launcher := "current"
+			if e.Superseded(current) {
+				launcher = "superseded"
+			} else if e.Binary == "" {
+				launcher = "unknown"
+			}
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", e.PID, fmtAge(e.Age(now)), e.Profile, launcher, sessionPoolSummary(e.Pool), e.Cwd)
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", e.PID, fmtAge(e.Age(now)), e.Profile, launcher, sessionPoolSummary(e.Pool), e.Cwd)
+		w.Flush()
+	}
+	// The live table answers "what is running"; the operator's other question
+	// — "what did I walk away from in this repository" — is answered from the
+	// saved transcripts' headers, ranked so the current directory's own
+	// sessions come first.
+	if cwd, err := os.Getwd(); err == nil {
+		writeSavedSessionList(os.Stdout, repoSavedSessions(cwd, trustedSessionRoots("")), entries, now)
+	}
+	return 0
+}
+
+// writeSavedSessionList renders the repository's saved sessions beneath the
+// live table. Live ones are those a registry entry is provably running (its
+// lock is held); every other transcript is a session that ended or was killed
+// and can be resumed.
+func writeSavedSessionList(out io.Writer, saved []savedSession, live []sessionEntry, now time.Time) {
+	if len(saved) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Saved sessions in this repository (resume with: code wt resume <id>):")
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSTATE\tACTIVITY\tDIRECTORY\tTITLE")
+	running := liveSavedSessions(saved, live)
+	for _, s := range saved {
+		state := "interrupted"
+		if _, isLive := running[s.Path]; isLive {
+			state = "live"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.ID, state, fmtAge(now.Sub(s.Activity)), s.Cwd, sessionTitleOrUntitled(s))
 	}
 	w.Flush()
-	return 0
 }
 
 func runSessionReap(args []string) int {
@@ -562,6 +596,7 @@ func withSession(profile, envName string, fallbacks []string, wt *sessionWorktre
 	rec := sessionRecord{
 		PID:     os.Getpid(),
 		Profile: profile,
+		Resume:  forwardedResume(os.Args[1:]),
 		Started: time.Now().Unix(),
 	}
 	if path, err := resolveLaunchPath(envName, fallbacks); err == nil {
@@ -590,6 +625,12 @@ const sessionHelp = `code session — inspect and retire running code sessions
       toggles), whether the launcher has since been superseded, and the
       directory each was started in. Only sessions started by a code that
       records them appear; older ones are invisible here.
+
+      Inside a repository, also list the saved omp sessions recorded in any
+      of its worktrees — the current directory's first — marked live when a
+      registered session is running them and interrupted otherwise. Only
+      the transcript headers (id, cwd, title, timestamp) are read. Resume
+      one in its original directory with code wt resume <id>.
 
   code session reap [--older-than DUR] [--superseded] [--all] [--yes]
                     [--grace DUR]
