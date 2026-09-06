@@ -32,6 +32,11 @@ go build -o /tmp/code .  # then drive the binary; `code` on PATH is the installe
 code generate init       # scaffold models.yml from `omp models/usage/bench --json` (minutes; probes)
 code generate --models-file F --out /tmp/grid.plain
                          # render a catalog; `--out -` is stdout; refuses a file not marked probed: true
+CODE_OMP_SMOKE=1 go test -run 'TestOmpSmoke$' -v ./
+                         # the omp-drift smoke (ompsmoke_test.go): the overlay read back as omp's
+                         # effective config, the --json schemas, the role inventory. Skipped in the
+                         # ordinary suite; omp-smoke.yml runs it weekly against the latest upstream
+                         # release and opens or updates one `omp-drift` issue on failure
 ```
 
 A change to `view.go`, `layout.go`, `render.go` or a glyph table is proven with
@@ -116,7 +121,7 @@ tag-immutability rule applies there.
 | `code [omp args…]` | the dial TUI, then a launch; everything after `code` is forwarded to omp verbatim, a forwarded `--profile` is replaced (`main.go:315`) |
 | `code generate [init]` | headless catalog: `init` scaffolds and probes `models.yml`, bare `generate` renders it (`generate.go`, `generate_init.go`) |
 | `code session` / `code ls` / `code session reap` | the cross-launch session registry: list, and retire whole process trees (`session.go`) |
-| `code worktree` / `code wt [rm\|prune]` | whole-session operator worktrees on `code/<adj>-<color>-<animal>` branches (`worktree.go`) |
+| `code worktree` / `code wt [rm\|prune\|resume <worktree\|id-prefix>]` | whole-session operator worktrees on `code/<adj>-<color>-<animal>` branches; `resume` reopens an interrupted omp session in its original worktree (`worktree.go`, `history.go`) |
 | `code babel [--configure]` | Babel's analysis-worker protocol on stdio; `--configure` mints a profile revision from the same dials (`babelworker.go`, `babelconfigure.go`) |
 | hidden sandbox helper | Code re-entering itself inside its own sandbox; spawned only by the containment backend, undocumented on purpose (`main.go:48-53`) |
 
@@ -146,7 +151,7 @@ Thirty-nine non-test Go files in one `package main`; `docs/manifold-transition.m
 | `routing.go`, `providers.go` | which model leads which role per dial combination; the one provider/pool/lane/tier registry — nothing else hard-codes a provider id, pool letter or bucket |
 | `model.go`, `update.go`, `view.go`, `render.go`, `layout.go`, `theme.go`, `colorize.go`, `wheel.go` | the Bubble Tea TUI: state, keys, rendering, responsive size classes, palette, trackpad filter |
 | `launch.go` | argv assembly, binary resolution (`CODE_OMP`, `CODE_OMP_UNTRUSTED`), the overlay temp file, `runChild` |
-| `session.go`, `worktree.go`, `selection_state.go` | flock-based session registry and `reap`; `code/<adj>-<color>-<animal>` worktrees under code's own state root; `CODE_SELECTION_STATE` load/save and the ceremony handoff mirror |
+| `session.go`, `worktree.go`, `history.go`, `selection_state.go` | flock-based session registry and `reap`; `code/<adj>-<color>-<animal>` worktrees under code's own state root; saved-session discovery over omp's transcript headers (the metadata allowlist, ranking, prefix resolution); `CODE_SELECTION_STATE` load/save and the ceremony handoff mirror |
 | `vault.go`, `usage.go`, `manager.go` | the broker half: accounts, `OMP_AUTH_BROKER_*` resolution, the 0600 account-pool file, DeepSeek balance; quota fetch and the usage panel; the account manager UI |
 | `runtime.go`, `onboarding.go`, `suggest.go` | the delegated runtime broker (`CODE_RUNTIME_BROKER`); first-run scaffold when no catalog exists; `ctrl+o` prompt-to-profile over loopback Ollama |
 | `babelwire.go`, `babelworker.go`, `babelprofile.go`, `babelconfigure.go` | Babel's analysis-worker protocol (Code's side), handshake and modes, profile revisions, the configuration ceremony |
@@ -160,8 +165,10 @@ State on disk (`docs/configuration.md` §State on disk; `code wt --help`): under
 (`CODE_WORKTREE_DIR`). The catalog is wherever `CODE_GENERATED` points, else
 `$XDG_DATA_HOME/code/generated.plain`; `models.yml` is
 `$XDG_CONFIG_HOME/code/models.yml` (`code generate --help`). omp's own session
-store (`~/.omp/agent/sessions` here) is omp's: nothing in this tree reads or
-writes it, and `code --continue` is forwarded verbatim (README.md).
+store (`~/.omp/agent/sessions` here, plus every profile root) is omp's to
+write; `history.go` reads only the leading `title`/`session` records of a
+transcript — id, timestamp, cwd, title — never a body, and `ompu` roots never
+(`docs/configuration.md`). `code --continue` is forwarded verbatim (README.md).
 
 ## Invariants (violations are bugs, not style)
 
