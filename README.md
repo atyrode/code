@@ -162,6 +162,14 @@ API-key providers are broker writes rather than OAuth logins; the
 [atyrode dotfiles](https://github.com/atyrode/dotfiles) expose the secure
 `atyrode auth broker add-api-key <provider>` route.
 
+This release was tested against **omp 18.1.10**. omp releases near-daily and
+ignores overlay keys it no longer knows, so a weekly workflow
+([`omp-smoke.yml`](.github/workflows/omp-smoke.yml)) reruns the check against
+the latest upstream release and opens an `omp-drift` issue when something
+stopped applying. The line above is maintained by hand when a release is cut,
+not by that workflow: a bot commit for every green week would be noise, and a
+red week is not a version to advertise.
+
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you
 which model it picked for each rung, you sanity-check, press enter, done.
