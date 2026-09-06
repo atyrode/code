@@ -173,7 +173,16 @@ func (m *model) syncPreviewAt(yoff int) {
 	} else if base, ok := m.generated[id]; ok {
 		_, roles := splitMeta(base)
 		roles = m.filterRows(m.applyAdvisor(roles, m.sel["advisor"]))
-		b.WriteString(m.renderRoute(roles, m.depth, m.selectedLaunchAvailability(), rw))
+		depth := m.depth
+		if m.sel["fallback"] == "off" {
+			// The chains do not reach the overlay, so they must not reach
+			// the eye either: the f toggle would otherwise show a route that
+			// cannot run. Leads only, whatever f says, and a down lead stays
+			// struck rather than yielding to its next rung — omp will not
+			// move to it.
+			roles, depth = leadRows(roles), 0
+		}
+		b.WriteString(m.renderRoute(roles, depth, m.selectedLaunchAvailability(), rw))
 	} else {
 		b.WriteString(stDim.Render("no profile for this combination") + "\n")
 	}
@@ -181,6 +190,17 @@ func (m *model) syncPreviewAt(yoff int) {
 	content := lipgloss.NewStyle().MaxWidth(m.vp.Width).Render(b.String())
 	m.vp.SetContent(content)
 	m.vp.SetYOffset(yoff) // clamps into the new content and viewport height
+}
+
+// leadRows cuts every routing row at its first arrow, keeping the lead token
+// and dropping the chain — the preview of a launch whose model fallback is off.
+func leadRows(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		lead, _, _ := strings.Cut(r, " → ")
+		out[i] = strings.TrimRight(lead, " ")
+	}
+	return out
 }
 
 // footer is the pinned bottom block: the usage panel (when this composition

@@ -248,7 +248,7 @@ this record's scope (D6). The launcher half:
 ### 3.3 TUI surfaces and keys
 
 - **Generator dials** — `lane`, `model`, `thinking`, `advisor`, `spark`, and
-  the `more` fold (`fast`, `prewalk`, `planyolo`), plus `runtime` and (ceremony
+  the `more` fold (`fast`, `prewalk`, `planyolo`, `fallback`), plus `runtime` and (ceremony
   only) `local`; defaults in `keys.go:47-50`. Mutates `m.sel`, persisted on
   every change (`selection_state.go:226-229`).
 - **Routing preview** — `f` primary ⇄ full chains (`update.go:200`), `n` short

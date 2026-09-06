@@ -25,23 +25,24 @@ warning at the top of `models.yml` so you can write the rung in by hand.
 
 ## Dials that set omp's own switches
 
-Most dials pick models, so they select a pre-computed routing block. Three do
+Most dials pick models, so they select a pre-computed routing block. Four do
 not: they choose a value for a switch omp already owns, and this tool's only job
 is to put that value where omp reads it. None of them appears in the combo id,
 so the generated grid is byte-identical whatever they are set to.
 
 In the generator they sit behind a `more` row at the end of the dial list,
 closed on every open: `→` on that row opens it, `←` closes it, and while it is
-closed the row names what it hides and spells any switch left on (`prewalk on`),
-so nothing behind the fold can change a launch without saying so on screen. The
-fold is a view state — a `d` reset turns the switches back off but leaves it
-open, and it is never persisted with the dials.
+closed the row names what it hides and spells any switch away from its default
+(`prewalk on`, `fallback off`), so nothing behind the fold can change a launch
+without saying so on screen. The fold is a view state — a `d` reset turns the
+switches back but leaves it open, and it is never persisted with the dials.
 
 | dial | omp surface | effect |
 | --- | --- | --- |
 | `fast` | `tier:` overlay key, per provider | buys every priority service tier the lane's pools sell. Offered on exactly those lanes: a pool declares one by setting `ServiceTier` in the provider registry, and nothing else needs editing |
 | `prewalk` | `prewalk.enabled` + `task.prewalk` | hands the run to the `smol` role at the first edit once the plan's todo list exists. Main session and spawned task agents both move — half a run on the cheap model would not be what the label says. The target needs no setting: omp defaults it to `smol`, which the grid already routes |
 | `planyolo` | `--plan-yolo` argv flag | starts read-only in plan mode, auto-approves the plan on the model's first resolve call, then implements. omp exposes this on the command line only, so it rides argv rather than the overlay |
+| `fallback` | `retry.modelFallback` | on by default. Off keeps every role on its lead: the overlay writes `modelFallback: false` and carries no `fallbackChains` — omp gates every model switch it makes on retry (the error path, the usage-aware preflight, the advisor's) on that one key, so the chains would be inert and are left out rather than shown. `retry.enabled` stays on: same-model retries are not fallback. The account/broker fallback is a separate system and is untouched. The routing preview shows leads only while it is off, and the `f` chain toggle gives way to a note saying the chains are disabled for this launch |
 
 A forwarded flag of your own still wins: the dials' flags are inserted before
 whatever you passed through.
@@ -76,7 +77,7 @@ operator had asked for nothing. Set `CODE_SYMBOLS` where you set the font.
 
 | key | effect |
 | --- | --- |
-| `f` | primary lead ⇄ full fallback chains |
+| `f` | primary lead ⇄ full fallback chains (leads only, and the cue says why, while the `fallback` dial is off) |
 | `n` | short model keys ⇄ full catalog model ids — a sanity check on what the current dials actually route to |
 | `i` | short ⇄ full account ids in the Usage panel |
 | `d` | reset the dials to defaults |
