@@ -22,7 +22,7 @@ mkdir -p dist
 while IFS= read -r manifest; do
   dir="$(dirname "$manifest")"
   id="$(bun -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).id)' "$manifest")"
-  bun "$pack" "$dir" --out "dist/$id.manifold-plugin.json"
+  bun "$pack" "$dir" --self-contained --out "dist/$id.manifold-plugin.json"
 done < <(find . -path ./node_modules -prune -o -path ./dist -prune -o -name manifest.json -print | sort)
 
 (cd dist && sha256sum -- *.manifold-plugin.json > SHA256SUMS)

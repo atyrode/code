@@ -37,12 +37,17 @@ doors. Packing never selects trust: the installer chooses hardened isolation wit
 Manifold's existing consent rules. The local verification gate exercises both modes
 on disposable hubs, not the integrated preview.
 
+`pack.sh` selects the SDK's `--self-contained` output. A hardened child's
+JavaScript realm cannot inherit the hub's shared-module registry; carrying the
+kit dependencies makes the same artifact load in either mode. Normal installation
+still requires the default export and does not opt the installer into hardening.
+
 ## Commands
 
 ```sh
 bun install            # zod + typescript
 bun run check          # tsc over the plugins and the tests
-bun test               # panel programs, doors and an imported packed server definition
+bun test               # panel programs and server-door behavior
 bun run pack           # dist/<id>.manifold-plugin.json for every plugin + dist/SHA256SUMS
 bun run verify         # real throwaway hubs: install both bundles normally, then hardened;
                        # dispatch every door and uninstall in each mode

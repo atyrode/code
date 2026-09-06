@@ -1,13 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { packPlugin } from "@manifold/plugin-kit/pack";
 import { attachServerGuest, type GuestCtx, type GuestEmit } from "@manifold/plugin-kit/server";
 import {
-  PLUGIN_BUNDLE_SERVER_FILE,
-  PluginBundleSchema,
   type IsolateChildFrame,
   type IsolateDispatchCtx,
   type IsolateHostFrame,
@@ -18,7 +11,6 @@ import {
   LAUNCH_DOOR,
   LAUNCH_LEDGER_LIMIT,
   LAUNCH_RECORDED_EVENT,
-  LIST_LAUNCHES_ACTION,
   LIST_LAUNCHES_DOOR,
   LaunchRecordSchema,
   launchKey,
@@ -182,11 +174,11 @@ interface FakeHost {
   next(): Promise<IsolateChildFrame>;
 }
 
-function host(def = plugin): FakeHost {
+function host(): FakeHost {
   const queue: IsolateChildFrame[] = [];
   const waiting: ((frame: IsolateChildFrame) => void)[] = [];
   let listener: (frame: unknown) => void = () => {};
-  attachServerGuest(def, {
+  attachServerGuest(plugin, {
     send: (frame) => {
       const waiter = waiting.shift();
       if (waiter === undefined) queue.push(frame);
@@ -236,50 +228,6 @@ const dispatchCtx: IsolateDispatchCtx = {
   containerScope: null,
   now: 1_000,
 };
-
-describe("the published server module", () => {
-  test("the packed default definition serves the baseline doors", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "code-plugin-bundle-"));
-    let url: string | undefined;
-    try {
-      const file = join(dir, "baseline.manifold-plugin.json");
-      await packPlugin(fileURLToPath(new URL("../atyrode.code", import.meta.url)), file);
-      const bundle = PluginBundleSchema.parse(await Bun.file(file).json());
-      const source = bundle.files[PLUGIN_BUNDLE_SERVER_FILE];
-      if (source === undefined) throw new Error("baseline bundle has no server module");
-      url = URL.createObjectURL(
-        new Blob([Buffer.from(source, "base64")], { type: "text/javascript" }),
-      );
-      // Only the freshly packed bytes exercise the host's module-loading boundary.
-      const def: typeof plugin = (await import(url)).default;
-      expect(def.manifest.id).toBe(CODE_PLUGIN_ID);
-      const fake = host(def);
-      expect((await loaded(fake)).actions.map((action) => action.name)).toEqual([
-        LAUNCH_DOOR,
-        LIST_LAUNCHES_DOOR,
-      ]);
-      fake.send({
-        t: "dispatch",
-        id: "packed-list",
-        action: LIST_LAUNCHES_ACTION,
-        args: {},
-        ctx: dispatchCtx,
-      });
-      expect(await serve(fake, [])).toMatchObject({
-        method: "storage.keys",
-        args: ["launches/"],
-      });
-      expect(await fake.next()).toEqual({
-        t: "dispatched",
-        id: "packed-list",
-        outcome: { ok: true, result: { launches: [] }, emits: [] },
-      });
-    } finally {
-      if (url !== undefined) URL.revokeObjectURL(url);
-      await rm(dir, { recursive: true, force: true });
-    }
-  }, 20_000);
-});
 
 describe("through the kit's transport", () => {
   test("load publishes both doors with their caps and JSON Schemas", async () => {
