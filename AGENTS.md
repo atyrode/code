@@ -100,7 +100,7 @@ After goreleaser finishes, run `scripts/bump-flake-pin.sh <tag>` and PR the
 result: the flake wraps the published release binaries, not a source build
 (`flake.nix`, `nix/code.nix`), so `nix run github:atyrode/code` serves the new
 version only once `nix/code.nix` is repointed. `nix/omp.nix` pins upstream omp for
-the `#with-omp` bundle only; it is not a build dependency.
+the `#with-omp` bundle and required native CI canaries; it is not a Code build dependency.
 
 **Never move or delete a published tag.** Go modules are immutable: the first
 time anyone — a user, CI, the dotfiles pipeline — fetches a version,
@@ -140,8 +140,8 @@ Environment: `main.go:1-19` is the manifest of what the launcher reads
 dotfiles wrapper (`pkgs/omp-configured/default.nix`, `codeLauncher`) exports
 `CODE_GENERATED`, `CODE_OMP`, `CODE_OMP_UNTRUSTED`, `CODE_RUNTIME_BROKER`,
 `CODE_AUTH_ACCOUNT_STATE`, `CODE_SELECTION_STATE` and the `OMP_AUTH_BROKER_*`
-triple. On this machine `omp` on PATH is 18.1.10; `nix/omp.nix` pins 18.1.2, and
-`docs/status.md` audits the omp-owns-it list against 18.1.2.
+triple. `nix/omp.nix` pins the minimum-tested native runtime, OMP 18.1.12;
+`docs/status.md` retains its separately dated omp-owns-it audit against 18.1.2.
 
 ## Map
 
