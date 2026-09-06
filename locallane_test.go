@@ -657,7 +657,7 @@ func TestLocalRunBinaryWritesALocalReport(t *testing.T) {
 	// A stand-in omp that announces itself and waits for stdin to close, so
 	// the launch runs to a finished report on a machine with no omp.
 	fakeOmp := filepath.Join(t.TempDir(), "omp")
-	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"type\":\"ready\",\"protocolVersion\":1}'\ncat >/dev/null\n"), 0o700); err != nil {
+	if err := os.WriteFile(fakeOmp, []byte("#!/bin/sh\necho '{\"type\":\"ready\",\"protocolVersion\":1}'\nwhile IFS= read -r line; do :; done\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	info := filepath.Join(t.TempDir(), "runtime.json")
