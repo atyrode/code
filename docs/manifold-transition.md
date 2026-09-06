@@ -547,7 +547,7 @@ performed and its date written here). Update the row in the PR that moves it.
 | Step | Status | Evidence, and what is left |
 | --- | --- | --- |
 | 0 | superseded | — |
-| 1 | in progress | Package skeleton: `plugins/` on `main` (#107, 2026-09-05; §9). Not done: a flake output for the bundles (they are CI artifacts only, `manifold-plugins.yml`); the SDK is a sibling checkout pinned by `MANIFOLD_REV`, not a release asset. Headless launch (#96): not started. `code publish` (#97): not started. |
+| 1 | in progress | Package skeleton: `plugins/` on `main` (#107, 2026-09-05; §9). Dev loop, CI and delivery exist (2026-09-06, atyrode/manifold#319): `bun run dev` against the preview hub, `bun run verify` against a spawned real server in CI (manifold's reusable `plugins.yml`), and a `v*` tag attaches the bundles to the release and installs them on `preview.manifold.tyrode.dev` through the receiver (`release.yml`). Not done: a flake output for the bundles (they are release assets, not a nix output); the SDK is a sibling checkout pinned by `MANIFOLD_REV`, not a release asset. Headless launch (#96): not started. `code publish` (#97): not started. |
 | 2 | shipped, not proven | `atyrode.code.generator`'s `launcher` panel (#107; §9.3). Shipped better than planned: the PTY execs `code` directly (atyrode/manifold#192 landed), nothing is typed. Shipped narrower than planned: no dials, `argv` is `["code"]`, so the TUI in the tile is the whole selection surface until #96. Not proven: never installed on a hub (`engine.plugins.install`, §9.4); the browser-to-omp proof is unrecorded. #98 stays open for the dial-carrying launch. |
 | 3 | not started | #99; waits on atyrode/manifold#134, atyrode/manifold#201. |
 | 4 | not started | #100; sub-plugins reserved as #105, #106; waits on #97. |
@@ -980,9 +980,14 @@ what they need and grants each part only what it needs.
   (`plugins/test/contract.test.ts` pins the manifests to it).
 - **One cut.** All of this repo's bundles are packed together by
   `plugins/pack.sh` from one tree (`dist/<id>.manifold-plugin.json` +
-  `dist/SHA256SUMS`); `.github/workflows/manifold-plugins.yml` does it on every
-  push touching `plugins/` and uploads `dist/`. Both manifests are at
-  `0.1.0`.
+  `dist/SHA256SUMS`) and travel one path (atyrode/manifold#319):
+  `.github/workflows/manifold-plugins.yml` calls manifold's reusable
+  `plugins.yml` on every push touching `plugins/` (check, test, pack, `verify`
+  against a spawned real server); `release.yml` attaches the bundles to the
+  `v*` GitHub Release and hands each URL and sha, parents before parts, to the
+  integrated preview's receiver (`preview.manifold.tyrode.dev`); production is
+  installed by the operator, by hand, from the release URL. Both manifests are
+  at `0.1.0`.
 - **The SDK is a sibling checkout** until the kit ships as a release asset:
   `plugins/tsconfig.json` maps `@manifold/plugin-kit` and `@manifold/protocol`
   to `../../manifold/packages/*/src`, pinned by `plugins/MANIFOLD_REV`

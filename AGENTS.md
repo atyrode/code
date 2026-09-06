@@ -41,3 +41,41 @@ real tags only at milestones. The same tag-immutability rule applies there.
 - Supported provider assumption: omp with **both Anthropic and OpenAI**
   available (see README). Features may degrade with fewer providers but must
   not crash.
+
+## Manifold plugins
+
+`plugins/` holds this repo's manifold plugins (`atyrode.code`, its part
+`atyrode.code.generator`). Direction: `docs/manifold-transition.md`; progress:
+its §6 ledger, updated in the PR that moves it; the kit: manifold's
+`docs/PLUGINS.md` §9.
+
+```
+cd plugins && bun install && bun run check && bun test && bun run pack && bun run verify
+                       # the gate: verify spawns a real manifold server, installs every
+                       # bundle in dist/, dispatches every door, uninstalls. Green before a push.
+bun run dev -- --hub http://127.0.0.1:7912 --deliver docker:manifold-dev-manifold-1
+                       # from dev-01: pack + install on the integrated preview, then watch
+                       # and reinstall on change. A browser reload shows the change.
+```
+
+- The SDK is a sibling checkout: `../manifold` at the rev in `plugins/MANIFOLD_REV`,
+  with `bun install --frozen-lockfile` run there. Bump `MANIFOLD_REV` and the
+  `uses: atyrode/manifold/.github/workflows/plugins.yml@<rev>` ref in
+  `.github/workflows/manifold-plugins.yml` together, always.
+- Where a change is visible: `https://preview.manifold.tyrode.dev` → plugin
+  manager → Installed → `atyrode.code` (and `atyrode.code.generator`). The `code`
+  panel launches only on an enrolled machine that is online on that hub; dev-01
+  is enrolled there.
+- Delivery, in order: PR → CI (`manifold-plugins.yml`: check, test, pack,
+  verify) → `v*` tag → `release.yml` attaches `dist/*.manifold-plugin.json` +
+  `SHA256SUMS` to the GitHub Release → the preview installs each bundle from
+  its release URL through the receiver, parents before parts. Production
+  (`https://manifold.tyrode.dev`) is the operator's: installed by hand from the
+  release URL in the plugin manager, root only, never automated.
+- **At the end of a plugin task, and whenever asking the operator to look, name
+  the hub URL, the panel, the action and the expected result** (e.g. "on
+  preview.manifold.tyrode.dev, open the `code` panel, pick dev-01, Launch: a
+  terminal tile running `code` appears beside it").
+- The owner key never appears in argv, logs or committed files: `dev` reads it
+  from the container (`docker exec … cat /data/owner.key`) or
+  `--owner-key-file`.
