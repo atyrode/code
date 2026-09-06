@@ -1462,7 +1462,7 @@ func TestEngineLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, report, _ := containedLaunch(t, backend, broker.URL)
+	view, report, _ := containedLaunch(t, backend, broker.URL, sandboxFakeHostPathEnv+"="+secret)
 
 	// The declaration in the report is the full one: a run that launched
 	// contained while declaring less would be the failure this whole
@@ -1489,11 +1489,11 @@ func TestEngineLaunchesTheSessionInsideTheSandbox(t *testing.T) {
 	if view.Routes != 0 {
 		t.Errorf("the session's network namespace carries %d route(s)", view.Routes)
 	}
-	// The host's home directory is the shortest test of "this is not the host".
-	for _, name := range view.Root {
-		if name == "home" {
-			t.Errorf("the host's /home is visible inside the sandbox: %v", view.Root)
-		}
+	// A mounted runtime can need empty ancestors such as /home when TMPDIR
+	// is under the host's home. The boundary is access to ungranted contents,
+	// not the spelling of those namespace directories.
+	if !view.HostReadDenied {
+		t.Error("the session did not refuse a read of ungranted host state")
 	}
 	if view.TokenOnArgv {
 		t.Error("the provider credential reached OMP's argv, where a process listing would expose it")

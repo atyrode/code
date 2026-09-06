@@ -8,11 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CODE_TEST_REQUIRE_OMP: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - uses: cachix/install-nix-action@v31
+      - name: Install the bundled OMP pin
+        # Use the same derivation as with-omp, not a second CI version or latest.
+        # A failed fetch/build fails CI before any canary can skip.
+        run: |
+          nix build .#omp --out-link "$RUNNER_TEMP/code-omp"
+          echo "$RUNNER_TEMP/code-omp/bin" >> "$GITHUB_PATH"
       - name: gofmt
         run: |
           out=$(gofmt -l .)

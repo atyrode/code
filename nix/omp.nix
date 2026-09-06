@@ -6,12 +6,12 @@
   stdenv,
 }:
 
-# Upstream oh-my-pi release binaries, pinned for the optional `with-omp` bundle.
+# Upstream oh-my-pi release binaries, pinned for `with-omp` and required CI.
 #
 # This is NOT a build dependency: `code` shells out to whatever `omp` is on PATH
 # (or CODE_OMP) at runtime, so a normal install needs nothing from here. The pin
-# exists only so `nix run github:atyrode/code#with-omp` can hand a stranger a
-# working pair without asking them to install omp first.
+# gives `with-omp` a tested pair and CI the same runtime for the native
+# tool-registry canaries; version and hashes have one source.
 #
 # It used to track the atyrode/omp fork, which is retired — and because the
 # dotfiles always tracked upstream, the two disagreed (fork 17.2.1 vs upstream
@@ -20,23 +20,23 @@
 # Linux assets are Bun single-file executables. Patch PT_INTERP in place so
 # process.execPath remains the OMP binary when it re-execs subprocess workers.
 let
-  version = "18.1.2";
+  version = "18.1.12";
   sources = {
     "x86_64-linux" = {
       asset = "omp-linux-x64";
-      hash = "sha256-xqMGNHpXyHK/OFh+gRMttQSQIohn4+F5o2Okz4dNoaA=";
+      hash = "sha256-9UMQCPcdLzlxYXIFz86csifB0TVmWTAIgkTHbYay+0I=";
     };
     "aarch64-linux" = {
       asset = "omp-linux-arm64";
-      hash = "sha256-KGXCGnOui4k/1VU78wKvxb6KC8r6AVr5lzI0nVGIMNo=";
+      hash = "sha256-Eox5SY5bnTKF1Xt7Q9RhOarVRzpph2cxT/vmDHxd4xQ=";
     };
     "x86_64-darwin" = {
       asset = "omp-darwin-x64";
-      hash = "sha256-//HswZULRVMLww+sVHg8Rdk/G8ilxJGGsb15bMbLYtA=";
+      hash = "sha256-81tW7DnIlMf0N6LROo7lrFGp/GXvLEozu8TsnGMznLU=";
     };
     "aarch64-darwin" = {
       asset = "omp-darwin-arm64";
-      hash = "sha256-XyUSzOKhVK0kBqR5JCHELwIrEzX4PcveQjb3blCrNbQ=";
+      hash = "sha256-fP2Q4LPz/25KlJMUsBBF8ZyyXy8tnYXDxkvORwS+hn0=";
     };
   };
   source =
