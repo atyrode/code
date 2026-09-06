@@ -172,7 +172,7 @@ func TestWorktreeListMarksLegacyRoot(t *testing.T) {
 	}
 
 	var out strings.Builder
-	writeWorktreeList(&out, entries, time.Now())
+	writeWorktreeList(&out, entries, nil, nil, time.Now())
 	rendered := out.String()
 
 	for _, line := range strings.Split(rendered, "\n") {

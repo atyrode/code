@@ -101,6 +101,35 @@ or `$HOME/.local/state` when that is unset — in `code/`:
 relative value is ignored, because the process chdirs into the worktree it
 creates and a relative root would not name the same directory afterwards.
 
+### Saved omp sessions
+
+`code ls` and `code wt` also read omp's persisted sessions, which are omp's
+state, not `code`'s: `~/.omp/agent/sessions` (the default profile, honouring
+`PI_CODING_AGENT_DIR` and `PI_CONFIG_DIR`), `~/.omp/profiles/<name>/agent/sessions`
+for each named profile, or only the directory a forwarded `--session-dir`
+names. Those are the trusted roots; the untrusted launcher's state is never
+searched, because an untrusted session is isolated on purpose and is not
+resumable from here.
+
+Discovery is metadata-only. Each transcript starts with a title record and a
+session record (id, cwd, timestamp), and `code` reads those two lines and
+stops at the first line of any other type — prompts, tool output, and anything
+a conversation may quote are never opened. Results are ranked: the current
+directory's own sessions, then the rest of the repository (every worktree
+`git worktree list` or `code wt` knows), then parent or child directories,
+then everything else, newest activity first within a rank.
+
+A session is marked `live` when a record in `code/sessions` holds its lock in
+the same directory and this is the transcript that process has written most
+recently since it started — or, when it has written nothing yet, the id it
+recorded as its `--resume` target; anything else is `interrupted`.
+`code wt resume <worktree|id>` resolves an id or unique prefix across every
+trusted root to exactly one session, refuses an ambiguous one by listing the
+candidates, and launches `omp --resume <id>` (with `--session-dir` when the
+session lives outside the default root) in the recorded directory, through the
+same trusted launch path as a fresh session. A directory that no longer exists
+is reported; nothing is created, pruned, or reset.
+
 ### Why `code/wt` and not omp's `~/.omp/wt`
 
 Session worktrees used to be created inside omp's own worktree directory, which

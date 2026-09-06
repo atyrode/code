@@ -159,21 +159,7 @@ func legacyWorktreeRoots() []string {
 	profile = strings.TrimSpace(profile)
 	defaultProfile := profile == "" || profile == "default"
 
-	configDir := os.Getenv("PI_CONFIG_DIR")
-	if configDir == "" {
-		configDir = ".omp"
-	}
-
-	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
-		root := filepath.Join(xdgData, "omp")
-		if !defaultProfile {
-			root = filepath.Join(root, "profiles", profile)
-		}
-		add(filepath.Join(root, "wt"))
-	}
-
-	if home := os.Getenv("HOME"); home != "" {
-		root := filepath.Join(home, configDir)
+	for _, root := range ompConfigDirs() {
 		if !defaultProfile {
 			root = filepath.Join(root, "profiles", profile)
 		}
@@ -329,13 +315,17 @@ func releaseSessionWorktree(w *sessionWorktree) {
 	fmt.Fprintf(os.Stderr, "code: kept worktree %s (branch %s)\n", w.Dir, w.Branch)
 }
 
+// worktreeLiveness finds the registered session running in dir. A session
+// launched into the worktree records it as its Worktree; one resumed there by
+// hand (cd <dir> && code --resume) records it only as its Cwd, and is using the
+// tree just the same.
 func worktreeLiveness(dir string) (live bool, pid int, known bool) {
 	registry := sessionDir()
 	if registry == "" || registry == sessionDisabled {
 		return false, 0, false
 	}
 	for _, session := range loadSessions(registry) {
-		if session.Worktree == dir {
+		if session.Worktree == dir || session.Cwd == dir {
 			return true, session.PID, true
 		}
 	}
@@ -447,6 +437,8 @@ func runWorktree(args []string) int {
 		return runWorktreeRemove(args[1:])
 	case "prune":
 		return runWorktreePrune(args[1:])
+	case "resume":
+		return runWorktreeResume(args[1:])
 	case "help", "-h", "--help":
 		fmt.Print(worktreeHelp)
 		return 2
@@ -466,14 +458,17 @@ func runWorktreeList(args []string) int {
 		fmt.Println("no session worktrees")
 		return 0
 	}
-	writeWorktreeList(os.Stdout, entries, time.Now())
+	saved := scanSavedSessions(trustedSessionRoots(""))
+	writeWorktreeList(os.Stdout, entries, saved, loadSessions(sessionDir()), time.Now())
 	return 0
 }
 
-// writeWorktreeList renders the table. It takes its writer and its clock so the
-// rendering — in particular the legacy marking, which is the only part an
-// operator has to trust for cleanup — is assertable without a live terminal.
-func writeWorktreeList(out io.Writer, entries []worktreeEntry, now time.Time) {
+// writeWorktreeList renders the table, then the saved sessions each worktree
+// holds. It takes its writer and its clock so the rendering — in particular the
+// legacy marking, which is the only part an operator has to trust for cleanup,
+// and the session attribution, which is what a resume acts on — is assertable
+// without a live terminal.
+func writeWorktreeList(out io.Writer, entries []worktreeEntry, saved []savedSession, live []sessionEntry, now time.Time) {
 	base := worktreeBase()
 	roots := legacyWorktreeRoots()
 	legacy := 0
@@ -484,10 +479,10 @@ func writeWorktreeList(out io.Writer, entries []worktreeEntry, now time.Time) {
 		if e.Created > 0 {
 			age = now.Sub(time.Unix(e.Created, 0))
 		}
-		live, _, known := worktreeLiveness(e.Dir)
+		isLive, _, known := worktreeLiveness(e.Dir)
 		state := "clean"
 		switch {
-		case live:
+		case isLive:
 			state = "live"
 		case !known:
 			state = "unknown"
@@ -506,6 +501,100 @@ func writeWorktreeList(out io.Writer, entries []worktreeEntry, now time.Time) {
 		fmt.Fprintf(out, "%d legacy worktree(s) predate code's own root and still sit in omp's, where omp worktree clear --all can force-delete them.\n", legacy)
 		fmt.Fprintf(out, "Retire them with code wt rm <name>; new worktrees are created in %s.\n", base)
 	}
+	writeWorktreeSessions(out, entries, saved, live, now)
+}
+
+// writeWorktreeSessions lists the saved omp sessions whose recorded cwd lies in
+// a managed worktree, one row per session, so two concurrent sessions in the
+// same tree are told apart by id and title before either is resumed.
+func writeWorktreeSessions(out io.Writer, entries []worktreeEntry, saved []savedSession, live []sessionEntry, now time.Time) {
+	dirs := make([]string, 0, len(entries))
+	names := make(map[string]string, len(entries))
+	for _, e := range entries {
+		dir := canonicalPath(e.Dir)
+		dirs = append(dirs, dir)
+		names[dir] = e.Name
+	}
+	var rows []savedSession
+	for _, s := range saved {
+		if s.Worktree = containingWorktree(canonicalPath(s.Cwd), dirs); s.Worktree != "" {
+			rows = append(rows, s)
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Worktree != rows[j].Worktree {
+			return rows[i].Worktree < rows[j].Worktree
+		}
+		if !rows[i].Activity.Equal(rows[j].Activity) {
+			return rows[i].Activity.After(rows[j].Activity)
+		}
+		return rows[i].ID < rows[j].ID
+	})
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Saved sessions (resume with: code wt resume <worktree|id>):")
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "WORKTREE\tSESSION\tSTATE\tACTIVITY\tTITLE")
+	running := liveSavedSessions(saved, live)
+	for _, s := range rows {
+		state := "interrupted"
+		if _, isLive := running[s.Path]; isLive {
+			state = "live"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", names[s.Worktree], s.ID, state, fmtAge(now.Sub(s.Activity)), sessionTitleOrUntitled(s))
+	}
+	_ = w.Flush()
+}
+
+// runWorktreeResume continues a saved session where it ran. The selector is a
+// managed worktree's name or a session id (or prefix); everything after it is
+// forwarded to omp. The launch is the trusted launch `code` performs itself —
+// same launcher, same auth environment, same registry record — with the
+// session's own directory as cwd, so the transcript continues in the tree that
+// holds its work. Nothing about that tree is created, pruned or reset.
+func runWorktreeResume(args []string) int {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Print(worktreeHelp)
+		return 2
+	}
+	selector, forwarded := args[0], args[1:]
+	live := loadSessions(sessionDir())
+	records := loadWorktreeRecords()
+	// A forwarded --session-dir is the operator naming the root; discovery
+	// then looks nowhere else, exactly as omp itself would.
+	explicit := forwardedSessionDir(forwarded)
+	defaultRoot := defaultSessionRoot()
+	if explicit != "" {
+		defaultRoot = explicit
+	}
+	plan, err := planWorktreeResume(selector, records, scanSavedSessions(trustedSessionRoots(explicit)), live, defaultRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "code wt resume: %v\n", err)
+		return 1
+	}
+	// The registry record names the managed worktree when the session ran in
+	// one, so `code wt` shows the tree as live for as long as this runs.
+	wt := &sessionWorktree{ChildDir: plan.Dir}
+	for _, rec := range records {
+		if underRoot(canonicalPath(plan.Dir), canonicalPath(rec.Dir)) {
+			wt = rec.sessionWorktree()
+			wt.ChildDir = plan.Dir
+			break
+		}
+	}
+	fmt.Fprintf(os.Stderr, "code: resuming %s (%s) in %s\n", plan.Session.ID, sessionTitleOrUntitled(plan.Session), plan.Dir)
+	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
+	selections := loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
+	return withSession("resume", "CODE_OMP", []string{"omp"}, wt, func(sess *sessionHandle) int {
+		_ = sess.Update(func(r *sessionRecord) { r.Resume = plan.Session.ID })
+		argv := func(path string, _ []string, _ string) []string {
+			out := append([]string{path}, plan.Args...)
+			return append(out, stripProfileArgs(forwarded)...)
+		}
+		return runTrusted(sess, "CODE_OMP", []string{"omp"}, argv, "", broker, selections, plan.Dir)
+	})
 }
 
 func runWorktreeRemove(args []string) int {
@@ -622,9 +711,20 @@ const worktreeHelp = `code worktree — manage isolated session worktrees
   code worktree [list]
   code wt
       List recorded session worktrees, their age, branch, liveness or dirty
-      state, root, and directory. A "legacy" root is one left in omp's
+      state, root, and directory, then the saved omp sessions recorded in
+      each — id, live or interrupted, last activity, title — read from the
+      transcript headers only. A "legacy" root is one left in omp's
       worktree directory by a build older than this one — remove or prune
       clears it like any other.
+
+  code worktree resume <worktree|id> [omp args...]
+  code wt resume <worktree|id>
+      Continue a saved session in the directory it ran in, launched the way
+      code launches any trusted session. The selector is a worktree name
+      (when it holds exactly one session) or a session id or unique prefix;
+      an ambiguous selector lists the candidates and resumes nothing. A
+      session whose directory is gone is reported, never recreated, and a
+      dirty tree is left as it is.
 
   code worktree remove <name> [--force]
   code wt rm <name> [--force]
@@ -637,4 +737,6 @@ const worktreeHelp = `code worktree — manage isolated session worktrees
   Worktree base: $XDG_STATE_HOME/code/wt, or CODE_WORKTREE_DIR.
   Records: $XDG_STATE_HOME/code/worktrees, or CODE_WORKTREE_STATE.
   Session liveness: $XDG_STATE_HOME/code/sessions, or CODE_SESSION_STATE.
+  Saved sessions: ~/.omp/agent/sessions (PI_CODING_AGENT_DIR), every
+  ~/.omp/profiles/*/agent/sessions, and a forwarded --session-dir.
 `

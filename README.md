@@ -53,10 +53,16 @@ Every session you launch is recorded while it runs, so the ones you walked away
 from are findable rather than merely suspected:
 
 ```bash
-code ls                                 # live sessions: age, launcher, directory
+code ls                                 # live sessions, then this repository's saved ones
 code session reap --superseded          # dry run: what is on a stale build
 code session reap --older-than 3d --yes # retire them, whole process tree
 ```
+
+Inside a repository, `code ls` also lists the omp sessions saved from any of
+its worktrees — the current directory's first, then the rest of the repository
+— each marked `live` when a recorded session is running it and `interrupted`
+otherwise. Only the transcript headers (id, directory, title, timestamp) are
+read; the conversation never is.
 
 `reap` prints and exits unless you pass `--yes`, and always takes the session's
 whole process tree — language servers, browsers, and workers included, so they
@@ -68,10 +74,21 @@ off by default. A pristine worktree is removed when the session exits; changes
 or commits keep it for recovery:
 
 ```bash
-code wt                    # list session worktrees and their state
+code wt                    # list session worktrees, their state, and their saved sessions
+code wt resume <name|id>   # continue a saved session in the worktree it ran in
 code wt remove <name>      # remove an idle, pristine worktree
 code wt prune              # dry-run cleanup; add --yes to remove
 ```
+
+A session whose process was killed — the terminal closed, the machine
+rebooted — is still on disk, and `code wt` shows it under its worktree with its
+id, title, and last activity. `code wt resume` takes the worktree's name (when
+it holds one session) or the session id, and launches `omp --resume <id>` in
+that directory the way `code` launches any trusted session: same launcher,
+same auth environment, same registry record. Two sessions in one tree, or a
+prefix shared by several ids, are listed and refused until you name one; a
+tree that no longer exists is reported rather than recreated; uncommitted
+changes are left where they are.
 
 Worktrees are created under `code`'s own state root —
 `$XDG_STATE_HOME/code/wt`, or `$HOME/.local/state/code/wt`, relocatable with
