@@ -155,9 +155,15 @@ launches it, it doesn't replace it. Authenticate locally with
 `omp auth-broker login <provider>`. For a canonical broker on another machine,
 set `CODE_AUTH_LOGIN_VIA=user@host`; the account manager's `v` → `a` flow then
 runs the same interactive login over SSH and refreshes the account list.
-When a broker cooldown outlives an upstream quota reset, highlight the blocked
-account and press `x` to clear its remembered blocks and refresh live usage; a
-continuing upstream limit recreates the block on the next request.
+Enabled accounts form a pool omp rotates through, not a pick: the account
+manager and the launch both print the exact pool per provider, and judge each
+account against the tier the selected model draws (a `tier:fable` block keeps
+an account off Fable while the rest of Anthropic stays available, and the
+warning says so). When a broker cooldown outlives an upstream quota reset —
+fresh usage shows headroom while the block stands — that is reported as stale
+broker state, not exhaustion: highlight the blocked account and press `x` to
+clear its remembered blocks and refresh live usage; a continuing upstream
+limit recreates the block on the next request.
 API-key providers are broker writes rather than OAuth logins; the
 [atyrode dotfiles](https://github.com/atyrode/dotfiles) expose the secure
 `atyrode auth broker add-api-key <provider>` route.

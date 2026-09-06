@@ -93,13 +93,16 @@ func main() {
 			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt, launchDir)
 		})
 	case fm.launchManaged:
+		// A managed launch carries no catalog, so the intent names no tier:
+		// every provider is judged on its main tier, and the usage the dials
+		// showed still catches a stale provider-wide block.
 		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, func(sess *sessionHandle) int {
 			return runTrusted(sess, "CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
-				fm.firstPrompt, fm.broker, fm.accountSelections, launchDir)
+				fm.firstPrompt, fm.broker, fm.accountSelections, launchIntent{usage: fm.avail.accountUsage}, launchDir)
 		})
 	case fm.genConfig != "":
 		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func(sess *sessionHandle) int {
-			return launchGenerated(sess, fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, launchDir)
+			return launchGenerated(sess, fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, fm.launchIntent(), launchDir)
 		})
 	}
 	if wt != nil {

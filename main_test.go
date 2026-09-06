@@ -3535,12 +3535,12 @@ func TestSelectedAvailabilityHonoursReLoginOrgChange(t *testing.T) {
 	}
 	// The same input must also keep it out of the launch pool, so the two
 	// surfaces cannot disagree about which accounts are in play.
-	pool, warnings := buildAccountPool(a.accounts, staleDisabled, time.Now())
-	if got, ok := pool["anthropic"]; !ok || len(got) != 0 {
+	report := launchAccountReport(a.accounts, staleDisabled, launchIntent{}, time.Now())
+	if pool := report.pool(); pool["anthropic"] == nil || len(pool["anthropic"]) != 0 {
 		t.Fatalf("pool = %#v, want anthropic present and empty (every account disabled)", pool)
 	}
-	if len(warnings) != 1 || warnings[0].Reason != poolAllDisabled {
-		t.Fatalf("warnings = %#v, want one poolAllDisabled", warnings)
+	if warnings := report.warnings(time.Now()); len(warnings) != 1 || !strings.Contains(warnings[0], "every Anthropic account is disabled") {
+		t.Fatalf("warnings = %#v, want one all-disabled warning", warnings)
 	}
 }
 
@@ -3957,7 +3957,7 @@ exit %d
 			selections.SetManualDisabled(map[accountKey]bool{
 				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
 			})
-			status := launchGenerated(nil, "models: {}\n", "prompt", nil, broker, selections, "")
+			status := launchGenerated(nil, "models: {}\n", "prompt", nil, broker, selections, launchIntent{}, "")
 			if status != tc.exit {
 				t.Fatalf("exit status = %d, want %d", status, tc.exit)
 			}
@@ -4027,7 +4027,7 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 		accountPoolCopy := filepath.Join(dir, label+"-account-pool")
 		t.Setenv("ENV_COPY", envCopy)
 		t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
-		if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", broker, selections, ""); status != 0 {
+		if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", broker, selections, launchIntent{}, ""); status != 0 {
 			t.Fatalf("%s launch status = %d", label, status)
 		}
 		envBody, err := os.ReadFile(envCopy)
@@ -4099,7 +4099,7 @@ func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	t.Setenv("CAPTURE", capture)
 	t.Setenv("OMP_AUTH_BROKER_URL", "http://incomplete")
 	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/stale-pool")
-	if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), ""); status != 0 {
+	if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), launchIntent{}, ""); status != 0 {
 		t.Fatalf("direct trusted launch status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)

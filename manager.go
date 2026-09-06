@@ -1024,10 +1024,48 @@ func windowManagerLines(lines []managerLine, cursor, height int) []managerLine {
 // launched from this point on.
 const managerLaunchScopeHint = "Selection applies to sessions launched from now on; running sessions keep the accounts they started with."
 
+// managerLaunchReport is the launch verdict for the accounts exactly as the
+// manager shows them — a draft counts, because the operator is deciding — so
+// what the manager says about the pool is what Enter would write.
+func (m model) managerLaunchReport() launchReport {
+	return launchAccountReport(m.avail.accounts, m.managerDisplayedDisabled(), m.launchIntent(), timeNow())
+}
+
+// managerLaunchBody renders the launch report the launch layer computed: the
+// effective pool per provider when there is room for it, then every warning.
+// The manager renders and wraps; it decides nothing about eligibility. The
+// pool lines are the first thing to go on a tight screen — the account rows
+// they describe already sit above them, with each block labelled — while a
+// warning is never dropped: it is the one thing the operator must read.
+func (m model) managerLaunchBody(width int, withPool bool) string {
+	if !m.avail.accountsOK {
+		return ""
+	}
+	now := timeNow()
+	report := m.managerLaunchReport()
+	var lines []string
+	if withPool {
+		for _, line := range report.poolLines(now) {
+			lines = append(lines, stDim.Width(width).Render(line))
+		}
+	}
+	for _, line := range report.warnings(now) {
+		lines = append(lines, stWarn.Width(width).Render(gWarn+" "+line))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) managerAccountBody(width int, rows []managerLine) string {
+	return m.managerAccountBodyWith(width, rows, m.managerLaunchBody(width, true))
+}
+
+func (m model) managerAccountBodyWith(width int, rows []managerLine, launch string) string {
 	body := padLeft(m.managerTitle(width), gut)
 	if boxes := managerProviderBoxes(width, rows, m.managerFocusedProvider()); boxes != "" {
 		body += "\n\n" + padLeft(boxes, gut)
+	}
+	if launch != "" {
+		body += "\n\n" + padLeft(launch, gut)
 	}
 	if m.accountErr != "" {
 		body += "\n\n" + padLeft(stBrk.Render(m.accountErr), gut)
@@ -1143,11 +1181,22 @@ func (m model) managerView() string {
 			if m.accountErr != "" {
 				available -= 2
 			}
-			if available < 0 {
-				available = 0
+			// The pool lines stay as long as every account row still fits
+			// beside them; once the accounts would have to be windowed the
+			// pool lines go first and only the warnings remain.
+			launch := m.managerLaunchBody(width, true)
+			reserve := func(launch string) int {
+				if launch == "" {
+					return available
+				}
+				return available - lipgloss.Height(launch) - 1
 			}
+			if reserve(launch) < managerProviderBoxesHeight(rows) {
+				launch = m.managerLaunchBody(width, false)
+			}
+			available = max(0, reserve(launch))
 			rows = windowManagerLines(rows, m.mgrCursor, available)
-			accounts = m.managerAccountBody(width, rows)
+			accounts = m.managerAccountBodyWith(width, rows, launch)
 		}
 		body = accounts
 	}
