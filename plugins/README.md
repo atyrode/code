@@ -33,14 +33,16 @@ The pinned SDK supports two install modes. The baseline server default-exports i
 `ServerPluginDef` for normal module loading and calls `defineServerPlugin` to bind IPC
 when loaded as a hardened child. The latter call is inert on a normal import; it does
 not supply the default export. The generator remains web-only and uses the baseline's
-doors. Packing never selects trust: the installer chooses hardened isolation with
-Manifold's existing consent rules. The local verification gate exercises both modes
-on disposable hubs, not the integrated preview.
+doors. Its Worker-authored panel requires hardened installation; a normal-mode
+admission check does not prove that panel can mount. The local verification gate
+checks normal server loading and hardened installation on disposable hubs, not
+the integrated preview. Both release delivery and `bun run dev` explicitly select
+hardened mode under Manifold's existing consent rules.
 
 `pack.sh` selects the SDK's `--self-contained` output. A hardened child's
 JavaScript realm cannot inherit the hub's shared-module registry; carrying the
-kit dependencies makes the same artifact load in either mode. Normal installation
-still requires the default export and does not opt the installer into hardening.
+kit dependencies lets the baseline server load in either mode. Packing itself
+does not select trust or opt the installer into hardening.
 
 ## Commands
 
@@ -62,7 +64,10 @@ of this repo's bundles are cut together, from one tree, and travel one path: CI
 (`.github/workflows/manifold-plugins.yml`, manifold's reusable `plugins.yml`) runs check, test,
 pack and verify on every push touching `plugins/`; a `v*` tag (`release.yml`) attaches
 `dist/*.manifold-plugin.json` and `SHA256SUMS` to the GitHub Release and hands each bundle's URL
-and sha to the integrated preview's receiver, which installs it on
-`preview.manifold.tyrode.dev`. Production (`manifold.tyrode.dev`) is installed by the operator,
+and sha with an explicit `--hardened` to the integrated preview's receiver,
+which installs it on `preview.manifold.tyrode.dev`. Before releasing, that
+stable receiver checkout must include
+[manifold #364](https://github.com/atyrode/manifold/issues/364); a plugin SDK pin
+does not update the receiver on the host. Production (`manifold.tyrode.dev`) is installed by the operator,
 by hand, from the release URL in the plugin manager. The kit's commands are documented in
 manifold's `docs/PLUGINS.md` §9.
