@@ -593,7 +593,11 @@ func runWorktreeResume(args []string) int {
 			out := append([]string{path}, plan.Args...)
 			return append(out, stripProfileArgs(forwarded)...)
 		}
-		return runTrusted(sess, "CODE_OMP", []string{"omp"}, argv, "", broker, selections, plan.Dir)
+		// A resume carries no dials and fetches no usage: omp restores the
+		// session's own model, so there is no requested tier to judge and no
+		// fresh window to contradict a block with. The report still writes the
+		// pool and names blocked identities from the broker snapshot alone.
+		return runTrusted(sess, "CODE_OMP", []string{"omp"}, argv, "", broker, selections, launchIntent{}, plan.Dir)
 	})
 }
 
