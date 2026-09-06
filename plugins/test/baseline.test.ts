@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { attachServerGuest, type GuestCtx, type GuestEmit } from "@manifold/plugin-kit/server";
-import type { IsolateChildFrame, IsolateDispatchCtx, IsolateHostFrame } from "@manifold/protocol";
+import {
+  type IsolateChildFrame,
+  type IsolateDispatchCtx,
+  type IsolateHostFrame,
+} from "@manifold/protocol";
 import {
   CODE_PLUGIN_ID,
   LAUNCH_ACTION,
@@ -11,7 +15,7 @@ import {
   LaunchRecordSchema,
   launchKey,
 } from "../atyrode.code/contract.ts";
-import { handlers, plugin } from "../atyrode.code/server.ts";
+import plugin, { handlers } from "../atyrode.code/server.ts";
 
 /**
  * THE BASELINE'S DOORS against a fake ctx: what `launch` refuses, what it writes and emits

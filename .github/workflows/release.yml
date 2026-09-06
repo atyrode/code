@@ -69,6 +69,8 @@ jobs:
         # so the words typed here travel as SSH_ORIGINAL_COMMAND and the host does the install
         # with the owner key it already holds. One call per bundle, parents before parts: ids
         # sorted so `atyrode.code` precedes `atyrode.code.generator`, which requires it.
+        # These are isolated kit plugins; the Worker-authored panel requires explicit
+        # hardened installation. The receiver must support manifold#364 before release.
         if: vars.DEV_DEPLOY_HOST != ''
         env:
           DEV_DEPLOY_SSH_KEY: ${{ secrets.DEV_DEPLOY_SSH_KEY }}
@@ -86,7 +88,7 @@ jobs:
             echo "installing $id ($sha) on the preview"
             ssh -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i "$key" \
               "${{ vars.DEV_DEPLOY_USER }}@${{ vars.DEV_DEPLOY_HOST }}" \
-              "plugin $ASSETS/$id.manifold-plugin.json $sha"
+              "plugin $ASSETS/$id.manifold-plugin.json $sha --hardened"
           done
           rm -f "$key"
         working-directory: code/plugins
