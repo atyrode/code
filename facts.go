@@ -9,10 +9,15 @@ import (
 // ── data ─────────────────────────────────────────────────────────────────────
 // loadBlocks parses a generated page into name -> role rows.
 func loadBlocks(path string) map[string][]string {
+	blocks, _ := loadBlocksChecked(path)
+	return blocks
+}
+
+func loadBlocksChecked(path string) (map[string][]string, error) {
 	blocks := map[string][]string{}
 	f, err := os.Open(path)
 	if err != nil {
-		return blocks
+		return blocks, err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -35,5 +40,5 @@ func loadBlocks(path string) map[string][]string {
 			blocks[cur] = append(blocks[cur], line)
 		}
 	}
-	return blocks
+	return blocks, sc.Err()
 }

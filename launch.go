@@ -450,13 +450,13 @@ func childStatus(err error) int {
 // sessions, with the auth environment stripped. It contains nothing itself —
 // whatever ompu is, is the operator's business — which is exactly why it is no
 // longer called runSandbox.
-func runUntrustedLauncher(envName string, fallbacks []string, prompt, dir string) int {
+func runUntrustedLauncher(envName string, fallbacks []string, prompt, dir string, forwarded []string) int {
 	path, err := resolveLaunchPath(envName, fallbacks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: untrusted launcher not found:", err)
 		return 1
 	}
-	err = runChild(path, untrustedLaunchArgv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
+	err = runChild(path, untrustedLaunchArgv(path, forwarded, prompt), withoutAuthEnv(os.Environ()), dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: untrusted launcher:", err)
 	}
@@ -465,7 +465,7 @@ func runUntrustedLauncher(envName string, fallbacks []string, prompt, dir string
 
 func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 	argv func(string, []string, string) []string, prompt string,
-	broker brokerConfig, selections accountSelectionState, intent launchIntent, dir string) int {
+	broker brokerConfig, selections accountSelectionState, intent launchIntent, dir string, forwarded []string) int {
 	disabled := selections.CurrentDisabled()
 	path, err := resolveLaunchPath(envName, fallbacks)
 	if err != nil {
@@ -473,7 +473,7 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 		return 1
 	}
 	if !broker.configured() {
-		err = runChild(path, argv(path, os.Args[1:], prompt), withoutAuthEnv(os.Environ()), dir)
+		err = runChild(path, argv(path, forwarded, prompt), withoutAuthEnv(os.Environ()), dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "code: trusted child:", err)
 		}
@@ -481,7 +481,7 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 	}
 	accounts, err := loadAccounts(broker)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch:", err)
+		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch")
 		return 1
 	}
 	now := time.Now()
@@ -506,7 +506,7 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 		r.PoolAt = time.Now().Unix()
 	})
 	childEnv := withAuthEnv(os.Environ(), broker, accountPoolPath)
-	err = runChild(path, argv(path, os.Args[1:], prompt), childEnv, dir)
+	err = runChild(path, argv(path, forwarded, prompt), childEnv, dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: trusted child:", err)
 	}
@@ -514,7 +514,7 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 }
 
 // launchGenerated keeps both immutable launch inputs alive only for the child.
-func launchGenerated(session *sessionHandle, cfg, prompt string, flags []string, broker brokerConfig, selections accountSelectionState, intent launchIntent, dir string) int {
+func launchGenerated(session *sessionHandle, cfg, prompt string, flags []string, broker brokerConfig, selections accountSelectionState, intent launchIntent, dir string, forwarded []string) int {
 	tmp, err := os.CreateTemp("", "code-gen-*.yml")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code:", err)
@@ -533,5 +533,5 @@ func launchGenerated(session *sessionHandle, cfg, prompt string, flags []string,
 	}
 	return runTrusted(session, "CODE_OMP", []string{"omp"}, func(path string, forwarded []string, prompt string) []string {
 		return generatedLaunchArgv(path, cfgPath, flags, forwarded, prompt)
-	}, prompt, broker, selections, intent, dir)
+	}, prompt, broker, selections, intent, dir, forwarded)
 }
