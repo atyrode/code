@@ -1,11 +1,4 @@
-import {
-  defineServerAction,
-  defineServerPlugin,
-  type GuestCtx,
-  type GuestStorage,
-  type ServerPluginDef,
-} from "@manifold/plugin-kit/server";
-import { PluginManifestSchema } from "@manifold/protocol";
+import { defineAction, type EmitEvent, type PluginStorage } from "@manifold/plugin";
 import { z } from "zod";
 import {
   CODE_ARGV0,
@@ -25,24 +18,20 @@ import {
   type LaunchResult,
   type ListLaunchesResult,
 } from "./contract.ts";
-import manifestJson from "./manifest.json";
 
 /*
   THE BASELINE, server half. Two doors over one ledger:
 
   - `atyrode.code.launch` is the arbitration point for a launch of `code`: it refuses any other
     program, refuses an offline machine, writes one ledger row and emits `launch_recorded`. It
-    does NOT birth the terminal — stage 1 serves no terminal verb to a server half — so the
-    caller (tonight, the generator's panel) opens the PTY afterwards with its own authority and
-    the argv this door echoed back. The door carries `terminals:spawn` so a caller who could not
-    open a terminal is refused here, before a row is written.
-  - `atyrode.code.listLaunches` reads the ledger back, newest first.
-
-  Both are async end to end, whether the normal host serves a verb directly or the hardened
-  child crosses the process boundary as a `call` frame.
+    does NOT create a terminal or prove a process is running. The caller opens the terminal
+    afterwards through host.client.openTerminal with its own authority and the authorized argv.
+    The door carries `terminals:spawn` so a caller who could not open a terminal is refused here,
+    before a row is written.
+  - `atyrode.code.listLaunches` reads the authorization ledger back, newest first.
  */
 
-const launch = defineServerAction({
+const launch = defineAction({
   name: LAUNCH_ACTION,
   title: "Authorize and record a launch of code on a machine",
   caps: ["terminals:spawn"],
@@ -50,7 +39,7 @@ const launch = defineServerAction({
   result: LaunchResultSchema,
 });
 
-const listLaunches = defineServerAction({
+const listLaunches = defineAction({
   name: LIST_LAUNCHES_ACTION,
   title: "List the launches this plugin recorded",
   caps: [],
@@ -58,8 +47,22 @@ const listLaunches = defineServerAction({
   result: ListLaunchesResultSchema,
 });
 
+/**
+ * The ActionCtx slice this baseline consumes. The pinned SDK exposes PluginStorage and
+ * EmitEvent, but not the engine's full ActionCtx; no server-internal import is needed.
+ */
+export interface LaunchContext {
+  readonly pluginId: string;
+  readonly principal: { readonly id: string };
+  readonly storage: Pick<PluginStorage, "get" | "set" | "delete" | "keys">;
+  readonly emit: EmitEvent;
+  readonly machines: { isOnline(machineId: string): boolean };
+  now(): number;
+  newId(): string;
+}
+
 /** Every ledger key the plugin holds, oldest first by the clock the key carries. */
-async function ledgerKeys(storage: GuestStorage): Promise<string[]> {
+async function ledgerKeys(storage: LaunchContext["storage"]): Promise<string[]> {
   const keys = [...(await storage.keys(LAUNCHES_KEY_PREFIX))];
   keys.sort((a, b) => launchKeyRecordedAt(a) - launchKeyRecordedAt(b) || a.localeCompare(b));
   return keys;
@@ -67,14 +70,14 @@ async function ledgerKeys(storage: GuestStorage): Promise<string[]> {
 
 export const handlers = {
   async [LAUNCH_ACTION](
-    ctx: GuestCtx,
+    ctx: LaunchContext,
     args: LaunchInput,
   ): Promise<LaunchResult | { refused: string }> {
     if (args.argv[0] !== CODE_ARGV0) return { refused: "only the code launcher may be launched" };
-    if (!(await ctx.machines.isOnline(args.machineId))) {
+    if (!ctx.machines.isOnline(args.machineId)) {
       return { refused: `machine ${args.machineId} is offline` };
     }
-    const launchId = await ctx.newId();
+    const launchId = ctx.newId();
     const recordedAt = ctx.now();
     const record: LaunchRecord = {
       launchId,
@@ -97,7 +100,7 @@ export const handlers = {
     return { launchId, argv: args.argv, recordedAt };
   },
 
-  async [LIST_LAUNCHES_ACTION](ctx: GuestCtx): Promise<ListLaunchesResult> {
+  async [LIST_LAUNCHES_ACTION](ctx: LaunchContext): Promise<ListLaunchesResult> {
     const keys = await ledgerKeys(ctx.storage);
     const launches: LaunchRecord[] = [];
     for (const key of keys.reverse()) {
@@ -108,13 +111,8 @@ export const handlers = {
   },
 };
 
-/** Normal installs import this definition; hardened installs bind it to the IPC transport below. */
-const plugin: ServerPluginDef = {
-  manifest: PluginManifestSchema.parse(manifestJson),
+// The installer attaches the bundle's manifest to this in-realm definition.
+export default {
   actions: [launch, listLaunches],
   handlers,
 };
-
-export default plugin;
-
-defineServerPlugin(plugin);
