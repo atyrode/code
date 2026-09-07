@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2024",
-    "lib": ["ES2024"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "module": "Preserve",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -21,10 +22,21 @@
     "types": ["bun"],
     "baseUrl": ".",
     "paths": {
-      "@manifold/plugin-kit": ["../../manifold/packages/plugin-kit/src/index.ts"],
-      "@manifold/plugin-kit/*": ["../../manifold/packages/plugin-kit/src/*.ts"],
-      "@manifold/protocol": ["../../manifold/packages/protocol/src/index.ts"]
+      "@manifold/plugin": ["../../manifold/packages/plugin/src/index.ts"],
+      "@manifold/plugin/hooks": ["../../manifold/packages/plugin/src/hooks.ts"],
+      "@manifold/protocol": ["../../manifold/packages/protocol/src/index.ts"],
+      "@manifold/ui": ["../../manifold/packages/ui/src/index.ts"],
+      "@manifold/sdk": ["../../manifold/packages/sdk/src/index.ts"],
+      "@manifold/scene": ["../../manifold/packages/scene/src/index.ts"],
+      "react": ["../../manifold/node_modules/react", "./node_modules/@types/react"],
+      "react/*": ["../../manifold/node_modules/react/*", "./node_modules/@types/react/*"],
+      "react-dom": ["../../manifold/node_modules/react-dom", "./node_modules/@types/react-dom"],
+      "react-dom/*": ["../../manifold/node_modules/react-dom/*", "./node_modules/@types/react-dom/*"]
     }
   },
-  "include": ["atyrode.code/**/*", "test/**/*"]
+  "include": [
+    "atyrode.code/**/*",
+    "test/**/*",
+    "../../manifold/packages/plugin/src/css-modules.d.ts"
+  ]
 }
