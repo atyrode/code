@@ -1,11 +1,12 @@
 {
   "id": "atyrode.code.generator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "code generator",
-  "description": "The launch panel: pick an online machine and open code in a terminal tile, through the baseline's launch door; shows the launches the baseline recorded.",
+  "description": "A persistent React launch panel: choose an online machine and working directory, open interactive code in a terminal tile, and review recent authorizations.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "launcher", "title": "code" }],
+    "seats": [{ "panel": "launcher", "order": 150, "ratio": 0.5 }],
     "sections": [],
     "elements": [],
     "tools": [],
@@ -17,5 +18,5 @@
       "reason": "The launch door and the launch ledger live in the baseline."
     }
   },
-  "entry": { "web": "web.js" }
+  "entry": { "web": "web.js", "styles": true }
 }
