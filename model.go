@@ -143,22 +143,26 @@ type providerAvailabilityMsg struct {
 // probeProviderAvailabilityCmd asks the same OMP binary Code launches which
 // providers have usable local credentials. Broker-backed installations get
 // this information from their account snapshot instead.
+func probeProviderAvailability() map[string]bool {
+	pools := map[string]bool{}
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return pools
+	}
+	for _, provider := range providerRegistry {
+		cmd := exec.Command(path, "token", provider.ID)
+		cmd.Env = withoutAuthEnv(os.Environ())
+		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+		if cmd.Run() == nil {
+			pools[provider.Pool] = true
+		}
+	}
+	return pools
+}
+
 func probeProviderAvailabilityCmd() tea.Cmd {
 	return func() tea.Msg {
-		pools := map[string]bool{}
-		path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
-		if err != nil {
-			return providerAvailabilityMsg{pools: pools}
-		}
-		for _, provider := range providerRegistry {
-			cmd := exec.Command(path, "token", provider.ID)
-			cmd.Env = withoutAuthEnv(os.Environ())
-			cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-			if cmd.Run() == nil {
-				pools[provider.Pool] = true
-			}
-		}
-		return providerAvailabilityMsg{pools: pools}
+		return providerAvailabilityMsg{pools: probeProviderAvailability()}
 	}
 }
 
@@ -198,24 +202,26 @@ var ompVersionRe = regexp.MustCompile(`omp/(\d+)\.(\d+)`)
 // probeOmpVersionCmd resolves the same binary Enter launches and asks it for
 // its version, off the main thread. A drift guard, not a feature flag: any
 // failure just reads as "unknown" and version-gated keys stay off.
-func probeOmpVersionCmd() tea.Cmd {
-	return func() tea.Msg {
-		path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
-		if err != nil {
-			return ompVersionMsg{}
-		}
-		out, err := exec.Command(path, "--version").Output()
-		if err != nil {
-			return ompVersionMsg{}
-		}
-		match := ompVersionRe.FindSubmatch(out)
-		if match == nil {
-			return ompVersionMsg{}
-		}
-		major, _ := strconv.Atoi(string(match[1]))
-		minor, _ := strconv.Atoi(string(match[2]))
-		return ompVersionMsg{major: major, minor: minor, ok: true}
+func probeOmpVersion() ompVersionMsg {
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return ompVersionMsg{}
 	}
+	out, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return ompVersionMsg{}
+	}
+	match := ompVersionRe.FindSubmatch(out)
+	if match == nil {
+		return ompVersionMsg{}
+	}
+	major, _ := strconv.Atoi(string(match[1]))
+	minor, _ := strconv.Atoi(string(match[2]))
+	return ompVersionMsg{major: major, minor: minor, ok: true}
+}
+
+func probeOmpVersionCmd() tea.Cmd {
+	return func() tea.Msg { return probeOmpVersion() }
 }
 
 type gitRepoMsg struct {
@@ -223,24 +229,26 @@ type gitRepoMsg struct {
 	linked, ok   bool
 }
 
-func probeGitRepoCmd() tea.Cmd {
-	return func() tea.Msg {
-		out, err := exec.Command("git", "rev-parse", "--path-format=absolute",
-			"--show-toplevel", "--show-prefix", "--git-dir", "--git-common-dir").Output()
-		if err != nil {
-			return gitRepoMsg{}
-		}
-		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-		if len(lines) != 4 {
-			return gitRepoMsg{}
-		}
-		return gitRepoMsg{
-			root:   lines[0],
-			prefix: lines[1],
-			linked: lines[2] != lines[3],
-			ok:     true,
-		}
+func probeGitRepo() gitRepoMsg {
+	out, err := exec.Command("git", "rev-parse", "--path-format=absolute",
+		"--show-toplevel", "--show-prefix", "--git-dir", "--git-common-dir").Output()
+	if err != nil {
+		return gitRepoMsg{}
 	}
+	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(lines) != 4 {
+		return gitRepoMsg{}
+	}
+	return gitRepoMsg{
+		root:   lines[0],
+		prefix: lines[1],
+		linked: lines[2] != lines[3],
+		ok:     true,
+	}
+}
+
+func probeGitRepoCmd() tea.Cmd {
+	return func() tea.Msg { return probeGitRepo() }
 }
 
 // ompVersionAtLeast reports a probed version ≥ major.minor; unknown is never

@@ -37,6 +37,16 @@ func main() {
 	// the launched omp session as before.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "launch":
+			os.Exit(runLaunch(os.Args[2:]))
+		case "inspect":
+			os.Exit(runInspect(os.Args[2:]))
+		case "suggest":
+			os.Exit(runSuggest(os.Args[2:]))
+		case "usage":
+			os.Exit(runUsageCLI(os.Args[2:]))
+		case "accounts":
+			os.Exit(runAccountsCLI(os.Args[2:]))
 		case "generate":
 			os.Exit(runGenerate(os.Args[2:]))
 		case "session", "sessions":
@@ -60,18 +70,30 @@ func main() {
 		fmt.Fprintln(os.Stderr, "code:", err)
 		os.Exit(1)
 	}
+	os.Exit(executeLaunch(fm, os.Args[1:]))
+}
+
+// executeLaunch owns the child lifetime for both a confirmed TUI and a headless
+// selection. The caller supplies argv; process-global command flags never leak.
+func executeLaunch(fm model, forwarded []string) int {
 	var wt *sessionWorktree
 	launchChosen := fm.launchUntrusted || fm.launchRuntime != "" || fm.launchManaged || fm.genConfig != ""
 	if fm.worktreeMode && launchChosen {
+		if fm.gitRoot == "" {
+			fmt.Fprintln(os.Stderr, "code: worktree: not inside a git repository")
+			return 1
+		}
+		var err error
 		wt, err = createSessionWorktree(fm.gitRoot)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "code: worktree:", err)
-			os.Exit(1)
+			return 1
 		}
 		wt.ChildDir = filepath.Join(wt.Dir, filepath.FromSlash(fm.gitPrefix))
 		if _, err := os.Stat(wt.ChildDir); err != nil {
 			wt.ChildDir = wt.Dir
 		}
+		defer releaseSessionWorktree(wt)
 	}
 	launchDir := ""
 	if wt != nil {
@@ -85,32 +107,27 @@ func main() {
 		// designated for untrusted sessions, and it contains nothing. The one
 		// sandbox in this codebase is the boundary the engine builds, and the
 		// containment declaration is the only thing entitled to that word.
-		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, func(_ *sessionHandle) int {
-			return runUntrustedLauncher("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir)
+		status = withSession("untrusted", "CODE_OMP_UNTRUSTED", []string{"ompu"}, wt, forwarded, func(_ *sessionHandle) int {
+			return runUntrustedLauncher("CODE_OMP_UNTRUSTED", []string{"ompu"}, fm.firstPrompt, launchDir, forwarded)
 		})
 	case fm.launchRuntime != "":
-		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, func(_ *sessionHandle) int {
-			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt, launchDir)
+		status = withSession("runtime:"+fm.launchRuntime, "CODE_RUNTIME_BROKER", nil, wt, forwarded, func(_ *sessionHandle) int {
+			return runRuntimeTarget(fm.launchRuntime, fm.sel["thinking"], fm.firstPrompt, launchDir, forwarded)
 		})
 	case fm.launchManaged:
 		// A managed launch carries no catalog, so the intent names no tier:
 		// every provider is judged on its main tier, and the usage the dials
 		// showed still catches a stale provider-wide block.
-		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, func(sess *sessionHandle) int {
+		status = withSession("managed", "CODE_OMP", []string{"omp-managed", "omp"}, wt, forwarded, func(sess *sessionHandle) int {
 			return runTrusted(sess, "CODE_OMP", []string{"omp-managed", "omp"}, managedLaunchArgv,
-				fm.firstPrompt, fm.broker, fm.accountSelections, launchIntent{usage: fm.avail.accountUsage}, launchDir)
+				fm.firstPrompt, fm.broker, fm.accountSelections, launchIntent{usage: fm.avail.accountUsage}, launchDir, forwarded)
 		})
 	case fm.genConfig != "":
-		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, func(sess *sessionHandle) int {
-			return launchGenerated(sess, fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, fm.launchIntent(), launchDir)
+		status = withSession(comboID(fm.sel), "CODE_OMP", []string{"omp"}, wt, forwarded, func(sess *sessionHandle) int {
+			return launchGenerated(sess, fm.genConfig, fm.firstPrompt, fm.sessionFlags(), fm.broker, fm.accountSelections, fm.launchIntent(), launchDir, forwarded)
 		})
 	}
-	if wt != nil {
-		releaseSessionWorktree(wt)
-	}
-	if status != 0 {
-		os.Exit(status)
-	}
+	return status
 }
 
 // resolveGlyphs picks the facet-glyph table this terminal can actually render,

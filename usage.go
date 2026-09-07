@@ -256,7 +256,9 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 			RemainingAccounts float64 `json:"remainingAccounts"`
 		} `json:"capacity"`
 	}
-	if len(out) == 0 || json.Unmarshal(out, &doc) != nil {
+	// omp always emits a reports array, even when it has no usage. A nil
+	// slice means the field was absent or null, not a successful observation.
+	if len(out) == 0 || json.Unmarshal(out, &doc) != nil || doc.Reports == nil {
 		return a
 	}
 	a.ok = true
