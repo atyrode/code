@@ -3992,15 +3992,13 @@ exit %d
 			t.Setenv("CODE_OMP", script)
 			t.Setenv("CAPTURE", capture)
 			t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
-			oldArgs := os.Args
-			os.Args = []string{"code", "--profile", "forwarded", "--profile=also-forwarded", "hello"}
-			defer func() { os.Args = oldArgs }()
+			forwarded := []string{"--profile", "forwarded", "--profile=also-forwarded", "hello"}
 
 			selections := defaultAccountSelectionState()
 			selections.SetManualDisabled(map[accountKey]bool{
 				{Provider: "openai-codex", IdentityKey: "unmatched-key"}: true,
 			})
-			status := launchGenerated(nil, "models: {}\n", "prompt", nil, broker, selections, launchIntent{}, "")
+			status := launchGenerated(nil, "models: {}\n", "prompt", nil, broker, selections, launchIntent{}, "", forwarded)
 			if status != tc.exit {
 				t.Fatalf("exit status = %d, want %d", status, tc.exit)
 			}
@@ -4070,7 +4068,7 @@ cat "$OMP_AUTH_BROKER_ACCOUNT_POOL_FILE" > "$ACCOUNT_POOL_COPY"
 		accountPoolCopy := filepath.Join(dir, label+"-account-pool")
 		t.Setenv("ENV_COPY", envCopy)
 		t.Setenv("ACCOUNT_POOL_COPY", accountPoolCopy)
-		if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", broker, selections, launchIntent{}, ""); status != 0 {
+		if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", broker, selections, launchIntent{}, "", nil); status != 0 {
 			t.Fatalf("%s launch status = %d", label, status)
 		}
 		envBody, err := os.ReadFile(envCopy)
@@ -4142,7 +4140,7 @@ func TestTrustedLaunchWithoutBrokerUsesLocalOMPAuth(t *testing.T) {
 	t.Setenv("CAPTURE", capture)
 	t.Setenv("OMP_AUTH_BROKER_URL", "http://incomplete")
 	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/stale-pool")
-	if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), launchIntent{}, ""); status != 0 {
+	if status := runTrusted(nil, "CODE_OMP", nil, managedLaunchArgv, "", brokerConfig{}, defaultAccountSelectionState(), launchIntent{}, "", nil); status != 0 {
 		t.Fatalf("direct trusted launch status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)
@@ -4169,10 +4167,7 @@ func TestUntrustedLaunchStripsInheritedBrokerEnvironment(t *testing.T) {
 	t.Setenv("OMP_AUTH_BROKER_SNAPSHOT_CACHE", "/tmp/ambient")
 	t.Setenv("OMP_AUTH_BROKER_ACCOUNT_POOL_FILE", "/tmp/ambient-account-pool")
 	t.Setenv("CODE_AUTH_ACCOUNT_STATE", "/tmp/ambient-state")
-	oldArgs := os.Args
-	os.Args = []string{"code", "--profile", "ambient"}
-	defer func() { os.Args = oldArgs }()
-	if status := runUntrustedLauncher("CODE_OMP_UNTRUSTED", nil, "", ""); status != 0 {
+	if status := runUntrustedLauncher("CODE_OMP_UNTRUSTED", nil, "", "", []string{"--profile", "ambient"}); status != 0 {
 		t.Fatalf("untrusted launcher status = %d", status)
 	}
 	raw, err := os.ReadFile(capture)

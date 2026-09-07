@@ -592,11 +592,11 @@ func runSessionReap(args []string) int {
 // withSession records a launch for the lifetime of its child. Bookkeeping never
 // blocks a launch: the session is the product, the record is not, so a registry
 // failure is silently tolerated rather than surfaced as a launch error.
-func withSession(profile, envName string, fallbacks []string, wt *sessionWorktree, run func(*sessionHandle) int) int {
+func withSession(profile, envName string, fallbacks []string, wt *sessionWorktree, forwarded []string, run func(*sessionHandle) int) int {
 	rec := sessionRecord{
 		PID:     os.Getpid(),
 		Profile: profile,
-		Resume:  forwardedResume(os.Args[1:]),
+		Resume:  forwardedResume(forwarded),
 		Started: time.Now().Unix(),
 	}
 	if path, err := resolveLaunchPath(envName, fallbacks); err == nil {

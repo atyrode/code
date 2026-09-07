@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"time"
 
@@ -67,8 +68,24 @@ func (m model) managerDisplayedDisabled() map[accountKey]bool {
 }
 
 func (m *model) commitAccountSelections(candidate accountSelectionState) error {
+	path, err := accountAPIStatePath(m.accountState)
+	if err != nil {
+		return err
+	}
+	lock, err := lockAccountAPIState(path)
+	if err != nil {
+		return err
+	}
+	defer unlockProfile(lock)
+	current, err := readAccountAPIState(path)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(cloneAccountSelectionState(current), cloneAccountSelectionState(m.accountSelections)) {
+		return fmt.Errorf("account selections changed on disk; restart Code before editing")
+	}
 	candidate = pruneAccountSelectionState(candidate, m.avail)
-	if err := writeAccountSelectionState(m.accountState, candidate); err != nil {
+	if err := writeAccountSelectionState(path, candidate); err != nil {
 		return err
 	}
 	m.accountSelections = candidate

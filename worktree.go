@@ -587,9 +587,9 @@ func runWorktreeResume(args []string) int {
 	fmt.Fprintf(os.Stderr, "code: resuming %s (%s) in %s\n", plan.Session.ID, sessionTitleOrUntitled(plan.Session), plan.Dir)
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	selections := loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
-	return withSession("resume", "CODE_OMP", []string{"omp"}, wt, func(sess *sessionHandle) int {
+	return withSession("resume", "CODE_OMP", []string{"omp"}, wt, forwarded, func(sess *sessionHandle) int {
 		_ = sess.Update(func(r *sessionRecord) { r.Resume = plan.Session.ID })
-		argv := func(path string, _ []string, _ string) []string {
+		argv := func(path string, forwarded []string, _ string) []string {
 			out := append([]string{path}, plan.Args...)
 			return append(out, stripProfileArgs(forwarded)...)
 		}
@@ -597,7 +597,7 @@ func runWorktreeResume(args []string) int {
 		// session's own model, so there is no requested tier to judge and no
 		// fresh window to contradict a block with. The report still writes the
 		// pool and names blocked identities from the broker snapshot alone.
-		return runTrusted(sess, "CODE_OMP", []string{"omp"}, argv, "", broker, selections, launchIntent{}, plan.Dir)
+		return runTrusted(sess, "CODE_OMP", []string{"omp"}, argv, "", broker, selections, launchIntent{}, plan.Dir, forwarded)
 	})
 }
 
