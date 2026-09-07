@@ -9,7 +9,10 @@ the launcher's transition direction, not proof that the TUI has been replaced.
 
 The marked block is generated from
 [dotfiles' engineering.md](https://github.com/atyrode/dotfiles/blob/main/modules/home/agents/engineering.md);
-edit local guidance outside it and propose shared-rule changes at that source.
+`agent-policy` rejects stale or corrupted common generated content. Edit local
+guidance outside it; source updates arrive through generated-only maintenance
+PRs with required CI and holds, as described in [instruction authoring and
+distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#instruction-authoring-and-distribution).
 
 <!-- BEGIN SHARED ENGINEERING: generated; do not edit -->
 
