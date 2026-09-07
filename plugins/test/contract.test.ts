@@ -29,7 +29,8 @@ describe("the manifests spell the contract", () => {
     expect(manifest.id).toBe(GENERATOR_PLUGIN_ID);
     expect(manifest.contributes.panels.map((p) => p.id)).toEqual([LAUNCHER_PANEL]);
     expect(manifest.dependencies?.[CODE_PLUGIN_ID]?.type).toBe("required");
-    expect(manifest.entry).toEqual({ web: "web.js" });
+    expect(manifest.entry?.web).toBe("web.js");
+    expect(manifest.entry?.styles).toBe(true);
     expect(manifest.capabilities).toEqual([]);
   });
 });

@@ -18,10 +18,10 @@ export const GENERATOR_PLUGIN_ID = "atyrode.code.generator";
 
 // ---------------------------------------------------------------------------- doors
 
-/** LOCAL action names, as `defineServerAction` takes them; the roster prefixes the plugin id. */
+/** Local action names; the roster prefixes the plugin id. */
 export const LAUNCH_ACTION = "launch";
 export const LIST_LAUNCHES_ACTION = "listLaunches";
-/** FULL door names, as `host.action` and a button's `action` spell them. */
+/** Full door names used by host.client.action and a button's data-action. */
 export const LAUNCH_DOOR = `${CODE_PLUGIN_ID}.${LAUNCH_ACTION}`;
 export const LIST_LAUNCHES_DOOR = `${CODE_PLUGIN_ID}.${LIST_LAUNCHES_ACTION}`;
 
