@@ -1,0 +1,36 @@
+name: Agent policy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-policy:
+    name: agent-policy
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # The policy and its checking code intentionally follow reviewed dotfiles main.
+      - uses: atyrode/dotfiles/.github/actions/agent-policy@main
+
+  synchronize:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    uses: atyrode/dotfiles/.github/workflows/sync-agent-policy.yml@main
