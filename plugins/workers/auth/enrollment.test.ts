@@ -6,7 +6,8 @@ import { registerOAuthProvider, unregisterOAuthProvider } from "@oh-my-pi/pi-ai/
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { ControlFrames, EnrollmentControl, EnrollmentRefusal, attachControlInput, type EnrollmentEvent } from "./control.ts";
-import { authEvent, enroll, enrollmentFlow, uploadFields } from "./enrollment.ts";
+import { authEvent, enroll, uploadFields } from "./enrollment.ts";
+import { enrollmentFlow } from "./providers.ts";
 
 const grant = {
   access_token: "fixture-access-never-output",
@@ -47,6 +48,14 @@ function manualEnrollment(events: EnrollmentEvent[], form: "url" | "query" | "co
 }
 
 describe("private OAuth control", () => {
+  test("a start cannot switch the provider bound by the sealed native input", async () => {
+    const control = new EnrollmentControl(() => undefined, 10_000, "anthropic");
+    control.receive({ type: "start", provider: "openai-codex" });
+    await expect(control.started.promise).rejects.toMatchObject({ code: "invalid_control" });
+    expect(control.signal.aborted).toBe(true);
+    control.finish();
+  });
+
   test("consumes correlated responses once and aborts stale replay without echoing input", async () => {
     const events: EnrollmentEvent[] = [];
     const control = new EnrollmentControl(event => events.push(event));

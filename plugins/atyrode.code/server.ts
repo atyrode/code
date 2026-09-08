@@ -4,6 +4,7 @@ import {
   catalogPayload, machineActions, machineHandlers, matchesCatalog, readCodeConfiguration,
   readCodeSnapshot, requireConfigurationResources, requireCurrentJob, requirePayload, type CodeContext,
 } from "./machine-server.ts";
+import { authActions, authHandlers } from "./auth-server.ts";
 
 const prepareLaunch = defineAction({
   name: "prepareLaunch", title: "Prepare a reviewed native Code runtime", caps: ["terminals:spawn"], trace: "opaque",
@@ -11,6 +12,7 @@ const prepareLaunch = defineAction({
 });
 export const handlers = {
   ...machineHandlers,
+  ...authHandlers,
   async prepareLaunch(ctx: CodeContext, args: PrepareLaunchInput): Promise<PrepareLaunchResult | { refused: string }> {
     try {
       const configuration = await readCodeConfiguration(ctx, args.machineId);
@@ -41,4 +43,4 @@ export const handlers = {
     }
   },
 };
-export default { actions: [prepareLaunch, ...machineActions], handlers };
+export default { actions: [prepareLaunch, ...machineActions, ...authActions], handlers };
