@@ -357,3 +357,37 @@ func TestInspectPortableChoicesDetermineAvailableProviders(t *testing.T) {
 	}
 	requireNoPath(t, path+".lock")
 }
+
+func TestPortableObservationsRefuseBrokerlessLocalCredentials(t *testing.T) {
+	capture := headlessLaunchFixture(t)
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", filepath.Join(t.TempDir(), "missing", "accounts.json"))
+	status, body, errout := accountAPITestRun(t, runInspect)
+	var standalone inspectSnapshot
+	if status != 0 || json.Unmarshal([]byte(body), &standalone) != nil {
+		t.Fatalf("standalone credential fallback failed: %s", errout)
+	}
+	available := false
+	for _, provider := range standalone.Providers {
+		if provider.ID == "openai-codex" && provider.CredentialState == "available" {
+			available = true
+		}
+	}
+	if !available {
+		t.Fatal("fixture did not expose standalone local credentials")
+	}
+	state := `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[{"provider":"openai-codex","identityKey":"a@example.com"}],"presets":[]}`
+	for _, command := range []struct {
+		run func([]string) int
+		args []string
+	}{
+		{runInspect, []string{"--state", state}},
+		{runSuggest, []string{"--state", state, "--prompt", "critical refactor"}},
+	} {
+		status, body, _ := accountAPITestRun(t, command.run, command.args...)
+		if status == 0 || body != "" {
+			t.Fatalf("portable observation borrowed local credential authority: %s", body)
+		}
+	}
+	requireNoPath(t, filepath.Join(capture, "argv"))
+	requireNoPath(t, os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
+}
