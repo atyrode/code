@@ -282,7 +282,7 @@ func TestUsageAPIPortableChoicesControlAccountsWithoutPersistence(t *testing.T) 
 	if err != nil || string(after) != original {
 		t.Fatal("portable usage overwrote standalone settings")
 	}
-	for _, malformed := range []string{"null", portableAccountTestState+"{}", `{"schemaVersion":1}`} {
+	for _, malformed := range []string{"null", portableAccountTestState + "{}", `{"schemaVersion":1}`} {
 		status, body, _ := accountAPITestRun(t, runUsageCLI, "--state", malformed)
 		if status == 0 || body != "" {
 			t.Fatal("malformed portable usage choices returned an observation")
@@ -300,8 +300,8 @@ func TestUsageAPIPortableBrokerFailureNeverBorrowsStandaloneCache(t *testing.T) 
 	now := time.Now().Unix()
 	cached := emptyAvailability()
 	cached.ok, cached.accountsOK, cached.accounts = true, true, accounts
-	cached.accountUsage[accountKey{Provider: "openai-codex", IdentityKey: "a@example.com"}] = []usageWin{{id: "30d", prov: "openai-codex", pct: 22, secs: 900, observed: now-200}}
-	cached.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "12.50", fetchedAt: now-200}
+	cached.accountUsage[accountKey{Provider: "openai-codex", IdentityKey: "a@example.com"}] = []usageWin{{id: "30d", prov: "openai-codex", pct: 22, secs: 900, observed: now - 200}}
+	cached.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "12.50", fetchedAt: now - 200}
 	saveUsageCache(cachePath, cached)
 	before, err := os.ReadFile(cachePath)
 	if err != nil {

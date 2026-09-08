@@ -4,12 +4,12 @@ import {
   type PrepareLaunchInput, type PrepareLaunchResult,
 } from "./contract.ts";
 import {
-  accountStateFromSnapshot, machineActions, machineHandlers, readCodePreferences,
+  machineActions, machineHandlers, readCodePreferences,
   readCodeSnapshot, type CodeContext,
 } from "./machine-server.ts";
 
 const prepareLaunch = defineAction({
-  name: "prepareLaunch", title: "Prepare a reviewed Code launch", caps: ["terminals:spawn", "jobs:read"],
+  name: "prepareLaunch", title: "Prepare a reviewed Code launch", caps: ["terminals:spawn"], trace: "opaque",
   input: PrepareLaunchInputSchema, result: PrepareLaunchResultSchema,
 });
 
@@ -38,14 +38,10 @@ export const handlers = {
       if (args.accounts.source === "plugin") {
         if (args.kind !== "generated" && args.kind !== "managed") return { refused: "code_invalid_request" };
         const preferences = await readCodePreferences(ctx, args.machineId);
-        if (args.accounts.revision !== (preferences.record?.revision ?? 0) || inspection.baseRevision !== args.accounts.revision)
+        if (preferences.record === null) return { refused: "code_preferences_missing" };
+        if (args.accounts.revision !== preferences.record.revision || inspection.baseRevision !== args.accounts.revision)
           return { refused: "code_stale_preferences" };
-        let state = preferences.record?.state;
-        if (state === undefined) {
-          const baseline = await readCodeSnapshot(ctx, args.machineId, "accounts-list", args.accounts.baselineJobId);
-          if (baseline.value.baseRevision !== args.accounts.revision) return { refused: "code_stale_preferences" };
-          state = accountStateFromSnapshot(baseline.value);
-        }
+        const state = preferences.record.state;
         const disabled = state.activePreset === "Manual" ? state.manualDisabled : state.presets.find((preset) => preset.name === state.activePreset)?.disabled;
         if (disabled === undefined) return { refused: "code_invalid_request" };
         argv.push(`--account-selection=${JSON.stringify({ schemaVersion: 1, disabled })}`);

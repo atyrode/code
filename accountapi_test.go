@@ -257,10 +257,10 @@ const portableAccountTestState = `{"schemaVersion":1,"activePreset":"Manual","ma
 func portableAccountTestDocument(t *testing.T, result accountAPIResult) string {
 	t.Helper()
 	body, err := json.Marshal(struct {
-		SchemaVersion int `json:"schemaVersion"`
-		ActivePreset string `json:"activePreset"`
+		SchemaVersion  int                   `json:"schemaVersion"`
+		ActivePreset   string                `json:"activePreset"`
 		ManualDisabled []accountAPIReference `json:"manualDisabled"`
-		Presets []accountAPIPreset `json:"presets"`
+		Presets        []accountAPIPreset    `json:"presets"`
 	}{1, result.ActivePreset, result.ManualDisabled, result.Presets})
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestAccountsAPIRejectsMalformedPortableStateWithoutSideEffects(t *testing.T
 		t.Fatal(err)
 	}
 	for _, state := range []string{
-		"", "null", "[]", portableAccountTestState+"{}", portableAccountTestState+" trailing",
+		"", "null", "[]", portableAccountTestState + "{}", portableAccountTestState + " trailing",
 		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"schemaVersion":2`, 1),
 		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"schemaVersion":1,"schemaVersion":1`, 1),
 		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"SchemaVersion":1`, 1),
