@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { defineAction } from "@manifold/plugin";
 import type { GuestJobFollow, GuestJobNode } from "@manifold/plugin-kit/server";
 import { canonicalJobJson, JobFollowSnapshotSchema, PublicJobSchema, type JobFollowSnapshot, type PublicJob } from "@manifold/protocol";
@@ -246,7 +246,7 @@ export const authHandlers = {
       enrollmentProvenance(job, args.machineId, started.jobId, args.provider);
       await requireCurrentJob(ctx, job);
       if (job.state !== "started" || job.nextInputSeq !== 0) throw new AuthRefusal("code_auth_input_conflict");
-      await ctx.jobs.input({ node: nodeFor(job.machineId, job.jobId), seq: job.nextInputSeq, data: Buffer.from(JSON.stringify({ type: "start", provider: args.provider }) + "\n").toString("base64"), eof: false });
+      await ctx.jobs.input({ requestId: randomUUID(), node: nodeFor(job.machineId, job.jobId), seq: job.nextInputSeq, data: Buffer.from(JSON.stringify({ type: "start", provider: args.provider }) + "\n").toString("base64"), eof: false });
       return PublicJobSchema.parse(await ctx.jobs.status(nodeFor(job.machineId, job.jobId)));
     } catch (reason) {
       if (cleanupTarget) {
@@ -288,11 +288,12 @@ export const authHandlers = {
       const observation = await readEnrollment(ctx, args);
       const job = observation.job;
       if (observation.state !== "challenge" || observation.prompt?.promptId !== args.promptId || job.state !== "started") throw new AuthRefusal("code_auth_stale_response");
+      if (job.nextInputSeq === null) throw new AuthRefusal("code_auth_input_unconfirmed");
       if (job.nextInputSeq !== args.nextInputSeq) throw new AuthRefusal("code_auth_input_conflict");
       const frame = Buffer.from(JSON.stringify({ type: "response", promptId: args.promptId, value: args.value }) + "\n");
       if (frame.length > CONTROL_FRAME_BYTES) throw new AuthRefusal("code_auth_invalid_callback");
       try {
-        await ctx.jobs.input({ node: nodeFor(args.machineId, args.jobId), seq: job.nextInputSeq,
+        await ctx.jobs.input({ requestId: randomUUID(), node: nodeFor(args.machineId, args.jobId), seq: job.nextInputSeq,
           data: frame.toString("base64"), eof: false });
       } catch { throw new AuthRefusal("code_auth_input_refused"); }
       return { accepted: true as const, jobId: job.jobId };

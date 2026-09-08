@@ -60,12 +60,13 @@ function fixture() {
       input: async args => {
         state.attempts++;
         if (state.inputConflict || args.seq !== current.nextInputSeq || current.state !== "started") throw new Error("Native sequence conflict");
-        current = { ...current, nextInputSeq: current.nextInputSeq + 1 };
+        current = { ...current, nextInputSeq: args.seq + 1 };
         const frame = JSON.parse(Buffer.from(args.data, "base64").toString());
         if (frame.type === "response") {
           state.acceptedResponses++;
           bytes = Buffer.concat([bytes, encode([{ type: "prompt_closed", promptId }])]);
         } else if (frame.type === "start") bytes = encode(frames);
+        return { accepted: true as const };
       },
       cancel: async node => {
         if (!state.readsAllowed || node.jobId !== current.jobId) throw new Error("Native cancellation denied");
@@ -126,8 +127,12 @@ describe("governed native OAuth controls", () => {
     expect(f.state.acceptedResponses).toBe(1);
   });
 
-  test("native sequence races refuse once without replaying a callback", async () => {
+  test("unknown or competing native input sequences refuse without replaying a callback", async () => {
     const f = fixture();
+    f.replace({ ...f.current(), nextInputSeq: null });
+    expect(await authHandlers.respondEnrollment(f.ctx, response)).toEqual({ refused: "code_auth_input_unconfirmed" });
+    expect(f.state.attempts).toBe(0);
+    f.replace({ ...f.current(), nextInputSeq: 1 });
     expect(await authHandlers.respondEnrollment(f.ctx, { ...response, nextInputSeq: 0 })).toEqual({ refused: "code_auth_input_conflict" });
     expect(f.state.attempts).toBe(0);
     f.state.inputConflict = true;
