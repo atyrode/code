@@ -10,6 +10,9 @@
     "dev": "bun ../../manifold/packages/plugin-kit/src/dev.ts ."
   },
   "dependencies": {
+    "@oh-my-pi/pi-ai": "18.1.14",
+    "@oh-my-pi/pi-catalog": "18.1.14",
+    "@oh-my-pi/pi-utils": "18.1.14",
     "zod": "4.4.3"
   },
   "devDependencies": {
