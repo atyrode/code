@@ -184,7 +184,6 @@ func barAnimCmd(step int) tea.Cmd {
 	return tea.Tick(barAnimInterval, func(time.Time) tea.Msg { return barAnimMsg{step} })
 }
 
-
 type gitRepoMsg struct {
 	root, prefix string
 	linked, ok   bool
