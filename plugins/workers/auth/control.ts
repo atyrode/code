@@ -15,6 +15,7 @@ export class EnrollmentRefusal extends Error {
 }
 
 export type EnrollmentEvent =
+  | { type: "started"; provider: string }
   | { type: "auth"; url: string; instructions: string; challenge?: string }
   | { type: "prompt"; promptId: string; kind: "oauth_callback"; message: string }
   | { type: "prompt_closed"; promptId: string }
@@ -79,7 +80,7 @@ export class EnrollmentControl {
   #promptCount = 0;
   #timer: NodeJS.Timeout;
 
-  constructor(readonly emit: (event: EnrollmentEvent) => void, timeoutMs = ENROLLMENT_TIMEOUT_MS) {
+  constructor(readonly emit: (event: EnrollmentEvent) => void, timeoutMs = ENROLLMENT_TIMEOUT_MS, readonly sealedProvider?: string) {
     this.#timer = setTimeout(() => this.cancel("timeout"), timeoutMs);
     // A disconnect can precede consumption of the start promise.
     void this.started.promise.catch(() => undefined);
@@ -90,7 +91,8 @@ export class EnrollmentControl {
     if (!record(frame)) return this.cancel("invalid_control");
     if (frame.type === "cancel" && fields(frame, ["type"])) return this.cancel("cancelled");
     if (frame.type === "start" && fields(frame, ["type", "provider"])) {
-      if (this.#didStart || typeof frame.provider !== "string" || !/^[a-z0-9][a-z0-9-]{0,95}$/.test(frame.provider)) {
+      if (this.#didStart || typeof frame.provider !== "string" || !/^[a-z0-9][a-z0-9-]{0,95}$/.test(frame.provider) ||
+        (this.sealedProvider !== undefined && frame.provider !== this.sealedProvider)) {
         return this.cancel("invalid_control");
       }
       this.#didStart = true;

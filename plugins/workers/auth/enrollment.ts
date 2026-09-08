@@ -4,40 +4,15 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { parseCallbackInput } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
-import type { CompiledAuthProvider, CompiledDeviceCodeLogin, CompiledOAuthCodeLogin } from "@oh-my-pi/pi-catalog/compat/types";
 import { setTransports } from "@oh-my-pi/pi-utils/logger";
 import { EnrollmentControl, EnrollmentRefusal, type EnrollmentEvent } from "./control.ts";
+import { enrollmentFlow, enrollmentProviders, type SupportedFlow } from "./providers.ts";
 
 // Public SDK logger is lazy. Disable both transports before invoking any flow;
 // provider progress/errors are deliberately not diagnostic output for this worker.
 setTransports({ file: false, console: false });
 
 export type EnrollmentUpload = (input: Record<string, string | number | boolean>, signal: AbortSignal) => Promise<unknown>;
-type SupportedFlow = CompiledOAuthCodeLogin | CompiledDeviceCodeLogin | { kind: "codex-device" };
-
-/** Capability filtering over the SDK policy, not a second provider registry. */
-export function enrollmentFlow(policy: CompiledAuthProvider | undefined): SupportedFlow {
-  if (!policy?.login) throw new EnrollmentRefusal("provider_unavailable");
-  if (policy.result === "api-key" || policy.login.kind === "api-key") throw new EnrollmentRefusal("api_key_unsupported");
-  const flow = policy.login;
-  if (flow.kind === "custom") {
-    // This reviewed SDK hook creates a new grant, but ignores ctrl.fetch and only
-    // checks abort between polls. The private worker exits on cancellation; it
-    // never awaits late completion or uploads after the abort gate.
-    if (flow.hook === "openai-codex-device") return { kind: "codex-device" };
-    throw new EnrollmentRefusal("flow_unsupported");
-  }
-  // Other hooks can read/write host caches, acquire browser cookies, prompt for
-  // secrets, or provision API keys. Admit only the reviewed token identity hooks.
-  if (flow.afterExchange && !["anthropic-identity", "openai-codex-profile"].includes(flow.afterExchange)) {
-    throw new EnrollmentRefusal("flow_unsupported");
-  }
-  if (flow.kind === "oauth-code" && (flow.callback.nativeScheme || flow.state === "none" || flow.pasteKey)) {
-    throw new EnrollmentRefusal("flow_unsupported");
-  }
-  if (flow.kind === "device-code" && flow.headersHook) throw new EnrollmentRefusal("flow_unsupported");
-  return flow;
-}
 
 /** Project static instructions or an explicitly bounded device challenge, never arbitrary SDK prose. */
 export function authEvent(info: { url: string; instructions?: string }, flow: SupportedFlow): EnrollmentEvent {
@@ -129,9 +104,11 @@ export async function enroll(control: EnrollmentControl, upload: EnrollmentUploa
   try {
     const provider = await untilAbort(control.started.promise, control.signal);
     control.signal.throwIfAborted();
-    const entry = getOAuthProviders().find(item => item.id === provider && item.available);
+    const reviewed = enrollmentProviders().some(entry => entry.id === provider);
+    const entry = reviewed ? getOAuthProviders().find(item => item.id === provider && item.available) : undefined;
     if (!entry) throw new EnrollmentRefusal("provider_unavailable");
     const flow = enrollmentFlow(authPolicyFor(provider));
+    control.emit({ type: "started", provider });
     // A constructor-supplied, private in-memory DB cannot open/import source auth.
     // Never call AuthStorage.create(), SqliteAuthCredentialStore.open(), reload
     // from a remote store, getApiKey(), or a broker snapshot in this process.

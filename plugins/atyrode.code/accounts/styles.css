@@ -70,3 +70,25 @@
 .plugin-atyrode_code_accounts input:focus-visible,
 .plugin-atyrode_code_accounts select:focus-visible { outline: 2px solid #91a7ff; outline-offset: 3px; }
 .plugin-atyrode_code_accounts code { font-size: 0.9em; overflow-wrap: anywhere; }
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__enrollment {
+  border-inline-start: 3px solid #91a7ff;
+  padding-inline-start: 0.85rem;
+  min-width: 0;
+}
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__challenge {
+  display: inline-block;
+  padding: 0.35rem 0.65rem;
+  background: #263248;
+  font-size: 1.2rem;
+  letter-spacing: 0.08em;
+}
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__authorization {
+  color: #b6c5ff;
+  text-decoration: underline;
+  padding-block: 0.6rem;
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__authorization:focus-visible {
+  outline: 2px solid #91a7ff;
+  outline-offset: 3px;
+}

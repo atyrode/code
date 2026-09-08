@@ -1,4 +1,4 @@
-import { writeSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 import { attachControlInput, CONTROL_FRAME_BYTES, EnrollmentControl, type EnrollmentEvent } from "./control.ts";
 import { EnrollmentService } from "./service.ts";
 
@@ -16,7 +16,16 @@ const control = new EnrollmentControl(event => {
   if (event.type === "complete" || event.type === "refused") terminalEvent = true;
   if (event.type === "complete") completed = true;
   emit(event);
-});
+}, undefined, (() => {
+  try {
+    const provider = readFileSync("/inputs/provider", "utf8");
+    if (!/^[a-z0-9][a-z0-9-]{0,95}$/.test(provider)) throw new Error("invalid_control");
+    return provider;
+  } catch {
+    emit({ type: "refused", code: "invalid_control" });
+    process.exit(1);
+  }
+})());
 let service: EnrollmentService | undefined;
 const detach = attachControlInput(process.stdin, control);
 const terminate = (): void => control.cancel("cancelled");

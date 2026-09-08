@@ -5,6 +5,7 @@ import { Cluster, ScrollRegion, Stack } from "@manifold/ui";
 import { ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID } from "../contract.ts";
 import { CodeAccountChangeOperationSchema, type CodeAccounts, type CodeApplyAccountChoicesResult, type CodeRunInput } from "../machine-contract.ts";
 import { applyCodeAccountChoices, codeOperationFailure, initializeCodeConfiguration, runCodeOperation, useCodeConfiguration, useCodeMachines, useCodeOperation } from "../machine-web.ts";
+import { AccountEnrollment } from "./auth.tsx";
 
 type AccountOperation = "accounts-list" | "account-set" | "preset-create" | "preset-update" | "preset-activate" | "preset-delete" | "account-clear-blocks" | "account-disable";
 type Request = Extract<CodeRunInput, { operation: AccountOperation }>;
@@ -289,6 +290,7 @@ function AccountsPanel({ host }: PanelProps) {
         <p id={`${id}-machine-status`} role="status">{error !== null ? "Machine list unavailable; requests are disabled." : machines === null ? "Reading machines…" : selection === null ? "Choose a machine; no automatic selection or execution." : machine === undefined ? "Selected machine is no longer visible. It will not be replaced by a machine with the same name." : machine.revoked === true ? "Selected machine is revoked. Execution is unavailable." : !machine.online ? "Selected machine is offline. Only historical observations may be available." : "Selected immutable machine ID retained. Availability does not imply runtime consent."}</p>
         <button type="button" onClick={refresh}>Read machine availability</button>
       </Stack>
+      <AccountEnrollment key={`enrollment:${host.principal.id}:${selection ?? "none"}`} host={host} machineId={selection} available={available} />
       <MachineAccounts key={`${host.principal.id}:${selection ?? "none"}`} host={host} machineId={selection} available={available} />
       <aside className="plugin-atyrode_code_accounts__notice">
         <p>Missing consent or backend? Open native Plugins, select Code, then its machine administration. Review this machine’s Code operation consent, installation and backend availability with its administrator.</p>
