@@ -1,8 +1,8 @@
 {
   "id": "atyrode.code.generator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "code generator",
-  "description": "A persistent React launch panel: choose an online machine and working directory, open interactive code in a terminal tile, and review recent authorizations.",
+  "description": "Native Code dials, routing previews and reviewed headless launches, with explicit CLI recovery.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "launcher", "title": "code" }],
@@ -15,7 +15,7 @@
   "dependencies": {
     "atyrode.code": {
       "type": "required",
-      "reason": "The launch door and the launch ledger live in the baseline."
+      "reason": "Governed Code observations, shared account choices and launch preparation live in the parent."
     }
   },
   "entry": { "web": "web.js", "styles": true }

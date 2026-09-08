@@ -1,8 +1,8 @@
 {
   "id": "atyrode.code.accounts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "code accounts",
-  "description": "Machine-scoped account selection, named presets and governed per-account block clearing.",
+  "description": "Shared account choices in native plugin storage, evaluated by Code without moving credentials or rewriting CLI state.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "accounts", "title": "Code accounts" }],

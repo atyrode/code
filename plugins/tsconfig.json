@@ -24,6 +24,7 @@
     "paths": {
       "@manifold/plugin": ["../../manifold/packages/plugin/src/index.ts"],
       "@manifold/plugin/hooks": ["../../manifold/packages/plugin/src/hooks.ts"],
+      "@manifold/plugin-kit/server": ["../../manifold/packages/plugin-kit/src/server.ts"],
       "@manifold/protocol": ["../../manifold/packages/protocol/src/index.ts"],
       "@manifold/ui": ["../../manifold/packages/ui/src/index.ts"],
       "@manifold/sdk": ["../../manifold/packages/sdk/src/index.ts"],

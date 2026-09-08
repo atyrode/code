@@ -1,25 +1,35 @@
 import { PublicJobSchema } from "@manifold/protocol";
 import { z } from "zod";
+import { CodeSelectionSchema } from "./contract.ts";
 
 const text = z.string();
 const identity = z.string().min(1).max(512);
 const timestamp = z.number().int();
-const selection = z.record(z.string(), text);
+const selection = CodeSelectionSchema;
 const accountReference = z.strictObject({ provider: text, identityKey: text });
 const disabled = z.array(accountReference);
+const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const jobId = z.string().min(1).max(128);
+const changeBase = { expectedRevision: revision, baselineJobId: jobId };
+const accountSource = z.enum(["plugin", "machine"]);
+export const CODE_ACCOUNT_CHANGE_OPERATIONS = [
+  "account-set", "preset-create", "preset-update", "preset-activate", "preset-delete", "account-import",
+] as const;
+export const CodeAccountChangeOperationSchema = z.enum(CODE_ACCOUNT_CHANGE_OPERATIONS);
 
 /** Code validates product choices; Manifold validates who may run the declared operation. */
 export const CodeOperationInputSchemas = {
-  inspect: z.strictObject({ selection: selection.optional() }),
+  inspect: z.strictObject({ selection: selection.optional(), accountSource }),
   usage: z.strictObject({}),
   "accounts-list": z.strictObject({}),
-  "account-set": z.strictObject({ provider: identity, identity, enabled: z.boolean() }),
-  "preset-create": z.strictObject({ name: z.string().min(1).max(120), disabled }),
-  "preset-update": z.strictObject({ name: z.string().min(1).max(120), disabled }),
-  "preset-activate": z.strictObject({ name: z.string().min(1).max(120) }),
-  "preset-delete": z.strictObject({ name: z.string().min(1).max(120) }),
+  "account-import": z.strictObject({}),
+  "account-set": z.strictObject({ ...changeBase, provider: identity, identity, enabled: z.boolean() }),
+  "preset-create": z.strictObject({ ...changeBase, name: z.string().min(1).max(120), disabled }),
+  "preset-update": z.strictObject({ ...changeBase, name: z.string().min(1).max(120), disabled }),
+  "preset-activate": z.strictObject({ ...changeBase, name: z.string().min(1).max(120) }),
+  "preset-delete": z.strictObject({ ...changeBase, name: z.string().min(1).max(120) }),
   "account-clear-blocks": z.strictObject({ provider: identity, identity }),
-  suggest: z.strictObject({ selection: selection.optional(), prompt: z.string().min(1).max(16384) }),
+  suggest: z.strictObject({ selection: selection.optional(), prompt: z.string().min(1).max(16384), accountSource }),
 } as const;
 export type CodeOperation = keyof typeof CodeOperationInputSchemas;
 export type CodeOperationInput<K extends CodeOperation> = z.infer<(typeof CodeOperationInputSchemas)[K]>;
@@ -45,6 +55,25 @@ export const CodeAccountsSchema = z.strictObject({
 });
 export type CodeAccounts = z.infer<typeof CodeAccountsSchema>;
 
+export const CodeAccountStateSchema = CodeAccountsSchema.pick({
+  schemaVersion: true, activePreset: true, presets: true, manualDisabled: true,
+});
+export type CodeAccountState = z.infer<typeof CodeAccountStateSchema>;
+export const CodeAccountReadSchema = CodeAccountsSchema.extend({ baseRevision: revision.nullable() });
+export const CodeAccountProposalSchema = CodeAccountsSchema.extend({ baseRevision: revision });
+export const CodeAccountViewSchema = CodeAccountReadSchema.extend({
+  preferenceRevision: revision,
+  appliedJobId: jobId.nullable(),
+  proposals: z.array(z.strictObject({ job: PublicJobSchema, value: CodeAccountProposalSchema })).max(CODE_ACCOUNT_CHANGE_OPERATIONS.length),
+  proposalsUnavailable: z.boolean(),
+});
+export const CodeApplyAccountChoicesInputSchema = z.strictObject({
+  machineId: z.string().min(1).max(128), operation: CodeAccountChangeOperationSchema, jobId,
+});
+export type CodeApplyAccountChoicesInput = z.infer<typeof CodeApplyAccountChoicesInputSchema>;
+export const CodeApplyAccountChoicesResultSchema = z.strictObject({ revision, jobId });
+export type CodeApplyAccountChoicesResult = z.infer<typeof CodeApplyAccountChoicesResultSchema>;
+
 export const CodeBlockResultSchema = z.strictObject({
   schemaVersion: z.literal(1),
   operation: z.literal("clear-blocks"),
@@ -55,6 +84,7 @@ export const CodeBlockResultSchema = z.strictObject({
 /** This is deliberately narrower than local `code inspect`: paths and session metadata stay local. */
 export const CodeInspectionSchema = z.strictObject({
   schema_version: z.literal(1),
+  baseRevision: revision.nullable(),
   observed_at: z.iso.datetime(),
   observation: z.literal("one_shot"),
   catalog: z.strictObject({ state: z.enum(["ready", "missing"]) }),
@@ -101,6 +131,7 @@ const UsageAccountSchema = AccountSchema.extend({
 
 export const CodeUsageSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  baseRevision: revision.nullable(),
   requestedAt: timestamp,
   observedAt: timestamp,
   status: text,
@@ -121,6 +152,7 @@ export type CodeUsage = z.infer<typeof CodeUsageSchema>;
 
 export const CodeSuggestionSchema = z.strictObject({
   schema_version: z.literal(1),
+  baseRevision: revision.nullable(),
   observed_at: z.iso.datetime(),
   observation: z.literal("one_shot"),
   evaluator: text,
@@ -132,12 +164,13 @@ export type CodeSuggestion = z.infer<typeof CodeSuggestionSchema>;
 export const CodeOperationResultSchemas = {
   inspect: CodeInspectionSchema,
   usage: CodeUsageSchema,
-  "accounts-list": CodeAccountsSchema,
-  "account-set": CodeAccountsSchema,
-  "preset-create": CodeAccountsSchema,
-  "preset-update": CodeAccountsSchema,
-  "preset-activate": CodeAccountsSchema,
-  "preset-delete": CodeAccountsSchema,
+  "accounts-list": CodeAccountReadSchema,
+  "account-import": CodeAccountProposalSchema,
+  "account-set": CodeAccountProposalSchema,
+  "preset-create": CodeAccountProposalSchema,
+  "preset-update": CodeAccountProposalSchema,
+  "preset-activate": CodeAccountProposalSchema,
+  "preset-delete": CodeAccountProposalSchema,
   "account-clear-blocks": CodeBlockResultSchema,
   suggest: CodeSuggestionSchema,
 } as const;
@@ -145,6 +178,7 @@ export type CodeOperationResult<K extends CodeOperation> = z.infer<(typeof CodeO
 
 export const CODE_RUN_DOOR = "atyrode.code.run";
 export const CODE_OBSERVE_DOOR = "atyrode.code.observe";
+export const CODE_APPLY_ACCOUNT_CHOICES_DOOR = "atyrode.code.applyAccountChoices";
 export const CODE_JOB_TOPIC = { kind: "plugin", pluginId: "engine.jobs" } as const;
 export const CodeOperationSchema = z.enum(Object.keys(CodeOperationInputSchemas) as [CodeOperation, ...CodeOperation[]]);
 
@@ -160,6 +194,7 @@ export const CodeRunInputSchema = z.discriminatedUnion("operation", [
   requestSchema("inspect", CodeOperationInputSchemas.inspect),
   requestSchema("usage", CodeOperationInputSchemas.usage),
   requestSchema("accounts-list", CodeOperationInputSchemas["accounts-list"]),
+  requestSchema("account-import", CodeOperationInputSchemas["account-import"]),
   requestSchema("account-set", CodeOperationInputSchemas["account-set"]),
   requestSchema("preset-create", CodeOperationInputSchemas["preset-create"]),
   requestSchema("preset-update", CodeOperationInputSchemas["preset-update"]),
@@ -173,6 +208,7 @@ export type CodeRunInput = z.infer<typeof CodeRunInputSchema>;
 export const CodeObserveInputSchema = z.strictObject({
   machineId: z.string().min(1).max(128),
   operation: CodeOperationSchema,
+  jobId: jobId.optional(),
 });
 export type CodeObserveInput = z.infer<typeof CodeObserveInputSchema>;
 
@@ -182,19 +218,20 @@ function observationSchema<N extends CodeOperation, S extends z.ZodType>(operati
     state: z.enum(["empty", "pending", "ready", "failed", "unavailable"]),
     latest: PublicJobSchema.nullable(),
     snapshot: z.strictObject({ job: PublicJobSchema, value }).nullable(),
-    failure: z.enum(["operation_failed", "output_unavailable", "invalid_result"]).nullable(),
+    failure: z.enum(["operation_failed", "output_unavailable", "invalid_result", "stale_preferences"]).nullable(),
   });
 }
 
 export const CodeObservationSchema = z.discriminatedUnion("operation", [
   observationSchema("inspect", CodeInspectionSchema),
   observationSchema("usage", CodeUsageSchema),
-  observationSchema("accounts-list", CodeAccountsSchema),
-  observationSchema("account-set", CodeAccountsSchema),
-  observationSchema("preset-create", CodeAccountsSchema),
-  observationSchema("preset-update", CodeAccountsSchema),
-  observationSchema("preset-activate", CodeAccountsSchema),
-  observationSchema("preset-delete", CodeAccountsSchema),
+  observationSchema("accounts-list", CodeAccountViewSchema),
+  observationSchema("account-import", CodeAccountProposalSchema),
+  observationSchema("account-set", CodeAccountProposalSchema),
+  observationSchema("preset-create", CodeAccountProposalSchema),
+  observationSchema("preset-update", CodeAccountProposalSchema),
+  observationSchema("preset-activate", CodeAccountProposalSchema),
+  observationSchema("preset-delete", CodeAccountProposalSchema),
   observationSchema("account-clear-blocks", CodeBlockResultSchema),
   observationSchema("suggest", CodeSuggestionSchema),
 ]);

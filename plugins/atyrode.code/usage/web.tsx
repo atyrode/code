@@ -31,7 +31,7 @@ function UsageSnapshot({ value }: { value: CodeUsage }) {
       <h3>{status(value.status)}</h3>
       <p>Observed: {time(value.observedAt)} · Requested: {time(value.requestedAt)}</p>
       <p>Usage refresh: {status(value.usageRefresh)} · Account refresh: {status(value.accountRefresh)}</p>
-      <p>Active preset: <strong>{value.activePreset || "Unknown"}</strong></p>
+      <p>Active preset: <strong>{value.activePreset || "Unknown"}</strong> · account revision {value.baseRevision ?? "machine defaults"}</p>
       <p className="plugin-atyrode_code_usage__muted">This is a point-in-time snapshot, not a live quota guarantee. Reset times are reported deadlines, not confirmation that quota has reset.</p>
     </section>
     {value.providers.length === 0 && <p>No provider observations are available. Quotas are unknown.</p>}
@@ -79,13 +79,14 @@ function UsageSnapshot({ value }: { value: CodeUsage }) {
 function MachineUsage({ host, machineId, available }: { host: HostServices; machineId: string | null; available: boolean }) {
   const { observation, error, refresh } = useCodeOperation(host, machineId, "usage");
   const [submitted, setSubmitted] = useState<PublicJob | null>(null);
+  const submittedFeed = useCodeOperation(host, machineId, "usage", submitted?.jobId);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const observedJob = submitted === null ? null : observation?.latest?.jobId === submitted.jobId ? observation.latest : observation?.snapshot?.job.jobId === submitted.jobId ? observation.snapshot.job : null;
-  const busy = submitting || observation?.state === "pending";
+  const observedJob = submittedFeed.observation?.latest?.jobId === submitted?.jobId ? submittedFeed.observation?.latest ?? null : null;
+  const busy = submitting || observation?.state === "pending" || submittedFeed.observation?.state === "pending";
   async function requestRefresh() {
     if (machineId === null || !available || pending.current || busy) return;
     pending.current = true;
@@ -98,24 +99,26 @@ function MachineUsage({ host, machineId, available }: { host: HostServices; mach
       if (mounted.current) setRequestError(codeOperationFailure(reason));
     } finally {
       pending.current = false;
-      if (mounted.current) { setSubmitting(false); refresh(); }
+      if (mounted.current) { setSubmitting(false); refresh(); submittedFeed.refresh(); }
     }
   }
   return <Stack gap="1rem">
     <Cluster gap="0.5rem">
       <button type="button" disabled={!available || busy} onClick={() => { void requestRefresh(); }}>Request usage refresh</button>
-      <button type="button" disabled={machineId === null} onClick={refresh}>Read shared status</button>
+      <button type="button" disabled={machineId === null} onClick={() => { refresh(); submittedFeed.refresh(); }}>Read shared status</button>
     </Cluster>
     <p className="plugin-atyrode_code_usage__muted">Refresh submits one governed usage job on this exact machine. Reading status never starts a job.</p>
     <div role="status" aria-live="polite" aria-atomic="true">
       {submitting && <p>Requesting admission; execution has not been confirmed.</p>}
       {requestError !== null && <p>{requestError}</p>}
       {submitted !== null && <p>Requested job <code>{submitted.jobId}</code>: {jobStatus(observedJob ?? submitted)}.{observedJob === null ? " Shared status for this job has not yet been observed; this is its submission status." : ""}</p>}
+      {submitted !== null && submittedFeed.error !== null && <p>The requested job’s current status is unavailable.</p>}
       {error !== null ? <p>Usage observation unavailable under the current authority.</p> : machineId === null ? <p>Select a machine to read its shared observation.</p> : observation === null ? <p>Reading shared usage observation…</p> : <>
         {observation.state === "empty" && <p>No completed usage snapshot. Request a refresh explicitly.</p>}
         {observation.state === "pending" && <p>A usage job is pending. No new snapshot is confirmed.</p>}
         {observation.state === "failed" && <p>The latest usage job failed. No new snapshot is confirmed.</p>}
         {observation.state === "unavailable" && <p>The latest usage result is unavailable or could not be verified.</p>}
+        {observation.failure === "stale_preferences" && <p>Shared account choices changed after this snapshot. Request a new usage observation for the current selection.</p>}
         {observation.latest !== null && <p>Latest shared job <code>{observation.latest.jobId}</code>: {jobStatus(observation.latest)}.</p>}
       </>}
     </div>
@@ -147,7 +150,7 @@ function UsagePanel({ host }: PanelProps) {
       </Stack>
       <MachineUsage key={`${host.principal.id}:${selection ?? "none"}`} host={host} machineId={selection} available={available} />
       <aside className="plugin-atyrode_code_usage__notice">
-        <p>Missing consent or backend? Open native Plugins, select Code, then its machine administration. Review this machine’s Code operation consent, installation and backend availability with its administrator.</p>
+        <p>Manage installation, backend bindings and consent in native Plugins. Automatic refresh uses Manifold’s native schedules for the usage operation; this panel has no separate polling daemon or scheduler.</p>
         <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open Code in Plugins</button>
       </aside>
     </Stack>
