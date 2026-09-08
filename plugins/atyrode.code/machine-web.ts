@@ -12,7 +12,7 @@ import {
   type CodeApplyAccountChoicesInput, type CodeObservation, type CodeOperation, type CodeOperationInput,
 } from "./machine-contract.ts";
 
-type FailureKind = "denied" | "unavailable" | "invalid" | "stale" | "large" | "preview" | "mode" | "catalog";
+type FailureKind = "denied" | "unavailable" | "invalid" | "stale" | "large" | "preview" | "mode" | "catalog" | "preferences";
 const failureMessages: Record<FailureKind, string> = {
   denied: "This operation needs current machine authority and explicit plugin consent.",
   unavailable: "The governed Code backend is unavailable.",
@@ -22,12 +22,14 @@ const failureMessages: Record<FailureKind, string> = {
   preview: "The reviewed preview no longer matches this launch. Request a new preview.",
   mode: "The requested launch mode is not available on this machine.",
   catalog: "The selected machine does not have a runnable Code catalog.",
+  preferences: "Save or explicitly import shared choices in Code accounts before using them, or choose existing CLI settings.",
 };
 const refusalKinds = new Map<string, FailureKind>([
   ["code_stale_preferences", "stale"], ["code_input_too_large", "large"],
   ["code_preview_changed", "preview"], ["code_launch_mode_unavailable", "mode"],
   ["code_catalog_missing", "catalog"], ["code_invalid_request", "invalid"],
   ["code_operation_unavailable", "unavailable"], ["code_observation_unavailable", "unavailable"],
+  ["code_preferences_missing", "preferences"],
 ]);
 
 class CodeOperationError extends Error {

@@ -111,14 +111,14 @@ func loadHeadlessModel(accountOverride *accountSelectionState) (model, error) {
 	}
 	glyphs := resolveGlyphs()
 	m := model{
-		generated:         generated,
-		advisors:          parseAdvisors(generated["__advisors__"]),
-		facts:             parseFacts(generated["__models__"]),
-		glyphs:            glyphs,
-		facets:            facetDefs(glyphs),
-		sel:               defaultSel(),
-		broker:            resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE")),
-		runtimeTargets:    loadRuntimeTargets(),
+		generated:      generated,
+		advisors:       parseAdvisors(generated["__advisors__"]),
+		facts:          parseFacts(generated["__models__"]),
+		glyphs:         glyphs,
+		facets:         facetDefs(glyphs),
+		sel:            defaultSel(),
+		broker:         resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE")),
+		runtimeTargets: loadRuntimeTargets(),
 	}
 	if accountOverride != nil {
 		if !m.broker.configured() {

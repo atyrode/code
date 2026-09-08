@@ -44,7 +44,7 @@ function MachineGenerator({ host, machineId, available }: { host: HostServices; 
     inspection.value.baseRevision === revision &&
     Object.keys(selection).length === Object.keys(inspection.value.selection).length &&
     Object.entries(selection).every(([key, value]) => inspection.value.selection[key] === value);
-  const missingAccounts = effectiveSource === "plugin" && (accounts === null || accountFeed.observation?.state !== "ready");
+  const missingAccounts = effectiveSource === "plugin" && (accounts === null || accounts.value.preferenceRevision < 1 || accountFeed.observation?.state !== "ready");
   const missingMount = host.containerId === null || host.authoring === null;
   const busy = requesting || status?.kind === "pending" || observation?.state === "pending";
   const modeAvailable = inspection?.value.launch_modes.some((mode) => mode.mode === kind && mode.available) ?? false;
@@ -85,7 +85,7 @@ function MachineGenerator({ host, machineId, available }: { host: HostServices; 
         machineId, inspectionJobId: inspection!.job.jobId, kind, selection,
         ...(kind === "runtime" ? { runtime } : {}), worktree, prompt,
         accounts: effectiveSource === "plugin"
-          ? { source: "plugin", revision: accounts!.value.preferenceRevision, baselineJobId: accounts!.job.jobId }
+          ? { source: "plugin", revision: accounts!.value.preferenceRevision }
           : { source: "machine" },
       });
       if (!mounted.current) return;
@@ -110,7 +110,7 @@ function MachineGenerator({ host, machineId, available }: { host: HostServices; 
 
   return <Stack gap="1rem">
     <Cluster gap="0.5rem">
-      <button type="button" disabled={!available || busy} onClick={() => { void request("inspect"); }}>Preview these choices</button>
+      <button type="button" disabled={!available || busy || missingAccounts} onClick={() => { void request("inspect"); }}>Preview these choices</button>
       <button type="button" disabled={machineId === null} onClick={() => { inspectionFeed.refresh(); accountFeed.refresh(); suggestionFeed.refresh(); }}>Read shared observations</button>
     </Cluster>
     <p className="plugin-atyrode_code_generator__muted">A preview runs Code on the selected machine. Reading observations never starts a job. Manifold owns execution, consent and retained history.</p>
@@ -169,7 +169,7 @@ function MachineGenerator({ host, machineId, available }: { host: HostServices; 
             </select>
             <p className="plugin-atyrode_code_generator__muted">Shared choices are passed to this launch only. Existing CLI settings use the machine’s normal Code configuration. Neither option rewrites it.</p>
             {effectiveSource === "plugin" && <>
-              <p>{accounts === null ? "Read accounts before launching with shared choices." : `Preset ${accounts.value.activePreset} · revision ${accounts.value.preferenceRevision}`}</p>
+              <p>{missingAccounts ? "Save a choice or review and apply an import in Code accounts first. Existing CLI settings can be used without adopting shared choices." : `Preset ${accounts!.value.activePreset} · revision ${accounts!.value.preferenceRevision}`}</p>
               <button type="button" disabled={!available || busy} onClick={() => { void request("accounts-list"); }}>Refresh account choices</button>
             </>}
           </Stack>
@@ -199,7 +199,7 @@ function MachineGenerator({ host, machineId, available }: { host: HostServices; 
         <h3 id={`${id}-suggestion`}>Suggest a configuration</h3>
         <label htmlFor={`${id}-suggestion-prompt`}>Describe the work for the machine-local evaluator</label>
         <textarea id={`${id}-suggestion-prompt`} value={suggestionPrompt} maxLength={16384} rows={3} onChange={(event) => setSuggestionPrompt(event.target.value)} />
-        <button type="button" disabled={!available || busy || suggestionPrompt.trim() === "" || suggestionFeed.observation?.state === "pending"} onClick={() => { void request("suggest"); }}>Request suggestion</button>
+        <button type="button" disabled={!available || busy || missingAccounts || suggestionPrompt.trim() === "" || suggestionFeed.observation?.state === "pending"} onClick={() => { void request("suggest"); }}>Request suggestion</button>
         {suggestionFeed.observation?.state === "pending" && <p role="status">Suggestion is pending.</p>}
         {(suggestionFeed.error !== null || suggestionFeed.observation?.state === "failed" || suggestionFeed.observation?.state === "unavailable") && <p role="status">No verified current suggestion is available. Check the native operation status and local evaluator setup.</p>}
         {suggestion !== null && <>

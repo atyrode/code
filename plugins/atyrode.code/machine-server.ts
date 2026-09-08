@@ -27,15 +27,15 @@ const StoredPreferencesSchema = z.strictObject({
 
 export const machineActions = [
   defineAction({
-    name: "run", title: "Run a declared Code operation on a machine", caps: ["machines:run"],
+    name: "run", title: "Run a declared Code operation on a machine", caps: [], trace: "opaque",
     input: CodeRunInputSchema, result: PublicJobSchema,
   }),
   defineAction({
-    name: "observe", title: "Read an authorized Code observation", caps: ["jobs:read"],
+    name: "observe", title: "Read an authorized Code observation", caps: [], trace: "opaque",
     input: CodeObserveInputSchema, result: CodeObservationSchema,
   }),
   defineAction({
-    name: "applyAccountChoices", title: "Apply a verified account-choice proposal", caps: ["machines:run", "jobs:read"],
+    name: "applyAccountChoices", title: "Apply a verified account-choice proposal", caps: [], trace: "opaque",
     input: CodeApplyAccountChoicesInputSchema, result: CodeApplyAccountChoicesResultSchema,
   }),
 ];
@@ -67,6 +67,15 @@ export async function readCodePreferences(ctx: CodeContext, machineId: string) {
     if (source.machineId !== machineId || source.pluginId !== CODE_PLUGIN_ID ||
       source.operationId !== `${CODE_PLUGIN_ID}.${record.source.operation}` || source.jobId !== record.source.jobId ||
       source.state !== "exited" || source.result?.exitCode !== 0) throw new Error("invalid_result");
+    const output = source.result.outputs.find((item) => item.name === "stdout");
+    if (!output || output.bytes < 1) throw new Error("invalid_result");
+    // Metadata permission alone does not authorize the identities copied from sealed stdout.
+    const access = await ctx.jobs.output({
+      node: { kind: "output", machineId, operationId: source.operationId, jobId: source.jobId, outputId: output.outputId },
+      offset: 0, maxBytes: 1,
+    });
+    if (access.jobId !== source.jobId || access.outputId !== output.outputId || access.seq !== 0)
+      throw new Error("invalid_result");
   }
   return preferences;
 }
@@ -134,7 +143,9 @@ export const machineHandlers = {
         if (accountSource === "machine") payload = { ...input, baseRevision: null };
         else {
           const preferences = await readCodePreferences(ctx, args.machineId);
-          payload = { ...input, baseRevision: preferences.record?.revision ?? 0,
+          if (preferences.record === null && (args.operation === "inspect" || args.operation === "suggest"))
+            return { refused: "code_preferences_missing" };
+          payload = { ...input, baseRevision: preferences.record?.revision ?? (args.operation === "accounts-list" ? 0 : null),
             ...(preferences.record === null ? {} : { state: preferences.record.state }) };
         }
       }
@@ -157,9 +168,9 @@ export const machineHandlers = {
       const preferences = args.operation === "account-import"
         ? await readStoredPreferences(ctx, args.machineId)
         : await readCodePreferences(ctx, args.machineId);
+      const proposal = await readCodeSnapshot(ctx, args.machineId, args.operation, args.jobId);
       if (preferences.record?.source.jobId === args.jobId && preferences.record.source.operation === args.operation)
         return { revision: preferences.record.revision, jobId: args.jobId };
-      const proposal = await readCodeSnapshot(ctx, args.machineId, args.operation, args.jobId);
       const revision = preferences.record?.revision ?? 0;
       if (proposal.value.baseRevision !== revision || revision === Number.MAX_SAFE_INTEGER)
         return { refused: "code_stale_preferences" };
@@ -243,7 +254,7 @@ export const machineHandlers = {
       if (args.operation === "usage" && snapshot !== null) {
         const result = CodeOperationResultSchemas.usage.parse(snapshot.value);
         preferences ??= await readCodePreferences(ctx, args.machineId);
-        if (result.baseRevision !== (preferences.record?.revision ?? 0)) failure = "stale_preferences";
+        if (result.baseRevision !== (preferences.record?.revision ?? null)) failure = "stale_preferences";
       }
       let state: CodeObservation["state"] = cursor === undefined ? "empty" : "unavailable";
       if (latest) {

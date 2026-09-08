@@ -10,7 +10,7 @@ import (
 )
 
 func TestRejectsAmbiguousOrInjectedPayloads(t *testing.T) {
-	cases := []struct { operation, payload string }{
+	cases := []struct{ operation, payload string }{
 		{"inspect", `{`},
 		{"inspect", `{}` + `{}`},
 		{"inspect", `{} trailing`},
@@ -46,7 +46,7 @@ func TestRejectsAmbiguousOrInjectedPayloads(t *testing.T) {
 
 func TestPayloadByteLimit(t *testing.T) {
 	// Leading JSON whitespace counts toward the same byte limit as values.
-	atLimit := strings.Repeat(" ", maxInput-2)+`{}`
+	atLimit := strings.Repeat(" ", maxInput-2) + `{}`
 	if _, _, err := operationArgs("inspect", atLimit); err != nil {
 		t.Fatal("exactly bounded JSON rejected")
 	}
@@ -57,10 +57,14 @@ func TestPayloadByteLimit(t *testing.T) {
 
 func TestFlagLikeDataRemainsOneValue(t *testing.T) {
 	const hostile = "--help --provider=other; $(touch /tmp/not-executed)\n"
-	payload, err := json.Marshal(map[string]any{"provider":"p", "identity":hostile, "enabled":false, "state":json.RawMessage(workerAccountState), "baseRevision":0})
-	if err != nil { t.Fatal(err) }
+	payload, err := json.Marshal(map[string]any{"provider": "p", "identity": hostile, "enabled": false, "state": json.RawMessage(workerAccountState), "baseRevision": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
 	args, _, err := operationArgs("account-set", string(payload))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Parse as Code does: a value containing flags must not become another flag.
 	var identity, provider, enabled string
 	fs := flag.NewFlagSet("accounts", flag.ContinueOnError)
@@ -69,7 +73,9 @@ func TestFlagLikeDataRemainsOneValue(t *testing.T) {
 	fs.StringVar(&provider, "provider", "", "")
 	fs.StringVar(&enabled, "enabled", "", "")
 	fs.String("state", "", "")
-	if err := fs.Parse(args[2:]); err != nil { t.Fatal(err) }
+	if err := fs.Parse(args[2:]); err != nil {
+		t.Fatal(err)
+	}
 	if identity != hostile || provider != "p" || enabled != "false" || fs.NArg() != 0 {
 		t.Fatalf("caller data escaped its value: %q %q %q", identity, provider, enabled)
 	}
@@ -80,8 +86,12 @@ func TestOutputLimitAppliesToCopyAndCannotRecover(t *testing.T) {
 	if _, err := io.Copy(&output, io.LimitReader(strings.NewReader(strings.Repeat("x", maxOutput+1)), maxOutput+1)); err == nil {
 		t.Fatal("oversized child stream accepted")
 	}
-	if output.buffer.Len() > maxOutput { t.Fatal("retained unbounded output") }
-	if _, err := output.Write([]byte("{}")); err == nil { t.Fatal("overflow recovered into success") }
+	if output.buffer.Len() > maxOutput {
+		t.Fatal("retained unbounded output")
+	}
+	if _, err := output.Write([]byte("{}")); err == nil {
+		t.Fatal("overflow recovered into success")
+	}
 	var exact boundedOutput
 	if n, err := io.Copy(&exact, strings.NewReader(strings.Repeat("x", maxOutput))); err != nil || n != maxOutput {
 		t.Fatalf("exact output limit rejected: %d %v", n, err)
@@ -93,14 +103,20 @@ const inspectFixture = `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z"
 const usageFixture = `{"schemaVersion":1,"requestedAt":200,"observedAt":100,"status":"stale","usageRefresh":"failed","accountRefresh":"failed","activePreset":"Manual","providers":[{"provider":"p","status":"stale","buckets":[{"name":"pool","status":"unknown"}],"accounts":[{"provider":"p","identityKey":"public-key","email":"public@example.com","selectable":true,"enabled":false,"blocked":true,"blockedUntil":300,"restrictions":[{"scope":"usage","until":300,"reason":"PRIVATE"}],"status":"selection_disabled","snapshotStatus":"stale","faultAt":90,"windows":[{"windowId":"day","label":"Daily","usedPercent":20,"resetsAt":400,"durationSeconds":86400,"observedAt":100,"status":"stale","raw":"PRIVATE"}],"credentialID":"PRIVATE","apiKey":"PRIVATE","blocks":[{"token":"PRIVATE"}],"error":"PRIVATE"}]}],"balances":[{"provider":"p","status":"stale","currency":"USD","totalBalance":"3.25","observedAt":100}],"token":"PRIVATE"}`
 
 func TestProjectsPrivateFieldsWithoutChangingFreshness(t *testing.T) {
-	for operation, fixture := range map[string]string{"inspect":inspectFixture, "usage":usageFixture} {
+	for operation, fixture := range map[string]string{"inspect": inspectFixture, "usage": usageFixture} {
 		t.Run(operation, func(t *testing.T) {
 			result, err := projectResult(operation, []byte(fixture), nil)
-			if err != nil { t.Fatal(err) }
-			if bytes.Contains(result, []byte("PRIVATE")) { t.Fatalf("private data escaped: %s", result) }
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(result, []byte("PRIVATE")) {
+				t.Fatalf("private data escaped: %s", result)
+			}
 			if operation == "usage" {
 				var p usageResult
-				if err := json.Unmarshal(result, &p); err != nil { t.Fatal(err) }
+				if err := json.Unmarshal(result, &p); err != nil {
+					t.Fatal(err)
+				}
 				a := p.Providers[0].Accounts[0]
 				if p.Status != "stale" || p.ObservedAt != 100 || p.RequestedAt != 200 || p.UsageRefresh != "failed" || p.AccountRefresh != "failed" || a.SnapshotStatus != "stale" || a.Windows[0].ObservedAt != 100 || a.Windows[0].Status != "stale" {
 					t.Fatalf("freshness rewritten: %s", result)
@@ -116,8 +132,8 @@ func TestProjectsPrivateFieldsWithoutChangingFreshness(t *testing.T) {
 func TestInvalidChildDocumentNeverReturnsPartialResult(t *testing.T) {
 	cases := []string{
 		inspectFixture[:len(inspectFixture)-1],
-		inspectFixture+`{}`,
-		inspectFixture+`garbage`,
+		inspectFixture + `{}`,
+		inspectFixture + `garbage`,
 		strings.Replace(inspectFixture, `"schema_version":1`, `"schema_version":2`, 1),
 		strings.Replace(inspectFixture, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1),
 		strings.Replace(inspectFixture, `"observation":"one_shot",`, ``, 1),
@@ -126,7 +142,7 @@ func TestInvalidChildDocumentNeverReturnsPartialResult(t *testing.T) {
 		strings.Replace(inspectFixture, `"observed_at":"2026-09-08T10:00:00Z"`, `"observed_at":"not a timestamp"`, 1),
 		strings.Replace(inspectFixture, `"runtime_targets":[]`, `"runtime_targets":[{"name":"r"}]`, 1),
 		strings.Replace(inspectFixture, `"estimates":null`, `"estimates":{"cost":9223372036854775808,"speed":1,"scale_min":1,"scale_max":5}`, 1),
-		strings.Repeat(" ", maxOutput)+inspectFixture,
+		strings.Repeat(" ", maxOutput) + inspectFixture,
 	}
 	for index, input := range cases {
 		if result, err := projectResult("inspect", []byte(input), nil); err == nil || result != nil {
@@ -138,25 +154,37 @@ func TestInvalidChildDocumentNeverReturnsPartialResult(t *testing.T) {
 func TestUnselectableAccountAndFalseFlagsRemainObservable(t *testing.T) {
 	input := `{"schemaVersion":1,"operation":"list","observedAt":100,"activePreset":"Manual","accounts":[{"provider":"p","identityKey":"","selectable":false,"enabled":false,"blocked":false,"restrictions":[],"apiKey":"PRIVATE"}],"presets":[],"manualDisabled":[]}`
 	result, err := projectResult("accounts-list", []byte(input), nil)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bytes.Contains(result, []byte("PRIVATE")) || !bytes.Contains(result, []byte(`"identityKey":""`)) || !bytes.Contains(result, []byte(`"enabled":false`)) {
 		t.Fatalf("unselectable account misrepresented: %s", result)
 	}
 	missing := strings.Replace(input, `"enabled":false,`, ``, 1)
-	if result, err := projectResult("accounts-list", []byte(missing), nil); err == nil || result != nil { t.Fatal("missing enabled treated as disabled") }
-	if result, err := projectResult("preset-delete", []byte(input), nil); err == nil || result != nil { t.Fatal("wrong operation accepted") }
+	if result, err := projectResult("accounts-list", []byte(missing), nil); err == nil || result != nil {
+		t.Fatal("missing enabled treated as disabled")
+	}
+	if result, err := projectResult("preset-delete", []byte(input), nil); err == nil || result != nil {
+		t.Fatal("wrong operation accepted")
+	}
 }
 
 func TestSuggestionActionsMustMatchSelection(t *testing.T) {
 	input := `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z","observation":"one_shot","evaluator":"local-model","actions":[{"key":"lane","value":"fast","raw":"PRIVATE"}],"selection":{"lane":"fast"},"prompt":"PRIVATE","output":"PRIVATE"}`
 	result, err := projectResult("suggest", []byte(input), nil)
-	if err != nil { t.Fatal(err) }
-	if bytes.Contains(result, []byte("PRIVATE")) { t.Fatalf("private evaluator material escaped: %s", result) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(result, []byte("PRIVATE")) {
+		t.Fatalf("private evaluator material escaped: %s", result)
+	}
 	for _, broken := range []string{
 		strings.Replace(input, `"selection":{"lane":"fast"}`, `"selection":{"lane":"slow"}`, 1),
 		strings.Replace(input, `"actions":[`, `"actions":[{"key":"lane","value":"fast"},`, 1),
 	} {
-		if result, err := projectResult("suggest", []byte(broken), nil); err == nil || result != nil { t.Fatal("inconsistent suggestion accepted") }
+		if result, err := projectResult("suggest", []byte(broken), nil); err == nil || result != nil {
+			t.Fatal("inconsistent suggestion accepted")
+		}
 	}
 }
 
@@ -164,41 +192,41 @@ const workerAccountState = `{"schemaVersion":1,"activePreset":"Manual","manualDi
 
 func TestChoiceMutationsRequirePortableStateAndSafeRevision(t *testing.T) {
 	for operation, fields := range map[string]string{
-		"account-set": `"provider":"openai-codex","identity":"a@example.com","enabled":false`,
-		"preset-create": `"name":"A","disabled":[]`,
-		"preset-update": `"name":"A","disabled":[]`,
+		"account-set":     `"provider":"openai-codex","identity":"a@example.com","enabled":false`,
+		"preset-create":   `"name":"A","disabled":[]`,
+		"preset-update":   `"name":"A","disabled":[]`,
 		"preset-activate": `"name":"A"`,
-		"preset-delete": `"name":"A"`,
+		"preset-delete":   `"name":"A"`,
 	} {
 		t.Run(operation, func(t *testing.T) {
 			for _, suffix := range []string{
 				``,
 				`,"baseRevision":0`,
-				`,"state":`+workerAccountState,
+				`,"state":` + workerAccountState,
 				`,"state":null,"baseRevision":0`,
-				`,"state":`+workerAccountState+`,"baseRevision":null`,
-				`,"state":`+workerAccountState+`,"baseRevision":-1`,
-				`,"state":`+workerAccountState+`,"baseRevision":0.5`,
-				`,"state":`+workerAccountState+`,"baseRevision":9007199254740992`,
-				`,"state":`+workerAccountState+`,"baseRevision":0,"baseRevision":1`,
-				`,"state":`+strings.Replace(workerAccountState, `"schemaVersion":1`, `"schemaVersion":2`, 1)+`,"baseRevision":0`,
-				`,"state":`+strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":null`, 1)+`,"baseRevision":0`,
-				`,"state":`+strings.Replace(workerAccountState, `"presets":[]`, `"presets":[{"name":"A","disabled":[],"name":"B"}]`, 1)+`,"baseRevision":0`,
-				`,"state":`+strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"p","identityKey":"i","credential":"private"}]`, 1)+`,"baseRevision":0`,
+				`,"state":` + workerAccountState + `,"baseRevision":null`,
+				`,"state":` + workerAccountState + `,"baseRevision":-1`,
+				`,"state":` + workerAccountState + `,"baseRevision":0.5`,
+				`,"state":` + workerAccountState + `,"baseRevision":9007199254740992`,
+				`,"state":` + workerAccountState + `,"baseRevision":0,"baseRevision":1`,
+				`,"state":` + strings.Replace(workerAccountState, `"schemaVersion":1`, `"schemaVersion":2`, 1) + `,"baseRevision":0`,
+				`,"state":` + strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":null`, 1) + `,"baseRevision":0`,
+				`,"state":` + strings.Replace(workerAccountState, `"presets":[]`, `"presets":[{"name":"A","disabled":[],"name":"B"}]`, 1) + `,"baseRevision":0`,
+				`,"state":` + strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"p","identityKey":"i","credential":"private"}]`, 1) + `,"baseRevision":0`,
 			} {
 				if args, revision, err := operationArgs(operation, "{"+fields+suffix+"}"); err == nil || args != nil || revision != nil {
 					t.Fatalf("invalid proposal accepted: %s", suffix)
 				}
 			}
 			for _, revision := range []string{"0", "9007199254740991"} {
-				payload := "{"+fields+`,"state":`+workerAccountState+`,"baseRevision":`+revision+"}"
+				payload := "{" + fields + `,"state":` + workerAccountState + `,"baseRevision":` + revision + "}"
 				if _, _, err := operationArgs(operation, payload); err != nil {
 					t.Fatalf("valid revision boundary rejected: %s", revision)
 				}
 			}
 		})
 	}
-	for _, payload := range []string{`{}`, `{"state":`+workerAccountState+`}`} {
+	for _, payload := range []string{`{}`, `{"state":` + workerAccountState + `}`} {
 		if _, revision, err := operationArgs("accounts-list", payload); err != nil || revision != nil {
 			t.Fatal("account reads unexpectedly require a revision")
 		}
@@ -213,7 +241,7 @@ func TestChoiceMutationsRequirePortableStateAndSafeRevision(t *testing.T) {
 
 func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
 	const result = `{"schemaVersion":1,"operation":"set","observedAt":100,"activePreset":"Manual","accounts":[{"provider":"openai-codex","identityKey":"a@example.com","selectable":true,"enabled":false,"blocked":false,"restrictions":[],"credential":"PRIVATE"}],"presets":[],"manualDisabled":[{"provider":"openai-codex","identityKey":"a@example.com"}],"baseRevision":900}`
-	payload := `{"provider":"openai-codex","identity":"a@example.com","enabled":false,"state":`+workerAccountState+`,"baseRevision":7}`
+	payload := `{"provider":"openai-codex","identity":"a@example.com","enabled":false,"state":` + workerAccountState + `,"baseRevision":7}`
 	_, revision, err := operationArgs("account-set", payload)
 	if err != nil {
 		t.Fatal(err)
@@ -223,8 +251,8 @@ func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	var proposal struct {
-		BaseRevision int64 `json:"baseRevision"`
-		Accounts []accountRow `json:"accounts"`
+		BaseRevision   int64              `json:"baseRevision"`
+		Accounts       []accountRow       `json:"accounts"`
 		ManualDisabled []accountReference `json:"manualDisabled"`
 	}
 	if err := json.Unmarshal(projected, &proposal); err != nil {
@@ -233,7 +261,7 @@ func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
 	if proposal.BaseRevision != 7 || len(proposal.Accounts) != 1 || proposal.Accounts[0].Enabled || len(proposal.ManualDisabled) != 1 || proposal.ManualDisabled[0].IdentityKey != "a@example.com" || bytes.Contains(projected, []byte("PRIVATE")) {
 		t.Fatalf("proposal lost its verified choices or revision binding: %s", projected)
 	}
-	for _, invalid := range []string{result+"{}", strings.Replace(result, `"operation":"set"`, `"operation":"list"`, 1), strings.Replace(result, `"enabled":false,`, "", 1)} {
+	for _, invalid := range []string{result + "{}", strings.Replace(result, `"operation":"set"`, `"operation":"list"`, 1), strings.Replace(result, `"enabled":false,`, "", 1)} {
 		if projected, err := projectResult("account-set", []byte(invalid), revision); err == nil || projected != nil {
 			t.Fatal("revision marker made invalid child output publishable")
 		}
@@ -245,21 +273,21 @@ func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
 
 func TestReadObservationsCarryNullableCallerRevision(t *testing.T) {
 	fixtures := map[string]string{
-		"inspect": inspectFixture,
-		"usage": usageFixture,
+		"inspect":       inspectFixture,
+		"usage":         usageFixture,
 		"accounts-list": `{"schemaVersion":1,"operation":"list","observedAt":100,"activePreset":"Manual","accounts":[],"presets":[],"manualDisabled":[]}`,
-		"suggest": `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z","observation":"one_shot","evaluator":"local-model","actions":[{"key":"model","value":"smart"}],"selection":{"model":"smart"}}`,
+		"suggest":       `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z","observation":"one_shot","evaluator":"local-model","actions":[{"key":"model","value":"smart"}],"selection":{"model":"smart"}}`,
 	}
 	for operation, fixture := range fixtures {
 		t.Run(operation, func(t *testing.T) {
-			fields := `"state":`+workerAccountState
+			fields := `"state":` + workerAccountState
 			if operation == "suggest" {
 				fields += `,"prompt":"refactor"`
 			}
 			for _, marker := range []string{"", "null", "0", "9007199254740991"} {
-				payload := "{"+fields
+				payload := "{" + fields
 				if marker != "" {
-					payload += `,"baseRevision":`+marker
+					payload += `,"baseRevision":` + marker
 				}
 				payload += "}"
 				_, revision, err := operationArgs(operation, payload)
@@ -267,7 +295,7 @@ func TestReadObservationsCarryNullableCallerRevision(t *testing.T) {
 					t.Fatalf("valid observation rejected: %s", payload)
 				}
 				// The child cannot relabel an observation as another shared revision.
-				spoofed := fixture[:len(fixture)-1]+`,"baseRevision":100}`
+				spoofed := fixture[:len(fixture)-1] + `,"baseRevision":100}`
 				result, err := projectResult(operation, []byte(spoofed), revision)
 				if err != nil {
 					t.Fatal(err)
@@ -303,7 +331,7 @@ func TestAccountImportRequiresClosedSafeRevisionPayload(t *testing.T) {
 		`{"baseRevision":"1"}`, `{"baseRevision":true}`,
 		`{"baseRevision":1,"baseRevision":2}`, `{"BaseRevision":1}`,
 		`{"baseRevision":1} {}`, `{"baseRevision":1} trailing`,
-		`{"baseRevision":1,"state":`+workerAccountState+`}`,
+		`{"baseRevision":1,"state":` + workerAccountState + `}`,
 		`{"baseRevision":1,"argv":["accounts","set"]}`,
 	} {
 		if args, revision, err := operationArgs("account-import", payload); err == nil || args != nil || revision != nil {
@@ -342,7 +370,7 @@ func TestAccountImportProjectsMachineChoicesWithCallerRevision(t *testing.T) {
 		t.Fatalf("import lost verified machine choices or revision binding: %s", result)
 	}
 	for _, invalid := range []string{
-		machine+"{}",
+		machine + "{}",
 		strings.Replace(machine, `"operation":"list"`, `"operation":"set"`, 1),
 		strings.Replace(machine, `"enabled":false,`, "", 1),
 	} {
