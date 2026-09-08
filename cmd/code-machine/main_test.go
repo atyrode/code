@@ -37,7 +37,7 @@ func TestRejectsAmbiguousOrInjectedPayloads(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.operation+"/"+tc.payload, func(t *testing.T) {
-			if args, err := operationArgs(tc.operation, tc.payload); err == nil || args != nil {
+			if args, _, err := operationArgs(tc.operation, tc.payload); err == nil || args != nil {
 				t.Fatalf("unsafe request accepted: %v", args)
 			}
 		})
@@ -47,19 +47,19 @@ func TestRejectsAmbiguousOrInjectedPayloads(t *testing.T) {
 func TestPayloadByteLimit(t *testing.T) {
 	// Leading JSON whitespace counts toward the same byte limit as values.
 	atLimit := strings.Repeat(" ", maxInput-2)+`{}`
-	if _, err := operationArgs("inspect", atLimit); err != nil {
+	if _, _, err := operationArgs("inspect", atLimit); err != nil {
 		t.Fatal("exactly bounded JSON rejected")
 	}
-	if args, err := operationArgs("inspect", " "+atLimit); err == nil || args != nil {
+	if args, _, err := operationArgs("inspect", " "+atLimit); err == nil || args != nil {
 		t.Fatal("oversized input accepted")
 	}
 }
 
 func TestFlagLikeDataRemainsOneValue(t *testing.T) {
 	const hostile = "--help --provider=other; $(touch /tmp/not-executed)\n"
-	payload, err := json.Marshal(map[string]any{"provider":"p", "identity":hostile, "enabled":false})
+	payload, err := json.Marshal(map[string]any{"provider":"p", "identity":hostile, "enabled":false, "state":json.RawMessage(workerAccountState), "baseRevision":0})
 	if err != nil { t.Fatal(err) }
-	args, err := operationArgs("account-set", string(payload))
+	args, _, err := operationArgs("account-set", string(payload))
 	if err != nil { t.Fatal(err) }
 	// Parse as Code does: a value containing flags must not become another flag.
 	var identity, provider, enabled string
@@ -68,6 +68,7 @@ func TestFlagLikeDataRemainsOneValue(t *testing.T) {
 	fs.StringVar(&identity, "identity", "", "")
 	fs.StringVar(&provider, "provider", "", "")
 	fs.StringVar(&enabled, "enabled", "", "")
+	fs.String("state", "", "")
 	if err := fs.Parse(args[2:]); err != nil { t.Fatal(err) }
 	if identity != hostile || provider != "p" || enabled != "false" || fs.NArg() != 0 {
 		t.Fatalf("caller data escaped its value: %q %q %q", identity, provider, enabled)
@@ -94,7 +95,7 @@ const usageFixture = `{"schemaVersion":1,"requestedAt":200,"observedAt":100,"sta
 func TestProjectsPrivateFieldsWithoutChangingFreshness(t *testing.T) {
 	for operation, fixture := range map[string]string{"inspect":inspectFixture, "usage":usageFixture} {
 		t.Run(operation, func(t *testing.T) {
-			result, err := projectResult(operation, []byte(fixture))
+			result, err := projectResult(operation, []byte(fixture), nil)
 			if err != nil { t.Fatal(err) }
 			if bytes.Contains(result, []byte("PRIVATE")) { t.Fatalf("private data escaped: %s", result) }
 			if operation == "usage" {
@@ -128,7 +129,7 @@ func TestInvalidChildDocumentNeverReturnsPartialResult(t *testing.T) {
 		strings.Repeat(" ", maxOutput)+inspectFixture,
 	}
 	for index, input := range cases {
-		if result, err := projectResult("inspect", []byte(input)); err == nil || result != nil {
+		if result, err := projectResult("inspect", []byte(input), nil); err == nil || result != nil {
 			t.Fatalf("invalid document %d returned public output: %s", index, result)
 		}
 	}
@@ -136,25 +137,108 @@ func TestInvalidChildDocumentNeverReturnsPartialResult(t *testing.T) {
 
 func TestUnselectableAccountAndFalseFlagsRemainObservable(t *testing.T) {
 	input := `{"schemaVersion":1,"operation":"list","observedAt":100,"activePreset":"Manual","accounts":[{"provider":"p","identityKey":"","selectable":false,"enabled":false,"blocked":false,"restrictions":[],"apiKey":"PRIVATE"}],"presets":[],"manualDisabled":[]}`
-	result, err := projectResult("accounts-list", []byte(input))
+	result, err := projectResult("accounts-list", []byte(input), nil)
 	if err != nil { t.Fatal(err) }
 	if bytes.Contains(result, []byte("PRIVATE")) || !bytes.Contains(result, []byte(`"identityKey":""`)) || !bytes.Contains(result, []byte(`"enabled":false`)) {
 		t.Fatalf("unselectable account misrepresented: %s", result)
 	}
 	missing := strings.Replace(input, `"enabled":false,`, ``, 1)
-	if result, err := projectResult("accounts-list", []byte(missing)); err == nil || result != nil { t.Fatal("missing enabled treated as disabled") }
-	if result, err := projectResult("preset-delete", []byte(input)); err == nil || result != nil { t.Fatal("wrong operation accepted") }
+	if result, err := projectResult("accounts-list", []byte(missing), nil); err == nil || result != nil { t.Fatal("missing enabled treated as disabled") }
+	if result, err := projectResult("preset-delete", []byte(input), nil); err == nil || result != nil { t.Fatal("wrong operation accepted") }
 }
 
 func TestSuggestionActionsMustMatchSelection(t *testing.T) {
 	input := `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z","observation":"one_shot","evaluator":"local-model","actions":[{"key":"lane","value":"fast","raw":"PRIVATE"}],"selection":{"lane":"fast"},"prompt":"PRIVATE","output":"PRIVATE"}`
-	result, err := projectResult("suggest", []byte(input))
+	result, err := projectResult("suggest", []byte(input), nil)
 	if err != nil { t.Fatal(err) }
 	if bytes.Contains(result, []byte("PRIVATE")) { t.Fatalf("private evaluator material escaped: %s", result) }
 	for _, broken := range []string{
 		strings.Replace(input, `"selection":{"lane":"fast"}`, `"selection":{"lane":"slow"}`, 1),
 		strings.Replace(input, `"actions":[`, `"actions":[{"key":"lane","value":"fast"},`, 1),
 	} {
-		if result, err := projectResult("suggest", []byte(broken)); err == nil || result != nil { t.Fatal("inconsistent suggestion accepted") }
+		if result, err := projectResult("suggest", []byte(broken), nil); err == nil || result != nil { t.Fatal("inconsistent suggestion accepted") }
+	}
+}
+
+const workerAccountState = `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[],"presets":[]}`
+
+func TestChoiceMutationsRequirePortableStateAndSafeRevision(t *testing.T) {
+	for operation, fields := range map[string]string{
+		"account-set": `"provider":"openai-codex","identity":"a@example.com","enabled":false`,
+		"preset-create": `"name":"A","disabled":[]`,
+		"preset-update": `"name":"A","disabled":[]`,
+		"preset-activate": `"name":"A"`,
+		"preset-delete": `"name":"A"`,
+	} {
+		t.Run(operation, func(t *testing.T) {
+			for _, suffix := range []string{
+				``,
+				`,"baseRevision":0`,
+				`,"state":`+workerAccountState,
+				`,"state":null,"baseRevision":0`,
+				`,"state":`+workerAccountState+`,"baseRevision":null`,
+				`,"state":`+workerAccountState+`,"baseRevision":-1`,
+				`,"state":`+workerAccountState+`,"baseRevision":0.5`,
+				`,"state":`+workerAccountState+`,"baseRevision":9007199254740992`,
+				`,"state":`+workerAccountState+`,"baseRevision":0,"baseRevision":1`,
+				`,"state":`+strings.Replace(workerAccountState, `"schemaVersion":1`, `"schemaVersion":2`, 1)+`,"baseRevision":0`,
+				`,"state":`+strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":null`, 1)+`,"baseRevision":0`,
+				`,"state":`+strings.Replace(workerAccountState, `"presets":[]`, `"presets":[{"name":"A","disabled":[],"name":"B"}]`, 1)+`,"baseRevision":0`,
+				`,"state":`+strings.Replace(workerAccountState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"p","identityKey":"i","credential":"private"}]`, 1)+`,"baseRevision":0`,
+			} {
+				if args, revision, err := operationArgs(operation, "{"+fields+suffix+"}"); err == nil || args != nil || revision != nil {
+					t.Fatalf("invalid proposal accepted: %s", suffix)
+				}
+			}
+			for _, revision := range []string{"0", "9007199254740991"} {
+				payload := "{"+fields+`,"state":`+workerAccountState+`,"baseRevision":`+revision+"}"
+				if _, _, err := operationArgs(operation, payload); err != nil {
+					t.Fatalf("valid revision boundary rejected: %s", revision)
+				}
+			}
+		})
+	}
+	for _, payload := range []string{`{}`, `{"state":`+workerAccountState+`}`} {
+		if _, revision, err := operationArgs("accounts-list", payload); err != nil || revision != nil {
+			t.Fatal("account reads unexpectedly require a revision")
+		}
+	}
+	if _, _, err := operationArgs("account-clear-blocks", `{"provider":"openai-codex","identity":"a@example.com"}`); err != nil {
+		t.Fatal("governed broker effect unexpectedly requires portable state")
+	}
+	if args, _, err := operationArgs("account-clear-blocks", `{"provider":"openai-codex","identity":"a@example.com","state":`+workerAccountState+`}`); err == nil || args != nil {
+		t.Fatal("broker effect accepted portable choices")
+	}
+}
+
+func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
+	const result = `{"schemaVersion":1,"operation":"set","observedAt":100,"activePreset":"Manual","accounts":[{"provider":"openai-codex","identityKey":"a@example.com","selectable":true,"enabled":false,"blocked":false,"restrictions":[],"credential":"PRIVATE"}],"presets":[],"manualDisabled":[{"provider":"openai-codex","identityKey":"a@example.com"}],"baseRevision":900}`
+	payload := `{"provider":"openai-codex","identity":"a@example.com","enabled":false,"state":`+workerAccountState+`,"baseRevision":7}`
+	_, revision, err := operationArgs("account-set", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := projectResult("account-set", []byte(result), revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposal struct {
+		BaseRevision int64 `json:"baseRevision"`
+		Accounts []accountRow `json:"accounts"`
+		ManualDisabled []accountReference `json:"manualDisabled"`
+	}
+	if err := json.Unmarshal(projected, &proposal); err != nil {
+		t.Fatal(err)
+	}
+	if proposal.BaseRevision != 7 || len(proposal.Accounts) != 1 || proposal.Accounts[0].Enabled || len(proposal.ManualDisabled) != 1 || proposal.ManualDisabled[0].IdentityKey != "a@example.com" || bytes.Contains(projected, []byte("PRIVATE")) {
+		t.Fatalf("proposal lost its verified choices or revision binding: %s", projected)
+	}
+	for _, invalid := range []string{result+"{}", strings.Replace(result, `"operation":"set"`, `"operation":"list"`, 1), strings.Replace(result, `"enabled":false,`, "", 1)} {
+		if projected, err := projectResult("account-set", []byte(invalid), revision); err == nil || projected != nil {
+			t.Fatal("revision marker made invalid child output publishable")
+		}
+	}
+	if projected, err := projectResult("account-set", []byte(result), nil); err == nil || projected != nil {
+		t.Fatal("unbound mutation result became publishable")
 	}
 }

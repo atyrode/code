@@ -315,6 +315,9 @@ type accountSelectionState struct {
 	active         string
 	manualDisabled map[accountKey]bool
 	presets        []accountSelectionPreset
+	// Supplied launch choices must be resolved exactly against the authoritative
+	// broker snapshot, never recovered or pruned into a broader account pool.
+	strictLaunch bool
 }
 
 type accountSelectionFile struct {
