@@ -23,6 +23,14 @@ the same model's priced row under any other provider omp lists (exact bare id,
 highest price where resellers disagree), and names any model no row prices in a
 warning at the top of `models.yml` so you can write the rung in by hand.
 
+The generated grid covers OMP's model roles and bundled task agents, not a
+historical agent inventory. The retired bundled `librarian` route is no longer
+generated or included in cost/speed estimates. Re-render an existing catalog
+with `code generate` to remove that old automatic row; Code does not rewrite
+stored catalogs or delete user agent definitions on startup. Explicit custom
+agent rows in a supplied catalog remain supported: a `●`-marked row, including
+one named `librarian`, still supplies its `task.agentModelOverrides` entry.
+
 ## Dials that set omp's own switches
 
 Most dials pick models, so they select a pre-computed routing block. Four do

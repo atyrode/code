@@ -325,10 +325,7 @@ func (o *smokeOmp) checkRoles(t *testing.T) {
 	}
 	for name := range genAgentRoles {
 		if !agents[name] {
-			// The reverse drift: an override for an agent omp no longer ships
-			// is inert. Not a failure, since the generator's routing is not
-			// this check's to change, but it is named so the run says so.
-			t.Logf("the generator routes an agent %q that %s no longer bundles (its task.agentModelOverrides entry is inert)", name, o.version)
+			t.Errorf("the generator routes an agent %q that %s no longer bundles (its task.agentModelOverrides entry is inert)", name, o.version)
 		}
 	}
 }

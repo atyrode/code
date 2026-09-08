@@ -515,9 +515,9 @@ func TestEnterRefusesMissingCombo(t *testing.T) {
 // TestGenConfigYAMLAgentOverrides locks the atyrode/dotfiles#173 fix: every ●-marked
 // agent-backed role in the generated block is mirrored into
 // task.agentModelOverrides (so spawned agents follow the generated profile),
-// while unmarked roles and the advisor never are. Prompt-focused keystrokes
-// never reach the launch keybinds — clikit's promptbox owns that routing and
-// its tests live in cli-kit.
+// while unmarked roles and the advisor never are. librarian is deliberately a
+// custom catalog row here: retiring its obsolete bundled route must not block
+// a user-supplied named agent from receiving an explicit override.
 func TestGenConfigYAMLAgentOverrides(t *testing.T) {
 	rows := []string{
 		"    default    gpt-5.6-sol:high",

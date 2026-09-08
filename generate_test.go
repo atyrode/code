@@ -157,7 +157,6 @@ const goldenMixedSmart = `mixed_smart_medium_sp  mixed · smart · medium · spa
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● scout      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● sonic      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -182,7 +181,6 @@ const goldenClaudeElite = `claude-only_elite_max_nosp  claude-only · elite · m
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● librarian  claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● scout      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● sonic      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     advisor    claude-sonnet-5:max      → claude-haiku-4-5:xhigh
@@ -204,7 +202,6 @@ const goldenClaudeSmart = `claude-only_smart_medium_nosp  claude-only · smart �
     slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
-  ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● scout      claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● sonic      claude-sonnet-5:medium   → claude-haiku-4-5:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low
@@ -1825,7 +1822,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 			t.Errorf("claude-only/smart %s = %q, want the tier-4 rung claude-fable-5", role, got)
 		}
 	}
-	for _, role := range []string{"default", "task", "librarian"} {
+	for _, role := range []string{"default", "task"} {
 		if got := lead("claude-only", "smart", role); got != "claude-opus-5" {
 			t.Errorf("claude-only/smart %s = %q, want the tier-3 rung claude-opus-5", role, got)
 		}
@@ -1842,7 +1839,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 	// `elite`: the tier-4 rung takes the default seat too — the old fable+main
 	// pair. The bump is already saturated, so the deliberative seats do not
 	// climb any further.
-	for _, role := range []string{"default", "task", "librarian", "plan", "slow", "reviewer", "security-reviewer", "vision"} {
+	for _, role := range []string{"default", "task", "plan", "slow", "reviewer", "security-reviewer", "vision"} {
 		if got := lead("claude-only", "elite", role); got != "claude-fable-5" {
 			t.Errorf("claude-only/elite %s = %q, want claude-fable-5", role, got)
 		}
