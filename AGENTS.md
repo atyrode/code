@@ -1,10 +1,13 @@
 # atyrode/code — agent operating contract
 
-Code is a Go launcher for OMP: it previews model routing and starts sessions with
-a one-shot configuration overlay. It owns pre-launch selection, a cross-launch
-session registry, whole-session worktrees and a contained native RPC engine for
-supervising clients. OMP owns the ordinary session runtime. Manifold plugins are
-the launcher's transition direction, not proof that the TUI has been replaced.
+Code is `atyrode.code`, a Manifold-native plugin controlled through Manifold's
+web GUI and governed APIs. The standalone Code CLI/TUI is deprecated; it is
+implementation to replace, not a second product to preserve. Manifold owns
+fleet, permissions, multiplayer, persistence, resource lifecycle, execution
+and traceability. Code owns its model/catalog/routing/account-choice semantics;
+OMP owns the ordinary session runtime. A native omp terminal is an execution
+surface, not Code's control plane. The operator ratified this replacement in
+[issue #149](https://github.com/atyrode/code/issues/149) on 2026-09-08.
 `CLAUDE.md` points here; edit this file, not the adapter.
 
 The marked block is generated from
@@ -101,102 +104,102 @@ distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#
 
 ## Commands
 
+These verify the implementation currently in the tree. Legacy entrypoints are
+not requirements for the plugin architecture or instructions to provision it.
+
 | Command | Use |
 | --- | --- |
-| `scripts/gate.sh` | Canonical core gate: formatting drift, vet and tests. Extra test arguments are for focused loops, not the full gate. |
-| `CGO_ENABLED=0 go build -o <run-owned-path> .` | Build the CLI/TUI to exercise; `code` on PATH may be an installed release, not your change. |
-| `code`, `code engine`, `code ls`, `code wt` | Launcher, native RPC, session and worktree entrypoints; see [README](README.md) and [configuration](docs/configuration.md) for their contracts. |
-| `code generate init`, `code generate` | Catalog scaffold/probe and render entrypoints. `init` probes real models; it is not an offline fixture command. |
-| `code generate refresh --models-file PATH` | Refresh curated facts without regenerating tiers. Defaults to potentially paid live benchmarks; `--skip-bench` is metadata-only and `--bench-json PATH` reuses saved chat measurements. |
+| `scripts/gate.sh` | Canonical Go gate: formatting drift, vet and tests. Extra test arguments are for focused loops, not the full gate. |
+| `CGO_ENABLED=0 go build -o <run-owned-path> .` | Build the deprecated implementation when investigating its behavior; `code` on PATH is not your working tree. |
+| `code`, `code engine`, `code ls`, `code wt` | Deprecated entrypoints still present; [configuration](docs/configuration.md) describes their existing behavior, not the target architecture. |
+| `code generate init`, `code generate`, `code generate refresh --models-file PATH` | Legacy catalog tools. Initial probes and default refresh benchmarks can incur real provider requests/cost; they are not offline fixtures. |
 | `bun run check`, `bun test`, `bun run pack`, `bun run verify` (in `plugins/`) | Plugin gate; first read [plugin setup and commands](plugins/README.md). |
 
 ## Boundaries
 
-- **Runtime and routing ownership.** OMP owns ordinary-session retry, fallback,
-  quotas, sandboxing, resume and in-session subagent worktrees. Code owns
-  pre-launch estimates, selection, reachability, whole-session worktrees and its
-  registry. Reuse `routing.go`/`providers.go`, not parallel provider/pool/lane maps.
-  Launches use ephemeral overlays, never edits to OMP configuration; preserve
-  forwarded-argument behavior, including `--continue` and replacement of a
-  forwarded `--profile` (`launch.go`, `main.go`).
-- **Native evidence and refusal.** `code engine` uses an operator-confirmed,
-  immutable profile. Profile dials come from the terminal ceremony, not argv or
-  environment overrides; configuration without a terminal is refused. Redact
-  provider credentials from native RPC, including `rpc_chunk` frames. The atomic
-  mode-0600 `code.runtime/1` report precedes the first forwarded byte and records
-  exit status/resource use afterwards. Declare only measured, established
-  containment; missing required containment means refusal, not a weaker claim
-  or weakened escape scenarios. `--describe` is metadata, not runtime proof.
-  Closing stdin ends the child tree (`engine.go`, `engineredact.go`, `sandbox.go`).
-- **Credentials and launch authority.** Broker tokens travel only in the
-  environment. Untrusted, runtime and broker-less launches strip every
-  `OMP_AUTH_BROKER_*` key and `CODE_AUTH_ACCOUNT_STATE`; the DeepSeek key stays
-  in memory, never serialized. Preserve the mode-0600 account pool, private
-  mode-0700 session directory and cleanup in `vault.go`. Secrets stay local, never
-  in Manifold; launch authority stays on the spoke. Plugin owner keys must not
-  enter argv, logs or committed files, or be copied between machines.
-- **Public and persistent compatibility.** CLI and `CODE_*` contracts protect
-  separately released callers, including dotfiles' `codeLauncher`; change them
-  only with coordinated downstream migration. Preserve profile references and
-  immutable revisions: profile import copies exact revisions, rejects conflicts
-  and leaves its source untouched. Legacy worktrees remain discoverable and
-  removable, without silent relocation or migration. Internal cutovers remove obsolete
-  callers/paths; public or persistent migration and rollback support remains
-  until its coordinated transition completes.
-- **State and privacy.** Code worktrees belong under Code's state root, never
-  OMP's worktree root: OMP cleanup does not know Code's liveness registry. OMP
-  owns writes to its session store. History reads only leading session metadata,
-  never conversations, prompts or tool output, and never untrusted `ompu` roots.
-  [Configuration](docs/configuration.md), `worktree.go` and `history.go` own state
-  paths, overrides and resume behavior; do not create a second root inventory.
-- **Availability and safe verification.** Missing providers must not crash the
-  launcher; unavailable features hide or degrade. Ordinary tests stay offline
-  and deterministic using existing seams. Required containment, native canary
-  and opt-in upstream drift lanes are explicit exceptions, not permission for
-  incidental live probes.
+- **Plugin first, not coexistence.** No target requirement preserves the public
+  CLI/TUI, terminal configuration ceremonies, `CODE_*` compatibility, a dotfiles
+  Code wrapper, or a permanent standalone recovery path. This is an explicitly
+  authorized architectural retirement, not permission to erase user data or
+  break unrelated products. Any future CLI starts as a client of the Manifold
+  plugin; do not design that hypothetical client now.
+- **Domain versus platform.** Code supplies catalog/model selection, estimates,
+  routing, usage interpretation and account/preset semantics. Reuse the useful
+  domain behavior in `routing.go`/`providers.go`, not duplicate provider maps.
+  Manifold owns machine targeting, jobs, resource/workspace lifetime, permissions,
+  scheduling, shared state and traces. Do not retain or create a Code publisher,
+  SSH/terminal RPC transport, private session/worktree registry, ACL, scheduler or
+  audit system. Implement missing reusable capability in Manifold through its
+  proper public contracts, not a privileged Code exception.
+- **One state authority.** Code's durable product state lives through Manifold's
+  native settings/document/action/storage mechanisms, with native identity,
+  sharing, revocation, concurrency and attribution. Do not synchronize a CLI
+  preference file with plugin storage. Browser and agent operations use the same
+  governed doors; multiplayer is the baseline, not a later adaptation.
+- **Declared execution resources.** Tools, catalogs, configuration and services
+  resolve through native fleet/resource lifecycle. A private executable can be
+  a worker implementation detail; it must not require a separately installed
+  and configured Code product. Extend existing native concepts before inventing
+  a new profile registry. Exact reviewed software/configuration revisions are
+  explicitly promoted; inspection-to-launch drift refuses rather than falling
+  back to host PATH, ambient environment or different settings.
+- **Scoped credential access.** Credentialed operations use native scoped or
+  delegated service access. Read jobs and runtime launches have distinct
+  authority. Keep upstream secrets with their native machine-side resolver;
+  do not silently substitute raw broker credentials in a new worker environment.
+  No secret in plugin/browser inputs, hub records, argv, logs or ordinary job
+  output. A process may still disclose data it is authorized to read; scoped
+  access is not a claim of magical output redaction.
+- **Runtime truth and privacy.** OMP retains ordinary-session retry, fallback,
+  quota enforcement, resume and in-session subagent isolation. Code must not
+  recreate them. Manifold governs orchestration and records actual execution
+  provenance; declare only measured containment, and refuse unavailable
+  enforcement. Preserve secret protection in legacy paths while they remain.
+  OMP owns its session store; do not mine transcript bodies as migration input.
+- **Deliberate retirement.** Legacy data or external services may be adopted only
+  through explicit bounded native operations when needed. That is not mandatory
+  standalone setup, ongoing synchronization, or permission to relocate credentials,
+  delete files, retire a broker or mutate a fleet. Data safety does not make the
+  old architecture a compatibility requirement.
+- **Availability and evidence.** Missing providers/resources must produce
+  truthful per-machine/per-operation states and refusals, not crashes or a
+  standalone fallback. Ordinary tests are deterministic and offline. Required
+  containment and explicit upstream/runtime lanes remain real evidence, not
+  permission for incidental live probes.
 
 ## Task-specific guidance
 
-- **Native runtime or containment changes:** read `scripts/gate.sh`,
-  `.github/workflows/ci.yml` and the affected native tests for prerequisites and
-  required evidence flags; `nix/omp.nix` owns Code's optional standalone bundle
-  pin and required CI runtime. Dotfiles owns managed machine runtime and
-  configuration; do not add a cross-repository build dependency. Containment,
-  pinned registry/config smoke and latest-upstream drift are separate
-  measurements, not substitutes. Local skips remain unverified unless
-  identified CI evidence supplies the missing measurement; never opt required
-  evidence out. Use `TestOmpSmoke` and the README's compiled-runner invocation
-  for deployed configured-OMP verification, and `.github/workflows/omp-smoke.yml`
-  for latest-upstream drift. Dotfiles owns the complementary packaged Code/OMP
-  interactive startup check.
-- **Launcher/TUI transition work:** read the recorded direction and decisions in
-  [the transition document](docs/manifold-transition.md) before extending the
-  launcher. New launcher capabilities must be reachable headlessly rather than
-  TUI-only; new rendering belongs on the plugin surface, not a new Bubble Tea
-  surface. Preserve the working TUI until its replacement is proven end to end.
-  Planned verbs, doors and projections are not available merely because the
-  dated record describes them; check current code and published evidence.
+- **Runtime or containment changes:** read `scripts/gate.sh`,
+  `.github/workflows/ci.yml` and affected tests. Existing `nix/omp.nix`,
+  `TestOmpSmoke` and `.github/workflows/omp-smoke.yml` measure the deprecated
+  implementation's pinned or upstream runtime; they are not target deployment
+  ownership. Do not weaken containment or secret-protection tests to bypass
+  missing native capability. Local skips remain unverified unless identified
+  CI evidence supplies the missing measurement.
+- **Plugin replacement work:** read [the architecture](docs/manifold-transition.md)
+  before changing behavior. Design web controls and their governed API together,
+  using Manifold's native mechanisms. No new CLI-only/TUI-only feature, ceremony
+  or first-run requirement is acceptable. Retire obsolete public paths and tests
+  in explicit implementation cutovers; do not preserve them merely to keep old
+  parity assertions green. Prove the actual plugin workflow, not a terminal
+  simulation or every historical key/glyph. Deprecated code still present is
+  not evidence that the replacement has shipped.
 - **Terminal rendering or interaction changes:** use the
   `tui-visual-verification` skill for actual interaction and rendered capture,
   including affected transitions; render-function tests alone are insufficient.
   The skill owns the terminal recipe and resource cleanup, not this root.
   Catalog changes use `TestGoldenCatalogTwoPool` and
   `testdata/two-pool-golden.plain`; deliberately update and review that fixture.
-- **Configuration or local classifier changes:** read
-  [configuration](docs/configuration.md) and the owning implementation rather
-  than copying command/environment maps. `suggest.go` consumes cli-kit's default
-  model; coordinate changes affecting dotfiles' classifier/wrapper integration
-  with that owner rather than introducing a second default here.
-- **Plugin changes:** first read [plugins/README.md](plugins/README.md) and
-  Manifold's `docs/PLUGINS.md` §9. They own SDK checkout/install, packing,
-  normal/hardened disposable-real-server verification and delivery procedures.
-  Use frozen dependency installs for both SDK and plugins; update
-  `plugins/MANIFOLD_REV` and the reusable-workflow ref in
-  `.github/workflows/manifold-plugins.yml` atomically. Adapt to Manifold's mechanisms;
-  raise genuine platform gaps with its owner rather than building a parallel
-  mechanism. Before ready/merge, complete applicable plugin CI and both server
-  modes; normal admission alone does not prove a Worker panel mounts, and a
-  bundle build is not installed-browser proof.
+- **Configuration and model changes:** use Code's domain rules and native
+  resource/configuration authority. [Configuration](docs/configuration.md)
+  describes remaining legacy behavior for investigation only; do not reproduce
+  its environment or machine-state conventions as the new contract.
+- **Plugin changes:** read [plugins/README.md](plugins/README.md) and Manifold's
+  `docs/PLUGINS.md`. Use frozen installs for the pinned SDK and plugin workspace;
+  update `plugins/MANIFOLD_REV` and the reusable-workflow reference atomically.
+  Verify the runtime modes actually declared by the bundle. Packing or server
+  admission alone does not prove mounted web behavior, machine execution or
+  native permissions/multiplayer/traceability.
 - **Authorized preview work:** use the plugin owner's delivery procedure only
   with explicit task authority for live mutation. Inspect current preview
   configuration and the live machine roster, then verify the installed browser
@@ -204,13 +207,12 @@ distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#
   online or substitute a local bundle for installation evidence. Production
   installation is operator-only, by hand from the release URL in the plugin
   manager, root only, never automated.
-- **Release work:** read `.github/workflows/release.yml`, `.goreleaser.yaml` and
-  the plugin README's receiver prerequisite before publishing: an SDK pin does
-  not update the receiver, and a tag may trigger preview mutation. After release,
-  `scripts/bump-flake-pin.sh <tag>` prepares the pin update for a PR; `flake.nix`
-  and `nix/code.nix` wrap published binaries, not a Code source build. Published
-  tags are immutable, including cli-kit dependency tags; fix a bad release with
-  a new patch, not tag movement/deletion.
+- **Release work:** publishing and activation require explicit authorization.
+  Read the actual workflows and receiver requirements first; a tag can deploy,
+  and an SDK pin alone does not update a receiver. Current GoReleaser/flake
+  packaging is legacy implementation, not a mandate to keep a public Code
+  binary. Published tags remain immutable, including dependencies: fix a bad
+  release with a new version, never by moving or deleting its tag.
 
 ## Delivery
 
@@ -224,10 +226,11 @@ distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#
   hunks. Coordinate overlaps through their issues/PRs; do not push to another
   contributor's branch or force-push a branch you did not create. Target main
   and use authorized squash merge.
-- For transition work, §6 of `docs/manifold-transition.md` is the sole progress
-  ledger; the PR advancing a step updates its row. Treat the document as dated
-  decisions/evidence, and `docs/status.md` as caveats, not another progress map.
-  Do not call planned or unpublished CLI/plugin work shipped.
+- [The architecture](docs/manifold-transition.md) is the current ratified target;
+  its §6 is the sole progress ledger. A PR changing a step updates that row.
+  `docs/status.md` holds caveats, not a competing roadmap. Replace stale design
+  guidance rather than stacking contradictory historical plans. Keep source,
+  merge, deployment and operational evidence distinct.
 - Release publication, preview installation, production installation, downstream
   pin updates and machine activation are distinct evidence. A tag proves no
   installed client updated and gives no update-time guarantee. For plugin review,

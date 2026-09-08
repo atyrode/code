@@ -1,112 +1,106 @@
 # Status & caveats
 
-`code` is an opinionated personal tool, published because it's useful. It was
-built for a heavily managed multi-provider oh-my-pi setup
-([atyrode/dotfiles](https://github.com/atyrode/dotfiles)) and it degrades
-cleanly without that infrastructure: every feature that isn't configured
-simply hides itself (see [configuration](./configuration.md)).
+Code's product direction is **`atyrode.code`, a Manifold-native plugin
+controlled through the web GUI**. The existing standalone CLI/TUI is
+**deprecated**, not a supported companion architecture to preserve until
+feature parity. [Issue #149](https://github.com/atyrode/code/issues/149)
+records the operator-ratified correction.
 
-If you run omp with more than one provider subscription and care which model
-chain answers which task, this tool is for you. If you run omp on one
-provider with defaults, you probably don't need it.
+The [architecture document](./manifold-transition.md) owns the design and
+its [section 6](./manifold-transition.md#6-transition-steps) is the sole
+transition ledger. This page records evidence boundaries and constraints,
+not a second checklist or progress tracker.
 
-## Direction
+## What the available evidence establishes
 
-`code` is becoming a [manifold](https://github.com/atyrode/manifold) plugin:
-a small launcher UI in the browser that opens omp-ready terminals on enrolled
-machines, with the dials, routing preview, usage panel and account manager
-rendered there. The TUI stays until every one of its surfaces has a plugin
-equivalent, and from 2026-09-05 nothing new lands TUI-only.
+- **Source baseline:** `origin/main@288190f` still contains the legacy Go
+  CLI/TUI and bootstrap plugins. Their presence demonstrates existing
+  implementation, not acceptance of the target architecture. In particular,
+  opening the old launcher in a Manifold terminal is not the native GUI product.
+- **Candidate work:** [draft PR #148](https://github.com/atyrode/code/pull/148)
+  contains candidate headless, React and native-job work. It needs rework under
+  #149 because its coexistence assumptions are rejected. A draft is neither
+  merged implementation nor operational acceptance.
+- **Target contract:** native scoped service access, explicit promotion of
+  exact revisions and one Manifold-owned source of Code state are ratified
+  requirements. This documentation does not claim they are fully implemented.
+- **Operational boundary:** no supported native installation, preview readiness
+  or live end-to-end acceptance is established by these documents. Existing
+  packaging, CI or deployment mechanics do not establish those claims either.
+  Evidence must identify the revisions and the actual path exercised; a
+  passing local check cannot stand in for a live acceptance result.
 
-[`manifold-transition.md`](./manifold-transition.md) is the record: the
-decisions (§5), the six steps (§6) and, in §6's ledger, which step is where —
-that table is the only progress tracker, and the PR that moves a step updates
-it. Work items carry the `manifold-transition` label in the issue tracker.
-What has shipped so far is under `plugins/` (`plugins/README.md`).
+The [plugin guide](../plugins/README.md) is the development entry point.
+The [configuration reference](./configuration.md) is explicitly deprecated
+implementation documentation, not instructions for setting up the target
+product. Historical commands, wrappers, state paths and screenshots describe
+the old implementation only.
 
-## The catalog
+## Domain and runtime constraints worth retaining
 
-The dials map to pre-generated routing blocks. `code generate init` scaffolds
-a models file from your own omp instance (`omp models --json`, plus
-`omp usage --json` to spot the tier-scoped quota bucket that marks the spark
-model) and `code generate` renders the catalog from it — see the README
-quickstart. The tier assignments `init` derives (newest model per family,
-then ranked by thinking ceiling, context and price) still deserve a human look.
+### Model catalogs and estimates
 
-What no longer needs a caveat: `init` probes every candidate with `omp bench`
-before it can become a rung, and that is mandatory rather than a flag. omp lists
-models an account cannot actually call and nothing in the metadata says so —
-`claude-mythos-5` reports the fable models' exact price, context window and
-thinking range, and 404s here — so anything the provider disowns is dropped, as
-is anything missing from the report. The same pass supplies the real speed/ttft,
-which used to be an identical placeholder pair on every model, making the speed
-meter move with the thinking dial and nothing else. It is one timed request per
-model, so `init` takes a minute and the figures are a single sample rather than a
-steady benchmark. A verified file is marked `probed: true`; `generate` refuses
-one that is not.
+Code owns capability ladders and coding-role routing, not a new execution
+platform. Model metadata alone does not establish that an account can call a
+model. The legacy generator's reachability probes are useful implementation
+reference: an unavailable model, an incompatible client and an inconclusive
+probe are distinct outcomes. An inconclusive request must not be presented as
+successful verification or silently certify the remaining ladder.
 
-The probe sorts a failure into three outcomes, because they are not the same
-thing. A model the provider says does not exist is dropped. A model the provider
-refuses because the *client* is too old is also dropped, but named in the
-scaffold's header with the version the provider asked for. Entitlement alone
-does not prove that the current OMP client can call a model. Anything else is
-inconclusive, and inconclusive refuses the whole scaffold rather than certifying
-a ladder around a model that never answered.
+Automatically inferred tier assignments still require domain review.
+A single timed request is a sample, not a sustained throughput benchmark;
+cost and speed previews are estimates, not promises. A local endpoint listing
+a tag proves neither its reasoning quality nor its fitness for a task. Do not
+present local models as capability-verified merely because the endpoint answers.
 
-## Other honest caveats
+OMP model, usage and benchmark schemas and upstream provider behavior can
+change. Compatibility claims must name the versions and exercised contracts;
+a historical version number is not a current guarantee.
 
-- oh-my-pi releases near-daily, and the `omp models --json` / `omp usage --json`
-  / `omp bench --json` schemas the generator reads carry no
-  stability guarantee — nor does the auth broker's snapshot/usage API the
-  panel draws from. Required CI checks the bundled pin and the scheduled
-  [latest-upstream smoke](../.github/workflows/omp-smoke.yml) warns about drift;
-  neither guarantees future upstream schema stability.
-- The quota bucket a model draws from is declared in the catalog (`bucket:`)
-  and the TUI prefers that; guessing it from the model family is now only the
-  fallback for catalogs that declare none. Model-family colouring is still
-  name matching that reflects the author's provider mix. Both fail soft.
-- The Usage panel draws a tier-scoped quota window only while some catalog model
-  still draws from that bucket. Providers do not stop reporting a window they
-  have retired — Anthropic's separate Fable window is still in the payload,
-  reading 0% and `ok` indefinitely — and a row nothing can ever spend is noise.
-  Windows that are not tier-scoped are the account's ordinary quota and always
-  render, and a catalog-less run knows no buckets so it shows everything.
-  Routing is unaffected either way: a bucket no model declares strikes no rung.
-- The local model lane (the engine's configuration ceremony) offers whatever the
-  daemon reports and verifies only that the endpoint answers and still serves
-  the chosen tag. Nothing probes whether that model can carry an analysis — the
-  catalog's rungs are `omp bench`-verified, these are not — so a 1B model is as
-  selectable as a 30B one, and the resulting findings are as good as the model.
-- Deliberately not ours: retry, model fallback,
-  quota enforcement, sandboxing of an ordinary session, session resume, and
-  worktree isolation for spawned subagents are all omp's, and nothing here
-  reimplements them — every runtime concern is a freshly exec'd `omp`. What is
-  ours is the pre-launch estimate omp cannot make (the cost/speed meters, which
-  score a facet combination omp has no concept of), the capability ladder
-  (`omp models --json` carries no tier or ranking field), the reachability
-  probe (omp lists models an account cannot call and says nothing about it), and
-  whole-session operator worktrees plus the cross-launch session registry, which
-  omp has no command for.
-- Those worktrees used to live in `~/.omp/wt` — omp's own directory, which
-  `omp worktree clear --all` empties without knowing about this tool's liveness
-  records. They now live under `code`'s state root; `code wt` still lists any
-  left behind, marked `legacy`, so the existing remove/prune flow can clear
-  them.
-- Account health comes from omp, not from silence. omp reports which
-  credentials it has disabled and why (`disabledCredentials` — an expired OAuth
-  grant reads as `oauth refresh failed (invalid_grant)` on the account's own
-  row), which configured accounts sent no report (`accountsWithoutUsage`), and
-  its own cross-account headroom per provider (`capacity`). That last one is the
-  authority on a provider's main bucket: one account at 100% no longer strikes
-  every route while a sibling still has room. `capacity` carries no tier, so the
-  tier-scoped buckets keep their per-report verdict. The one inference left is
-  the oldest — a metered provider omp reports nothing for at all is `unauthed`.
-- What this tool still holds itself is *which accounts are enabled* — a private
-  selection omp's vault cannot see. That is the remaining place two judges can
-  disagree about one account, and whether it should exist at all is an open
-  question rather than a plan.
+### Quotas and account health
 
-## Built on
+Routing should use declared model quota buckets rather than assume that model
+family names encode entitlement. Provider-wide headroom and tier-scoped quota
+windows are different signals: a usable sibling account can supply provider
+capacity without proving that a particular tier has capacity. A stale,
+retired quota window must not be advertised as spendable capacity when no
+model uses it.
 
-[cli-kit](https://github.com/atyrode/cli-kit) — the shared palette, layout
-primitives, and the `ctrl+o` PromptBox.
+Disabled credentials, missing usage reports, exhaustion and stale broker
+blocks are not interchangeable. Missing data is not evidence of health or
+entitlement. Code can interpret authorized service observations for domain
+previews; it must not create an independent account-health authority or
+private enabled-account preference store beside Manifold state.
+
+### Execution, recovery and safety
+
+Manifold owns fleet placement, permissions, multiplayer/shared state,
+persistence, resource lifecycle, execution, scheduling and traces. Code owns
+the coding-domain actions using those services. OMP provides agent runtime
+behavior, including retries and model fallback; its terminal is an execution
+surface, not Code's control plane. Generic gaps must be fixed in Manifold,
+not filled with Code-owned parallel machinery.
+
+The legacy session registry and separate worktree root record real safety
+concerns: cleanup must not delete live work, orphan child processes, erase
+uncommitted changes or mistake a missing worktree for permission to recreate
+it. Preserve those protections in Manifold-owned lifecycle and recovery
+contracts, **not** by retaining Code's registry, private persistence or CLI
+recovery indefinitely. Existing state is not authorization to migrate or
+remove it.
+
+Legacy/external brokers and runtimes may remain governed native resources
+when required. They must be reached through scoped native service access;
+that does not make standalone installation, `CODE_*` variables, a personal
+wrapper or dual state part of the target. Internal domain workers are
+implementation details, not separately configured operator products. Any
+future CLI would be a Manifold client, with no requirement to preserve the
+current command surface.
+
+## Promotion is a separate operator decision
+
+Development and architecture changes do not authorize live deployment,
+releases, credential relocation, broker retirement or destructive state
+changes. Promotion requires explicit selection of exact revisions. Do not
+interpret a branch, a moving tag, an old preview workflow or a successful
+local build as permission to change a running environment.

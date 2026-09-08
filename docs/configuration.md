@@ -1,6 +1,38 @@
-# Configuration
+# Configuration and deprecated implementation reference
 
-## models.yml columns
+## Native target authority
+
+Code is a Manifold-native plugin, controlled through its web GUI and governed
+APIs. Manifold supplies the authoritative configuration/state mechanisms,
+fleet resources, permissions, multiplayer, lifecycle and traces. Code supplies
+domain schemas, validation and interpretation. No target setup requires an
+independently installed Code CLI, dotfiles wrapper or `CODE_*` environment.
+
+The operator selected one Manifold-owned source of state, native scoped service
+access, and explicit promotion of exact software/configuration revisions in
+[#149](https://github.com/atyrode/code/issues/149). Private executables may
+implement domain work behind native contracts; they are not separately
+configured products. An omp terminal is an execution surface, not Code's
+control plane. Missing reusable capability is implemented in Manifold.
+
+CLI/TUI parity, CLI-only features, dual preference stores and a permanent
+standalone recovery path do not constrain this rework. Optional adoption of
+useful old data is a bounded governed operation, not ongoing synchronization or
+mandatory preparation with the old application. Architecture and evidence live
+in [the transition document](manifold-transition.md), whose
+[section 6](manifold-transition.md#6-transition-steps) is the sole ledger.
+[The plugin guide](../plugins/README.md) describes current development mechanics.
+
+## Deprecated implementation reference
+
+The remainder describes existing standalone behavior for investigation and
+extraction of domain logic. It is not plugin onboarding, a compatibility
+promise, or instructions for provisioning/migrating the new product. These
+commands and paths still exist in the baseline source; documenting them does
+not mean the native replacement is implemented. Do not execute legacy probes,
+mutations or cleanup merely because they appear here.
+
+### Legacy models.yml columns
 
 | column | meaning |
 | --- | --- |
@@ -49,7 +81,7 @@ so this intent is not yet a strict runtime guarantee when models are shared
 These are one-shot launch overlays, not a migration of persistent OMP settings
 or previously stored immutable Code profile revisions.
 
-## Refreshing curated model facts
+### Legacy curated-fact refresh
 
 ```sh
 code generate refresh --models-file PATH
@@ -89,13 +121,13 @@ catalog shape. Invalid metadata envelopes leave the file unchanged. Saving is
 atomic, preserves file permissions and refuses to overwrite a catalog changed
 during collection.
 
-Code owns this generic headless refresh command; catalog curation, scheduling
-and deployment belong to each consumer. Dotfiles' existing refresh integration
-has not migrated merely because this command exists: that consumer cutover
-waits for a published Code binary. This command neither activates a host nor
-publishes a release.
+This is the existing headless refresh implementation, not the target product
+boundary. In the plugin, Code retains catalog semantics while native resource,
+job, scheduling and promotion mechanisms own the surrounding workflow.
+Existing consumer integrations have not migrated merely because this command
+exists; changing them is separate work, not a requirement to preserve this CLI.
 
-## Dials that set omp's own switches
+### Legacy dials that set omp's switches
 
 Most dials pick models, so they select a pre-computed routing block. Four do
 not: they choose a value for a switch omp already owns, and this tool's only job
@@ -116,20 +148,17 @@ switches back but leaves it open, and it is never persisted with the dials.
 | `planyolo` | `--plan-yolo` argv flag | starts read-only in plan mode, auto-approves the plan on the model's first resolve call, then implements. omp exposes this on the command line only, so it rides argv rather than the overlay |
 | `fallback` | `retry.modelFallback` | on by default. Off keeps every role on its lead: the overlay writes `modelFallback: false` and carries no `fallbackChains` — omp gates every model switch it makes on retry (the error path, the usage-aware preflight, the advisor's) on that one key, so the chains would be inert and are left out rather than shown. `retry.enabled` stays on: same-model retries are not fallback. The account/broker fallback is a separate system and is untouched. The routing preview shows leads only while it is off, and the `f` chain toggle gives way to a note saying the chains are disabled for this launch |
 
-A forwarded flag of your own still wins: the dials' flags are inserted before
-whatever you passed through.
+The existing launcher inserts its dial-derived flags before forwarded flags, so
+a forwarded flag can override them. This ordering is not a target CLI contract.
 
-## Glyphs and fonts
+### Legacy glyphs and fonts
 
-The facet dials are labelled with Nerd Font Private Use Area codepoints, so a
-terminal without a patched font renders them as tofu boxes. `code` cannot fix
-that for you: font selection belongs to the terminal emulator, and a
-Nix/goreleaser package of a TUI binary has no way to reach into it. Installing
-the font is the operator's business — [dotfiles](https://github.com/atyrode/dotfiles)
-does it via `nerd-fonts.symbols-only` in the `agent-tools` profile.
+The deprecated TUI labels its facet dials with Nerd Font Private Use Area
+codepoints. Unpatched terminal fonts render missing-glyph boxes. That explains
+the old implementation; installing terminal fonts is not plugin onboarding and
+the web UI is not required to reproduce those glyphs.
 
-What `code` does provide is a fallback, so an unpatched terminal is legible
-rather than broken:
+The existing implementation also provides a plain-Unicode fallback:
 
 | `CODE_SYMBOLS` | glyphs |
 | --- | --- |
@@ -143,9 +172,9 @@ omp has its own `symbolPreset` setting with the same three values, and `code`
 deliberately does **not** read it: omp reports `unicode` on a machine where
 nobody ever set it, so the value cannot distinguish a deliberate choice from
 omp's default — and taking it at face value silently restyled a machine whose
-operator had asked for nothing. Set `CODE_SYMBOLS` where you set the font.
+operator had asked for nothing. The old override is `CODE_SYMBOLS`.
 
-## Keys worth knowing
+### Legacy key bindings
 
 | key | effect |
 | --- | --- |
@@ -158,10 +187,12 @@ operator had asked for nothing. Set `CODE_SYMBOLS` where you set the font.
 `n` is a view preference: it defaults to off and is never persisted into the
 selection state, because it changes nothing about routing.
 
-## State on disk
+### Legacy state on disk
 
-Everything `code` persists lives under its own state root — `$XDG_STATE_HOME`,
-or `$HOME/.local/state` when that is unset — in `code/`:
+The standalone implementation stores the following under its own state root —
+`$XDG_STATE_HOME`, or `$HOME/.local/state` when unset — in `code/`. This is an
+inventory of existing data, not Manifold's target state schema or an instruction
+to keep a second configuration, session or worktree authority.
 
 | path | contents | override |
 | --- | --- | --- |
@@ -187,7 +218,7 @@ present with different content refuses the import, so a reference a client
 recorded keeps meaning exactly what it meant. Nothing is migrated on its own;
 the old directory is untouched until the operator names it.
 
-### Saved omp sessions
+#### Existing saved omp sessions
 
 `code ls` and `code wt` also read OMP's persisted sessions, which are OMP's
 state, not `code`'s. On Linux/macOS, OMP uses
@@ -230,7 +261,7 @@ session lives outside the default root) in the recorded directory, through the
 same trusted launch path as a fresh session. A directory that no longer exists
 is reported; nothing is created, pruned, or reset.
 
-### Why `code/wt` and not omp's `~/.omp/wt`
+#### Why existing worktrees must not be swept blindly
 
 Session worktrees used to be created inside omp's own worktree directory, which
 `omp worktree list` enumerates and `omp worktree clear --all` force-deletes in
@@ -239,26 +270,14 @@ session registry, so it cannot tell a running session's worktree from one of its
 own abandoned task worktrees. One `omp worktree clear --all` was enough to
 delete a live session's tree and its uncommitted work.
 
-The two features are not the same thing and neither replaces the other. omp's
-worktrees are in-session, per-subagent task isolation; `code`'s are pre-launch,
-whole-session operator branches on a `code/<adj>-<color>-<animal>` branch. So
-`code` moved its worktrees into its own state root and stopped reading omp's
-`OMP_WORKTREE_DIR` entirely.
+OMP's worktrees provide in-session subagent isolation; the deprecated Code
+registry represented whole-session operator worktrees. The old implementation
+moved its default root to avoid that collision. The new product must preserve
+the safety property through native resource/workspace lifetime, not preserve
+Code's separate registry.
 
-Worktrees created by an older build are still recorded and still listed —
-`code wt` marks their `ROOT` column `legacy` — and `code wt rm <name>` or
-`code wt prune` retires them. Nothing is moved on disk: they are your git
-worktrees, and a launcher that silently relocated them would be committing the
-same unannounced mutation this change exists to prevent. To see what an old
-build left behind:
-
-```bash
-# every directory still in omp's root that is checked out on a code/ branch
-for d in ~/.omp/wt/*/; do
-  b=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null)
-  case "$b" in code/*) echo "$d $b" ;; esac
-done
-```
-
-The `code/` branch check is what separates them from omp's own task worktrees,
-which share the directory and are omp's to clear.
+Older worktrees can still live at their original recorded paths. Deprecation
+does not authorize moving them, deleting uncommitted work or running either
+program's broad cleanup command. Any necessary adoption or retirement must
+identify the actual resources and use a bounded, explicitly authorized native
+operation. There is no standalone migration recipe for the new architecture.
