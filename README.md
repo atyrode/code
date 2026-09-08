@@ -45,9 +45,17 @@ code --continue                # dial, then pick up your last omp session
 ```
 
 A few words `code` keeps for itself: `generate` (the [catalog
-subcommand](docs/configuration.md)), `session` and its `ls` shorthand,
-`worktree` and its `wt` shorthand, and `--profile` (routing is code's job — a
-forwarded `--profile` is replaced).
+subcommand](docs/configuration.md)), `launch`, `inspect`, `suggest`, `usage`,
+`accounts`, `engine`, `session` and its `ls` shorthand, `worktree` and its `wt`
+shorthand, and `--profile` (routing is code's job — a forwarded `--profile` is
+replaced).
+
+For scripts, `code launch --prompt "fix the failing tests"` skips the dials;
+`code inspect`, `code suggest --prompt "fix the failing tests"`, `code usage`,
+and `code accounts list` return one-shot JSON. These run with this machine's
+authority, not through a new network daemon. See the
+[headless command contracts](docs/configuration.md#headless-commands) for
+selection JSON, launch kinds, freshness, and explicit account mutations.
 
 Every session you launch is recorded while it runs, so the ones you walked away
 from are findable rather than merely suspected:

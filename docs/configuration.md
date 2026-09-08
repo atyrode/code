@@ -1,5 +1,225 @@
 # Configuration
 
+## Headless commands
+
+These commands use the same local catalog, launchers, account broker and state
+as the TUI. They do not start a Code network daemon or grant a remote client
+authority: whoever invokes them acts with this machine's permissions and
+configured broker access. Broker reads may contact the configured broker;
+`suggest` sends its prompt only to a loopback evaluator. This CLI surface is
+not a claim of full Manifold web parity.
+
+Plain `code` still opens the TUI. `code engine --configure` still requires the
+operator's interactive confirmation to mint an immutable profile, including
+any ceremony-only local model choice; none of these commands replaces it.
+Existing `CODE_*` configuration remains in force, notably `CODE_GENERATED`,
+`CODE_OMP`, `CODE_OMP_UNTRUSTED`, `CODE_RUNTIME_BROKER`, `CODE_AUTH_VAULTS`,
+`CODE_AUTH_VAULTS_FILE`, `CODE_AUTH_ACCOUNT_STATE` and `CODE_USAGE_CACHE`, plus
+the [state-root overrides](#state-on-disk).
+
+### Launch without the dials
+
+```bash
+code launch
+code launch --selection '{"model":"smart","fallback":"off"}' --prompt "fix the failing tests"
+code launch --worktree --prompt "review this repository"
+code launch -- --continue
+code launch --kind managed --prompt "explain this repository"
+code launch --kind untrusted --prompt "inspect this unfamiliar repository"
+code launch --kind runtime --runtime TARGET --selection '{"thinking":"high"}'
+```
+
+`--selection` is exactly one JSON object with unique keys and string values.
+Omitting it is equivalent to `{}`: start from catalog/capability-adjusted
+defaults, **not** saved TUI dial positions. Unknown facets, duplicate keys,
+non-string values, unavailable provider lanes and incompatible combinations
+are refused; explicit choices are not silently rerouted to another provider
+or tier. Use `code inspect` to discover this machine's supported facets, and
+`code inspect --selection '{"model":"smart"}'` to preview a particular choice.
+Headless selection does not read or overwrite `CODE_SELECTION_STATE`.
+
+For a generated or managed launch, `--account-selection` accepts exactly
+`{"schemaVersion":1,"disabled":[{"provider":"PROVIDER","identityKey":"IDENTITY_KEY"}]}`.
+It applies only to that launch and bypasses the standalone account-selection
+file. Code validates every supplied identity against the fresh broker snapshot;
+unknown identities or an unavailable broker refuse instead of widening the pool.
+Untrusted and delegated-runtime launches reject this option. Omitting it keeps
+the ordinary machine-local account policy.
+
+| `--kind` | behavior |
+| --- | --- |
+| `generated` (default) | requires a runnable catalog combination and an available provider lane; launches with an ephemeral routing overlay, without rewriting omp config |
+| `managed` | trusted launcher without generated routing; no facets; honors the configured account selection |
+| `untrusted` | invokes `CODE_OMP_UNTRUSTED` (otherwise `ompu`); no facets; choosing this launcher does not itself establish engine sandbox containment |
+| `runtime` | requires `--runtime TARGET` naming an advertised runtime target; accepts only the `thinking` facet, and delegates to the configured runtime broker |
+
+Replace `TARGET` with a name in `code inspect`'s `runtime_targets`.
+`--runtime` is invalid for other kinds. `--worktree` requires a Git repository
+and uses the normal session worktree lifecycle: pristine trees are retired on
+exit, while changes or commits keep them for recovery. `--prompt TEXT` supplies
+the first message. All omp arguments must follow an explicit `--`; positional
+text before it is an error. Forwarded routing/profile flags receive the same
+filtering as the TUI, and forwarded omp switches follow the dial-generated
+ones. Launch attaches to the real session; it is not a JSON response.
+
+Recovery remains `code ls`, `code session reap`, `code wt`,
+`code wt resume <name|id>`, `code wt remove <name>` and `code wt prune`.
+The existing dry-run/`--yes` and live/dirty-worktree protections still apply.
+
+### Inspect and suggest
+
+```bash
+code inspect
+code inspect --selection '{"model":"smart","fallback":"off"}'
+code suggest --prompt "fix a typo in the help text"
+code suggest --selection '{"model":"smart"}' "review the authentication boundary"
+```
+
+`inspect` returns one JSON object containing `catalog`, `selection`, `facets`,
+`routing`, `estimates`, `providers`, `launch_modes`, `runtime_targets`,
+`session_registry`, `sessions`, `saved_sessions` and `worktrees`. Facet values
+are capability-dependent, not a promise that every cross-product is valid.
+Routing identifies each role's primary and fallback models; cost/speed
+estimates use a 1–5 scale and are `null` when unavailable. A missing default
+catalog is reported as `catalog.state: "missing"`, with `init_argv` and
+`generate_argv` recovery commands (`code generate init`, then `code generate`);
+an explicitly configured unreadable or invalid catalog fails instead.
+
+`suggest` requires a nonblank prompt, supplied either with `--prompt` or as
+positional text after the options, never both. It requires hosted catalog
+routing and the local evaluator (`CODE_EVAL_MODEL`; `CODE_OLLAMA_ENDPOINT`
+must be a loopback HTTP URL without credentials, query or fragment). There is
+no cloud fallback. The response contains `evaluator`, an `actions` array of
+`{"key":"…","value":"…"}` changes, and the complete resulting `selection`.
+`--selection` supplies the starting state, not pinned constraints: the
+suggestion may change it. Invalid or unavailable proposed choices and
+incomplete or failed evaluator responses fail rather than producing a usable
+proposal. A proposal does not apply itself, launch anything, or persist dial
+state. Review its selection, optionally preview it with `inspect --selection`,
+then pass that object to `launch --selection` yourself.
+
+Both commands use `schema_version: 1`, `observation: "one_shot"` and
+`observed_at` as a UTC RFC3339 timestamp (possibly with fractional seconds).
+Their public field names are **snake_case**; session/worktree timestamps are
+also RFC3339 strings. These are observations, not a continuously live feed:
+`lock_held` means a session registry lock was held when read, while
+`not_observed` is not proof that a process is dead and `unknown` can mean the
+registry is disabled. Saved sessions are metadata-only. Inspection does not
+persist dial choices, but uses the normal registry readers, including stale
+record cleanup.
+
+### Usage and account JSON
+
+```bash
+code usage
+code accounts                     # same as accounts list
+code accounts list
+code accounts presets list
+```
+
+These commands output JSON directly; there is no `--json` flag. Unlike
+`inspect`/`suggest`, accounts and usage use **camelCase**, `schemaVersion: 1`,
+and integer **Unix seconds** for times (`observedAt`, `requestedAt`,
+`resetsAt`, `blockedUntil`, restriction `until`, `faultAt`, `expiresAt`).
+Do not treat these two schema families as identically cased or timestamped.
+Errors go to stderr with a nonzero exit status.
+
+Without a portable `--state` document, `usage` refreshes the broker snapshot once
+and reconciles it with `CODE_USAGE_CACHE`; a successful usage-and-account refresh
+can update that cache, but does not change selections. Check `status`
+(`fresh`, `partial`, `stale`, `failed`), `usageRefresh`, `accountRefresh`,
+provider/account/window statuses and each window's `observedAt`, not just the
+request time. Cache fallback preserves observation ages. Missing windows have
+`status: "missing"` with zero observation/reset times, not freshly measured
+zero usage. Disabled accounts remain visible; provider buckets summarize only
+the selected launch pool. Reset credits and provider balances appear when
+available. A wholly failed snapshot can still be emitted as JSON before the
+command exits nonzero; stale or partial data is explicitly labeled.
+
+`accounts list` and `accounts presets list` return the same full projection:
+`operation`, `observedAt`, `activePreset`, `accounts`, `presets` and
+`manualDisabled`. Each account has a public `(provider, identityKey)`
+reference, `selectable`, `enabled`, `blocked` and scoped `restrictions`.
+Enabled means included in the account pool, not necessarily usable for every
+model tier; a broker restriction may still block it. Credentials, internal
+credential IDs and raw broker error chains are not exposed. Public identities
+and optional email addresses are still personal data.
+
+### Explicit account mutations and login
+
+Use the exact `provider` and `identityKey` returned by `accounts list`, not a
+display email or internal credential ID. `PROVIDER` and `IDENTITY_KEY` below
+are placeholders for those returned values:
+
+```bash
+code accounts set --provider PROVIDER --identity IDENTITY_KEY --enabled false
+code accounts set --provider PROVIDER --identity IDENTITY_KEY --enabled true
+code accounts presets create --name Focus --disabled '[{"provider":"PROVIDER","identityKey":"IDENTITY_KEY"}]'
+code accounts presets update --name Focus --disabled '[]'
+code accounts presets activate --name Focus
+code accounts presets activate --name Manual
+code accounts presets delete --name Focus
+code accounts clear-blocks --provider PROVIDER --identity IDENTITY_KEY
+code accounts login --provider anthropic
+```
+
+Mutations take effect immediately; there is no confirmation prompt or `--yes`
+flag. `set` requires literal `true` or `false` and edits the active selection
+(including an active named preset). Presets store **disabled** references:
+`[]` excludes nobody. Create requires a new name and activates it; update
+requires an existing name and replaces its disabled list. Names are matched
+case-insensitively; `Manual` is reserved. Deleting the active preset preserves
+its current pool as Manual rather than broadening it.
+
+Selection/preset writes require `CODE_AUTH_ACCOUNT_STATE`, a successful
+account snapshot and valid existing state. They lock and re-read the state,
+validate account references, and persist with a private atomic replacement.
+Invalid state or unknown identities/presets fail instead of silently resetting
+to a wider pool. A nonexistent state file starts at Manual; an unset path is
+allowed for reads but not selection writes. Returned JSON describes the
+resulting selection, not a continuously refreshed account view.
+
+`clear-blocks` is a broker mutation, not a selection change. Its JSON
+acknowledges the account reference and `cleared: true`; it does not guarantee
+new quota or a fresh usage read. Run `code usage` afterward. An upstream limit
+can recreate the block on the next request.
+
+`login` is deliberately **not JSON**: it connects the real terminal's stdin,
+stdout and stderr to `omp auth-broker login <provider>` (using `CODE_OMP`).
+`CODE_AUTH_LOGIN_VIA=user@host` adds the existing `--via` login handoff.
+Only OAuth providers are accepted; browser authorization and terminal
+interaction stay in that existing login flow, never in a headless credential
+API. API-key enrollment still uses the operator's secure broker tooling.
+Refresh with `code accounts list` after login.
+
+### Portable account choices
+
+`accounts list`, preset listing and selection/preset mutations also accept
+`--state JSON`. `inspect`, `suggest` and `usage` accept the same document:
+
+```json
+{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[],"presets":[]}
+```
+
+Each entry in `manualDisabled` is a public `{provider,identityKey}` pair.
+Each preset is `{name,disabled}`, with the same reference shape. This is a
+portable public-choice document, not the on-disk file format and never a place
+for credentials. Duplicate/unknown fields, malformed documents and invalid
+preset names are refused. References are reconciled against the fresh broker
+snapshot using the same account semantics as the normal CLI.
+
+With `--state`, selection operations return the evaluated proposal without
+reading, locking or writing `CODE_AUTH_ACCOUNT_STATE`. Portable inspection and
+suggestions require the broker rather than falling back to standalone
+credentials. Portable usage neither reads nor writes `CODE_USAGE_CACHE`.
+`clear-blocks` and `login` reject `--state`: they are real broker/terminal
+operations, not portable choice transformations.
+
+The Manifold worker adds a `baseRevision` to its public results; this is not
+a CLI flag. The plugin applies a verified proposal through native storage
+compare-and-set, and shared-choice previews require an adopted revision.
+Standalone commands without either override retain their original behavior.
+
 ## models.yml columns
 
 | column | meaning |

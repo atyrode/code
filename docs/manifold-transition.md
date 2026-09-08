@@ -1,6 +1,9 @@
 # Code as a manifold plugin: the transition
 
-Status: operator direction, recorded 2026-09-05. Every manifold fact below was
+Historical baseline: operator direction recorded 2026-09-05. Unless explicitly
+dated otherwise, the inventories, decisions and filed step/issue text below
+describe that snapshot, not today's host API or plugin authoring instructions.
+Every manifold fact in that baseline was
 read at manifold `main` @ `8466628` (v0.6.2, 2026-09-02; `dev` is retired,
 atyrode/manifold#174); every code fact at `atyrode/code` `main` @ `76b1d8f`;
 every dotfiles fact at `atyrode/nix-dotfiles` `main` @ `bbeb8e3`; Babel's
@@ -12,6 +15,14 @@ Babel went first: `~/babel/docs/manifold-transition.md` is the model, and its
 manifold prerequisites are cited by number rather than restated. Babel's
 citations were pinned to the retired `dev`; every line below was re-read at
 `main`, and several moved.
+
+Current implementation progress lives only in the **§6 ledger**. For current
+in-realm React authoring, SDK pin, dev loop and authenticated preview instructions,
+use [`plugins/README.md`](../plugins/README.md). ADR 0025 supersedes the historical
+Worker/vocabulary setup recorded here. D3's dated addendum below supersedes the
+separate publisher deployment, not the requirement that secrets and launch
+authority stay on the machine. Historical line citations are intentionally
+preserved rather than rewritten to imply they describe the current SDK.
 
 ---
 
@@ -449,6 +460,21 @@ parity test.
 
 ### D3 Projections flow spoke to hub, Babel's D2 shape
 
+**Current direction (2026-09-07).** The OS-supervised `code publish` service
+described below was the original deployment plan, not a service to add now.
+Code #97/#102 instead require Manifold's governed common runtime; the host work
+is unpublished [Manifold PR #375](https://github.com/atyrode/manifold/pull/375),
+covering #156/#235/#236. Machine-local one-shot headless APIs are the Code side
+of that boundary, not an alternate transport. There must be no separate Code
+publisher daemon, extra token ceremony, or terminal/PTY used as RPC to bypass
+the host prerequisite. Catalog, usage and account access remain blocked from
+the browser until the real runtime-backed path exists; machine-local credentials
+still never cross into plugin payloads. References to `code publish`, its
+OS unit and token in the original capability map, steps and §8.4 are historical
+planning text under this superseding direction. §6 alone records progress.
+
+**Original decision (2026-09-05):**
+
 A per-machine `code publish` service, OS-supervised by dotfiles as
 `manifold-agent` is (`~/nix-dotfiles/modules/home/profiles/manifold-node.nix:27,34-44`),
 runs as an agent-kind principal with a token the ceremony delivers beside the
@@ -547,12 +573,12 @@ performed and its date written here). Update the row in the PR that moves it.
 | Step | Status | Evidence, and what is left |
 | --- | --- | --- |
 | 0 | superseded | — |
-| 1 | in progress | Package skeleton: `plugins/` on `main` (#107, 2026-09-05; §9). Dev loop, CI and delivery exist (2026-09-06, atyrode/manifold#319): `bun run dev` against the preview hub, `bun run verify` against a spawned real server in CI (manifold's reusable `plugins.yml`), and a `v*` tag attaches the bundles to the release and installs them on `preview.manifold.tyrode.dev` through the receiver (`release.yml`). Not done: a flake output for the bundles (they are release assets, not a nix output); the SDK is a sibling checkout pinned by `MANIFOLD_REV`, not a release asset. Headless launch (#96): not started. `code publish` (#97): not started. |
-| 2 | shipped, not proven | `atyrode.code.generator`'s `launcher` panel (#107; §9.3). Shipped better than planned: the PTY execs `code` directly (atyrode/manifold#192 landed), nothing is typed. Shipped narrower than planned: no dials, `argv` is `["code"]`, so the TUI in the tile is the whole selection surface until #96. Not proven: never installed on a hub (`engine.plugins.install`, §9.4); the browser-to-omp proof is unrecorded. #98 stays open for the dial-carrying launch. |
-| 3 | not started | #99; waits on atyrode/manifold#134, atyrode/manifold#201. |
-| 4 | not started | #100; sub-plugins reserved as #105, #106; waits on #97. |
-| 5 | not started | #103; waits on #97, atyrode/manifold#160. |
-| 6 | not started | #101; waits on 2–5 proven. |
+| 1 | in progress | Under #102, the integration incorporates #135/#134 and supplies the `0.3.0` in-realm family, closed Go worker and release-archive validation. Manifold's governed runtime, job discovery and atomic storage are merged (#429/#445/#446); the SDK pin is `f5fd6bdbc5fe8499badba58f31919d1a46598483`. On 2026-09-08 the Go gate, plugin check/tests/pack/real-server verify and compiled-worker bubblewrap smoke passed. Source packs intentionally have no artifact. A genuine release plus reviewed machine resources remain prerequisites; no publisher, token copying or broad directory binding substitutes for them. |
+| 2 | in progress; earlier panel shipped | The integration supplies real browser dials, exact inspection/revision checks and ephemeral headless programs through native terminal creation; CLI recovery remains separate. The earlier 2026-09-07 preview proof opened interactive Code and left the panel mounted. The 2026-09-08 isolated real-hub browser proof checks the new panels and truthful offline/unavailable controls, not dev-01 account execution or successful selected omp startup. A reviewed shared job/terminal profile is tracked in atyrode/manifold#447; full operator proof remains pending and #98 stays open. |
+| 3 | not started | #99: final plugin-authored launchpad placement still waits on Manifold #134/#201 decisions. The locally exercised workspace panel plus host composition is not that discipline and does not close either host issue. |
+| 4 | in progress | `atyrode.code.usage` and `atyrode.code.accounts` are real independent React panels over declared jobs, not reserved placeholders. Code evaluates public account/preset proposals; Manifold CAS stores shared revisions. Explicit import reads but never rewrites CLI state; cached choices retain source-output authority. Tests cover competing proposals, revocation, stale snapshots and import recovery. Actual compiled-worker account/routing smoke passed on 2026-09-08 with read-only state and synthetic broker accounts. Live dev-01 account/usage proof still needs released artifacts and approved native bindings (atyrode/manifold#447); OAuth stays in the existing terminal flow. |
+| 5 | in progress | Catalog inspection, routing and suggestions are connected to real web controls and governed operations. Shared-choice preview requires an adopted account revision. The compiled-worker smoke on 2026-09-08 proves missing-catalog first-run reporting as well as account-aware golden routing. Generation/provisioning remains the existing headless CLI path until native resource lifecycle support exists; no plugin writes existing configuration or invents a migration channel. Live suggestion/onboarding and full browser-to-omp parity remain unproven; #103 stays open. |
+| 6 | not started | #101 remains gated on steps 2–5 proven. The Bubble Tea launcher, terminal-owned dials and `code engine --configure` ceremony remain intact; no TUI retirement or ceremony removal is part of this baseline. |
 
 Ids in the steps and in §8 are spelled `code.<x>` as first drafted; §9.1
 superseded that to `atyrode.code.*` and the issues were re-spelled on
@@ -937,13 +963,18 @@ way: atyrode/manifold#162 (already fixed by atyrode/manifold#177).
 
 ## 9. Topology and first plugin (2026-09-05)
 
-Recorded the night the authoring kit landed: every manifold fact in this
-section was read at manifold `main` @ `d8ec7aa` ("plugin-kit: the out-of-tree
-authoring SDK", atyrode/manifold#230), which ships `packages/plugin-kit`
+**Historical implementation record, not current authoring guidance.** Recorded
+the night the authoring kit landed: every manifold fact in this section was read
+at manifold `main` @ `d8ec7aa` ("plugin-kit: the out-of-tree authoring SDK",
+atyrode/manifold#230), which shipped `packages/plugin-kit`
 (`defineServerPlugin`, `defineWebPlugin`, the vocabulary builders, `pack`),
-`engine.plugins.install` and the isolate supervisor
-(`packages/server/src/isolate/`). What this section records is built, tested
-and packed in `plugins/` on this branch; nothing here is a draft.
+`engine.plugins.install` and the isolate supervisor (`packages/server/src/isolate/`).
+The `0.1.0` API shapes, Worker mount protocol, proof counts and "tonight"/"not done"
+statements below describe that earlier implementation, not the current checkout.
+The baseline/sub-plugin topology and reserved ids still apply; current authoring
+uses ADR 0025 in-realm React and default module exports, described in
+[`plugins/README.md`](../plugins/README.md). All subsequent progress, including
+the 2026-09-07 local preview proof and its limits, is recorded only in §6.
 
 ### 9.1 The topology
 

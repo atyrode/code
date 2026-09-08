@@ -14,16 +14,7 @@ if [ ! -f "$pack" ]; then
   exit 1
 fi
 
-cd "$here"
-rm -rf dist
-mkdir -p dist
-
-# A plugin directory is one holding manifest.json; a child lives INSIDE its parent's directory.
-while IFS= read -r manifest; do
-  dir="$(dirname "$manifest")"
-  id="$(bun -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).id)' "$manifest")"
-  bun "$pack" "$dir" --self-contained --out "dist/$id.manifold-plugin.json"
-done < <(find . -path ./node_modules -prune -o -path ./dist -prune -o -name manifest.json -print | sort)
-
-(cd dist && sha256sum -- *.manifold-plugin.json > SHA256SUMS)
-cat dist/SHA256SUMS
+# CODE_MACHINE_ARTIFACTS, when set, names a JSON map beside the worker archives and
+# checksums.txt. The helper verifies their bytes, privately stages the family and changes
+# only the staged root machine.artifacts. Unset keeps source declarations unchanged.
+exec bun "$here/../scripts/machine-artifacts.ts" pack

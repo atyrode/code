@@ -1,0 +1,183 @@
+.plugin-atyrode_code_generator {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  color: inherit;
+  background: #14181e;
+  container-type: inline-size;
+}
+
+.plugin-atyrode_code_generator__body {
+  width: 100%;
+  padding: clamp(0.75rem, 3cqi, 1.5rem);
+  max-width: 70rem;
+  margin-inline: auto;
+  overflow-wrap: anywhere;
+}
+
+.plugin-atyrode_code_generator h2,
+.plugin-atyrode_code_generator h3,
+.plugin-atyrode_code_generator p {
+  margin: 0;
+}
+
+.plugin-atyrode_code_generator h2 {
+  font-size: 1.45rem;
+  letter-spacing: -0.025em;
+}
+
+.plugin-atyrode_code_generator h3 {
+  font-size: 1rem;
+}
+
+.plugin-atyrode_code_generator header p {
+  padding-top: 0.45rem;
+}
+
+.plugin-atyrode_code_generator label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.plugin-atyrode_code_generator__muted {
+  color: #adb5bd;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+
+.plugin-atyrode_code_generator select,
+.plugin-atyrode_code_generator input,
+.plugin-atyrode_code_generator textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid #495057;
+  border-radius: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  background: #171a1f;
+  color: #f8f9fa;
+  font: inherit;
+  text-overflow: ellipsis;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.plugin-atyrode_code_generator__note {
+  padding: 0.85rem 1rem;
+  border-inline-start: 2px solid #748ffc;
+  border-radius: 0.2rem;
+  background: #1c2230;
+  color: #ced4da;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.plugin-atyrode_code_generator code {
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.plugin-atyrode_code_generator button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  max-width: 100%;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #495057;
+  border-radius: 0.55rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.plugin-atyrode_code_generator__launch {
+  background: #364fc7;
+  color: #fff;
+}
+
+.plugin-atyrode_code_generator__launch:hover:not(:disabled) {
+  background: #4263eb;
+  border-color: #91a7ff;
+}
+
+
+.plugin-atyrode_code_generator button:disabled,
+.plugin-atyrode_code_generator select:disabled,
+.plugin-atyrode_code_generator input:disabled,
+.plugin-atyrode_code_generator textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.plugin-atyrode_code_generator button:focus-visible,
+.plugin-atyrode_code_generator input:focus-visible,
+.plugin-atyrode_code_generator select:focus-visible,
+.plugin-atyrode_code_generator textarea:focus-visible {
+  outline: 2px solid #91a7ff;
+  outline-offset: 3px;
+}
+
+.plugin-atyrode_code_generator__status {
+  border-radius: 0.55rem;
+  line-height: 1.55;
+  font-size: 0.9rem;
+}
+
+.plugin-atyrode_code_generator__status:not(:empty) {
+  padding: 0.85rem 1rem;
+  border: 1px solid #495057;
+  background: #1c2230;
+}
+
+.plugin-atyrode_code_generator__status[data-state="opened"] {
+  border-color: #2b8a3e;
+  color: #b2f2bb;
+}
+
+.plugin-atyrode_code_generator__status[data-state="denied"] {
+  border-color: #c92a2a;
+  color: #ffc9c9;
+}
+
+.plugin-atyrode_code_generator__facets {
+  margin: 0;
+  padding: 0.8rem;
+  min-width: 0;
+  border: 1px solid #495057;
+  border-radius: 0.55rem;
+}
+
+.plugin-atyrode_code_generator__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.plugin-atyrode_code_generator__checkbox input {
+  width: auto;
+}
+
+
+@container (max-width: 22rem) {
+  .plugin-atyrode_code_generator__launch {
+    width: 100%;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator button,
+  .plugin-atyrode_code_generator input,
+  .plugin-atyrode_code_generator select,
+  .plugin-atyrode_code_generator textarea {
+    transition: none;
+  }
+}

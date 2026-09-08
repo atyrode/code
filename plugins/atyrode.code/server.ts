@@ -1,120 +1,62 @@
+import { defineAction } from "@manifold/plugin";
 import {
-  defineServerAction,
-  defineServerPlugin,
-  type GuestCtx,
-  type GuestStorage,
-  type ServerPluginDef,
-} from "@manifold/plugin-kit/server";
-import { PluginManifestSchema } from "@manifold/protocol";
-import { z } from "zod";
-import {
-  CODE_ARGV0,
-  LAUNCH_ACTION,
-  LAUNCH_LEDGER_LIMIT,
-  LAUNCH_RECORDED_EVENT,
-  LAUNCHES_KEY_PREFIX,
-  LIST_LAUNCHES_ACTION,
-  LaunchInputSchema,
-  LaunchRecordSchema,
-  LaunchResultSchema,
-  ListLaunchesResultSchema,
-  launchKey,
-  launchKeyRecordedAt,
-  type LaunchInput,
-  type LaunchRecord,
-  type LaunchResult,
-  type ListLaunchesResult,
+  CODE_ARGV0, PrepareLaunchInputSchema, PrepareLaunchResultSchema,
+  type PrepareLaunchInput, type PrepareLaunchResult,
 } from "./contract.ts";
-import manifestJson from "./manifest.json";
+import {
+  machineActions, machineHandlers, readCodePreferences,
+  readCodeSnapshot, type CodeContext,
+} from "./machine-server.ts";
 
-/*
-  THE BASELINE, server half. Two doors over one ledger:
-
-  - `atyrode.code.launch` is the arbitration point for a launch of `code`: it refuses any other
-    program, refuses an offline machine, writes one ledger row and emits `launch_recorded`. It
-    does NOT birth the terminal — stage 1 serves no terminal verb to a server half — so the
-    caller (tonight, the generator's panel) opens the PTY afterwards with its own authority and
-    the argv this door echoed back. The door carries `terminals:spawn` so a caller who could not
-    open a terminal is refused here, before a row is written.
-  - `atyrode.code.listLaunches` reads the ledger back, newest first.
-
-  Both are async end to end, whether the normal host serves a verb directly or the hardened
-  child crosses the process boundary as a `call` frame.
- */
-
-const launch = defineServerAction({
-  name: LAUNCH_ACTION,
-  title: "Authorize and record a launch of code on a machine",
-  caps: ["terminals:spawn"],
-  input: LaunchInputSchema,
-  result: LaunchResultSchema,
+const prepareLaunch = defineAction({
+  name: "prepareLaunch", title: "Prepare a reviewed Code launch", caps: ["terminals:spawn"], trace: "opaque",
+  input: PrepareLaunchInputSchema, result: PrepareLaunchResultSchema,
 });
-
-const listLaunches = defineServerAction({
-  name: LIST_LAUNCHES_ACTION,
-  title: "List the launches this plugin recorded",
-  caps: [],
-  input: z.strictObject({}),
-  result: ListLaunchesResultSchema,
-});
-
-/** Every ledger key the plugin holds, oldest first by the clock the key carries. */
-async function ledgerKeys(storage: GuestStorage): Promise<string[]> {
-  const keys = [...(await storage.keys(LAUNCHES_KEY_PREFIX))];
-  keys.sort((a, b) => launchKeyRecordedAt(a) - launchKeyRecordedAt(b) || a.localeCompare(b));
-  return keys;
-}
 
 export const handlers = {
-  async [LAUNCH_ACTION](
-    ctx: GuestCtx,
-    args: LaunchInput,
-  ): Promise<LaunchResult | { refused: string }> {
-    if (args.argv[0] !== CODE_ARGV0) return { refused: "only the code launcher may be launched" };
-    if (!(await ctx.machines.isOnline(args.machineId))) {
-      return { refused: `machine ${args.machineId} is offline` };
-    }
-    const launchId = await ctx.newId();
-    const recordedAt = ctx.now();
-    const record: LaunchRecord = {
-      launchId,
-      machineId: args.machineId,
-      argv: args.argv,
-      ...(args.label === undefined ? {} : { label: args.label }),
-      recordedAt,
-      by: ctx.principal.id,
-    };
-    await ctx.storage.set(launchKey(recordedAt, launchId), JSON.stringify(record));
-    const keys = await ledgerKeys(ctx.storage);
-    for (const stale of keys.slice(0, Math.max(0, keys.length - LAUNCH_LEDGER_LIMIT))) {
-      await ctx.storage.delete(stale);
-    }
-    ctx.emit({ kind: "plugin", pluginId: ctx.pluginId }, LAUNCH_RECORDED_EVENT, {
-      launchId,
-      machineId: args.machineId,
-      recordedAt,
-    });
-    return { launchId, argv: args.argv, recordedAt };
-  },
+  ...machineHandlers,
+  async prepareLaunch(ctx: CodeContext, args: PrepareLaunchInput): Promise<PrepareLaunchResult | { refused: string }> {
+    try {
+      const inspection = (await readCodeSnapshot(ctx, args.machineId, "inspect", args.inspectionJobId)).value;
+      if (!inspection.launch_modes.some((mode) => mode.mode === args.kind && mode.available))
+        return { refused: "code_launch_mode_unavailable" };
+      if (Object.keys(args.selection).length !== Object.keys(inspection.selection).length ||
+        Object.entries(args.selection).some(([key, value]) => inspection.selection[key] !== value))
+        return { refused: "code_preview_changed" };
+      if (args.kind === "generated" && inspection.catalog.state !== "ready")
+        return { refused: "code_catalog_missing" };
+      if (args.kind === "runtime" && (!args.runtime || !inspection.runtime_targets.some((target) => target.name === args.runtime)))
+        return { refused: "code_launch_mode_unavailable" };
+      if (args.kind !== "runtime" && args.runtime !== undefined) return { refused: "code_invalid_request" };
 
-  async [LIST_LAUNCHES_ACTION](ctx: GuestCtx): Promise<ListLaunchesResult> {
-    const keys = await ledgerKeys(ctx.storage);
-    const launches: LaunchRecord[] = [];
-    for (const key of keys.reverse()) {
-      const raw = await ctx.storage.get(key);
-      if (raw !== null) launches.push(LaunchRecordSchema.parse(JSON.parse(raw)));
+      const argv = [CODE_ARGV0, "launch", `--kind=${args.kind}`];
+      if (args.kind === "generated") argv.push(`--selection=${JSON.stringify(args.selection)}`);
+      if (args.kind === "runtime") {
+        argv.push(`--runtime=${args.runtime}`);
+        if (args.selection.thinking !== undefined) argv.push(`--selection=${JSON.stringify({ thinking: args.selection.thinking })}`);
+      }
+      if (args.accounts.source === "plugin") {
+        if (args.kind !== "generated" && args.kind !== "managed") return { refused: "code_invalid_request" };
+        const preferences = await readCodePreferences(ctx, args.machineId);
+        if (preferences.record === null) return { refused: "code_preferences_missing" };
+        if (args.accounts.revision !== preferences.record.revision || inspection.baseRevision !== args.accounts.revision)
+          return { refused: "code_stale_preferences" };
+        const state = preferences.record.state;
+        const disabled = state.activePreset === "Manual" ? state.manualDisabled : state.presets.find((preset) => preset.name === state.activePreset)?.disabled;
+        if (disabled === undefined) return { refused: "code_invalid_request" };
+        argv.push(`--account-selection=${JSON.stringify({ schemaVersion: 1, disabled })}`);
+      } else if (inspection.baseRevision !== null) return { refused: "code_preview_changed" };
+      if (args.worktree) argv.push("--worktree");
+      if (args.prompt !== "") argv.push(`--prompt=${args.prompt}`);
+      const result = PrepareLaunchResultSchema.safeParse({ program: { argv } });
+      return result.success ? result.data : { refused: "code_input_too_large" };
+    } catch {
+      return { refused: "code_observation_unavailable" };
     }
-    return { launches };
   },
 };
 
-/** Normal installs import this definition; hardened installs bind it to the IPC transport below. */
-const plugin: ServerPluginDef = {
-  manifest: PluginManifestSchema.parse(manifestJson),
-  actions: [launch, listLaunches],
+export default {
+  actions: [prepareLaunch, ...machineActions],
   handlers,
 };
-
-export default plugin;
-
-defineServerPlugin(plugin);

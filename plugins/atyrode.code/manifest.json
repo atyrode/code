@@ -1,15 +1,366 @@
 {
   "id": "atyrode.code",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "title": "code",
-  "description": "The code launcher's baseline: the door that authorizes a launch of code on an enrolled machine and records it, and the ledger of the launches it recorded.",
-  "capabilities": ["terminals:spawn"],
+  "description": "Code's product operations over Manifold-governed jobs, atomic shared choices and native terminal launches.",
+  "capabilities": [
+    "terminals:spawn",
+    "machines:run",
+    "jobs:read"
+  ],
+  "dataVersion": { "major": 1, "minor": 0 },
+  "purges": ["storage"],
   "contributes": {
     "panels": [],
     "sections": [],
     "elements": [],
     "tools": [],
-    "events": [{ "id": "launch_recorded", "title": "Launch recorded" }]
+    "events": [
+      {
+        "id": "preferences_changed",
+        "title": "Shared account choices changed"
+      }
+    ]
   },
-  "entry": { "server": true, "web": "web.js" }
+  "machine": {
+    "artifacts": {},
+    "operations": {
+      "atyrode.code.inspect": {
+        "argv": [
+          {
+            "literal": "inspect"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code",
+          "omp"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 60000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.usage": {
+        "argv": [
+          {
+            "literal": "usage"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code",
+          "omp"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 60000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.accounts-list": {
+        "argv": [
+          {
+            "literal": "accounts-list"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.account-import": {
+        "argv": [
+          {
+            "literal": "account-import"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": ["code"],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.account-set": {
+        "argv": [
+          {
+            "literal": "account-set"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.preset-create": {
+        "argv": [
+          {
+            "literal": "preset-create"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.preset-update": {
+        "argv": [
+          {
+            "literal": "preset-update"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.preset-activate": {
+        "argv": [
+          {
+            "literal": "preset-activate"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.preset-delete": {
+        "argv": [
+          {
+            "literal": "preset-delete"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.account-clear-blocks": {
+        "argv": [
+          {
+            "literal": "account-clear-blocks"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 30000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      },
+      "atyrode.code.suggest": {
+        "argv": [
+          {
+            "literal": "suggest"
+          },
+          {
+            "input": "payload"
+          }
+        ],
+        "input": {
+          "payload": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "code",
+          "omp"
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 60000,
+          "memoryBytes": 536870912,
+          "processes": 32,
+          "outputBytes": 2097152
+        },
+        "stdin": false
+      }
+    },
+    "locations": {}
+  },
+  "entry": {
+    "server": true,
+    "web": "web.js"
+  }
 }

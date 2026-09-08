@@ -1,0 +1,18 @@
+{
+  "id": "atyrode.code.accounts",
+  "version": "0.3.0",
+  "title": "code accounts",
+  "description": "Shared account choices in native plugin storage, evaluated by Code without moving credentials or rewriting CLI state.",
+  "capabilities": [],
+  "contributes": {
+    "panels": [{ "id": "accounts", "title": "Code accounts" }],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": { "type": "required", "reason": "Governed account operations and shared observations live in Code." }
+  },
+  "entry": { "web": "web.js", "styles": true }
+}

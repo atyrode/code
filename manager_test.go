@@ -561,6 +561,9 @@ func TestManagerSelectorCyclesManualAndNamedPresetsInInsertionOrder(t *testing.T
 	if err := m.accountSelections.UpsertPreset("Travel", second); err != nil {
 		t.Fatal(err)
 	}
+	if err := writeAccountSelectionState(m.accountState, m.accountSelections); err != nil {
+		t.Fatal(err)
+	}
 
 	if selector := stripAnsi(m.managerPresetSelector(120)); !strings.Contains(selector, "preset  ‹ Manual ›") {
 		t.Fatalf("manual selector is not explicit: %q", selector)
@@ -799,6 +802,9 @@ func TestManagerInlineNamingSupportsUnicodeBackspaceAndSaveActivate(t *testing.T
 	m := managerTestModel(t)
 	key := accountKey{Provider: "openai-codex", IdentityKey: "codex-a"}
 	m.accountSelections.SetManualDisabled(map[accountKey]bool{key: true})
+	if err := writeAccountSelectionState(m.accountState, m.accountSelections); err != nil {
+		t.Fatal(err)
+	}
 	m, _ = managerUpdate(t, m, "n")
 	if !m.managerPreset.naming {
 		t.Fatal("n did not open inline naming")
@@ -892,6 +898,9 @@ func TestManagerDeleteCopiesVisibleSelectionToManualWithoutJump(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.accountSelections.Activate("Travel")
+	if err := writeAccountSelectionState(m.accountState, m.accountSelections); err != nil {
+		t.Fatal(err)
+	}
 	before := stripAnsi(m.managerView())
 	m, _ = managerUpdate(t, m, "d")
 	if m.managerPreset.deleting != "Travel" {
@@ -1118,6 +1127,9 @@ func TestManagerDeleteConfirmationBlocksKeysAndRetriesPersistence(t *testing.T) 
 	}
 
 	m.accountState = filepath.Join(t.TempDir(), "account-state.json")
+	if err := writeAccountSelectionState(m.accountState, m.accountSelections); err != nil {
+		t.Fatal(err)
+	}
 	m, _ = managerUpdate(t, m, "y")
 	if m.managerPreset.deleting != "" || m.accountErr != "" ||
 		m.accountSelections.ActiveName() != accountSelectionManualName {
