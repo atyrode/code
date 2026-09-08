@@ -317,3 +317,43 @@ func TestInspectRegistryProjectionOmitsPoolsAndConversation(t *testing.T) {
 		t.Fatal("saved history incorrectly depends on live publisher/session")
 	}
 }
+
+func TestInspectPortableChoicesDetermineAvailableProviders(t *testing.T) {
+	headlessLaunchFixture(t)
+	t.Setenv("CODE_GENERATED", "testdata/two-pool-golden.plain")
+	server := testAccountBroker(t, `{"reports":[]}`)
+	t.Setenv("OMP_AUTH_BROKER_URL", server.URL)
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "fixture")
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", path)
+	const original = "invalid standalone settings"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[{"provider":"openai-codex","identityKey":"codex-key"},{"provider":"openai-codex","identityKey":"unmatched-key"}],"presets":[]}`
+	status, body, errout := accountAPITestRun(t, runInspect, "--state", state)
+	var result inspectSnapshot
+	if status != 0 || json.Unmarshal([]byte(body), &result) != nil {
+		t.Fatalf("portable inspect failed: %s", errout)
+	}
+	providers := map[string]string{}
+	for _, provider := range result.Providers {
+		providers[provider.ID] = provider.CredentialState
+	}
+	if providers["openai-codex"] != "unavailable" || providers["anthropic"] != "available" {
+		t.Fatalf("preview ignored selected account pool: %v", providers)
+	}
+	status, body, _ = accountAPITestRun(t, runInspect, "--state", state, "--selection", `{"lane":"gpt-only"}`)
+	if status == 0 || body != "" {
+		t.Fatal("explicit disabled provider produced a launch preview")
+	}
+	status, body, errout = accountAPITestRun(t, runInspect, "--state", portableAccountTestState, "--selection", `{"lane":"gpt-only"}`)
+	if status != 0 {
+		t.Fatalf("enabled portable provider remained unavailable: %s", errout)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != original {
+		t.Fatal("portable inspection changed standalone settings")
+	}
+	requireNoPath(t, path+".lock")
+}

@@ -136,7 +136,12 @@ func loadHeadlessModel(accountOverride *accountSelectionState) (model, error) {
 	m.ompMajor, m.ompMinor = version.major, version.minor
 	if m.broker.configured() {
 		m.avail = loadAvailability(m.broker)
-		m.applyProviderAvailability(connectedPools(m.avail.accounts))
+		if accountOverride != nil && !accountOverride.strictLaunch {
+			m.accountSelections = pruneAccountSelectionState(m.accountSelections, m.avail)
+			m.applyProviderAvailability(connectedPools(m.selectedLaunchAvailability().accounts))
+		} else {
+			m.applyProviderAvailability(connectedPools(m.avail.accounts))
+		}
 	} else {
 		m.avail = loadUsageCache(os.Getenv("CODE_USAGE_CACHE"))
 		m.applyProviderAvailability(probeProviderAvailability())
