@@ -31,7 +31,7 @@ function UsageSnapshot({ value }: { value: CodeUsage }) {
       <h3>{status(value.status)}</h3>
       <p>Observed: {time(value.observedAt)} · Requested: {time(value.requestedAt)}</p>
       <p>Usage refresh: {status(value.usageRefresh)} · Account refresh: {status(value.accountRefresh)}</p>
-      <p>Active preset: <strong>{value.activePreset || "Unknown"}</strong> · account revision {value.baseRevision ?? "machine defaults"}</p>
+      <p>Active preset: <strong>{value.activePreset || "Unknown"}</strong> · configuration revision {value.baseRevision}</p>
       <p className="plugin-atyrode_code_usage__muted">This is a point-in-time snapshot, not a live quota guarantee. Reset times are reported deadlines, not confirmation that quota has reset.</p>
     </section>
     {value.providers.length === 0 && <p>No provider observations are available. Quotas are unknown.</p>}
@@ -56,6 +56,7 @@ function UsageSnapshot({ value }: { value: CodeUsage }) {
               return <li key={`${window.windowId}:${i}`}>
                 <strong>{window.label || window.windowId || "Unnamed window"}</strong>{window.tier ? ` · ${window.tier}` : ""}
                 <p>{measured ? `${window.usedPercent}% used${window.status === "stale" ? " (stale measurement)" : " at observation"}` : "Utilization unavailable"} · {status(window.status)}</p>
+                {measured && <meter min={0} max={100} value={window.usedPercent} aria-label={`${window.label || window.windowId || "Usage window"} utilization`}>{window.usedPercent}%</meter>}
                 <p>Reset: {time(window.resetsAt)} · Observed: {time(window.observedAt)}</p>
                 <p>Window duration: {window.durationSeconds > 0 ? `${window.durationSeconds.toLocaleString()} seconds` : "Unknown"}</p>
               </li>;
@@ -150,7 +151,7 @@ function UsagePanel({ host }: PanelProps) {
       </Stack>
       <MachineUsage key={`${host.principal.id}:${selection ?? "none"}`} host={host} machineId={selection} available={available} />
       <aside className="plugin-atyrode_code_usage__notice">
-        <p>Manage installation, backend bindings and consent in native Plugins. Automatic refresh uses Manifold’s native schedules for the usage operation; this panel has no separate polling daemon or scheduler.</p>
+        <p>Manage installation, backend bindings and consent in native Plugins. Initialize shared choices in Code or Accounts before refreshing usage. This panel observes retained jobs; only an explicit refresh starts work.</p>
         <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open Code in Plugins</button>
       </aside>
     </Stack>

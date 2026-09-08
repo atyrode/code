@@ -82,6 +82,13 @@
   overflow-wrap: anywhere;
 }
 
+.plugin-atyrode_code_generator pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24rem;
+  overflow: auto;
+}
+
 .plugin-atyrode_code_generator button {
   display: inline-flex;
   align-items: center;
@@ -98,15 +105,6 @@
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.plugin-atyrode_code_generator__launch {
-  background: #364fc7;
-  color: #fff;
-}
-
-.plugin-atyrode_code_generator__launch:hover:not(:disabled) {
-  background: #4263eb;
-  border-color: #91a7ff;
-}
 
 
 .plugin-atyrode_code_generator button:disabled,
@@ -137,17 +135,8 @@
   background: #1c2230;
 }
 
-.plugin-atyrode_code_generator__status[data-state="opened"] {
-  border-color: #2b8a3e;
-  color: #b2f2bb;
-}
 
-.plugin-atyrode_code_generator__status[data-state="denied"] {
-  border-color: #c92a2a;
-  color: #ffc9c9;
-}
-
-.plugin-atyrode_code_generator__facets {
+.plugin-atyrode_code_generator fieldset {
   margin: 0;
   padding: 0.8rem;
   min-width: 0;
@@ -155,23 +144,6 @@
   border-radius: 0.55rem;
 }
 
-.plugin-atyrode_code_generator__checkbox {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.plugin-atyrode_code_generator__checkbox input {
-  width: auto;
-}
-
-
-@container (max-width: 22rem) {
-  .plugin-atyrode_code_generator__launch {
-    width: 100%;
-  }
-
-}
 
 @media (prefers-reduced-motion: reduce) {
   .plugin-atyrode_code_generator button,

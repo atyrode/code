@@ -4,9 +4,9 @@ import type { PublicJob } from "@manifold/protocol";
 import { Cluster, ScrollRegion, Stack } from "@manifold/ui";
 import { ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID } from "../contract.ts";
 import { CodeAccountChangeOperationSchema, type CodeAccounts, type CodeApplyAccountChoicesResult, type CodeRunInput } from "../machine-contract.ts";
-import { applyCodeAccountChoices, codeOperationFailure, runCodeOperation, useCodeMachines, useCodeOperation } from "../machine-web.ts";
+import { applyCodeAccountChoices, codeOperationFailure, initializeCodeConfiguration, runCodeOperation, useCodeConfiguration, useCodeMachines, useCodeOperation } from "../machine-web.ts";
 
-type AccountOperation = "accounts-list" | "account-import" | "account-set" | "preset-create" | "preset-update" | "preset-activate" | "preset-delete" | "account-clear-blocks";
+type AccountOperation = "accounts-list" | "account-set" | "preset-create" | "preset-update" | "preset-activate" | "preset-delete" | "account-clear-blocks" | "account-disable";
 type Request = Extract<CodeRunInput, { operation: AccountOperation }>;
 type Disabled = CodeAccounts["manualDisabled"];
 type Draft = { kind: "preset-create" | "preset-update"; name: string; disabled: Disabled; baseObservation: string };
@@ -25,12 +25,12 @@ function jobStatus(job: PublicJob): string {
 function MachineAccounts({ host, machineId, available }: { host: HostServices; machineId: string | null; available: boolean }) {
   const id = useId();
   const accountFeed = useCodeOperation(host, machineId, "accounts-list");
+  const configuration = useCodeConfiguration(host, machineId);
   const [operation, setOperation] = useState<AccountOperation>("accounts-list");
   const [submitted, setSubmitted] = useState<PublicJob | null>(null);
   const resultFeed = useCodeOperation(host, machineId, operation, submitted?.jobId);
   const [applied, setApplied] = useState<CodeApplyAccountChoicesResult | null>(null);
   const [applying, setApplying] = useState(false);
-  const autoApply = useRef<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -67,14 +67,6 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
     }
   }
 
-  useEffect(() => {
-    const proposal = result?.snapshot;
-    if (result?.state !== "ready" || proposal === null || proposal === undefined ||
-      proposal.job.jobId !== autoApply.current || proposal.job.jobId !== submitted?.jobId) return;
-    // Only a locally confirmed request continues automatically. Reloaded proposals need review.
-    autoApply.current = null;
-    void applyProposal(proposal.job);
-  }, [result, submitted?.jobId, host, machineId]);
 
   async function submit(request: Request) {
     if (machineId === null || request.machineId !== machineId || !available || pending.current || busy) return;
@@ -83,11 +75,9 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
     setRequestError(null);
     setSubmitted(null);
     setApplied(null);
-    autoApply.current = null;
     setOperation(request.operation);
     try {
       const job = await runCodeOperation(host, request.machineId, request.operation, request.input);
-      if (request.operation !== "account-import" && CodeAccountChangeOperationSchema.safeParse(request.operation).success) autoApply.current = job.jobId;
       if (mounted.current) {
         setSubmitted(job);
         setConfirmation(null);
@@ -116,21 +106,32 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
 
   return <Stack gap="1rem">
     <Cluster gap="0.5rem">
-      <button type="button" disabled={!available || busy} onClick={() => { if (machineId !== null) void submit({ machineId, operation: "accounts-list", input: {} }); }}>Request account refresh</button>
+      <button type="button" disabled={!available || busy || configuration.data?.status !== "ready"} onClick={() => { if (machineId !== null) void submit({ machineId, operation: "accounts-list", input: {} }); }}>Request account refresh</button>
       <button type="button" disabled={machineId === null} onClick={() => { accountFeed.refresh(); resultFeed.refresh(); }}>Read shared status</button>
-      <button type="button" disabled={!available || busy} onClick={() => { if (machineId !== null) void submit({ machineId, operation: "account-import", input: {} }); }}>Review import from machine</button>
     </Cluster>
-    <p className="plugin-atyrode_code_accounts__muted">Code evaluates account choices on the machine; Manifold stores the verified public selection atomically. Credentials and standalone CLI state stay on the machine. The first saved change adopts the reviewed public choices, without moving or rewriting the original file.</p>
+    {configuration.data && configuration.data.status !== "ready" && <section aria-label="Initialize native choices">
+      <p>{configuration.data.status === "transition_required" ? "Preserve existing native presets and exclusions in an explicit same-store configuration transition." : "Initialize native Manual choices before refreshing accounts. No credentials or machine configuration files are imported."}</p>
+      {configuration.data.previousChoices && <details><summary>Choices to preserve</summary><pre>{JSON.stringify(configuration.data.previousChoices, null, 2)}</pre></details>}
+      <button type="button" disabled={!available || busy} onClick={() => {
+        if (!machineId || !configuration.data || pending.current) return;
+        pending.current = true; setSubmitting(true); setRequestError(null);
+        void initializeCodeConfiguration(host, { machineId, expectedRevision: configuration.data.revision })
+          .catch((reason: unknown) => { if (mounted.current) setRequestError(codeOperationFailure(reason)); })
+          .finally(() => { pending.current = false; if (mounted.current) { setSubmitting(false); configuration.refresh(); accountFeed.refresh(); } });
+      }}>{configuration.data.status === "transition_required" ? "Preserve and transition native choices" : "Initialize native choices"}</button>
+    </section>}
+    {configuration.error && <p role="status">{configuration.error}</p>}
+    <p className="plugin-atyrode_code_accounts__muted">Manifold stores one shared configuration atomically. Account evaluation proposes a change; explicitly apply the verified proposal. Credentials remain behind native scoped services.</p>
     <div role="status" aria-live="polite" aria-atomic="true">
       {submitting && <p>Requesting admission; the operation has not completed.</p>}
       {applying && <p>Applying the verified proposal to shared Manifold choices…</p>}
-      {applied !== null && <p>Shared account choices saved as revision {applied.revision}. Running sessions and standalone CLI settings were not changed.</p>}
+      {applied !== null && <p>Shared choices saved as configuration revision {applied.revision}. Running sessions were not changed. Request an account refresh for this revision.</p>}
       {requestError !== null && <p>{requestError}</p>}
       {submitted !== null && <p>Requested job <code>{submitted.jobId}</code>: {jobStatus(observedJob ?? submitted)}.{observedJob === null ? " Shared status for this job has not yet been observed; this is its submission status." : ""}</p>}
       {submitted !== null && resultFeed.error !== null && <p>Requested operation observation is unavailable under the current authority.</p>}
       {submitted !== null && result?.latest?.jobId === submitted.jobId && result.state === "failed" && <p>The requested operation failed; its change is not confirmed.</p>}
       {submitted !== null && result?.latest?.jobId === submitted.jobId && result.state === "unavailable" && <p>The requested result is unavailable or could not be verified; its change is not confirmed.</p>}
-      {submitted !== null && result?.snapshot?.job.jobId === submitted.jobId && <p>{result.operation === "account-clear-blocks" ? `Block clearing completed for ${result.snapshot.value.account.provider} · ${result.snapshot.value.account.identityKey}. Request account refresh to observe current restrictions.` : result.operation === "accounts-list" ? "Account snapshot verified." : "Choice evaluation completed. Shared settings change only after the atomic apply succeeds."}</p>}
+      {submitted !== null && result?.snapshot?.job.jobId === submitted.jobId && <p>{result.operation === "account-clear-blocks" || result.operation === "account-disable" ? `Account administration completed for ${result.snapshot.value.account.provider} · ${result.snapshot.value.account.identityKey}. Request account refresh to observe current restrictions.` : result.operation === "accounts-list" ? "Account snapshot verified." : "Choice evaluation completed. Review and explicitly apply the proposed change below."}</p>}
       {accountFeed.error !== null ? <p>Account observation unavailable under the current authority.</p> : machineId === null ? <p>Select a machine to read its shared account observation.</p> : observation === null ? <p>Reading shared account observation…</p> : <>
         {observation.state === "empty" && <p>No completed account snapshot. Request account refresh explicitly.</p>}
         {observation.state === "pending" && <p>An account operation is pending. No new account snapshot is confirmed.</p>}
@@ -139,21 +140,6 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
         {observation.latest !== null && <p>Latest shared account job <code>{observation.latest.jobId}</code>: {jobStatus(observation.latest)}.</p>}
       </>}
     </div>
-    {result?.operation === "account-import" && result.state === "ready" && result.snapshot !== null && <section className="plugin-atyrode_code_accounts__notice" aria-labelledby={`${id}-import`}>
-      <Stack gap="0.75rem">
-        <h3 id={`${id}-import`}>Review machine choices before replacing shared settings</h3>
-        <p>This replaces the complete shared selection and preset list with the following machine snapshot. It does not write the CLI state file or move credentials. It can recover settings whose original job consent is no longer valid.</p>
-        <p>Active preset: {result.snapshot.value.activePreset}. Base Manifold revision: {result.snapshot.value.baseRevision}.</p>
-        <p>Manual exclusions:</p>
-        {result.snapshot.value.manualDisabled.length === 0 ? <p>None.</p> : <ul>{result.snapshot.value.manualDisabled.map((entry, index) => <li key={index}>{entry.provider} · {entry.identityKey}</li>)}</ul>}
-        <h4>Named presets</h4>
-        {result.snapshot.value.presets.length === 0 ? <p>None.</p> : result.snapshot.value.presets.map((preset) => <div key={preset.name}>
-          <strong>{preset.name}</strong>
-          {preset.disabled.length === 0 ? <p>No exclusions.</p> : <ul>{preset.disabled.map((entry, index) => <li key={index}>{entry.provider} · {entry.identityKey}</li>)}</ul>}
-        </div>)}
-        <button type="button" disabled={!available || busy || applied?.jobId === result.snapshot.job.jobId} onClick={() => { if (result.snapshot !== null) void applyProposal(result.snapshot.job); }}>Replace shared choices with this import</button>
-      </Stack>
-    </section>}
     {snapshot !== null && value !== null && <>
       <section className="plugin-atyrode_code_accounts__notice" aria-label="Account snapshot freshness">
         <p>{observation?.state === "ready" && available ? "Last successful account snapshot" : "Historical account snapshot — not current"} · job <code>{snapshot.job.jobId}</code></p>
@@ -178,6 +164,8 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
                   } }, `${account.enabled ? "Disable" : "Enable"} ${account.provider} · ${account.email || account.identityKey}`); }}>{account.enabled ? "Disable" : "Enable"}</button>
                 <button type="button" disabled={!canEdit || !account.selectable || !account.identityKey || confirmation !== null} aria-label={`Clear blocks for ${account.provider} ${account.email || account.identityKey || "unavailable identity"}`}
                   onClick={() => { if (machineId !== null) confirm({ machineId, operation: "account-clear-blocks", input: { provider: account.provider, identity: account.identityKey } }, `Clear blocks for ${account.provider} · ${account.email || account.identityKey}`); }}>Clear account blocks</button>
+                <button type="button" disabled={!canEdit || !account.selectable || !account.identityKey || confirmation !== null}
+                  onClick={() => { if (machineId !== null) confirm({ machineId, operation: "account-disable", input: { provider: account.provider, identity: account.identityKey } }, `Disable broker credential for ${account.provider} · ${account.email || account.identityKey}`); }}>Disable broker credential…</button>
               </Cluster>
             </Stack>
           </article>)}
@@ -271,6 +259,7 @@ function MachineAccounts({ host, machineId, available }: { host: HostServices; m
         {confirmation.request.operation === "preset-delete" && <p>This deletes the named preset, not its accounts. The completed account snapshot will report the resulting active selection.</p>}
         {confirmation.request.operation === "account-set" && <p>This changes manual account selection. The completed snapshot will report which preset is active.</p>}
         {confirmation.request.operation === "account-clear-blocks" && <p>Only this account’s blocks are targeted. This does not enable the account or guarantee that its credentials work.</p>}
+        {confirmation.request.operation === "account-disable" && <p>This disables the broker credential, not only its shared selection. It does not revoke the provider-side account or complete a login flow.</p>}
         {confirmationStale && <p role="alert">The account snapshot changed since this review. Cancel and review the current state before submitting.</p>}
         <Cluster gap="0.5rem">
           <button type="button" disabled={!canEdit || confirmationStale} onClick={() => { void submit(confirmation.request); }}>{confirmation.request.operation === "preset-delete" ? "Confirm delete" : confirmation.request.operation === "preset-create" || confirmation.request.operation === "preset-update" ? "Confirm save" : "Confirm request"}</button>

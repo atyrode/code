@@ -1,34 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { assertStorageKey, assertStorageValue } from "@manifold/plugin";
-import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
+import { canonicalJobJson, PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { CODE_PLUGIN_ID, type PrepareLaunchInput } from "../atyrode.code/contract.ts";
-import { type CodeOperation } from "../atyrode.code/machine-contract.ts";
-import { machineHandlers, type CodeContext } from "../atyrode.code/machine-server.ts";
+import { type CodeConfiguration, type CodeOperation } from "../atyrode.code/machine-contract.ts";
+import { catalogPayload, machineHandlers, type CodeContext } from "../atyrode.code/machine-server.ts";
 import { handlers } from "../atyrode.code/server.ts";
 
 const alice = { provider: "openai-codex", identityKey: "alice@example.test" };
 const bob = { provider: "openai-codex", identityKey: "bob@example.test" };
+const choiceState = { schemaVersion: 1 as const, activePreset: "Manual", presets: [], manualDisabled: [] };
 const accounts = {
-  schemaVersion: 1, operation: "list", observedAt: 1_700_000_000, activePreset: "Manual",
-  accounts: [alice, bob].map((account) => ({ ...account, selectable: true, enabled: true, blocked: false, restrictions: [] })),
-  presets: [], manualDisabled: [], baseRevision: 0,
+  ...choiceState, operation: "list", observedAt: 1_700_000_000,
+  accounts: [alice, bob].map((account) => ({ ...account, selectable: true, enabled: true, blocked: false, restrictions: [] })), baseRevision: 1,
 };
+const selection = { lane: "A", model: "test", thinking: "high", advisor: "off", spark: "off", fast: "off", prewalk: "off", planyolo: "off", fallback: "off" };
+const modelsYaml = "version: 1\n";
+const catalogRevision = createHash("sha256").update(modelsYaml).digest("hex");
 const inspection = {
-  schema_version: 1, baseRevision: null, observed_at: "2026-09-08T12:00:00Z", observation: "one_shot",
-  catalog: { state: "ready" }, selection: { lane: "A" }, facets: [{ key: "lane", values: ["A", "B"] }],
-  routing: [{ role: "default", primary: "openai-codex/test", fallbacks: [], agent_override: false }],
-  estimates: null, providers: [{ id: "openai-codex", credential_state: "available" }],
-  launch_modes: [{ mode: "generated", available: true }, { mode: "managed", available: true }], runtime_targets: [],
+  schemaVersion: 1, baseRevision: 1, catalogRevision, observedAt: 1_700_000_000, selection,
+  facets: [{ key: "lane", values: ["A", "B"] }], routing: [{ role: "default", lead: "openai-codex/test", fallback: [], agentBacked: false }],
+  estimates: { costScore: 2, speedScore: 3, scaleMin: 1, scaleMax: 5 }, ready: true, refusals: [],
 };
-
+const key = `account-preferences/${createHash("sha256").update("m1").digest("hex")}`;
 function fixture() {
   const store = new Map<string, string>();
   const jobs = new Map<string, { job: PublicJob; bytes: Buffer }>();
   const denied = new Set<string>();
   const deniedOutputs = new Set<string>();
   const emissions: unknown[] = [];
-  const fault = { corruptOutput: false, wrongOutputJob: false, writable: true, starts: 0 };
+  const fault = { corruptOutput: false, wrongOutputJob: false, writable: true, starts: 0, binding: "d".repeat(64) };
   let nextId = 0;
   const ctx: CodeContext = {
     storage: {
@@ -53,6 +54,9 @@ function fixture() {
     newId: async () => `job-${++nextId}`,
     emit: (...event) => { emissions.push(event); },
     jobs: {
+      describe: async () => ({ machineId: "m1", pluginId: CODE_PLUGIN_ID, admissionPublicKey: "-----BEGIN PUBLIC KEY-----test", connected: true, platforms: ["linux-amd64"],
+        installation: { revision: "installation-1", artifactSha256: "a".repeat(64), enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: [],
+        operations: Object.fromEntries(["inspect", "analysis-plan", "catalog-review", "launch", "suggest"].map((operation) => [`${CODE_PLUGIN_ID}.${operation}`, { ready: true, reason: null, resourceBindingDigest: fault.binding }])) }),
       execute: async () => { fault.starts++; throw new Error("Unexpected execution"); },
       status: async (node) => {
         if (denied.has(node.jobId)) throw new Error("Current native authority denied");
@@ -79,14 +83,14 @@ function fixture() {
       follow: async () => { throw new Error("Unexpected following"); },
     },
   };
-  function add(operation: CodeOperation, value: unknown, machineId = "m1") {
+  function add(operation: CodeOperation, value: unknown, machineId = "m1", payload: unknown = {}) {
     const jobId = `job-${++nextId}`;
     const bytes = Buffer.from(JSON.stringify(value));
     const artifactSha256 = "a".repeat(64);
     const job = PublicJobSchema.parse({
       jobId, machineId, operationId: `${CODE_PLUGIN_ID}.${operation}`, pluginId: CODE_PLUGIN_ID,
-      installationRevision: "installation-1", artifactSha256, state: "exited",
-      authority: { origin: { kind: "action", traceId: `trace-${jobId}` }, requester: "p1",
+      installationRevision: "installation-1", artifactSha256, state: "exited", resourceBindingDigest: "d".repeat(64), inputDigest: createHash("sha256").update(canonicalJobJson({ payload: JSON.stringify(payload) })).digest("hex"),
+      authority: { origin: { kind: "action", traceId: `trace-${jobId}`, door: "atyrode.code.run" }, requester: "p1",
         executor: { machineId, ownerId: "owner", ownerGeneration: 1 }, decision: null },
       result: { jobId, requestDigest: "b".repeat(64), ownerId: "owner", ownerGeneration: 1, state: "exited",
         exitCode: 0, reason: null, startedAt: 1000, finishedAt: 1100, usage: null,
@@ -99,121 +103,107 @@ function fixture() {
   return { ctx, store, jobs, denied, deniedOutputs, emissions, fault, add };
 }
 
-function launchInput(inspectionJobId: string, revision: number): PrepareLaunchInput {
-  return { machineId: "m1", inspectionJobId, kind: "generated", selection: { lane: "A" }, worktree: false, prompt: "",
-    accounts: { source: "plugin", revision } };
+function activeConfiguration(f: ReturnType<typeof fixture>): CodeConfiguration {
+  const configuration: CodeConfiguration = {
+    schemaVersion: 2, machineId: "m1", revision: 1, state: choiceState, choiceSource: null, selection,
+    active: { catalogRevision, modelsYaml, generation: null, review: null }, draft: null, updatedBy: "p1",
+    resourcePins: { installationRevision: "installation-1", artifactSha256: "a".repeat(64),
+      operations: Object.fromEntries(["inspect", "analysis-plan", "launch", "suggest"].map((op) => [`${CODE_PLUGIN_ID}.${op}`, "d".repeat(64)])) },
+  };
+  f.store.set(key, JSON.stringify(configuration));
+  return configuration;
 }
+function launchInput(planJobId: string, expectedRevision = 1): PrepareLaunchInput {
+  return { machineId: "m1", planJobId, expectedRevision, prompt: "Review this change" };
+}
+const planValue = { ...inspection, configYaml: "model: openai-codex/test\n", flags: ["--no-tools"], accountPool: { "openai-codex": [alice.identityKey] } };
 
-describe("shared Code choices", () => {
-  test("competing proposals cannot overwrite each other or change the reviewed launch pool", async () => {
+describe("native Code configuration", () => {
+  test("initialization preserves existing same-store choices and refuses resetting them", async () => {
     const f = fixture();
-    const baseline = f.add("accounts-list", accounts);
-    const first = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
-    const second = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [bob] });
-    const results = await Promise.all([first, second].map((job) => machineHandlers.applyAccountChoices(f.ctx, {
-      machineId: "m1", operation: "account-set", jobId: job.jobId,
-    })));
+    const source = f.add("account-set", { ...accounts, manualDisabled: [alice] });
+    const previous = { schemaVersion: 1, machineId: "m1", revision: 4, state: { ...choiceState, manualDisabled: [alice] }, source: { operation: "account-set", jobId: source.jobId } };
+    f.store.set(key, JSON.stringify(previous));
+    expect(await machineHandlers.readConfiguration(f.ctx, { machineId: "m1" })).toMatchObject({ status: "transition_required", previousChoices: previous.state });
+    expect(JSON.parse(f.store.get(key)!)).toEqual(previous);
+    expect(await machineHandlers.initializeConfiguration(f.ctx, { machineId: "m1", expectedRevision: 4 })).toMatchObject({ schemaVersion: 2, revision: 5, state: previous.state, choiceSource: previous.source });
+    expect(await machineHandlers.initializeConfiguration(f.ctx, { machineId: "m1", expectedRevision: 5 })).toEqual({ refused: "code_stale_preferences" });
+    expect(f.store.size).toBe(1);
+  });
+
+  test("competing proposals cannot overwrite each other or a reviewed launch", async () => {
+    const f = fixture(); const configuration = activeConfiguration(f);
+    const plan = f.add("analysis-plan", planValue, "m1", catalogPayload(configuration));
+    const first = f.add("account-set", { ...accounts, manualDisabled: [alice] });
+    const second = f.add("account-set", { ...accounts, manualDisabled: [bob] });
+    const results = await Promise.all([first, second].map((job) => machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: job.jobId })));
     const successes = results.filter((result) => !("refused" in result));
     expect(successes).toHaveLength(1);
     expect(results).toContainEqual({ refused: "code_stale_preferences" });
     const winner = successes[0]!;
-    if ("refused" in winner) throw new Error(winner.refused);
     expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: winner.jobId })).toEqual(winner);
-    const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
-    const launch = await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1));
-    if ("refused" in launch) throw new Error(launch.refused);
-    const choice = launch.program.argv.find((arg) => arg.startsWith("--account-selection="));
-    expect(choice).toBeDefined();
-    expect(JSON.parse(choice!.slice("--account-selection=".length))).toEqual({
-      schemaVersion: 1, disabled: [winner.jobId === first.jobId ? alice : bob],
-    });
-    expect(f.emissions).toHaveLength(1);
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(plan.jobId))).toEqual({ refused: "code_stale_preferences" });
     expect(JSON.stringify(f.emissions)).not.toContain("@example.test");
-    expect(await machineHandlers.run(f.ctx, {
-      machineId: "m1", operation: "account-set", input: { provider: alice.provider, identity: alice.identityKey, enabled: true,
-        expectedRevision: 0, baselineJobId: baseline.jobId },
-    })).toEqual({ refused: "code_stale_preferences" });
-    expect(f.fault.starts).toBe(0);
   });
 
-  test("source-job revocation prevents cached choices from being observed or launched", async () => {
-    const f = fixture();
-    const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
-    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId })).toEqual({ revision: 1, jobId: proposal.jobId });
-    const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
-    f.denied.add(proposal.jobId);
+  test("revoking source output access prevents cached identities from being disclosed", async () => {
+    const f = fixture(); activeConfiguration(f);
+    const source = f.add("account-set", { ...accounts, manualDisabled: [alice] });
+    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: source.jobId });
+    f.deniedOutputs.add(source.jobId);
+    expect(await machineHandlers.readConfiguration(f.ctx, { machineId: "m1" })).toEqual({ refused: "code_observation_unavailable" });
     expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toEqual({ refused: "code_observation_unavailable" });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
-    f.denied.clear();
-    f.fault.writable = false;
-    const other = f.add("account-set", { ...accounts, operation: "set", baseRevision: 1, manualDisabled: [bob] });
-    const before = [...f.store.values()];
-    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: other.jobId })).toEqual({ refused: "code_operation_unavailable" });
-    expect([...f.store.values()]).toEqual(before);
-  });
-  test("metadata permission alone cannot disclose stored account identities", async () => {
-    const f = fixture();
-    const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
-    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId });
-    f.deniedOutputs.add(proposal.jobId);
-    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toEqual({ refused: "code_observation_unavailable" });
-    const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+    f.deniedOutputs.clear(); f.denied.add(source.jobId);
+    expect(await machineHandlers.readConfiguration(f.ctx, { machineId: "m1" })).toEqual({ refused: "code_observation_unavailable" });
   });
 
-  test("an explicit verified import recovers revoked choices without allowing a stale replacement", async () => {
-    const f = fixture();
-    const old = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
-    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: old.jobId });
-    f.denied.add(old.jobId);
-    const replacement = f.add("account-import", { ...accounts, baseRevision: 1, manualDisabled: [bob] });
-    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: replacement.jobId })).toEqual({ revision: 2, jobId: replacement.jobId });
-    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toMatchObject({
-      state: "ready", snapshot: { value: { preferenceRevision: 2, manualDisabled: [bob] } },
-    });
-    const stale = f.add("account-import", { ...accounts, baseRevision: 1 });
-    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: stale.jobId })).toEqual({ refused: "code_stale_preferences" });
-    f.deniedOutputs.add(replacement.jobId);
-    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: replacement.jobId })).toEqual({ refused: "code_operation_unavailable" });
-  });
-
-
-  test.each(["corruptOutput", "wrongOutputJob"] as const)("refuses %s instead of committing an unverified proposal", async (fault) => {
-    const f = fixture();
-    const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
+  test.each(["corruptOutput", "wrongOutputJob"] as const)("refuses %s rather than committing unverified choices", async (fault) => {
+    const f = fixture(); activeConfiguration(f);
+    const before = f.store.get(key);
+    const proposal = f.add("account-set", { ...accounts, manualDisabled: [alice] });
     f.fault[fault] = true;
     expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId })).toEqual({ refused: "code_operation_unavailable" });
-    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId })).toMatchObject({ state: "failed", failure: "invalid_result", snapshot: null });
-    expect(f.store.size).toBe(0);
-    expect(f.emissions).toEqual([]);
+    expect(f.store.get(key)).toEqual(before);
   });
 
-  test("a launch cannot use a preview from another account revision or machine", async () => {
-    const f = fixture();
-    const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
-    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId });
-    const stale = f.add("inspect", { ...inspection, baseRevision: 0 });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(stale.jobId, 1))).toEqual({ refused: "code_stale_preferences" });
-    const wrongMachine = f.add("inspect", { ...inspection, baseRevision: 1 }, "m2");
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(wrongMachine.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+  test("native direct execution cannot spoof governed configuration provenance", async () => {
+    const f = fixture(); activeConfiguration(f);
+    const proposal = f.add("account-set", { ...accounts, manualDisabled: [alice] });
+    if (proposal.authority.origin.kind !== "action") throw new Error("fixture");
+    proposal.authority.origin.door = "engine.jobs.execute";
+    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId })).toEqual({ refused: "code_operation_unavailable" });
   });
 
-  test("unversioned machine defaults cannot masquerade as a reviewed shared selection", async () => {
-    const f = fixture();
-    f.add("accounts-list", accounts);
-    const reviewed = f.add("inspect", { ...inspection, baseRevision: 0 });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 0))).toEqual({ refused: "code_preferences_missing" });
-    expect(await machineHandlers.run(f.ctx, {
-      machineId: "m1", operation: "inspect", input: { accountSource: "plugin", selection: { lane: "A" } },
-    })).toEqual({ refused: "code_preferences_missing" });
-    expect(f.fault.starts).toBe(0);
+  test("promotion binds exact reviewed source and current choice payload, with CAS", async () => {
+    const f = fixture(); activeConfiguration(f);
+    const staged = await machineHandlers.stageConfiguration(f.ctx, { machineId: "m1", expectedRevision: 1, source: { kind: "edit", modelsYaml } });
+    if ("refused" in staged) throw new Error(staged.refused);
+    const forged = f.add("catalog-review", { ...inspection, baseRevision: 2 }, "m1", { ...catalogPayload(staged, true), state: { ...choiceState, manualDisabled: [alice] } });
+    expect(await machineHandlers.promoteConfiguration(f.ctx, { machineId: "m1", expectedRevision: 2, reviewJobId: forged.jobId })).toEqual({ refused: "code_preview_changed" });
+    const reviewed = f.add("catalog-review", { ...inspection, baseRevision: 2, ready: false, refusals: ["broker_metadata_unavailable"] }, "m1", catalogPayload(staged, true));
+    expect(await machineHandlers.promoteConfiguration(f.ctx, { machineId: "m1", expectedRevision: 2, reviewJobId: reviewed.jobId })).toMatchObject({ revision: 3, active: { modelsYaml, catalogRevision }, draft: null, selection });
+    expect(await machineHandlers.promoteConfiguration(f.ctx, { machineId: "m1", expectedRevision: 2, reviewJobId: reviewed.jobId })).toEqual({ refused: "code_stale_preferences" });
   });
 
-  test("an explicit observation remains bound to its job when another participant submits later", async () => {
-    const f = fixture();
-    const requested = f.add("inspect", inspection);
-    const later = f.add("inspect", { ...inspection, selection: { lane: "B" } });
-    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "inspect" })).toMatchObject({ snapshot: { job: { jobId: later.jobId }, value: { selection: { lane: "B" } } } });
-    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "inspect", jobId: requested.jobId })).toMatchObject({ snapshot: { job: { jobId: requested.jobId }, value: { selection: { lane: "A" } } } });
+  test("launch derives runtime input only from the exact authorized plan and refuses resource drift", async () => {
+    const f = fixture(); const configuration = activeConfiguration(f);
+    const plan = f.add("analysis-plan", planValue, "m1", catalogPayload(configuration));
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(plan.jobId))).toMatchObject({ runtime: {
+      pluginId: CODE_PLUGIN_ID, operationId: "atyrode.code.launch", installationRevision: "installation-1", artifactSha256: "a".repeat(64), resourceBindingDigest: "d".repeat(64),
+      input: { configYaml: planValue.configYaml, flags: JSON.stringify(planValue.flags), accountPool: JSON.stringify(planValue.accountPool), prompt: "Review this change" },
+    } });
+    f.fault.binding = "e".repeat(64);
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(plan.jobId))).toEqual({ refused: "code_resources_changed" });
+    f.fault.binding = "d".repeat(64);
+    const other = f.add("analysis-plan", planValue, "m2", catalogPayload(configuration));
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(other.jobId))).toEqual({ refused: "code_observation_unavailable" });
+  });
+
+  test("an explicit observation stays attached to its job when another participant submits", async () => {
+    const f = fixture(); const configuration = activeConfiguration(f);
+    const requested = f.add("inspect", inspection, "m1", catalogPayload(configuration));
+    const later = f.add("inspect", { ...inspection, selection: { ...selection, lane: "B" } });
+    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "inspect" })).toMatchObject({ snapshot: { job: { jobId: later.jobId } }, failure: "stale_preferences" });
+    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "inspect", jobId: requested.jobId })).toMatchObject({ state: "ready", snapshot: { job: { jobId: requested.jobId } } });
   });
 });
