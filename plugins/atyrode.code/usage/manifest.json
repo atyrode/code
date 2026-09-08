@@ -1,6 +1,6 @@
 {
   "id": "atyrode.code.usage",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "code usage",
   "description": "Machine-scoped usage observations and explicit governed refresh requests.",
   "capabilities": [],
