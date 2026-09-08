@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.ref_name }}
+      CODE_MACHINE_ARTIFACTS: ${{ github.workspace }}/worker-artifacts/machine-artifacts.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,13 +56,35 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
         working-directory: code/plugins
+      - name: Obtain the published worker archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/worker-artifacts"
+          gh release download "$TAG" --repo "$REPOSITORY" \
+            --pattern code-machine-linux-amd64.tar.gz \
+            --pattern code-machine-linux-arm64.tar.gz \
+            --pattern checksums.txt \
+            --dir "$GITHUB_WORKSPACE/worker-artifacts"
+      - name: Derive machine artifact pins from the released bytes
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          bun scripts/machine-artifacts.ts generate \
+            "$GITHUB_WORKSPACE/worker-artifacts" "$REPOSITORY" "$TAG" \
+            "$CODE_MACHINE_ARTIFACTS"
+        working-directory: code
       - name: Pack
         run: bun run pack
+        working-directory: code/plugins
+      - name: Verify the release bundles on a disposable server
+        run: bun run verify
         working-directory: code/plugins
       - name: Attach the bundles to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$TAG" --repo "${{ github.repository }}" --clobber dist/*.manifold-plugin.json dist/SHA256SUMS
+        run: gh release upload "$TAG" --repo "${{ github.repository }}" dist/*.manifold-plugin.json dist/SHA256SUMS
         working-directory: code/plugins
       - name: Install on the integrated preview
         # Inert unless the repository variable DEV_DEPLOY_HOST exists, like manifold's
@@ -78,6 +101,7 @@ jobs:
         run: |
           umask 077
           key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
           printf '%s\n' "$DEV_DEPLOY_SSH_KEY" > "$key"
           # Bytewise sort so the prefix `atyrode.code` lands before `atyrode.code.generator`
           # regardless of the runner's locale; `ssh -n` so ssh cannot eat the remaining lines.
@@ -90,5 +114,4 @@ jobs:
               "${{ vars.DEV_DEPLOY_USER }}@${{ vars.DEV_DEPLOY_HOST }}" \
               "plugin $ASSETS/$id.manifold-plugin.json $sha"
           done
-          rm -f "$key"
         working-directory: code/plugins
