@@ -6,7 +6,6 @@
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "usage", "title": "Code usage" }],
-    "seats": [{ "panel": "usage", "order": 160, "ratio": 0.5 }],
     "sections": [],
     "elements": [],
     "tools": [],

@@ -8,6 +8,8 @@
     "machines:run",
     "jobs:read"
   ],
+  "dataVersion": { "major": 1, "minor": 0 },
+  "purges": ["storage"],
   "contributes": {
     "panels": [],
     "sections": [],
