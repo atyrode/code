@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+export class DomainError extends Error {
+  constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
+    "invalid_choices" | "account_unavailable" | "preset_exists" | "preset_missing" | "invalid_usage") {
+    super(`code_${code}`);
+  }
+}
+
 export const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)
   .refine(value => !["constructor", "prototype", "__proto__"].includes(value));
 export const epochMilliseconds = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
