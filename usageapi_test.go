@@ -289,3 +289,44 @@ func TestUsageAPIPortableChoicesControlAccountsWithoutPersistence(t *testing.T) 
 		}
 	}
 }
+
+func TestUsageAPIPortableBrokerFailureNeverBorrowsStandaloneCache(t *testing.T) {
+	_, accounts, _ := accountAPITestBroker(t)
+	server := testAccountBroker(t, `{"reports":[]}`)
+	server.Close()
+	t.Setenv("OMP_AUTH_BROKER_URL", server.URL)
+	cachePath := filepath.Join(t.TempDir(), "usage.json")
+	t.Setenv("CODE_USAGE_CACHE", cachePath)
+	now := time.Now().Unix()
+	cached := emptyAvailability()
+	cached.ok, cached.accountsOK, cached.accounts = true, true, accounts
+	cached.accountUsage[accountKey{Provider: "openai-codex", IdentityKey: "a@example.com"}] = []usageWin{{id: "30d", prov: "openai-codex", pct: 22, secs: 900, observed: now-200}}
+	cached.deepseek = &deepseekBalance{ok: true, currency: "USD", total: "12.50", fetchedAt: now-200}
+	saveUsageCache(cachePath, cached)
+	before, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, errout := accountAPITestRun(t, runUsageCLI)
+	var standalone usageAPIResult
+	if status != 0 || json.Unmarshal([]byte(body), &standalone) != nil || standalone.Status != "stale" || standalone.ObservedAt != now-200 {
+		t.Fatalf("standalone cache recovery changed: %s %s", body, errout)
+	}
+	status, body, _ = accountAPITestRun(t, runUsageCLI, "--state", portableAccountTestState)
+	var portable usageAPIResult
+	if status == 0 || json.Unmarshal([]byte(body), &portable) != nil || portable.Status != "failed" || portable.ObservedAt != 0 {
+		t.Fatalf("portable failure published cached observation: %s", body)
+	}
+	if len(portable.Balances) != 0 {
+		t.Fatalf("standalone balance escaped into portable observation: %s", body)
+	}
+	for _, provider := range portable.Providers {
+		if len(provider.Accounts) != 0 {
+			t.Fatalf("standalone identities/windows escaped into portable observation: %s", body)
+		}
+	}
+	after, err := os.ReadFile(cachePath)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("portable failure changed standalone usage cache")
+	}
+}

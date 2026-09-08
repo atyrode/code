@@ -258,8 +258,11 @@ func runUsageCLI(args []string) int {
 		}
 	}
 	requestedAt := time.Now()
-	cache := loadUsageCache(os.Getenv("CODE_USAGE_CACHE"))
-	cache.accountsStale = cache.accountsOK
+	cache := emptyAvailability()
+	if !portable {
+		cache = loadUsageCache(os.Getenv("CODE_USAGE_CACHE"))
+		cache.accountsStale = cache.accountsOK
+	}
 	loadedAt := time.Now()
 	broker := resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
 	fresh := loadAvailability(broker)
