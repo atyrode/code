@@ -15,6 +15,8 @@ import { z } from "zod";
 export const CODE_PLUGIN_ID = "atyrode.code";
 /** The first sub-plugin: the launch panel, a view over the baseline's doors. */
 export const GENERATOR_PLUGIN_ID = "atyrode.code.generator";
+export const USAGE_PLUGIN_ID = "atyrode.code.usage";
+export const ACCOUNTS_PLUGIN_ID = "atyrode.code.accounts";
 
 // ---------------------------------------------------------------------------- doors
 
