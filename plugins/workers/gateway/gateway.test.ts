@@ -1,0 +1,219 @@
+import { describe, expect, test } from "bun:test";
+import { Duplex } from "node:stream";
+import { setImmediate } from "node:timers/promises";
+import { setTransports } from "@oh-my-pi/pi-utils/logger";
+import type { SnapshotEntry, SnapshotResponse, SnapshotStreamEvent } from "@oh-my-pi/pi-ai/auth-broker/types";
+import { GatewayContext } from "./context.ts";
+import { isolateEnvironment, parseInputs } from "./inputs.ts";
+
+// Runtime imports must follow the same logging barrier as the private worker.
+setTransports({ file: false, console: false });
+const { openPoolStorage, poolModels, PoolBrokerClient } = await import("./storage.ts");
+const { safeNativeStream } = await import("./boundary.ts");
+const { startPoolGateway } = await import("./runtime.ts");
+const { resolveCredentialIdentityKey } = await import("@oh-my-pi/pi-ai/auth/sqlite-credential-store");
+const broker = { url: "http://127.0.0.1:12345", token: "fixture-native-capability-not-a-source-token" };
+const serviceBearer = "fixture-native-service-bearer-private-only";
+
+function credential(id: number, identityKey: string | null, provider = "anthropic"): SnapshotEntry {
+  return { id, provider, identityKey, rotatesInMs: null, credential: {
+    type: "oauth", access: `fixture-access-${id}`, refresh: "__remote__", expires: Date.now() + 3600_000,
+    accountId: `fixture-account-${id}`, email: `fixture-${id}@example.invalid`,
+  } };
+}
+class FixtureBroker {
+  snapshot: SnapshotResponse;
+  stream?: ReadableStreamDefaultController<Uint8Array>;
+  readonly listening = Promise.withResolvers<void>();
+  readonly disconnected = Promise.withResolvers<void>();
+  refreshes = 0;
+  refreshEntry?: SnapshotEntry;
+  readonly encoder = new TextEncoder();
+  constructor(entries: SnapshotEntry[]) {
+    this.snapshot = { generation: 1, generatedAt: Date.now(), serverNowMs: Date.now(), credentials: entries,
+      refresher: { enabled: false, intervalMs: 60000, skewMs: 60000, nextSweepInMs: 60000 } };
+  }
+  readonly fetch: typeof fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(String(input));
+    expect(url.origin).toBe(broker.url);
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${broker.token}`);
+    if (url.pathname === "/v1/snapshot/stream") {
+      return new Response(new ReadableStream<Uint8Array>({ start: controller => {
+        this.stream = controller;
+        this.send({ ...this.snapshot, kind: "snapshot" });
+        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} this.disconnected.resolve(); }, { once: true });
+        this.listening.resolve();
+      } }), { headers: { "Content-Type": "text/event-stream" } });
+    }
+    if (url.pathname === "/v1/snapshot") return Response.json(this.snapshot, { headers: { ETag: `"${this.snapshot.generation}"` } });
+    if (url.pathname === "/v1/usage") return Response.json({ generatedAt: Date.now(), reports: [] });
+    if (url.pathname.endsWith("/refresh")) {
+      this.refreshes++;
+      const entry = this.refreshEntry!;
+      const { rotatesInMs: _, ...wireEntry } = entry;
+      return Response.json({ entry: wireEntry });
+    }
+    throw new Error("unplanned fixture operation");
+  }, { preconnect: fetch.preconnect });
+  send(event: SnapshotStreamEvent): void { this.stream!.enqueue(this.encoder.encode(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`)); }
+  remove(id: number): void {
+    this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1, credentials: this.snapshot.credentials.filter(entry => entry.id !== id) };
+    this.send({ kind: "removed", id, generation: this.snapshot.generation, serverNowMs: Date.now(), refresher: this.snapshot.refresher });
+  }
+}
+
+async function eventually(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 100; i++) { if (check()) return; await setImmediate(); }
+  throw new Error("fixture transition not observed");
+}
+
+describe("native account-pool gateway", () => {
+  test("selected identity excludes unlisted, empty and missing providers, including identityless API keys", async () => {
+    const apiKey: SnapshotEntry = { id: 5, provider: "anthropic", identityKey: null, rotatesInMs: null, credential: { type: "api_key", key: "fixture-key-never-admitted" } };
+    expect(resolveCredentialIdentityKey("anthropic", apiKey.credential)).toBeNull();
+    const fixture = new FixtureBroker([credential(1, "chosen"), credential(2, "other"), credential(3, "chosen", "openai-codex"), credential(4, "chosen", "github-copilot"), apiKey]);
+    const inputs = parseInputs(broker, { anthropic: ["chosen"], "openai-codex": [] }, serviceBearer);
+    const controller = new AbortController();
+    const storage = await openPoolStorage(broker, inputs.accountPool, controller.signal, fixture.fetch);
+    try {
+      expect(storage.remote.listAuthCredentials().map(entry => entry.id)).toEqual([1]);
+      expect(await storage.getApiKey("openai-codex")).toBeUndefined();
+      expect(await storage.getApiKey("github-copilot")).toBeUndefined();
+      const models = poolModels(inputs.accountPool);
+      expect(models.get("anthropic/claude-sonnet-4-5")).toMatchObject({ provider: "anthropic", id: "claude-sonnet-4-5", api: "anthropic-messages" });
+      expect([...models.values()].every(model => model.provider === "anthropic")).toBe(true);
+      expect(models.has("claude-sonnet-4-5")).toBe(false);
+    } finally { controller.abort(); storage.close(); }
+  });
+
+  test("real SDK storage observes live disable and cannot reuse the selected bearer", async () => {
+    const fixture = new FixtureBroker([credential(1, "chosen"), credential(2, "other")]);
+    const controller = new AbortController();
+    const inputs = parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer);
+    const storage = await openPoolStorage(broker, inputs.accountPool, controller.signal, fixture.fetch);
+    try {
+      await fixture.listening.promise;
+      expect(await storage.getApiKey("anthropic", "fixture-session")).toBe("fixture-access-1");
+      fixture.remove(1);
+      await eventually(() => storage.remote.listAuthCredentials().length === 0);
+      expect(await storage.getApiKey("anthropic", "fixture-session")).toBeUndefined();
+    } finally { controller.abort(); storage.close(); }
+    await fixture.disconnected.promise;
+  });
+
+  test("refresh uses the SDK broker hook and refuses an identity change", async () => {
+    const entry = credential(1, "chosen");
+    const fixture = new FixtureBroker([entry]);
+    const controller = new AbortController();
+    const inputs = parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer);
+    const storage = await openPoolStorage(broker, inputs.accountPool, controller.signal, fixture.fetch);
+    try {
+      await fixture.listening.promise;
+      fixture.refreshEntry = { ...entry, credential: { ...entry.credential, type: "oauth", access: "fixture-rotated-access", refresh: "__remote__", expires: Date.now() + 3600_000 } };
+      await storage.remote.markCredentialSuspect(1);
+      expect(await storage.getApiKey("anthropic")).toBe("fixture-rotated-access");
+      fixture.refreshEntry = credential(1, "unlisted");
+      await expect(storage.remote.markCredentialSuspect(1)).rejects.toThrow("gateway_unavailable");
+      expect(await storage.getApiKey("anthropic")).toBeUndefined();
+      expect(fixture.refreshes).toBe(2);
+    } finally { controller.abort(); storage.close(); }
+  });
+
+  test("an SSE upsert moving a row outside its identity pool becomes a removal", async () => {
+    const fixture = new FixtureBroker([credential(1, "chosen")]);
+    const inputs = parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer);
+    const controller = new AbortController();
+    const client = new PoolBrokerClient({ ...broker, fetchImpl: fixture.fetch }, inputs.accountPool);
+    const iterator = client.openSnapshotStream({ signal: controller.signal });
+    try {
+      const first = await iterator.next();
+      expect(first.value?.kind).toBe("snapshot");
+      fixture.send({ kind: "entry", entry: credential(1, "unlisted"), generation: 2, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      expect((await iterator.next()).value).toMatchObject({ kind: "removed", id: 1 });
+    } finally { controller.abort(); await iterator.return(undefined); }
+  });
+
+  test("sealed endpoint validation rejects authority tricks and strips ambient credentials before SDK loading", () => {
+    for (const url of ["https://127.0.0.1:12345", "http://localhost:12345", "http://127.1:12345", "http://127.0.0.1:12345/v1", "http://127.0.0.1:12345?token=secret", "http://127.0.0.1:65536"]) {
+      expect(() => parseInputs({ ...broker, url }, {}, serviceBearer)).toThrow();
+    }
+    expect(() => parseInputs(broker, { anthropic: ["duplicate", "duplicate"] }, serviceBearer)).toThrow();
+    expect(() => parseInputs(broker, { anthropic: ["bad\nidentity"] }, serviceBearer)).toThrow();
+    const environment = { PATH: "/bin", MANIFOLD_JOB_CONTEXT_FD: "3", ANTHROPIC_API_KEY: "private", HOME: "/source", HTTP_PROXY: "secret", PI_DEBUG_STARTUP: "1" };
+    isolateEnvironment(environment);
+    expect(environment).toEqual({ PATH: "/bin", MANIFOLD_JOB_CONTEXT_FD: "3", HOME: "/inputs" });
+  });
+
+  test("readiness is private, one-shot and disconnect aborts ownership", async () => {
+    const writes: string[] = [];
+    const socket = new Duplex({ read() {}, write(chunk, _encoding, callback) { writes.push(chunk.toString()); callback(); } });
+    const context = new GatewayContext(socket);
+    try {
+      socket.push('{"type":"context","locations":[]}\n');
+      await context.announce(1234);
+      expect(writes).toEqual(['{"type":"service_ready","port":1234}\n']);
+      await expect(context.announce(1234)).rejects.toThrow("gateway_unavailable");
+      socket.push(null);
+      await eventually(() => context.controller.signal.aborted);
+    } finally { context.close(); }
+  });
+
+  test("SSE failure projection discards raw SDK diagnostics across chunk boundaries", async () => {
+    const model = [...poolModels(parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer).accountPool).values()][0]!;
+    const raw = `data: ${JSON.stringify({ type: "error", reason: "error", error: { errorMessage: "fixture-source-token", content: [{ type: "text", text: "fixture-credential-body" }] } })}\n\n`;
+    const bytes = new TextEncoder().encode(raw);
+    const source = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes.slice(0, 17)); controller.enqueue(bytes.slice(17)); controller.close(); } });
+    const projected = await new Response(safeNativeStream(source, model)).text();
+    expect(projected).not.toContain("fixture-source-token");
+    expect(projected).not.toContain("fixture-credential-body");
+    const event = JSON.parse(projected.split("\n")[0]!.slice(6));
+    expect(event.error).toMatchObject({ provider: model.provider, model: model.id, api: model.api, stopReason: "error", content: [] });
+  });
+
+  test("worker startup refusal contains stdout and raw exception output", async () => {
+    const child = Bun.spawn([process.execPath, new URL("./entry.ts", import.meta.url).pathname], {
+      env: { MANIFOLD_JOB_CONTEXT_FD: "invalid-fixture-source-token", ANTHROPIC_API_KEY: "fixture-provider-token" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("gateway_unavailable\n");
+  });
+
+  test("owner abort cancels startup broker requests without creating a listener", async () => {
+    const entered = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const blockedFetch: typeof fetch = Object.assign((_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      entered.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => { stopped.resolve(); reject(new Error("fixture-private-broker-error")); }, { once: true });
+      });
+    }, { preconnect: fetch.preconnect });
+    const opening = startPoolGateway(parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer), controller.signal, blockedFetch);
+    await entered.promise;
+    controller.abort();
+    await stopped.promise;
+    await expect(opening).rejects.toThrow("gateway_unavailable");
+  });
+
+  test("real SDK gateway publishes only authenticated native models and closes its broker watch", async () => {
+    const fixture = new FixtureBroker([]);
+    const controller = new AbortController();
+    const gateway = await startPoolGateway(parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer), controller.signal, fixture.fetch);
+    const url = `http://127.0.0.1:${gateway.port}`;
+    try {
+      expect((await fetch(url + "/v1/models")).status).toBe(401);
+      const headers = { Authorization: `Bearer ${serviceBearer}`, "x-omp-install-id": "00000000-0000-4000-8000-000000000001" };
+      expect((await fetch(url + "/v1/credentials/check", { headers })).status).toBe(404);
+      const listed = await (await fetch(url + "/v1/models", { headers })).json();
+      expect(listed.data.every((model: { owned_by: string }) => model.owned_by === "anthropic")).toBe(true);
+      const response = await fetch(url + "/v1/pi/stream", { method: "POST", headers, body: JSON.stringify({ modelId: listed.data[0].id, context: { messages: [] } }) });
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toContain("No credential available");
+    } finally { controller.abort(); await gateway.close(); }
+    await fixture.disconnected.promise;
+    await expect(fetch(url + "/v1/models")).rejects.toThrow();
+  });
+});
