@@ -1,8 +1,8 @@
 import { accessSync, constants, closeSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { RuntimeAccountPoolSchema, type RuntimeAccountPool } from "../../domain/contracts.ts";
 
 export const INPUT_LIMIT = 128 * 1024;
-export type AccountPool = ReadonlyMap<string, ReadonlySet<string>>;
-export interface GatewayInputs { broker: { url: string; token: string }; accountPool: AccountPool; serviceBearer: string }
+export interface GatewayInputs { broker: { url: string; token: string }; accountPool: RuntimeAccountPool; serviceBearer: string }
 export const unavailable = (): Error => new Error("gateway_unavailable");
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -17,20 +17,20 @@ export function parseInputs(broker: unknown, pool: unknown, serviceBearer: unkno
   if (!/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(broker.url)) throw unavailable();
   const url = new URL(broker.url);
   if (Number(url.port) < 1 || Number(url.port) > 65535) throw unavailable();
-  if (!record(pool) || Object.keys(pool).length > 128) throw unavailable();
-  const accountPool = new Map<string, ReadonlySet<string>>();
-  let identities = 0;
-  for (const [provider, selected] of Object.entries(pool)) {
-    if (!/^[a-z][a-z0-9-]{0,127}$/.test(provider) || !Array.isArray(selected) || selected.length > 256) throw unavailable();
-    const set = new Set<string>();
-    for (const identity of selected) {
-      if (typeof identity !== "string" || identity.length < 1 || Buffer.byteLength(identity) > 2048 || /[\u0000-\u001f\u007f]/.test(identity) || set.has(identity)) throw unavailable();
-      set.add(identity);
-      if (++identities > 1024) throw unavailable();
+  const parsed = RuntimeAccountPoolSchema.safeParse(pool);
+  if (!parsed.success) throw unavailable();
+  const accountPool = parsed.data;
+  const slots = new Set<number>();
+  for (const selected of Object.values(accountPool)) {
+    for (const slot of selected) {
+      if (slots.has(slot.credentialId) || slots.size >= 1024) throw unavailable();
+      slots.add(slot.credentialId);
+      Object.freeze(slot);
     }
     // Empty is deliberately retained. It NEVER means all accounts.
-    accountPool.set(provider, set);
+    Object.freeze(selected);
   }
+  Object.freeze(accountPool);
   return { broker: { url: broker.url, token: broker.token }, accountPool, serviceBearer };
 }
 
