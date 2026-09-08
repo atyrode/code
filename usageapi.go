@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"os"
 	"sort"
 	"time"
@@ -233,15 +235,26 @@ func saveUsageAPICache(path string, a availability, now time.Time) {
 }
 
 func runUsageCLI(args []string) int {
-	if len(args) > 0 {
-		return accountAPIError("usage takes no arguments; output is one JSON snapshot")
-	}
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	state := defaultAccountSelectionState()
-	if path := os.Getenv("CODE_AUTH_ACCOUNT_STATE"); path != "" {
+	portable := false
+	fs.Func("state", "portable account choices JSON", func(raw string) error {
 		var err error
-		state, err = readAccountAPIState(path)
-		if err != nil {
-			return accountAPIError(err.Error())
+		state, err = decodePortableAccountState(raw)
+		portable = true
+		return err
+	})
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return accountAPIError("invalid usage flags")
+	}
+	if !portable {
+		if path := os.Getenv("CODE_AUTH_ACCOUNT_STATE"); path != "" {
+			var err error
+			state, err = readAccountAPIState(path)
+			if err != nil {
+				return accountAPIError(err.Error())
+			}
 		}
 	}
 	requestedAt := time.Now()
@@ -253,8 +266,11 @@ func runUsageCLI(args []string) int {
 	now := time.Now()
 	ageUsageAPICache(&cache, now.Unix()-loadedAt.Unix())
 	merged, stale := reconcileUsage(cache, fresh)
-	if fresh.ok && fresh.accountsOK {
+	if !portable && fresh.ok && fresh.accountsOK {
 		saveUsageAPICache(os.Getenv("CODE_USAGE_CACHE"), merged, now)
+	}
+	if portable {
+		state = pruneAccountSelectionState(state, fresh)
 	}
 	result := projectUsageAPI(merged, fresh.ok, fresh.accountsOK, stale, state, requestedAt, now)
 	if status := writeAccountAPIJSON(result); status != 0 {

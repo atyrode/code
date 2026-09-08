@@ -38,6 +38,12 @@ func runSuggest(args []string) int {
 	fs := flag.NewFlagSet("code suggest", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var selection map[string]string
+	var accountOverride *accountSelectionState
+	fs.Func("state", "portable account choices JSON", func(raw string) error {
+		state, err := decodePortableAccountState(raw)
+		accountOverride = &state
+		return err
+	})
 	var prompt string
 	promptSet := false
 	fs.Func("prompt", "task to size (or pass positional prompt after flags)", func(value string) error {
@@ -66,7 +72,7 @@ func runSuggest(args []string) int {
 		fmt.Fprintln(os.Stderr, "code suggest: a prompt is required")
 		return 2
 	}
-	m, err := loadHeadlessModel(nil)
+	m, err := loadHeadlessModel(accountOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "code suggest: %v\n", err)
 		return 1

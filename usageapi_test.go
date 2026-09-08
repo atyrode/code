@@ -246,3 +246,46 @@ func TestUsageAPICacheRoundTripPreservesOmittedWindowDeadline(t *testing.T) {
 		t.Fatalf("cached omission moved deadline or observation: %+v deadline=%d", rows[0], deadline)
 	}
 }
+
+func TestUsageAPIPortableChoicesControlAccountsWithoutPersistence(t *testing.T) {
+	server := testAccountBroker(t, `{"reports":[]}`)
+	t.Setenv("OMP_AUTH_BROKER_URL", server.URL)
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "fixture")
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	cache := filepath.Join(t.TempDir(), "usage.json")
+	t.Setenv("CODE_USAGE_CACHE", cache)
+	const original = "invalid standalone settings"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"schemaVersion":1,"activePreset":"Focus","manualDisabled":[],"presets":[{"name":"Focus","disabled":[{"provider":"openai-codex","identityKey":"codex-key"}]}]}`
+	for _, statePath := range []string{path, filepath.Join(t.TempDir(), "missing", "state"), ""} {
+		t.Setenv("CODE_AUTH_ACCOUNT_STATE", statePath)
+		status, body, errout := accountAPITestRun(t, runUsageCLI, "--state", state)
+		var result usageAPIResult
+		if status != 0 || json.Unmarshal([]byte(body), &result) != nil {
+			t.Fatalf("portable usage failed: %s", errout)
+		}
+		enabled := map[string]bool{}
+		for _, provider := range result.Providers {
+			for _, row := range provider.Accounts {
+				enabled[row.IdentityKey] = row.Enabled
+			}
+		}
+		disabled, found := enabled["codex-key"]
+		if result.ActivePreset != "Focus" || !found || disabled || !enabled["unmatched-key"] {
+			t.Fatalf("usage ignored portable account choices: %s", body)
+		}
+		requireNoPath(t, cache)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != original {
+		t.Fatal("portable usage overwrote standalone settings")
+	}
+	for _, malformed := range []string{"null", portableAccountTestState+"{}", `{"schemaVersion":1}`} {
+		status, body, _ := accountAPITestRun(t, runUsageCLI, "--state", malformed)
+		if status == 0 || body != "" {
+			t.Fatal("malformed portable usage choices returned an observation")
+		}
+	}
+}

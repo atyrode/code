@@ -240,3 +240,37 @@ func TestSuggestSizingPreservesExplicitEvaluatorSwitch(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestPortableChoicesRefuseDisabledProviderWithoutWriting(t *testing.T) {
+	headlessLaunchFixture(t)
+	t.Setenv("CODE_GENERATED", "testdata/two-pool-golden.plain")
+	broker := testAccountBroker(t, `{"reports":[]}`)
+	t.Setenv("OMP_AUTH_BROKER_URL", broker.URL)
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", "fixture")
+	path := filepath.Join(t.TempDir(), "accounts.json")
+	t.Setenv("CODE_AUTH_ACCOUNT_STATE", path)
+	const original = "invalid standalone settings"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evaluator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"message": map[string]string{"content": `{"model":"smart"}`}, "done": true})
+	}))
+	t.Cleanup(evaluator.Close)
+	t.Setenv("CODE_OLLAMA_ENDPOINT", evaluator.URL)
+	state := `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[{"provider":"openai-codex","identityKey":"codex-key"},{"provider":"openai-codex","identityKey":"unmatched-key"}],"presets":[]}`
+	status, body, _ := accountAPITestRun(t, runSuggest, "--state", state, "--selection", `{"lane":"gpt-only"}`, "--prompt", "critical refactor")
+	if status == 0 || body != "" {
+		t.Fatal("suggestion accepted a disabled provider")
+	}
+	status, body, errout := accountAPITestRun(t, runSuggest, "--state", portableAccountTestState, "--selection", `{"lane":"gpt-only"}`, "--prompt", "critical refactor")
+	var result suggestSnapshot
+	if status != 0 || json.Unmarshal([]byte(body), &result) != nil || result.Selection["lane"] != "gpt-only" || result.Selection["model"] != "smart" {
+		t.Fatalf("enabled portable provider not usable for suggestion: %s %s", body, errout)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != original {
+		t.Fatal("portable suggestion changed standalone settings")
+	}
+	requireNoPath(t, path+".lock")
+}

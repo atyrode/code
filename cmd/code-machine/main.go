@@ -24,11 +24,15 @@ var errInvalid = errors.New("invalid operation data")
 
 type selectionPayload struct {
 	Selection map[string]string `json:"selection,omitempty"`
+	State *accountChoiceState `json:"state,omitempty"`
+	BaseRevision *int64 `json:"baseRevision,omitempty" nullable:"true"`
 }
 
 type suggestPayload struct {
 	Selection map[string]string `json:"selection,omitempty"`
 	Prompt string `json:"prompt"`
+	State *accountChoiceState `json:"state,omitempty"`
+	BaseRevision *int64 `json:"baseRevision,omitempty" nullable:"true"`
 }
 
 type accountPayload struct {
@@ -45,6 +49,7 @@ type accountChoiceState struct {
 
 type accountListPayload struct {
 	State *accountChoiceState `json:"state,omitempty"`
+	BaseRevision *int64 `json:"baseRevision,omitempty" nullable:"true"`
 }
 
 type accountSetPayload struct {
@@ -99,18 +104,19 @@ func operationArgs(operation, payload string) ([]string, *int64, error) {
 	case "inspect":
 		var p selectionPayload
 		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
-		return selectionArgs([]string{"inspect"}, p.Selection), nil, nil
+		return stateArgs(selectionArgs([]string{"inspect"}, p.Selection), p.State, p.BaseRevision)
 	case "suggest":
 		var p suggestPayload
 		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Prompt) == "" { return nil, nil, errInvalid }
-		return selectionArgs([]string{"suggest", "--prompt="+p.Prompt}, p.Selection), nil, nil
+		return stateArgs(selectionArgs([]string{"suggest", "--prompt="+p.Prompt}, p.Selection), p.State, p.BaseRevision)
 	case "usage":
-		if decodeDocument(data, &struct{}{}, true) != nil { return nil, nil, errInvalid }
-		return []string{"usage"}, nil, nil
+		var p accountListPayload
+		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
+		return stateArgs([]string{"usage"}, p.State, p.BaseRevision)
 	case "accounts-list":
 		var p accountListPayload
 		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
-		return stateArgs([]string{"accounts", "list"}, p.State, nil)
+		return stateArgs([]string{"accounts", "list"}, p.State, p.BaseRevision)
 	case "account-set":
 		var p accountSetPayload
 		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, nil, errInvalid }

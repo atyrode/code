@@ -242,3 +242,56 @@ func TestChoiceProposalBindsVerifiedPublicResultToCallerRevision(t *testing.T) {
 		t.Fatal("unbound mutation result became publishable")
 	}
 }
+
+func TestReadObservationsCarryNullableCallerRevision(t *testing.T) {
+	fixtures := map[string]string{
+		"inspect": inspectFixture,
+		"usage": usageFixture,
+		"accounts-list": `{"schemaVersion":1,"operation":"list","observedAt":100,"activePreset":"Manual","accounts":[],"presets":[],"manualDisabled":[]}`,
+		"suggest": `{"schema_version":1,"observed_at":"2026-09-08T10:00:00Z","observation":"one_shot","evaluator":"local-model","actions":[{"key":"model","value":"smart"}],"selection":{"model":"smart"}}`,
+	}
+	for operation, fixture := range fixtures {
+		t.Run(operation, func(t *testing.T) {
+			fields := `"state":`+workerAccountState
+			if operation == "suggest" {
+				fields += `,"prompt":"refactor"`
+			}
+			for _, marker := range []string{"", "null", "0", "9007199254740991"} {
+				payload := "{"+fields
+				if marker != "" {
+					payload += `,"baseRevision":`+marker
+				}
+				payload += "}"
+				_, revision, err := operationArgs(operation, payload)
+				if err != nil {
+					t.Fatalf("valid observation rejected: %s", payload)
+				}
+				// The child cannot relabel an observation as another shared revision.
+				spoofed := fixture[:len(fixture)-1]+`,"baseRevision":100}`
+				result, err := projectResult(operation, []byte(spoofed), revision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var public map[string]json.RawMessage
+				if err := json.Unmarshal(result, &public); err != nil {
+					t.Fatal(err)
+				}
+				want := marker
+				if want == "" {
+					want = "null"
+				}
+				if string(public["baseRevision"]) != want || bytes.Contains(result, []byte("PRIVATE")) {
+					t.Fatalf("observation revision/privacy mismatch: %s", result)
+				}
+			}
+			for _, marker := range []string{"-1", "9007199254740992", "1.5", `"1"`, "true"} {
+				if args, revision, err := operationArgs(operation, "{"+fields+`,"baseRevision":`+marker+"}"); err == nil || args != nil || revision != nil {
+					t.Fatalf("invalid read revision accepted: %s", marker)
+				}
+			}
+			if result, err := projectResult(operation, []byte(fixture+"{}"), nil); err == nil || result != nil {
+				t.Fatal("nullable revision made malformed child observation publishable")
+			}
+		})
+	}
+}
