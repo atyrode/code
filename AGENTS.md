@@ -107,6 +107,7 @@ distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#
 | `CGO_ENABLED=0 go build -o <run-owned-path> .` | Build the CLI/TUI to exercise; `code` on PATH may be an installed release, not your change. |
 | `code`, `code engine`, `code ls`, `code wt` | Launcher, native RPC, session and worktree entrypoints; see [README](README.md) and [configuration](docs/configuration.md) for their contracts. |
 | `code generate init`, `code generate` | Catalog scaffold/probe and render entrypoints. `init` probes real models; it is not an offline fixture command. |
+| `code generate refresh --models-file PATH` | Refresh curated facts without regenerating tiers. Defaults to potentially paid live benchmarks; `--skip-bench` is metadata-only and `--bench-json PATH` reuses saved chat measurements. |
 | `bun run check`, `bun test`, `bun run pack`, `bun run verify` (in `plugins/`) | Plugin gate; first read [plugin setup and commands](plugins/README.md). |
 
 ## Boundaries
