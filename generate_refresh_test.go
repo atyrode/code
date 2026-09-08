@@ -383,3 +383,23 @@ func TestGenerateRefreshMalformedBenchStillSavesMetadata(t *testing.T) {
 		t.Fatalf("malformed benchmark changed cached measurements or lost metadata: %s %+v", date, models)
 	}
 }
+
+func TestGenerateRefreshDoesNotReplaceManagedSymlink(t *testing.T) {
+	path, calls := refreshFixture(t, refreshCatalogFixture, refreshMetadataFixture, "", 99, "")
+	link := path + ".link"
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if status := runGenerateRefresh([]string{"--models-file", link}); status != 2 {
+		t.Fatalf("symlink refresh exit = %d", status)
+	}
+	target, err := os.Readlink(link)
+	if err != nil || target != path {
+		t.Fatalf("managed link was replaced: %q (%v)", target, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != refreshCatalogFixture {
+		t.Fatalf("managed target changed: %q (%v)", raw, err)
+	}
+	refreshRequireCalls(t, calls, "")
+}

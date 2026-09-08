@@ -3,8 +3,8 @@ package main
 // `code generate init` — scaffold a models.yml from the user's own omp
 // instance. The factual fields (id, cost, thinking) come straight from
 // `omp models --json`; the judgment fields (which model fills which tier) are
-// auto-guessed from cost and MUST be reviewed by the user. speed/ttft are
-// rough placeholder estimates until measured.
+// auto-guessed from cost and MUST be reviewed by the user. Live scaffolding
+// measures speed/ttft through OMP's mandatory reachability probe.
 
 import (
 	"encoding/json"
