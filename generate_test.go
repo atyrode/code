@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -157,7 +158,6 @@ const goldenMixedSmart = `mixed_smart_medium_sp  mixed · smart · medium · spa
     slow       claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → gpt-5.6-sol:high → gpt-5.6-terra:high
-  ● librarian  gpt-5.6-sol:medium       → gpt-5.6-terra:medium → claude-opus-5:medium → claude-sonnet-5:medium
   ● scout      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
   ● sonic      gpt-5.6-terra:medium     → gpt-5.6-luna:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low → gpt-5.6-terra:low → gpt-5.6-luna:low
@@ -182,7 +182,6 @@ const goldenClaudeElite = `claude-only_elite_max_nosp  claude-only · elite · m
     slow       claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● reviewer   claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● security-reviewer claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
-  ● librarian  claude-fable-5:max       → claude-opus-5:max → claude-sonnet-5:max
   ● scout      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
   ● sonic      claude-sonnet-5:max      → claude-haiku-4-5:xhigh
     advisor    claude-sonnet-5:max      → claude-haiku-4-5:xhigh
@@ -204,7 +203,6 @@ const goldenClaudeSmart = `claude-only_smart_medium_nosp  claude-only · smart �
     slow       claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● reviewer   claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
   ● security-reviewer claude-fable-5:high      → claude-opus-5:high → claude-sonnet-5:high
-  ● librarian  claude-opus-5:medium     → claude-sonnet-5:medium → claude-haiku-4-5:medium
   ● scout      claude-sonnet-5:medium   → claude-haiku-4-5:medium
   ● sonic      claude-sonnet-5:medium   → claude-haiku-4-5:medium
     advisor    claude-sonnet-5:high     → claude-haiku-4-5:low
@@ -1201,6 +1199,70 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	}
 }
 
+// The configured runtime must supply all three probes, even with no omp on PATH.
+// Checking the generated catalog catches a usage probe silently falling back:
+// that optional probe is what assigns the spark quota bucket.
+func TestGenerateInitConfiguredRuntime(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	omp := filepath.Join(dir, "configured-omp")
+	script := "#!" + sh + "\n" + `
+case "$1" in
+models) printf '%s\n' ` + shellSingleQuote(initJSON) + ` ;;
+usage) printf '%s\n' ` + shellSingleQuote(initUsage) + ` ;;
+bench)
+  shift
+  printf '{"models":['
+  sep=''
+  while [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; do
+    printf '%s{"model":"%s","results":[{"ok":true}],"stats":{"ttftMs":{"mean":1404.2},"generationTps":{"mean":48.94}}}' "$sep" "$1"
+    sep=,
+    shift
+  done
+  [ "$*" = '--json --runs 1 --max-tokens 4 --profile chat --prompt Reply with the single word: ok' ] || exit 9
+  printf ']}\n'
+  ;;
+*) exit 8 ;;
+esac
+`
+	if err := os.WriteFile(omp, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", omp)
+	t.Setenv("PATH", t.TempDir())
+	out := filepath.Join(dir, "models.yml")
+	if status := runGenerateInit([]string{"--models-file", out}); status != 0 {
+		t.Fatalf("configured runtime init exit %d", status)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"probed: true", "bucket: codex-spark", "speed: 48.9\n", "ttft: 1.4\n"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("configured runtime catalog lacks %q:\n%s", want, raw)
+		}
+	}
+	// An explicitly broken runtime must not fall through to some other omp.
+	if err := os.Link(omp, filepath.Join(dir, "omp")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("CODE_OMP", filepath.Join(dir, "missing"))
+	for name, probe := range map[string]func() ([]byte, error){
+		"models": ompModelsJSON,
+		"usage":  ompUsageJSON,
+		"bench":  func() ([]byte, error) { return ompBenchJSON([]string{"anthropic/claude-opus-5"}) },
+	} {
+		if _, err := probe(); err == nil {
+			t.Errorf("%s ignored the invalid configured runtime", name)
+		}
+	}
+}
+
 // TestScaffoldUnpricedModels: omp's model table lags a launch unevenly — the
 // provider's own row lists a brand-new flagship at $0 with every spec of the
 // pool's top rung, while a reseller row of the same model carries the price.
@@ -1825,7 +1887,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 			t.Errorf("claude-only/smart %s = %q, want the tier-4 rung claude-fable-5", role, got)
 		}
 	}
-	for _, role := range []string{"default", "task", "librarian"} {
+	for _, role := range []string{"default", "task"} {
 		if got := lead("claude-only", "smart", role); got != "claude-opus-5" {
 			t.Errorf("claude-only/smart %s = %q, want the tier-3 rung claude-opus-5", role, got)
 		}
@@ -1842,7 +1904,7 @@ func TestTierFourReachableWithoutTheRetiredToggles(t *testing.T) {
 	// `elite`: the tier-4 rung takes the default seat too — the old fable+main
 	// pair. The bump is already saturated, so the deliberative seats do not
 	// climb any further.
-	for _, role := range []string{"default", "task", "librarian", "plan", "slow", "reviewer", "security-reviewer", "vision"} {
+	for _, role := range []string{"default", "task", "plan", "slow", "reviewer", "security-reviewer", "vision"} {
 		if got := lead("claude-only", "elite", role); got != "claude-fable-5" {
 			t.Errorf("claude-only/elite %s = %q, want claude-fable-5", role, got)
 		}

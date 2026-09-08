@@ -48,9 +48,8 @@ one that is not.
 The probe sorts a failure into three outcomes, because they are not the same
 thing. A model the provider says does not exist is dropped. A model the provider
 refuses because the *client* is too old is also dropped, but named in the
-scaffold's header with the version the provider asked for — `claude-fable-5-1`
-is entitled on this account today and still uncallable, because omp advertises
-Claude Code 2.1.246 and Anthropic wants 2.1.251 for it. Anything else is
+scaffold's header with the version the provider asked for. Entitlement alone
+does not prove that the current OMP client can call a model. Anything else is
 inconclusive, and inconclusive refuses the whole scaffold rather than certifying
 a ladder around a model that never answered.
 
@@ -59,8 +58,9 @@ a ladder around a model that never answered.
 - oh-my-pi releases near-daily, and the `omp models --json` / `omp usage --json`
   / `omp bench --json` schemas the generator reads carry no
   stability guarantee — nor does the auth broker's snapshot/usage API the
-  panel draws from. A scheduled compatibility check is planned:
-  [#3](https://github.com/atyrode/code/issues/3).
+  panel draws from. Required CI checks the bundled pin and the scheduled
+  [latest-upstream smoke](../.github/workflows/omp-smoke.yml) warns about drift;
+  neither guarantees future upstream schema stability.
 - The quota bucket a model draws from is declared in the catalog (`bucket:`)
   and the TUI prefers that; guessing it from the model family is now only the
   fallback for catalogs that declare none. Model-family colouring is still
@@ -77,7 +77,7 @@ a ladder around a model that never answered.
   the chosen tag. Nothing probes whether that model can carry an analysis — the
   catalog's rungs are `omp bench`-verified, these are not — so a 1B model is as
   selectable as a 30B one, and the resulting findings are as good as the model.
-- Deliberately not ours, audited against omp 18.1.2: retry, model fallback,
+- Deliberately not ours: retry, model fallback,
   quota enforcement, sandboxing of an ordinary session, session resume, and
   worktree isolation for spawned subagents are all omp's, and nothing here
   reimplements them — every runtime concern is a freshly exec'd `omp`. What is

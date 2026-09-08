@@ -488,13 +488,13 @@ func (c *catalog) visionCross(pool string, tier int) string {
 
 var (
 	genRoleOrder = []string{"default", "task", "plan", "slow", "reviewer",
-		"security-reviewer", "librarian", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit"}
+		"security-reviewer", "scout", "sonic", "advisor", "vision", "smol", "tiny", "commit"}
 	// The bundled agents this grid routes: every ●-marked role is mirrored
 	// into task.agentModelOverrides. security-reviewer gets reviewer's exact
 	// routing membership; note `omp security` still injects the scan's own
 	// model into task.agentModelOverrides at runtime, superseding this value
 	// inside that workflow — the catalog route covers ad-hoc spawns.
-	genAgentRoles = map[string]bool{"librarian": true, "reviewer": true,
+	genAgentRoles = map[string]bool{"reviewer": true,
 		"security-reviewer": true, "scout": true, "sonic": true, "task": true}
 	genDelib = map[string]bool{"plan": true, "slow": true,
 		"reviewer": true, "security-reviewer": true}
@@ -532,7 +532,7 @@ var (
 )
 
 // lanePolicy is a lane's whole role-mapping, as data. primary answers for
-// default/task/librarian; delib hosts plan/slow/reviewer ("" = the
+// default/task; delib hosts plan/slow/reviewer ("" = the
 // primary); visionSmart overrides the image rung's pool at the top of the model
 // dial (smart or elite — mixed prefers Claude's top rung there). pure lanes
 // never cross: reviewer and advisor stay in-primary.

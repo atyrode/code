@@ -39,7 +39,11 @@ type ompModels struct {
 // ompModelsJSON fetches the user's model list; a var so tests and the
 // onboarding flow can stub the omp dependency.
 var ompModelsJSON = func() ([]byte, error) {
-	return exec.Command("omp", "models", "--json").Output()
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return nil, err
+	}
+	return exec.Command(path, "models", "--json").Output()
 }
 
 var datedID = regexp.MustCompile(`-\d{6,8}$`)
@@ -277,7 +281,11 @@ func pickLadder(cands []ompModel) []ompModel {
 // onboarding flow can stub it. Failure is never fatal — the special tiers it
 // feeds are optional.
 var ompUsageJSON = func() ([]byte, error) {
-	return exec.Command("omp", "usage", "--json").Output()
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return nil, err
+	}
+	return exec.Command(path, "usage", "--json").Output()
 }
 
 // specialTier is a quota bucket omp scopes to a subset of a provider's models
@@ -455,8 +463,12 @@ var versionBlockedProbe = regexp.MustCompile(`(?i)claude_code_version_too_old|do
 // without a profile fails the whole invocation with "--prompt requires --profile
 // chat or generation", which took `code generate init` down on every run.
 var ompBenchJSON = func(selectors []string) ([]byte, error) {
+	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
+	if err != nil {
+		return nil, err
+	}
 	args := append([]string{"bench"}, selectors...)
-	return exec.Command("omp", append(args,
+	return exec.Command(path, append(args,
 		"--json", "--runs", "1", "--max-tokens", "4",
 		"--profile", "chat",
 		"--prompt", "Reply with the single word: ok")...).Output()

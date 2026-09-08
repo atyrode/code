@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,9 +9,9 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,10 +22,10 @@ import (
 // stopped applying. This one asserts what omp reads back, with the same
 // generator, decoders and role tables the tool ships.
 //
-// It is not part of the ordinary suite: it runs only with CODE_OMP_SMOKE=1,
-// against CODE_OMP or the omp on PATH, in a private omp home so the operator's
-// configuration and accounts never take part (.github/workflows/omp-smoke.yml
-// runs it weekly against the latest upstream release).
+// Required CI runs it against the optional bundle pin; the weekly workflow
+// runs it against latest upstream. Locally opt in with CODE_OMP_SMOKE=1 and
+// CODE_OMP (or omp on PATH). A private home keeps operator config and accounts
+// out of both runs. See README for the reusable deployed-wrapper invocation.
 func TestOmpSmoke(t *testing.T) {
 	if os.Getenv("CODE_OMP_SMOKE") != "1" {
 		t.Skip("set CODE_OMP_SMOKE=1 to run the drift check against a real omp")
@@ -39,10 +40,9 @@ func TestOmpSmoke(t *testing.T) {
 }
 
 type smokeOmp struct {
-	path         string
-	version      string // `omp --version` verbatim, e.g. omp/18.1.10
-	major, minor int    // what the generator's version gates read
-	agentDir     string // PI_CODING_AGENT_DIR: where config.yml is read from
+	path     string
+	version  string // `omp --version` verbatim, for runtime evidence
+	agentDir string // PI_CODING_AGENT_DIR: where config.yml is read from
 }
 
 // newSmokeOmp resolves the binary the way Enter does and gives it a private
@@ -68,25 +68,23 @@ func newSmokeOmp(t *testing.T) *smokeOmp {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
-	for key := range authEnvKeys {
-		t.Setenv(key, "")
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if ompCredentialShaped(key) || strings.HasPrefix(key, "OMP_AUTH_BROKER_") {
+			t.Setenv(key, "")
+		}
 	}
 
 	o := &smokeOmp{path: path, agentDir: agentDir}
 	out := o.run(t, "--version")
-	match := ompVersionRe.FindSubmatch(out)
-	if match == nil {
-		t.Fatalf("omp --version printed no omp/<major>.<minor>: %q", out)
-	}
 	o.version = strings.TrimSpace(string(out))
-	o.major, _ = strconv.Atoi(string(match[1]))
-	o.minor, _ = strconv.Atoi(string(match[2]))
 	return o
 }
 
 func (o *smokeOmp) run(t *testing.T, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(o.path, args...)
+	cmd.Dir = o.agentDir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -97,9 +95,9 @@ func (o *smokeOmp) run(t *testing.T, args ...string) []byte {
 
 // smokeOverlay is the overlay under test: the two-pool golden catalog on the
 // dials that make the generator emit every key it knows how to emit — the
-// audit advisor (advisor.enabled and, on omp ≥ 17.3, task.agentAdvisor), fast
-// (tier), prewalk (prewalk.enabled and task.prewalk), and the agent-backed
-// roles (task.agentModelOverrides) that every hosted combo carries.
+// audit advisor (advisor.enabled and task.agentAdvisor), fast (tier), prewalk
+// (prewalk.enabled and task.prewalk), and the agent-backed roles
+// (task.agentModelOverrides) that every hosted combo carries.
 func (o *smokeOmp) smokeOverlay(t *testing.T) string {
 	t.Helper()
 	blocks := loadBlocks(filepath.Join("testdata", "two-pool-golden.plain"))
@@ -108,8 +106,6 @@ func (o *smokeOmp) smokeOverlay(t *testing.T) string {
 		generated: blocks,
 		advisors:  parseAdvisors(blocks["__advisors__"]),
 		facts:     parseFacts(blocks["__models__"]),
-		ompMajor:  o.major,
-		ompMinor:  o.minor,
 	}
 	m.sel["advisor"] = "audit"
 	m.sel["fast"] = "on"
@@ -189,6 +185,7 @@ func (o *smokeOmp) checkEffectiveConfig(t *testing.T) {
 			t.Errorf("%s: overlay sets %v, omp reads back %v (under %s)", path, leaves[path], got, key)
 		}
 	}
+	checkNativeAgentRouting(t, overlay)
 }
 
 // flattenLeaves walks a decoded YAML document to its dotted leaf paths. Lists
@@ -331,10 +328,84 @@ func (o *smokeOmp) checkRoles(t *testing.T) {
 	}
 	for name := range genAgentRoles {
 		if !agents[name] {
-			// The reverse drift: an override for an agent omp no longer ships
-			// is inert. Not a failure, since the generator's routing is not
-			// this check's to change, but it is named so the run says so.
-			t.Logf("the generator routes an agent %q that %s no longer bundles (its task.agentModelOverrides entry is inert)", name, o.version)
+			t.Errorf("the generator routes an agent %q that %s no longer bundles (its task.agentModelOverrides entry is inert)", name, o.version)
 		}
+	}
+}
+
+// TestGenConfigYAMLAgentOverrides defends role identity, not YAML spelling.
+// Native resolution is opt-in because the Go package does not vendor OMP.
+func TestGenConfigYAMLAgentOverrides(t *testing.T) {
+	m := model{sel: defaultSel()}
+	m.sel["advisor"] = "off"
+	m.generated = map[string][]string{comboID(m.sel): {
+		"    default    claude-fable-5:high → claude-sonnet-5:medium",
+		"    plan       claude-fable-5:high",
+		"  ● librarian  gpt-5.6-sol:high → claude-haiku-4-5:low",
+		"  ● reviewer   gpt-5.6-sol:high → gpt-5.6-luna:medium",
+		"  ● sonic      gpt-5.6-luna:minimal",
+	}}
+	overlay := m.genConfigYAML()
+	var config struct {
+		Task struct {
+			Overrides map[string]string `yaml:"agentModelOverrides"`
+		} `yaml:"task"`
+		Retry struct {
+			Chains map[string][]string `yaml:"fallbackChains"`
+		} `yaml:"retry"`
+	}
+	if err := yaml.Unmarshal([]byte(overlay), &config); err != nil {
+		t.Fatalf("generated aliases are not valid YAML: %v", err)
+	}
+	agents := make([]string, 0, len(config.Task.Overrides))
+	for agent := range config.Task.Overrides {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	if !reflect.DeepEqual(agents, []string{"librarian", "reviewer", "sonic"}) {
+		t.Fatalf("marked custom/bundled agents were lost or non-agents overridden: %v", agents)
+	}
+	if chain, ok := config.Retry.Chains["sonic"]; !ok || len(chain) != 0 {
+		t.Fatalf("lead-only role must explicitly suppress default-chain inheritance: %v", config.Retry.Chains)
+	}
+	checkNativeAgentRouting(t, overlay)
+}
+
+// checkNativeAgentRouting runs native Settings/resolver and the actual pure
+// executor chain constructors, without a session, credential lookup or model call.
+// A Bun loader exposes private functions in memory; upstream stays untouched.
+func checkNativeAgentRouting(t *testing.T, overlay string) {
+	t.Helper()
+	source := os.Getenv("CODE_OMP_SOURCE")
+	if source == "" {
+		t.Log("native agent routing unverified: set CODE_OMP_SOURCE to an OMP source checkout with dependencies")
+		return
+	}
+	source, err := filepath.Abs(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Fatal("CODE_OMP_SOURCE requires Bun")
+	}
+	home := t.TempDir()
+	config := filepath.Join(home, "overlay.yml")
+	if err := os.WriteFile(config, []byte(overlay), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs(filepath.Join("testdata", "native-agent-routing.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bun, script, source, config)
+	cmd.Dir = home
+	cmd.Env = ompChildEnv(os.Environ(), home, ompAuth{})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("native agent routing: %v\n%s", err, out)
+	} else {
+		t.Logf("%s", out)
 	}
 }

@@ -27,7 +27,7 @@ import (
 // omission drops that model out of both meters with no trace.
 var roleWeight = map[string]float64{
 	"default": 10, "task": 6, "reviewer": 3, "sonic": 3, "plan": 3, "advisor": 4, "slow": 2,
-	"librarian": 2, "scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
+	"scout": 2, "smol": 1, "tiny": 0.5, "commit": 0.5, "vision": 0.5,
 	// security-reviewer routes like reviewer but is spawned far more rarely
 	// (ad-hoc scans), so it barely moves the needle.
 	"security-reviewer": 1,
@@ -766,8 +766,8 @@ func (m model) poolOfModel(id string) string {
 // fallback dial is off, thinking, advisor, and the priority tier when fast is
 // on) from the generated routing block for the current facets — what Enter
 // launches omp with. The agent overrides mirror the preview: without them the
-// static managed defaults would keep the five agent-backed types pinned
-// regardless of the generated profile (issue atyrode/dotfiles#173).
+// static managed defaults would keep agent-backed types pinned regardless of
+// the generated profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
 	rows := m.currentRows()
 	var mr, fc, ao strings.Builder
@@ -795,18 +795,18 @@ func (m model) genConfigYAML() string {
 			advisorOn = true
 		}
 		if i == 1 && role != "advisor" {
-			// ●-marked agent-backed role: mirror its lead route as the task-agent
-			// model override so spawned agents follow the generated profile.
-			ao.WriteString("    " + role + ": " + m.prefixed(models[0]) + "\n")
+			// Preserve role identity: native child fallback lookup is role-keyed,
+			// and two agents can share a lead while having different chains.
+			ao.WriteString("    " + role + ": '@" + strings.ReplaceAll(role, "'", "''") + "'\n")
 		}
 		mr.WriteString("  " + role + ": " + m.prefixed(models[0]) + "\n")
-		if len(models) > 1 {
-			var fbs []string
-			for _, x := range models[1:] {
-				fbs = append(fbs, m.prefixed(x))
-			}
-			fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
+		var fbs []string
+		for _, x := range models[1:] {
+			fbs = append(fbs, m.prefixed(x))
 		}
+		// An explicit empty chain prevents native inheritance of default's
+		// chain for a role whose preview advertises only its lead.
+		fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
 	}
 	var b strings.Builder
 	b.WriteString("modelRoles:\n" + mr.String())
@@ -824,12 +824,11 @@ func (m model) genConfigYAML() string {
 	} else {
 		b.WriteString("retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" + fc.String())
 	}
-	// task.agentAdvisor (omp ≥ 17.3; earlier omps hard-error on the unknown
-	// key, and CODE_OMP wrappers can lag the store during a dotfiles rollout,
-	// so the probed version gates the emission): at the audit dial, spawned
-	// task agents get their own advisor. Merged into the one task: block —
-	// overlays are strict YAML and two task: keys would be invalid.
-	agentAdvisor := m.sel["advisor"] == "audit" && m.ompVersionAtLeast(17, 3)
+	// At the audit dial, spawned task agents get their own advisor. Supported
+	// OMP runtimes register this setting; emission must not depend on an async
+	// version probe or differ when replaying a saved profile.
+	// Merge it into the one task: block: duplicate YAML keys are invalid.
+	agentAdvisor := m.sel["advisor"] == "audit"
 	// prewalk drops the run from the active model to the "smol" role at the
 	// first edit once the plan's todo list exists. The dial is one switch, so
 	// both the main session (prewalk.enabled) and spawned task agents

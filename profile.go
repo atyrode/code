@@ -726,11 +726,6 @@ func dialCost(m model, rows []string) profileCost {
 // engine it speaks and the thinking level are the whole configuration, and
 // they are in the profile (locallane.go). Reading the environment for them
 // instead would let a variable decide what a minted profile runs.
-//
-// The omp version is unknown here (nothing probes it in a launch), so the
-// omp ≥ 17.3 advisor key is omitted. That is the safe direction by design: an
-// older omp hard-errors on the unknown key, and a newer one simply does not get
-// the audit-tier agent advisor.
 func profileOverlay(p codeProfile) (string, error) {
 	if isLocalProfile(p.Metadata) {
 		target, err := localTargetOf(p.Metadata)

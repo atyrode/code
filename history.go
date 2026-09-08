@@ -2,14 +2,10 @@ package main
 
 // Saved-session discovery.
 //
-// omp persists every trusted session as a JSONL transcript under a state root:
-// ~/.omp/agent/sessions by default, one more per named profile, or wherever
-// --session-dir points. Each transcript starts with two header records — a
-// title and the session record (id, cwd, timestamp) — and everything after them
-// is the conversation. code reads the headers and nothing else: prompts, tool
-// output and whatever credentials a transcript may quote live below the headers
-// and are never opened, so a listing can only ever show what omp itself put on
-// the first two lines.
+// omp persists trusted sessions under its effective profile's data root, or
+// wherever --session-dir points. Transcripts begin with a session header and
+// optionally a title slot. Code reads at most these two bounded leading records:
+// prompts, tool output and credentials below them are never used for discovery.
 //
 // The resolver here is the one place that knows which roots are trusted and how
 // an id or prefix maps to exactly one (root, full id) pair. Both the listing
@@ -25,6 +21,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -74,22 +72,22 @@ func readSessionHeader(path string) (savedSession, bool) {
 	r := bufio.NewReader(io.LimitReader(f, sessionHeaderLimit))
 	var s savedSession
 	titled := false
-	for {
+	for i := 0; i < 2; i++ {
 		line, err := r.ReadBytes('\n')
 		if len(line) == 0 && err != nil {
 			break
 		}
-		// The type is the first key omp writes, so a textual check decides
-		// whether a line is a header before any of it is decoded.
-		switch {
-		case strings.HasPrefix(string(line), `{"type":"title"`):
-			var rec sessionHeaderRecord
-			if json.Unmarshal(line, &rec) == nil && rec.Title != "" {
+		var rec sessionHeaderRecord
+		if json.Unmarshal(line, &rec) != nil {
+			break
+		}
+		switch rec.Type {
+		case "title":
+			if rec.Title != "" {
 				s.Title, titled = rec.Title, true
 			}
-		case strings.HasPrefix(string(line), `{"type":"session"`):
-			var rec sessionHeaderRecord
-			if json.Unmarshal(line, &rec) != nil || rec.ID == "" {
+		case "session":
+			if rec.ID == "" {
 				return savedSession{}, false
 			}
 			s.ID, s.Cwd = rec.ID, rec.Cwd
@@ -100,7 +98,7 @@ func readSessionHeader(path string) (savedSession, bool) {
 				s.Started = ts
 			}
 		default:
-			// The first conversation record: reading stops here, unparsed.
+			// Do not inspect subsequent records for titles or other metadata.
 			line = nil
 		}
 		if line == nil || err != nil {
@@ -118,9 +116,9 @@ func readSessionHeader(path string) (savedSession, bool) {
 	return s, true
 }
 
-// ompConfigDirs lists the directories omp may keep its state under, most
-// specific first: $XDG_DATA_HOME/omp when that variable is set, then
-// $HOME/.omp (or PI_CONFIG_DIR in place of .omp).
+// ompConfigDirs is the historical root inventory, also used solely to recognize
+// old Code worktree records. An XDG root has flattened sessions/, unlike the
+// legacy config root's agent/sessions. Presence here does not select an active root.
 func ompConfigDirs() []string {
 	configDir := os.Getenv("PI_CONFIG_DIR")
 	if configDir == "" {
@@ -132,25 +130,96 @@ func ompConfigDirs() []string {
 	}
 	if filepath.IsAbs(configDir) {
 		dirs = append(dirs, configDir)
-	} else if home := os.Getenv("HOME"); home != "" {
-		dirs = append(dirs, filepath.Join(home, configDir))
+	}
+	if root := ompConfigRoot(); root != "" {
+		dirs = append(dirs, root)
 	}
 	return dirs
 }
 
-// defaultSessionRoot is where omp stores the default profile's sessions: the
-// agent directory (PI_CODING_AGENT_DIR, else <config>/agent) plus sessions/.
-// This is the root a trusted launch writes to, since trusted launches force the
-// default profile, and so the root a resume needs no --session-dir for.
-func defaultSessionRoot() string {
-	if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
-		return filepath.Join(expandHome(dir), "sessions")
-	}
-	dirs := ompConfigDirs()
-	if len(dirs) == 0 {
+func ompConfigRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
 		return ""
 	}
-	return filepath.Join(dirs[0], "agent", "sessions")
+	config := os.Getenv("PI_CONFIG_DIR")
+	if config == "" {
+		config = ".omp"
+	}
+	// Node path.join keeps an absolute-looking PI_CONFIG_DIR beneath home.
+	return filepath.Join(home, config)
+}
+
+// ompSessionRoot follows getSessionsDir in OMP v18.1.14 utils/dirs.ts.
+// `omp config path` returns the config agent directory, NOT this data path.
+// The native completion/list APIs read message bodies (and can recover backups),
+// so they cannot implement Code's metadata-only, non-mutating history contract.
+func ompSessionRoot(profile string) string {
+	config := ompConfigRoot()
+	if config == "" {
+		return ""
+	}
+	base := config
+	if profile != "" {
+		base = filepath.Join(base, "profiles", profile)
+	}
+	agent := filepath.Join(base, "agent")
+	if profile == "" {
+		override := os.Getenv("PI_CODING_AGENT_DIR")
+		// setProfile propagates a derived agent dir to children. An explicit
+		// default profile must not mistake that inherited path for an override.
+		inherited := ompProfile()
+		if inherited == "" {
+			inherited = validOmpProfile(os.Getenv("PI_PROFILE"))
+		}
+		if inherited != "" && override == filepath.Join(config, "profiles", inherited, "agent") {
+			override = ""
+		}
+		if override != "" {
+			resolved, err := filepath.Abs(override)
+			if err == nil && resolved != agent {
+				return filepath.Join(resolved, "sessions")
+			}
+		}
+	}
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		if data := os.Getenv("XDG_DATA_HOME"); data != "" {
+			root := filepath.Join(data, "omp")
+			if profile != "" {
+				root = filepath.Join(root, "profiles", profile)
+			}
+			if _, err := os.Stat(root); err == nil {
+				return filepath.Join(root, "sessions")
+			}
+		}
+	}
+	return filepath.Join(agent, "sessions")
+}
+
+var ompProfileNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+var ompReservedProfile = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$`)
+
+func validOmpProfile(profile string) string {
+	profile = strings.TrimSpace(profile)
+	if profile == "default" || strings.HasSuffix(profile, ".") ||
+		!ompProfileNamePattern.MatchString(profile) || ompReservedProfile.MatchString(profile) {
+		return ""
+	}
+	return profile
+}
+
+func ompProfile() string {
+	profile, ok := os.LookupEnv("OMP_PROFILE")
+	if !ok {
+		profile = os.Getenv("PI_PROFILE")
+	}
+	return validOmpProfile(profile)
+}
+
+// defaultSessionRoot is the native launch's default session-dir. Trusted argv
+// strips forwarded --profile but inherits the environment's selected profile.
+func defaultSessionRoot() string {
+	return ompSessionRoot(ompProfile())
 }
 
 // trustedSessionRoots enumerates every sessions directory code will discover
@@ -181,14 +250,24 @@ func trustedSessionRoots(explicit string) []string {
 		return roots
 	}
 	add(defaultSessionRoot())
+	add(ompSessionRoot(""))
 	for _, config := range ompConfigDirs() {
+		// Keep both layouts discoverable after an explicit XDG migration.
+		// Resume passes a historical root explicitly; no transcript is moved.
+		if config == filepath.Join(os.Getenv("XDG_DATA_HOME"), "omp") && os.Getenv("XDG_DATA_HOME") != "" {
+			add(filepath.Join(config, "sessions"))
+		}
 		add(filepath.Join(config, "agent", "sessions"))
 		profiles, err := os.ReadDir(filepath.Join(config, "profiles"))
 		if err != nil {
 			continue
 		}
 		for _, profile := range profiles {
-			if profile.IsDir() {
+			if profile.IsDir() && validOmpProfile(profile.Name()) != "" {
+				add(ompSessionRoot(profile.Name()))
+				if config == filepath.Join(os.Getenv("XDG_DATA_HOME"), "omp") && os.Getenv("XDG_DATA_HOME") != "" {
+					add(filepath.Join(config, "profiles", profile.Name(), "sessions"))
+				}
 				add(filepath.Join(config, "profiles", profile.Name(), "agent", "sessions"))
 			}
 		}
