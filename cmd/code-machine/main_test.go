@@ -295,3 +295,62 @@ func TestReadObservationsCarryNullableCallerRevision(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountImportRequiresClosedSafeRevisionPayload(t *testing.T) {
+	for _, payload := range []string{
+		`{}`, `null`, `{"baseRevision":null}`, `{"baseRevision":-1}`,
+		`{"baseRevision":9007199254740992}`, `{"baseRevision":0.5}`,
+		`{"baseRevision":"1"}`, `{"baseRevision":true}`,
+		`{"baseRevision":1,"baseRevision":2}`, `{"BaseRevision":1}`,
+		`{"baseRevision":1} {}`, `{"baseRevision":1} trailing`,
+		`{"baseRevision":1,"state":`+workerAccountState+`}`,
+		`{"baseRevision":1,"argv":["accounts","set"]}`,
+	} {
+		if args, revision, err := operationArgs("account-import", payload); err == nil || args != nil || revision != nil {
+			t.Fatalf("invalid import authority accepted: %s", payload)
+		}
+	}
+	for _, marker := range []string{"0", "9007199254740991"} {
+		args, revision, err := operationArgs("account-import", `{"baseRevision":`+marker+`}`)
+		if err != nil || revision == nil {
+			t.Fatalf("safe import revision rejected: %s", marker)
+		}
+		if len(args) != 2 || args[0] != "accounts" || args[1] != "list" {
+			t.Fatalf("import escaped read-only machine operation: %v", args)
+		}
+	}
+}
+
+func TestAccountImportProjectsMachineChoicesWithCallerRevision(t *testing.T) {
+	const machine = `{"schemaVersion":1,"operation":"list","observedAt":100,"activePreset":"Work","accounts":[{"provider":"openai-codex","identityKey":"a@example.com","selectable":true,"enabled":false,"blocked":false,"restrictions":[],"credential":"PRIVATE"}],"presets":[{"name":"Work","disabled":[{"provider":"openai-codex","identityKey":"a@example.com"}]}],"manualDisabled":[],"baseRevision":999}`
+	_, revision, err := operationArgs("account-import", `{"baseRevision":7}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := projectResult("account-import", []byte(machine), revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported struct {
+		accountsResult
+		BaseRevision int64 `json:"baseRevision"`
+	}
+	if err := json.Unmarshal(result, &imported); err != nil {
+		t.Fatal(err)
+	}
+	if imported.BaseRevision != 7 || imported.ActivePreset != "Work" || len(imported.Presets) != 1 || imported.Presets[0].Disabled[0].IdentityKey != "a@example.com" || imported.Accounts[0].Enabled || bytes.Contains(result, []byte("PRIVATE")) {
+		t.Fatalf("import lost verified machine choices or revision binding: %s", result)
+	}
+	for _, invalid := range []string{
+		machine+"{}",
+		strings.Replace(machine, `"operation":"list"`, `"operation":"set"`, 1),
+		strings.Replace(machine, `"enabled":false,`, "", 1),
+	} {
+		if result, err := projectResult("account-import", []byte(invalid), revision); err == nil || result != nil {
+			t.Fatal("invalid machine choices became an import proposal")
+		}
+	}
+	if result, err := projectResult("account-import", []byte(machine), nil); err == nil || result != nil {
+		t.Fatal("unbound machine import became publishable")
+	}
+}

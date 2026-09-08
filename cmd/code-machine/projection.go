@@ -243,10 +243,10 @@ func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, 
 			usageResult
 			BaseRevision *int64 `json:"baseRevision"`
 		}{p, baseRevision}
-	case "accounts-list", "account-set", "preset-create", "preset-update", "preset-activate", "preset-delete":
+	case "accounts-list", "account-import", "account-set", "preset-create", "preset-update", "preset-activate", "preset-delete":
 		var p accountsResult
 		expected := strings.TrimPrefix(operation, "account-")
-		if operation == "accounts-list" {
+		if operation == "accounts-list" || operation == "account-import" {
 			expected = "list"
 		} else if strings.HasPrefix(operation, "preset-") {
 			expected = "presets " + strings.TrimPrefix(operation, "preset-")
