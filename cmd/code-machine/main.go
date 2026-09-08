@@ -117,6 +117,14 @@ func operationArgs(operation, payload string) ([]string, *int64, error) {
 		var p accountListPayload
 		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
 		return stateArgs([]string{"accounts", "list"}, p.State, p.BaseRevision)
+	case "account-import":
+		var p struct {
+			BaseRevision int64 `json:"baseRevision"`
+		}
+		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
+		// Listing imports only machine-local public choices; it never mutates
+		// those choices or accepts a caller-supplied replacement document.
+		return stateArgs([]string{"accounts", "list"}, nil, &p.BaseRevision)
 	case "account-set":
 		var p accountSetPayload
 		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, nil, errInvalid }
