@@ -12,9 +12,10 @@ architectural requirement.
 Code is piloted through Manifold's web GUI and governed APIs. Its fleet access,
 permissions, multiplayer state, persistence, resources, execution and
 traceability use Manifold. Missing reusable capability is implemented there,
-not bypassed with Code infrastructure. Useful Go domain behavior may be reused;
-the old program's packaging, state files and control flow do not define the new
-product boundary.
+not bypassed with Code infrastructure. Code's implementation is TypeScript:
+React for plugin surfaces, plain TypeScript for domain behavior and governed
+actions, and Bun for genuinely machine-local workers. Useful behavior is reused,
+not the Go implementation, its toolchain, packaging or control flow.
 
 A future CLI, if requested, would be designed as a client of this architecture.
 There is no requirement to preserve the present CLI/TUI, `CODE_*` compatibility,
@@ -52,6 +53,36 @@ define the actual mechanisms. Code must adapt to those contracts, not invent a
 parallel mechanism with similar names. Reusable capability need not all become
 engine code: apply Manifold's Foundation law to choose its proper native/plugin
 home. Code's domain nouns do not belong in a privileged platform exception.
+
+### 2.1 Implementation boundaries
+
+React is the presentation layer, not the whole plugin. Catalogs, routes, account
+references, estimates and launch configuration are typed domain data. Rendering
+consumes that data; domain decisions never recover their meaning by parsing
+terminal rows, glyphs, `generated.plain` or a hidden command's printed output.
+YAML may remain a useful human-editing or OMP interchange format, but is a
+boundary encoding, not the domain model or an inherited local-file authority.
+
+Pure computations execute inside plugin actions, with shared modules available
+to the web for non-authoritative previews. A preset edit or catalog review does
+not become a machine job merely because the previous Go program implemented it.
+Canonical settings/content, commits, permissions and conflict handling use
+Manifold's native mechanisms. Data ownership is not approximated by permission
+to read an old worker's stdout.
+
+An additional worker must demonstrate a machine-local need: executing the exact
+OMP runtime for a probe, running a provider-authentication flow, or adapting a
+required local runtime protocol. Its installation, inputs, resources, service
+grants and lifetime are declared and governed by Manifold. Generic worker
+context framing, cancellation, input receipts and service readiness belong in
+the native SDK, not repeated Code socket clients. This does not prohibit the
+SDK's own native job channel.
+
+Platform additions must remain product-independent. Code/provider names,
+account-pool semantics and broker-specific header values belong in plugin
+policy/data or application adapters, not privileged Manifold branches. A
+gateway is retained only for a demonstrated OMP protocol/account-scoping need;
+it is not a Code daemon, credential store or alternative control plane.
 
 ## 3. Product workflows and shared state
 
@@ -98,6 +129,24 @@ No step requires first configuring a standalone `code` command. A private
 machine-side executable may be necessary to perform domain work, but it is a
 plugin implementation artifact managed through native lifecycle, not another
 operator-facing product or control service.
+
+### 3.1 Workflow placement
+
+| Workflow | Execution and authority |
+| --- | --- |
+| Edit/review catalog, preview routes and estimates | Typed Code domain functions and governed plugin actions over native content/settings; no machine process or broker access for pure computation. |
+| Change dials, account choices and presets | Direct governed state actions with native concurrency and attribution; no worker proposal/printed-result round trip. |
+| Read account facts and usage; clear blocks or disable credentials | Native scoped service operations with distinct read/write authority. Code interprets permitted observations; it does not recreate a broker or transport. |
+| Discover models and benchmark reachability | A declared native job against the exact target OMP/resources, with explicit cost/network effects; typed results become a reviewable candidate, not a local catalog file. |
+| Suggest a selection | Pure prompt/result validation plus a governed inference/service call; a worker only when the selected runtime actually requires machine locality. |
+| Authenticate a provider | Native enrollment/service authority and a pinned SDK worker where needed; supported account types and identity rules are explicit, not silently reduced to OAuth-only. |
+| Prepare and launch | A governed action binds domain-code, catalog/state, account authorization and native execution-resource revisions; Manifold starts OMP and proves readiness. |
+| Workspaces, sessions and multiplayer | Native ownership, placement, history, reconnect, cancellation, sharing and retirement; no Code lifecycle registry. |
+| Supervising clients, including Babel | The same typed governed product actions and native job references; migrate callers rather than preserving `code babel` or another public process protocol. |
+
+Model fallback, retry, quota enforcement and ordinary session resume remain
+OMP's runtime responsibilities. Live observation freshness and equivalent
+secret rotation are checked separately from software/configuration promotion.
 
 ## 4. Execution resources, revisions and credentials
 
@@ -151,6 +200,52 @@ Releases/tags, production or fleet activation, broker retirement and credential
 relocation still require their applicable authorization. Protecting live data is
 not an excuse to make old state formats or a standalone fallback part of the
 new architecture.
+
+### 5.1 Required deletions and redesigns
+
+The final source and distributable have no Code Go program, Go module,
+`code-machine` binary, GoReleaser dependency or Go-specific worker ABI. Remove
+the standalone launchers, wrapper/Nix product outputs and release-pin workflow
+rather than making plugin packaging depend on them. Necessary pinned OMP/Bun
+resources are declared through the native artifact mechanism, not discovered
+through the removed Code installation.
+
+Remove the visual catalog serializer/parser pipeline and CLI-shaped
+operation-plus-JSON-payload dispatch for pure product operations. Remove
+obsolete commands, unused declarations, dual-format compatibility readers and
+tests that exist only to pin the removed interface. Existing live data remains
+untouched unless a separate bounded native operation is authorized; keeping
+bytes safe does not require keeping executable compatibility paths.
+
+Preserve behavioral invariants, not source structure: valid capability ladders,
+image-safe routing, exact preview-to-launch resolution, estimates over typed
+routes, account selection without accidental broadening, quota freshness and
+unknown-state semantics, and honest probe outcomes. Their new regressions test
+observable native behavior, not the old text format, function layout or command
+spelling. Update every in-scope caller, build, release, test and documentation
+dependency as part of the cutover.
+
+### 5.2 Falsifiable acceptance
+
+These scenarios are acceptance criteria, not claims that the current draft
+passes. Section 6 remains the sole progress ledger.
+
+| Scenario | The migration fails if |
+| --- | --- |
+| Clean build and install without Go, an installed Code command, Code wrapper or Code state directories | Any plugin build, package, first-use or runtime path needs those things. |
+| Catalog review, route/estimate preview and shared preference edits while execution machines are offline | Pure computation or state editing creates a machine job, requires broker access, or claims runtime readiness. |
+| Two principals use web and agent clients against one configuration | They hit different authority/state paths, overwrite a stale revision, or require a Code ACL/replication layer. |
+| Review then change domain/plugin code, catalog/state or an execution binding before launch | A launch silently resolves different approved inputs instead of naming the stale boundary. |
+| First-use accounts, usage, authentication, generation, suggestions and launch | A hidden CLI ceremony, undeclared operation, missing artifact, unsupported account type or placeholder substitutes for the requested capability. |
+| Scoped service reads, credential administration and authority revocation | Read access grants mutation/runtime authority, source secrets escape, an approved account pool broadens, or revoked authority can still cause an upstream effect. |
+| Real OMP execution, terminal reconnect and cancellation | A tile or queued job is reported as ready, lifecycle ownership is lost, or a gateway/child survives outside its native owner. |
+| Native workspaces and supervising-client integration | A Code registry, filesystem mirror, old public executable or terminal-as-transport remains required. |
+| Independent plugin exercises a reusable platform primitive | Its behavior depends on a Code/provider identifier or a Code-specific privileged exception. |
+
+Source inspection, native action/job histories, built artifact contents and
+actual browser/machine runs provide different evidence. A green unit suite or
+a polished panel does not replace the others, and unavailable live authority
+must be reported rather than replaced with a synthetic-success claim.
 
 A meaningful implementation proof must exercise the actual plugin boundary:
 
