@@ -1,62 +1,44 @@
 import { defineAction } from "@manifold/plugin";
+import { CODE_PLUGIN_ID, PrepareLaunchInputSchema, PrepareLaunchResultSchema, type PrepareLaunchInput, type PrepareLaunchResult } from "./contract.ts";
 import {
-  CODE_ARGV0, PrepareLaunchInputSchema, PrepareLaunchResultSchema,
-  type PrepareLaunchInput, type PrepareLaunchResult,
-} from "./contract.ts";
-import {
-  machineActions, machineHandlers, readCodePreferences,
-  readCodeSnapshot, type CodeContext,
+  catalogPayload, machineActions, machineHandlers, matchesCatalog, readCodeConfiguration,
+  readCodeSnapshot, requireConfigurationResources, requireCurrentJob, requirePayload, type CodeContext,
 } from "./machine-server.ts";
 
 const prepareLaunch = defineAction({
-  name: "prepareLaunch", title: "Prepare a reviewed Code launch", caps: ["terminals:spawn"], trace: "opaque",
+  name: "prepareLaunch", title: "Prepare a reviewed native Code runtime", caps: ["terminals:spawn"], trace: "opaque",
   input: PrepareLaunchInputSchema, result: PrepareLaunchResultSchema,
 });
-
 export const handlers = {
   ...machineHandlers,
   async prepareLaunch(ctx: CodeContext, args: PrepareLaunchInput): Promise<PrepareLaunchResult | { refused: string }> {
     try {
-      const inspection = (await readCodeSnapshot(ctx, args.machineId, "inspect", args.inspectionJobId)).value;
-      if (!inspection.launch_modes.some((mode) => mode.mode === args.kind && mode.available))
-        return { refused: "code_launch_mode_unavailable" };
-      if (Object.keys(args.selection).length !== Object.keys(inspection.selection).length ||
-        Object.entries(args.selection).some(([key, value]) => inspection.selection[key] !== value))
-        return { refused: "code_preview_changed" };
-      if (args.kind === "generated" && inspection.catalog.state !== "ready")
-        return { refused: "code_catalog_missing" };
-      if (args.kind === "runtime" && (!args.runtime || !inspection.runtime_targets.some((target) => target.name === args.runtime)))
-        return { refused: "code_launch_mode_unavailable" };
-      if (args.kind !== "runtime" && args.runtime !== undefined) return { refused: "code_invalid_request" };
-
-      const argv = [CODE_ARGV0, "launch", `--kind=${args.kind}`];
-      if (args.kind === "generated") argv.push(`--selection=${JSON.stringify(args.selection)}`);
-      if (args.kind === "runtime") {
-        argv.push(`--runtime=${args.runtime}`);
-        if (args.selection.thinking !== undefined) argv.push(`--selection=${JSON.stringify({ thinking: args.selection.thinking })}`);
-      }
-      if (args.accounts.source === "plugin") {
-        if (args.kind !== "generated" && args.kind !== "managed") return { refused: "code_invalid_request" };
-        const preferences = await readCodePreferences(ctx, args.machineId);
-        if (preferences.record === null) return { refused: "code_preferences_missing" };
-        if (args.accounts.revision !== preferences.record.revision || inspection.baseRevision !== args.accounts.revision)
-          return { refused: "code_stale_preferences" };
-        const state = preferences.record.state;
-        const disabled = state.activePreset === "Manual" ? state.manualDisabled : state.presets.find((preset) => preset.name === state.activePreset)?.disabled;
-        if (disabled === undefined) return { refused: "code_invalid_request" };
-        argv.push(`--account-selection=${JSON.stringify({ schemaVersion: 1, disabled })}`);
-      } else if (inspection.baseRevision !== null) return { refused: "code_preview_changed" };
-      if (args.worktree) argv.push("--worktree");
-      if (args.prompt !== "") argv.push(`--prompt=${args.prompt}`);
-      const result = PrepareLaunchResultSchema.safeParse({ program: { argv } });
+      const configuration = await readCodeConfiguration(ctx, args.machineId);
+      const record = configuration.record;
+      if (record === null) return { refused: "code_configuration_missing" };
+      if (record.revision !== args.expectedRevision) return { refused: "code_stale_preferences" };
+      const plan = await readCodeSnapshot(ctx, args.machineId, "analysis-plan", args.planJobId);
+      if (!matchesCatalog(record, plan.value)) return { refused: "code_stale_preferences" };
+      requirePayload(plan.job, catalogPayload(record));
+      if (!plan.value.ready || plan.value.refusals.length !== 0) return { refused: "code_resources_incomplete" };
+      await requireCurrentJob(ctx, plan.job);
+      const pins = await requireConfigurationResources(ctx, record, `${CODE_PLUGIN_ID}.launch`);
+      // Re-read after asynchronous authority/resource checks; terminal admission independently
+      // verifies the pinned native installation and resources at the actual start boundary.
+      const current = await readCodeConfiguration(ctx, args.machineId);
+      if (current.raw !== configuration.raw) return { refused: "code_stale_preferences" };
+      const input = { configYaml: plan.value.configYaml, accountPool: JSON.stringify(plan.value.accountPool),
+        flags: JSON.stringify(plan.value.flags), prompt: args.prompt };
+      if (Buffer.byteLength(JSON.stringify(input)) > 64 << 10) return { refused: "code_input_too_large" };
+      const result = PrepareLaunchResultSchema.safeParse({ runtime: {
+        pluginId: CODE_PLUGIN_ID, operationId: `${CODE_PLUGIN_ID}.launch`, ...pins,
+        input,
+      } });
       return result.success ? result.data : { refused: "code_input_too_large" };
-    } catch {
-      return { refused: "code_observation_unavailable" };
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "";
+      return { refused: message.startsWith("code_") ? message : "code_observation_unavailable" };
     }
   },
 };
-
-export default {
-  actions: [prepareLaunch, ...machineActions],
-  handlers,
-};
+export default { actions: [prepareLaunch, ...machineActions], handlers };

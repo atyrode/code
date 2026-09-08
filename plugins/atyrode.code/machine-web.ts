@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
-import { PublicJobSchema, type MachineSummary, type PublicJob } from "@manifold/protocol";
+import { JobDescriptionSchema, PublicJobSchema, type MachineSummary, type PublicJob } from "@manifold/protocol";
+import { z } from "zod";
 import {
   CODE_PREFERENCES_TOPIC, PREPARE_LAUNCH_DOOR, PrepareLaunchInputSchema, PrepareLaunchResultSchema,
   type PrepareLaunchInput,
@@ -9,27 +10,29 @@ import {
 import {
   CODE_APPLY_ACCOUNT_CHOICES_DOOR, CODE_JOB_TOPIC, CODE_OBSERVE_DOOR, CODE_RUN_DOOR,
   CodeApplyAccountChoicesInputSchema, CodeApplyAccountChoicesResultSchema, CodeObservationSchema, CodeRunInputSchema,
+  CodeConfigurationSchema, CodeConfigurationReadSchema, CodeInitializeInputSchema,
+  CodeStageInputSchema, CodePromoteInputSchema, CodeSelectInputSchema,
   type CodeApplyAccountChoicesInput, type CodeObservation, type CodeOperation, type CodeOperationInput,
 } from "./machine-contract.ts";
 
-type FailureKind = "denied" | "unavailable" | "invalid" | "stale" | "large" | "preview" | "mode" | "catalog" | "preferences";
+type FailureKind = "denied" | "unavailable" | "invalid" | "stale" | "large" | "preview" | "resources" | "catalog" | "configuration";
 const failureMessages: Record<FailureKind, string> = {
   denied: "This operation needs current machine authority and explicit plugin consent.",
   unavailable: "The governed Code backend is unavailable.",
   invalid: "The Code request or response did not match its contract.",
-  stale: "Shared account choices changed. Read the current state and review again.",
-  large: "This request exceeds the native execution or terminal argument bound.",
-  preview: "The reviewed preview no longer matches this launch. Request a new preview.",
-  mode: "The requested launch mode is not available on this machine.",
-  catalog: "The selected machine does not have a runnable Code catalog.",
-  preferences: "Save or explicitly import shared choices in Code accounts before using them, or choose existing CLI settings.",
+  stale: "Shared configuration changed. Read the current state and review again.",
+  large: "This request exceeds the native execution or storage bound.",
+  preview: "The reviewed source no longer matches this request. Request a fresh review.",
+  resources: "Native resources are incomplete or changed. Review this machine’s operation bindings and promote a fresh catalog review.",
+  catalog: "Stage, review and explicitly promote a catalog in Code before launching.",
+  configuration: "Initialize native configuration or explicitly preserve and transition the existing native choices in Code.",
 };
 const refusalKinds = new Map<string, FailureKind>([
   ["code_stale_preferences", "stale"], ["code_input_too_large", "large"],
-  ["code_preview_changed", "preview"], ["code_launch_mode_unavailable", "mode"],
+  ["code_preview_changed", "preview"], ["code_resources_incomplete", "resources"], ["code_resources_changed", "resources"],
   ["code_catalog_missing", "catalog"], ["code_invalid_request", "invalid"],
   ["code_operation_unavailable", "unavailable"], ["code_observation_unavailable", "unavailable"],
-  ["code_preferences_missing", "preferences"],
+  ["code_configuration_missing", "configuration"], ["code_configuration_transition_required", "configuration"],
 ]);
 
 class CodeOperationError extends Error {
@@ -111,4 +114,35 @@ export async function applyCodeAccountChoices(host: HostServices, input: CodeApp
 export async function prepareCodeLaunch(host: HostServices, input: PrepareLaunchInput) {
   const args = PrepareLaunchInputSchema.parse(input);
   return PrepareLaunchResultSchema.parse(await action(host, PREPARE_LAUNCH_DOOR, args));
+}
+
+function useCodeRead<S extends z.ZodType>(host: HostServices, machineId: string | null, name: string, schema: S) {
+  const feed = usePolledResource<{ data: z.infer<S> | null; error: string | null } | null>(
+    async () => {
+      try { return { data: schema.parse(await action(host, `atyrode.code.${name}`, { machineId })), error: null }; }
+      catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
+    }, FALLBACK_POLL_MS, {
+      key: `atyrode.code.${name}:${machineId}`, restartKey: host.principal.id, initial: null,
+      enabled: machineId !== null, topics: [CODE_JOB_TOPIC, CODE_PREFERENCES_TOPIC, ...host.topics.machines], events: host.client,
+    },
+  );
+  return { data: feed.value?.data ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
+}
+export function useCodeConfiguration(host: HostServices, machineId: string | null) {
+  return useCodeRead(host, machineId, "readConfiguration", CodeConfigurationReadSchema);
+}
+export function useCodeSetup(host: HostServices, machineId: string | null) {
+  return useCodeRead(host, machineId, "readSetup", JobDescriptionSchema);
+}
+export async function initializeCodeConfiguration(host: HostServices, input: z.infer<typeof CodeInitializeInputSchema>) {
+  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.initializeConfiguration", CodeInitializeInputSchema.parse(input)));
+}
+export async function stageCodeConfiguration(host: HostServices, input: z.infer<typeof CodeStageInputSchema>) {
+  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.stageConfiguration", CodeStageInputSchema.parse(input)));
+}
+export async function promoteCodeConfiguration(host: HostServices, input: z.infer<typeof CodePromoteInputSchema>) {
+  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.promoteConfiguration", CodePromoteInputSchema.parse(input)));
+}
+export async function selectCodeConfiguration(host: HostServices, input: z.infer<typeof CodeSelectInputSchema>) {
+  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.selectConfiguration", CodeSelectInputSchema.parse(input)));
 }
