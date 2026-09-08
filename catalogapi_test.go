@@ -377,7 +377,7 @@ func TestPortableObservationsRefuseBrokerlessLocalCredentials(t *testing.T) {
 	}
 	state := `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[{"provider":"openai-codex","identityKey":"a@example.com"}],"presets":[]}`
 	for _, command := range []struct {
-		run func([]string) int
+		run  func([]string) int
 		args []string
 	}{
 		{runInspect, []string{"--state", state}},

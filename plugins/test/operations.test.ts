@@ -26,6 +26,7 @@ function fixture() {
   const store = new Map<string, string>();
   const jobs = new Map<string, { job: PublicJob; bytes: Buffer }>();
   const denied = new Set<string>();
+  const deniedOutputs = new Set<string>();
   const emissions: unknown[] = [];
   const fault = { corruptOutput: false, wrongOutputJob: false, writable: true, starts: 0 };
   let nextId = 0;
@@ -65,7 +66,7 @@ function fixture() {
         nextCursor: null,
       }),
       output: async ({ node, offset, maxBytes }) => {
-        if (denied.has(node.jobId)) throw new Error("Current output authority denied");
+        if (denied.has(node.jobId) || deniedOutputs.has(node.jobId)) throw new Error("Current output authority denied");
         const entry = jobs.get(node.jobId);
         if (!entry) throw new Error("No such output");
         const bytes = Buffer.from(entry.bytes.subarray(offset, offset + maxBytes));
@@ -95,12 +96,12 @@ function fixture() {
     jobs.set(jobId, { job, bytes });
     return job;
   }
-  return { ctx, store, jobs, denied, emissions, fault, add };
+  return { ctx, store, jobs, denied, deniedOutputs, emissions, fault, add };
 }
 
-function launchInput(inspectionJobId: string, baselineJobId: string, revision: number): PrepareLaunchInput {
+function launchInput(inspectionJobId: string, revision: number): PrepareLaunchInput {
   return { machineId: "m1", inspectionJobId, kind: "generated", selection: { lane: "A" }, worktree: false, prompt: "",
-    accounts: { source: "plugin", revision, baselineJobId } };
+    accounts: { source: "plugin", revision } };
 }
 
 describe("shared Code choices", () => {
@@ -119,7 +120,7 @@ describe("shared Code choices", () => {
     if ("refused" in winner) throw new Error(winner.refused);
     expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: winner.jobId })).toEqual(winner);
     const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
-    const launch = await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, baseline.jobId, 1));
+    const launch = await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1));
     if ("refused" in launch) throw new Error(launch.refused);
     const choice = launch.program.argv.find((arg) => arg.startsWith("--account-selection="));
     expect(choice).toBeDefined();
@@ -137,13 +138,12 @@ describe("shared Code choices", () => {
 
   test("source-job revocation prevents cached choices from being observed or launched", async () => {
     const f = fixture();
-    const baseline = f.add("accounts-list", accounts);
     const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
     expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId })).toEqual({ revision: 1, jobId: proposal.jobId });
     const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
     f.denied.add(proposal.jobId);
     expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toEqual({ refused: "code_observation_unavailable" });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, baseline.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
     f.denied.clear();
     f.fault.writable = false;
     const other = f.add("account-set", { ...accounts, operation: "set", baseRevision: 1, manualDisabled: [bob] });
@@ -151,6 +151,32 @@ describe("shared Code choices", () => {
     expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: other.jobId })).toEqual({ refused: "code_operation_unavailable" });
     expect([...f.store.values()]).toEqual(before);
   });
+  test("metadata permission alone cannot disclose stored account identities", async () => {
+    const f = fixture();
+    const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
+    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId });
+    f.deniedOutputs.add(proposal.jobId);
+    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toEqual({ refused: "code_observation_unavailable" });
+    const reviewed = f.add("inspect", { ...inspection, baseRevision: 1 });
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+  });
+
+  test("an explicit verified import recovers revoked choices without allowing a stale replacement", async () => {
+    const f = fixture();
+    const old = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
+    await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: old.jobId });
+    f.denied.add(old.jobId);
+    const replacement = f.add("account-import", { ...accounts, baseRevision: 1, manualDisabled: [bob] });
+    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: replacement.jobId })).toEqual({ revision: 2, jobId: replacement.jobId });
+    expect(await machineHandlers.observe(f.ctx, { machineId: "m1", operation: "accounts-list" })).toMatchObject({
+      state: "ready", snapshot: { value: { preferenceRevision: 2, manualDisabled: [bob] } },
+    });
+    const stale = f.add("account-import", { ...accounts, baseRevision: 1 });
+    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: stale.jobId })).toEqual({ refused: "code_stale_preferences" });
+    f.deniedOutputs.add(replacement.jobId);
+    expect(await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-import", jobId: replacement.jobId })).toEqual({ refused: "code_operation_unavailable" });
+  });
+
 
   test.each(["corruptOutput", "wrongOutputJob"] as const)("refuses %s instead of committing an unverified proposal", async (fault) => {
     const f = fixture();
@@ -164,13 +190,23 @@ describe("shared Code choices", () => {
 
   test("a launch cannot use a preview from another account revision or machine", async () => {
     const f = fixture();
-    const baseline = f.add("accounts-list", accounts);
     const proposal = f.add("account-set", { ...accounts, operation: "set", manualDisabled: [alice] });
     await machineHandlers.applyAccountChoices(f.ctx, { machineId: "m1", operation: "account-set", jobId: proposal.jobId });
     const stale = f.add("inspect", { ...inspection, baseRevision: 0 });
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(stale.jobId, baseline.jobId, 1))).toEqual({ refused: "code_stale_preferences" });
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(stale.jobId, 1))).toEqual({ refused: "code_stale_preferences" });
     const wrongMachine = f.add("inspect", { ...inspection, baseRevision: 1 }, "m2");
-    expect(await handlers.prepareLaunch(f.ctx, launchInput(wrongMachine.jobId, baseline.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(wrongMachine.jobId, 1))).toEqual({ refused: "code_observation_unavailable" });
+  });
+
+  test("unversioned machine defaults cannot masquerade as a reviewed shared selection", async () => {
+    const f = fixture();
+    f.add("accounts-list", accounts);
+    const reviewed = f.add("inspect", { ...inspection, baseRevision: 0 });
+    expect(await handlers.prepareLaunch(f.ctx, launchInput(reviewed.jobId, 0))).toEqual({ refused: "code_preferences_missing" });
+    expect(await machineHandlers.run(f.ctx, {
+      machineId: "m1", operation: "inspect", input: { accountSource: "plugin", selection: { lane: "A" } },
+    })).toEqual({ refused: "code_preferences_missing" });
+    expect(f.fault.starts).toBe(0);
   });
 
   test("an explicit observation remains bound to its job when another participant submits later", async () => {

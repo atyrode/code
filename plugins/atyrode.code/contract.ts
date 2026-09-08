@@ -26,7 +26,6 @@ export const PrepareLaunchInputSchema = z.strictObject({
     z.strictObject({
       source: z.literal("plugin"),
       revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      baselineJobId: z.string().min(1).max(128),
     }),
   ]),
 });
