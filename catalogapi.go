@@ -116,6 +116,12 @@ func runInspect(args []string) int {
 	fs := flag.NewFlagSet("code inspect", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var selection map[string]string
+	var accountOverride *accountSelectionState
+	fs.Func("state", "portable account choices JSON", func(raw string) error {
+		state, err := decodePortableAccountState(raw)
+		accountOverride = &state
+		return err
+	})
 	fs.Func("selection", "JSON object of explicit facet choices", func(raw string) error {
 		var err error
 		selection, err = decodeLaunchSelection(raw)
@@ -131,7 +137,7 @@ func runInspect(args []string) int {
 		fmt.Fprintln(os.Stderr, "code inspect: unexpected arguments")
 		return 2
 	}
-	m, err := loadHeadlessModel(nil)
+	m, err := loadHeadlessModel(accountOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "code inspect: %v\n", err)
 		return 1

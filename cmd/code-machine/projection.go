@@ -192,6 +192,9 @@ type suggestResult struct {
 }
 
 func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, error) {
+	if baseRevision != nil && (*baseRevision < 0 || *baseRevision > 9007199254740991) {
+		return nil, errInvalid
+	}
 	if len(data) > maxOutput {
 		return nil, errInvalid
 	}
@@ -219,7 +222,10 @@ func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, 
 				return nil, errInvalid
 			}
 		}
-		result = p
+		result = struct {
+			inspectResult
+			BaseRevision *int64 `json:"baseRevision"`
+		}{p, baseRevision}
 	case "usage":
 		var p usageResult
 		if decodeDocument(data, &p, false) != nil || p.SchemaVersion != 1 {
@@ -233,7 +239,10 @@ func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, 
 		if (p.UsageRefresh != "succeeded" && p.UsageRefresh != "failed") || (p.AccountRefresh != "succeeded" && p.AccountRefresh != "failed") {
 			return nil, errInvalid
 		}
-		result = p
+		result = struct {
+			usageResult
+			BaseRevision *int64 `json:"baseRevision"`
+		}{p, baseRevision}
 	case "accounts-list", "account-set", "preset-create", "preset-update", "preset-activate", "preset-delete":
 		var p accountsResult
 		expected := strings.TrimPrefix(operation, "account-")
@@ -246,9 +255,12 @@ func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, 
 			return nil, errInvalid
 		}
 		if operation == "accounts-list" {
-			result = p
+			result = struct {
+				accountsResult
+				BaseRevision *int64 `json:"baseRevision"`
+			}{p, baseRevision}
 		} else {
-			if baseRevision == nil || *baseRevision < 0 || *baseRevision > 9007199254740991 {
+			if baseRevision == nil {
 				return nil, errInvalid
 			}
 			result = struct {
@@ -275,7 +287,10 @@ func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, 
 			}
 			seen[action.Key] = true
 		}
-		result = p
+		result = struct {
+			suggestResult
+			BaseRevision *int64 `json:"baseRevision"`
+		}{p, baseRevision}
 	default:
 		return nil, errInvalid
 	}
