@@ -128,7 +128,7 @@ func TestInspectDefaultSelectionRoundTripsToLaunch(t *testing.T) {
 		t.Run("provider="+provider, func(t *testing.T) {
 			headlessLaunchFixture(t)
 			t.Setenv("LAUNCH_PROVIDER", provider)
-			m, err := loadHeadlessModel()
+			m, err := loadHeadlessModel(nil)
 			if err != nil {
 				t.Fatal(err)
 			}

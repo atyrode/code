@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // Public projections are deliberately separate from broker and persistence types.
@@ -61,6 +62,97 @@ func writeAccountAPIJSON(value any) int {
 		return accountAPIError("cannot write JSON result")
 	}
 	return 0
+}
+
+// Decode the exact public object shape without encoding/json's case folding,
+// duplicate-key last-wins behavior, or null-to-zero-value coercion.
+func decodeAccountObject(raw string, fields map[string]any) error {
+	invalid := errors.New("invalid account selection object")
+	if !utf8.ValidString(raw) {
+		return invalid
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	token, err := dec.Token()
+	if err != nil || token != json.Delim('{') {
+		return invalid
+	}
+	seen := make(map[string]bool, len(fields))
+	for dec.More() {
+		token, err := dec.Token()
+		if err != nil {
+			return invalid
+		}
+		key, ok := token.(string)
+		target, known := fields[key]
+		if !ok || !known || seen[key] {
+			return invalid
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if dec.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, target) != nil {
+			return invalid
+		}
+	}
+	if token, err := dec.Token(); err != nil || token != json.Delim('}') || requireJSONEOF(dec) != nil || len(seen) != len(fields) {
+		return invalid
+	}
+	return nil
+}
+
+func decodeAccountReferences(raw string) (map[accountKey]bool, error) {
+	var values []json.RawMessage
+	if !utf8.ValidString(raw) || json.Unmarshal([]byte(raw), &values) != nil || values == nil {
+		return nil, errors.New("disabled must be an array of account references")
+	}
+	entries := make([]accountStateEntry, 0, len(values))
+	for _, value := range values {
+		var entry accountStateEntry
+		if decodeAccountObject(string(value), map[string]any{"provider": &entry.Provider, "identityKey": &entry.IdentityKey}) != nil ||
+			strings.TrimSpace(entry.IdentityKey) == "" || strings.ContainsAny(entry.IdentityKey, "\x00\r\n") {
+			return nil, errors.New("invalid disabled account reference")
+		}
+		entries = append(entries, entry)
+	}
+	disabled, ok := decodeAccountStateEntries(entries)
+	if !ok {
+		return nil, errors.New("invalid disabled account references")
+	}
+	return disabled, nil
+}
+
+func decodePortableAccountState(raw string) (accountSelectionState, error) {
+	state := defaultAccountSelectionState()
+	var version int
+	var active string
+	var manual json.RawMessage
+	var presets []json.RawMessage
+	err := decodeAccountObject(raw, map[string]any{
+		"schemaVersion": &version, "activePreset": &active, "manualDisabled": &manual, "presets": &presets,
+	})
+	if err != nil || version != 1 {
+		return state, errors.New("invalid portable account state")
+	}
+	disabled, err := decodeAccountReferences(string(manual))
+	if err != nil {
+		return state, err
+	}
+	state.SetManualDisabled(disabled)
+	for _, rawPreset := range presets {
+		var name string
+		var refs json.RawMessage
+		if decodeAccountObject(string(rawPreset), map[string]any{"name": &name, "disabled": &refs}) != nil {
+			return state, errors.New("invalid account preset")
+		}
+		disabled, err := decodeAccountReferences(string(refs))
+		name = strings.TrimSpace(name)
+		if err != nil || containsPresetName(state.presets, name) || strings.ContainsAny(name, "\x00\r\n") || state.UpsertPreset(name, disabled) != nil {
+			return state, errors.New("invalid account preset")
+		}
+	}
+	if !state.Activate(active) {
+		return state, errors.New("unknown active account preset")
+	}
+	return state, nil
 }
 
 // This decoder does not inherit the TUI loader's recovery-to-Manual behavior:
@@ -218,15 +310,9 @@ func resolveAccountAPIReference(accounts map[string][]account, provider, identit
 }
 
 func accountAPIDisabled(raw string, accounts map[string][]account) (map[accountKey]bool, error) {
-	var entries []accountStateEntry
-	dec := json.NewDecoder(strings.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&entries) != nil || requireJSONEOF(dec) != nil {
-		return nil, errors.New("--disabled must be a JSON array of account references")
-	}
-	disabled, ok := decodeAccountStateEntries(entries)
-	if !ok {
-		return nil, errors.New("invalid disabled account references")
+	disabled, err := decodeAccountReferences(raw)
+	if err != nil {
+		return nil, err
 	}
 	for key := range disabled {
 		if _, err := resolveAccountAPIReference(accounts, key.Provider, key.IdentityKey); err != nil {
@@ -274,6 +360,10 @@ func runAccountsCLI(args []string) int {
 	fs := flag.NewFlagSet("accounts", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var provider, identity, enabled, name, disabledJSON string
+	var portableJSON string
+	if op != "login" && op != "clear-blocks" {
+		fs.StringVar(&portableJSON, "state", "", "portable account choices JSON")
+	}
 	switch op {
 	case "list", "presets list":
 	case "set":
@@ -294,6 +384,20 @@ func runAccountsCLI(args []string) int {
 	}
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return accountAPIError("invalid accounts flags")
+	}
+	portable := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "state" {
+			portable = true
+		}
+	})
+	state := defaultAccountSelectionState()
+	if portable {
+		var err error
+		state, err = decodePortableAccountState(portableJSON)
+		if err != nil {
+			return accountAPIError(err.Error())
+		}
 	}
 	if op == "login" {
 		p := providerByID(provider)
@@ -345,14 +449,16 @@ func runAccountsCLI(args []string) int {
 			Cleared       bool                `json:"cleared"`
 		}{1, op, accountAPIReference{provider, identity}, true})
 	}
-	path := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
-	state := defaultAccountSelectionState()
 	if op == "list" || op == "presets list" {
-		if path != "" {
-			state, err = readAccountAPIState(path)
+		if !portable {
+			if path := os.Getenv("CODE_AUTH_ACCOUNT_STATE"); path != "" {
+				state, err = readAccountAPIState(path)
+			}
+		} else {
+			state = pruneAccountSelectionState(state, availability{accounts: accounts, accountsOK: true})
 		}
 	} else {
-		state, err = mutateAccountAPIState(path, accounts, func(state *accountSelectionState) error {
+		change := func(state *accountSelectionState) error {
 			switch op {
 			case "set":
 				a, err := resolveAccountAPIReference(accounts, provider, identity)
@@ -392,7 +498,15 @@ func runAccountsCLI(args []string) int {
 				}
 			}
 			return nil
-		})
+		}
+		if portable {
+			err = change(&state)
+			if err == nil {
+				state = pruneAccountSelectionState(state, availability{accounts: accounts, accountsOK: true})
+			}
+		} else {
+			state, err = mutateAccountAPIState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"), accounts, change)
+		}
 	}
 	if err != nil {
 		return accountAPIError(err.Error())

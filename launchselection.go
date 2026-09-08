@@ -15,6 +15,7 @@ import (
 const launchHelp = `code launch — start an omp session without mounting the TUI
 
   code launch [--selection '<facet-map-json>'] [--kind generated|managed|untrusted|runtime]
+              [--account-selection '<account-selection-json>']
               [--runtime TARGET] [--worktree] [--prompt TEXT] [-- OMP_ARGS...]
 
 Generated is the default. Selection overlays catalog defaults, never saved UI
@@ -22,6 +23,8 @@ choices. Managed and untrusted launches take no facets. Runtime requires an
 advertised --runtime target and accepts only the thinking facet. Routing/profile
 flags are filtered just as in the TUI. Local engine profiles still require the
 interactive confirmation ceremony; this command does not mint profiles.
+Account selection is a version-1 object with a disabled reference array. It
+overrides only this generated or managed launch; saved account choices are untouched.
 `
 
 // decodeLaunchSelection accepts exactly one object of unique string-valued keys.
@@ -65,10 +68,26 @@ func decodeLaunchSelection(text string) (map[string]string, error) {
 	return selection, nil
 }
 
+func decodeLaunchAccountSelection(raw string) (accountSelectionState, error) {
+	state := defaultAccountSelectionState()
+	var version int
+	var refs json.RawMessage
+	if decodeAccountObject(raw, map[string]any{"schemaVersion": &version, "disabled": &refs}) != nil || version != 1 {
+		return state, errors.New("invalid launch account selection")
+	}
+	disabled, err := decodeAccountReferences(string(refs))
+	if err != nil {
+		return state, err
+	}
+	state.SetManualDisabled(disabled)
+	state.strictLaunch = true
+	return state, nil
+}
+
 // loadHeadlessModel reads one snapshot of the same capabilities as the TUI. It
 // constructs no Bubble Tea widgets, reads no persisted facet selection, and
 // discovers no ceremony-only local lane.
-func loadHeadlessModel() (model, error) {
+func loadHeadlessModel(accountOverride *accountSelectionState) (model, error) {
 	catalogPath := os.Getenv("CODE_GENERATED")
 	explicit := catalogPath != ""
 	if !explicit {
@@ -99,8 +118,12 @@ func loadHeadlessModel() (model, error) {
 		facets:            facetDefs(glyphs),
 		sel:               defaultSel(),
 		broker:            resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE")),
-		accountSelections: loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE")),
 		runtimeTargets:    loadRuntimeTargets(),
+	}
+	if accountOverride != nil {
+		m.accountSelections = *accountOverride
+	} else {
+		m.accountSelections = loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
 	}
 	if len(m.runtimeTargets) > 0 {
 		m.facets = append([]facet{runtimeFacet(glyphs["runtime"], m.runtimeTargets)}, m.facets...)
@@ -185,6 +208,7 @@ func runLaunch(args []string) int {
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, launchHelp) }
 	selectionJSON := fs.String("selection", "{}", "facet map JSON")
+	accountSelectionJSON := fs.String("account-selection", "", "launch account selection JSON")
 	kind := fs.String("kind", "generated", "launch kind")
 	runtime := fs.String("runtime", "", "runtime target")
 	worktree := fs.Bool("worktree", false, "launch in an isolated worktree")
@@ -218,10 +242,27 @@ func runLaunch(args []string) int {
 	if *kind != "runtime" && *runtime != "" {
 		return fail(errors.New("--runtime requires --kind runtime"))
 	}
+	var accountOverride *accountSelectionState
+	accountSelectionSupplied := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "account-selection" {
+			accountSelectionSupplied = true
+		}
+	})
+	if accountSelectionSupplied {
+		if *kind != "generated" && *kind != "managed" {
+			return fail(errors.New("--account-selection requires generated or managed launch"))
+		}
+		state, err := decodeLaunchAccountSelection(*accountSelectionJSON)
+		if err != nil {
+			return fail(err)
+		}
+		accountOverride = &state
+	}
 	var m model
 	switch *kind {
 	case "generated":
-		m, err = loadHeadlessModel()
+		m, err = loadHeadlessModel(accountOverride)
 		if err != nil {
 			return fail(err)
 		}
@@ -246,7 +287,11 @@ func runLaunch(args []string) int {
 		m.launchManaged, m.launchUntrusted = *kind == "managed", *kind == "untrusted"
 		if m.launchManaged {
 			m.broker = resolveBroker(os.Getenv("CODE_AUTH_VAULTS"), os.Getenv("CODE_AUTH_VAULTS_FILE"))
-			m.accountSelections = loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
+			if accountOverride != nil {
+				m.accountSelections = *accountOverride
+			} else {
+				m.accountSelections = loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
+			}
 			m.avail = loadUsageCache(os.Getenv("CODE_USAGE_CACHE"))
 		}
 	case "runtime":

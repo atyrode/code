@@ -191,7 +191,7 @@ type suggestResult struct {
 	Selection map[string]string `json:"selection"`
 }
 
-func projectResult(operation string, data []byte) ([]byte, error) {
+func projectResult(operation string, data []byte, baseRevision *int64) ([]byte, error) {
 	if len(data) > maxOutput {
 		return nil, errInvalid
 	}
@@ -245,7 +245,17 @@ func projectResult(operation string, data []byte) ([]byte, error) {
 		if decodeDocument(data, &p, false) != nil || p.SchemaVersion != 1 || p.Operation != expected {
 			return nil, errInvalid
 		}
-		result = p
+		if operation == "accounts-list" {
+			result = p
+		} else {
+			if baseRevision == nil || *baseRevision < 0 || *baseRevision > 9007199254740991 {
+				return nil, errInvalid
+			}
+			result = struct {
+				accountsResult
+				BaseRevision int64 `json:"baseRevision"`
+			}{p, *baseRevision}
+		}
 	case "account-clear-blocks":
 		var p clearBlocksResult
 		if decodeDocument(data, &p, false) != nil || p.SchemaVersion != 1 || p.Operation != "clear-blocks" || !p.Cleared {

@@ -473,6 +473,10 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 		return 1
 	}
 	if !broker.configured() {
+		if selections.strictLaunch {
+			fmt.Fprintln(os.Stderr, "code: account selection requires an available broker")
+			return 1
+		}
 		err = runChild(path, argv(path, forwarded, prompt), withoutAuthEnv(os.Environ()), dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "code: trusted child:", err)
@@ -483,6 +487,14 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch")
 		return 1
+	}
+	if selections.strictLaunch {
+		for key := range disabled {
+			if _, err := resolveAccountAPIReference(accounts, key.Provider, key.IdentityKey); err != nil {
+				fmt.Fprintln(os.Stderr, "code: account selection is no longer available")
+				return 1
+			}
+		}
 	}
 	now := time.Now()
 	report := launchAccountReport(accounts, disabled, intent, now)

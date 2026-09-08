@@ -36,26 +36,43 @@ type accountPayload struct {
 	Identity string `json:"identity"`
 }
 
+type accountChoiceState struct {
+	SchemaVersion int `json:"schemaVersion"`
+	ActivePreset string `json:"activePreset"`
+	ManualDisabled []accountReference `json:"manualDisabled"`
+	Presets []preset `json:"presets"`
+}
+
+type accountListPayload struct {
+	State *accountChoiceState `json:"state,omitempty"`
+}
+
 type accountSetPayload struct {
 	Provider string `json:"provider"`
 	Identity string `json:"identity"`
 	Enabled bool `json:"enabled"`
+	State accountChoiceState `json:"state"`
+	BaseRevision int64 `json:"baseRevision"`
 }
 
 type presetPayload struct {
 	Name string `json:"name"`
+	State accountChoiceState `json:"state"`
+	BaseRevision int64 `json:"baseRevision"`
 }
 
 type presetWritePayload struct {
 	Name string `json:"name"`
 	Disabled []accountReference `json:"disabled"`
+	State accountChoiceState `json:"state"`
+	BaseRevision int64 `json:"baseRevision"`
 }
 
 // Values are always attached to fixed flag names, never parsed as additional
 // flags or shell syntax. Code, not this adapter, validates product selections.
-func operationArgs(operation, payload string) ([]string, error) {
+func operationArgs(operation, payload string) ([]string, *int64, error) {
 	if len(payload) > maxInput {
-		return nil, errInvalid
+		return nil, nil, errInvalid
 	}
 	data := []byte(payload)
 	selectionArgs := func(args []string, selection map[string]string) []string {
@@ -65,41 +82,57 @@ func operationArgs(operation, payload string) ([]string, error) {
 		}
 		return args
 	}
+	stateArgs := func(args []string, state *accountChoiceState, revision *int64) ([]string, *int64, error) {
+		if revision != nil && (*revision < 0 || *revision > 9007199254740991) {
+			return nil, nil, errInvalid
+		}
+		if state != nil {
+			if state.SchemaVersion != 1 {
+				return nil, nil, errInvalid
+			}
+			encoded, _ := json.Marshal(state)
+			args = append(args, "--state="+string(encoded))
+		}
+		return args, revision, nil
+	}
 	switch operation {
 	case "inspect":
 		var p selectionPayload
-		if decodeDocument(data, &p, true) != nil { return nil, errInvalid }
-		return selectionArgs([]string{"inspect"}, p.Selection), nil
+		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
+		return selectionArgs([]string{"inspect"}, p.Selection), nil, nil
 	case "suggest":
 		var p suggestPayload
-		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Prompt) == "" { return nil, errInvalid }
-		return selectionArgs([]string{"suggest", "--prompt="+p.Prompt}, p.Selection), nil
-	case "usage", "accounts-list":
-		if decodeDocument(data, &struct{}{}, true) != nil { return nil, errInvalid }
-		if operation == "usage" { return []string{"usage"}, nil }
-		return []string{"accounts", "list"}, nil
+		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Prompt) == "" { return nil, nil, errInvalid }
+		return selectionArgs([]string{"suggest", "--prompt="+p.Prompt}, p.Selection), nil, nil
+	case "usage":
+		if decodeDocument(data, &struct{}{}, true) != nil { return nil, nil, errInvalid }
+		return []string{"usage"}, nil, nil
+	case "accounts-list":
+		var p accountListPayload
+		if decodeDocument(data, &p, true) != nil { return nil, nil, errInvalid }
+		return stateArgs([]string{"accounts", "list"}, p.State, nil)
 	case "account-set":
 		var p accountSetPayload
-		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, errInvalid }
-		return []string{"accounts", "set", "--provider="+p.Provider, "--identity="+p.Identity, "--enabled="+strconv.FormatBool(p.Enabled)}, nil
+		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, nil, errInvalid }
+		return stateArgs([]string{"accounts", "set", "--provider="+p.Provider, "--identity="+p.Identity, "--enabled="+strconv.FormatBool(p.Enabled)}, &p.State, &p.BaseRevision)
 	case "account-clear-blocks":
 		var p accountPayload
-		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, errInvalid }
-		return []string{"accounts", "clear-blocks", "--provider="+p.Provider, "--identity="+p.Identity}, nil
+		if decodeDocument(data, &p, true) != nil || p.Provider == "" || p.Identity == "" { return nil, nil, errInvalid }
+		return []string{"accounts", "clear-blocks", "--provider="+p.Provider, "--identity="+p.Identity}, nil, nil
 	case "preset-create", "preset-update":
 		var p presetWritePayload
-		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Name) == "" { return nil, errInvalid }
+		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Name) == "" { return nil, nil, errInvalid }
 		for _, reference := range p.Disabled {
-			if reference.Provider == "" || reference.IdentityKey == "" { return nil, errInvalid }
+			if reference.Provider == "" || reference.IdentityKey == "" { return nil, nil, errInvalid }
 		}
 		disabled, _ := json.Marshal(p.Disabled)
-		return []string{"accounts", "presets", strings.TrimPrefix(operation, "preset-"), "--name="+p.Name, "--disabled="+string(disabled)}, nil
+		return stateArgs([]string{"accounts", "presets", strings.TrimPrefix(operation, "preset-"), "--name="+p.Name, "--disabled="+string(disabled)}, &p.State, &p.BaseRevision)
 	case "preset-activate", "preset-delete":
 		var p presetPayload
-		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Name) == "" { return nil, errInvalid }
-		return []string{"accounts", "presets", strings.TrimPrefix(operation, "preset-"), "--name="+p.Name}, nil
+		if decodeDocument(data, &p, true) != nil || strings.TrimSpace(p.Name) == "" { return nil, nil, errInvalid }
+		return stateArgs([]string{"accounts", "presets", strings.TrimPrefix(operation, "preset-"), "--name="+p.Name}, &p.State, &p.BaseRevision)
 	default:
-		return nil, errInvalid
+		return nil, nil, errInvalid
 	}
 }
 
@@ -120,7 +153,7 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 
 func execute(args []string) ([]byte, error) {
 	if len(args) != 2 { return nil, errInvalid }
-	argv, err := operationArgs(args[0], args[1])
+	argv, baseRevision, err := operationArgs(args[0], args[1])
 	if err != nil { return nil, errInvalid }
 	var stdout boundedOutput
 	cmd := exec.Command(codeTool, argv...)
@@ -128,7 +161,7 @@ func execute(args []string) ([]byte, error) {
 	// Nil stdin/stderr attach to the null device. Raw child output and errors
 	// never reach the job's public streams. The sandbox supplies the environment.
 	if cmd.Run() != nil || stdout.overflow { return nil, errInvalid }
-	return projectResult(args[0], stdout.buffer.Bytes())
+	return projectResult(args[0], stdout.buffer.Bytes(), baseRevision)
 }
 
 func main() {

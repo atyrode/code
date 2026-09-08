@@ -131,7 +131,7 @@ func runInspect(args []string) int {
 		fmt.Fprintln(os.Stderr, "code inspect: unexpected arguments")
 		return 2
 	}
-	m, err := loadHeadlessModel()
+	m, err := loadHeadlessModel(nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "code inspect: %v\n", err)
 		return 1
