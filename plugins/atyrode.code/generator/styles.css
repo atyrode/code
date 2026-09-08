@@ -43,25 +43,17 @@
   overflow-wrap: anywhere;
 }
 
-.plugin-atyrode_code_generator__muted,
-.plugin-atyrode_code_generator time {
+.plugin-atyrode_code_generator__muted {
   color: #adb5bd;
   font-size: 0.82rem;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
-.plugin-atyrode_code_generator__badge {
-  padding: 0.25rem 0.55rem;
-  border: 1px solid #495057;
-  border-radius: 0.45rem;
-  color: #ced4da;
-  font-size: 0.75rem;
-  overflow-wrap: anywhere;
-}
 
 .plugin-atyrode_code_generator select,
-.plugin-atyrode_code_generator input {
+.plugin-atyrode_code_generator input,
+.plugin-atyrode_code_generator textarea {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -116,25 +108,19 @@
   border-color: #91a7ff;
 }
 
-.plugin-atyrode_code_generator__refresh {
-  background: transparent;
-  color: #ced4da;
-}
-
-.plugin-atyrode_code_generator__refresh:hover:not(:disabled) {
-  background: #232a35;
-}
 
 .plugin-atyrode_code_generator button:disabled,
 .plugin-atyrode_code_generator select:disabled,
-.plugin-atyrode_code_generator input:disabled {
+.plugin-atyrode_code_generator input:disabled,
+.plugin-atyrode_code_generator textarea:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 .plugin-atyrode_code_generator button:focus-visible,
 .plugin-atyrode_code_generator input:focus-visible,
-.plugin-atyrode_code_generator select:focus-visible {
+.plugin-atyrode_code_generator select:focus-visible,
+.plugin-atyrode_code_generator textarea:focus-visible {
   outline: 2px solid #91a7ff;
   outline-offset: 3px;
 }
@@ -156,54 +142,42 @@
   color: #b2f2bb;
 }
 
-.plugin-atyrode_code_generator__status[data-state="denied"],
-.plugin-atyrode_code_generator__error {
+.plugin-atyrode_code_generator__status[data-state="denied"] {
   border-color: #c92a2a;
   color: #ffc9c9;
 }
 
-.plugin-atyrode_code_generator__ledger {
-  border-top: 1px solid #343a40;
-  padding-top: 1.25rem;
-}
-
-.plugin-atyrode_code_generator__records {
-  list-style: none;
+.plugin-atyrode_code_generator__facets {
   margin: 0;
-  padding: 0;
+  padding: 0.8rem;
+  min-width: 0;
+  border: 1px solid #495057;
+  border-radius: 0.55rem;
 }
 
-.plugin-atyrode_code_generator__records li {
-  padding-block: 0.8rem;
-  border-bottom: 1px solid #2a3039;
+.plugin-atyrode_code_generator__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
-.plugin-atyrode_code_generator__records li:last-child {
-  border-bottom: 0;
+.plugin-atyrode_code_generator__checkbox input {
+  width: auto;
 }
 
-.plugin-atyrode_code_generator__records strong {
-  font-size: 0.9rem;
-}
-
-.plugin-atyrode_code_generator__records p {
-  padding-top: 0.3rem;
-}
 
 @container (max-width: 22rem) {
   .plugin-atyrode_code_generator__launch {
     width: 100%;
   }
 
-  .plugin-atyrode_code_generator__records time {
-    flex-basis: 100%;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .plugin-atyrode_code_generator button,
   .plugin-atyrode_code_generator input,
-  .plugin-atyrode_code_generator select {
+  .plugin-atyrode_code_generator select,
+  .plugin-atyrode_code_generator textarea {
     transition: none;
   }
 }
