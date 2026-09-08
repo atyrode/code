@@ -1,0 +1,19 @@
+{
+  "id": "atyrode.code.usage",
+  "version": "0.2.0",
+  "title": "code usage",
+  "description": "Machine-scoped usage observations and explicit governed refresh requests.",
+  "capabilities": [],
+  "contributes": {
+    "panels": [{ "id": "usage", "title": "Code usage" }],
+    "seats": [{ "panel": "usage", "order": 160, "ratio": 0.5 }],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": { "type": "required", "reason": "Governed machine operations and shared usage observations live in Code." }
+  },
+  "entry": { "web": "web.js", "styles": true }
+}

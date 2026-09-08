@@ -1,0 +1,72 @@
+.plugin-atyrode_code_accounts {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  color: inherit;
+  background: #14181e;
+  container-type: inline-size;
+}
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__body {
+  width: 100%;
+  max-width: 70rem;
+  margin-inline: auto;
+  padding: clamp(0.75rem, 3cqi, 1.5rem);
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code_accounts h2,
+.plugin-atyrode_code_accounts h3,
+.plugin-atyrode_code_accounts h4,
+.plugin-atyrode_code_accounts p { margin: 0; }
+.plugin-atyrode_code_accounts h2 { font-size: 1.4rem; }
+.plugin-atyrode_code_accounts h3 { font-size: 1.1rem; }
+.plugin-atyrode_code_accounts h4 { font-size: 1rem; }
+.plugin-atyrode_code_accounts p,
+.plugin-atyrode_code_accounts li { line-height: 1.6; }
+.plugin-atyrode_code_accounts ul { margin: 0; padding-inline-start: 1.3rem; }
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__muted { color: #adb5bd; font-size: 0.85rem; }
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__card,
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__notice {
+  padding: 0.85rem;
+  border: 1px solid #495057;
+  border-radius: 0.5rem;
+}
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__notice { background: #1c2230; border-inline-start: 3px solid #91a7ff; }
+.plugin-atyrode_code_accounts label,
+.plugin-atyrode_code_accounts legend { font-weight: 600; }
+.plugin-atyrode_code_accounts fieldset { min-width: 0; margin: 0; border: 1px solid #68737e; border-radius: 0.45rem; padding: 0.75rem; }
+.plugin-atyrode_code_accounts .plugin-atyrode_code_accounts__checkbox { display: block; padding-block: 0.6rem; line-height: 1.5; cursor: pointer; }
+.plugin-atyrode_code_accounts input[type="checkbox"] { width: 1.2rem; height: 1.2rem; margin-inline-end: 0.5rem; vertical-align: middle; accent-color: #91a7ff; }
+.plugin-atyrode_code_accounts select,
+.plugin-atyrode_code_accounts input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.65rem;
+  border: 1px solid #68737e;
+  border-radius: 0.45rem;
+  background: #171a1f;
+  color: #f8f9fa;
+  font: inherit;
+}
+.plugin-atyrode_code_accounts button {
+  min-height: 2.75rem;
+  max-width: 100%;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid #68737e;
+  border-radius: 0.45rem;
+  background: #263248;
+  color: #f8f9fa;
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code_accounts button:hover:not(:disabled) { background: #364969; }
+.plugin-atyrode_code_accounts button:disabled,
+.plugin-atyrode_code_accounts input:disabled { opacity: 0.6; cursor: not-allowed; }
+.plugin-atyrode_code_accounts button:focus-visible,
+.plugin-atyrode_code_accounts input:focus-visible,
+.plugin-atyrode_code_accounts select:focus-visible { outline: 2px solid #91a7ff; outline-offset: 3px; }
+.plugin-atyrode_code_accounts code { font-size: 0.9em; overflow-wrap: anywhere; }
