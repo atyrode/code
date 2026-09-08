@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"gopkg.in/yaml.v3"
 )
 
 // ansiRe strips SGR sequences so tests assert on visible text regardless of the
@@ -512,48 +513,6 @@ func TestEnterRefusesMissingCombo(t *testing.T) {
 	}
 }
 
-// TestGenConfigYAMLAgentOverrides locks the atyrode/dotfiles#173 fix: every ●-marked
-// agent-backed role in the generated block is mirrored into
-// task.agentModelOverrides (so spawned agents follow the generated profile),
-// while unmarked roles and the advisor never are. librarian is deliberately a
-// custom catalog row here: retiring its obsolete bundled route must not block
-// a user-supplied named agent from receiving an explicit override.
-func TestGenConfigYAMLAgentOverrides(t *testing.T) {
-	rows := []string{
-		"    default    gpt-5.6-sol:high",
-		"    plan       claude-fable-5:xhigh",
-		"  ● librarian  gpt-5.6-sol:high",
-		"  ● reviewer   claude-fable-5:xhigh",
-		"  ● sonic      gpt-5.6-luna:minimal",
-		"  ● task       gpt-5.6-terra:medium",
-		"    smol       gpt-5.6-luna:low",
-	}
-	m := model{
-		sel:       defaultSel(),
-		generated: map[string][]string{comboID(defaultSel()): rows},
-	}
-	m.sel["advisor"] = "off"
-	got := m.genConfigYAML()
-
-	// The override block is emitted in row order with a fixed shape; assert it
-	// verbatim so any drift in keys, values, or nesting fails loudly.
-	want := "task:\n  agentModelOverrides:\n" +
-		"    librarian: openai-codex/gpt-5.6-sol:high\n" +
-		"    reviewer: anthropic/claude-fable-5:xhigh\n" +
-		"    sonic: openai-codex/gpt-5.6-luna:minimal\n" +
-		"    task: openai-codex/gpt-5.6-terra:medium\n" +
-		"defaultThinkingLevel:"
-	if !strings.Contains(got, want) {
-		t.Errorf("generated config must mirror exactly the ● roles into agentModelOverrides, got:\n%s", got)
-	}
-	// Override entries are 4-space-indented; assert no non-agent role sneaks in.
-	for _, role := range []string{"plan", "smol", "default", "advisor"} {
-		if strings.Contains(got, "    "+role+": ") {
-			t.Errorf("non-agent role %q must not be overridden, got:\n%s", role, got)
-		}
-	}
-}
-
 // TestDefaultGlyphs pins all three built-in facet glyph tables. The nerd
 // literals are invisible in most editors — an edit once wiped them all to empty
 // strings without anything failing, which is why each codepoint is asserted
@@ -954,24 +913,30 @@ func TestFallbackDialTurnsOmpModelFallbackOff(t *testing.T) {
 	if on != legacy {
 		t.Errorf("a selection without the dial must launch as fallback on:\n--- no key ---\n%s\n--- on ---\n%s", legacy, on)
 	}
-	const chains = "retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" +
-		"    default: [openai-codex/gpt-5.6-luna:medium, anthropic/claude-sonnet-5:medium]\n" +
-		"    task: [openai-codex/gpt-5.6-luna:medium, anthropic/claude-sonnet-5:medium]\n" +
-		"    scout: [anthropic/claude-haiku-4-5:low]\n"
-	if !strings.Contains(on, chains) {
-		t.Fatalf("fallback on must write the chains it always did:\n%s", on)
+	var enabled, disabled map[string]any
+	if err := yaml.Unmarshal([]byte(on), &enabled); err != nil {
+		t.Fatal(err)
 	}
 	m.sel["fallback"] = "off"
-	off := m.genConfigYAML()
-	const none = "retry:\n  enabled: true\n  modelFallback: false\n"
-	if !strings.Contains(off, none) {
-		t.Errorf("fallback off must write modelFallback: false under an enabled retry block:\n%s", off)
+	if err := yaml.Unmarshal([]byte(m.genConfigYAML()), &disabled); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(off, "fallbackChains") || strings.Contains(off, "fallbackRevertPolicy") {
-		t.Errorf("fallback off must not carry chains:\n%s", off)
+	onRetry := enabled["retry"].(map[string]any)
+	offRetry := disabled["retry"].(map[string]any)
+	if onRetry["enabled"] != true || onRetry["modelFallback"] != true {
+		t.Fatalf("fallback on disabled retries or model switching: %v", onRetry)
 	}
-	if want := strings.Replace(on, chains, none, 1); off != want {
-		t.Errorf("fallback off changed more than the retry block:\n--- got ---\n%s\n--- want ---\n%s", off, want)
+	chain := onRetry["fallbackChains"].(map[string]any)["scout"]
+	if !reflect.DeepEqual(chain, []any{"anthropic/claude-haiku-4-5:low"}) {
+		t.Fatalf("scout lost its advertised fallback: %v", chain)
+	}
+	if !reflect.DeepEqual(offRetry, map[string]any{"enabled": true, "modelFallback": false}) {
+		t.Fatalf("fallback off must keep same-model retries without chains: %v", offRetry)
+	}
+	delete(enabled, "retry")
+	delete(disabled, "retry")
+	if !reflect.DeepEqual(enabled, disabled) {
+		t.Fatal("fallback dial changed settings outside retry")
 	}
 }
 

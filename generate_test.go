@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1195,6 +1196,70 @@ func TestGenerateInitLiveProbesModels(t *testing.T) {
 	body, _ := os.ReadFile(out)
 	if !strings.Contains(string(body), "probed: true") {
 		t.Errorf("live init must stamp probed: true:\n%s", body)
+	}
+}
+
+// The configured runtime must supply all three probes, even with no omp on PATH.
+// Checking the generated catalog catches a usage probe silently falling back:
+// that optional probe is what assigns the spark quota bucket.
+func TestGenerateInitConfiguredRuntime(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	omp := filepath.Join(dir, "configured-omp")
+	script := "#!" + sh + "\n" + `
+case "$1" in
+models) printf '%s\n' ` + shellSingleQuote(initJSON) + ` ;;
+usage) printf '%s\n' ` + shellSingleQuote(initUsage) + ` ;;
+bench)
+  shift
+  printf '{"models":['
+  sep=''
+  while [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; do
+    printf '%s{"model":"%s","results":[{"ok":true}],"stats":{"ttftMs":{"mean":1404.2},"generationTps":{"mean":48.94}}}' "$sep" "$1"
+    sep=,
+    shift
+  done
+  [ "$*" = '--json --runs 1 --max-tokens 4 --profile chat --prompt Reply with the single word: ok' ] || exit 9
+  printf ']}\n'
+  ;;
+*) exit 8 ;;
+esac
+`
+	if err := os.WriteFile(omp, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODE_OMP", omp)
+	t.Setenv("PATH", t.TempDir())
+	out := filepath.Join(dir, "models.yml")
+	if status := runGenerateInit([]string{"--models-file", out}); status != 0 {
+		t.Fatalf("configured runtime init exit %d", status)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"probed: true", "bucket: codex-spark", "speed: 48.9\n", "ttft: 1.4\n"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("configured runtime catalog lacks %q:\n%s", want, raw)
+		}
+	}
+	// An explicitly broken runtime must not fall through to some other omp.
+	if err := os.Link(omp, filepath.Join(dir, "omp")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("CODE_OMP", filepath.Join(dir, "missing"))
+	for name, probe := range map[string]func() ([]byte, error){
+		"models": ompModelsJSON,
+		"usage":  ompUsageJSON,
+		"bench":  func() ([]byte, error) { return ompBenchJSON([]string{"anthropic/claude-opus-5"}) },
+	} {
+		if _, err := probe(); err == nil {
+			t.Errorf("%s ignored the invalid configured runtime", name)
+		}
 	}
 }
 

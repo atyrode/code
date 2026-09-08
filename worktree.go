@@ -741,6 +741,8 @@ const worktreeHelp = `code worktree — manage isolated session worktrees
   Worktree base: $XDG_STATE_HOME/code/wt, or CODE_WORKTREE_DIR.
   Records: $XDG_STATE_HOME/code/worktrees, or CODE_WORKTREE_STATE.
   Session liveness: $XDG_STATE_HOME/code/sessions, or CODE_SESSION_STATE.
-  Saved sessions: ~/.omp/agent/sessions (PI_CODING_AGENT_DIR), every
-  ~/.omp/profiles/*/agent/sessions, and a forwarded --session-dir.
+  Saved sessions: native XDG data roots plus historical default/profile
+  agent/sessions roots (PI_CONFIG_DIR; default-only PI_CODING_AGENT_DIR).
+  A forwarded --session-dir replaces discovery with only that directory.
+  Launch profile: OMP_PROFILE, else PI_PROFILE; no forced default profile.
 `

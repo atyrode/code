@@ -23,6 +23,12 @@ the same model's priced row under any other provider omp lists (exact bare id,
 highest price where resellers disagree), and names any model no row prices in a
 warning at the top of `models.yml` so you can write the rung in by hand.
 
+All three scaffold probes (`models`, `usage`, and the mandatory live `bench`)
+use `CODE_OMP` when set, otherwise `omp` on PATH, just like a trusted launch.
+An invalid explicit runtime is an error, not permission to probe a different
+installation. `code generate init` and first-run onboarding make model calls;
+`code generate` only re-renders an existing catalog.
+
 The generated grid covers OMP's model roles and bundled task agents, not a
 historical agent inventory. The retired bundled `librarian` route is no longer
 generated or included in cost/speed estimates. Re-render an existing catalog
@@ -30,6 +36,17 @@ with `code generate` to remove that old automatic row; Code does not rewrite
 stored catalogs or delete user agent definitions on startup. Explicit custom
 agent rows in a supplied catalog remain supported: a `●`-marked row, including
 one named `librarian`, still supplies its `task.agentModelOverrides` entry.
+The override is a quoted native alias (`librarian: '@librarian'`), with its
+selector and thinking suffix defined once in `modelRoles.librarian`.
+OMP must retain that role identity when spawning: copying the concrete lead
+loses it and makes the child inherit `retry.fallbackChains.default`, even if
+another role happens to name the same lead. A generated lead-only role receives
+an explicit empty chain (`[]`), expressing that it must not inherit another
+role's chain. OMP 18.1.14 has a separate child-session role-persistence defect,
+so this intent is not yet a strict runtime guarantee when models are shared
+([#142](https://github.com/atyrode/code/issues/142)).
+These are one-shot launch overlays, not a migration of persistent OMP settings
+or previously stored immutable Code profile revisions.
 
 ## Dials that set omp's own switches
 
@@ -125,18 +142,32 @@ the old directory is untouched until the operator names it.
 
 ### Saved omp sessions
 
-`code ls` and `code wt` also read omp's persisted sessions, which are omp's
-state, not `code`'s: `~/.omp/agent/sessions` (the default profile, honouring
-`PI_CODING_AGENT_DIR` and `PI_CONFIG_DIR`), `~/.omp/profiles/<name>/agent/sessions`
-for each named profile, or only the directory a forwarded `--session-dir`
-names. Those are the trusted roots; the untrusted launcher's state is never
-searched, because an untrusted session is isolated on purpose and is not
-resumable from here.
+`code ls` and `code wt` also read OMP's persisted sessions, which are OMP's
+state, not `code`'s. On Linux/macOS, OMP uses
+`$XDG_DATA_HOME/omp/sessions` when `$XDG_DATA_HOME/omp` already exists;
+a named profile independently uses
+`$XDG_DATA_HOME/omp/profiles/<name>/sessions` when that profile root exists.
+Merely setting `XDG_DATA_HOME` does not migrate or select a nonexistent root.
+Otherwise sessions remain under `~/.omp/agent/sessions` or
+`~/.omp/profiles/<name>/agent/sessions`, with `PI_CONFIG_DIR` selecting the
+legacy config root. An explicit `PI_CODING_AGENT_DIR` overrides the default
+profile's agent directory, not a named profile's data root.
 
-Discovery is metadata-only. Each transcript starts with a title record and a
-session record (id, cwd, timestamp), and `code` reads those two lines and
-stops at the first line of any other type — prompts, tool output, and anything
-a conversation may quote are never opened. Results are ranked: the current
+Trusted launches inherit the environment's profile: `OMP_PROFILE` takes
+precedence over `PI_PROFILE`, including when explicitly empty. Forwarded
+`--profile` remains stripped; Code does not force the default profile.
+Discovery includes effective native roots and historical default/profile
+roots so migration does not hide old transcripts. A forwarded `--session-dir`
+replaces that inventory with only the named directory. Untrusted launcher
+state is never searched or resumed. `omp config path` reports a **config**
+directory, not the session data root.
+
+Discovery decodes only allowlisted header metadata in at most two leading
+JSONL records within 64 KiB, accepting either title/session order and reordered
+JSON keys. It stops at the first non-header record; it never searches messages
+for a title or prompt. OMP's native session listing/completion reads messages
+(and normal listing can recover backups), so Code does not call it for this
+metadata-only, non-mutating inventory. Results are ranked: the current
 directory's own sessions, then the rest of the repository (every worktree
 `git worktree list` or `code wt` knows), then parent or child directories,
 then everything else, newest activity first within a rank.

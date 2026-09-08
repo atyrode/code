@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +248,149 @@ func TestReadSessionHeaderStopsAtConversation(t *testing.T) {
 	}
 	if _, ok := readSessionHeader(titleOnly); ok {
 		t.Fatal("a transcript without a session record was accepted")
+	}
+}
+
+func TestReadSessionHeaderReorderedAndBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "header.jsonl")
+	for _, body := range []string{
+		"  {\"title\":\"current\",\"type\":\"title\"}\n" +
+			`{"cwd":"/work","id":"ordered","title":"initial","type":"session"}` + "\n",
+		`{"id":"ordered","cwd":"/work","type":"session"}` + "\n" +
+			`{"title":"current","type":"title"}` + "\n",
+	} {
+		// A later title must never override either leading-header layout.
+		body += `{"title":"private later title","type":"title"}` + "\n" + strings.Repeat("private body", sessionHeaderLimit)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if s, ok := readSessionHeader(path); !ok || s.ID != "ordered" || s.Title != "current" || s.Cwd != "/work" {
+			t.Fatalf("reordered headers = %+v, %v", s, ok)
+		}
+	}
+	// A session beyond the bounded prefix is not metadata discovery.
+	body := `{"title":"` + strings.Repeat("x", sessionHeaderLimit) + `","type":"title"}` + "\n" +
+		`{"id":"hidden","cwd":"/work","type":"session"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readSessionHeader(path); ok {
+		t.Fatal("read a session header past the byte limit")
+	}
+}
+
+// With CODE_OMP_DIRS_SOURCE=/absolute/omp/packages/utils/src/dirs.ts this same
+// matrix also compares against the real upstream getSessionsDir API in Bun.
+// Importing dirs alone is read-only and never initializes providers or transcripts.
+func TestOmpSessionRootLayouts(t *testing.T) {
+	source := os.Getenv("CODE_OMP_DIRS_SOURCE")
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		dirs []string
+		want string
+	}{
+		{"legacy", nil, nil, ".omp/agent/sessions"},
+		{"xdg-not-migrated", map[string]string{"XDG_DATA_HOME": "$HOME/data"}, nil, ".omp/agent/sessions"},
+		{"xdg-migrated", map[string]string{"XDG_DATA_HOME": "$HOME/data"}, []string{"data/omp"}, "data/omp/sessions"},
+		{"profile-new-under-xdg", map[string]string{"XDG_DATA_HOME": "$HOME/data", "OMP_PROFILE": "work"}, []string{"data/omp"}, ".omp/profiles/work/agent/sessions"},
+		{"profile-migrated", map[string]string{"XDG_DATA_HOME": "$HOME/data", "OMP_PROFILE": "work"}, []string{"data/omp/profiles/work"}, "data/omp/profiles/work/sessions"},
+		{"profile-legacy", map[string]string{"OMP_PROFILE": "work"}, []string{".omp/profiles/work/agent"}, ".omp/profiles/work/agent/sessions"},
+		{"profile-overrides-agent", map[string]string{"OMP_PROFILE": "work", "PI_CODING_AGENT_DIR": "$HOME/custom"}, nil, ".omp/profiles/work/agent/sessions"},
+		{"agent-overrides-xdg", map[string]string{"XDG_DATA_HOME": "$HOME/data", "PI_CODING_AGENT_DIR": "$HOME/custom"}, []string{"data/omp"}, "custom/sessions"},
+		{"default-agent-still-xdg", map[string]string{"XDG_DATA_HOME": "$HOME/data", "PI_CODING_AGENT_DIR": "$HOME/.omp/agent"}, []string{"data/omp"}, "data/omp/sessions"},
+		{"empty-canonical-profile", map[string]string{"OMP_PROFILE": "", "PI_PROFILE": "work"}, nil, ".omp/agent/sessions"},
+		{"legacy-profile-env", map[string]string{"PI_PROFILE": "work"}, nil, ".omp/profiles/work/agent/sessions"},
+		{"canonical-profile-wins", map[string]string{"OMP_PROFILE": "other", "PI_PROFILE": "work"}, nil, ".omp/profiles/other/agent/sessions"},
+		{"inherited-agent-default", map[string]string{"OMP_PROFILE": "", "PI_PROFILE": "work", "PI_CODING_AGENT_DIR": "$HOME/.omp/profiles/work/agent"}, nil, ".omp/agent/sessions"},
+		{"custom-config", map[string]string{"PI_CONFIG_DIR": ".custom"}, nil, ".custom/agent/sessions"},
+		{"absolute-config-is-joined", map[string]string{"PI_CONFIG_DIR": "/custom"}, nil, "custom/agent/sessions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, xdg := tc.env["XDG_DATA_HOME"]; xdg && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("native XDG resolution is Linux/macOS only")
+			}
+			home := isolateHistoryTest(t)
+			// OMP_PROFILE absence differs from an explicitly empty value.
+			if err := os.Unsetenv("OMP_PROFILE"); err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, strings.ReplaceAll(value, "$HOME", home))
+			}
+			for _, dir := range tc.dirs {
+				if err := os.MkdirAll(filepath.Join(home, dir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := filepath.Join(home, tc.want)
+			if got := defaultSessionRoot(); got != want {
+				t.Fatalf("session root = %s, want %s", got, want)
+			}
+			if source != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "bun", "--eval",
+					`const dirs = await import(process.env.CODE_OMP_DIRS_SOURCE); console.log(dirs.getSessionsDir());`)
+				cmd.Dir = home
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("native getSessionsDir: %v: %s", err, out)
+				}
+				if native := strings.TrimSpace(string(out)); native != want {
+					t.Fatalf("native root = %s, Code root = %s", native, want)
+				}
+			}
+		})
+	}
+}
+
+func TestMigratedSessionDiscoveryAndResume(t *testing.T) {
+	home := isolateHistoryTest(t)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	cwd := filepath.Join(home, "project")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	roots := []string{
+		filepath.Join(home, "data", "omp", "sessions"),
+		filepath.Join(home, "data", "omp", "profiles", "work", "sessions"),
+		filepath.Join(home, ".omp", "agent", "sessions"),
+		filepath.Join(home, ".omp", "profiles", "work", "agent", "sessions"),
+	}
+	for i, root := range roots {
+		writeSavedSession(t, root, "saved-"+string(rune('a'+i)), cwd, "Public title", time.Now())
+	}
+	writeSavedSession(t, filepath.Join(home, ".ompu", "agent", "sessions"), "untrusted", cwd, "Do not list", time.Now())
+	sessions := scanSavedSessions(trustedSessionRoots(""))
+	if len(sessions) != len(roots) {
+		t.Fatalf("migrated and historical sessions = %+v", sessions)
+	}
+	for i, root := range roots {
+		id := "saved-" + string(rune('a'+i))
+		plan, err := planWorktreeResume(id, nil, sessions, nil, defaultSessionRoot())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "--resume " + id
+		if root != roots[0] {
+			want = "--session-dir " + root + " " + want
+		}
+		if plan.Dir != cwd || strings.Join(plan.Args, " ") != want {
+			t.Fatalf("resume %s = %+v, want %s", id, plan, want)
+		}
+	}
+	if selected := scanSavedSessions(trustedSessionRoots(roots[1])); len(selected) != 1 || selected[0].ID != "saved-b" {
+		t.Fatalf("explicit root must replace discovery: %+v", selected)
+	}
+	if err := os.Remove(cwd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planWorktreeResume("saved-b", nil, sessions, nil, defaultSessionRoot()); err == nil {
+		t.Fatal("resumed into a missing recorded cwd")
+	}
+	if _, err := os.Stat(cwd); !os.IsNotExist(err) {
+		t.Fatalf("resume changed missing cwd: %v", err)
 	}
 }
 

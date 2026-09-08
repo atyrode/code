@@ -385,6 +385,7 @@ func TestProfileOverlay(t *testing.T) {
 	if !strings.Contains(overlay, "  agentAdvisor:\n    task: \"on\"\n") {
 		t.Errorf("audit profile lost its task advisor:\n%s", overlay)
 	}
+	checkNativeAgentRouting(t, overlay)
 
 	t.Run("a combination the catalog no longer generates", func(t *testing.T) {
 		stale := saved

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -183,6 +185,7 @@ func (o *smokeOmp) checkEffectiveConfig(t *testing.T) {
 			t.Errorf("%s: overlay sets %v, omp reads back %v (under %s)", path, leaves[path], got, key)
 		}
 	}
+	checkNativeAgentRouting(t, overlay)
 }
 
 // flattenLeaves walks a decoded YAML document to its dotted leaf paths. Lists
@@ -327,5 +330,82 @@ func (o *smokeOmp) checkRoles(t *testing.T) {
 		if !agents[name] {
 			t.Errorf("the generator routes an agent %q that %s no longer bundles (its task.agentModelOverrides entry is inert)", name, o.version)
 		}
+	}
+}
+
+// TestGenConfigYAMLAgentOverrides defends role identity, not YAML spelling.
+// Native resolution is opt-in because the Go package does not vendor OMP.
+func TestGenConfigYAMLAgentOverrides(t *testing.T) {
+	m := model{sel: defaultSel()}
+	m.sel["advisor"] = "off"
+	m.generated = map[string][]string{comboID(m.sel): {
+		"    default    claude-fable-5:high → claude-sonnet-5:medium",
+		"    plan       claude-fable-5:high",
+		"  ● librarian  gpt-5.6-sol:high → claude-haiku-4-5:low",
+		"  ● reviewer   gpt-5.6-sol:high → gpt-5.6-luna:medium",
+		"  ● sonic      gpt-5.6-luna:minimal",
+	}}
+	overlay := m.genConfigYAML()
+	var config struct {
+		Task struct {
+			Overrides map[string]string `yaml:"agentModelOverrides"`
+		} `yaml:"task"`
+		Retry struct {
+			Chains map[string][]string `yaml:"fallbackChains"`
+		} `yaml:"retry"`
+	}
+	if err := yaml.Unmarshal([]byte(overlay), &config); err != nil {
+		t.Fatalf("generated aliases are not valid YAML: %v", err)
+	}
+	agents := make([]string, 0, len(config.Task.Overrides))
+	for agent := range config.Task.Overrides {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	if !reflect.DeepEqual(agents, []string{"librarian", "reviewer", "sonic"}) {
+		t.Fatalf("marked custom/bundled agents were lost or non-agents overridden: %v", agents)
+	}
+	if chain, ok := config.Retry.Chains["sonic"]; !ok || len(chain) != 0 {
+		t.Fatalf("lead-only role must explicitly suppress default-chain inheritance: %v", config.Retry.Chains)
+	}
+	checkNativeAgentRouting(t, overlay)
+}
+
+// checkNativeAgentRouting runs native Settings/resolver and the actual pure
+// executor chain constructors, without a session, credential lookup or model call.
+// A Bun loader exposes private functions in memory; upstream stays untouched.
+func checkNativeAgentRouting(t *testing.T, overlay string) {
+	t.Helper()
+	source := os.Getenv("CODE_OMP_SOURCE")
+	if source == "" {
+		t.Log("native agent routing unverified: set CODE_OMP_SOURCE to an OMP source checkout with dependencies")
+		return
+	}
+	source, err := filepath.Abs(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Fatal("CODE_OMP_SOURCE requires Bun")
+	}
+	home := t.TempDir()
+	config := filepath.Join(home, "overlay.yml")
+	if err := os.WriteFile(config, []byte(overlay), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs(filepath.Join("testdata", "native-agent-routing.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bun, script, source, config)
+	cmd.Dir = home
+	cmd.Env = ompChildEnv(os.Environ(), home, ompAuth{})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("native agent routing: %v\n%s", err, out)
+	} else {
+		t.Logf("%s", out)
 	}
 }

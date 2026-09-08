@@ -61,8 +61,11 @@ code session reap --older-than 3d --yes # retire them, whole process tree
 Inside a repository, `code ls` also lists the omp sessions saved from any of
 its worktrees — the current directory's first, then the rest of the repository
 — each marked `live` when a recorded session is running it and `interrupted`
-otherwise. Only the transcript headers (id, directory, title, timestamp) are
-read; the conversation never is.
+otherwise. Native XDG data roots and historical default/profile roots are
+covered; a forwarded `--session-dir` replaces that inventory. Only bounded
+leading header metadata (id, directory, title, timestamp) is decoded, never a
+message search. See [saved session paths](docs/configuration.md#saved-omp-sessions)
+for profile precedence and migration behavior.
 
 `reap` prints and exits unless you pass `--yes`, and always takes the session's
 whole process tree — language servers, browsers, and workers included, so they
@@ -208,7 +211,10 @@ Dotfiles owns OMP's **managed machine runtime and configuration**. Code's
 `#with-omp` is only an optional standalone bundle, not a replacement for the
 dotfiles wrapper or a second deployment authority. The repositories have no
 cross-repository build dependency: update and verify each pin explicitly.
-`CODE_OMP` still selects the configured runtime that Code actually launches.
+`CODE_OMP` selects both the configured runtime Code launches and the
+`models`/`usage`/mandatory live `bench` probes used by `code generate init`
+and first-run onboarding; an invalid explicit path does not fall back to
+another installation.
 Older OMP releases are not compatibility targets; Code no longer probes for
 pre-17.3 settings support. In particular, the explicit `audit` advisor dial
 always enables advising for spawned `task` agents, including saved audit
@@ -277,6 +283,28 @@ schema evidence, not evidence that the deployed **Code** wrapper reaches an
 interactive session: dotfiles owns the complementary packaged Code/OMP PTY
 startup and argument/config-layer checks. Neither smoke activates a machine or
 advances a pin. Native containment still requires the separate canaries above.
+
+For offline **native agent-routing** evidence beyond config readback, use a
+source checkout of the pinned OMP release with its dependencies installed:
+
+```bash
+CODE_OMP_SOURCE=/absolute/path/to/oh-my-pi \
+  go test -run '^(TestGenConfigYAMLAgentOverrides|TestProfileOverlay)$' -count=1 -v .
+```
+
+This requires Bun. It generates real overlays and imports OMP's public Settings
+and alias-resolution APIs under a private home. It checks that custom agents
+retain distinct role identities and their intended model/thinking selectors.
+`modelRoles` is the selector authority; task overrides use quoted `@role`
+aliases. `CODE_OMP_SOURCE` can also qualify `TestOmpSmoke`'s generated overlay.
+This is selection evidence, not actual retry execution.
+
+OMP 18.1.14 still loses the role hint inside fresh child sessions: retries can
+borrow a parent's or sibling's chain when models are shared, including for an
+explicitly empty chain. The generator now expresses the intended routing, but
+complete runtime enforcement requires the upstream fix tracked in
+[#142](https://github.com/atyrode/code/issues/142). Do not treat the current pin's
+preview as a strict per-agent fallback guarantee.
 
 Then just run `code`. The first run notices there's no routing catalog yet
 and walks you through building one from your omp's model list — it shows you

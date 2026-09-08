@@ -766,8 +766,8 @@ func (m model) poolOfModel(id string) string {
 // fallback dial is off, thinking, advisor, and the priority tier when fast is
 // on) from the generated routing block for the current facets — what Enter
 // launches omp with. The agent overrides mirror the preview: without them the
-// static managed defaults would keep the five agent-backed types pinned
-// regardless of the generated profile (issue atyrode/dotfiles#173).
+// static managed defaults would keep agent-backed types pinned regardless of
+// the generated profile (issue atyrode/dotfiles#173).
 func (m model) genConfigYAML() string {
 	rows := m.currentRows()
 	var mr, fc, ao strings.Builder
@@ -795,18 +795,18 @@ func (m model) genConfigYAML() string {
 			advisorOn = true
 		}
 		if i == 1 && role != "advisor" {
-			// ●-marked agent-backed role: mirror its lead route as the task-agent
-			// model override so spawned agents follow the generated profile.
-			ao.WriteString("    " + role + ": " + m.prefixed(models[0]) + "\n")
+			// Preserve role identity: native child fallback lookup is role-keyed,
+			// and two agents can share a lead while having different chains.
+			ao.WriteString("    " + role + ": '@" + strings.ReplaceAll(role, "'", "''") + "'\n")
 		}
 		mr.WriteString("  " + role + ": " + m.prefixed(models[0]) + "\n")
-		if len(models) > 1 {
-			var fbs []string
-			for _, x := range models[1:] {
-				fbs = append(fbs, m.prefixed(x))
-			}
-			fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
+		var fbs []string
+		for _, x := range models[1:] {
+			fbs = append(fbs, m.prefixed(x))
 		}
+		// An explicit empty chain prevents native inheritance of default's
+		// chain for a role whose preview advertises only its lead.
+		fc.WriteString("    " + role + ": [" + strings.Join(fbs, ", ") + "]\n")
 	}
 	var b strings.Builder
 	b.WriteString("modelRoles:\n" + mr.String())
