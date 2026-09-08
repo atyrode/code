@@ -953,10 +953,13 @@ func defaultCatalogPath() string {
 	return filepath.Join(base, "code", "generated.plain")
 }
 
-// runGenerate implements `code generate [init]`. Returns a process exit code.
+// runGenerate implements `code generate [init|refresh]`. Returns a process exit code.
 func runGenerate(args []string) int {
 	if len(args) > 0 && args[0] == "init" {
 		return runGenerateInit(args[1:])
+	}
+	if len(args) > 0 && args[0] == "refresh" {
+		return runGenerateRefresh(args[1:])
 	}
 	modelsFile, out := defaultModelsPath(), defaultCatalogPath()
 	for i := 0; i < len(args); i++ {
@@ -1026,6 +1029,20 @@ const generateHelp = `code generate — render the facet-grid catalog the TUI br
       --from-json  read the model list from FILE instead of omp, and skip the
                    probe. Offline inspection only: the result is marked
                    'probed: false' and 'code generate' will refuse to render it.
+
+  code generate refresh [--models-file FILE] [--skip-bench | --bench-json FILE]
+                        [--runs N] [--max-tokens N]
+      Refresh cached cost, context, thinking and measured speed/ttft only.
+      Keeps model membership, tiers, buckets, custom fields and comments.
+      Uses 'omp models --json' and the native chat benchmark (paid requests).
+      Defaults: the same models path as render, 2 runs, 256 maximum tokens.
+      --skip-bench updates metadata only; --bench-json reuses saved native
+      chat JSON instead of making benchmark requests. Neither skips metadata.
+      The single 'refreshed' date advances only for complete metadata and
+      successful complete measurements. Partial results keep unavailable facts
+      and the old date. Symlinks, ambiguous YAML and concurrent edits refuse.
+      Exit: 0 complete (or complete metadata with --skip-bench);
+            1 incomplete facts/collection or save failure; 2 invalid input.
 
   code generate [--models-file FILE] [--out FILE|-]
       Render the catalog. Defaults: models file at

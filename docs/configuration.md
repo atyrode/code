@@ -27,7 +27,8 @@ All three scaffold probes (`models`, `usage`, and the mandatory live `bench`)
 use `CODE_OMP` when set, otherwise `omp` on PATH, just like a trusted launch.
 An invalid explicit runtime is an error, not permission to probe a different
 installation. `code generate init` and first-run onboarding make model calls;
-`code generate` only re-renders an existing catalog.
+`code generate refresh` also does by default. `code generate` only re-renders
+an existing catalog.
 
 The generated grid covers OMP's model roles and bundled task agents, not a
 historical agent inventory. The retired bundled `librarian` route is no longer
@@ -47,6 +48,52 @@ so this intent is not yet a strict runtime guarantee when models are shared
 ([#142](https://github.com/atyrode/code/issues/142)).
 These are one-shot launch overlays, not a migration of persistent OMP settings
 or previously stored immutable Code profile revisions.
+
+## Refreshing curated model facts
+
+```sh
+code generate refresh --models-file PATH
+code generate refresh --models-file PATH --skip-bench
+code generate refresh --models-file PATH --bench-json saved-chat-bench.json
+```
+
+`refresh` updates an existing catalog's `cost_in`, `cost_out`, `context`,
+`thinking`, `speed` and `ttft` (adding a missing `ttft` when measured). It preserves
+membership, model IDs, pools, tiers, buckets, image overrides, comments and custom
+fields. It does not regenerate tiers: **`code generate init --refresh` replaces
+the scaffold**, while `code generate` renders the catalog after editing.
+Without `--models-file`, refresh uses the same default models path as `init`.
+
+**The default benchmark makes live, potentially paid model calls.** Collection
+uses `CODE_OMP` (otherwise `omp` on PATH), the provider registry and native
+`bench --profile chat` with Code's short harmless prompt. `--runs N` defaults to
+2 requests per curated model; `--max-tokens N` defaults to 256. Both must be
+positive. Metadata comes from `omp models --json`, including priced reseller
+rows when a provider's own price is unavailable. Thinking capabilities retain
+gaps rather than advertising unsupported intermediate levels.
+
+`--skip-bench` makes no benchmark calls and retains cached speed/TTFT.
+`--bench-json PATH` instead reads saved native `omp bench --profile chat --json`
+output; it must contain its declared number of successful runs, with valid
+per-run measurements and aggregate means. These options are mutually exclusive. Both still
+collect current metadata. Speed prefers streaming `generationTps`; TTFT is
+stored in seconds. A failed run cannot be hidden by an average of successes.
+
+The single `refreshed` date advances only when metadata and every requested
+benchmark measurement are complete. Metadata-only, failed and partial runs
+retain the previous date (or leave it absent). Available valid facts can still
+be saved while unavailable fields retain their cached values. Exit status is
+`0` for a full refresh or complete metadata with explicit `--skip-bench`, `1`
+for incomplete facts/collection failure, and `2` for invalid arguments or
+catalog shape. Invalid metadata envelopes leave the file unchanged. Saving is
+atomic, preserves file permissions and refuses to overwrite a catalog changed
+during collection.
+
+Code owns this generic headless refresh command; catalog curation, scheduling
+and deployment belong to each consumer. Dotfiles' existing refresh integration
+has not migrated merely because this command exists: that consumer cutover
+waits for a published Code binary. This command neither activates a host nor
+publishes a release.
 
 ## Dials that set omp's own switches
 

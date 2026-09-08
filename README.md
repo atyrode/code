@@ -213,7 +213,8 @@ dotfiles wrapper or a second deployment authority. The repositories have no
 cross-repository build dependency: update and verify each pin explicitly.
 `CODE_OMP` selects both the configured runtime Code launches and the
 `models`/`usage`/mandatory live `bench` probes used by `code generate init`
-and first-run onboarding; an invalid explicit path does not fall back to
+and first-run onboarding, plus the metadata and benchmark collection for
+`code generate refresh`; an invalid explicit path does not fall back to
 another installation.
 Older OMP releases are not compatibility targets; Code no longer probes for
 pre-17.3 settings support. In particular, the explicit `audit` advisor dial
@@ -316,6 +317,15 @@ there — you re-render with `code generate` instead.
 
 The same machinery is scriptable as `code generate init` (scaffold the models
 file) and `code generate` (re-render the catalog after you edit it).
+
+For an already curated models file, use
+`code generate refresh --models-file PATH` to update cached model facts without
+reassigning tiers or changing membership. **The default runs live benchmarks
+and may incur provider charges.** `--skip-bench` updates metadata only;
+`--bench-json PATH` reuses a saved native chat benchmark instead of making model
+calls. Neither is `code generate init --refresh`, which regenerates the scaffold.
+See [fact refresh](docs/configuration.md#refreshing-curated-model-facts) for
+freshness, failure and ownership rules.
 
 ## More
 

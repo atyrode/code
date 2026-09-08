@@ -463,15 +463,62 @@ var versionBlockedProbe = regexp.MustCompile(`(?i)claude_code_version_too_old|do
 // without a profile fails the whole invocation with "--prompt requires --profile
 // chat or generation", which took `code generate init` down on every run.
 var ompBenchJSON = func(selectors []string) ([]byte, error) {
+	return collectBenchJSON(selectors, 1, 4)
+}
+
+// Both generation paths use OMP's native chat benchmark and the same harmless
+// prompt; init asks only about reachability, refresh asks for complete timing.
+func collectBenchJSON(selectors []string, runs, maxTokens int) ([]byte, error) {
 	path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
 	if err != nil {
 		return nil, err
 	}
 	args := append([]string{"bench"}, selectors...)
 	return exec.Command(path, append(args,
-		"--json", "--runs", "1", "--max-tokens", "4",
+		"--json", "--runs", strconv.Itoa(runs), "--max-tokens", strconv.Itoa(maxTokens),
 		"--profile", "chat",
 		"--prompt", "Reply with the single word: ok")...).Output()
+}
+
+type benchMetric struct {
+	Mean float64 `json:"mean"`
+}
+
+type benchResult struct {
+	OK              bool    `json:"ok"`
+	Error           string  `json:"error"`
+	Challenge       string  `json:"challenge"`
+	GenerationTps   float64 `json:"generationTps"`
+	TokensPerSecond float64 `json:"tokensPerSecond"`
+	TTFTMs          float64 `json:"ttftMs"`
+}
+
+type benchStats struct {
+	TTFTMs          *benchMetric `json:"ttftMs"`
+	GenerationTps   *benchMetric `json:"generationTps"`
+	TokensPerSecond *benchMetric `json:"tokensPerSecond"`
+}
+
+type benchModel struct {
+	Model    string        `json:"model"`
+	Selector string        `json:"selector"`
+	Results  []benchResult `json:"results"`
+	Stats    *benchStats   `json:"stats"`
+}
+
+type benchReport struct {
+	Profile string          `json:"profile"`
+	Runs    int             `json:"runs"`
+	Cache   json.RawMessage `json:"cache"`
+	Models  []benchModel    `json:"models"`
+}
+
+func parseBenchReport(raw []byte) (benchReport, error) {
+	var report benchReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return report, fmt.Errorf("parsing bench report: %w", err)
+	}
+	return report, nil
 }
 
 // runBench sorts each model into the outcomes benchFact describes and records
@@ -497,30 +544,9 @@ func runBench(selectors []string) (map[string]benchFact, error) {
 	// probe report" — which made the run refuse the whole ladder. Reachability
 	// is therefore derived from the runs themselves (all ok, at least one),
 	// never from an aggregate that a schema change can quietly empty.
-	type metric struct {
-		Mean float64 `json:"mean"`
-	}
-	var parsed struct {
-		Models []struct {
-			Model   string `json:"model"`
-			Results []struct {
-				OK    bool   `json:"ok"`
-				Error string `json:"error"`
-			} `json:"results"`
-			Stats *struct {
-				TTFTMs *metric `json:"ttftMs"`
-				// generationTps is the streaming rate; tokensPerSecond folds
-				// the startup wait into the same figure. effTPS (facets.go)
-				// already composes ttft with the streaming rate itself, so
-				// taking tokensPerSecond here would charge for time-to-first
-				// token twice and read a 62 t/s haiku as 5 t/s.
-				GenerationTps   *metric `json:"generationTps"`
-				TokensPerSecond *metric `json:"tokensPerSecond"`
-			} `json:"stats"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("parsing bench report: %w", err)
+	parsed, parseErr := parseBenchReport(raw)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	out := map[string]benchFact{}
 	for _, m := range parsed.Models {
