@@ -135,8 +135,6 @@ func loadHeadlessModel(accountOverride *accountSelectionState) (model, error) {
 	_, sandboxErr := resolveLaunchPath("CODE_OMP_UNTRUSTED", []string{"ompu"})
 	m.hasSandbox = sandboxErr == nil
 	m.applyCatalog()
-	version := probeOmpVersion()
-	m.ompMajor, m.ompMinor = version.major, version.minor
 	if m.broker.configured() {
 		m.avail = loadAvailability(m.broker)
 		if accountOverride != nil && !accountOverride.strictLaunch {

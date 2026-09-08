@@ -1,125 +1,156 @@
-# code's manifold plugins
+# Code's Manifold plugins
 
-The out-of-tree manifold plugins in this repo (migration status: `docs/manifold-transition.md`
-§6). One directory per plugin, a child INSIDE its parent's directory:
+Code supplies product semantics; Manifold owns machines, execution, consent,
+job history, shared storage, terminal creation and workspace placement. Current
+migration evidence lives only in [the transition ledger](../docs/manifold-transition.md#6-transition-steps).
 
-| Directory                | Id                       | What                                                                                             |
-| ------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------ |
-| `atyrode.code/`          | `atyrode.code`           | The baseline: `atyrode.code.launch` (authorize and record a launch of `code`), `atyrode.code.listLaunches`, the `launch_recorded` event. |
-| `atyrode.code/generator/` | `atyrode.code.generator` | The persistent React launch panel (`launcher`): pick a machine and working directory, open interactive `code` in a terminal tile through the baseline's door. Requires `atyrode.code`. |
+| Directory | Plugin | Surface |
+| --- | --- | --- |
+| `atyrode.code/` | `atyrode.code` | `run`, `observe`, `applyAccountChoices` and `prepareLaunch` doors over native services. |
+| `atyrode.code/generator/` | `atyrode.code.generator` | The `launcher` panel: real catalog dials, routing, suggestions and reviewed headless launches; explicit CLI recovery. |
+| `atyrode.code/usage/` | `atyrode.code.usage` | Independent usage observations, freshness and explicit refresh requests. |
+| `atyrode.code/accounts/` | `atyrode.code.accounts` | Independent account choices, named presets, reviewed import and block clearing. |
 
-Every id, door name, storage key, event kind and panel id is spelled once, in
-`atyrode.code/contract.ts`; both halves of every bundle import it, and `test/contract.test.ts`
-pins the manifests to it.
+The generator requests a default workspace seat. Usage and Accounts are
+available through native **F8 → Arrange → Shelf**, rather than forcing three
+narrow columns into every workspace. Existing saved arrangements are preserved.
+All parts require the parent; disablement, installation and placement remain
+native Manifold operations.
 
-## The SDK is a sibling checkout
+## SDK and authoring
 
-The authoring tools come from `@manifold/plugin-kit` in
-[atyrode/manifold](https://github.com/atyrode/manifold), pinned by `MANIFOLD_REV` to
-`d8dc6c93ad6a9d467b5546aec88af3b9c42ceb87`. Until the kit is published as a release
-asset, that checkout IS the SDK. `tsconfig.json` maps the public `@manifold/plugin`,
-`@manifold/plugin/hooks`, `@manifold/protocol` and `@manifold/ui` imports and their
-supporting packages to the sibling checkout, with React resolved from its workspace:
+`MANIFOLD_REV` pins the sibling [atyrode/manifold](https://github.com/atyrode/manifold)
+checkout to `f5fd6bdbc5fe8499badba58f31919d1a46598483`, including governed job
+discovery and atomic plugin-storage compare-and-set. Update that file and the
+reusable workflow reference in `.github/workflows/manifold-plugins.yml` together.
 
-```
+```text
 <parent>/
-  code/plugins/      this directory
-  manifold/          atyrode/manifold at $(cat plugins/MANIFOLD_REV), with `bun install` run
+  code/plugins/
+  manifold/       pinned SDK, with bun install --frozen-lockfile run
 ```
 
-`bun install --frozen-lockfile` here installs zod, TypeScript and the Bun/React types;
-run it in the manifold checkout too, because the kit and shared React packages
-resolve from that workspace.
+Run `bun install --frozen-lockfile` in both checkouts. Code's TypeScript paths
+resolve the public plugin, protocol and UI packages there; React is shared from
+the SDK workspace. No private host imports, vendored SDK or second React runtime
+are needed.
 
-## In-realm authoring
+The `0.3.0` bundles use normal **In-realm** React modules and default-export server
+handlers. Components receive `PanelProps`/`HostServices`, use `@manifold/ui`, and
+observe native machine/job events with the shared resource hook. Each part's CSS
+is rooted under its own `plugin-atyrode_code…` class. Do not install these React
+bundles with the historical `--hardened` mode or replace native events with a
+Code publisher daemon.
 
-The `0.2.0` bundles use Manifold's ADR 0025 in-realm model, not the historical
-Worker `ui.*` vocabulary. The baseline server default-exports its definition
-(`actions` and `handlers`); there is no IPC bootstrap or `defineServerPlugin`
-call. Web modules default-export their registrations. The generator's `web.tsx`
-registers a React component receiving `PanelProps`/`HostServices`, uses shared
-`@manifold/ui` primitives, and reads machines and the authorization ledger through
-`usePolledResource` and the host's client. It calls the baseline launch door, then
-`host.client.openTerminal` with the authorized argv and optional machine-local cwd.
+## Governed machine operations
 
-`manifest.json` declares `entry.styles: true`; `styles.css` is scoped under
-`.plugin-atyrode_code_generator` (including prefixed descendant classes). The kit
-carries this sheet for host admission under ADR 0025's root-class rule. Do not
-replace it with global styles or bundle a separate copy of React.
+The parent declares a closed `code-machine` worker for inspection, usage,
+account listing/import, account toggles, preset create/update/activate/delete,
+block clearing and suggestions. The worker executes the reviewed
+`/runtime/bin/code` tool, validates bounded JSON, and projects public output.
+Raw stderr, internal credential ids, credentials, paths and session metadata are
+not published as job observations. Public account identities remain personal
+data and are read only through current native job/output authority.
 
-`pack.sh` uses the kit's shared-module output, not `--self-contained`. Install
-these bundles in normal **In-realm** mode; `--hardened` is not this React plugin's
-execution contract. Packing does not grant trust. The SDK pin, host admission
-and browser mounting are separate gates: a passing `verify` proves real-server
-installation and door availability, not browser rendering or full Code parity.
+The source manifest deliberately has an empty `machine.artifacts` map. It is
+**unavailable**, not a fake executable or a claim that a machine is ready.
+The release build produces static Linux x64/arm64 workers. `scripts/machine-artifacts.ts`
+verifies the actual archives and release checksums, derives entry/archive hashes
+and bounds, then `pack.sh` stages that map when `CODE_MACHINE_ARTIFACTS` is set.
+The checked-in declaration is not overwritten. Missing archives, bad checksums,
+wrong architecture, dynamic executables and unsafe archive entries are refused.
+A source pack without that variable stays explicitly unavailable.
 
-## Commands
+A real installation also needs Manifold's proved owner and reviewed `code`/`omp`
+runtime-tool bindings. The Code wrapper must support the headless verbs and
+reference the intended catalog and dependencies. Broker reads additionally need
+explicit machine-local credential-resource and host-network consent. Do not
+copy a token into the hub, treat a mutable secret as an immutable tool dependency,
+grant a whole home/state directory, bypass the wrapper, or use a terminal as RPC.
+These are native machine-configuration prerequisites, not privileges this plugin
+can create for itself. Production and fleet activation are separate operator work.
+
+The shared reviewed job/terminal profile and safe resource bindings are tracked
+in [Manifold #447](https://github.com/atyrode/manifold/issues/447), refining
+[its executable lifecycle work](https://github.com/atyrode/manifold/issues/153).
+A worker release alone does not satisfy that prerequisite.
+
+## Shared choices and launch review
+
+Account jobs evaluate Code's existing Go semantics. They do not write the CLI
+selection file: the worker passes a portable `--state` document and returns a
+proposal tied to its starting revision. Applying it uses native storage
+compare-and-set. Two participants cannot silently overwrite one another; a stale
+proposal must be reviewed again. A locally confirmed change continues to apply
+only after its exact job succeeds; proposals recovered after a reload need
+explicit review. The event invalidates reads without broadcasting identities.
+
+The first saved change adopts the reviewed public choices. **Review import from
+machine** is a separate declared operation: it reads the machine's existing
+choices, shows the complete replacement, and applies only after confirmation and
+CAS. It can replace an old inaccessible revision without disclosing it. Neither
+path moves credentials or rewrites the original state file. Ordinary CLI/TUI
+settings and explicit `CODE_*` overrides remain intact.
+
+Shared-choice inspection and launch require an adopted revision, not an
+unversioned reading of CLI defaults. Launch preparation checks the exact machine,
+inspection job, facet selection and account revision, then returns an ephemeral
+`code launch --account-selection=…` program for native terminal creation. Go
+validates the selected identities again against the fresh broker. **Existing CLI
+settings** is an explicit separate choice. The terminal's wrapper/catalog must
+match the reviewed machine profile; no cross-surface profile binding is invented
+inside Code.
+
+There is no duplicate Code launch ledger. Manifold owns actual terminals and
+job history; opening a terminal is not proof that omp became ready. Old ledger
+rows are not migrated or silently deleted. Native storage data versioning and
+explicit purge cover the parent's public preferences.
+
+Usage is a timestamped observation, not a quota guarantee. Native schedules own
+automatic refresh; they pin their input payload. A schedule using shared choices
+must be updated when that revision changes, otherwise the panel labels its result
+stale. Portable usage never borrows the standalone usage cache. First-run
+inspection reports a missing catalog and provider availability without writing
+configuration; `code generate init` and `code generate` remain the headless
+recovery path. OAuth login remains in Code's existing local terminal flow.
+
+## Commands and proof boundaries
 
 ```sh
 bun install --frozen-lockfile
-bun run check          # tsc over the plugins and tests
-bun test               # contract, machine selection and server-door behavior
-bun run pack           # dist/<id>.manifold-plugin.json for every plugin + dist/SHA256SUMS
-bun run verify         # real throwaway server: normal install, dispatch each door, uninstall
+bun run check
+bun test
+bun run pack
+bun run verify
 bun run dev -- --hub http://127.0.0.1:7912 --deliver docker:manifold-dev-manifold-1
-                       # from dev-01: pack + install on the integrated preview, parents before
-                       # parts, then watch sources and reinstall changed bundles
 ```
 
-The dev command runs from this `plugins/` directory on dev-01. The kit reads the
-preview container's owner credential in memory; do not put it in argv or logs.
-It packs and delivers the bundles, installs parents before dependants, and watches
-for changes. Changed bundles trigger the host's normal live remount; unchanged
-hashes do not reinstall. Keep the authenticated preview open while editing.
+Run the dev command from this directory on dev-01. The kit keeps the preview
+owner credential in memory, installs parents before parts, and uses normal live
+remounts. Packing is not consent. The real-server verifier proves installation
+and door availability; it does not establish useful execution, current broker
+access or successful terminal startup. Native dispatch, browser rendering and
+actual Code-worker execution need their own smoke evidence.
 
-`pack.sh` packs every `manifest.json` and writes `dist/SHA256SUMS`; each sha256 is
-the pin `engine.plugins.install` demands. All bundles are cut together. CI
-(`.github/workflows/manifold-plugins.yml`, Manifold's reusable `plugins.yml`) runs
-check, test, pack and real-server verify. A `v*` release attaches the bundles and
-checksums; preview delivery must use the same normal in-realm mode as the dev
-loop, not the old Worker's `--hardened` flag. The receiver on the host must support
-the delivery contract; changing the SDK pin does not update it. Production
-(`manifold.tyrode.dev`) remains an operator install from the release URL in the
-plugin manager, not a target of this dev loop.
+After an approved build is installed on [the integrated preview](https://preview.manifold.tyrode.dev):
 
-## Try the panel on the authenticated preview
+1. In **Plugins → Installed**, enable Code and its desired parts in normal
+   **In-realm** mode. Open Code's native machine operations section to inspect
+   the exact artifact, owner readiness, per-operation consent and retained jobs.
+2. Open **Code** in an editable composition and explicitly choose an online
+   machine. No machine is chosen and no job is run merely by mounting a panel.
+3. Place **Code accounts** from **F8 → Arrange → Shelf**. Refresh its snapshot,
+   then review/apply an import or save an account choice. The expected result is
+   a verified new Manifold revision, not a rewritten CLI file.
+4. In **Code**, preview the desired dials against that revision. Review routing
+   and any suggestion before **Launch reviewed choices**. Expect a native
+   terminal tile in the current composition; inspect its output for Code/omp
+   readiness. The panel stays open. **Open Code CLI recovery** is separate.
+5. Place **Code usage** independently. An explicit refresh starts one governed
+   job; completed observations show their provenance and freshness. Offline,
+   unsupported, denied and stale states must not look like a successful refresh.
 
-1. Open [the integrated preview](https://preview.manifold.tyrode.dev) and sign in
-   normally through the production identity handoff. This does not change
-   production. Workspace arrangements are per user.
-2. In the plugin manager's **Installed** list, check that `atyrode.code` and
-   `atyrode.code.generator` are enabled and **In-realm**. The generator declares
-   a default seat between the sidebar and container view; saved custom layouts
-   are preserved.
-3. If **code** is absent from a custom layout, press **F8** for **Arrange** and
-   choose **code** from **Shelf**. Existing pane widths can be resized there.
-   Manifold [#420](https://github.com/atyrode/manifold/issues/420) tracks a
-   host bug that can misplace Shelf-added panels with nested canvas portals;
-   the default workspace seat uses the host's normal composed layout.
-4. Open or create a composition in an editable workspace view. Pick the online
-   **dev-01** machine and optionally enter a working directory that exists there
-   (for example `/home/alex/code`); blank uses the machine
-   default. Without a mounted editable container or an eligible machine, the
-   panel explains the missing prerequisite and disables launch.
-5. Press **Open code in a tile**. Expect a terminal tile in the current
-   composition running interactive `code`, with the launch panel still present.
-   Provider, account, model and agent selection and the dials still belong to
-   that terminal. Quit the TUI with `q`: the panel remains available. Manifold
-   may retire the terminal's empty composition; create another to launch again.
-
-**Recent authorizations** is not a running-session list: the door records before
-terminal creation, which can still fail, and the program can subsequently exit.
-Opening a terminal does not establish that an omp coding session is ready.
-
-Local browser/terminal proof was performed on **2026-09-07**; its exact scope and
-remaining merge/operator-proof gates are recorded only in the authoritative
-[§6 ledger](../docs/manifold-transition.md#6-transition-steps). This is not full
-web parity. Remote catalog/dials, usage and account surfaces require the governed
-common runtime for Code #97/#102, currently blocked on unpublished
-[Manifold PR #375](https://github.com/atyrode/manifold/pull/375)
-(#156/#235/#236). No separate `code publish` daemon or PTY-as-RPC substitute is
-introduced. `atyrode.code.usage` and `atyrode.code.accounts` remain reserved until
-real runtime-backed surfaces exist. Final plugin-authored launchpad placement
-still depends on Manifold #134/#201; the working workspace panel plus host
-composition does not close those issues. The TUI and engine configuration
-ceremony remain intact until their retirement gates are met.
+These are acceptance actions, not an assertion that the current preview already
+contains this build or its real account bindings. Releases/tags, credential
+relocation, broker retirement, production deployment and TUI removal are not
+part of this source integration.

@@ -38,6 +38,14 @@ or tier. Use `code inspect` to discover this machine's supported facets, and
 `code inspect --selection '{"model":"smart"}'` to preview a particular choice.
 Headless selection does not read or overwrite `CODE_SELECTION_STATE`.
 
+For a generated or managed launch, `--account-selection` accepts exactly
+`{"schemaVersion":1,"disabled":[{"provider":"PROVIDER","identityKey":"IDENTITY_KEY"}]}`.
+It applies only to that launch and bypasses the standalone account-selection
+file. Code validates every supplied identity against the fresh broker snapshot;
+unknown identities or an unavailable broker refuse instead of widening the pool.
+Untrusted and delegated-runtime launches reject this option. Omitting it keeps
+the ordinary machine-local account policy.
+
 | `--kind` | behavior |
 | --- | --- |
 | `generated` (default) | requires a runnable catalog combination and an available provider lane; launches with an ephemeral routing overlay, without rewriting omp config |
@@ -116,8 +124,8 @@ and integer **Unix seconds** for times (`observedAt`, `requestedAt`,
 Do not treat these two schema families as identically cased or timestamped.
 Errors go to stderr with a nonzero exit status.
 
-`usage` takes no arguments. It refreshes the broker snapshot once and
-reconciles it with `CODE_USAGE_CACHE`; a successful usage-and-account refresh
+Without a portable `--state` document, `usage` refreshes the broker snapshot once
+and reconciles it with `CODE_USAGE_CACHE`; a successful usage-and-account refresh
 can update that cache, but does not change selections. Check `status`
 (`fresh`, `partial`, `stale`, `failed`), `usageRefresh`, `accountRefresh`,
 provider/account/window statuses and each window's `observedAt`, not just the
@@ -183,6 +191,34 @@ Only OAuth providers are accepted; browser authorization and terminal
 interaction stay in that existing login flow, never in a headless credential
 API. API-key enrollment still uses the operator's secure broker tooling.
 Refresh with `code accounts list` after login.
+
+### Portable account choices
+
+`accounts list`, preset listing and selection/preset mutations also accept
+`--state JSON`. `inspect`, `suggest` and `usage` accept the same document:
+
+```json
+{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[],"presets":[]}
+```
+
+Each entry in `manualDisabled` is a public `{provider,identityKey}` pair.
+Each preset is `{name,disabled}`, with the same reference shape. This is a
+portable public-choice document, not the on-disk file format and never a place
+for credentials. Duplicate/unknown fields, malformed documents and invalid
+preset names are refused. References are reconciled against the fresh broker
+snapshot using the same account semantics as the normal CLI.
+
+With `--state`, selection operations return the evaluated proposal without
+reading, locking or writing `CODE_AUTH_ACCOUNT_STATE`. Portable inspection and
+suggestions require the broker rather than falling back to standalone
+credentials. Portable usage neither reads nor writes `CODE_USAGE_CACHE`.
+`clear-blocks` and `login` reject `--state`: they are real broker/terminal
+operations, not portable choice transformations.
+
+The Manifold worker adds a `baseRevision` to its public results; this is not
+a CLI flag. The plugin applies a verified proposal through native storage
+compare-and-set, and shared-choice previews require an adopted revision.
+Standalone commands without either override retain their original behavior.
 
 ## models.yml columns
 

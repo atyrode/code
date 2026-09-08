@@ -24,7 +24,6 @@ func headlessLaunchFixture(t *testing.T) string {
 	t.Setenv("CODE_GENERATED", engineCatalogFixture(t))
 	t.Setenv("CODE_USAGE_CACHE", "")
 	t.Setenv("CODE_SESSION_STATE", t.TempDir())
-	t.Setenv("LAUNCH_VERSION", "18.1.10")
 	t.Setenv("LAUNCH_PROVIDER", "")
 	t.Setenv("LAUNCH_EXIT", "0")
 	capture := t.TempDir()
@@ -33,7 +32,6 @@ func headlessLaunchFixture(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "omp")
 	body := `#!/bin/sh
 case "$1" in
-  --version) printf 'omp/%s\n' "$LAUNCH_VERSION"; exit 0 ;;
   token) [ -z "$LAUNCH_PROVIDER" ] || [ "$2" = "$LAUNCH_PROVIDER" ]; exit $? ;;
 esac
 cat "$LAUNCH_RECORD" > "$LAUNCH_CAPTURE/session" || exit 94
@@ -75,55 +73,46 @@ func launchCapture(t *testing.T, dir, name string) string {
 }
 
 func TestHeadlessLaunchMatchesConfirmedTUI(t *testing.T) {
-	for _, version := range []string{"17.2.9", "18.1.10"} {
-		t.Run(version, func(t *testing.T) {
-			capture := headlessLaunchFixture(t)
-			t.Setenv("LAUNCH_VERSION", version)
-			selection := map[string]string{"lane": "gpt-led", "thinking": "high", "advisor": "audit", "prewalk": "on", "planyolo": "on", "fallback": "off"}
-			m, err := loadHeadlessModel(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Turn the TUI dials directly, then confirm through its real Enter
-			// transition rather than synthesizing the expected overlay in the test.
-			for key, value := range selection {
-				m.sel[key] = value
-			}
-			m.firstPrompt = "first prompt with spaces"
-			confirmed, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			forwarded := []string{"--profile", "ignored", "--profile=ignored-too", "--resume=existing", "--", "literal text"}
-			if status := executeLaunch(confirmed.(model), forwarded); status != 0 {
-				t.Fatalf("TUI launch status = %d", status)
-			}
-			wantConfig, wantArgv := launchCapture(t, capture, "config"), launchCapture(t, capture, "argv")
-			if strings.Contains(wantConfig, "agentAdvisor:") != (version == "18.1.10") {
-				t.Fatalf("advisor version guard for %s:\n%s", version, wantConfig)
-			}
-			if !strings.Contains(wantConfig, "modelFallback: false") || !strings.Contains(wantArgv, "--plan-yolo\n") {
-				t.Fatalf("dials did not reach child: %s\n%s", wantConfig, wantArgv)
-			}
-			encoded, _ := json.Marshal(selection)
-			args := []string{"--selection", string(encoded), "--prompt", m.firstPrompt, "--"}
-			if status := runLaunch(append(args, forwarded...)); status != 0 {
-				t.Fatalf("headless launch status = %d", status)
-			}
-			if got := launchCapture(t, capture, "config"); got != wantConfig {
-				t.Fatalf("headless overlay differs from TUI:\n%s\nwant:\n%s", got, wantConfig)
-			}
-			if got := launchCapture(t, capture, "argv"); got != wantArgv || strings.Contains(got, "ignored") || !strings.HasSuffix(got, "literal text\nfirst prompt with spaces\n") {
-				t.Fatalf("headless argv = %q, TUI argv = %q", got, wantArgv)
-			}
-			var record sessionRecord
-			if err := json.Unmarshal([]byte(launchCapture(t, capture, "session")), &record); err != nil {
-				t.Fatal(err)
-			}
-			if record.Resume != "existing" || record.Profile != comboID(m.sel) {
-				t.Fatalf("child saw wrong session: %+v", record)
-			}
-			requireNoPath(t, os.Getenv("LAUNCH_RECORD"))
-			requireNoPath(t, strings.TrimSpace(launchCapture(t, capture, "config-path")))
-		})
+	capture := headlessLaunchFixture(t)
+	selection := map[string]string{"lane": "gpt-led", "thinking": "high", "advisor": "audit", "prewalk": "on", "planyolo": "on", "fallback": "off"}
+	m, err := loadHeadlessModel(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	// Confirm through the same Enter transition that an operator uses.
+	for key, value := range selection {
+		m.sel[key] = value
+	}
+	m.firstPrompt = "first prompt with spaces"
+	confirmed, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	forwarded := []string{"--profile", "ignored", "--profile=ignored-too", "--resume=existing", "--", "literal text"}
+	if status := executeLaunch(confirmed.(model), forwarded); status != 0 {
+		t.Fatalf("TUI launch status = %d", status)
+	}
+	wantConfig, wantArgv := launchCapture(t, capture, "config"), launchCapture(t, capture, "argv")
+	if !strings.Contains(wantConfig, "agentAdvisor:") || !strings.Contains(wantConfig, "modelFallback: false") || !strings.Contains(wantArgv, "--plan-yolo\n") {
+		t.Fatalf("dials did not reach child: %s\n%s", wantConfig, wantArgv)
+	}
+	encoded, _ := json.Marshal(selection)
+	args := []string{"--selection", string(encoded), "--prompt", m.firstPrompt, "--"}
+	if status := runLaunch(append(args, forwarded...)); status != 0 {
+		t.Fatalf("headless launch status = %d", status)
+	}
+	if got := launchCapture(t, capture, "config"); got != wantConfig {
+		t.Fatalf("headless overlay differs from TUI:\n%s\nwant:\n%s", got, wantConfig)
+	}
+	if got := launchCapture(t, capture, "argv"); got != wantArgv || strings.Contains(got, "ignored") || !strings.HasSuffix(got, "literal text\nfirst prompt with spaces\n") {
+		t.Fatalf("headless argv = %q, TUI argv = %q", got, wantArgv)
+	}
+	var record sessionRecord
+	if err := json.Unmarshal([]byte(launchCapture(t, capture, "session")), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Resume != "existing" || record.Profile != comboID(m.sel) {
+		t.Fatalf("child saw wrong session: %+v", record)
+	}
+	requireNoPath(t, os.Getenv("LAUNCH_RECORD"))
+	requireNoPath(t, strings.TrimSpace(launchCapture(t, capture, "config-path")))
 }
 
 func TestHeadlessLaunchRejectsInvalidRequestsBeforeChild(t *testing.T) {
