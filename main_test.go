@@ -4244,8 +4244,8 @@ func threePoolModel(t *testing.T) model {
 }
 
 // TestGenConfigYAMLDeepSeekLane: a ds-led selection launches deepseek-prefixed
-// roles, mirrors security-reviewer into the agent overrides, and version-gates
-// task.agentAdvisor on the probed omp (17.2 hard-errors on the unknown key).
+// roles, mirrors security-reviewer into the agent overrides, and enables the
+// task advisor at audit without waiting for runtime discovery.
 func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 	m := threePoolModel(t)
 	m.sel["lane"] = "ds-led"
@@ -4256,7 +4256,6 @@ func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 		t.Fatalf("no generated block for %s", comboID(m.sel))
 	}
 
-	m.ompMajor, m.ompMinor = 17, 3
 	got := m.genConfigYAML()
 	for _, want := range []string{
 		"  default: deepseek/deepseek-v4-pro:medium\n",
@@ -4280,13 +4279,10 @@ func TestGenConfigYAMLDeepSeekLane(t *testing.T) {
 		t.Errorf("ds-only must not emit the OpenAI priority tier:\n%s", only)
 	}
 
-	// Version gate: an unknown or 17.2 omp omits the 17.3-only key entirely.
-	m.sel["lane"] = "ds-led"
-	for _, v := range []struct{ major, minor int }{{0, 0}, {17, 2}} {
-		m.ompMajor, m.ompMinor = v.major, v.minor
-		if got := m.genConfigYAML(); strings.Contains(got, "agentAdvisor") {
-			t.Errorf("agentAdvisor emitted on omp %d.%d:\n%s", v.major, v.minor, got)
-		}
+	// Lower advisor levels do not opt spawned tasks into their own advisor.
+	m.sel["advisor"] = "review"
+	if got := m.genConfigYAML(); strings.Contains(got, "agentAdvisor") {
+		t.Errorf("agentAdvisor emitted below audit:\n%s", got)
 	}
 }
 

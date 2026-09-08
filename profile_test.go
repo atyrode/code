@@ -380,11 +380,10 @@ func TestProfileOverlay(t *testing.T) {
 			t.Errorf("overlay lacks %q:\n%s", want, overlay)
 		}
 	}
-	// Nothing probes omp's version in a launch, so the 17.3-only key stays
-	// out: an older omp hard-errors on it, and omitting it is the safe
-	// direction.
-	if strings.Contains(overlay, "agentAdvisor") {
-		t.Errorf("overlay emitted a version-gated key with no probed version:\n%s", overlay)
+	// Replaying an explicitly confirmed audit profile keeps task advising,
+	// just like the same dials at an interactive launch.
+	if !strings.Contains(overlay, "  agentAdvisor:\n    task: \"on\"\n") {
+		t.Errorf("audit profile lost its task advisor:\n%s", overlay)
 	}
 
 	t.Run("a combination the catalog no longer generates", func(t *testing.T) {

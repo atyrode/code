@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CODE_TEST_REQUIRE_OMP: "1"
+      CODE_OMP_SMOKE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

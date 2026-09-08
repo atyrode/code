@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -21,10 +20,10 @@ import (
 // stopped applying. This one asserts what omp reads back, with the same
 // generator, decoders and role tables the tool ships.
 //
-// It is not part of the ordinary suite: it runs only with CODE_OMP_SMOKE=1,
-// against CODE_OMP or the omp on PATH, in a private omp home so the operator's
-// configuration and accounts never take part (.github/workflows/omp-smoke.yml
-// runs it weekly against the latest upstream release).
+// Required CI runs it against the optional bundle pin; the weekly workflow
+// runs it against latest upstream. Locally opt in with CODE_OMP_SMOKE=1 and
+// CODE_OMP (or omp on PATH). A private home keeps operator config and accounts
+// out of both runs. See README for the reusable deployed-wrapper invocation.
 func TestOmpSmoke(t *testing.T) {
 	if os.Getenv("CODE_OMP_SMOKE") != "1" {
 		t.Skip("set CODE_OMP_SMOKE=1 to run the drift check against a real omp")
@@ -39,10 +38,9 @@ func TestOmpSmoke(t *testing.T) {
 }
 
 type smokeOmp struct {
-	path         string
-	version      string // `omp --version` verbatim, e.g. omp/18.1.10
-	major, minor int    // what the generator's version gates read
-	agentDir     string // PI_CODING_AGENT_DIR: where config.yml is read from
+	path     string
+	version  string // `omp --version` verbatim, for runtime evidence
+	agentDir string // PI_CODING_AGENT_DIR: where config.yml is read from
 }
 
 // newSmokeOmp resolves the binary the way Enter does and gives it a private
@@ -68,25 +66,23 @@ func newSmokeOmp(t *testing.T) *smokeOmp {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
-	for key := range authEnvKeys {
-		t.Setenv(key, "")
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if ompCredentialShaped(key) || strings.HasPrefix(key, "OMP_AUTH_BROKER_") {
+			t.Setenv(key, "")
+		}
 	}
 
 	o := &smokeOmp{path: path, agentDir: agentDir}
 	out := o.run(t, "--version")
-	match := ompVersionRe.FindSubmatch(out)
-	if match == nil {
-		t.Fatalf("omp --version printed no omp/<major>.<minor>: %q", out)
-	}
 	o.version = strings.TrimSpace(string(out))
-	o.major, _ = strconv.Atoi(string(match[1]))
-	o.minor, _ = strconv.Atoi(string(match[2]))
 	return o
 }
 
 func (o *smokeOmp) run(t *testing.T, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(o.path, args...)
+	cmd.Dir = o.agentDir
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -97,9 +93,9 @@ func (o *smokeOmp) run(t *testing.T, args ...string) []byte {
 
 // smokeOverlay is the overlay under test: the two-pool golden catalog on the
 // dials that make the generator emit every key it knows how to emit — the
-// audit advisor (advisor.enabled and, on omp ≥ 17.3, task.agentAdvisor), fast
-// (tier), prewalk (prewalk.enabled and task.prewalk), and the agent-backed
-// roles (task.agentModelOverrides) that every hosted combo carries.
+// audit advisor (advisor.enabled and task.agentAdvisor), fast (tier), prewalk
+// (prewalk.enabled and task.prewalk), and the agent-backed roles
+// (task.agentModelOverrides) that every hosted combo carries.
 func (o *smokeOmp) smokeOverlay(t *testing.T) string {
 	t.Helper()
 	blocks := loadBlocks(filepath.Join("testdata", "two-pool-golden.plain"))
@@ -108,8 +104,6 @@ func (o *smokeOmp) smokeOverlay(t *testing.T) string {
 		generated: blocks,
 		advisors:  parseAdvisors(blocks["__advisors__"]),
 		facts:     parseFacts(blocks["__models__"]),
-		ompMajor:  o.major,
-		ompMinor:  o.minor,
 	}
 	m.sel["advisor"] = "audit"
 	m.sel["fast"] = "on"

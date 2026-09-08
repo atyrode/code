@@ -15,11 +15,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.relayout()
-	case ompVersionMsg:
-		if msg.ok {
-			m.ompMajor, m.ompMinor = msg.major, msg.minor
-		}
-		return m, nil
 	case gitRepoMsg:
 		if msg.ok && !msg.linked && msg.root != "" {
 			m.gitRoot, m.gitPrefix = msg.root, msg.prefix

@@ -4,8 +4,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -108,10 +106,6 @@ type model struct {
 	genConfig          string            // generated config YAML to launch omp with (generator Enter)
 	firstPrompt        string            // prompt from the suggest box, forwarded as omp's first message
 	savedSel           map[string]string // selection snapshot before a live suggest preview (for revert)
-	// The probed omp version (omp/<semver> from `omp --version`), fetched
-	// async at startup. Zero = unknown: 17.3-only overlay keys are omitted so
-	// a lagging CODE_OMP wrapper never hard-errors at launch.
-	ompMajor, ompMinor int
 }
 
 // usage auto-refreshes on this cadence; a 1s tick drives the countdown.
@@ -186,38 +180,6 @@ func barAnimCmd(step int) tea.Cmd {
 	return tea.Tick(barAnimInterval, func(time.Time) tea.Msg { return barAnimMsg{step} })
 }
 
-// ompVersionMsg carries the probed omp version; ok=false leaves it unknown.
-type ompVersionMsg struct {
-	major, minor int
-	ok           bool
-}
-
-// ompVersionRe parses `omp/<major>.<minor>...` anywhere in --version output.
-var ompVersionRe = regexp.MustCompile(`omp/(\d+)\.(\d+)`)
-
-// probeOmpVersionCmd resolves the same binary Enter launches and asks it for
-// its version, off the main thread. A drift guard, not a feature flag: any
-// failure just reads as "unknown" and version-gated keys stay off.
-func probeOmpVersionCmd() tea.Cmd {
-	return func() tea.Msg {
-		path, err := resolveLaunchPath("CODE_OMP", []string{"omp"})
-		if err != nil {
-			return ompVersionMsg{}
-		}
-		out, err := exec.Command(path, "--version").Output()
-		if err != nil {
-			return ompVersionMsg{}
-		}
-		match := ompVersionRe.FindSubmatch(out)
-		if match == nil {
-			return ompVersionMsg{}
-		}
-		major, _ := strconv.Atoi(string(match[1]))
-		minor, _ := strconv.Atoi(string(match[2]))
-		return ompVersionMsg{major: major, minor: minor, ok: true}
-	}
-}
-
 type gitRepoMsg struct {
 	root, prefix string
 	linked, ok   bool
@@ -243,17 +205,8 @@ func probeGitRepoCmd() tea.Cmd {
 	}
 }
 
-// ompVersionAtLeast reports a probed version ≥ major.minor; unknown is never
-// "at least" anything.
-func (m model) ompVersionAtLeast(major, minor int) bool {
-	if m.ompMajor == 0 && m.ompMinor == 0 {
-		return false
-	}
-	return m.ompMajor > major || (m.ompMajor == major && m.ompMinor >= minor)
-}
-
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{probeOmpVersionCmd(), probeGitRepoCmd()}
+	cmds := []tea.Cmd{probeGitRepoCmd()}
 	if m.broker.configured() {
 		cmds = append(cmds, m.startUsageFetch(), m.spin.Tick, tickCmd())
 	} else if !m.providersResolved {

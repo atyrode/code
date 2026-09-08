@@ -158,12 +158,16 @@ distribution](https://github.com/atyrode/dotfiles/blob/main/docs/agent-tools.md#
 
 - **Native runtime or containment changes:** read `scripts/gate.sh`,
   `.github/workflows/ci.yml` and the affected native tests for prerequisites and
-  required evidence flags; `nix/omp.nix` owns the runtime pin. Containment, the
-  pinned OMP registry canary and latest-upstream drift smoke are separate
+  required evidence flags; `nix/omp.nix` owns Code's optional standalone bundle
+  pin and required CI runtime. Dotfiles owns managed machine runtime and
+  configuration; do not add a cross-repository build dependency. Containment,
+  pinned registry/config smoke and latest-upstream drift are separate
   measurements, not substitutes. Local skips remain unverified unless
   identified CI evidence supplies the missing measurement; never opt required
-  evidence out. For upstream compatibility work, use `TestOmpSmoke` and
-  `.github/workflows/omp-smoke.yml` for the opt-in drift procedure.
+  evidence out. Use `TestOmpSmoke` and the README's compiled-runner invocation
+  for deployed configured-OMP verification, and `.github/workflows/omp-smoke.yml`
+  for latest-upstream drift. Dotfiles owns the complementary packaged Code/OMP
+  interactive startup check.
 - **Launcher/TUI transition work:** read the recorded direction and decisions in
   [the transition document](docs/manifold-transition.md) before extending the
   launcher. New launcher capabilities must be reachable headlessly rather than

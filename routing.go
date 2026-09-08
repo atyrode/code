@@ -824,12 +824,11 @@ func (m model) genConfigYAML() string {
 	} else {
 		b.WriteString("retry:\n  enabled: true\n  modelFallback: true\n  fallbackRevertPolicy: cooldown-expiry\n  fallbackChains:\n" + fc.String())
 	}
-	// task.agentAdvisor (omp ≥ 17.3; earlier omps hard-error on the unknown
-	// key, and CODE_OMP wrappers can lag the store during a dotfiles rollout,
-	// so the probed version gates the emission): at the audit dial, spawned
-	// task agents get their own advisor. Merged into the one task: block —
-	// overlays are strict YAML and two task: keys would be invalid.
-	agentAdvisor := m.sel["advisor"] == "audit" && m.ompVersionAtLeast(17, 3)
+	// At the audit dial, spawned task agents get their own advisor. Supported
+	// OMP runtimes register this setting; emission must not depend on an async
+	// version probe or differ when replaying a saved profile.
+	// Merge it into the one task: block: duplicate YAML keys are invalid.
+	agentAdvisor := m.sel["advisor"] == "audit"
 	// prewalk drops the run from the active model to the "smol" role at the
 	// first edit once the plan's todo list exists. The dial is one switch, so
 	// both the main session (prewalk.enabled) and spawned task agents
