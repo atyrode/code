@@ -121,6 +121,9 @@ func loadHeadlessModel(accountOverride *accountSelectionState) (model, error) {
 		runtimeTargets:    loadRuntimeTargets(),
 	}
 	if accountOverride != nil {
+		if !m.broker.configured() {
+			return model{}, errors.New("portable account choices require an available broker")
+		}
 		m.accountSelections = *accountOverride
 	} else {
 		m.accountSelections = loadAccountSelectionState(os.Getenv("CODE_AUTH_ACCOUNT_STATE"))
