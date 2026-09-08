@@ -17,6 +17,7 @@ const failures: Readonly<Record<string, string>> = {
   code_auth_stale_response: "This callback request is no longer current. The response was not sent. Read the current enrollment before responding.",
   code_auth_input_conflict: "Another native input was accepted first. This response was not replayed. Read the current request before responding.",
   code_auth_input_refused: "Native stdin refused the response. It was not retried; read the current enrollment before taking another action.",
+  code_auth_input_unconfirmed: "The native owner has not confirmed the next input sequence. Refresh the job after reconnecting; no callback was sent or replayed.",
   code_auth_observation_changed: "The native enrollment changed during observation. Waiting for a current reading; stale controls are disabled.",
   code_auth_resources_changed: "Native enrollment resources changed. Review Code’s machine setup before starting or controlling this enrollment.",
   code_auth_completion_unconfirmed: "The worker reported completion but native execution did not confirm success. Do not assume enrollment succeeded.",
@@ -153,7 +154,8 @@ export function AccountEnrollment({ host, machineId, available }: { host: HostSe
         {enrollment.auth.challenge && <p>One-time device challenge: <code className="plugin-atyrode_code_accounts__challenge">{enrollment.auth.challenge}</code></p>}
         <a className="plugin-atyrode_code_accounts__authorization" href={enrollment.auth.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">Open provider authorization page</a>
       </>}
-      {enrollment.prompt && <CallbackForm key={`${enrollment.job.jobId}:${enrollment.prompt.promptId}:${enrollment.job.nextInputSeq}`} host={host} enrollment={enrollment} disabled={busy || !available} refresh={feed.refresh} report={setMessage} />}
+      {enrollment.prompt && enrollment.job.nextInputSeq === null && <p>Native input is unconfirmed. Callback submission is disabled until the owner’s current input sequence is available.</p>}
+      {enrollment.prompt && <CallbackForm key={`${enrollment.job.jobId}:${enrollment.prompt.promptId}:${enrollment.job.nextInputSeq}`} host={host} enrollment={enrollment} disabled={busy || !available || enrollment.job.nextInputSeq === null} refresh={feed.refresh} report={setMessage} />}
       {enrollment.complete && <p>Fresh OAuth credential enrolled for <code>{enrollment.complete.provider}</code>{enrollment.complete.identity.email ? ` · ${enrollment.complete.identity.email}` : ""}. Native execution exited successfully. Explicitly read accounts to review the resulting public identities and choices.</p>}
       {enrollment.refusal && <p>Enrollment refused: <code>{enrollment.refusal}</code>. No successful enrollment is being claimed. Cancel an active job before explicitly starting another flow.</p>}
     </Stack>}
