@@ -1,0 +1,19 @@
+{
+  "id": "atyrode.code.accounts",
+  "version": "0.2.0",
+  "title": "code accounts",
+  "description": "Machine-scoped account selection, named presets and governed per-account block clearing.",
+  "capabilities": [],
+  "contributes": {
+    "panels": [{ "id": "accounts", "title": "Code accounts" }],
+    "seats": [{ "panel": "accounts", "order": 170, "ratio": 0.5 }],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": { "type": "required", "reason": "Governed account operations and shared observations live in Code." }
+  },
+  "entry": { "web": "web.js", "styles": true }
+}
