@@ -1,11 +1,11 @@
 import { Console } from "node:console";
 import { writeSync } from "node:fs";
-import { GatewayContext } from "./context.ts";
+import { openWorkerContext, type WorkerContext } from "@manifold/plugin/worker";
 import { isolateEnvironment, parseInputs, readSealedJSON, requirePrivateInputRoot } from "./inputs.ts";
 import type { PoolGateway } from "./runtime.ts";
 
-// Entrypoint imports above contain no SDK. Install output/error containment
-// before loading provider/native modules or touching the three sealed inputs.
+// Entrypoint imports above contain no upstream provider SDK. Install output/error
+// containment before loading provider/native modules or touching sealed inputs.
 isolateEnvironment(process.env);
 const silentWrite = (...args: unknown[]): boolean => {
   const callback = args.at(-1);
@@ -16,7 +16,7 @@ process.stdout.write = silentWrite;
 process.stderr.write = silentWrite;
 // Bun's built-in console need not route through process.stdout.write.
 globalThis.console = new Console({ stdout: process.stdout, stderr: process.stderr });
-let context: GatewayContext | undefined;
+let context: WorkerContext | undefined;
 let service: PoolGateway | undefined;
 let failed = false;
 const stop = (): void => { context?.close(); };
@@ -31,16 +31,16 @@ process.on("SIGINT", stop);
 process.on("uncaughtException", fatal);
 process.on("unhandledRejection", fatal);
 try {
-  context = GatewayContext.open(process.env.MANIFOLD_JOB_CONTEXT_FD);
-  await context.ready.promise;
+  context = openWorkerContext();
+  await context.ready;
   requirePrivateInputRoot();
   const logger = await import("@oh-my-pi/pi-utils/logger");
   logger.setTransports({ file: false, console: false });
   const inputs = parseInputs(readSealedJSON("/inputs/broker"), readSealedJSON("/inputs/accountPool"), readSealedJSON("/inputs/serviceBearer"));
   const { startPoolGateway } = await import("./runtime.ts");
-  service = await startPoolGateway(inputs, context.controller.signal);
-  await context.announce(service.port);
-  if (!context.controller.signal.aborted) await new Promise<void>(resolve => context!.controller.signal.addEventListener("abort", () => resolve(), { once: true }));
+  service = await startPoolGateway(inputs, context.signal);
+  await context.announceServiceReady(service.port);
+  if (!context.signal.aborted) await new Promise<void>(resolve => context!.signal.addEventListener("abort", () => resolve(), { once: true }));
 } catch {
   failed = true;
   writeSync(2, "gateway_unavailable\n");

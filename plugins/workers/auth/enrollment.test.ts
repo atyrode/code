@@ -5,7 +5,7 @@ import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-sto
 import { registerOAuthProvider, unregisterOAuthProvider } from "@oh-my-pi/pi-ai/oauth";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { ControlFrames, EnrollmentControl, EnrollmentRefusal, attachControlInput, type EnrollmentEvent } from "./control.ts";
+import { CONTROL_FRAME_BYTES, EnrollmentControl, EnrollmentRefusal, attachControlInput, type EnrollmentEvent } from "./control.ts";
 import { authEvent, enroll, uploadFields } from "./enrollment.ts";
 import { enrollmentFlow } from "./providers.ts";
 
@@ -124,17 +124,36 @@ describe("private OAuth control", () => {
     } finally { control.finish(); vi.useRealTimers(); }
   });
 
-  test("bounded frames accept split UTF-8 but refuse oversized and invalid encoding", () => {
-    const values: unknown[] = [];
-    const frames = new ControlFrames(value => values.push(value), 32);
-    const bytes = Buffer.from('{"text":"é"}\n');
-    const split = bytes.indexOf(0xc3) + 1;
-    frames.push(bytes.subarray(0, split));
-    frames.push(bytes.subarray(split));
-    expect(values).toEqual([{ text: "é" }]);
-    expect(() => frames.push(Buffer.alloc(33, 65))).toThrow(EnrollmentRefusal);
-    frames.clear();
-    expect(() => frames.push(Uint8Array.from([0xff, 10]))).toThrow(EnrollmentRefusal);
+  test("native input framing delivers a fragmented private callback without exposing it", async () => {
+    const input = new PassThrough();
+    const events: EnrollmentEvent[] = [];
+    const control = new EnrollmentControl(event => events.push(event));
+    const detach = attachControlInput(input, control);
+    try {
+      const pending = control.requestCallback();
+      const prompt = events.find(event => event.type === "prompt")!;
+      if (prompt.type !== "prompt") throw new Error("Missing prompt");
+      const bytes = Buffer.from(JSON.stringify({ type: "response", promptId: prompt.promptId, value: "private-code#état" }) + "\n");
+      const split = bytes.indexOf(0xc3) + 1;
+      input.write(bytes.subarray(0, split));
+      input.write(bytes.subarray(split));
+      expect(await pending).toBe("private-code#état");
+      expect(JSON.stringify(events)).not.toContain("private-code");
+    } finally { detach(); control.finish(); input.destroy(); }
+  });
+
+  test("oversized or truncated native input cancels a waiting private callback", async () => {
+    for (const bytes of [Buffer.alloc(CONTROL_FRAME_BYTES, 65), Buffer.from('{"type":"response"')]) {
+      const input = new PassThrough();
+      const control = new EnrollmentControl(() => {});
+      const detach = attachControlInput(input, control);
+      try {
+        const pending = control.requestCallback().catch(error => error);
+        input.end(bytes);
+        expect(await pending).toBeInstanceOf(EnrollmentRefusal);
+        expect(control.signal.reason.code).toBe("invalid_control");
+      } finally { detach(); control.finish(); input.destroy(); }
+    }
   });
 });
 

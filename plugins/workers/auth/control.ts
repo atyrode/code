@@ -1,4 +1,5 @@
 import type { Readable } from "node:stream";
+import { attachWorkerInput } from "@manifold/plugin/worker";
 
 export const CONTROL_FRAME_BYTES = 16 * 1024;
 export const ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -21,45 +22,6 @@ export type EnrollmentEvent =
   | { type: "prompt_closed"; promptId: string }
   | { type: "complete"; provider: string; identity: { type: "oauth"; email?: string; accountId?: string; orgId?: string; orgName?: string } }
   | { type: "refused"; code: RefusalCode };
-
-/** Newline-delimited UTF-8; never accumulate an unbounded line or decode partial characters. */
-export class ControlFrames {
-  #pending: Buffer;
-  #length = 0;
-  #decoder = new TextDecoder("utf-8", { fatal: true });
-  constructor(readonly receive: (frame: unknown) => void, maxBytes = CONTROL_FRAME_BYTES - 1) {
-    this.#pending = Buffer.alloc(maxBytes);
-  }
-
-  push(chunk: Uint8Array): void {
-    let offset = 0;
-    while (offset < chunk.length) {
-      const newline = chunk.indexOf(10, offset);
-      const end = newline === -1 ? chunk.length : newline;
-      const count = end - offset;
-      if (this.#length + count > this.#pending.length) throw new EnrollmentRefusal("invalid_control");
-      this.#pending.set(chunk.subarray(offset, end), this.#length);
-      this.#length += count;
-      if (newline === -1) return;
-      try {
-        const frame: unknown = JSON.parse(this.#decoder.decode(this.#pending.subarray(0, this.#length)));
-        this.receive(frame);
-      } catch (error) {
-        if (error instanceof EnrollmentRefusal) throw error;
-        throw new EnrollmentRefusal("invalid_control");
-      } finally {
-        this.#pending.fill(0, 0, this.#length);
-        this.#length = 0;
-      }
-      offset = newline + 1;
-    }
-  }
-
-  clear(): void {
-    this.#pending.fill(0);
-    this.#length = 0;
-  }
-}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -157,21 +119,15 @@ export class EnrollmentControl {
 }
 
 export function attachControlInput(input: Readable, control: EnrollmentControl): () => void {
-  const frames = new ControlFrames(frame => control.receive(frame));
-  const onData = (chunk: Buffer): void => {
-    try { frames.push(chunk); } catch { control.cancel("invalid_control"); }
-  };
-  const onEnd = (): void => { frames.clear(); control.cancel("disconnected"); };
-  input.on("data", onData);
-  input.on("end", onEnd);
-  input.on("close", onEnd);
-  input.on("error", onEnd);
-  return () => {
-    input.off("data", onData);
-    input.off("end", onEnd);
-    input.off("close", onEnd);
-    input.off("error", onEnd);
-    input.pause();
-    frames.clear();
-  };
+  return attachWorkerInput({
+    input,
+    signal: control.signal,
+    maxFrameBytes: CONTROL_FRAME_BYTES,
+    parse: value => value,
+    receive: frame => control.receive(frame),
+    onClose: error => control.cancel(
+      error.code === "worker_input_closed" || error.code === "worker_disconnected" ? "disconnected"
+        : error.code === "worker_cancelled" ? "cancelled" : "invalid_control",
+    ),
+  });
 }

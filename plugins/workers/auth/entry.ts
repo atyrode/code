@@ -1,6 +1,6 @@
 import { readFileSync, writeSync } from "node:fs";
 import { attachControlInput, CONTROL_FRAME_BYTES, EnrollmentControl, type EnrollmentEvent } from "./control.ts";
-import { EnrollmentService } from "./service.ts";
+import { openWorkerContext, type WorkerContext } from "@manifold/plugin/worker";
 
 // Private machine artifact only. No argv options, terminal UI, login database path,
 // broker URL/token, environment credential importer, or operator CLI fallback.
@@ -26,9 +26,10 @@ const control = new EnrollmentControl(event => {
     process.exit(1);
   }
 })());
-let service: EnrollmentService | undefined;
+let context: WorkerContext | undefined;
 const detach = attachControlInput(process.stdin, control);
 const terminate = (): void => control.cancel("cancelled");
+const disconnected = (): void => control.cancel("disconnected");
 process.on("SIGTERM", terminate);
 process.on("SIGINT", terminate);
 // Never let a raw SDK exception/rejection become Bun's stderr stack output.
@@ -44,21 +45,26 @@ process.on("unhandledRejection", fatal);
 try {
   delete process.env.PI_DEBUG_STARTUP;
   delete process.env.PI_TIMING;
-  const rawFd = process.env.MANIFOLD_JOB_CONTEXT_FD;
-  if (!rawFd || !/^[0-9]{1,9}$/.test(rawFd)) throw new Error("service_unavailable");
-  service = new EnrollmentService(Number(rawFd), control);
+  context = openWorkerContext({ signal: control.signal });
+  context.signal.addEventListener("abort", disconnected, { once: true });
+  if (context.signal.aborted) disconnected();
+  await context.ready;
   // Static imports cannot work here: install fatal-error containment and disable
   // the SDK's lazy log transports before loading its native/provider graph.
   const logger = await import("@oh-my-pi/pi-utils/logger");
   logger.setTransports({ file: false, console: false });
   const { enroll } = await import("./enrollment.ts");
-  await enroll(control, (input, signal) => service!.upload(input, signal));
+  await enroll(control, (input, signal) => {
+    signal.throwIfAborted();
+    return context!.callService({ serviceId: "broker", operationId: "enroll-oauth", input });
+  });
 } catch {
   if (!terminalEvent) emit({ type: "refused", code: "service_unavailable" });
 } finally {
   detach();
   control.finish();
-  service?.close();
+  context?.signal.removeEventListener("abort", disconnected);
+  context?.close();
   process.off("SIGTERM", terminate);
   process.off("SIGINT", terminate);
 }
