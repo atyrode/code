@@ -251,3 +251,148 @@ func TestAccountsAPIEnableClearsReloginIdentityMatch(t *testing.T) {
 		t.Fatal("re-login identity still disabled after explicit enable")
 	}
 }
+
+const portableAccountTestState = `{"schemaVersion":1,"activePreset":"Manual","manualDisabled":[],"presets":[]}`
+
+func portableAccountTestDocument(t *testing.T, result accountAPIResult) string {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		SchemaVersion int `json:"schemaVersion"`
+		ActivePreset string `json:"activePreset"`
+		ManualDisabled []accountAPIReference `json:"manualDisabled"`
+		Presets []accountAPIPreset `json:"presets"`
+	}{1, result.ActivePreset, result.ManualDisabled, result.Presets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func TestAccountsAPIPortablePresetTransitionsNeverTouchDisk(t *testing.T) {
+	_, accounts, _ := accountAPITestBroker(t)
+	path := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
+	// Unreadable as account state: even a read of this file would fail the command.
+	const original = "standalone choices must remain byte-for-byte unchanged"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := portableAccountTestState
+	run := func(wantActive string, wantPool []string, args ...string) {
+		t.Helper()
+		status, out, errout := accountAPITestRun(t, runAccountsCLI, append(args, "--state", state)...)
+		if status != 0 {
+			t.Fatalf("portable command failed: %v: %s", args, errout)
+		}
+		var result accountAPIResult
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatal(err)
+		}
+		state = portableAccountTestDocument(t, result)
+		choices, err := decodePortableAccountState(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool := launchAccountReport(accounts, choices.CurrentDisabled(), launchIntent{}, time.Now()).pool()
+		if result.ActivePreset != wantActive || !reflect.DeepEqual(pool["openai-codex"], wantPool) {
+			t.Fatalf("unexpected choices: active %q, pool %v", result.ActivePreset, pool)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil || string(body) != original {
+			t.Fatalf("portable command changed disk: %s %v", body, err)
+		}
+		requireNoPath(t, path+".lock")
+	}
+	run("Manual", []string{"b@example.com"}, "set", "--provider", "openai-codex", "--identity", "a@example.com", "--enabled", "false")
+	run("Only A", []string{"a@example.com"}, "presets", "create", "--name", "Only A", "--disabled", `[{"provider":"openai-codex","identityKey":"b@example.com"}]`)
+	run("Manual", []string{"b@example.com"}, "presets", "activate", "--name", "manual")
+	run("Manual", []string{"b@example.com"}, "presets", "update", "--name", "ONLY A", "--disabled", `[{"provider":"openai-codex","identityKey":"a@example.com"},{"provider":"openai-codex","identityKey":"b@example.com"}]`)
+	run("Only A", []string{}, "presets", "activate", "--name", "only a")
+	run("Manual", []string{}, "presets", "delete", "--name", " ONLY A ")
+	run("Manual", []string{}, "list")
+	run("Manual", []string{}, "presets", "list")
+	for _, args := range [][]string{
+		{"set", "--provider", "openai-codex", "--identity", "missing", "--enabled", "false"},
+		{"presets", "activate", "--name", "missing"},
+		{"presets", "create", "--name", "manual", "--disabled", "[]"},
+	} {
+		status, out, _ := accountAPITestRun(t, runAccountsCLI, append(args, "--state", state)...)
+		body, err := os.ReadFile(path)
+		if status == 0 || out != "" || err != nil || string(body) != original {
+			t.Fatalf("failed portable mutation affected state: %v %s", args, out)
+		}
+		requireNoPath(t, path+".lock")
+	}
+}
+
+func TestAccountsAPIPortableStatePrunesWithoutResolvingPath(t *testing.T) {
+	accountAPITestBroker(t)
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing", "state.json"), filepath.Join(t.TempDir(), "dangling")} {
+		t.Setenv("CODE_AUTH_ACCOUNT_STATE", path)
+		if strings.HasSuffix(path, "dangling") {
+			if err := os.Symlink("absent", path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		state := `{"schemaVersion":1,"activePreset":"Away","manualDisabled":[{"provider":"openai-codex","identityKey":"gone"}],"presets":[{"name":"Away","disabled":[{"provider":"openai-codex","identityKey":"gone"}]}]}`
+		for _, args := range [][]string{{"list"}, {"set", "--provider", "openai-codex", "--identity", "a@example.com", "--enabled", "true"}} {
+			status, out, errout := accountAPITestRun(t, runAccountsCLI, append(args, "--state", state)...)
+			var result accountAPIResult
+			if status != 0 || json.Unmarshal([]byte(out), &result) != nil {
+				t.Fatalf("stateless command consulted missing path: %s", errout)
+			}
+			if result.ActivePreset != "Away" || len(result.ManualDisabled) != 0 || len(result.Presets) != 1 || len(result.Presets[0].Disabled) != 0 {
+				t.Fatalf("healthy snapshot did not prune choices: %s", out)
+			}
+		}
+		if path != "" {
+			requireNoPath(t, path+".lock")
+			if !strings.HasSuffix(path, "dangling") {
+				requireNoPath(t, path)
+			}
+		}
+	}
+}
+
+func TestAccountsAPIRejectsMalformedPortableStateWithoutSideEffects(t *testing.T) {
+	_, _, cleared := accountAPITestBroker(t)
+	path := os.Getenv("CODE_AUTH_ACCOUNT_STATE")
+	const original = "standalone"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{
+		"", "null", "[]", portableAccountTestState+"{}", portableAccountTestState+" trailing",
+		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"schemaVersion":2`, 1),
+		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"schemaVersion":1,"schemaVersion":1`, 1),
+		strings.Replace(portableAccountTestState, `"schemaVersion":1`, `"SchemaVersion":1`, 1),
+		strings.Replace(portableAccountTestState, `"activePreset":"Manual"`, `"activePreset":null`, 1),
+		strings.Replace(portableAccountTestState, `"activePreset":"Manual"`, `"activePreset":"unknown"`, 1),
+		strings.Replace(portableAccountTestState, `"manualDisabled":[]`, `"manualDisabled":null`, 1),
+		strings.Replace(portableAccountTestState, `"presets":[]`, `"presets":null`, 1),
+		strings.Replace(portableAccountTestState, `"presets":[]`, `"presets":[{"name":"Manual","disabled":[]}]`, 1),
+		strings.Replace(portableAccountTestState, `"presets":[]`, `"presets":[{"name":"A","disabled":[]},{"name":"a","disabled":[]}]`, 1),
+		strings.Replace(portableAccountTestState, `"presets":[]`, `"presets":[{"name":"A","disabled":[],"name":"B"}]`, 1),
+		strings.Replace(portableAccountTestState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"openai-codex","identityKey":"a@example.com","identityKey":"b@example.com"}]`, 1),
+		strings.Replace(portableAccountTestState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"openai-codex","identityKey":" "}]`, 1),
+		strings.Replace(portableAccountTestState, `"manualDisabled":[]`, `"manualDisabled":[{"provider":"unknown","identityKey":"a"}]`, 1),
+		strings.Replace(portableAccountTestState, `"presets":[]`, `"presets":[],"secret":"not-allowed"`, 1),
+	} {
+		status, out, _ := accountAPITestRun(t, runAccountsCLI, "set", "--provider", "openai-codex", "--identity", "a@example.com", "--enabled", "false", "--state", state)
+		body, err := os.ReadFile(path)
+		if status == 0 || out != "" || err != nil || string(body) != original {
+			t.Fatalf("invalid state accepted or touched disk: %s", state)
+		}
+		requireNoPath(t, path+".lock")
+	}
+	for _, operation := range []string{"login", "clear-blocks"} {
+		status, out, _ := accountAPITestRun(t, runAccountsCLI, operation, "--provider", "openai-codex", "--state", portableAccountTestState)
+		if status == 0 || out != "" {
+			t.Fatalf("portable state accepted for broker effect %s", operation)
+		}
+	}
+	select {
+	case <-cleared:
+		t.Fatal("invalid choice request caused broker mutation")
+	default:
+	}
+}
