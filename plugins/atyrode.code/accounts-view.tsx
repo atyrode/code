@@ -2,15 +2,12 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
 import type { AccountChoiceChange, AccountReference } from "../domain/contracts.ts";
-import { CODE_PLUGIN_ID, ApiKeyProviderSchema, type ActionInput, type Target } from "./contract.ts";
+import { CODE_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
 import { callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
-import { AccountEnrollment } from "./account-enrollment.tsx";
+import { OmpSignIn } from "./omp-sign-in.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
-type Confirmation = { title: string } & (
-  | { action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks">; credentialId: number }
-  | { action: "enrollApiKey"; input: ActionInput<"enrollApiKey"> }
-);
+type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks">; credentialId: number };
 type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
@@ -28,37 +25,25 @@ export function AccountsView(props: AccountsViewProps) {
 function ScopedAccountsView({ host, target, available, onDone }: AccountsViewProps) {
   const id = useId();
   const configuration = useCodeQuery(host, "readConfiguration", target);
-  const accountFeed = useCodeQuery(host, "accounts", target);
-  const setup = useCodeQuery(host, "readSetup", target);
-  const keyOperations = setup.data?.services.find(service => service.serviceId === "broker")?.operations.flatMap(operation => {
-    if (!operation.operationId.startsWith("enroll-key-")) return [];
-    const provider = ApiKeyProviderSchema.safeParse(operation.operationId.slice("enroll-key-".length));
-    return provider.success ? [{ ...operation, provider: provider.data }] : [];
-  }) ?? [];
+  const accountFeed = useCodeQuery(host, "accounts", {});
   const current = configuration.data?.configuration ?? null;
   const observation = accountFeed.data;
   const choices = current?.accounts ?? null;
   const disabled = choices ? disabledAccountReferences(choices) : [];
   const [draft, setDraft] = useState<PresetDraft | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [method, setMethod] = useState<"oauth" | "key">("oauth");
-  const [keyProvider, setKeyProvider] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const canEdit = target !== null && available && current !== null && !busy;
-  const canAdminister = canEdit && observation?.status === "fresh";
+  const canEdit = host.authoring !== null && target !== null && available && current !== null && !busy;
+  const canAdminister = host.authoring !== null && target !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
-  const observedConfirmation = confirmation && confirmation.action !== "enrollApiKey" ? observation?.accounts.find(account =>
+  const observedConfirmation = confirmation ? observation?.accounts.find(account =>
     account.credentialId === confirmation.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
-  const confirmedKeyOperation = confirmation?.action === "enrollApiKey" ? keyOperations.find(operation => operation.provider === confirmation.input.provider) : null;
-  const canConfirm = confirmation?.action === "enrollApiKey"
-    ? available && !busy && setup.data?.connected === true && confirmedKeyOperation?.ready === true && confirmedKeyOperation.invocable
-    : canAdminister && observedConfirmation != null;
-  function refresh() { configuration.refresh(); accountFeed.refresh(); setup.refresh(); }
+  const canConfirm = canAdminister && observedConfirmation != null;
+  function refresh() { configuration.refresh(); accountFeed.refresh(); }
   async function saveChoice(change: AccountChoiceChange, revision = current?.revision) {
     if (!target || !canEdit || revision === undefined || revision !== current?.revision || pending.current || confirmation) return;
     if (change.kind === "set-account" && observation?.status !== "fresh") return;
@@ -74,7 +59,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     } finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
   async function initialize() {
-    if (!target || !available || !configuration.data || current || pending.current) return;
+    if (!host.authoring || !target || !available || !configuration.data || current || pending.current) return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
       await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data.revision });
@@ -86,9 +71,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     if (!confirmation || !canConfirm || pending.current) return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
-      const result = confirmation.action === "enrollApiKey"
-        ? await callCodeAction(host, "enrollApiKey", confirmation.input)
-        : await callCodeAction(host, confirmation.action, confirmation.input);
+      const result = await callCodeAction(host, confirmation.action, confirmation.input);
       if (mounted.current) {
         setMessage(`Native action returned ${result.status} accounts. ${result.status === "fresh" ? "Review the account rows below." : "Current account availability is not confirmed."}`);
         setConfirmation(null);
@@ -107,19 +90,20 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   return <section className="plugin-atyrode_code plugin-atyrode_code__accounts" aria-labelledby={`${id}-title`}>
     <header className="plugin-atyrode_code__account-toolbar">
       <h2 id={`${id}-title`} className="plugin-atyrode_code__section-label">accounts</h2>
-      <button type="button" disabled={!target} onClick={refresh}>refresh</button>
-      <button type="button" aria-expanded={adding} disabled={!target || busy || confirmation !== null} onClick={() => setAdding(!adding)}>{adding ? "close sign-in" : "+ add account"}</button>
+      <button type="button" onClick={refresh}>refresh</button>
       {onDone && <button type="button" disabled={busy} onClick={onDone}>done</button>}
     </header>
-    {!target && <p role="status">Choose a workspace and machine to view accounts.</p>}
-    {target && !available && <p role="status">Machine unavailable. Shown accounts may be historical; actions are disabled.</p>}
+    <OmpSignIn host={host} showAccounts={!choices} />
+    {!target && <p role="status">Choose a workspace machine to edit project account choices. Instance accounts and OMP sign-in do not depend on that selection.</p>}
+    {target && !available && <p role="status">Workspace machine unavailable. Project account choices are disabled; instance account discovery and OMP sign-in remain independent.</p>}
+    {!host.authoring && <p role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
     {configuration.error && <p role="status">{configuration.error}</p>}
     {accountFeed.error && <p role="status">{accountFeed.error}</p>}
     {target && configuration.data === null && !configuration.error && <p role="status">Reading account choices…</p>}
-    {target && observation === null && !accountFeed.error && <p role="status">Reading native accounts…</p>}
+    {observation === null && !accountFeed.error && <p role="status">Reading instance accounts…</p>}
     {configuration.data && current === null && <div className="plugin-atyrode_code__account-notice">
       <p>Set up account choices for this workspace. Existing credentials are not imported.</p>
-      <button type="button" disabled={!available || busy} onClick={() => void initialize()}>Initialize choices</button>
+      <button type="button" disabled={!host.authoring || !available || busy} onClick={() => void initialize()}>Initialize choices</button>
     </div>}
     {(busy || message) && <p role="status" aria-live="polite">{busy ? "Saving…" : message}</p>}
     {observation && <p className="plugin-atyrode_code__account-meta" role="status">{observation.status === "fresh" ? `Observed ${time(observation.observedAt)}` : `${observation.status} · current availability unknown; credential actions disabled`}</p>}
@@ -140,7 +124,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
         {observation?.accounts.length === 0 && <p>No accounts reported. Add an account to begin; saved exclusions are kept.</p>}
         {observation?.accounts.map(account => {
           const excluded = accountSelectionDisabled(account, disabled);
-          const status = !available || observation.status !== "fresh" ? "unknown" : account.disabled ? "credential disabled" : account.blocks.length ? "blocks reported" : "no blocks reported";
+          const status = observation.status !== "fresh" ? "unknown" : account.disabled ? "credential disabled" : account.blocks.length ? "blocks reported" : "no blocks reported";
           return <article key={`${referenceKey(account.reference)}:${account.credentialId}`} className="plugin-atyrode_code__account-row">
             <label className="plugin-atyrode_code__account-identity">
               <input type="checkbox" checked={!excluded} aria-label={`Include ${account.reference.provider} ${account.email ?? `credential ${account.credentialId}`} in ${selectedPreset?.name ?? "Manual"}`} disabled={!canEdit || observation.status !== "fresh" || confirmation !== null || draft !== null} onChange={() => void saveChoice({ kind: "set-account", reference: account.reference, enabled: excluded })} />
@@ -206,45 +190,21 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
         <button type="button" disabled={busy} onClick={() => setDraft(null)}>discard</button>
       </div>
     </form>}
-    {adding && <section className="plugin-atyrode_code__account-editor" aria-label="Add account">
-      <div className="plugin-atyrode_code__account-toolbar" aria-label="Sign-in method">
-        <button type="button" aria-pressed={method === "oauth"} disabled={busy || confirmation !== null} onClick={() => setMethod("oauth")}>provider sign-in</button>
-        <button type="button" aria-pressed={method === "key"} disabled={busy || confirmation !== null} onClick={() => setMethod("key")}>native API key</button>
-      </div>
-      <div hidden={method !== "oauth"}><AccountEnrollment host={host} machineId={target?.machineId ?? null} available={available} onDone={() => { refresh(); setAdding(false); }} /></div>
-      {method === "key" && <>
-        <p>Enroll an owner-configured key. The key stays in native credential storage; nothing is pasted here.</p>
-        {setup.error && <p role="status">{setup.error}</p>}
-        {keyOperations.length === 0 && <p role="status">No visible API-key mapping. Configure a native credential reference in service setup first.</p>}
-        <label htmlFor={`${id}-key-provider`}>Provider</label>
-        <select id={`${id}-key-provider`} value={keyProvider} disabled={busy || confirmation !== null} onChange={event => setKeyProvider(event.target.value)}>
-          <option value="">Choose provider</option>
-          {keyOperations.map(operation => <option key={operation.operationId} value={operation.provider}>{operation.provider}{!operation.ready || !operation.invocable ? " · unavailable" : ""}</option>)}
-        </select>
-        {keyOperations.filter(operation => operation.provider === keyProvider).map(operation => <div key={operation.operationId}>
-          {(!operation.ready || !operation.invocable) && <p role="status">{operation.reason ?? "This native enrollment operation is not ready or admitted."}</p>}
-          <button type="button" disabled={!target || !available || busy || confirmation !== null || draft !== null || !setup.data?.connected || !operation.ready || !operation.invocable} onClick={() => { if (target) setConfirmation({ action: "enrollApiKey", input: { ...target, provider: operation.provider }, title: `Enroll ${operation.provider} API key` }); }}>Review enrollment…</button>
-        </div>)}
-        {setup.data && !setup.data.connected && <p role="status">Machine disconnected; key enrollment is unavailable.</p>}
-      </>}
-    </section>}
     {confirmation && <section className="plugin-atyrode_code__account-notice" aria-labelledby={`${id}-confirmation`}>
       <h3 id={`${id}-confirmation`}>{confirmation.title}?</h3>
-      {confirmation.action === "enrollApiKey" ? <p>This sends the owner-configured native reference to this machine’s broker. Provider acceptance is not guaranteed; account selection will not change.</p> : <>
-        <p>{referenceLabel(confirmation.input.reference)} · slot {confirmation.credentialId}</p>
-        <p>{confirmation.action === "clearAccountBlocks" ? "Clear this account’s native blocks. This does not enable its selection or repair credentials." : "Disable this credential for every consumer of this native service scope, not only Code. This does not revoke the provider grant."}</p>
-        {!observedConfirmation && <p role="alert">This exact account is no longer observed. Cancel and refresh accounts.</p>}
-      </>}
+      <p>{referenceLabel(confirmation.input.reference)} · slot {confirmation.credentialId}</p>
+      <p>{confirmation.action === "clearAccountBlocks" ? "Clear this account’s native blocks. This does not enable its selection or repair credentials." : "Disable this credential for every consumer of this instance broker, not only Code. This does not revoke the provider grant."}</p>
+      {!observedConfirmation && <p role="alert">This exact account is no longer observed. Cancel and refresh accounts.</p>}
       {!canConfirm && <p role="status">Current availability or authority is not confirmed. This action is disabled.</p>}
       <div className="plugin-atyrode_code__account-toolbar">
-        <button type="button" className="plugin-atyrode_code__primary-action" disabled={!canConfirm} onClick={() => void commit()}>Confirm {confirmation.action === "enrollApiKey" ? "enrollment" : confirmation.action === "clearAccountBlocks" ? "reset" : "disable"}</button>
+        <button type="button" className="plugin-atyrode_code__primary-action" disabled={!canConfirm} onClick={() => void commit()}>Confirm {confirmation.action === "clearAccountBlocks" ? "reset" : "disable"}</button>
         <button type="button" disabled={busy} onClick={() => setConfirmation(null)}>cancel</button>
       </div>
     </section>}
     <details className="plugin-atyrode_code__account-details">
       <summary>scope / diagnostics</summary>
       <p>Workspace <code>{target?.containerId ?? "none"}</code> · machine <code>{target?.machineId ?? "none"}</code></p>
-      <p>Native scope <code>{observation?.scope ?? "unknown"}</code> · configuration revision {current?.revision ?? "unknown"}</p>
+      <p>Instance account scope <code>{observation?.scope ?? "unknown"}</code> · project configuration revision {current?.revision ?? "unknown"}</p>
       <p>Reads do not start jobs. Saved choices do not change running sessions. OAuth re-login exclusions follow the same identity; API-key slots remain separate.</p>
       <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>native setup / consent</button>
     </details>

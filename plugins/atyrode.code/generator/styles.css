@@ -98,12 +98,6 @@
 .plugin-atyrode_code_generator__setup-step > button,
 .plugin-atyrode_code_generator__onboarding > button { justify-self: start; }
 .plugin-atyrode_code_generator__setup-step > h3 { font-size: 1.1rem; color: var(--code-fg); }
-.plugin-atyrode_code_generator__service-setup,
-.plugin-atyrode_code_generator__connection-review { display: grid; gap: 0.8rem; min-width: 0; }
-.plugin-atyrode_code_generator__service-setup > fieldset { display: grid; gap: 0.8rem; margin: 0; }
-.plugin-atyrode_code_generator__service-setup > fieldset > button { justify-self: start; }
-.plugin-atyrode_code_generator__service-setup label { display: grid; gap: 0.3rem; }
-.plugin-atyrode_code_generator__service-setup details > :not(summary) { margin-block-start: 0.6rem; }
 .plugin-atyrode_code_generator__setup-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 1rem; }
 .plugin-atyrode_code_generator__setup-facts dt { color: var(--code-muted); }
 .plugin-atyrode_code_generator__setup-facts dd { margin: 0; }

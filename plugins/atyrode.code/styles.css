@@ -213,8 +213,8 @@
 
 .plugin-atyrode_code .plugin-atyrode_code__accounts,
 .plugin-atyrode_code.plugin-atyrode_code__accounts,
-.plugin-atyrode_code .plugin-atyrode_code__enrollment,
-.plugin-atyrode_code.plugin-atyrode_code__enrollment {
+.plugin-atyrode_code .plugin-atyrode_code__sign-in,
+.plugin-atyrode_code.plugin-atyrode_code__sign-in {
   display: grid;
   gap: 0.65rem;
   min-width: 0;
@@ -307,31 +307,6 @@
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-check input,
 .plugin-atyrode_code .plugin-atyrode_code__account-identity input { flex: 0 0 auto; accent-color: var(--code-accent); }
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-progress {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1.5rem;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-  color: var(--code-dim);
-}
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-progress [aria-current="step"] { color: var(--code-accent); }
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-step {
-  display: grid;
-  justify-items: start;
-  gap: 0.6rem;
-  min-width: 0;
-}
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-step input:not([type="checkbox"]),
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-step select {
-  width: min(100%, 34rem);
-}
-.plugin-atyrode_code .plugin-atyrode_code__enrollment-challenge {
-  color: var(--code-accent);
-  font-size: 1.2em;
-  letter-spacing: 0.08em;
-}
 @media (max-width: 48rem) {
   .plugin-atyrode_code .plugin-atyrode_code__account-row { grid-template-columns: minmax(0, 1fr); }
 }
