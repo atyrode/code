@@ -93,10 +93,13 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
   return <section className="plugin-atyrode_code_generator__catalog" aria-label="Model catalog">
     <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">catalog</h2><span className="plugin-atyrode_code__muted">{record?.active ? record.active.document.models.length + " models" : "choose your models"}</span><button type="button" disabled={busy} onClick={onDone}>back</button></header>
     {configuration.error && <p role="status">{configuration.error}</p>}
+    {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
+    {!writable && <p role="status" className="plugin-atyrode_code__notice">Catalog changes require an initialized workspace and edit access.</p>}
+    {!inventoryReady && !editor && !review && <div className="plugin-atyrode_code__notice"><p role="status">{setup.data ? "Model discovery needs native runtime approval. You can still edit or import a catalog." : "Reading model discovery availability…"}</p>{setup.data && <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review discovery permissions</button>}</div>}
     {!record?.active && !inventoryId && !editor && !review && <p>Discover the models available to your accounts. This reads the model inventory; it does not run a benchmark.</p>}
     {!review && !editor && <div className="plugin-atyrode_code__toolbar">
       <button type="button" className={!record?.active ? "plugin-atyrode_code__primary-action" : undefined} disabled={!writable || busy || !available || !inventoryReady || !record?.resources || inventoryRunning} onClick={() => { if (record) void perform(async () => { const job = await callCodeAction(host, "startInventory", { ...target, expectedRevision: record.revision }); if (mounted.current) { setInventoryId(job.jobId); setBenchmarkId(null); } }); }}>{inventoryRunning ? "Discovering models…" : record?.active ? "Refresh model inventory" : "Discover models"}</button>
-      <button type="button" disabled={!writable || busy} onClick={() => edit(record?.draft?.document ?? record?.active?.document ?? { schemaVersion: 1, models: [] })}>edit / import</button>
+      <button type="button" disabled={!writable || busy} onClick={() => edit(record?.draft?.document ?? record?.active?.document ?? { schemaVersion: 1, models: [] })}>Edit or import models</button>
       {record?.draft && <button type="button" disabled={!writable || busy} onClick={() => void perform(() => reviewStaged(record))}>review saved changes</button>}
     </div>}
     {inventoryId && <div className="plugin-atyrode_code_generator__job-progress" role="status">

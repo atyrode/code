@@ -29,7 +29,7 @@ function QuotaWindow({ window, inactive, now }: { window: UsageWindow; inactive:
   const percent = window.usedFraction === null || window.status === "unknown" ? null : window.usedFraction * 100;
   const label = `${window.windowId}${window.tier ? ` ${window.tier}` : ""}`;
   const state = inactive ? "inactive" : window.status;
-  return <li className="plugin-atyrode_code__usage-window" data-state={state}>
+  return <li className="plugin-atyrode_code__usage-window" data-state={state} data-level={percent === null ? "unknown" : percent >= 100 ? "exhausted" : percent >= 90 ? "high" : "normal"}>
     <span className="plugin-atyrode_code__usage-window-label">{label}</span>
     {percent === null ? <span className="plugin-atyrode_code__usage-meter-unknown" aria-hidden="true" /> :
       <meter className="plugin-atyrode_code__usage-meter" min={0} max={100} value={Math.min(100, percent)}
@@ -88,6 +88,7 @@ function UsageSnapshot({ value }: { value: UsageView }) {
         <h3 className={provider.family === "openai" ? "plugin-atyrode_code__provider-blue" : provider.family === "anthropic" ? "plugin-atyrode_code__provider-amber" : ""}>{provider.provider === "openai-codex" ? "Codex" : provider.provider === "anthropic" ? "Claude" : provider.provider}</h3>
         {provider.accounts.length === 0 && <p className="plugin-atyrode_code__muted">No account observations · quota unknown</p>}
         {provider.accounts.map(entry => <AccountUsage key={JSON.stringify([entry.account.reference.scope, entry.account.reference.provider, entry.account.credentialId])} entry={entry} now={now} />)}
+        {provider.buckets.filter(bucket => bucket.status === "maxed" || bucket.status === "blocked").map(bucket => <p key={bucket.name} className="plugin-atyrode_code__warning">{bucket.name} · selected pool {status(bucket.status).toLowerCase()}</p>)}
         {provider.buckets.length > 0 && <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-pool">
           <summary>Selected pool · limits &amp; status</summary>
           <ul>{provider.buckets.map(bucket => <li key={bucket.name}><strong>{bucket.name}</strong> · {status(bucket.status)} · Reset: {time(bucket.resetsAt)}</li>)}</ul>
@@ -102,7 +103,7 @@ function UsageSnapshot({ value }: { value: UsageView }) {
   </>;
 }
 
-function TargetUsageOverview({ host, target, onAccounts }: { host: HostServices; target: Target | null; onAccounts?: () => void }) {
+function TargetUsageOverview({ host, target }: { host: HostServices; target: Target | null }) {
   const configuration = useCodeQuery(host, "readConfiguration", target);
   const current = configuration.data?.configuration;
   const feed = useCodeQuery(host, "usage", current ? target : null);
@@ -111,19 +112,18 @@ function TargetUsageOverview({ host, target, onAccounts }: { host: HostServices;
   return <section className="plugin-atyrode_code plugin-atyrode_code__usage" aria-label="Code usage">
     <header className="plugin-atyrode_code__section-heading">
       <h2 className="plugin-atyrode_code__section-label">usage</h2>
-      {activeProfile !== null && <span className="plugin-atyrode_code__muted">{activeProfile}</span>}
+      {activeProfile !== null && <span className="plugin-atyrode_code__muted" title="Saved account pool">{activeProfile === "Manual" ? "Manual account pool" : activeProfile}</span>}
       <div className="plugin-atyrode_code__toolbar">
-        {onAccounts && <button type="button" onClick={onAccounts}>Accounts</button>}
         <button type="button" disabled={target === null} onClick={() => { configuration.refresh(); feed.refresh(); }} title="Refresh native observations only">Refresh</button>
       </div>
     </header>
     {!target ? <p className="plugin-atyrode_code__muted" role="status">Select a machine in a mounted workspace to read usage.</p> : error ?
-      <details className="plugin-atyrode_code__details plugin-atyrode_code__warning"><summary role="status">Usage unavailable · details</summary><p>{error}</p></details> :
+      <div className="plugin-atyrode_code__notice plugin-atyrode_code__warning" role="status"><p>Usage unavailable</p><p>{error}</p></div> :
       configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">Usage appears after Code setup.</p> :
       !configuration.data || !feed.data ? <p className="plugin-atyrode_code__muted" role="status">Reading usage…</p> : <UsageSnapshot value={feed.data} />}
   </section>;
 }
 
-export function UsageOverview({ host, target, onAccounts }: { host: HostServices; target: Target | null; onAccounts?: () => void }) {
-  return <TargetUsageOverview key={JSON.stringify([host.principal.id, target?.containerId, target?.machineId])} host={host} target={target} {...(onAccounts ? { onAccounts } : {})} />;
+export function UsageOverview({ host, target }: { host: HostServices; target: Target | null }) {
+  return <TargetUsageOverview key={JSON.stringify([host.principal.id, target?.containerId, target?.machineId])} host={host} target={target} />;
 }

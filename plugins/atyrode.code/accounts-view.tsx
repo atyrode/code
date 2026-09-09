@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
 import type { AccountChoiceChange, AccountReference } from "../domain/contracts.ts";
 import { CODE_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
-import { callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
 import { OmpSignIn } from "./omp-sign-in.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
@@ -25,7 +25,7 @@ export function AccountsView(props: AccountsViewProps) {
 function ScopedAccountsView({ host, target, available, onDone }: AccountsViewProps) {
   const id = useId();
   const configuration = useCodeQuery(host, "readConfiguration", target);
-  const accountFeed = useCodeQuery(host, "accounts", {});
+  const accountFeed = useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const current = configuration.data?.configuration ?? null;
   const observation = accountFeed.data;
   const choices = current?.accounts ?? null;
@@ -93,7 +93,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       <button type="button" onClick={refresh}>refresh</button>
       {onDone && <button type="button" disabled={busy} onClick={onDone}>done</button>}
     </header>
-    <OmpSignIn host={host} showAccounts={!choices} />
+    {choices ? <details className="plugin-atyrode_code__account-details"><summary>Add or manage accounts in OMP</summary><OmpSignIn host={host} showAccounts={false} /></details> : <OmpSignIn host={host} />}
     {!target && <p role="status">Choose a workspace machine to edit project account choices. Instance accounts and OMP sign-in do not depend on that selection.</p>}
     {target && !available && <p role="status">Workspace machine unavailable. Project account choices are disabled; instance account discovery and OMP sign-in remain independent.</p>}
     {!host.authoring && <p role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
@@ -115,13 +115,9 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
           {choices.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
         </select>
         <button type="button" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => setDraft({ kind: "create-preset", preset: { id: crypto.randomUUID(), name: "", disabled: [...disabled] }, revision: current.revision })}>save as…</button>
-        {selectedPreset && <>
-          <button type="button" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => setDraft({ kind: "update-preset", preset: { ...selectedPreset, disabled: [...selectedPreset.disabled] }, revision: current.revision })}>edit</button>
-          <button type="button" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => void saveChoice({ kind: "delete-preset", id: selectedPreset.id })}>delete profile</button>
-        </>}
       </div>
       <div className="plugin-atyrode_code__account-list" aria-label="Account pool">
-        {observation?.accounts.length === 0 && <p>No accounts reported. Add an account to begin; saved exclusions are kept.</p>}
+        {observation?.accounts.length === 0 && <p>No accounts reported. Open “Add or manage accounts in OMP” to sign in; saved exclusions are kept.</p>}
         {observation?.accounts.map(account => {
           const excluded = accountSelectionDisabled(account, disabled);
           const status = observation.status !== "fresh" ? "unknown" : account.disabled ? "credential disabled" : account.blocks.length ? "blocks reported" : "no blocks reported";
