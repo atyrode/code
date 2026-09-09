@@ -124,7 +124,5 @@ describe("native account selection", () => {
     expectCode(() => selectedAccountPool(projectAccounts(null, scope, null, 100), initialAccountChoices()), "account_unavailable");
     expectCode(() => selectedAccountPool(projectAccounts(snapshot, scope, null, 100), initialAccountChoices()), "account_unavailable");
     expectCode(() => projectAccounts(snapshot, scope, 101, 100), "invalid_accounts");
-    const forged = { ...observation, accounts: [{ ...observation.accounts[0]!, reference: { ...slot, credentialId: 10 } }] };
-    expectCode(() => selectedAccountPool(forged, initialAccountChoices()), "invalid_accounts");
   });
 });

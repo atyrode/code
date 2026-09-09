@@ -1,283 +1,193 @@
-# Configuration and deprecated implementation reference
+# Native configuration and workflows
 
-## Native target authority
+Code is a Manifold plugin, not an independently configured process. Manifold
+owns storage, credential-source references, service policy, grants/consent,
+resource revisions, jobs, locations and terminals. Code owns typed product
+schemas and governed actions. OMP owns ordinary agent execution and sessions.
+The [architecture ledger](manifold-transition.md#6-transition-steps) records
+acceptance; the [plugin guide](../plugins/README.md) covers development.
 
-Code is a Manifold-native plugin, controlled through its web GUI and governed
-APIs. Manifold supplies the authoritative configuration/state mechanisms,
-fleet resources, permissions, multiplayer, lifecycle and traces. Code supplies
-domain schemas, validation and interpretation. No target setup requires an
-independently installed Code CLI, dotfiles wrapper or `CODE_*` environment.
+## Shared configuration
 
-The operator selected one Manifold-owned source of state, native scoped service
-access, and explicit promotion of exact software/configuration revisions in
-[#149](https://github.com/atyrode/code/issues/149). Private executables may
-implement domain work behind native contracts; they are not separately
-configured products. An omp terminal is an execution surface, not Code's
-control plane. Missing reusable capability is implemented in Manifold.
+The authoritative schema is `plugins/atyrode.code/contract.ts`. A target is
+`{ containerId, machineId }`, using native identities, not a label or host path.
+`readConfiguration` returns `{ revision, configuration }`; absent state has
+revision `0`. `initializeConfiguration` takes the target and `expectedRevision`.
+The resulting configuration contains:
 
-CLI/TUI parity, CLI-only features, dual preference stores and a permanent
-standalone recovery path do not constrain this rework. Optional adoption of
-useful old data is a bounded governed operation, not ongoing synchronization or
-mandatory preparation with the old application. Architecture and evidence live
-in [the transition document](manifold-transition.md), whose
-[section 6](manifold-transition.md#6-transition-steps) is the sole ledger.
-[The plugin guide](../plugins/README.md) describes current development mechanics.
+- a monotonically increasing `revision`, `updatedBy` and `updatedAt`;
+- shared `accounts` choices and presets;
+- nullable `draft` and `active` catalog documents with digests;
+- nullable `selection` and promoted `resources`.
 
-## Deprecated implementation reference
+`state.ts` stores one record for each target through native plugin storage.
+Container scope and read/write grants are checked at the action boundary;
+`ctx.storage.compareAndSet` atomically commits the exact previous value.
+Concurrent edits refuse with `code_stale_preferences`, not last-writer-wins.
+`preferences_changed` invalidates observations so clients reread current state.
+Local React editor drafts are not another authoritative store.
 
-The remainder describes existing standalone behavior for investigation and
-extraction of domain logic. It is not plugin onboarding, a compatibility
-promise, or instructions for provisioning/migrating the new product. These
-commands and paths still exist in the baseline source; documenting them does
-not mean the native replacement is implemented. Do not execute legacy probes,
-mutations or cleanup merely because they appear here.
+## Catalog, dials and reviews
 
-### Legacy models.yml columns
+`CatalogDocumentSchema` in `plugins/domain/contracts.ts` is
+`{ schemaVersion: 1, models: [...] }`. Each model has explicit `key`, `provider`,
+`id`, `api`, `tier`, `quotaBucket`, costs, performance/context measurements,
+`thinkingLevels` and `images`. Tier `0` is off-ladder; capabilities are `1`–`4`.
+Nullable metrics mean unknown. Typed validation and `compileCatalog` enforce
+catalog invariants; no terminal-format parser or legacy catalog file is involved.
 
-| column | meaning |
-| --- | --- |
-| `pool` | `O` (OpenAI/Codex), `A` (Anthropic), or `D` (DeepSeek). `O` and `A` must fill tiers 1..3; `D` is optional — one verified model is enough, missing tiers borrow the nearest rung |
-| `tier` | position on the pool's capability ladder. `1` cheap, `2` regular, `3` smart, and an optional `4` — a fourth rung the model dial's `elite` notch reaches. Ladder depth is per pool, and a provider shipping a fourth model needs no code change to light its own `elite` up: Anthropic's is `claude-fable-5`, OpenAI's `gpt-6-astra`. `0` is off the ladder entirely: the fast idle-bucket model the `spark` toggle drains |
-| `bucket` | the quota window the model draws — drives the usage meter |
-| `image` | `false` marks a text-only model, which the vision role then avoids |
+In the launcher, edit a candidate directly or import typed JSON into the local
+editor. Import is not a commit. `stageCatalog` validates and stores a draft;
+`reviewCatalog` with `source: "draft"` or `"active"` returns routes, estimates,
+resource observations and a `reviewDigest`. `promoteCatalog` requires the exact
+`expectedRevision`, source and review digest. Promotion commits the reviewed
+catalog, selection and resource snapshot, clearing the promoted draft.
 
-The `elite` notch is offered only on lanes whose **lead** pool has a tier-4
-rung. That is not the same as "any pool in the lane" — the deliberative bump
-already gives plan/slow/reviewer the top rung at `smart`, so on a lane
-led by a three-rung pool `elite` would render a block identical to `smart`.
+`SelectionSchema` contains `lane`, `capability`, `thinking`, `advisor`, `spark`,
+`priority`, `prewalk`, `planYolo` and `fallback`. Save via `select` with an
+`expectedRevision`. Routing and estimates are typed domain computations; only
+the final OMP boundary produces its overlay/arguments. Disabling model fallback
+does not disable same-model retries or redefine broker account policy.
 
-`code generate init` ranks a pool's ladder by price, so it needs one for every
-model. omp's model table lags a launch unevenly — a brand-new flagship arrives
-at `$0` under its own provider while a reseller row of the same model
-(openrouter's `openai/gpt-6-astra`) carries the price from day one — and a
-scaffold used to drop such a model without a word. It now fills the blank from
-the same model's priced row under any other provider omp lists (exact bare id,
-highest price where resellers disagree), and names any model no row prices in a
-warning at the top of `models.yml` so you can write the rung in by hand.
+Catalog editing/review and shared preferences do not start machine jobs and
+can remain useful while execution is unavailable. Resource observations in a
+review are not a readiness claim. A changed product bundle, state, service
+policy or execution binding requires renewed review where the action binds it.
 
-All three scaffold probes (`models`, `usage`, and the mandatory live `bench`)
-use `CODE_OMP` when set, otherwise `omp` on PATH, just like a trusted launch.
-An invalid explicit runtime is an error, not permission to probe a different
-installation. `code generate init` and first-run onboarding make model calls;
-`code generate refresh` also does by default. `code generate` only re-renders
-an existing catalog.
+## Native resources, services and consent
 
-The generated grid covers OMP's model roles and bundled task agents, not a
-historical agent inventory. The retired bundled `librarian` route is no longer
-generated or included in cost/speed estimates. Re-render an existing catalog
-with `code generate` to remove that old automatic row; Code does not rewrite
-stored catalogs or delete user agent definitions on startup. Explicit custom
-agent rows in a supplied catalog remain supported: a `●`-marked row, including
-one named `librarian`, still supplies its `task.agentModelOverrides` entry.
-The override is a quoted native alias (`librarian: '@librarian'`), with its
-selector and thinking suffix defined once in `modelRoles.librarian`.
-OMP must retain that role identity when spawning: copying the concrete lead
-loses it and makes the child inherit `retry.fallbackChains.default`, even if
-another role happens to name the same lead. A generated lead-only role receives
-an explicit empty chain (`[]`), expressing that it must not inherit another
-role's chain. OMP 18.1.14 has a separate child-session role-persistence defect,
-so this intent is not yet a strict runtime guarantee when models are shared
-([#142](https://github.com/atyrode/code/issues/142)).
-These are one-shot launch overlays, not a migration of persistent OMP settings
-or previously stored immutable Code profile revisions.
+`readSetup` reports native execution installation/operation readiness, services
+and connectivity. Use native Plugins for artifact installation, resource and
+location bindings, operation consent and retained job lifecycle. In Code,
+`reviewResources` followed by `promoteResources` adopts the exact reviewed
+snapshot for a configuration, including before a catalog exists.
 
-### Legacy curated-fact refresh
+Promoted resources contain `productSha256`, nullable `execution` with
+`installationRevision`, `artifactSha256` and per-operation binding digests,
+and service pins with `serviceId`, `revision` and `policySha256`. Promotion does
+not install artifacts, grant consent or make unavailable operations ready.
 
-```sh
-code generate refresh --models-file PATH
-code generate refresh --models-file PATH --skip-bench
-code generate refresh --models-file PATH --bench-json saved-chat-bench.json
-```
+Managed Bun 1.4.2, OMP/SDK 18.1.14 and pi-natives artifacts are pinned in
+`plugins/runtime-artifacts.json`; `workers/build.ts` supplies the declarations
+at pack time. Every machine operation requires `runtimeTools.system`: the
+native owner's independently reviewed/promoted interpreter and transitive
+library closure. The direct-ELF requirements report is not that closure.
+Missing resources refuse admission; PATH, host files and incidental caches
+are not substitutes.
 
-`refresh` updates an existing catalog's `cost_in`, `cost_out`, `context`,
-`thinking`, `speed` and `ttft` (adding a missing `ttft` when measured). It preserves
-membership, model IDs, pools, tiers, buckets, image overrides, comments and custom
-fields. It does not regenerate tiers: **`code generate init --refresh` replaces
-the scaffold**, while `code generate` renders the catalog after editing.
-Without `--models-file`, refresh uses the same default models path as `init`.
+### Owner-held credential references
 
-**The default benchmark makes live, potentially paid model calls.** Collection
-uses `CODE_OMP` (otherwise `omp` on PATH), the provider registry and native
-`bench --profile chat` with Code's short harmless prompt. `--runs N` defaults to
-2 requests per curated model; `--max-tokens N` defaults to 256. Both must be
-positive. Metadata comes from `omp models --json`, including priced reseller
-rows when a provider's own price is unavailable. Thinking capabilities retain
-gaps rather than advertising unsupported intermediate levels.
+The native service setup UI uses `readServiceConfiguration`, `reviewServices`
+and `configureServices`. This requires the root owner's current
+`services:configure` machine authority and applicable container access. Inputs
+select an exact broker origin and existing `credentialRef`, optional classifier
+origin/model, and API-key `{ provider, credentialRef }` selections. A source
+must be available for the exact broker origin. No secret value is accepted.
+Review includes `expectedServiceRevision`; configuration requires the returned
+`reviewDigest` and native compare-and-set semantics. Unrelated native service
+policies are preserved.
 
-`--skip-bench` makes no benchmark calls and retains cached speed/TTFT.
-`--bench-json PATH` instead reads saved native `omp bench --profile chat --json`
-output; it must contain its declared number of successful runs, with valid
-per-run measurements and aggregate means. These options are mutually exclusive. Both still
-collect current metadata. Speed prefers streaming `generationTps`; TTFT is
-stored in seconds. A failed run cannot be hidden by an average of successes.
+First configure the broker (and optional classifier/API-key operations). If no
+ready gateway exists, the review explicitly omits `omp`. In native Plugins,
+review/install `atyrode.code.gateway` with its broker/system bindings and approve
+the required operation consents. Review service setup again to bind `omp` to
+that gateway's exact installation/artifact/operation revision. Then review/install
+`atyrode.code` with its current service/system/location bindings and explicitly
+approve the bounded caller-to-gateway invocation edges. These are native
+installation and authority changes, not automatic effects of opening Code.
 
-The single `refreshed` date advances only when metadata and every requested
-benchmark measurement are complete. Metadata-only, failed and partial runs
-retain the previous date (or leave it absent). Available valid facts can still
-be saved while unavailable fields retain their cached values. Exit status is
-`0` for a full refresh or complete metadata with explicit `--skip-bench`, `1`
-for incomplete facts/collection failure, and `2` for invalid arguments or
-catalog shape. Invalid metadata envelopes leave the file unchanged. Saving is
-atomic, preserves file permissions and refuses to overwrite a catalog changed
-during collection.
+Policies define the `broker`, optional `suggest`, and `omp` scoped services.
+Manifold owns resolution, grants, consent and revision enforcement. Upstream
+secrets stay with the machine-side native resolver. Job-local scoped service
+URLs/bearers are injected into declared sealed input files, not exposed as
+upstream credentials in browser inputs, hub records, argv, logs or job results.
+Read, mutation and runtime operations have distinct authority.
 
-This is the existing headless refresh implementation, not the target product
-boundary. In the plugin, Code retains catalog semantics while native resource,
-job, scheduling and promotion mechanisms own the surrounding workflow.
-Existing consumer integrations have not migrated merely because this command
-exists; changing them is separate work, not a requirement to preserve this CLI.
+This UI does not create credential sources, deploy a broker or provision a
+system closure. If the owner has not supplied the required resource, it is
+unavailable. There is no Code provisioning daemon or credential-import recipe.
 
-### Legacy dials that set omp's switches
+## Accounts, usage and onboarding
 
-Most dials pick models, so they select a pre-computed routing block. Four do
-not: they choose a value for a switch omp already owns, and this tool's only job
-is to put that value where omp reads it. None of them appears in the combo id,
-so the generated grid is byte-identical whatever they are set to.
+`accounts` returns permitted metadata with native service scope.
+`changeAccounts` commits revision-checked choices: `set-account`,
+`create-preset`, `update-preset`, `activate-preset` or `delete-preset`.
+References distinguish OAuth identities (`kind: "identity"`) from native
+credential slots (`kind: "credential"`); a launch freezes concrete slots and
+observed identities rather than an open-ended provider pool.
 
-In the generator they sit behind a `more` row at the end of the dial list,
-closed on every open: `→` on that row opens it, `←` closes it, and while it is
-closed the row names what it hides and spells any switch away from its default
-(`prewalk on`, `fallback off`), so nothing behind the fold can change a launch
-without saying so on screen. The fold is a view state — a `d` reset turns the
-switches back but leaves it open, and it is never persisted with the dials.
+`usage` combines permitted service observations with shared choices and freshness.
+Unavailable, stale, disabled, blocked and exhausted are distinct states.
+`clearAccountBlocks` and `disableCredential` are separately governed service
+mutations, not ordinary preference edits.
 
-| dial | omp surface | effect |
-| --- | --- | --- |
-| `fast` | `tier:` overlay key, per provider | buys every priority service tier the lane's pools sell. Offered on exactly those lanes: a pool declares one by setting `ServiceTier` in the provider registry, and nothing else needs editing |
-| `prewalk` | `prewalk.enabled` + `task.prewalk` | hands the run to the `smol` role at the first edit once the plan's todo list exists. Main session and spawned task agents both move — half a run on the cheap model would not be what the label says. The target needs no setting: omp defaults it to `smol`, which the grid already routes |
-| `planyolo` | `--plan-yolo` argv flag | starts read-only in plan mode, auto-approves the plan on the model's first resolve call, then implements. omp exposes this on the command line only, so it rides argv rather than the overlay |
-| `fallback` | `retry.modelFallback` | on by default. Off keeps every role on its lead: the overlay writes `modelFallback: false` and carries no `fallbackChains` — omp gates every model switch it makes on retry (the error path, the usage-aware preflight, the advisor's) on that one key, so the chains would be inert and are left out rather than shown. `retry.enabled` stays on: same-model retries are not fallback. The account/broker fallback is a separate system and is untouched. The routing preview shows leads only while it is off, and the `f` chain toggle gives way to a note saying the chains are disabled for this launch |
+**API keys:** the owner first selects an existing native source reference for a
+provider in reviewed service setup. `enrollApiKey` then takes only the target and
+`provider`; it invokes that policy's `enroll-key-<provider>` operation with empty
+input. A caller cannot supply a key, choose another source or override transport.
+Supported provider IDs come from the pinned SDK metadata. A supported schema or
+admitted operation does not establish that an upstream key was accepted.
 
-The existing launcher inserts its dial-derived flags before forwarded flags, so
-a forwarded flag can override them. This ordering is not a target CLI contract.
+**OAuth:** `observeEnrollment` reports supported flows, exact pins, availability
+and native job state. `startEnrollment` binds a machine/provider and those pins;
+`respondEnrollment` handles a correlated callback; `cancelEnrollment` ends the
+native enrollment lifetime. The pinned SDK worker performs a fresh grant and
+uploads through its scoped broker operation. Existing login files or sessions
+are not imported. Authentication remains unavailable without the required
+machine resources, authority and consent. This reference contains no instruction
+to use live accounts or credentials to establish acceptance.
 
-### Legacy glyphs and fonts
+## Inventory, benchmarks and suggestions
 
-The deprecated TUI labels its facet dials with Nerd Font Private Use Area
-codepoints. Unpatched terminal fonts render missing-glyph boxes. That explains
-the old implementation; installing terminal fonts is not plugin onboarding and
-the web UI is not required to reproduce those glyphs.
+- `startInventory` creates a native `atyrode.code.catalog-inventory` job against
+  promoted resources and selected accounts. `inventory` reads its retained
+  typed receipt and unpromoted draft.
+- `startBenchmark` binds an `inventoryJobId` and creates a native
+  `atyrode.code.catalog-benchmark` job. `benchmark` reads its receipt/catalog;
+  `stageBenchmark` stages that exact result against an `expectedRevision`.
+  Catalog review and promotion remain separate.
+- These explicit jobs contact providers and may incur cost. Native job IDs,
+  output access, cancellation and history remain Manifold-owned. Admission is
+  not successful execution; unavailable/inconclusive observations are not proof.
+- `suggest` uses the promoted `suggest` service's `classify` operation and
+  validates its response. It returns a revision-bound selection without saving
+  it. Apply as a local draft, inspect it, then commit through `select`.
 
-The existing implementation also provides a plain-Unicode fallback:
+## Launch and workspace boundary
 
-| `CODE_SYMBOLS` | glyphs |
-| --- | --- |
-| unset, or `nerd` | Nerd Font icons (the default — every existing install renders these) |
-| `unicode` | plain BMP symbols (`⇄ ⚙ ✦ ◎ ↓ ›`) that any modern monospace font carries |
+`previewLaunch` returns exact routes, selected account slots, resource pins and
+a `previewDigest`. `prepareLaunch` takes that digest, `expectedRevision` and a
+prompt, rechecks the reviewed inputs and returns `{ runtime }` conforming to
+Manifold's `TerminalRuntimeSchema`. It does **not** start a terminal. The web
+panel passes that runtime to `host.authoring.createTerminal` so the mounted native
+renderer creates the canvas portal or composition tile. Native terminal admission
+governs execution; a returned placement is not OMP readiness.
 
-`CODE_FACET_GLYPHS` ("`model=*,lane=>`") overrides individual keys on top of
-whichever preset resolved.
+The manifest declares `atyrode.code.workspace` and `atyrode.code.sessions`
+locations for the launch working directory and OMP sessions. These are governed
+location bindings, not arbitrary client paths. On first use, `prepareWorkspace`
+with the current `expectedRevision` starts a native job that creates those
+locations and runs the pinned OMP version probe. Inspect its completed native
+result before launch. Creation refuses existing locations; it does not replace
+or import user data. Launch uses separately consented write access, so later
+sessions reuse the locations rather than trying to create them again.
 
-omp has its own `symbolPreset` setting with the same three values, and `code`
-deliberately does **not** read it: omp reports `unicode` on a machine where
-nobody ever set it, so the value cannot distinguish a deliberate choice from
-omp's default — and taking it at face value silently restyled a machine whose
-operator had asked for nothing. The old override is `CODE_SYMBOLS`.
+Preparation does not clone a repository or introduce a private workspace/session
+registry. Native location and terminal lifecycle and OMP's own in-session
+isolation remain their owners' responsibilities. Existing user data must not be
+moved or deleted by inference.
 
-### Legacy key bindings
+## Headless clients and evidence
 
-| key | effect |
-| --- | --- |
-| `f` | primary lead ⇄ full fallback chains (leads only, and the cue says why, while the `fallback` dial is off) |
-| `n` | short model keys ⇄ full catalog model ids — a sanity check on what the current dials actually route to |
-| `i` | short ⇄ full account ids in the Usage panel |
-| `d` | reset the dials to defaults |
-| `?` | the rest of the key map |
+All product actions are `atyrode.code.<name>` through Manifold's governed action
+API. `ActionInput`, `ActionResult` and `actionSchemas` in `contract.ts`, plus the
+enrollment schemas in `auth-contract.ts`, define the exact boundary. Web and
+agent clients use the same authority and state; no printed-output protocol is
+required. Babel depends on Code, not vice versa. Its native adoption is separate
+and not claimed here; preserving an old engine ABI is not a Code prerequisite.
 
-`n` is a view preference: it defaults to off and is never persisted into the
-selection state, because it changes nothing about routing.
-
-### Legacy state on disk
-
-The standalone implementation stores the following under its own state root —
-`$XDG_STATE_HOME`, or `$HOME/.local/state` when unset — in `code/`. This is an
-inventory of existing data, not Manifold's target state schema or an instruction
-to keep a second configuration, session or worktree authority.
-
-| path | contents | override |
-| --- | --- | --- |
-| `code/selection.json` | the dial positions | `CODE_SELECTION_STATE` (`off` disables) |
-| `code/sessions` | live session records, used for liveness | `CODE_SESSION_STATE` (`off` disables) |
-| `code/worktrees` | one JSON record per session worktree | `CODE_WORKTREE_STATE` |
-| `code/wt` | the session worktrees themselves | `CODE_WORKTREE_DIR` |
-| `code/profiles` | immutable profile revisions the engine launches under | `CODE_PROFILE_STATE` |
-
-`CODE_WORKTREE_DIR` must be an absolute path (a leading `~` is expanded); a
-relative value is ignored, because the process chdirs into the worktree it
-creates and a relative root would not name the same directory afterwards.
-
-`code/profiles` holds the immutable profile revisions `code engine
---configure` mints and `code engine` launches under, one directory per
-profile id holding `NNNNNNNN.json` files that are written once and never
-rewritten; `CODE_PROFILE_STATE` names the directory outright. A profile
-directory laid out the same way at some other path — an earlier per-client
-location, another machine's store — is carried over with `code engine
---import-profiles DIR`: every revision is copied verbatim with its number
-intact, a revision already present with the same content is skipped, and one
-present with different content refuses the import, so a reference a client
-recorded keeps meaning exactly what it meant. Nothing is migrated on its own;
-the old directory is untouched until the operator names it.
-
-#### Existing saved omp sessions
-
-`code ls` and `code wt` also read OMP's persisted sessions, which are OMP's
-state, not `code`'s. On Linux/macOS, OMP uses
-`$XDG_DATA_HOME/omp/sessions` when `$XDG_DATA_HOME/omp` already exists;
-a named profile independently uses
-`$XDG_DATA_HOME/omp/profiles/<name>/sessions` when that profile root exists.
-Merely setting `XDG_DATA_HOME` does not migrate or select a nonexistent root.
-Otherwise sessions remain under `~/.omp/agent/sessions` or
-`~/.omp/profiles/<name>/agent/sessions`, with `PI_CONFIG_DIR` selecting the
-legacy config root. An explicit `PI_CODING_AGENT_DIR` overrides the default
-profile's agent directory, not a named profile's data root.
-
-Trusted launches inherit the environment's profile: `OMP_PROFILE` takes
-precedence over `PI_PROFILE`, including when explicitly empty. Forwarded
-`--profile` remains stripped; Code does not force the default profile.
-Discovery includes effective native roots and historical default/profile
-roots so migration does not hide old transcripts. A forwarded `--session-dir`
-replaces that inventory with only the named directory. Untrusted launcher
-state is never searched or resumed. `omp config path` reports a **config**
-directory, not the session data root.
-
-Discovery decodes only allowlisted header metadata in at most two leading
-JSONL records within 64 KiB, accepting either title/session order and reordered
-JSON keys. It stops at the first non-header record; it never searches messages
-for a title or prompt. OMP's native session listing/completion reads messages
-(and normal listing can recover backups), so Code does not call it for this
-metadata-only, non-mutating inventory. Results are ranked: the current
-directory's own sessions, then the rest of the repository (every worktree
-`git worktree list` or `code wt` knows), then parent or child directories,
-then everything else, newest activity first within a rank.
-
-A session is marked `live` when a record in `code/sessions` holds its lock in
-the same directory and this is the transcript that process has written most
-recently since it started — or, when it has written nothing yet, the id it
-recorded as its `--resume` target; anything else is `interrupted`.
-`code wt resume <worktree|id>` resolves an id or unique prefix across every
-trusted root to exactly one session, refuses an ambiguous one by listing the
-candidates, and launches `omp --resume <id>` (with `--session-dir` when the
-session lives outside the default root) in the recorded directory, through the
-same trusted launch path as a fresh session. A directory that no longer exists
-is reported; nothing is created, pruned, or reset.
-
-#### Why existing worktrees must not be swept blindly
-
-Session worktrees used to be created inside omp's own worktree directory, which
-`omp worktree list` enumerates and `omp worktree clear --all` force-deletes in
-full — live entries included. omp cannot know better: it has no view of `code`'s
-session registry, so it cannot tell a running session's worktree from one of its
-own abandoned task worktrees. One `omp worktree clear --all` was enough to
-delete a live session's tree and its uncommitted work.
-
-OMP's worktrees provide in-session subagent isolation; the deprecated Code
-registry represented whole-session operator worktrees. The old implementation
-moved its default root to avoid that collision. The new product must preserve
-the safety property through native resource/workspace lifetime, not preserve
-Code's separate registry.
-
-Older worktrees can still live at their original recorded paths. Deprecation
-does not authorize moving them, deleting uncommitted work or running either
-program's broad cleanup command. Any necessary adoption or retirement must
-identify the actual resources and use a bounded, explicitly authorized native
-operation. There is no standalone migration recipe for the new architecture.
+The current integration source is not a statement about main. The shared
+preview's exact deployment and bounded live observations are recorded in
+[status](status.md#source-is-not-deployment); they do not certify every workflow.
+Production deployment, releases, credential relocation, broker retirement and
+destructive state changes require separate authorization.

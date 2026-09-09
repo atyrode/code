@@ -1,0 +1,106 @@
+{
+  "id": "atyrode.code.gateway",
+  "version": "0.3.0",
+  "title": "code gateway",
+  "description": "Private native Code gateway installation, independently pinned to the governed broker and system runtime.",
+  "capabilities": [],
+  "entry": {},
+  "contributes": {
+    "panels": [],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": {
+      "type": "required",
+      "reason": "The governed broker contract and account policy belong to the Code product."
+    }
+  },
+  "machine": {
+    "artifacts": {},
+    "tools": {},
+    "requiresResourceBindings": true,
+    "locations": {},
+    "operations": {
+      "atyrode.code.gateway.serve": {
+        "argv": [
+          {
+            "literal": "/job/artifact"
+          }
+        ],
+        "input": {
+          "accountPool": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "bun",
+          "pi-natives",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "bun"
+        },
+        "inputFiles": {
+          "accountPool": {
+            "input": "accountPool"
+          },
+          "serviceBearer": {
+            "generated": "service-bearer"
+          },
+          "broker": {
+            "literal": "{\"url\": \"\", \"token\": \"\"}",
+            "jsonValues": [
+              {
+                "path": [
+                  "url"
+                ],
+                "serviceId": "broker",
+                "value": "url"
+              },
+              {
+                "path": [
+                  "token"
+                ],
+                "serviceId": "broker",
+                "value": "bearer"
+              }
+            ]
+          }
+        },
+        "providesService": true,
+        "services": [
+          {
+            "serviceId": "broker",
+            "revision": "1",
+            "operationIds": [
+              "gateway-snapshot",
+              "gateway-snapshot-stream",
+              "gateway-refresh",
+              "gateway-block",
+              "gateway-clear-blocks",
+              "gateway-disable",
+              "gateway-usage",
+              "gateway-usage-stale",
+              "gateway-usage-observed"
+            ]
+          }
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 86400000,
+          "memoryBytes": 2147483648,
+          "processes": 128,
+          "outputBytes": 4096
+        },
+        "stdin": false
+      }
+    }
+  }
+}

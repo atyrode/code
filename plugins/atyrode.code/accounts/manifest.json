@@ -2,7 +2,7 @@
   "id": "atyrode.code.accounts",
   "version": "0.3.0",
   "title": "code accounts",
-  "description": "Shared account choices in native plugin storage, evaluated by Code without moving credentials or rewriting CLI state.",
+  "description": "Shared account choices in native plugin storage, evaluated against governed service observations.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "accounts", "title": "Code accounts" }],

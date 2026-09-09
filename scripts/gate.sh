@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
-# The gate CI runs (.github/workflows/ci.yml), as one command: gofmt drift,
-# vet, then the test suite. CI provisions both the containment backend and the
-# bundled OMP pin. Locally, unavailable bubblewrap/user systemd or omp skips
-# their scenarios with an UNVERIFIED line; CODE_REQUIRE_SANDBOX=1 and
-# CODE_TEST_REQUIRE_OMP=1 restore CI's required measurements. CODE_OMP_SMOKE=1
-# also checks effective config/schema/role compatibility against that runtime.
-# Build .#omp and put its bin directory on PATH for the same pin as CI.
-#
-# Extra arguments go to `go test`, so `scripts/gate.sh -run TestX` is the
-# quick loop and a bare run is the whole gate.
-#
-# go is taken from PATH when present and from nixpkgs otherwise. CGO is off
-# because the release binaries are built that way (.goreleaser.yaml), and a
-# machine without a C compiler would otherwise fail in runtime/cgo before
-# reaching a single test.
+# The local and CI gate for the native Code plugin family.
+# Check out Manifold beside Code at plugins/MANIFOLD_REV before running.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-export CGO_ENABLED=0
-if [ -n "${CI:-}" ]; then
-  export CODE_TEST_REQUIRE_OMP=1
-  export CODE_OMP_SMOKE=1
-fi
 
-if command -v go >/dev/null 2>&1; then
-  run() { "$@"; }
-else
-  run() { nix shell nixpkgs#go -c "$@"; }
-fi
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+manifold="$(dirname -- "$here")/manifold"
 
-drift="$(run gofmt -l .)"
-if [ -n "$drift" ]; then
-  echo "gofmt needed on:"
-  echo "$drift"
+if [ "$#" -ne 0 ]; then
+  echo "usage: scripts/gate.sh (runs the complete native plugin gate)" >&2
   exit 1
 fi
-run go vet ./...
-run go test ./... "$@"
+if ! command -v bun >/dev/null 2>&1; then
+  echo "gate.sh: Bun 1.4.2 is required" >&2
+  exit 1
+fi
+version="$(bun --version)"
+if [ "$version" != "1.4.2" ]; then
+  echo "gate.sh: Bun 1.4.2 is required; found $version" >&2
+  exit 1
+fi
+if [ ! -f "$manifold/packages/plugin-kit/src/pack.ts" ]; then
+  echo "gate.sh: the native Manifold kit is unavailable at $manifold" >&2
+  echo "gate.sh: check out atyrode/manifold beside Code at plugins/MANIFOLD_REV" >&2
+  exit 1
+fi
+revision="$(tr -d '[:space:]' < "$here/plugins/MANIFOLD_REV")"
+if [ -z "$revision" ] || [ "$(git -C "$manifold" rev-parse HEAD)" != "$revision" ]; then
+  echo "gate.sh: the sibling Manifold checkout must be at plugins/MANIFOLD_REV" >&2
+  exit 1
+fi
+
+(cd -- "$manifold" && bun install --frozen-lockfile)
+cd -- "$here/plugins"
+bun install --frozen-lockfile
+bun run check
+bun run test
+bun run pack
+bun run verify

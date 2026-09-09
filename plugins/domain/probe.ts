@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CatalogDocumentSchema, CatalogModelSchema, ThinkingLevelSchema, epochMilliseconds, identifier, type CatalogDocument, type CatalogModel } from "./contracts.ts";
-import { compileCatalog } from "./catalog.ts";
+import { compileCatalog, validTierPair } from "./catalog.ts";
 import { familyOrder, familyPolicy, providerPolicy } from "./providers.ts";
 
 export const OMP_VERSION = "18.1.14" as const;
@@ -74,9 +74,10 @@ function unique<T extends ProbeIdentity>(models: readonly T[]): Map<string, T> {
   return out;
 }
 
-/** Pure projection of the pinned gateway registry, with an explicit provider permission set. */
+/** Project permitted identities only for providers with a Code routing policy. */
 export function projectProbeIdentities(registry: readonly { readonly provider: string; readonly id: string; readonly api: string }[], permittedProviders: readonly string[]): ProbeIdentity[] {
-  const permitted = parse(z.array(identifier).min(1).max(16), permittedProviders, "invalid_input");
+  const permitted = parse(z.array(identifier).min(1).max(16), permittedProviders, "invalid_input")
+    .filter(provider => providerPolicy(provider) !== undefined);
   const identities = parse(ProbeIdentitiesSchema, registry.filter(model => permitted.includes(model.provider))
     .map(({ provider, id, api }) => ({ provider, id, api })), "invalid_input");
   unique(identities);
@@ -91,28 +92,33 @@ export function parseBenchmarkInput(value: unknown): BenchmarkInput {
   return input;
 }
 export function parseOmpVersion(raw: string): typeof OMP_VERSION {
-  if (raw.trim() !== OMP_VERSION) throw new ProbeError("unsupported_version");
+  if (raw.trim() !== `omp/${OMP_VERSION}`) throw new ProbeError("unsupported_version");
   return OMP_VERSION;
 }
 
 // v18.1.14 models-cli.ts toModelJson does NOT emit api or version. API is joined
 // only from exact, sealed native models configuration identities, never spelling.
-const RawInventorySchema = z.object({ models: z.array(z.object({
-  provider: identifier, id: CatalogModelSchema.shape.id, selector: z.string().max(650),
+// Other providers may use opaque IDs or sentinel prices; neither defines a Code candidate.
+const RawInventoryModelSchema = z.object({
+  provider: identifier, id: z.string().min(1).max(512), selector: z.string().max(650),
   contextWindow: limit, maxTokens: limit, reasoning: z.boolean(),
   thinking: z.array(ThinkingLevelSchema).max(6).nullable(), input: z.array(z.enum(["text", "image"])).max(2),
   cost: z.object({ input: number, output: number, cacheRead: number, cacheWrite: number }),
-})).max(16384) });
+});
+const RawInventorySchema = z.object({
+  models: z.array(RawInventoryModelSchema.pick({ provider: true, id: true, selector: true }).passthrough()).max(16384),
+});
 export function parseInventoryObservation(raw: unknown, identitiesValue: unknown, observedAt: number, version: string): InventoryReceipt {
-  parseOmpVersion(version);
+  if (version !== OMP_VERSION) throw new ProbeError("unsupported_version");
   const identities = unique(parse(ProbeIdentitiesSchema, identitiesValue, "invalid_input"));
   const rawModels = parse(RawInventorySchema, raw).models;
-  unique(rawModels.map(model => ({ ...model, api: "unreported" })));
+  unique(rawModels.map(({ provider, id }) => ({ provider, id, api: "unreported" })));
   const models: InventoryModel[] = [];
-  for (const model of rawModels) {
-    if (model.selector !== probeAddress(model)) throw new ProbeError("ambiguous_identity");
-    const identity = identities.get(model.selector);
+  for (const rawModel of rawModels) {
+    if (rawModel.selector !== probeAddress(rawModel)) throw new ProbeError("ambiguous_identity");
+    const identity = identities.get(rawModel.selector);
     if (!identity) continue; // Inventory is explicitly limited to the sealed permission set.
+    const model = parse(RawInventoryModelSchema, rawModel);
     if ((!model.reasoning && (model.thinking?.length ?? 0) > 0) || new Set(model.thinking ?? []).size !== (model.thinking?.length ?? 0)) throw new ProbeError("invalid_observation");
     models.push({ ...identity, inputCostPerMillion: model.cost.input, outputCostPerMillion: model.cost.output,
       contextWindow: model.contextWindow, maxTokens: model.maxTokens, reasoning: model.reasoning,
@@ -211,13 +217,21 @@ const capable = (a: InventoryModel, b: InventoryModel): number => ceiling(b) - c
 const cheaper = (a: InventoryModel, b: InventoryModel): number => a.inputCostPerMillion - b.inputCostPerMillion || capable(a, b);
 function ladder(models: InventoryModel[]): InventoryModel[] {
   const sorted = [...models].sort(cheaper);
-  if (sorted.length < 3) return sorted;
-  const first = sorted[0]!, rest = sorted.slice(1), top = [...rest].sort(capable)[0]!;
-  const need = Math.min(4, sorted.length) - 2;
-  const middle = rest.filter(model => model !== top && model.inputCostPerMillion > first.inputCostPerMillion && model.inputCostPerMillion < top.inputCostPerMillion).sort(capable).slice(0, need);
-  const remaining = rest.filter(model => model !== top && !middle.includes(model));
-  for (let i = 0; middle.length < need && i < remaining.length; i++) middle.push(remaining[(Math.floor(remaining.length / 2) + i) % remaining.length]!);
-  return [first, ...middle.sort(cheaper), top];
+  if (sorted.length < 2) return sorted;
+  const first = sorted[0]!, ranked = sorted.filter(model => model !== first && validTierPair(first, model)).sort(capable);
+  let fallback: InventoryModel[] | undefined;
+  for (const top of ranked) {
+    const chosen = [first, top];
+    fallback ??= chosen;
+    for (const candidate of ranked) {
+      if (candidate === top || candidate.inputCostPerMillion > top.inputCostPerMillion) continue;
+      if (chosen.every(model => cheaper(candidate, model) < 0 ? validTierPair(candidate, model) : validTierPair(model, candidate))) chosen.push(candidate);
+      if (chosen.length === 4) break;
+    }
+    // A fourth rung must not make an otherwise valid ladder unusable.
+    if (chosen.length >= 3) return chosen.sort(cheaper);
+  }
+  return fallback ?? [first];
 }
 function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: Map<string, BenchmarkReceipt["results"][number]>): CatalogDocument {
   const models: CatalogModel[] = [];
@@ -228,6 +242,7 @@ function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: M
     const specialChoices = options.specials.filter(special => providerPolicy(special.provider)?.family === family);
     if (specialChoices.length > 1) throw new ProbeError("ambiguous_identity");
     const requested = specialChoices[0];
+    if (!candidates.length && !requested) continue;
     const special = requested && candidates.find(model => probeAddress(model) === probeAddress(requested) && model.api === requested.api);
     if (requested && (!special || !policy.special.some(value => value.facet === requested.facet) || !candidates.some(model => model.inputCostPerMillion > special.inputCostPerMillion))) throw new ProbeError("invalid_input");
     const rungs = ladder(candidates.filter(model => model !== special));

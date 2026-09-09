@@ -1,86 +1,65 @@
 # Code — `atyrode.code`
 
-**A Manifold-native coding-agent plugin, controlled through the web GUI.**
+**A TypeScript/React/Bun coding-agent plugin inside
+[Manifold](https://github.com/atyrode/manifold), using
+[oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi) for agent execution.**
 
-Code provides the coding-domain decisions around
-[oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi): model capability
-ladders, provider-pool routing, thinking and review settings, routing previews,
-and quota-aware cost and speed estimates. It is a plugin **inside
-[Manifold](https://github.com/atyrode/manifold)**, not a separately configured
-product alongside it.
+Code supplies typed model catalogs, capability ladders, routing and estimates,
+shared account choices, suggestions, provider onboarding and reviewed OMP
+launches. The web panels and headless clients use the same governed actions.
+There is no standalone Code installation, terminal configuration UI, private
+state store or public process ABI to preserve.
 
-> **Architecture direction, not a completed migration.** The standalone Code
-> CLI/TUI is **deprecated**. The source baseline at `main@288190f` still
-> contains that implementation and bootstrap plugins. The candidate
-> headless/React/native-job work in [draft PR #148](https://github.com/atyrode/code/pull/148)
-> needs rework: its standalone coexistence assumptions are rejected. Neither
-> that draft nor this documentation establishes a supported, preview-ready,
-> or live-accepted Manifold-native product.
+## Ownership
 
-The operator-ratified correction is tracked in
-[#149](https://github.com/atyrode/code/issues/149). Start with the
-[owning architecture](docs/manifold-transition.md), not the old terminal
-launcher or its installation instructions.
+| Code | Manifold | OMP |
+| --- | --- | --- |
+| Domain schemas and validation; routing, catalogs, preferences and account-choice semantics; React panels and typed actions | Fleet identity, grants and consent; durable storage and atomic commits; credential-source references and scoped services; artifact/binding revisions; jobs, locations, terminals and traces | Model runtime, ordinary retries and fallback, quotas, session resume and in-session subagent isolation |
 
-## Product and platform boundaries
+Code depends on Manifold and OMP. **Babel is a downstream consumer of Code,
+not a Code dependency.** Code exports native headless contracts; Babel adoption
+is independent work and is not claimed here. Retaining an old engine protocol
+is not a prerequisite for this source cutover.
 
-| Code owns | Manifold owns |
-| --- | --- |
-| Coding-domain configuration and validation; model ladders and routing policy; previews, estimates and coding workflows; plugin GUI and domain actions | Fleet and placement; permissions and scoped service access; multiplayer/shared state and persistence; resource lifecycle; execution and scheduling; traces |
+## Native workflows
 
-There is **one Manifold-owned source of Code state**. Code must not keep a
-second authoritative preference, account-selection, session or worktree store.
-A missing generic platform capability belongs in Manifold; Code must not
-emulate it with a private broker, registry, scheduler or transport.
+- **Code launcher:** initialize container/machine-scoped configuration; edit,
+  stage, review and promote a structured catalog; save shared dials; inspect
+  routes and estimates; review and promote exact native resource pins.
+- **Accounts / Usage:** choose identities or service-scoped credential slots,
+  manage shared presets, inspect usage and use separately authorized credential
+  actions. API-key onboarding selects existing native owner-held source
+  references; it never accepts raw keys. OAuth uses a governed SDK worker.
+- **Execution:** explicit inventory and benchmark jobs may contact providers and
+  incur cost. Suggestions use a scoped service. A reviewed launch produces a
+  native terminal runtime; Manifold owns admission and terminal lifetime.
 
-Legacy or external services can be governed as native Manifold resources.
-Their existence does not justify retaining the standalone Code architecture.
-Access must use native, scoped service contracts rather than requiring the
-operator's shell environment or a personal wrapper.
+The native resource owner must provide reviewed bindings, operation consent,
+scoped services and the required `runtimeTools.system` closure. Bun, OMP and
+pi-natives are pinned managed artifacts, not host-PATH or cache fallbacks.
+Missing resources are unavailable, not evidence of a ready installation.
+Workspace/session location bindings do not imply repository cloning or native
+worktree preparation has been implemented.
 
-## GUI to OMP runtime
+## Development and evidence
 
-The target flow is:
+Use Bun **1.4.2**, the pinned sibling Manifold checkout, and `scripts/gate.sh`.
+The plugin gate is `check`, `test`, `pack`, `verify`; see
+[plugin development](plugins/README.md) for exact commands and source maps.
 
-1. Configure a coding task in Code's Manifold web GUI and inspect its routing
-   and resource requirements.
-2. Submit a domain action through Manifold's permission and resource model.
-3. Have Manifold resolve scoped service access, place and execute the work,
-   and own its lifecycle, persistent state and traces.
-4. Use OMP for agent execution. An OMP terminal is an **execution surface
-   only**, not the control plane or a hidden Code configuration UI.
+- [Configuration and APIs](docs/configuration.md): current schemas, authority
+  and native workflows, not legacy state-format setup.
+- [Architecture and transition ledger](docs/manifold-transition.md): #149's
+  ratified design and the sole progress ledger, under integration issue #102.
+- [Status and caveats](docs/status.md): source versus operational evidence.
 
-Internal worker executables may implement domain work behind these native
-contracts. They are not a second Code product to install or configure. OMP's
-agent behavior, including model retries and fallback, should be used rather
-than reimplemented; Manifold remains responsible for platform execution and
-resource governance.
-
-There is no target requirement for CLI/TUI parity, `CODE_*` compatibility,
-standalone installation, a dotfiles wrapper, dual preference stores or a
-permanent CLI recovery path. A future CLI, if needed, would be designed as a
-Manifold client rather than preserve the deprecated launcher.
-
-## Development entry points
-
-- [Architecture and decisions](docs/manifold-transition.md) define the target
-  contracts and platform prerequisites. Its
-  [section 6](docs/manifold-transition.md#6-transition-steps) is the **sole
-  transition ledger**.
-- [Plugin development](plugins/README.md) describes the plugin tree, SDK pin
-  and local development mechanics. Existing bootstrap code is an implementation
-  reference, not proof of the target UX or architecture.
-- [Status and caveats](docs/status.md) separates source evidence, draft work
-  and operational acceptance, and records domain/runtime constraints.
-- [Deprecated configuration reference](docs/configuration.md) explains legacy
-  catalog and launcher mechanics when reading or extracting existing code. It
-  is not Manifold onboarding or a required setup path.
-
-Develop against explicitly identified Code and Manifold revisions. Promotion
-must explicitly select exact revisions; building, packaging or checking a
-plugin does not authorize installing it into a live environment. This work
-does not authorize deployment, releases, credential relocation, broker
-retirement or destructive state changes.
+This describes the current integration source, **not a claim that it is merged
+on main**. The shared preview carries all five bundles; bounded deployment,
+broker metadata and runtime-preparation evidence is recorded in
+[status](docs/status.md#source-is-not-deployment). Those observations do not
+certify the remaining interactive and account-backed runtime workflows.
+Production deployment, releases, credential relocation, broker retirement and
+destructive data changes require their own authorization.
 
 [MIT](LICENSE) — originally extracted from
 [atyrode/dotfiles](https://github.com/atyrode/dotfiles).

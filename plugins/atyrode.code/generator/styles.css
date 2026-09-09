@@ -1,155 +1,145 @@
 .plugin-atyrode_code_generator {
   flex: 1 1 auto;
   width: 100%;
-  max-width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
-  min-width: 0;
-  color: inherit;
-  background: #14181e;
-  container-type: inline-size;
+  container: code-generator / inline-size;
 }
-
 .plugin-atyrode_code_generator__body {
+  display: grid;
+  gap: 1.5rem;
   width: 100%;
-  padding: clamp(0.75rem, 3cqi, 1.5rem);
-  max-width: 70rem;
+  max-width: 88rem;
   margin-inline: auto;
-  overflow-wrap: anywhere;
+  padding: clamp(0.8rem, 2.5cqi, 1.75rem);
 }
-
-.plugin-atyrode_code_generator h2,
-.plugin-atyrode_code_generator h3,
-.plugin-atyrode_code_generator p {
-  margin: 0;
-}
-
-.plugin-atyrode_code_generator h2 {
-  font-size: 1.45rem;
-  letter-spacing: -0.025em;
-}
-
-.plugin-atyrode_code_generator h3 {
-  font-size: 1rem;
-}
-
-.plugin-atyrode_code_generator header p {
-  padding-top: 0.45rem;
-}
-
-.plugin-atyrode_code_generator label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.plugin-atyrode_code_generator__muted {
-  color: #adb5bd;
-  font-size: 0.82rem;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-
-
-.plugin-atyrode_code_generator select,
-.plugin-atyrode_code_generator input,
-.plugin-atyrode_code_generator textarea {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  border: 1px solid #495057;
-  border-radius: 0.55rem;
-  padding: 0.7rem 0.8rem;
-  background: #171a1f;
-  color: #f8f9fa;
-  font: inherit;
-  text-overflow: ellipsis;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.plugin-atyrode_code_generator__note {
-  padding: 0.85rem 1rem;
-  border-inline-start: 2px solid #748ffc;
-  border-radius: 0.2rem;
-  background: #1c2230;
-  color: #ced4da;
-  font-size: 0.85rem;
-  line-height: 1.6;
-}
-
-.plugin-atyrode_code_generator code {
-  font-size: 0.9em;
-  overflow-wrap: anywhere;
-}
-
-.plugin-atyrode_code_generator pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 24rem;
-  overflow: auto;
-}
-
-.plugin-atyrode_code_generator button {
-  display: inline-flex;
+.plugin-atyrode_code_generator__masthead,
+.plugin-atyrode_code_generator__profile-header {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  min-height: 2.5rem;
-  max-width: 100%;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid #495057;
-  border-radius: 0.55rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-  cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease;
+  gap: 0.45rem 1rem;
 }
-
-
-
-.plugin-atyrode_code_generator button:disabled,
-.plugin-atyrode_code_generator select:disabled,
-.plugin-atyrode_code_generator input:disabled,
-.plugin-atyrode_code_generator textarea:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.plugin-atyrode_code_generator__masthead {
+  justify-content: space-between;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--code-rule);
 }
-
-.plugin-atyrode_code_generator button:focus-visible,
-.plugin-atyrode_code_generator input:focus-visible,
-.plugin-atyrode_code_generator select:focus-visible,
-.plugin-atyrode_code_generator textarea:focus-visible {
-  outline: 2px solid #91a7ff;
-  outline-offset: 3px;
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__masthead h1 {
+  color: var(--code-fg);
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 1;
 }
-
-.plugin-atyrode_code_generator__status {
-  border-radius: 0.55rem;
-  line-height: 1.55;
-  font-size: 0.9rem;
+.plugin-atyrode_code_generator__masthead h1 span { color: var(--code-accent); }
+.plugin-atyrode_code_generator__machine { display: flex; align-items: center; flex-wrap: wrap; gap: 0.45rem; min-width: 0; }
+.plugin-atyrode_code_generator__machine label { color: var(--code-muted); }
+.plugin-atyrode_code_generator__machine select { max-width: min(25rem, 65cqi); }
+.plugin-atyrode_code_generator__connection { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--code-dim); }
+.plugin-atyrode_code_generator__connection[data-online="true"] { background: var(--code-positive); }
+.plugin-atyrode_code_generator__workbench { display: grid; gap: 1.15rem; min-width: 0; }
+.plugin-atyrode_code_generator__profile-header nav { margin-inline-start: auto; }
+.plugin-atyrode_code_generator__dials { display: grid; gap: 0.25rem; min-width: 0; }
+.plugin-atyrode_code_generator__dial { display: grid; grid-template-columns: 8rem minmax(0, 1fr); align-items: baseline; gap: 0.4rem 1rem; min-width: 0; }
+.plugin-atyrode_code_generator__dial-label { display: inline-flex; align-items: center; gap: 0.7rem; color: var(--code-muted); }
+.plugin-atyrode_code_generator__icon { width: 1.1rem; height: 1.1rem; flex: none; color: var(--code-accent); align-self: center; }
+.plugin-atyrode_code_generator__dial-options { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.35rem; min-width: 0; user-select: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button { padding: 0.15rem 0.4rem; color: var(--code-muted); border-bottom: 1px solid transparent; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button[aria-checked="true"] { color: var(--code-accent); border-bottom-color: var(--code-accent); background: color-mix(in srgb, var(--code-accent) 10%, transparent); font-weight: 700; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button:disabled { color: var(--code-dim); }
+.plugin-atyrode_code_generator__extra-dials { margin-top: 0.4rem; }
+.plugin-atyrode_code_generator__extra-dials > summary { font-size: 0.8125rem; }
+.plugin-atyrode_code_generator__extra-dials > .plugin-atyrode_code_generator__dial { margin-top: 0.25rem; }
+.plugin-atyrode_code_generator__draft { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 1rem; border-inline-start: 2px solid var(--code-accent); padding-inline-start: 0.75rem; }
+.plugin-atyrode_code_generator__draft > details { flex-basis: 100%; }
+.plugin-atyrode_code_generator__suggestion { display: grid; gap: 0.4rem; max-width: 52rem; }
+.plugin-atyrode_code_generator__suggestion > button { justify-self: start; font-size: 0.8125rem; }
+.plugin-atyrode_code_generator__suggestion > p { font-size: 0.8125rem; }
+.plugin-atyrode_code_generator__suggested-values { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-block: 0.4rem !important; }
+.plugin-atyrode_code_generator__suggested-values > div { display: flex; gap: 0.5rem; }
+.plugin-atyrode_code_generator__suggested-values dd { margin: 0; color: var(--code-accent); }
+.plugin-atyrode_code_generator__estimates { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 2rem; }
+.plugin-atyrode_code_generator__estimates > div { display: flex; align-items: baseline; gap: 1rem; }
+.plugin-atyrode_code_generator__estimates dt { color: var(--code-muted); }
+.plugin-atyrode_code_generator__estimates dd { margin: 0; letter-spacing: 0.15em; color: var(--code-rule); }
+.plugin-atyrode_code_generator__estimates [data-filled="true"] { color: var(--code-warning); }
+.plugin-atyrode_code_generator__routing { display: grid; gap: 0.7rem; padding-top: 1rem; border-top: 1px solid var(--code-rule); min-width: 0; }
+.plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(7, auto); grid-auto-flow: column; gap: 0.25rem 2rem; min-width: 0; }
+.plugin-atyrode_code_generator__routes > div { display: grid; grid-template-columns: 10.25rem minmax(0, 1fr); align-items: baseline; gap: 0.65rem; min-width: 0; }
+.plugin-atyrode_code_generator__routes dt { color: var(--code-muted); white-space: nowrap; }
+.plugin-atyrode_code_generator__routes dd { min-width: 0; margin: 0; }
+.plugin-atyrode_code_generator__agent-marker { display: inline-block; width: 1.15rem; color: var(--code-accent); font-size: 0.65em; }
+.plugin-atyrode_code_generator__model { display: inline-flex; align-items: baseline; max-width: 100%; min-width: 0; color: var(--code-fg); }
+.plugin-atyrode_code_generator__model > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator__model[data-family="openai"] { color: var(--code-blue); }
+.plugin-atyrode_code_generator__model[data-family="anthropic"] { color: var(--code-amber); }
+.plugin-atyrode_code_generator__thinking { flex-shrink: 0; color: var(--code-muted); font-size: 0.8em; }
+.plugin-atyrode_code_generator__fallback { display: flex; align-items: baseline; min-width: 0; gap: 0.4rem; color: var(--code-dim); font-size: 0.8125rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fallback-toggle { justify-self: start; font-size: 0.8125rem; padding-inline: 0; }
+.plugin-atyrode_code_generator__launch { display: grid; gap: 0.5rem; padding-block: 1rem; border-block: 1px solid var(--code-rule); min-width: 0; }
+.plugin-atyrode_code_generator__launch > label { color: var(--code-muted); }
+.plugin-atyrode_code_generator__launch-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.plugin-atyrode_code_generator__launch > button { justify-self: start; }
+.plugin-atyrode_code_generator__launch-review { display: grid; gap: 0.4rem; margin-bottom: 0.4rem; }
+.plugin-atyrode_code_generator__launch-review ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; }
+.plugin-atyrode_code_generator__launch-review li { display: flex; gap: 0.65rem; }
+.plugin-atyrode_code_generator__launch-review li > span:last-child { color: var(--code-muted); }
+.plugin-atyrode_code_generator__footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--code-dim); font-size: 0.75rem; }
+.plugin-atyrode_code_generator__onboarding { display: grid; gap: 1.5rem; min-width: 0; }
+.plugin-atyrode_code_generator__steps { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; list-style: none; padding: 0 !important; }
+.plugin-atyrode_code_generator__steps li { min-width: 0; }
+.plugin-atyrode_code_generator__steps button { display: inline-flex; gap: 0.5rem; padding-inline: 0.1rem; font-size: 0.8125rem; }
+.plugin-atyrode_code_generator__steps li[aria-current="step"] button { color: var(--code-accent); border-bottom-color: var(--code-accent); }
+.plugin-atyrode_code_generator__steps li[data-complete="true"] button { color: var(--code-positive); }
+.plugin-atyrode_code_generator__setup-step { display: grid; gap: 1rem; min-width: 0; max-width: 62rem; }
+.plugin-atyrode_code_generator__setup-step > p { max-width: 44rem; color: var(--code-muted); }
+.plugin-atyrode_code_generator__setup-step > button,
+.plugin-atyrode_code_generator__onboarding > button { justify-self: start; }
+.plugin-atyrode_code_generator__setup-step > h3 { font-size: 1.1rem; color: var(--code-fg); }
+.plugin-atyrode_code_generator__service-setup,
+.plugin-atyrode_code_generator__connection-review { display: grid; gap: 0.8rem; min-width: 0; }
+.plugin-atyrode_code_generator__service-setup > fieldset { display: grid; gap: 0.8rem; margin: 0; }
+.plugin-atyrode_code_generator__service-setup > fieldset > button { justify-self: start; }
+.plugin-atyrode_code_generator__service-setup label { display: grid; gap: 0.3rem; }
+.plugin-atyrode_code_generator__service-setup details > :not(summary) { margin-block-start: 0.6rem; }
+.plugin-atyrode_code_generator__setup-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 1rem; }
+.plugin-atyrode_code_generator__setup-facts dt { color: var(--code-muted); }
+.plugin-atyrode_code_generator__setup-facts dd { margin: 0; }
+.plugin-atyrode_code_generator__requirements { list-style: none; display: grid; gap: 0.4rem; padding: 0 !important; max-width: 36rem; }
+.plugin-atyrode_code_generator__requirements li { display: flex; justify-content: space-between; gap: 1rem; }
+.plugin-atyrode_code_generator__requirements li > span:last-child { color: var(--code-warning); }
+.plugin-atyrode_code_generator__requirements li[data-ready="true"] > span:last-child { color: var(--code-positive); }
+.plugin-atyrode_code_generator__catalog,
+.plugin-atyrode_code_generator__catalog-review,
+.plugin-atyrode_code_generator__model-editor { display: grid; gap: 0.8rem; min-width: 0; }
+.plugin-atyrode_code_generator__catalog > .plugin-atyrode_code__section-heading > button { margin-inline-start: auto; }
+.plugin-atyrode_code_generator__model-editor > fieldset { margin: 0; }
+.plugin-atyrode_code_generator__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 0.6rem; }
+.plugin-atyrode_code_generator__fields > label { display: grid; gap: 0.25rem; min-width: 0; }
+.plugin-atyrode_code_generator__fields > label > :is(input, select) { width: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__check { display: inline-flex; align-items: center; gap: 0.4rem; }
+.plugin-atyrode_code_generator__check input { width: auto; }
+.plugin-atyrode_code_generator__job-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; padding-inline-start: 0.65rem; border-inline-start: 2px solid var(--code-accent); }
+.plugin-atyrode_code_generator__job-progress > p { flex-basis: 100%; }
+@container code-generator (max-width: 61rem) {
+  .plugin-atyrode_code_generator__routes { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-auto-flow: row; }
 }
-
-.plugin-atyrode_code_generator__status:not(:empty) {
-  padding: 0.85rem 1rem;
-  border: 1px solid #495057;
-  background: #1c2230;
+@container code-generator (max-width: 38rem) {
+  .plugin-atyrode_code_generator__dial { grid-template-columns: 6.75rem minmax(0, 1fr); column-gap: 0.35rem; }
+  .plugin-atyrode_code_generator__dial-options { gap: 0.1rem; }
+  .plugin-atyrode_code_generator__steps li:not([aria-current="step"]) span { display: none; }
 }
-
-
-.plugin-atyrode_code_generator fieldset {
-  margin: 0;
-  padding: 0.8rem;
-  min-width: 0;
-  border: 1px solid #495057;
-  border-radius: 0.55rem;
-}
-
-
-@media (prefers-reduced-motion: reduce) {
-  .plugin-atyrode_code_generator button,
-  .plugin-atyrode_code_generator input,
-  .plugin-atyrode_code_generator select,
-  .plugin-atyrode_code_generator textarea {
-    transition: none;
-  }
+@container code-generator (max-width: 25rem) {
+  .plugin-atyrode_code_generator__masthead { align-items: start; }
+  .plugin-atyrode_code_generator__machine { width: 100%; }
+  .plugin-atyrode_code_generator__machine select { flex: 1; max-width: none; }
+  .plugin-atyrode_code_generator__profile-header nav { margin-inline-start: 0; width: 100%; }
+  .plugin-atyrode_code_generator__dial { grid-template-columns: minmax(0, 1fr); row-gap: 0.1rem; margin-bottom: 0.4rem; }
+  .plugin-atyrode_code_generator__dial-label { font-size: 0.8125rem; }
+  .plugin-atyrode_code_generator__routes > div { grid-template-columns: minmax(0, 1fr); gap: 0.05rem; margin-bottom: 0.4rem; }
+  .plugin-atyrode_code_generator__routes dd { padding-inline-start: 1.15rem; }
+  .plugin-atyrode_code_generator__setup-facts { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
+  .plugin-atyrode_code_generator__setup-facts dd { margin-bottom: 0.35rem; }
 }

@@ -48,6 +48,10 @@ class FixtureBroker {
     if (url.pathname.endsWith("/refresh")) {
       this.refreshes++;
       const entry = this.refreshEntry!;
+      this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1,
+        credentials: this.snapshot.credentials.map(current => current.id === entry.id ? entry : current) };
+      if (this.stream) this.send({ kind: "entry", entry, generation: this.snapshot.generation,
+        serverNowMs: Date.now(), refresher: this.snapshot.refresher });
       const { rotatesInMs: _, ...wireEntry } = entry;
       return Response.json({ entry: wireEntry });
     }
@@ -161,6 +165,8 @@ describe("native account-pool gateway", () => {
       await fixture.listening.promise;
       fixture.refreshEntry = { ...entry, credential: { ...entry.credential, type: "oauth", access: "fixture-rotated-access", refresh: "__remote__", expires: Date.now() + 3600_000 } };
       await storage.remote.markCredentialSuspect(1);
+      await eventually(() => storage.remote.listAuthCredentials("anthropic").some(current =>
+        current.credential.type === "oauth" && current.credential.access === "fixture-rotated-access"));
       expect(await storage.getApiKey("anthropic")).toBe("fixture-rotated-access");
       fixture.refreshEntry = credential(1, "unlisted");
       await expect(storage.remote.markCredentialSuspect(1)).rejects.toThrow("gateway_unavailable");
@@ -190,7 +196,7 @@ describe("native account-pool gateway", () => {
     expect(() => parseInputs(broker, { anthropic: [{ credentialId: 1, identityKey: "chosen" }, { credentialId: 1, identityKey: "chosen" }] }, serviceBearer)).toThrow();
     expect(() => parseInputs(broker, { anthropic: [{ credentialId: 0, identityKey: null }] }, serviceBearer)).toThrow();
     expect(() => parseInputs(broker, { anthropic: ["chosen"] }, serviceBearer)).toThrow();
-    const environment = { PATH: "/bin", MANIFOLD_JOB_CONTEXT_FD: "3", ANTHROPIC_API_KEY: "private", HOME: "/source", HTTP_PROXY: "secret", PI_DEBUG_STARTUP: "1" };
+    const environment: NodeJS.ProcessEnv = { PATH: "/bin", MANIFOLD_JOB_CONTEXT_FD: "3", ANTHROPIC_API_KEY: "private", HOME: "/source", HTTP_PROXY: "secret", PI_DEBUG_STARTUP: "1" };
     isolateEnvironment(environment);
     expect(environment).toEqual({ PATH: "/bin", MANIFOLD_JOB_CONTEXT_FD: "3", HOME: "/inputs" });
   });

@@ -217,10 +217,15 @@ async function waitForStart(ctx: CodeContext, job: PublicJob): Promise<void> {
 }
 
 export const authActions = [
-  defineAction({ name: "startEnrollment", title: "Begin a fresh provider OAuth enrollment", caps: [], trace: "opaque", input: EnrollmentStartSchema, result: PublicJobSchema }),
-  defineAction({ name: "observeEnrollment", title: "Read current native OAuth enrollment", caps: [], trace: "opaque", input: EnrollmentObserveSchema, result: EnrollmentObservationSchema }),
-  defineAction({ name: "respondEnrollment", title: "Respond once to a correlated OAuth callback", caps: [], trace: "opaque", input: EnrollmentRespondSchema, result: EnrollmentControlResultSchema }),
-  defineAction({ name: "cancelEnrollment", title: "Cancel the native OAuth enrollment lifetime", caps: [], trace: "opaque", input: EnrollmentTargetSchema, result: EnrollmentControlResultSchema }),
+  defineAction({ name: "startEnrollment", title: "Begin a fresh provider OAuth enrollment", caps: [],
+    delegates: ["machines:run", "jobs:read", "jobs:input", "jobs:cancel", "services:invoke", "network:host"],
+    trace: "opaque", input: EnrollmentStartSchema, result: PublicJobSchema }),
+  defineAction({ name: "observeEnrollment", title: "Read current native OAuth enrollment", caps: [],
+    delegates: ["machines:run", "jobs:read"], trace: "opaque", input: EnrollmentObserveSchema, result: EnrollmentObservationSchema }),
+  defineAction({ name: "respondEnrollment", title: "Respond once to a correlated OAuth callback", caps: [],
+    delegates: ["machines:run", "jobs:read", "jobs:input"], trace: "opaque", input: EnrollmentRespondSchema, result: EnrollmentControlResultSchema }),
+  defineAction({ name: "cancelEnrollment", title: "Cancel the native OAuth enrollment lifetime", caps: [],
+    delegates: ["machines:run", "jobs:read", "jobs:cancel"], trace: "opaque", input: EnrollmentTargetSchema, result: EnrollmentControlResultSchema }),
 ];
 export const authHandlers = {
   async startEnrollment(ctx: CodeContext, input: z.infer<typeof EnrollmentStartSchema>) {

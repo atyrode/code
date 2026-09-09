@@ -5,63 +5,28 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  color: inherit;
-  background: #14181e;
   container-type: inline-size;
 }
 .plugin-atyrode_code_usage .plugin-atyrode_code_usage__body {
+  display: grid;
+  gap: 0.8rem;
   width: 100%;
-  max-width: 70rem;
+  max-width: 90rem;
   margin-inline: auto;
-  padding: clamp(0.75rem, 3cqi, 1.5rem);
-  overflow-wrap: anywhere;
+  padding: clamp(0.65rem, 2cqi, 1.2rem);
 }
-.plugin-atyrode_code_usage h2,
-.plugin-atyrode_code_usage h3,
-.plugin-atyrode_code_usage h4,
-.plugin-atyrode_code_usage p { margin: 0; }
-.plugin-atyrode_code_usage h2 { font-size: 1.4rem; }
-.plugin-atyrode_code_usage h3 { font-size: 1.1rem; }
-.plugin-atyrode_code_usage h4 { font-size: 1rem; }
-.plugin-atyrode_code_usage p,
-.plugin-atyrode_code_usage li { line-height: 1.6; }
-.plugin-atyrode_code_usage ul { margin: 0; padding-inline-start: 1.3rem; }
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__muted { color: #adb5bd; font-size: 0.85rem; }
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__card,
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__notice {
-  padding: 0.85rem;
-  border: 1px solid #495057;
-  border-radius: 0.5rem;
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
 }
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__notice { background: #1c2230; border-inline-start: 3px solid #91a7ff; }
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__account { border-top: 1px solid #495057; padding-top: 0.75rem; }
-.plugin-atyrode_code_usage .plugin-atyrode_code_usage__windows > li { padding-block: 0.4rem; }
-.plugin-atyrode_code_usage label { font-weight: 600; }
-.plugin-atyrode_code_usage select {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0.65rem;
-  border: 1px solid #68737e;
-  border-radius: 0.45rem;
-  background: #171a1f;
-  color: #f8f9fa;
-  font: inherit;
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__target select {
+  flex: 1 1 12rem;
+  width: auto;
+  max-width: 32rem;
 }
-.plugin-atyrode_code_usage button {
-  min-height: 2.75rem;
-  max-width: 100%;
-  padding: 0.6rem 0.85rem;
-  border: 1px solid #68737e;
-  border-radius: 0.45rem;
-  background: #263248;
-  color: #f8f9fa;
-  font: inherit;
-  cursor: pointer;
-  overflow-wrap: anywhere;
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__footer {
+  border-top: 1px solid var(--code-rule);
+  padding-top: 0.4rem;
 }
-.plugin-atyrode_code_usage button:hover:not(:disabled) { background: #364969; }
-.plugin-atyrode_code_usage button:disabled { opacity: 0.6; cursor: not-allowed; }
-.plugin-atyrode_code_usage button:focus-visible,
-.plugin-atyrode_code_usage select:focus-visible { outline: 2px solid #91a7ff; outline-offset: 3px; }
-.plugin-atyrode_code_usage code { font-size: 0.9em; overflow-wrap: anywhere; }
