@@ -390,7 +390,7 @@ function signInFixture(isRoot = true) {
   };
   const jobs = f.ctx.jobs.describe;
   f.ctx.jobs.describe = async args => {
-    if (args.machineId !== state.owner.machineId) return unavailable();
+    if (args.machineId !== f.resources.brokerOwner) return unavailable();
     const description = await jobs(args);
     return { ...description, operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
       [operation, { ready: true, reason: null, resourceBindingDigest: f.resources.binding }])) };
@@ -466,6 +466,22 @@ describe("instance-owned OMP sign-in", () => {
     f.resources.binding = "e".repeat(64);
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
       .toEqual({ refused: "code_resources_changed" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("owner relocation during policy inspection invalidates sign-in without reconfiguring either owner", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    const expectedBrokerRevision = f.state.revision;
+    const read = f.ctx.services.readInstanceConfiguration;
+    f.ctx.services.readInstanceConfiguration = async args => {
+      const current = await read(args);
+      f.state.owner.machineId = "replacement-owner";
+      f.state.revision = "relocated-revision";
+      return current;
+    };
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
+      .toEqual({ refused: "code_broker_revision_changed" });
     expect(f.state.writes).toBe(1);
   });
 });
