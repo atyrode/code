@@ -1,106 +1,115 @@
-# Status & caveats
+# Status and caveats
 
-Code's product direction is **`atyrode.code`, a Manifold-native plugin
-controlled through the web GUI**. The existing standalone CLI/TUI is
-**deprecated**, not a supported companion architecture to preserve until
-feature parity. [Issue #149](https://github.com/atyrode/code/issues/149)
-records the operator-ratified correction.
+Code is `atyrode.code`, a TypeScript/React/Bun plugin within Manifold, using OMP
+for agent execution. [#149](https://github.com/atyrode/code/issues/149) records
+the ratified replacement; [#102](https://github.com/atyrode/code/issues/102)
+owns integration. The [architecture's section 6](manifold-transition.md#6-transition-steps)
+is the sole transition ledger. This page records constraints, not another roadmap.
 
-The [architecture document](./manifold-transition.md) owns the design and
-its [section 6](./manifold-transition.md#6-transition-steps) is the sole
-transition ledger. This page records evidence boundaries and constraints,
-not a second checklist or progress tracker.
+## Source is not deployment
 
-## What the available evidence establishes
+The current integration source contains typed domain modules, five plugin
+bundles, React launcher/accounts/usage panels, governed catalog/preferences/
+account/service actions, and Bun probe/OAuth/gateway workers. It uses native
+storage CAS, resource and service revision pins, jobs and terminal runtime
+contracts. This corrects the earlier bootstrap-only and Go-worker source
+description; it does **not** claim the integration has merged on main.
 
-- **Source baseline:** `origin/main@288190f` still contains the legacy Go
-  CLI/TUI and bootstrap plugins. Their presence demonstrates existing
-  implementation, not acceptance of the target architecture. In particular,
-  opening the old launcher in a Manifold terminal is not the native GUI product.
-- **Candidate work:** [draft PR #148](https://github.com/atyrode/code/pull/148)
-  contains candidate headless, React and native-job work. It needs rework under
-  #149 because its coexistence assumptions are rejected. A draft is neither
-  merged implementation nor operational acceptance.
-- **Target contract:** native scoped service access, explicit promotion of
-  exact revisions and one Manifold-owned source of Code state are ratified
-  requirements. This documentation does not claim they are fully implemented.
-- **Operational boundary:** no supported native installation, preview readiness
-  or live end-to-end acceptance is established by these documents. Existing
-  packaging, CI or deployment mechanics do not establish those claims either.
-  Evidence must identify the revisions and the actual path exercised; a
-  passing local check cannot stand in for a live acceptance result.
+The source cutover removes standalone product/toolchain/state-format dependencies.
+Historical prototype checks under draft #148 apply to that historical tree,
+not automatically to this replacement. Current gate, browser and machine
+results must identify the actual Code/Manifold revisions and exercised paths.
+On 2026-09-09, all five Code bundles were installed on
+<https://preview.manifold.tyrode.dev> with Manifold
+`abcbc62187a10c8d4f19e50352a30d0b8033a2c4`. The parent Code bundle is
+`35fc87e5775df0b034e91258b47bd5ada89f8e20beb796013fefc2eb9a65aaa0`.
+Both local gates and the native revision's required CI passed.
 
-The [plugin guide](../plugins/README.md) is the development entry point.
-The [configuration reference](./configuration.md) is explicitly deprecated
-implementation documentation, not instructions for setting up the target
-product. Historical commands, wrappers, state paths and screenshots describe
-the old implementation only.
+Live checks used temporary agent principals and a separately owned native
+machine to read projected broker account metadata, prepare OMP 18.1.14, inventory
+36 models, and generate and promote an unmeasured catalog. Native terminals
+started in both canvas and composition containers without the setup wizard;
+the launch jobs retained their original requester and exact installation revision.
+Credentials remained behind their existing protected owner-held references.
+These observations do not yet prove fresh provider enrollment, an account-backed
+OMP response or browser workflow acceptance.
 
-## Domain and runtime constraints worth retaining
+See [plugin development](../plugins/README.md) for the Bun 1.4.2 gate and
+[configuration](configuration.md) for current native workflows. There is no
+legacy CLI, Nix product, environment-variable setup or private-state migration
+requirement. Existing user files and live resources are not altered by a source
+retirement decision.
 
-### Model catalogs and estimates
+## Explicit availability boundaries
 
-Code owns capability ladders and coding-role routing, not a new execution
-platform. Model metadata alone does not establish that an account can call a
-model. The legacy generator's reachability probes are useful implementation
-reference: an unavailable model, an incompatible client and an inconclusive
-probe are distinct outcomes. An inconclusive request must not be presented as
-successful verification or silently certify the remaining ladder.
+- Managed Bun, OMP and pi-natives pins do not supply the native owner's
+  independently reviewed `runtimeTools.system` closure. The requirements report
+  lists direct ELF dependencies; a missing transitive closure, binding, consent,
+  service grant or machine connection must remain unavailable.
+- Service setup selects existing native owner-held source references and commits
+  reviewed policies. It does not provision infrastructure or acquire credentials.
+  API-key enrollment is owner-ref-only; OAuth uses the pinned native job worker.
+  Neither an exposed flow nor a successful synthetic fixture proves live provider
+  acceptance.
+- Pure catalog/preferences operations need no machine process. A catalog review
+  can record unavailable execution resources without certifying them. Runtime
+  preview/launch requires current promoted resources and exact selected accounts.
+- `prepareLaunch` returns a reviewed runtime; native terminal creation/admission
+  and actual OMP readiness are different observations. Verify process output,
+  cancellation and reconnect before claiming those behaviors.
+- Workspace preparation is a native create operation plus the pinned OMP version
+  probe. It refuses existing locations; launches reuse them with write consent.
+  This is not repository cloning, a private registry or a preparation daemon.
+- Code's typed native headless contract is available for downstream clients.
+  Babel is a consumer, not a Code dependency or acceptance prerequisite. This
+  task neither changes Babel nor claims its native adoption, and does not keep
+  an obsolete process ABI for it.
 
-Automatically inferred tier assignments still require domain review.
-A single timed request is a sample, not a sustained throughput benchmark;
-cost and speed previews are estimates, not promises. A local endpoint listing
-a tag proves neither its reasoning quality nor its fitness for a task. Do not
-present local models as capability-verified merely because the endpoint answers.
+## Domain and safety constraints
 
-OMP model, usage and benchmark schemas and upstream provider behavior can
-change. Compatibility claims must name the versions and exercised contracts;
-a historical version number is not a current guarantee.
+### Catalogs and estimates
 
-### Quotas and account health
+Code owns ladders and routing, not provider entitlement. Metadata, a reachable
+endpoint or an inventory entry does not prove model quality or callability.
+Unavailable, incompatible and inconclusive probes are distinct. Automatically
+assigned tiers require review; a timed request is a sample, not a sustained
+throughput guarantee. Costs and speeds remain estimates, and nullable facts
+must not be presented as measured values.
 
-Routing should use declared model quota buckets rather than assume that model
-family names encode entitlement. Provider-wide headroom and tier-scoped quota
-windows are different signals: a usable sibling account can supply provider
-capacity without proving that a particular tier has capacity. A stale,
-retired quota window must not be advertised as spendable capacity when no
-model uses it.
+OMP/provider schemas can change. Runtime claims must name pinned versions and
+exercised behavior. Routing preserves role identity at the OMP overlay boundary;
+source-level intent alone does not prove all upstream child-session behavior.
 
-Disabled credentials, missing usage reports, exhaustion and stale broker
-blocks are not interchangeable. Missing data is not evidence of health or
-entitlement. Code can interpret authorized service observations for domain
-previews; it must not create an independent account-health authority or
-private enabled-account preference store beside Manifold state.
+### Account health
 
-### Execution, recovery and safety
+Declared model quota buckets, provider-wide capacity and tier-specific windows
+are different signals. Missing usage is not health or entitlement; stale,
+disabled, exhausted and blocked accounts are not interchangeable. Code
+interprets authorized observations and shared choices without becoming a broker
+or a second account-health authority. Selected runtime pools must not broaden
+when a slot disappears or changes identity.
 
-Manifold owns fleet placement, permissions, multiplayer/shared state,
-persistence, resource lifecycle, execution, scheduling and traces. Code owns
-the coding-domain actions using those services. OMP provides agent runtime
-behavior, including retries and model fallback; its terminal is an execution
-surface, not Code's control plane. Generic gaps must be fixed in Manifold,
-not filled with Code-owned parallel machinery.
+### Native lifetime and privacy
 
-The legacy session registry and separate worktree root record real safety
-concerns: cleanup must not delete live work, orphan child processes, erase
-uncommitted changes or mistake a missing worktree for permission to recreate
-it. Preserve those protections in Manifold-owned lifecycle and recovery
-contracts, **not** by retaining Code's registry, private persistence or CLI
-recovery indefinitely. Existing state is not authorization to migrate or
-remove it.
+Manifold owns grants, consent, resources, persistence, job/terminal lifetime and
+traces. OMP owns ordinary model retries/fallback, quotas, resume and in-session
+subagent isolation. Source credentials stay with the native machine-side
+resolver; scoped access is not a claim that an authorized process cannot disclose
+data it can read. Declare measured containment only and refuse unavailable
+requirements.
 
-Legacy/external brokers and runtimes may remain governed native resources
-when required. They must be reached through scoped native service access;
-that does not make standalone installation, `CODE_*` variables, a personal
-wrapper or dual state part of the target. Internal domain workers are
-implementation details, not separately configured operator products. Any
-future CLI would be a Manifold client, with no requirement to preserve the
-current command surface.
+Native lifecycle must protect live work, uncommitted changes, child processes
+and retained sessions. A missing workspace is not permission to recreate,
+prune or erase it. Do not mine OMP transcript bodies or retain Code's former
+private registry to simulate lifecycle ownership. User data adoption or cleanup
+requires an explicit bounded authorization.
 
-## Promotion is a separate operator decision
+## Promotion remains separate
 
-Development and architecture changes do not authorize live deployment,
-releases, credential relocation, broker retirement or destructive state
-changes. Promotion requires explicit selection of exact revisions. Do not
-interpret a branch, a moving tag, an old preview workflow or a successful
-local build as permission to change a running environment.
+Promotion explicitly selects exact reviewed product/configuration/execution
+and service revisions. A changed revision refuses stale use; live observation
+freshness and equivalent secret rotation have their own semantics. Building,
+merging or publishing authorizes neither deployment nor credential relocation,
+broker retirement or destructive data changes. Tags and release bytes remain
+immutable. Operational evidence must identify the actual installed revision,
+hub/surface, action, observed result and remaining boundary.

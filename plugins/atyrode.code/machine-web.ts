@@ -1,148 +1,143 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
-import { JobDescriptionSchema, PublicJobSchema, type MachineSummary, type PublicJob } from "@manifold/protocol";
-import { z } from "zod";
-import {
-  CODE_PREFERENCES_TOPIC, PREPARE_LAUNCH_DOOR, PrepareLaunchInputSchema, PrepareLaunchResultSchema,
-  type PrepareLaunchInput,
-} from "./contract.ts";
-import {
-  CODE_APPLY_ACCOUNT_CHOICES_DOOR, CODE_JOB_TOPIC, CODE_OBSERVE_DOOR, CODE_RUN_DOOR,
-  CodeApplyAccountChoicesInputSchema, CodeApplyAccountChoicesResultSchema, CodeObservationSchema, CodeRunInputSchema,
-  CodeConfigurationSchema, CodeConfigurationReadSchema, CodeInitializeInputSchema,
-  CodeStageInputSchema, CodePromoteInputSchema, CodeSelectInputSchema,
-  type CodeApplyAccountChoicesInput, type CodeObservation, type CodeOperation, type CodeOperationInput,
-} from "./machine-contract.ts";
+import { ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
+import { actionSchemas, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
+  type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 
-type FailureKind = "denied" | "unavailable" | "invalid" | "stale" | "large" | "preview" | "resources" | "catalog" | "configuration";
-const failureMessages: Record<FailureKind, string> = {
-  denied: "This operation needs current machine authority and explicit plugin consent.",
-  unavailable: "The governed Code backend is unavailable.",
-  invalid: "The Code request or response did not match its contract.",
-  stale: "Shared configuration changed. Read the current state and review again.",
-  large: "This request exceeds the native execution or storage bound.",
-  preview: "The reviewed source no longer matches this request. Request a fresh review.",
-  resources: "Native resources are incomplete or changed. Review this machine’s operation bindings and promote a fresh catalog review.",
-  catalog: "Stage, review and explicitly promote a catalog in Code before launching.",
-  configuration: "Initialize native configuration or explicitly preserve and transition the existing native choices in Code.",
+const messages: Readonly<Record<string, string>> = {
+  code_stale_preferences: "Shared choices changed. Read the current revision before committing your edit.",
+  code_preview_changed: "The catalog, accounts or native resources changed. Review again before launching.",
+  code_resources_changed: "Promoted native resources changed. Review and promote their exact revisions again.",
+  code_resources_incomplete: "The selected machine does not have the required native resources and consent.",
+  code_configuration_missing: "Initialize Code for this container and machine first.",
+  code_catalog_missing: "Stage, review and promote a catalog first.",
+  code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
+  code_scope_refused: "Your current authority does not cover this container.",
+  code_result_unavailable: "This native result is incomplete, no longer retained, or not readable with your current authority.",
+  code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
+  code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
+  code_credential_reference_unavailable: "The selected native credential reference is unavailable for that exact origin.",
+  code_api_key_enrollment_unavailable: "Configure a native credential reference and admit this provider's enrollment operation first.",
+  code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
 };
-const refusalKinds = new Map<string, FailureKind>([
-  ["code_stale_preferences", "stale"], ["code_input_too_large", "large"],
-  ["code_preview_changed", "preview"], ["code_resources_incomplete", "resources"], ["code_resources_changed", "resources"],
-  ["code_catalog_missing", "catalog"], ["code_invalid_request", "invalid"],
-  ["code_operation_unavailable", "unavailable"], ["code_observation_unavailable", "unavailable"],
-  ["code_configuration_missing", "configuration"], ["code_configuration_transition_required", "configuration"],
-]);
-
-class CodeOperationError extends Error {
-  constructor(kind: FailureKind) { super(failureMessages[kind]); }
-}
-
+class CodeActionError extends Error {}
 export function codeOperationFailure(reason: unknown): string {
-  return reason instanceof CodeOperationError ? reason.message : "The Code operation could not be completed.";
+  return reason instanceof CodeActionError ? reason.message : "The Code action could not be completed.";
 }
-
-async function action(host: HostServices, door: string, input: unknown): Promise<unknown> {
-  const outcome = await host.client.action(door, input);
-  if (!outcome.ok)
-    throw new CodeOperationError(refusalKinds.get(outcome.denial.message) ?? (outcome.denial.rule === "unavailable" ? "unavailable" : "denied"));
-  return outcome.result;
+export async function callCodeAction<K extends CodeAction>(host: HostServices, name: K, input: ActionInput<K>): Promise<ActionResult<K>> {
+  const parsed = actionSchemas[name].input.safeParse(input);
+  if (!parsed.success) throw new CodeActionError("The action input does not match the typed Code contract.");
+  const outcome = await host.client.action(`${CODE_PLUGIN_ID}.${name}`, parsed.data);
+  if (!outcome.ok) throw new CodeActionError(messages[outcome.denial.message] ??
+    "This action is unavailable under the current native authority or resource configuration.");
+  const result = actionSchemas[name].result.safeParse(outcome.result);
+  if (!result.success) throw new CodeActionError("The Code action returned an invalid result.");
+  return result.data as ActionResult<K>;
 }
-
 export function useCodeMachines(host: HostServices) {
   const [error, setError] = useState<string | null>(null);
   const { value: machines, refresh } = usePolledResource<readonly MachineSummary[] | null>(
-    () => host.client.machines(), FALLBACK_POLL_MS,
-    {
-      key: MACHINES_RESOURCE,
-      restartKey: host.principal.id,
-      initial: null,
-      topics: host.topics.machines,
-      events: host.client,
-      onError: () => setError("The machine list could not be read."),
-    },
-  );
+    () => host.client.machines(), FALLBACK_POLL_MS, {
+      key: MACHINES_RESOURCE, restartKey: host.principal.id, initial: null,
+      topics: host.topics.machines, events: host.client,
+      onError: () => setError("The permitted machine list could not be read."),
+    });
   useEffect(() => { setError(null); }, [machines]);
   return { machines, error, refresh };
 }
 
-type Observation<K extends CodeOperation> = Extract<CodeObservation, { operation: K }>;
-type ReadResult<K extends CodeOperation> = { observation: Observation<K> | null; error: string | null };
-
-/** The shared feed owns observation and reconnection; a render never starts a machine job. */
-export function useCodeOperation<K extends CodeOperation>(host: HostServices, machineId: string | null, operation: K, jobId?: string) {
-  const { value, refresh } = usePolledResource<ReadResult<K> | null>(
-    async () => {
-      try {
-        const observation = CodeObservationSchema.parse(await action(host, CODE_OBSERVE_DOOR, { machineId, operation, ...(jobId === undefined ? {} : { jobId }) }));
-        if (observation.operation !== operation) throw new Error("Mismatched observation");
-        return { observation: observation as Observation<K>, error: null };
-      } catch {
-        return { observation: null, error: "The Code observation could not be read under the current authority." };
+/** Resume the latest configured machine once; never replace a disconnected selection during an edit. */
+export function useCodeTarget(host: HostServices) {
+  const { machines, error, refresh } = useCodeMachines(host);
+  const [machineId, setMachineId] = useState<string | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const selectedOnce = useRef(false);
+  useEffect(() => {
+    if (selectedOnce.current || machines === null || host.containerId === null) return;
+    let cancelled = false;
+    const containerId = host.containerId;
+    void Promise.allSettled(machines.map(async machine => ({
+      machine, record: (await callCodeAction(host, "readConfiguration", { containerId, machineId: machine.id })).configuration,
+    }))).then(rows => {
+      if (cancelled || selectedOnce.current) return;
+      let initial: MachineSummary | undefined;
+      let latest = -1;
+      for (const row of rows) if (row.status === "fulfilled" && row.value.record && row.value.record.updatedAt > latest) {
+        initial = row.value.machine; latest = row.value.record.updatedAt;
       }
-    }, FALLBACK_POLL_MS,
-    {
-      key: `${CODE_OBSERVE_DOOR}:${JSON.stringify([machineId, operation, jobId])}`,
-      restartKey: host.principal.id,
-      initial: null,
-      enabled: machineId !== null,
-      topics: [CODE_JOB_TOPIC, CODE_PREFERENCES_TOPIC],
-      events: host.client,
-    },
-  );
-  return { observation: value?.observation ?? null, error: value?.error ?? null, refresh };
+      initial ??= machines.find(machine => machine.online && machine.revoked !== true);
+      if (initial) { selectedOnce.current = true; setMachineId(initial.id); }
+      setLookupError(!initial && rows.some(row => row.status === "rejected") ? "The saved machine choice could not be read. Choose a machine to continue." : null);
+    });
+    return () => { cancelled = true; };
+  }, [machines, host.client, host.containerId, host.principal.id]);
+  function select(value: string | null) { selectedOnce.current = true; setLookupError(null); setMachineId(value); }
+  const machine = machines?.find(candidate => candidate.id === machineId) ?? null;
+  const target: Target | null = host.containerId && machineId ? { containerId: host.containerId, machineId } : null;
+  return {
+    machines, machine, machineId, target, error: error ?? lookupError, refresh, select,
+    available: error === null && machine !== null && machine.online && machine.revoked !== true,
+  };
 }
 
-export async function runCodeOperation<K extends CodeOperation>(
-  host: HostServices, machineId: string, operation: K, input: CodeOperationInput<K>,
-): Promise<PublicJob> {
-  try {
-    const args = CodeRunInputSchema.parse({ machineId, operation, input });
-    return PublicJobSchema.parse(await action(host, CODE_RUN_DOOR, args));
-  } catch (reason) {
-    if (reason instanceof CodeOperationError) throw reason;
-    throw new CodeOperationError("invalid");
-  }
+/** Job progress is a projection of native lifecycle, not a second Code job registry. */
+export function useCodeJob(host: HostServices, node: { kind: "job"; machineId: string; operationId: string; jobId: string } | null) {
+  const feed = usePolledResource<{
+    job: ReturnType<typeof PublicJobSchema.parse> | null;
+    error: string | null;
+  } | null>(async () => {
+    if (node === null) return null;
+    try {
+      const result = await host.client.action("engine.jobs.status", { node });
+      if (!result.ok) return { job: null, error: "Job status is unavailable. Open native history for details." };
+      return { job: PublicJobSchema.parse(result.result), error: null };
+    } catch {
+      return { job: null, error: "Job status could not be read. The job has not been restarted." };
+    }
+  }, FALLBACK_POLL_MS, {
+    key: `${CODE_PLUGIN_ID}.job:${JSON.stringify(node)}`, restartKey: host.principal.id,
+    initial: null, enabled: node !== null, topics: [CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
+  });
+  return { job: feed.value?.job ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 
-export async function applyCodeAccountChoices(host: HostServices, input: CodeApplyAccountChoicesInput) {
-  const args = CodeApplyAccountChoicesInputSchema.parse(input);
-  return CodeApplyAccountChoicesResultSchema.parse(await action(host, CODE_APPLY_ACCOUNT_CHOICES_DOOR, args));
+/** Setup reads retained native receipts so reloading never repeats workspace creation. */
+export function useCodeRuns(host: HostServices, target: Target, operation: string) {
+  const operationId = `${CODE_PLUGIN_ID}.${operation}`;
+  const feed = usePolledResource<{
+    runs: ReturnType<typeof ListJobRunsResultSchema.parse>["runs"];
+    error: string | null;
+  } | null>(async () => {
+    try {
+      const result = await host.client.action("engine.jobs.listRuns", { machineId: target.machineId, pluginId: CODE_PLUGIN_ID, operationId, limit: 100 });
+      if (!result.ok) throw new Error("History unavailable");
+      const value = ListJobRunsResultSchema.parse(result.result);
+      if (value.runs.some(run => {
+        const identity = run.job ?? run.occurrence;
+        return identity && (identity.machineId !== target.machineId || identity.pluginId !== CODE_PLUGIN_ID || identity.operationId !== operationId);
+      })) throw new Error("Unexpected history scope");
+      return { runs: value.runs, error: null };
+    } catch {
+      return { runs: [], error: "Preparation history could not be read. No work has been restarted." };
+    }
+  }, FALLBACK_POLL_MS, {
+    key: `${CODE_PLUGIN_ID}.runs:${target.machineId}:${operationId}`, restartKey: host.principal.id,
+    initial: null, topics: [CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
+  });
+  return { runs: feed.value?.runs ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
-
-export async function prepareCodeLaunch(host: HostServices, input: PrepareLaunchInput) {
-  const args = PrepareLaunchInputSchema.parse(input);
-  return PrepareLaunchResultSchema.parse(await action(host, PREPARE_LAUNCH_DOOR, args));
-}
-
-function useCodeRead<S extends z.ZodType>(host: HostServices, machineId: string | null, name: string, schema: S) {
-  const feed = usePolledResource<{ data: z.infer<S> | null; error: string | null } | null>(
-    async () => {
-      try { return { data: schema.parse(await action(host, `atyrode.code.${name}`, { machineId })), error: null }; }
-      catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
-    }, FALLBACK_POLL_MS, {
-      key: `atyrode.code.${name}:${machineId}`, restartKey: host.principal.id, initial: null,
-      enabled: machineId !== null, topics: [CODE_JOB_TOPIC, CODE_PREFERENCES_TOPIC, ...host.topics.machines], events: host.client,
-    },
-  );
+export type CodeQuery = "readConfiguration" | "readSetup" | "readServiceConfiguration" | "accounts" | "usage" | "inventory" | "benchmark";
+/** Native shared feeds invalidate observations; polling never starts work or changes state. */
+export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, input: ActionInput<K> | null) {
+  const feed = usePolledResource<{ data: ActionResult<K> | null; error: string | null } | null>(async () => {
+    if (input === null) return null;
+    try { return { data: await callCodeAction(host, name, input), error: null }; }
+    catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
+  }, FALLBACK_POLL_MS, {
+    key: `${CODE_PLUGIN_ID}.${name}:${JSON.stringify(input)}`, restartKey: host.principal.id,
+    initial: null, enabled: input !== null,
+    topics: input === null ? [] : [{ kind: "container", containerId: input.containerId }, CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
+  });
   return { data: feed.value?.data ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
-}
-export function useCodeConfiguration(host: HostServices, machineId: string | null) {
-  return useCodeRead(host, machineId, "readConfiguration", CodeConfigurationReadSchema);
-}
-export function useCodeSetup(host: HostServices, machineId: string | null) {
-  return useCodeRead(host, machineId, "readSetup", JobDescriptionSchema);
-}
-export async function initializeCodeConfiguration(host: HostServices, input: z.infer<typeof CodeInitializeInputSchema>) {
-  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.initializeConfiguration", CodeInitializeInputSchema.parse(input)));
-}
-export async function stageCodeConfiguration(host: HostServices, input: z.infer<typeof CodeStageInputSchema>) {
-  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.stageConfiguration", CodeStageInputSchema.parse(input)));
-}
-export async function promoteCodeConfiguration(host: HostServices, input: z.infer<typeof CodePromoteInputSchema>) {
-  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.promoteConfiguration", CodePromoteInputSchema.parse(input)));
-}
-export async function selectCodeConfiguration(host: HostServices, input: z.infer<typeof CodeSelectInputSchema>) {
-  return CodeConfigurationSchema.parse(await action(host, "atyrode.code.selectConfiguration", CodeSelectInputSchema.parse(input)));
 }

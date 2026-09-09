@@ -6,6 +6,16 @@ import { familyOrder, familyPolicy, providerPolicy } from "./providers.ts";
 
 type Model = Readonly<Omit<CatalogModel, "thinkingLevels">> & { readonly thinkingLevels: readonly ThinkingLevel[] };
 type Ladder = readonly (string | undefined)[];
+type TierCandidate = Pick<Model, "inputCostPerMillion" | "contextWindow" | "thinkingLevels">;
+
+export function validTierPair(lower: TierCandidate, higher: TierCandidate): boolean {
+  if (higher.inputCostPerMillion < lower.inputCostPerMillion) return true;
+  if (lower.contextWindow !== null && higher.contextWindow !== null && higher.contextWindow < lower.contextWindow) return false;
+  let ceiling = -1;
+  for (const level of higher.thinkingLevels) ceiling = Math.max(ceiling, ThinkingLevelSchema.options.indexOf(level));
+  for (const level of lower.thinkingLevels) if (ThinkingLevelSchema.options.indexOf(level) > ceiling) return false;
+  return true;
+}
 
 /** Owned snapshots and private indexes prevent a caller mutating a reviewed catalog. */
 export class CompiledCatalog {
@@ -57,12 +67,7 @@ export class CompiledCatalog {
           const loKey = ladder[lower], hiKey = ladder[higher];
           if (!loKey || !hiKey) continue;
           const lo = models.get(loKey)!, hi = models.get(hiKey)!;
-          if (hi.inputCostPerMillion < lo.inputCostPerMillion) continue;
-          if ((lo.contextWindow !== null && hi.contextWindow !== null && hi.contextWindow < lo.contextWindow) ||
-              ThinkingLevelSchema.options.indexOf(hi.thinkingLevels[hi.thinkingLevels.length - 1]!) <
-              ThinkingLevelSchema.options.indexOf(lo.thinkingLevels[lo.thinkingLevels.length - 1]!)) {
-            throw new DomainError("invalid_catalog");
-          }
+          if (!validTierPair(lo, hi)) throw new DomainError("invalid_catalog");
         }
       }
       Object.freeze(ladder);

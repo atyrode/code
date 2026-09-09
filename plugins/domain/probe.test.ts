@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { benchmarkCandidates, catalogFromObservations, parseBenchmarkInput, parseBenchmarkObservation, parseInventoryObservation, projectProbeIdentities, scaffoldInventory, type InventoryReceipt } from "./probe.ts";
+import { PROBE_MODEL_LIMIT, benchmarkCandidates, catalogFromObservations, parseBenchmarkInput, parseBenchmarkObservation, parseInventoryObservation, parseOmpVersion, projectProbeIdentities, scaffoldInventory, type InventoryReceipt } from "./probe.ts";
 
 const identity = { provider: "anthropic", id: "claude-sonnet-5", api: "anthropic-messages" };
 function row(provider = identity.provider, id = identity.id) {
@@ -29,6 +29,11 @@ function fullInventory(): InventoryReceipt {
 }
 
 describe("exact OMP observations", () => {
+  test("normalizes the real pinned executable banner and rejects runtime drift", () => {
+    expect(parseOmpVersion("omp/18.1.14\n")).toBe("18.1.14");
+    expect(() => parseOmpVersion("omp/18.2.0\n")).toThrow("probe_unsupported_version");
+    expect(() => parseOmpVersion("18.1.14\n")).toThrow("probe_unsupported_version");
+  });
   test("provider and backend API come from exact registry identity, not model spelling", () => {
     const registry = [{ provider: "openai", id: "claude-sonnet-5", api: "openai-responses", extra: "private" }];
     const identities = projectProbeIdentities(registry, ["openai"]);
@@ -38,13 +43,22 @@ describe("exact OMP observations", () => {
     expect(JSON.stringify(receipt)).not.toContain("not part of the receipt");
     expect(parseInventoryObservation({ models: [row()] }, identities, 100, "18.1.14").models).toEqual([]);
   });
+  test("unroutable provider registries cannot block the supported model inventory", () => {
+    const outside = Array.from({ length: PROBE_MODEL_LIMIT + 1 }, (_, index) => ({
+      provider: "unregistered", id: `@preset/${index}`, api: "openai-completions",
+    }));
+    const identities = projectProbeIdentities([identity, ...outside], [identity.provider, "unregistered"]);
+    const unpriced = { ...row("unregistered", "@preset/0"), cost: { input: -1, output: -1, cacheRead: 0, cacheWrite: 0 } };
+    const receipt = parseInventoryObservation({ models: [row(), unpriced] }, identities, 100, "18.1.14");
+    expect(receipt.models).toEqual([expect.objectContaining(identity)]);
+  });
   test("duplicate API, case-folded identities and wrong selectors are refused", () => {
     expect(() => parseInventoryObservation({ models: [row()] }, [identity, { ...identity, api: "openai-responses" }], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
     expect(() => parseInventoryObservation({ models: [row(), row("Anthropic")] }, [identity], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
     expect(() => parseInventoryObservation({ models: [{ ...row(), selector: "openai/claude-sonnet-5" }] }, [identity], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
   });
   test("unknown thinking/modalities, absent context metadata and version drift fail closed", () => {
-    for (const change of [{ thinking: ["off", "turbo"] }, { input: ["audio"] }, { contextWindow: undefined }, { cost: { input: -1, output: 15 } }]) {
+    for (const change of [{ thinking: ["off", "turbo"] }, { input: ["audio"] }, { contextWindow: undefined }, { cost: { ...row().cost, input: -1 } }]) {
       expect(() => parseInventoryObservation({ models: [{ ...row(), ...change }] }, [identity], 100, "18.1.14")).toThrow("probe_invalid_observation");
     }
     expect(() => parseInventoryObservation({ models: [row()] }, [identity], 100, "18.2.0")).toThrow("probe_unsupported_version");
@@ -90,6 +104,29 @@ describe("pure typed scaffolding", () => {
     expect(document.models.filter(model => model.provider === "openai-codex").map(model => model.quotaBucket)).toEqual(["codex", "codex", "codex"]);
     expect(document.models.every(model => model.tokensPerSecond === 62 && model.timeToFirstTokenMs === 700)).toBe(true);
     expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
+  });
+  test("one configured provider can form a ladder without inventing a missing provider", () => {
+    const inv = fullInventory();
+    inv.models = inv.models.filter(model => model.provider === "anthropic");
+    const draft = scaffoldInventory(inv);
+    expect(draft.document.models.map(model => [model.provider, model.tier])).toEqual([
+      ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
+    ]);
+    expect(() => scaffoldInventory({ ...inv, models: inv.models.slice(1) })).toThrow("probe_insufficient_ladder");
+  });
+  test("a shorter valid ladder beats extra rungs that lose context or thinking", () => {
+    const inv = fullInventory(), model = inv.models.find(value => value.provider === "openai-codex")!;
+    inv.models = [
+      { ...model, id: "gpt-efficient", inputCostPerMillion: 0.2, contextWindow: 1000000, thinkingLevels: ["max"] },
+      { ...model, id: "gpt-compact", inputCostPerMillion: 0.75, contextWindow: 272000, thinkingLevels: ["max"] },
+      { ...model, id: "gpt-shallow", inputCostPerMillion: 1, contextWindow: 1000000, thinkingLevels: ["xhigh"] },
+      { ...model, id: "gpt-standard", inputCostPerMillion: 2, contextWindow: 1000000, thinkingLevels: ["max"] },
+      { ...model, id: "gpt-powerful", inputCostPerMillion: 4, contextWindow: 1000000, thinkingLevels: ["max"] },
+      { ...model, id: "gpt-pricey", inputCostPerMillion: 10, contextWindow: 922000, thinkingLevels: ["max"] },
+    ];
+    expect(scaffoldInventory(inv).document.models.map(value => [value.tier, value.id])).toEqual([
+      [1, "gpt-efficient"], [2, "gpt-standard"], [3, "gpt-powerful"],
+    ]);
   });
   test("missing, stale, wrong API and inconclusive probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);

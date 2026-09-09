@@ -1,6 +1,6 @@
 import { readFileSync, writeSync } from "node:fs";
 import { attachControlInput, CONTROL_FRAME_BYTES, EnrollmentControl, type EnrollmentEvent } from "./control.ts";
-import { openWorkerContext, type WorkerContext } from "@manifold/plugin/worker";
+import { openWorkerContext, type WorkerContext } from "@manifold/sdk/worker";
 
 // Private machine artifact only. No argv options, terminal UI, login database path,
 // broker URL/token, environment credential importer, or operator CLI fallback.

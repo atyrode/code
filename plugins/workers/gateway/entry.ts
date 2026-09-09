@@ -1,6 +1,6 @@
 import { Console } from "node:console";
 import { writeSync } from "node:fs";
-import { openWorkerContext, type WorkerContext } from "@manifold/plugin/worker";
+import { openWorkerContext, type WorkerContext } from "@manifold/sdk/worker";
 import { isolateEnvironment, parseInputs, readSealedJSON, requirePrivateInputRoot } from "./inputs.ts";
 import type { PoolGateway } from "./runtime.ts";
 
@@ -15,7 +15,7 @@ const silentWrite = (...args: unknown[]): boolean => {
 process.stdout.write = silentWrite;
 process.stderr.write = silentWrite;
 // Bun's built-in console need not route through process.stdout.write.
-globalThis.console = new Console({ stdout: process.stdout, stderr: process.stderr });
+globalThis.console = Object.assign(new Console({ stdout: process.stdout, stderr: process.stderr }), { write: () => 0 });
 let context: WorkerContext | undefined;
 let service: PoolGateway | undefined;
 let failed = false;

@@ -78,7 +78,7 @@ export function startPrivateBoundary(target: { url: string; bearer: string }, be
         // This capability protects only the fixed SDK listener. It is never a
         // provider credential and never returned to the native service caller.
         headers.set("authorization", `Bearer ${target.bearer}`);
-        const response = await fetch(target.url + url.pathname, { method: request.method, headers, body: payload, redirect: "error", signal: requestSignal });
+        const response = await fetch(target.url + url.pathname, { method: request.method, headers, ...(payload ? { body: payload } : {}), redirect: "error", signal: requestSignal });
         if (!response.ok) { await response.body?.cancel(); return safeFailure(response.status); }
         if (response.headers.get("content-type")?.startsWith("text/event-stream")) {
           if (!response.body || !model) { await response.body?.cancel(); return safeFailure(503); }

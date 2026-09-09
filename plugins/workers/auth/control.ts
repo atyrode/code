@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { attachWorkerInput } from "@manifold/plugin/worker";
+import { attachWorkerInput } from "@manifold/sdk/worker";
 
 export const CONTROL_FRAME_BYTES = 16 * 1024;
 export const ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;

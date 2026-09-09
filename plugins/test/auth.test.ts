@@ -37,6 +37,9 @@ function fixture() {
       containerScope: null, isRoot: false, allows: async () => state.readsAllowed },
     storage: { pluginId: "atyrode.code", get: unavailable, set: unavailable, delete: unavailable, keys: unavailable, compareAndSet: unavailable },
     newId: async () => "auth-job", emit() {},
+    now: () => 1000, outsideScope: unavailable,
+    host: { enabled: unavailable, roster: unavailable },
+    services: { describe: unavailable, readConfiguration: unavailable, configureConfiguration: unavailable, read: unavailable, invoke: unavailable },
     jobs: {
       describe: async () => ({ machineId: "m1", pluginId: "atyrode.code", connected: true, platforms: ["linux-amd64"], admissionPublicKey: "-----BEGIN PUBLIC KEY-----test",
         installation: { revision: pins.installationRevision, artifactSha256: pins.artifactSha256, enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: [],

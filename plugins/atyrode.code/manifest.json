@@ -2,14 +2,31 @@
   "id": "atyrode.code",
   "version": "0.3.0",
   "title": "code",
-  "description": "Code's product operations over Manifold-governed jobs, atomic shared choices and native terminal launches.",
+  "description": "Typed Code catalogs, routing and account choices over native Manifold state, services, jobs and terminals.",
   "capabilities": [
+    "containers:read",
+    "containers:write",
     "terminals:spawn",
     "machines:run",
-    "jobs:read"
+    "jobs:read",
+    "jobs:input",
+    "jobs:cancel",
+    "services:read",
+    "services:invoke",
+    "services:configure",
+    "network:host",
+    "locations:read",
+    "locations:write",
+    "locations:create",
+    "operations:invoke"
   ],
-  "dataVersion": { "major": 1, "minor": 0 },
-  "purges": ["storage"],
+  "dataVersion": {
+    "major": 1,
+    "minor": 0
+  },
+  "purges": [
+    "storage"
+  ],
   "contributes": {
     "panels": [],
     "sections": [],
@@ -18,349 +35,457 @@
     "events": [
       {
         "id": "preferences_changed",
-        "title": "Shared account choices changed"
+        "title": "Shared Code configuration changed"
       }
     ]
   },
   "machine": {
     "artifacts": {},
+    "tools": {},
+    "requiresResourceBindings": true,
     "operations": {
-      "atyrode.code.inspect": {
+      "atyrode.code.catalog-inventory": {
         "argv": [
           {
-            "literal": "inspect"
-          },
-          {
-            "input": "payload"
+            "literal": "/job/artifact"
           }
         ],
         "input": {
-          "payload": {
+          "models": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "config": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "modelIdentities": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "accountPool": {
             "type": "string",
             "required": true,
             "maxLength": 65536
           }
         },
         "runtimeTools": [
-          "code",
-          "omp"
+          "bun",
+          "omp",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "bun"
+        },
+        "inputFiles": {
+          "models": {
+            "input": "models",
+            "homePath": [
+              ".omp",
+              "agent",
+              "models.yml"
+            ],
+            "jsonValues": [
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "baseUrl"
+                ],
+                "serviceId": "omp",
+                "value": "url"
+              },
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "apiKey"
+                ],
+                "serviceId": "omp",
+                "value": "bearer"
+              }
+            ]
+          },
+          "config": {
+            "input": "config",
+            "homePath": [
+              ".omp",
+              "agent",
+              "config.yml"
+            ]
+          },
+          "modelIdentities": {
+            "input": "modelIdentities"
+          }
+        },
+        "services": [
+          {
+            "serviceId": "omp",
+            "revision": "1",
+            "operationIds": [
+              "models",
+              "stream"
+            ]
+          }
         ],
         "locations": [],
         "outputs": [],
         "network": "host",
+        "limits": {
+          "timeoutMs": 600000,
+          "memoryBytes": 2147483648,
+          "processes": 128,
+          "outputBytes": 4194304
+        },
+        "stdin": false
+      },
+      "atyrode.code.catalog-benchmark": {
+        "argv": [
+          {
+            "literal": "/runtime/bin/benchmark"
+          }
+        ],
+        "input": {
+          "models": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "config": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "modelIdentities": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "accountPool": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "candidates": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          }
+        },
+        "runtimeTools": [
+          "bun",
+          "omp",
+          "benchmark",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "bun"
+        },
+        "inputFiles": {
+          "models": {
+            "input": "models",
+            "homePath": [
+              ".omp",
+              "agent",
+              "models.yml"
+            ],
+            "jsonValues": [
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "baseUrl"
+                ],
+                "serviceId": "omp",
+                "value": "url"
+              },
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "apiKey"
+                ],
+                "serviceId": "omp",
+                "value": "bearer"
+              }
+            ]
+          },
+          "config": {
+            "input": "config",
+            "homePath": [
+              ".omp",
+              "agent",
+              "config.yml"
+            ]
+          },
+          "modelIdentities": {
+            "input": "modelIdentities"
+          },
+          "candidates": {
+            "input": "candidates"
+          }
+        },
+        "services": [
+          {
+            "serviceId": "omp",
+            "revision": "1",
+            "operationIds": [
+              "models",
+              "stream"
+            ]
+          }
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 600000,
+          "memoryBytes": 2147483648,
+          "processes": 128,
+          "outputBytes": 4194304
+        },
+        "stdin": false
+      },
+      "atyrode.code.auth-enroll": {
+        "argv": [
+          {
+            "literal": "/runtime/bin/auth"
+          }
+        ],
+        "input": {
+          "provider": {
+            "type": "string",
+            "required": true,
+            "maxLength": 96
+          }
+        },
+        "runtimeTools": [
+          "bun",
+          "auth",
+          "pi-natives",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "bun"
+        },
+        "inputFiles": {
+          "provider": {
+            "input": "provider"
+          }
+        },
+        "services": [
+          {
+            "serviceId": "broker",
+            "revision": "1",
+            "operationIds": [
+              "enroll-oauth"
+            ]
+          }
+        ],
+        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 1800000,
+          "memoryBytes": 2147483648,
+          "processes": 128,
+          "outputBytes": 262144
+        },
+        "stdin": true
+      },
+      "atyrode.code.prepare-workspace": {
+        "argv": [
+          {
+            "literal": "--version"
+          }
+        ],
+        "input": {},
+        "runtimeTools": [
+          "omp",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "omp"
+        },
+        "services": [],
+        "workingDirectory": {
+          "locationId": "atyrode.code.workspace"
+        },
+        "locations": [
+          {
+            "locationId": "atyrode.code.workspace",
+            "access": "create"
+          },
+          {
+            "locationId": "atyrode.code.sessions",
+            "access": "create"
+          }
+        ],
+        "outputs": [],
+        "network": "none",
         "limits": {
           "timeoutMs": 60000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
+          "memoryBytes": 2147483648,
+          "processes": 64,
+          "outputBytes": 1048576
         },
         "stdin": false
       },
-      "atyrode.code.usage": {
+      "atyrode.code.launch": {
         "argv": [
           {
-            "literal": "usage"
+            "literal": "--config"
           },
           {
-            "input": "payload"
+            "literal": "/home/job/.omp/agent/config.yml"
+          },
+          {
+            "literal": "--plan-yolo",
+            "when": {
+              "input": "planYolo",
+              "equals": true
+            }
+          },
+          {
+            "literal": "--"
+          },
+          {
+            "input": "prompt"
           }
         ],
         "input": {
-          "payload": {
+          "models": {
             "type": "string",
             "required": true,
             "maxLength": 65536
+          },
+          "config": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "accountPool": {
+            "type": "string",
+            "required": true,
+            "maxLength": 65536
+          },
+          "prompt": {
+            "type": "string",
+            "required": true,
+            "maxLength": 16384
+          },
+          "planYolo": {
+            "type": "boolean",
+            "required": true
           }
         },
         "runtimeTools": [
-          "code",
-          "omp"
+          "omp",
+          "system"
         ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 60000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
+        "executable": {
+          "runtimeTool": "omp"
         },
-        "stdin": false
-      },
-      "atyrode.code.accounts-list": {
-        "argv": [
+        "inputFiles": {
+          "models": {
+            "input": "models",
+            "homePath": [
+              ".omp",
+              "agent",
+              "models.yml"
+            ],
+            "jsonValues": [
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "baseUrl"
+                ],
+                "serviceId": "omp",
+                "value": "url"
+              },
+              {
+                "path": [
+                  "providers",
+                  "*",
+                  "apiKey"
+                ],
+                "serviceId": "omp",
+                "value": "bearer"
+              }
+            ]
+          },
+          "config": {
+            "input": "config",
+            "homePath": [
+              ".omp",
+              "agent",
+              "config.yml"
+            ]
+          }
+        },
+        "services": [
           {
-            "literal": "accounts-list"
+            "serviceId": "omp",
+            "revision": "1",
+            "operationIds": [
+              "models",
+              "stream"
+            ]
+          }
+        ],
+        "workingDirectory": {
+          "locationId": "atyrode.code.workspace"
+        },
+        "locations": [
+          {
+            "locationId": "atyrode.code.workspace",
+            "access": "write"
           },
           {
-            "input": "payload"
+            "locationId": "atyrode.code.sessions",
+            "access": "write"
           }
         ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
         "outputs": [],
         "network": "host",
         "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
+          "timeoutMs": 86400000,
+          "memoryBytes": 8589934592,
+          "processes": 512,
+          "outputBytes": 1073741824
         },
-        "stdin": false
-      },
-      "atyrode.code.account-import": {
-        "argv": [
-          {
-            "literal": "account-import"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": ["code"],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.account-set": {
-        "argv": [
-          {
-            "literal": "account-set"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.preset-create": {
-        "argv": [
-          {
-            "literal": "preset-create"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.preset-update": {
-        "argv": [
-          {
-            "literal": "preset-update"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.preset-activate": {
-        "argv": [
-          {
-            "literal": "preset-activate"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.preset-delete": {
-        "argv": [
-          {
-            "literal": "preset-delete"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.account-clear-blocks": {
-        "argv": [
-          {
-            "literal": "account-clear-blocks"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 30000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
-      },
-      "atyrode.code.suggest": {
-        "argv": [
-          {
-            "literal": "suggest"
-          },
-          {
-            "input": "payload"
-          }
-        ],
-        "input": {
-          "payload": {
-            "type": "string",
-            "required": true,
-            "maxLength": 65536
-          }
-        },
-        "runtimeTools": [
-          "code",
-          "omp"
-        ],
-        "locations": [],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 60000,
-          "memoryBytes": 536870912,
-          "processes": 32,
-          "outputBytes": 2097152
-        },
-        "stdin": false
+        "stdin": true
       }
     },
-    "locations": {}
+    "locations": {
+      "atyrode.code.workspace": {
+        "anchor": "home",
+        "components": [
+          "code-workspaces"
+        ],
+        "revision": "1",
+        "kind": "directory",
+        "guestPath": "/home/job/workspace"
+      },
+      "atyrode.code.sessions": {
+        "anchor": "state",
+        "components": [
+          "code",
+          "omp-sessions"
+        ],
+        "revision": "1",
+        "kind": "directory",
+        "guestPath": "/home/job/.omp/agent/sessions"
+      }
+    }
   },
   "entry": {
     "server": true,
-    "web": "web.js"
+    "web": "web.js",
+    "styles": true
   }
 }

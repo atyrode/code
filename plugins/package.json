@@ -7,7 +7,7 @@
     "test": "bun test",
     "pack": "./pack.sh",
     "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts dist/*.manifold-plugin.json",
-    "dev": "bun ../../manifold/packages/plugin-kit/src/dev.ts ."
+    "dev": "bun dev.ts"
   },
   "dependencies": {
     "@oh-my-pi/pi-ai": "18.1.14",

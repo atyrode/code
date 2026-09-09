@@ -1,6 +1,6 @@
 import { Console } from "node:console";
 import { writeSync } from "node:fs";
-import { openWorkerContext, type WorkerContext } from "@manifold/plugin/worker";
+import { openWorkerContext, type WorkerContext } from "@manifold/sdk/worker";
 import { BenchmarkReceiptSchema, InventoryReceiptSchema, ProbeError, ProbeFailureReceiptSchema } from "../../domain/probe.ts";
 import { isolateProbeEnvironment, prepareProbeInputs } from "./inputs.ts";
 import { benchmarkTarget, inventoryTarget, PROBE_OUTPUT_LIMIT } from "./runtime.ts";
@@ -15,7 +15,7 @@ export async function runProbe(kind: "inventory" | "benchmark"): Promise<never> 
   };
   process.stdout.write = silentWrite;
   process.stderr.write = silentWrite;
-  globalThis.console = new Console({ stdout: process.stdout, stderr: process.stderr });
+  globalThis.console = Object.assign(new Console({ stdout: process.stdout, stderr: process.stderr }), { write: () => 0 });
   let context: WorkerContext | undefined;
   let emitted = false;
   let success = false;

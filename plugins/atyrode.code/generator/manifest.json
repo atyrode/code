@@ -2,11 +2,11 @@
   "id": "atyrode.code.generator",
   "version": "0.3.0",
   "title": "code generator",
-  "description": "Native Code dials, routing previews and reviewed headless launches, with explicit CLI recovery.",
+  "description": "Native Code dials, routing previews and reviewed governed launches.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "launcher", "title": "code" }],
-    "seats": [{ "panel": "launcher", "order": 150, "ratio": 0.5 }],
+    "seats": [{ "panel": "launcher", "order": 150, "ratio": 0.75 }],
     "sections": [],
     "elements": [],
     "tools": [],
