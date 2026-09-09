@@ -1,53 +1,78 @@
-import { ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServiceRuntimeSchema } from "@manifold/protocol";
-import { GATEWAY_PLUGIN_ID, GATEWAY_OPERATION_ID, type ActionInput, type ActionResult, type Target } from "./contract.ts";
-import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
-import { buildCodeServices } from "./service-policies.ts";
-import { authorizeTarget } from "./state.ts";
+import { InstanceServiceDescriptionSchema, ServiceRuntimeSchema, TerminalRuntimeSchema,
+  type InstanceServiceDescription } from "@manifold/protocol";
+import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "./auth-contract.ts";
+import { CODE_PLUGIN_ID } from "./contract.ts";
+import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
+import { buildSharedBrokerPolicy } from "./service-policies.ts";
 
-async function authorizeOwner(ctx: CodeContext, target: Target, write: boolean): Promise<void> {
-  await authorizeTarget(ctx, target, write);
-  if (!ctx.auth.isRoot || !(await ctx.auth.allows("services:configure", { kind: "machine", machineId: target.machineId })))
-    throw new CodeRefusal("service_owner_required");
+export async function describeSharedBroker(ctx: CodeContext): Promise<InstanceServiceDescription> {
+  const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
+  if (description.serviceId !== BROKER_SERVICE_ID ||
+    (description.configuration && description.configuration.pluginId !== CODE_PLUGIN_ID)) throw new CodeRefusal("resources_changed");
+  return description;
 }
-export async function readNativeServices(ctx: CodeContext, target: Target): Promise<ActionResult<"readServiceConfiguration">> {
-  await authorizeOwner(ctx, target, false);
-  return ServiceConfigurationReadSchema.parse(await ctx.services.readConfiguration({ machineId: target.machineId }));
+export function brokerOwner(description: InstanceServiceDescription) {
+  return description.configuration ? description.owner : description.defaultOwner;
 }
-function reviewGateway(current: ActionResult<"readServiceConfiguration">): ActionResult<"reviewServices">["gateway"] {
-  const candidate = current.runtimeCandidates.find(({ runtime }) =>
-    runtime.pluginId === GATEWAY_PLUGIN_ID && runtime.operationId === GATEWAY_OPERATION_ID);
-  if (!current.connected) return { status: "omitted", reason: "machine_disconnected", nativeReason: candidate?.reason ?? null };
-  if (!candidate) return { status: "omitted", reason: "not_installed", nativeReason: null };
-  if (!candidate.ready) return { status: "omitted",
-    reason: candidate.reason === "installation_disabled" ? "installation_disabled"
-      : candidate.reason === "purge_requested" ? "purge_requested" : "resources_unready",
-    nativeReason: candidate.reason };
-  return { status: "ready", runtime: ServiceRuntimeSchema.parse({
-    ...candidate.runtime, input: { accountPool: { input: "accountPool" } },
-  }) };
+export function expectBrokerRevision(description: InstanceServiceDescription, expected: string | null): void {
+  if ((description.configuration?.revision ?? null) !== expected) throw new CodeRefusal("broker_revision_changed");
 }
-export async function reviewNativeServices(ctx: CodeContext, args: ActionInput<"reviewServices">): Promise<ActionResult<"reviewServices">> {
-  const current = await readNativeServices(ctx, args);
-  if (current.configuration.revision !== args.expectedServiceRevision) throw new CodeRefusal("service_configuration_changed");
-  const selectedReferences = [args.broker.credentialRef, ...args.apiKeys.map(source => source.credentialRef)];
-  if (selectedReferences.some(ref => !current.credentialReferences.some(reference =>
-    reference.ref === ref && reference.available && reference.origins.includes(args.broker.origin))))
-    throw new CodeRefusal("credential_reference_unavailable");
-  const gateway = reviewGateway(current);
-  const desired = buildCodeServices({ broker: args.broker, classifier: args.classifier, apiKeys: args.apiKeys,
-    gateway: gateway.status === "ready" ? gateway.runtime : null });
-  // Other native services belong to their own owners; this review never replaces them.
-  // An unavailable gateway explicitly removes omp; stale runtime authority is never retained.
-  const policies = [...current.configuration.policies.filter(policy => !["broker", "suggest", "omp"].includes(policy.serviceId)), ...desired];
-  const validated = ServiceConfigurationSchema.parse({ revision: digestOf(policies), policies });
-  return { expectedServiceRevision: args.expectedServiceRevision, policies: validated.policies, gateway,
-    reviewDigest: digestOf({ target: { containerId: args.containerId, machineId: args.machineId },
-      expectedServiceRevision: args.expectedServiceRevision, policies: validated.policies, gateway }) };
+export async function canAdministerBroker(ctx: CodeContext, machineId: string): Promise<boolean> {
+  return ctx.auth.isRoot && await ctx.auth.allows("services:configure", { kind: "machine", machineId });
 }
-export async function configureNativeServices(ctx: CodeContext, args: ActionInput<"configureServices">): Promise<ActionResult<"configureServices">> {
-  await authorizeOwner(ctx, args, true);
-  const reviewed = await reviewNativeServices(ctx, args);
-  if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
-  return ServiceConfigurationSchema.parse(await ctx.services.configureConfiguration({ machineId: args.machineId,
-    expectedRevision: reviewed.expectedServiceRevision, policies: reviewed.policies }));
+
+/** One native description pins both installed operations and their promoted resource
+ * bindings. The installed artifact declares their common owner-local OMP home. */
+export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
+  const { description, installation } = await currentResources(ctx, machineId);
+  const broker = description.operations?.[BROKER_OPERATION_ID];
+  const signIn = description.operations?.[SIGN_IN_OPERATION_ID];
+  if (!broker?.ready || !signIn?.ready) throw new CodeRefusal("resources_incomplete");
+  const pins = { installationRevision: installation.revision, artifactSha256: installation.artifactSha256 };
+  return {
+    broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: CODE_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
+      ...pins, resourceBindingDigest: broker.resourceBindingDigest, input: {} }),
+    signIn: TerminalRuntimeSchema.parse({ pluginId: CODE_PLUGIN_ID, operationId: SIGN_IN_OPERATION_ID,
+      ...pins, resourceBindingDigest: signIn.resourceBindingDigest, input: {} }),
+  };
+}
+
+export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: string | null) {
+  let description = await describeSharedBroker(ctx);
+  expectBrokerRevision(description, expectedRevision);
+  const owner = brokerOwner(description);
+  if (!owner?.online || !description.connected) throw new CodeRefusal("account_owner_unavailable");
+  if (!await canAdministerBroker(ctx, owner.machineId)) throw new CodeRefusal("service_owner_required");
+  const runtimes = await sharedOmpRuntimes(ctx, owner.machineId);
+  const policy = buildSharedBrokerPolicy(runtimes.broker);
+  if (description.configuration) {
+    if (!description.configuration.enabled || !["ready", "starting"].includes(description.state))
+      throw new CodeRefusal("account_unavailable");
+    const current = await ctx.services.readInstanceConfiguration({ serviceId: BROKER_SERVICE_ID });
+    expectBrokerRevision(current.description, expectedRevision);
+    // Registry revisions are opaque and native-owned. Compare the policy contract
+    // without mistaking that registry identity for the builder's initial revision.
+    if (!current.policy || digestOf({ ...current.policy, revision: policy.revision }) !== digestOf(policy))
+      throw new CodeRefusal("resources_changed");
+  } else {
+    try {
+      description = InstanceServiceDescriptionSchema.parse(await ctx.services.configureInstance({ serviceId: BROKER_SERVICE_ID,
+        expectedRevision, machineId: owner.machineId, policy, enabled: true }));
+    } catch (error) {
+      // A concurrent first setup is a conflict, never permission to adopt the winner.
+      expectBrokerRevision(await describeSharedBroker(ctx), expectedRevision);
+      throw error;
+    }
+    if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== CODE_PLUGIN_ID ||
+      !description.configuration.enabled || description.owner?.machineId !== owner.machineId)
+      throw new CodeRefusal("resources_changed");
+  }
+  const latest = await sharedOmpRuntimes(ctx, owner.machineId);
+  if (digestOf(latest) !== digestOf(runtimes)) throw new CodeRefusal("resources_changed");
+  const revision = description.configuration!.revision;
+  const current = await describeSharedBroker(ctx);
+  expectBrokerRevision(current, revision);
+  if (current.owner?.machineId !== owner.machineId || !current.owner.online || !current.connected ||
+    !current.configuration?.enabled || !["ready", "starting"].includes(current.state)) throw new CodeRefusal("account_unavailable");
+  return { machineId: owner.machineId, runtime: runtimes.signIn };
 }

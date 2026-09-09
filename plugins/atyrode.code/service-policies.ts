@@ -1,26 +1,21 @@
 import { z } from "zod";
 import { ServicePolicySchema, ServiceRuntimeSchema, type ServiceOperationPolicy, type ServicePolicy,
   type ServiceProxyOperationPolicy, type ServiceRuntime } from "@manifold/protocol";
-import { ApiKeySourcesSchema } from "./contract.ts";
+import { BROKER_OPERATION_ID, BROKER_SERVICE_ID } from "./auth-contract.ts";
+import { CODE_PLUGIN_ID } from "./contract.ts";
 
 export interface CodeServicesInput {
-  broker: { origin: string; credentialRef: string };
   classifier: { origin: string; model: string } | null;
   gateway?: ServiceRuntime | null;
-  apiKeys?: { provider: string; credentialRef: string }[];
 }
 
 const inputSchema = z.strictObject({
-  broker: z.strictObject({ origin: z.string(), credentialRef: z.string() }),
   classifier: z.strictObject({ origin: z.string(), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/:-]{0,511}$/) }).nullable(),
   gateway: ServiceRuntimeSchema.nullish(),
-  apiKeys: ApiKeySourcesSchema.default([]),
 });
 const capabilities = { "omp-auth-broker-capabilities": "codex-meter-block-scopes" };
 const stringInput = (maxBytes: number, required = true): ServiceOperationPolicy["input"][string] =>
   ({ type: "string", required, maxBytes });
-const numberInput = (): ServiceOperationPolicy["input"][string] =>
-  ({ type: "number", required: true, min: -Number.MAX_VALUE, max: Number.MAX_VALUE, integer: false });
 function projected(method: ServiceOperationPolicy["method"], path: string, fields: string[][]): ServiceOperationPolicy {
   return { method, path, input: {}, query: {}, body: [], timeoutMs: 60_000,
     maxRequestBytes: 65_536, maxResponseBytes: 4 * 1024 * 1024, maxResultBytes: 96 * 1024,
@@ -38,10 +33,11 @@ function credentialProxy(method: ServiceProxyOperationPolicy["method"], suffix: 
     pathParameters: { credentialId: { format: "positive-integer", maxBytes: 16 } } };
 }
 
-/** Installer data only. Native schemas reject origins, credentials and mappings that
- * cannot be represented by the owner's service policy; there is no local policy store. */
-export function buildCodeServices(input: CodeServicesInput): ServicePolicy[] {
-  const configuration = inputSchema.parse(input);
+/** Native projects metadata before crossing into Code. Raw broker routes remain
+ * confined to governed worker bindings, never browser-readable operations. */
+export function buildSharedBrokerPolicy(runtime: ServiceRuntime): ServicePolicy {
+  if (runtime.scope !== "instance" || runtime.pluginId !== CODE_PLUGIN_ID || runtime.operationId !== BROKER_OPERATION_ID)
+    throw new Error("Invalid shared broker runtime");
   const metadata = projected("GET", "/v1/snapshot", [
     ["credentials", "*", "id"], ["credentials", "*", "provider"], ["credentials", "*", "identityKey"],
     ["credentials", "*", "credential", "type"], ["credentials", "*", "credential", "email"],
@@ -72,33 +68,6 @@ export function buildCodeServices(input: CodeServicesInput): ServicePolicy[] {
   disable.body = [{ path: ["cause"], value: { literal: "disabled by user" } }];
   disable.invocable = true;
 
-  // Only the OAuth worker can bind this operation. Scalar mappings cannot upload
-  // arbitrary credential extensions or turn this into the gateway's raw write path.
-  const enroll = projected("POST", "/v1/credential", [
-    ["entries", "*", "id"], ["entries", "*", "provider"], ["entries", "*", "identityKey"],
-  ]);
-  enroll.input = { provider: stringInput(128), access: stringInput(24_576), refresh: stringInput(24_576),
-    expires: numberInput(), authorizedAt: numberInput() };
-  enroll.body = [{ path: ["provider"], value: { input: "provider" } },
-    { path: ["credential", "type"], value: { literal: "oauth" } },
-    ...["access", "refresh", "expires", "authorizedAt"].map(key => ({ path: ["credential", key], value: { input: key } })),
-  ];
-  for (const key of ["enterpriseUrl", "projectId", "email", "accountId", "apiEndpoint", "orgId", "orgName"]) {
-    enroll.input[key] = stringInput(2048, false);
-    enroll.body.push({ path: ["credential", key], value: { input: key } });
-  }
-  const apiKeyOperations: Record<string, ServiceOperationPolicy> = Object.create(null);
-  for (const source of configuration.apiKeys) {
-    const operation = projected("POST", "/v1/credential", [
-      ["entries", "*", "id"], ["entries", "*", "provider"], ["entries", "*", "identityKey"],
-    ]);
-    operation.body = [{ path: ["provider"], value: { literal: source.provider } },
-      { path: ["credential", "type"], value: { literal: "api_key" } },
-      { path: ["credential", "key"], value: { credentialRef: source.credentialRef } }];
-    operation.invocable = true;
-    apiKeyOperations[`enroll-key-${source.provider}`] = operation;
-  }
-
   // These full-disclosure operations are deliberately distinct from direct reads
   // and mutations. Only the gateway's service binding admits their operation IDs.
   const snapshot = proxy("GET", "/v1/snapshot");
@@ -114,15 +83,19 @@ export function buildCodeServices(input: CodeServicesInput): ServicePolicy[] {
   const gatewayUsage = proxy("GET", "/v1/usage");
   gatewayUsage.timeoutMs = 300_000;
   const json = { kind: "json", disclosure: "full" } as const;
-  const broker = ServicePolicySchema.parse({ serviceId: "broker", revision: "1", origin: configuration.broker.origin,
-    allowLoopbackHttp: true, credential: { ref: configuration.broker.credentialRef, header: "Authorization", prefix: "Bearer " },
-    maxConcurrent: 16, operations: { metadata, usage, "clear-blocks": clearBlocks, disable, "enroll-oauth": enroll, ...apiKeyOperations,
+  return ServicePolicySchema.parse({ serviceId: BROKER_SERVICE_ID, revision: "1", runtime,
+    maxConcurrent: 16, operations: { metadata, usage, "clear-blocks": clearBlocks, disable,
       "gateway-snapshot": snapshot, "gateway-snapshot-stream": snapshotStream, "gateway-usage": gatewayUsage,
       "gateway-refresh": credentialProxy("POST", "refresh"), "gateway-disable": credentialProxy("POST", "disable", json),
       "gateway-block": credentialProxy("POST", "block", json), "gateway-clear-blocks": credentialProxy("DELETE", "blocks"),
       "gateway-usage-stale": proxy("POST", "/v1/usage/stale"), "gateway-usage-observed": proxy("POST", "/v1/usage/observed", json),
     } });
-  const policies = [broker];
+}
+
+/** Optional execution services; broker placement belongs to the native instance registry. */
+export function buildCodeServices(input: CodeServicesInput): ServicePolicy[] {
+  const configuration = inputSchema.parse(input);
+  const policies: ServicePolicy[] = [];
   if (configuration.classifier) {
     const classify = projected("POST", "/api/chat", [["message", "role"], ["message", "content"], ["done"], ["model"]]);
     // buildSuggestionRequest truncates task text to 600 code points, then JSON
@@ -143,7 +116,7 @@ export function buildCodeServices(input: CodeServicesInput): ServicePolicy[] {
   }
   if (!configuration.gateway) return policies;
   const models = proxy("GET", "/v1/models");
-  const stream = proxy("POST", "/v1/pi/stream", json);
+  const stream = proxy("POST", "/v1/pi/stream", { kind: "json", disclosure: "full" });
   stream.response.contentTypes = ["application/json", "text/event-stream"];
   stream.timeoutMs = 300_000;
   stream.maxRequestBytes = 16 * 1024 * 1024;

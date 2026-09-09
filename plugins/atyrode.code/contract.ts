@@ -1,11 +1,10 @@
-import { JobDescriptionSchema, PublicJobSchema, ServiceConfigurationSchema, ServiceConfigurationReadSchema, ServicePolicySchema, ServiceRuntimeSchema, TerminalRuntimeSchema } from "@manifold/protocol";
+import { JobDescriptionSchema, PublicJobSchema, TerminalRuntimeSchema } from "@manifold/protocol";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, AccountReferenceSchema, AccountsObservationSchema,
   CatalogDocumentSchema, RuntimeAccountPoolSchema, SelectionSchema, epochMilliseconds, identifier } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
 import { BenchmarkReceiptSchema, CatalogDraftSchema, InventoryReceiptSchema } from "../domain/probe.ts";
 import { UsageViewSchema } from "../domain/usage.ts";
-import { bundledCredentialProviders } from "./sdk-metadata.macro.ts" with { type: "macro" };
 
 export const CODE_PLUGIN_ID = "atyrode.code";
 export const GATEWAY_PLUGIN_ID = "atyrode.code.gateway";
@@ -71,28 +70,6 @@ export const PrepareSignInResultSchema = z.strictObject({ machineId: id, runtime
 export const InventoryResultSchema = z.strictObject({ job: PublicJobSchema, inventory: InventoryReceiptSchema, draft: CatalogDraftSchema });
 export const BenchmarkResultSchema = z.strictObject({ job: PublicJobSchema, benchmark: BenchmarkReceiptSchema, catalog: CatalogDocumentSchema });
 export const SuggestionSchema = z.strictObject({ revision, selection: SelectionSchema, changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])), evaluator: z.string().max(256) });
-/** The SDK broker accepts API-key slots generically; upstream key acceptance is not implied. */
-export const apiKeyProviders: readonly string[] = Object.freeze(bundledCredentialProviders());
-export const ApiKeyProviderSchema = identifier.refine(provider => apiKeyProviders.includes(provider), "Unsupported SDK provider");
-export const ApiKeySourcesSchema = z.array(z.strictObject({ provider: ApiKeyProviderSchema, credentialRef: identifier })).max(128)
-  .refine(sources => new Set(sources.map(source => source.provider)).size === sources.length, "Duplicate API-key provider");
-export const ServiceSetupInputSchema = TargetSchema.extend({
-  expectedServiceRevision: digest.nullable(),
-  broker: z.strictObject({ origin: z.url().max(4096), credentialRef: identifier }),
-  classifier: z.strictObject({ origin: z.url().max(4096), model: z.string().trim().min(1).max(256) }).nullable(),
-  apiKeys: ApiKeySourcesSchema,
-});
-export const GatewayReviewSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("ready"), runtime: ServiceRuntimeSchema }),
-  z.strictObject({ status: z.literal("omitted"),
-    reason: z.enum(["machine_disconnected", "not_installed", "installation_disabled", "purge_requested", "resources_unready"]),
-    nativeReason: z.string().nullable() }),
-]);
-export const ServiceConfigurationReviewSchema = z.strictObject({
-  expectedServiceRevision: digest.nullable(), policies: z.array(ServicePolicySchema).max(64),
-  gateway: GatewayReviewSchema, reviewDigest: digest,
-});
-
 export const actionSchemas = {
   readConfiguration: { input: TargetSchema, result: ConfigurationReadSchema },
   initializeConfiguration: { input: RevisionTargetSchema, result: ConfigurationSchema },
@@ -107,11 +84,7 @@ export const actionSchemas = {
   usage: { input: TargetSchema, result: UsageViewSchema },
   clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
   disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
-  enrollApiKey: { input: TargetSchema.extend({ provider: ApiKeyProviderSchema }), result: AccountsObservationSchema },
   readSetup: { input: TargetSchema, result: SetupSchema },
-  readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
-  reviewServices: { input: ServiceSetupInputSchema, result: ServiceConfigurationReviewSchema },
-  configureServices: { input: ServiceSetupInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },
   reviewResources: { input: RevisionTargetSchema, result: z.strictObject({ resources: PromotedResourcesSchema, reviewDigest: digest }) },
   promoteResources: { input: RevisionTargetSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
   prepareWorkspace: { input: RevisionTargetSchema, result: PublicJobSchema },

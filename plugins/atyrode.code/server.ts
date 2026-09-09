@@ -7,32 +7,30 @@ import { DomainError } from "../domain/contracts.ts";
 import { ProbeError } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
-import { authActions, authHandlers } from "./auth-server.ts";
-import { accountObservation, currentService, enrollApiKey, mutateCredential, usageObservation } from "./broker.ts";
+import { prepareSignIn, readAccountSetup } from "./auth-server.ts";
+import { accountObservation, currentService, mutateCredential, usageObservation } from "./broker.ts";
 import { actionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type CodeAction } from "./contract.ts";
 import { benchmarkResult, inventoryResult, launchInput, launchPreview, requirePromotedOperation, startBenchmark, startInventory } from "./execution.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
   currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
-import { configureNativeServices, readNativeServices, reviewNativeServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<CodeAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
   stageBenchmark: true, promoteResources: true, clearAccountBlocks: true, disableCredential: true,
-  enrollApiKey: true, prepareWorkspace: true, configureServices: true,
+  prepareWorkspace: true, prepareSignIn: true,
 };
+const instanceReads: Partial<Record<CodeAction, true>> = { accounts: true, readAccountSetup: true };
 // Native APIs resolve stored resource pins and enforce the caller's concrete authority.
 const actionDelegates: Partial<Record<CodeAction, readonly Cap[]>> = {
   reviewCatalog: ["machines:run", "services:read"],
   promoteCatalog: ["machines:run", "services:read"],
   accounts: ["services:read"],
+  readAccountSetup: ["services:read", "machines:run"],
+  prepareSignIn: ["services:read", "services:configure", "machines:run"],
   usage: ["services:read"],
   clearAccountBlocks: ["services:read", "services:invoke"],
   disableCredential: ["services:read", "services:invoke"],
-  enrollApiKey: ["services:read", "services:invoke"],
-  readServiceConfiguration: ["services:configure"],
-  reviewServices: ["services:configure"],
-  configureServices: ["services:configure"],
   readSetup: ["machines:run", "services:read"],
   reviewResources: ["machines:run", "services:read"],
   promoteResources: ["machines:run", "services:read"],
@@ -90,14 +88,12 @@ const productHandlers: ProductHandlers = {
     const record = requireConfiguration(previous);
     return commitConfiguration(ctx, previous, { ...record, accounts: reduceAccountChoices(record.accounts, args.change) });
   },
-  async accounts(ctx, args) { await authorizeTarget(ctx, args); return accountObservation(ctx, args.machineId); },
+  accounts: ctx => accountObservation(ctx),
+  readAccountSetup,
+  prepareSignIn,
   async usage(ctx, args) { return usageObservation(ctx, requireConfiguration(await readConfiguration(ctx, args))); },
-  async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.machineId, args.reference, "clear-blocks"); },
-  async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.machineId, args.reference, "disable"); },
-  enrollApiKey: (ctx, args) => enrollApiKey(ctx, args),
-  readServiceConfiguration: (ctx, args) => readNativeServices(ctx, args),
-  reviewServices: (ctx, args) => reviewNativeServices(ctx, args),
-  configureServices: (ctx, args) => configureNativeServices(ctx, args),
+  async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "clear-blocks"); },
+  async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "disable"); },
   async readSetup(ctx, args) {
     await authorizeTarget(ctx, args);
     const services = await ctx.services.describe({ machineId: args.machineId });
@@ -171,7 +167,7 @@ const productHandlers: ProductHandlers = {
       ...pins, input: launchInput(record, preview, args.prompt) } });
   },
 };
-export const handlers = { ...authHandlers, ...Object.fromEntries((Object.keys(actionSchemas) as CodeAction[]).map(name => [name,
+export const handlers = Object.fromEntries((Object.keys(actionSchemas) as CodeAction[]).map(name => [name,
   async (ctx: CodeContext, raw: unknown) => {
     try {
       const args = actionSchemas[name].input.parse(raw);
@@ -179,9 +175,11 @@ export const handlers = { ...authHandlers, ...Object.fromEntries((Object.keys(ac
       return actionSchemas[name].result.parse(await handler(ctx, args));
     } catch (error) { return refusal(error); }
   },
-])) };
-export default { actions: [...authActions, ...(Object.keys(actionSchemas) as CodeAction[]).map(name => defineAction({
-  name, title: name.replace(/([A-Z])/g, " $1"), caps: [mutating[name] ? "containers:write" : "containers:read"],
-  ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}), scope: "container", trace: "opaque",
+]));
+export default { actions: (Object.keys(actionSchemas) as CodeAction[]).map(name => defineAction({
+  name, title: name.replace(/([A-Z])/g, " $1"),
+  caps: [instanceReads[name] ? "services:read" : mutating[name] ? "containers:write" : "containers:read"],
+  ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
+  scope: instanceReads[name] ? "workspace" : "container", trace: "opaque",
   input: actionSchemas[name].input as z.ZodType<unknown>, result: actionSchemas[name].result as z.ZodType<unknown>,
-}))], handlers };
+})), handlers };
