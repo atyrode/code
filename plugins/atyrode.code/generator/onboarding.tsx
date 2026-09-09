@@ -3,10 +3,10 @@ import type { HostServices } from "@manifold/plugin";
 import { CODE_PLUGIN_ID, type ActionResult, type Target } from "../contract.ts";
 import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
-import { ServiceSetup } from "./service-setup.tsx";
+import { OmpSignIn } from "../omp-sign-in.tsx";
 
-const steps = ["workspace", "connection", "permissions", "resources", "prepare", "models"] as const;
-const titles = ["Set up Code here", "Connect your accounts", "Approve this machine", "Review runtime resources", "Choose your workspace", "Choose your models"] as const;
+const steps = ["accounts", "workspace", "permissions", "resources", "prepare", "models"] as const;
+const titles = ["Connect your accounts", "Set up Code here", "Approve this machine", "Review runtime resources", "Choose your workspace", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
 export function Onboarding({ host, target, available, settings = false, onDone }: {
   host: HostServices; target: Target; available: boolean; settings?: boolean; onDone: () => void;
@@ -19,6 +19,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [existingWorkspace, setExistingWorkspace] = useState(false);
+  const [accountsContinued, setAccountsContinued] = useState(settings);
   const [selectedStep, setSelectedStep] = useState<number | null>(settings ? 3 : null);
   const pending = useRef(false);
   const mounted = useRef(false);
@@ -26,7 +27,6 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const writable = host.authoring !== null;
   const execution = setup.data?.execution;
   const installation = execution?.installation;
-  const connections = setup.data?.services.some(service => service.serviceId === "broker") && setup.data.services.some(service => service.serviceId === "omp");
   const requiredOperations = ["prepare-workspace", "catalog-inventory", "launch"];
   const installed = installation?.enabled && !installation.purgeRequested && requiredOperations.every(operation => execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready);
   const currentPins = record?.resources?.execution;
@@ -41,8 +41,8 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const prepared = matchingJobs.some(job => job.state === "exited" && job.result?.exitCode === 0);
   const preparing = matchingJobs.find(job => runningStates.has(job.state));
   const latestPreparation = matchingJobs[0];
-  const nextStep = !record ? 0 : !connections ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
-  const step = Math.min(selectedStep ?? nextStep, record ? 5 : 0);
+  const nextStep = !accountsContinued ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
+  const step = selectedStep ?? nextStep;
   const reviewCurrent = review !== null && record?.revision === review.revision;
   function refresh() { configuration.refresh(); setup.refresh(); history.refresh(); }
   async function perform(work: () => Promise<void>) {
@@ -61,21 +61,22 @@ export function Onboarding({ host, target, available, settings = false, onDone }
     </li>)}</ol>
     <div className="plugin-atyrode_code_generator__setup-step">
       <h3>{titles[step]}</h3>
-      {!writable && <p role="status">This workspace is read-only. Its owner can complete setup.</p>}
-      {configuration.error && <p role="status">{configuration.error}</p>}
-      {setup.error && <p role="status">{setup.error}</p>}
-      {step === 0 && <>
+      {step !== 0 && !writable && <p role="status">This workspace is read-only. Its owner can complete runtime setup; account discovery remains available.</p>}
+      {step !== 0 && !available && <p role="status">The selected workspace machine is unavailable. Restore its native connection to prepare or run Code. Instance account sign-in is independent.</p>}
+      {step !== 0 && configuration.error && <p role="status">{configuration.error}</p>}
+      {step !== 0 && setup.error && <p role="status">{setup.error}</p>}
+      <div hidden={step !== 0}><OmpSignIn host={host} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} /></div>
+      {step === 1 && <>
         <p>Code remembers this workspace’s catalog, account choices and dials. This setup runs once; ordinary launches return straight to your profile.</p>
         <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data} onClick={() => { if (configuration.data) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Get started"}</button>
       </>}
-      {step === 1 && <ServiceSetup host={host} target={target} onConfigured={() => { setSelectedStep(null); refresh(); }} />}
       {step === 2 && <>
         <p>Approve Code’s runtime, workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
         <ul className="plugin-atyrode_code_generator__requirements">{requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "prepare-workspace" ? "workspace preparation" : operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "approval needed"}</span></li>)}</ul>
         <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open native setup</button><button type="button" onClick={() => { setSelectedStep(null); refresh(); }}>check again</button></div>
       </>}
       {step === 3 && <>
-        <p>Use this machine’s approved runtime and account connections. Reviewing does not install anything or grant additional access.</p>
+        <p>Use this machine’s approved runtime with the shared instance account broker. Reviewing does not install anything or grant additional access.</p>
         {!review && <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !record || !available} onClick={() => { if (record) void perform(async () => { const result = await callCodeAction(host, "reviewResources", { ...target, expectedRevision: record.revision }); if (mounted.current) setReview({ ...result, revision: record.revision }); }); }}>{busy ? "Reviewing…" : "Review resources"}</button>}
         {review && <>
           <dl className="plugin-atyrode_code_generator__setup-facts"><dt>runtime</dt><dd>{review.resources.execution ? "pinned native installation" : "not installed"}</dd><dt>connections</dt><dd>{Object.keys(review.resources.services).join(", ") || "none"}</dd></dl>

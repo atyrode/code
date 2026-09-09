@@ -16,9 +16,10 @@ const messages: Readonly<Record<string, string>> = {
   code_scope_refused: "Your current authority does not cover this container.",
   code_result_unavailable: "This native result is incomplete, no longer retained, or not readable with your current authority.",
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
+  code_broker_configuration_changed: "The instance broker placement changed. Refresh sign-in setup before opening OMP again.",
+  code_broker_unavailable: "The instance account broker is unavailable. Ask the instance owner to review its native placement and runtime.",
+  code_account_admin_required: "Account administration requires native permission. Ask the instance owner to grant access.",
   code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
-  code_credential_reference_unavailable: "The selected native credential reference is unavailable for that exact origin.",
-  code_api_key_enrollment_unavailable: "Configure a native credential reference and admit this provider's enrollment operation first.",
   code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
 };
 class CodeActionError extends Error {}
@@ -127,17 +128,21 @@ export function useCodeRuns(host: HostServices, target: Target, operation: strin
   });
   return { runs: feed.value?.runs ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
-export type CodeQuery = "readConfiguration" | "readSetup" | "readServiceConfiguration" | "accounts" | "usage" | "inventory" | "benchmark";
+export const ACCOUNT_REFRESH_MS = 1_000;
+export type CodeQuery = "readConfiguration" | "readSetup" | "readAccountSetup" | "accounts" | "usage" | "inventory" | "benchmark";
 /** Native shared feeds invalidate observations; polling never starts work or changes state. */
-export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, input: ActionInput<K> | null) {
+export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, input: ActionInput<K> | null, intervalMs = FALLBACK_POLL_MS) {
   const feed = usePolledResource<{ data: ActionResult<K> | null; error: string | null } | null>(async () => {
     if (input === null) return null;
     try { return { data: await callCodeAction(host, name, input), error: null }; }
     catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
-  }, FALLBACK_POLL_MS, {
+  }, intervalMs, {
     key: `${CODE_PLUGIN_ID}.${name}:${JSON.stringify(input)}`, restartKey: host.principal.id,
     initial: null, enabled: input !== null,
-    topics: input === null ? [] : [{ kind: "container", containerId: input.containerId }, CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
+    // OMP writes its store outside native jobs. Subscribing to job events would suppress
+    // the SDK timer on a live socket and miss accounts added in the open OMP terminal.
+    topics: input === null || name === "accounts" || name === "readAccountSetup" ? [] :
+      [...("containerId" in input ? [{ kind: "container" as const, containerId: input.containerId }] : []), CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
   });
   return { data: feed.value?.data ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }

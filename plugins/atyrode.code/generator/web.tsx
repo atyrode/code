@@ -6,12 +6,13 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { CODE_PLUGIN_ID, GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type LaunchPreview, type Target } from "../contract.ts";
-import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { Dials, Estimates, Routing } from "./dials.tsx";
 import { Onboarding } from "./onboarding.tsx";
+import { OmpSignIn } from "../omp-sign-in.tsx";
 
 type View = "profile" | "accounts" | "catalog" | "setup";
 function Workbench({ host, target, machine, available }: { host: HostServices; target: Target; machine: MachineSummary | null; available: boolean }) {
@@ -69,7 +70,6 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       if (mounted.current) { setPreview(null); setMessage("Terminal opened. Runtime output and status are shown there."); }
     });
   }
-  if (!configuration.data) return <p role="status">{configuration.error ?? "Reading workspace…"}</p>;
   if (!record?.active && view !== "accounts") return <Onboarding host={host} target={target} available={available} onDone={back} />;
   if (view === "accounts") return <AccountsView host={host} target={target} available={available} onDone={back} />;
   if (view === "catalog") return <CatalogWorkbench host={host} target={target} available={available} onDone={back} />;
@@ -126,10 +126,11 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
 function Launcher({ host }: PanelProps) {
   const id = useId();
   const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
+  useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   return <ScrollRegion className="plugin-atyrode_code plugin-atyrode_code_generator" aria-label="Code workspace"><div className="plugin-atyrode_code_generator__body">
     <header className="plugin-atyrode_code_generator__masthead"><h1>code<span aria-hidden="true">_</span></h1>
       <div className="plugin-atyrode_code_generator__machine"><span className="plugin-atyrode_code_generator__connection" data-online={available} aria-hidden="true" />
-        <label htmlFor={`${id}-machine`}>machine</label><select id={`${id}-machine`} value={machineId ?? ""} onChange={event => select(event.target.value || null)}><option value="">choose a machine</option>
+        <label htmlFor={`${id}-machine`}>workspace machine</label><select id={`${id}-machine`} value={machineId ?? ""} onChange={event => select(event.target.value || null)}><option value="">choose a machine</option>
           {machineId && !machine && <option value={machineId}>selected machine unavailable</option>}
           {machines?.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.revoked ? " · revoked" : entry.online ? "" : " · offline"}</option>)}
         </select>
@@ -138,6 +139,7 @@ function Launcher({ host }: PanelProps) {
     {error && <p role="status" className="plugin-atyrode_code__warning">{error} <button type="button" onClick={refresh}>refresh</button></p>}
     {!host.containerId && <p role="status">Open or create a workspace in Manifold to use Code here.</p>}
     {host.containerId && !target && <p role="status">{machines === null ? "Reading machines…" : machines.length ? "Choose the machine for this workspace." : "Enroll a machine in Manifold to get started."}</p>}
+    {!target && <OmpSignIn host={host} onContinue={() => { document.getElementById(`${id}-machine`)?.focus(); }} />}
     {target && <Workbench key={JSON.stringify([host.principal.id, target.containerId, target.machineId])} host={host} target={target} machine={machine} available={available} />}
   </div></ScrollRegion>;
 }
