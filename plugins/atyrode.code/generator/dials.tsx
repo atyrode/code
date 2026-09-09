@@ -29,7 +29,7 @@ function Dial({ label, icon, value, options, disabled, change }: {
   return <div className="plugin-atyrode_code_generator__dial">
     <span id={id} className="plugin-atyrode_code_generator__dial-label"><DialIcon kind={icon} />{label}</span>
     <div className="plugin-atyrode_code_generator__dial-options" role="radiogroup" aria-labelledby={id}
-      onPointerDown={event => { dragging.current = event.button === 0 && !disabled; }} onPointerUp={() => { dragging.current = false; }} onPointerLeave={() => { dragging.current = false; }}>
+      onPointerDown={event => { dragging.current = event.button === 0 && !disabled; }} onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }} onPointerLeave={() => { dragging.current = false; }}>
       {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} disabled={disabled}
         tabIndex={value === option.value ? 0 : -1} data-choice={index} title={option.title} onClick={() => { if (value !== option.value) change(option.value); }}
         onPointerEnter={event => { if (dragging.current && event.buttons === 1 && value !== option.value) change(option.value); }}
@@ -81,13 +81,13 @@ export function Dials({ selection, review, catalog, disabled, update }: {
 export function Estimates({ value }: { value: Review["estimates"] }) {
   return <dl className="plugin-atyrode_code_generator__estimates">{(["cost", "speed"] as const).map(label => {
     const score = value[label === "cost" ? "costScore" : "speedScore"];
-    return <div key={label}><dt>{label}</dt><dd role="img" aria-label={`Estimated relative ${label}: ${score} out of 5`} title={`Estimated relative ${label}; not a live quota or performance guarantee`}>
+    return <div key={label} data-estimate={label}><dt>{label}</dt><dd role="img" aria-label={`Estimated relative ${label}: ${score} out of 5`} title={`Estimated relative ${label}; not a live quota or performance guarantee`}>
       {Array.from({ length: 5 }, (_, index) => <span key={index} aria-hidden="true" data-filled={index < score}>{label === "cost" ? "$" : "»"}</span>)}
     </dd></div>;
   })}</dl>;
 }
 
-export function Routing({ value, catalog }: { value: Review; catalog: CompiledCatalog }) {
+export function Routing({ value, catalog, local = false }: { value: Review; catalog: CompiledCatalog; local?: boolean }) {
   const [fallbacks, setFallbacks] = useState(false);
   function choice(key: string, thinking: string) {
     const model = catalog.model(key);
@@ -97,11 +97,11 @@ export function Routing({ value, catalog }: { value: Review; catalog: CompiledCa
     </span>;
   }
   return <section className="plugin-atyrode_code_generator__routing" aria-label="Routing preview">
-    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">routing</h2></header>
+    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">routing</h2><span className="plugin-atyrode_code__muted" role="status">{local ? "Local preview" : "Profile preview"}</span></header>
     <dl className="plugin-atyrode_code_generator__routes">{value.routes.map(route => <div key={route.role}>
       <dt><span className="plugin-atyrode_code_generator__agent-marker" title={route.agentBacked ? "Agent role" : undefined} aria-hidden="true">{route.agentBacked ? "●" : ""}</span>{route.role}</dt>
       <dd>{choice(route.lead.key, route.lead.thinking)}{fallbacks && route.fallback.map((fallback, index) => <span key={`${fallback.key}:${index}`} className="plugin-atyrode_code_generator__fallback"><span aria-hidden="true">↳ </span>{choice(fallback.key, fallback.thinking)}</span>)}</dd>
     </div>)}</dl>
-    <button type="button" className="plugin-atyrode_code_generator__fallback-toggle" aria-pressed={fallbacks} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "hide fallback chains" : "show fallback chains"}</button>
+    {value.routes.some(route => route.fallback.length > 0) && <button type="button" className="plugin-atyrode_code_generator__fallback-toggle" aria-pressed={fallbacks} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "Hide fallbacks" : "Show fallbacks"}</button>}
   </section>;
 }

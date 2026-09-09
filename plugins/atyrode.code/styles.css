@@ -1,17 +1,19 @@
 .plugin-atyrode_code {
-  --code-bg: #282b34;
+  --code-bg: #1b1e26;
   --code-fg: #edf0f5;
-  --code-muted: #a0a6b5;
-  --code-dim: #737b8c;
+  --code-muted: #adb4c3;
+  --code-dim: #8790a2;
   --code-accent: #b6a3eb;
   --code-blue: #70b7e8;
   --code-amber: #e7ad74;
   --code-positive: #8bcbb4;
   --code-warning: #ded77b;
+  --code-danger: #ef929f;
   --code-rule: #4b515f;
   color: var(--code-fg);
   background: var(--code-bg);
-  font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --code-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 0.875rem;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
@@ -24,7 +26,7 @@
 .plugin-atyrode_code :is(h1, h2, h3, h4, h5, p, dl) { margin: 0; }
 .plugin-atyrode_code :is(h1, h2, h3, h4, h5) { font: inherit; font-weight: 600; }
 .plugin-atyrode_code :is(h2, h3) { color: var(--code-accent); }
-.plugin-atyrode_code :is(code, pre, kbd) { font: inherit; }
+.plugin-atyrode_code :is(code, pre, kbd) { font-family: var(--code-mono); font-size: 0.9em; }
 .plugin-atyrode_code pre { max-width: 100%; overflow: auto; white-space: pre-wrap; }
 .plugin-atyrode_code :is(ul, ol) { margin: 0; padding-inline-start: 1.4em; }
 .plugin-atyrode_code :is(button, input, select, textarea) {
@@ -36,8 +38,8 @@
 }
 .plugin-atyrode_code :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
   border: 1px solid var(--code-rule);
-  border-radius: 2px;
-  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  padding: 0.35rem 0.55rem;
   background: var(--code-bg);
 }
 .plugin-atyrode_code textarea { width: 100%; resize: vertical; }
@@ -49,8 +51,9 @@
   justify-content: center;
   gap: 0.4em;
   border: 1px solid transparent;
-  border-radius: 2px;
-  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  min-height: 2rem;
+  padding: 0.3rem 0.55rem;
   background: transparent;
   color: var(--code-muted);
   line-height: 1.4;
@@ -103,10 +106,12 @@
   display: inline-block;
   align-self: center;
   width: fit-content;
-  padding: 0 0.5rem;
-  color: var(--code-bg);
-  background: var(--code-accent);
+  padding: 0;
+  color: var(--code-accent);
+  font-size: 0.75rem;
   font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   line-height: 1.5;
 }
 .plugin-atyrode_code .plugin-atyrode_code__section-heading {
@@ -185,7 +190,9 @@
   background: var(--code-rule);
   overflow: hidden;
 }
-.plugin-atyrode_code .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-positive); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-level="high"] .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-level="exhausted"] .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-danger); }
 .plugin-atyrode_code .plugin-atyrode_code__usage-meter::-webkit-meter-bar { border: 0; border-radius: 0; height: 0.9rem; background: var(--code-rule); }
 .plugin-atyrode_code .plugin-atyrode_code__usage-meter::-webkit-meter-optimum-value { background: var(--code-meter-fill); border-radius: 0; }
 .plugin-atyrode_code .plugin-atyrode_code__usage-meter::-moz-meter-bar { background: var(--code-meter-fill); border-radius: 0; }
@@ -307,7 +314,7 @@
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-check input,
 .plugin-atyrode_code .plugin-atyrode_code__account-identity input { flex: 0 0 auto; accent-color: var(--code-accent); }
-@media (max-width: 48rem) {
+@container (max-width: 38rem) {
   .plugin-atyrode_code .plugin-atyrode_code__account-row { grid-template-columns: minmax(0, 1fr); }
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-profile {

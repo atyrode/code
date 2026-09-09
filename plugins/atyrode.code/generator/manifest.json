@@ -6,7 +6,7 @@
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "launcher", "title": "code" }],
-    "seats": [{ "panel": "launcher", "order": 150, "ratio": 0.75 }],
+    "seats": [{ "panel": "launcher", "order": 150, "ratio": 1.5 }],
     "sections": [],
     "elements": [],
     "tools": [],

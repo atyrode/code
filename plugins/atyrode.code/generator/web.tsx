@@ -1,12 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type ComponentType } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
-import { ScrollRegion } from "@manifold/ui";
+import { ControlIcon, ScrollRegion } from "@manifold/ui";
 import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { CODE_PLUGIN_ID, GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type LaunchPreview, type Target } from "../contract.ts";
-import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
+import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
@@ -28,7 +28,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const [suggestionPrompt, setSuggestionPrompt] = useState("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; failed: boolean } | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   const current = useRef({ host, machine, available });
@@ -57,7 +57,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     if (pending.current || !writable) return;
     pending.current = true; setBusy(true); setMessage(null);
     try { await work(); }
-    catch (reason) { if (mounted.current) setMessage(codeOperationFailure(reason)); }
+    catch (reason) { if (mounted.current) setMessage({ text: codeOperationFailure(reason), failed: true }); }
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
   async function launch() {
@@ -65,25 +65,27 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     await perform(async () => {
       const prepared = await callCodeAction(host, "prepareLaunch", { ...target, expectedRevision: preview.revision, previewDigest: preview.previewDigest, prompt });
       const latest = current.current;
-      if (!mounted.current || latest.host.client !== host.client || latest.host.containerId !== target.containerId || !latest.available || latest.machine?.id !== target.machineId || !latest.host.authoring) throw new Error("Destination changed");
+      if (!mounted.current || latest.host.client !== host.client || latest.host.principal.id !== host.principal.id || latest.host.authoring !== host.authoring || latest.host.containerId !== target.containerId || !latest.available || latest.machine?.id !== target.machineId || !latest.host.authoring) throw new Error("Destination changed");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
-      if (mounted.current) { setPreview(null); setMessage("Terminal opened. Runtime output and status are shown there."); }
+      if (mounted.current) { setPreview(null); setMessage({ text: "Terminal opened. Follow the session in OMP.", failed: false }); }
     });
   }
-  if (!record?.active && view !== "accounts") return <Onboarding host={host} target={target} available={available} onDone={back} />;
   if (view === "accounts") return <AccountsView host={host} target={target} available={available} onDone={back} />;
   if (view === "catalog") return <CatalogWorkbench host={host} target={target} available={available} onDone={back} />;
   if (view === "setup") return <Onboarding host={host} target={target} available={available} settings onDone={back} />;
+  if (!configuration.data) return <section className="plugin-atyrode_code__notice" role="status">{configuration.error ?? "Reading your Code profile…"}{configuration.error && <button type="button" onClick={refresh}>Try again</button>}</section>;
+  if (!record?.active) return <Onboarding host={host} target={target} available={available} onDone={back} />;
   return <div className="plugin-atyrode_code_generator__workbench">
     <header className="plugin-atyrode_code_generator__profile-header"><h2 className="plugin-atyrode_code__section-label">profile</h2>
       <span className="plugin-atyrode_code__muted">{record?.active?.document.models.length ?? 0} models</span>
-      <nav className="plugin-atyrode_code__toolbar" aria-label="Code workspace"><button type="button" disabled={busy} onClick={() => setView("accounts")}>accounts</button><button type="button" disabled={busy} onClick={() => setView("catalog")}>catalog</button><button type="button" disabled={busy} onClick={() => setView("setup")}>setup</button></nav>
+      <nav className="plugin-atyrode_code__toolbar" aria-label="Code workspace"><button type="button" disabled={busy} onClick={() => setView("accounts")}>Accounts</button><button type="button" disabled={busy} onClick={() => setView("catalog")}>Models</button><button type="button" disabled={busy} title="Runtime setup and permissions" onClick={() => setView("setup")}><ControlIcon kind="settings" size={14} />Setup</button></nav>
     </header>
+      {message && <p role="status" className={message.failed ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{message.text}</p>}
     {!writable && <p role="status" className="plugin-atyrode_code__notice">Read-only workspace. Profile changes and launch require edit access.</p>}
     {configuration.error && <p role="status">{configuration.error}</p>}
     {compiled && selection && localReview ? <Dials selection={selection} review={localReview} catalog={compiled} disabled={busy || !writable} update={value => { if (record) { setDials({ selection: value, revision: dials?.revision ?? record.revision }); setPreview(null); setSuggestion(null); setMessage(null); } }} /> : <p role="status" className="plugin-atyrode_code__warning">This profile no longer fits its catalog. Open the catalog to review its models.</p>}
     {dials && <div className="plugin-atyrode_code_generator__draft">
-      <p className={stale ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{stale ? "Shared choices changed. Your draft is kept and cannot overwrite them." : "Local profile · routing updates immediately"}</p>
+      <p role="status" className={stale ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{stale ? "Shared choices changed. Your draft is kept and cannot overwrite them." : "Unsaved profile · preview updated"}</p>
       <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || stale || !localReview} onClick={() => void perform(async () => { await callCodeAction(host, "select", { ...target, expectedRevision: dials.revision, selection: dials.selection }); if (mounted.current) setDials(null); })}>{busy ? "Saving…" : "Save profile"}</button><button type="button" disabled={busy} onClick={() => setDials(null)}>discard</button></div>
       {stale && <details className="plugin-atyrode_code__details"><summary>Keep a copy of your draft</summary><pre>{JSON.stringify(dials.selection, null, 2)}</pre></details>}
     </div>}
@@ -99,12 +101,15 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
         </div>}
       </>}
     </div>}
-    {compiled && shownReview && <>
-      <Estimates value={shownReview.estimates} />
-      <Routing value={shownReview} catalog={compiled} />
-    </>}
+    <div className="plugin-atyrode_code_generator__insights">
+      {compiled && shownReview && <div className="plugin-atyrode_code_generator__route-preview">
+        <Estimates value={shownReview.estimates} />
+        <Routing value={shownReview} catalog={compiled} local={dials !== null} />
+      </div>}
+      <UsageOverview host={host} target={target} />
+    </div>
     <section className="plugin-atyrode_code_generator__launch" aria-label="Launch Code">
-      {previewCurrent && <div className="plugin-atyrode_code_generator__launch-review"><h3>Ready to launch with</h3>
+      {previewCurrent && <div className="plugin-atyrode_code_generator__launch-review"><h3>Reviewed account pool</h3>
         <ul>{Object.entries(preview.accountPool).map(([provider, accounts]) => <li key={provider}><span>{provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
         <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ accounts: preview.accountPool, resources: preview.resources, reviewDigest: preview.previewDigest }, null, 2)}</pre></details>
       </div>}
@@ -115,10 +120,9 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
         if (record) void perform(async () => { const value = await callCodeAction(host, "previewLaunch", { ...target, expectedRevision: record.revision }); if (mounted.current) setPreview(value); });
       }}>{busy ? "Working…" : previewCurrent ? "Launch" : "Review launch"}</button><span className="plugin-atyrode_code__muted">{dials ? "save your profile first" : !available ? "machine offline" : !productCurrent ? "Code updated · review runtime setup" : !launchReady ? "runtime approval needed" : previewCurrent ? "opens a terminal in this workspace" : "check accounts and runtime before opening"}</span>
       </div>
-      {!launchReady && <button type="button" onClick={() => setView("setup")}>review runtime setup</button>}
-      {message && <p role="status" className="plugin-atyrode_code__warning">{message}</p>}
+      {!launchReady && <button type="button" disabled={busy} onClick={() => setView("setup")}>Review runtime setup</button>}
+      {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
     </section>
-    <UsageOverview host={host} target={target} onAccounts={() => setView("accounts")} />
     <footer className="plugin-atyrode_code_generator__footer"><span>shared profile · revision {record?.revision}</span><button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>native job history</button></footer>
   </div>;
 }
@@ -126,7 +130,6 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
 function Launcher({ host }: PanelProps) {
   const id = useId();
   const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
-  useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   return <ScrollRegion className="plugin-atyrode_code plugin-atyrode_code_generator" aria-label="Code workspace"><div className="plugin-atyrode_code_generator__body">
     <header className="plugin-atyrode_code_generator__masthead"><h1>code<span aria-hidden="true">_</span></h1>
       <div className="plugin-atyrode_code_generator__machine"><span className="plugin-atyrode_code_generator__connection" data-online={available} aria-hidden="true" />

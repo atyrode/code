@@ -5,8 +5,8 @@ import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeRuns } from 
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
 
-const steps = ["accounts", "workspace", "permissions", "resources", "prepare", "models"] as const;
-const titles = ["Connect your accounts", "Set up Code here", "Approve this machine", "Review runtime resources", "Choose your workspace", "Choose your models"] as const;
+const steps = ["Accounts", "Workspace", "Permissions", "Resources", "Folders", "Models"] as const;
+const titles = ["Connect your accounts", "Set up this workspace", "Approve this machine", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
 export function Onboarding({ host, target, available, settings = false, onDone }: {
   host: HostServices; target: Target; available: boolean; settings?: boolean; onDone: () => void;
@@ -41,8 +41,8 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const prepared = matchingJobs.some(job => job.state === "exited" && job.result?.exitCode === 0);
   const preparing = matchingJobs.find(job => runningStates.has(job.state));
   const latestPreparation = matchingJobs[0];
-  const nextStep = !accountsContinued ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
-  const step = selectedStep ?? nextStep;
+  const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
+  const step = selectedStep ?? (settings ? nextStep === 2 ? 2 : 3 : nextStep);
   const reviewCurrent = review !== null && record?.revision === review.revision;
   function refresh() { configuration.refresh(); setup.refresh(); history.refresh(); }
   async function perform(work: () => Promise<void>) {
@@ -52,23 +52,25 @@ export function Onboarding({ host, target, available, settings = false, onDone }
     catch (reason) { if (mounted.current) setMessage(codeOperationFailure(reason)); }
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
+  if (!configuration.data) return <p role="status">{configuration.error ?? "Reading workspace setup…"}</p>;
   return <section className="plugin-atyrode_code_generator__onboarding" aria-label={settings ? "Code setup" : "First-use setup"}>
     <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">{settings ? "setup" : "welcome to code"}</h2>
-      {settings && <button type="button" onClick={onDone}>back to code</button>}
+      {settings && <button type="button" disabled={busy} onClick={onDone}>Back to profile</button>}
     </header>
-    <ol className="plugin-atyrode_code_generator__steps" aria-label="Setup progress">{steps.map((label, index) => <li key={label} aria-current={step === index ? "step" : undefined} data-complete={index < nextStep}>
-      <button type="button" disabled={busy || index > nextStep} onClick={() => { setSelectedStep(index); setMessage(null); }}>{index + 1}<span>{label}</span></button>
-    </li>)}</ol>
+    {settings ? <nav className="plugin-atyrode_code__toolbar" aria-label="Runtime setup">{[2, 3, 4].map(index => <button key={index} type="button" aria-pressed={step === index} disabled={busy} onClick={() => { setSelectedStep(index); setMessage(null); }}>{steps[index]}</button>)}</nav> :
+      <ol className="plugin-atyrode_code_generator__steps" aria-label="Setup progress">{steps.map((label, index) => <li key={label} aria-current={step === index ? "step" : undefined} data-complete={index < nextStep}>
+        <button type="button" disabled={busy || index > nextStep || (index === 1 && record !== null)} onClick={() => { setSelectedStep(index); setMessage(null); }}><span aria-hidden="true">{index + 1}</span><span>{label}</span></button>
+      </li>)}</ol>}
     <div className="plugin-atyrode_code_generator__setup-step">
-      <h3>{titles[step]}</h3>
+      {step !== 0 && <h3>{titles[step]}</h3>}
       {step !== 0 && !writable && <p role="status">This workspace is read-only. Its owner can complete runtime setup; account discovery remains available.</p>}
       {step !== 0 && !available && <p role="status">The selected workspace machine is unavailable. Restore its native connection to prepare or run Code. Instance account sign-in is independent.</p>}
       {step !== 0 && configuration.error && <p role="status">{configuration.error}</p>}
       {step !== 0 && setup.error && <p role="status">{setup.error}</p>}
-      <div hidden={step !== 0}><OmpSignIn host={host} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} /></div>
+      {!settings && <div hidden={step !== 0}><OmpSignIn host={host} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} /></div>}
       {step === 1 && <>
-        <p>Code remembers this workspace’s catalog, account choices and dials. This setup runs once; ordinary launches return straight to your profile.</p>
-        <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data} onClick={() => { if (configuration.data) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Get started"}</button>
+        <p>Save this workspace’s profile, model catalog and account choices. Completed setup is remembered here.</p>
+        <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
       </>}
       {step === 2 && <>
         <p>Approve Code’s runtime, workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
@@ -86,17 +88,17 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         </>}
       </>}
       {step === 4 && <>
-        <p>New here? Create the workspace and session folders declared in native setup, and check the pinned OMP executable. Existing folders are never replaced.</p>
+        <p>{prepared ? "This runtime has a successful workspace preparation. Existing folders are kept." : "Create the folders declared in native setup, or use folders already bound to this workspace. Existing folders are never replaced."}</p>
         {history.error && <p role="status">{history.error}</p>}
         {preparing && <p role="status">Preparing workspace · {preparing.state}</p>}
         {latestPreparation && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The last preparation did not complete successfully. Inspect its native result before trying again.</p>}
-        <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy || preparing ? "Preparing…" : "Create new workspace"}</button>
-          <button type="button" disabled={busy || !!preparing} onClick={() => { setExistingWorkspace(true); setSelectedStep(null); }}>Use the existing bound workspace</button></div>
+        <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || history.runs === null || history.error !== null || !!preparing || prepared} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision }); if (mounted.current) setSelectedStep(null); }); }}>{prepared ? "Workspace prepared" : busy || preparing ? "Preparing…" : "Create new workspace"}</button>
+          {!settings && !prepared && <button type="button" disabled={busy || !!preparing} onClick={() => { setExistingWorkspace(true); setSelectedStep(null); }}>Use existing bound folders</button>}</div>
         <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>preparation history</button>
       </>}
       {step === 5 && <CatalogWorkbench host={host} target={target} available={available} onDone={() => { refresh(); onDone(); }} />}
     </div>
-    {selectedStep !== null && selectedStep < nextStep && <button type="button" onClick={() => setSelectedStep(null)}>continue setup</button>}
+    {!settings && selectedStep !== null && selectedStep > 0 && selectedStep < nextStep && <button type="button" onClick={() => setSelectedStep(null)}>Continue setup</button>}
     {message && <p role="status" className="plugin-atyrode_code__warning">{message}</p>}
   </section>;
 }
