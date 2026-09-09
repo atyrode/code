@@ -59,6 +59,15 @@ export const PrepareLaunchResultSchema = z.strictObject({ runtime: TerminalRunti
 export const SetupSchema = z.strictObject({ productSha256: digest, execution: JobDescriptionSchema.nullable(), services: z.array(z.strictObject({
   ...ServicePinSchema.shape, operations: z.array(z.strictObject({ operationId: identifier, readable: z.boolean(), invocable: z.boolean(), ready: z.boolean(), reason: z.string().nullable() })),
 })), connected: z.boolean() });
+export const AccountSetupSchema = z.strictObject({
+  revision: id.nullable(),
+  owner: z.strictObject({ machineId: id, name: z.string().min(1).max(256), online: z.boolean() }).nullable(),
+  state: z.enum(["unconfigured", "starting", "ready", "unavailable"]),
+  canSignIn: z.boolean(),
+  reason: z.string().max(256).nullable(),
+});
+export const PrepareSignInInputSchema = z.strictObject({ containerId: id, expectedBrokerRevision: id.nullable() });
+export const PrepareSignInResultSchema = z.strictObject({ machineId: id, runtime: TerminalRuntimeSchema });
 export const InventoryResultSchema = z.strictObject({ job: PublicJobSchema, inventory: InventoryReceiptSchema, draft: CatalogDraftSchema });
 export const BenchmarkResultSchema = z.strictObject({ job: PublicJobSchema, benchmark: BenchmarkReceiptSchema, catalog: CatalogDocumentSchema });
 export const SuggestionSchema = z.strictObject({ revision, selection: SelectionSchema, changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])), evaluator: z.string().max(256) });
@@ -92,7 +101,9 @@ export const actionSchemas = {
   promoteCatalog: { input: RevisionTargetSchema.extend({ source: z.enum(["active", "draft"]), reviewDigest: digest }), result: ConfigurationSchema },
   select: { input: RevisionTargetSchema.extend({ selection: SelectionSchema }), result: ConfigurationSchema },
   changeAccounts: { input: RevisionTargetSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
-  accounts: { input: TargetSchema, result: AccountsObservationSchema },
+  accounts: { input: z.strictObject({}), result: AccountsObservationSchema },
+  readAccountSetup: { input: z.strictObject({}), result: AccountSetupSchema },
+  prepareSignIn: { input: PrepareSignInInputSchema, result: PrepareSignInResultSchema },
   usage: { input: TargetSchema, result: UsageViewSchema },
   clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
   disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
