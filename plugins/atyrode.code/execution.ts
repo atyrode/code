@@ -5,7 +5,8 @@ import type { RuntimeAccountPool } from "../domain/contracts.ts";
 import { BenchmarkReceiptSchema, InventoryReceiptSchema, benchmarkCandidates, catalogFromObservations,
   projectProbeIdentities, scaffoldInventory } from "../domain/probe.ts";
 import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
-import { accountObservation } from "./broker.ts";
+import { BROKER_SERVICE_ID } from "./auth-contract.ts";
+import { accountObservation, currentService, sharedBrokerReference } from "./broker.ts";
 import { CODE_PLUGIN_ID, type Configuration, type LaunchPreview } from "./contract.ts";
 import { CodeRefusal, currentOperation, digestOf, readJobResult, type CodeContext } from "./machine-server.ts";
 import { bundledProbeModels } from "./sdk-metadata.macro.ts" with { type: "macro" };
@@ -33,10 +34,16 @@ export function nativeModelConfiguration(pool: RuntimeAccountPool) {
   const config = { extensions: [], disabledProviders: bundledProviders.filter(provider => !providers.includes(provider)), extendedContext: true };
   return { models, config, providers };
 }
-async function probeInput(ctx: CodeContext, record: Configuration) {
+async function executionAccountPool(ctx: CodeContext, record: Configuration) {
   const broker = record.resources?.services.broker;
   if (!broker) throw new CodeRefusal("resources_incomplete");
-  const pool = selectedAccountPool(await accountObservation(ctx, record.machineId, broker), record.accounts);
+  const reference = await sharedBrokerReference(ctx);
+  if (broker.serviceId !== reference.serviceId || broker.revision !== reference.revision) throw new CodeRefusal("resources_changed");
+  await currentService(ctx, record.machineId, BROKER_SERVICE_ID, broker);
+  return selectedAccountPool(await accountObservation(ctx, reference), record.accounts);
+}
+async function probeInput(ctx: CodeContext, record: Configuration) {
+  const pool = await executionAccountPool(ctx, record);
   const { models, config, providers } = nativeModelConfiguration(pool);
   const registry = bundledProviders.filter(provider => providers.includes(provider)).flatMap(provider => bundledModels[provider]!);
   const identities = projectProbeIdentities(registry, providers);
@@ -75,9 +82,7 @@ export async function benchmarkResult(ctx: CodeContext, machineId: string, inven
 export async function launchPreview(ctx: CodeContext, record: Configuration): Promise<LaunchPreview> {
   await requirePromotedOperation(ctx, record, "launch");
   if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-  const broker = record.resources!.services.broker;
-  if (!broker) throw new CodeRefusal("resources_incomplete");
-  const accountPool = selectedAccountPool(await accountObservation(ctx, record.machineId, broker), record.accounts);
+  const accountPool = await executionAccountPool(ctx, record);
   const catalog = compileCatalog(record.active.document);
   const review = reviewCatalog(catalog, record.selection, ctx.now());
   for (const route of review.routes) {

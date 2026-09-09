@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceInputSchema, type ServiceOperationPolicy, type ServicePolicy, type ServiceProxyOperationPolicy } from "@manifold/protocol";
-import { buildCodeServices, type CodeServicesInput } from "../atyrode.code/service-policies.ts";
-import { actionSchemas, ServiceSetupInputSchema } from "../atyrode.code/contract.ts";
+import { buildCodeServices, buildSharedBrokerPolicy, type CodeServicesInput } from "../atyrode.code/service-policies.ts";
+import { BROKER_OPERATION_ID, BROKER_SERVICE_ID } from "../atyrode.code/auth-contract.ts";
+import { CODE_PLUGIN_ID } from "../atyrode.code/contract.ts";
 
 function configuration(): CodeServicesInput & { gateway: NonNullable<CodeServicesInput["gateway"]> } {
-  return { broker: { origin: "https://broker.example", credentialRef: "broker-token" },
-    classifier: { origin: "http://127.0.0.1:11434", model: "qwen3:8b" },
+  return { classifier: { origin: "http://127.0.0.1:11434", model: "qwen3:8b" },
     gateway: { pluginId: "atyrode.code.gateway", operationId: "atyrode.code.gateway.serve", installationRevision: "install-7",
       artifactSha256: "a".repeat(64), resourceBindingDigest: "b".repeat(64), input: { accountPool: { input: "accountPool" } } } };
 }
 function service(id: string): ServicePolicy {
+  if (id === BROKER_SERVICE_ID) return buildSharedBrokerPolicy({ scope: "instance", pluginId: CODE_PLUGIN_ID,
+    operationId: BROKER_OPERATION_ID, installationRevision: "broker-install-1",
+    artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64), input: {} });
   const value = buildCodeServices(configuration()).find(policy => policy.serviceId === id);
   if (!value) throw new Error(`Missing service ${id}`);
   return value;
@@ -31,7 +34,7 @@ function projection(operation: ServiceOperationPolicy): string[] {
 
 describe("Code native service authority", () => {
   test("direct reads and controls never inherit gateway credential disclosure", () => {
-    const broker = service("broker");
+    const broker = service(BROKER_SERVICE_ID);
     const readable = Object.entries(broker.operations).filter(([, operation]) => !("kind" in operation) && operation.readable).map(([id]) => id);
     const invocable = Object.entries(broker.operations).filter(([, operation]) => !("kind" in operation) && operation.invocable).map(([id]) => id);
     expect(readable.sort()).toEqual(["metadata", "usage"]);
@@ -53,16 +56,10 @@ describe("Code native service authority", () => {
     expect(projection(usage).some(path => /(^|\.)(raw|notes|credential|error)(\.|$)/.test(path))).toBe(false);
     expect(projection(direct(broker, "clear-blocks"))).toEqual(["ok"]);
     expect(projection(direct(broker, "disable"))).toEqual(["ok"]);
-    const enroll = direct(broker, "enroll-oauth");
-    expect([enroll.method, enroll.path]).toEqual(["POST", "/v1/credential"]);
-    expect(projection(enroll)).toEqual(["entries.*.id", "entries.*.provider", "entries.*.identityKey"]);
-    expect(enroll.input.access).toEqual({ type: "string", required: true, maxBytes: 24_576 });
-    expect(enroll.input.apiEndpoint).toEqual({ type: "string", required: false, maxBytes: 2048 });
-    expect(enroll.body).toContainEqual({ path: ["credential", "type"], value: { literal: "oauth" } });
   });
 
   test("gateway exposes only pinned SDK stream-path broker routes with bounded parameters", () => {
-    const broker = service("broker");
+    const broker = service(BROKER_SERVICE_ID);
     const routes = Object.entries(broker.operations).filter(([, operation]) => "kind" in operation)
       .map(([id, operation]) => `${id} ${operation.method} ${operation.path}`).sort();
     expect(routes).toEqual([
@@ -104,35 +101,10 @@ describe("Code native service authority", () => {
     expect([proxy(omp, "stream").method, proxy(omp, "stream").path]).toEqual(["POST", "/v1/pi/stream"]);
   });
 
-  test("API-key enrollment fixes each native source and exposes no caller-selected key or transport authority", () => {
-    const config = configuration();
-    const broker = buildCodeServices({ ...config, apiKeys: [{ provider: "openai", credentialRef: "openai-owner-key" }] })
-      .find(policy => policy.serviceId === "broker")!;
-    const operation = direct(broker, "enroll-key-openai");
-    expect(operation.invocable).toBe(true);
-    expect(operation.input).toEqual({});
-    expect(operation.body).toEqual([
-      { path: ["provider"], value: { literal: "openai" } },
-      { path: ["credential", "type"], value: { literal: "api_key" } },
-      { path: ["credential", "key"], value: { credentialRef: "openai-owner-key" } },
-    ]);
-    expect(projection(operation)).toEqual(["entries.*.id", "entries.*.provider", "entries.*.identityKey"]);
-    expect(broker.operations["enroll-key-anthropic"]).toBeUndefined();
-    expect(() => buildCodeServices({ ...config, apiKeys: [
-      { provider: "openai", credentialRef: "first" }, { provider: "openai", credentialRef: "second" },
-    ] })).toThrow();
-    const target = { containerId: "container-a", machineId: "machine-a" };
-    expect(actionSchemas.enrollApiKey.input.safeParse({ ...target, provider: "openai", key: "raw-key" }).success).toBe(false);
-    expect(actionSchemas.enrollApiKey.input.safeParse({ ...target, provider: "openai", credentialRef: "caller-override" }).success).toBe(false);
-    expect(ServiceSetupInputSchema.safeParse({ ...target, expectedServiceRevision: null,
-      broker: config.broker, classifier: null, apiKeys: [{ provider: "openai", credentialRef: "source", key: "raw-key" }] }).success).toBe(false);
-  });
-
   test("native configuration boundary refuses unsafe origins, secret values and unbounded input", () => {
     const config = configuration();
-    expect(() => buildCodeServices({ ...config, broker: { ...config.broker, origin: "https://user:secret@broker.example" } })).toThrow();
-    expect(() => buildCodeServices({ ...config, broker: { ...config.broker, origin: "http://broker.example" } })).toThrow();
-    expect(() => buildCodeServices({ ...config, broker: { ...config.broker, credentialRef: "Bearer secret" } })).toThrow();
+    expect(() => buildCodeServices({ ...config, classifier: { ...config.classifier!, origin: "https://user:secret@classifier.example" } })).toThrow();
+    expect(() => buildCodeServices({ ...config, classifier: { ...config.classifier!, origin: "http://classifier.example" } })).toThrow();
     expect(() => buildCodeServices({ ...config, classifier: { ...config.classifier!, model: "m".repeat(513) } })).toThrow();
     expect(() => buildCodeServices({ ...config, gateway: { ...config.gateway, artifactSha256: "un-pinned" } })).toThrow();
     expect(() => buildCodeServices({ ...config, gateway: { ...config.gateway,
