@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { PluginRosterEntrySchema, ServiceReplySchema, type ServicePolicy } from "@manifold/protocol";
-import { actionSchemas, CODE_PLUGIN_ID, GATEWAY_PLUGIN_ID, GATEWAY_OPERATION_ID, type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
-import { digestOf, type CodeContext } from "../atyrode.code/machine-server.ts";
+import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceReplySchema, type ServicePolicy } from "@manifold/protocol";
+import { actionSchemas, CODE_PLUGIN_ID, type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
+import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "../atyrode.code/auth-contract.ts";
+import type { CodeContext } from "../atyrode.code/machine-server.ts";
 import { handlers } from "../atyrode.code/server.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import type { ProjectedBrokerSnapshot } from "../domain/accounts.ts";
@@ -22,7 +23,7 @@ function document(): CatalogDocument {
 interface Fixture {
   ctx: CodeContext;
   access: { containerScope: string | null; readable: Set<string>; writable: Set<string> };
-  resources: { product: string; artifact: string; binding: string; installation: string; brokerRevision: string; policy: string };
+  resources: { product: string; artifact: string; binding: string; installation: string; brokerRevision: string; brokerOwner: string; policy: string };
   metadata: ProjectedBrokerSnapshot;
   holdTwoReads(): void;
   duringMetadata(hook: () => Promise<void>): void;
@@ -31,7 +32,8 @@ interface Fixture {
 function fixture(isRoot = false): Fixture {
   const store = new Map<string, string>();
   const access = { containerScope: null as string | null, readable: new Set(["container-a", "container-b"]), writable: new Set(["container-a", "container-b"]) };
-  const resources = { product: "a".repeat(64), artifact: "b".repeat(64), binding: "c".repeat(64), installation: "install-1", brokerRevision: "broker-1", policy: "d".repeat(64) };
+  const resources = { product: "a".repeat(64), artifact: "b".repeat(64), binding: "c".repeat(64), installation: "install-1",
+    brokerRevision: "broker-1", brokerOwner: "broker-owner", policy: "d".repeat(64) };
   const metadata: ProjectedBrokerSnapshot = { credentials: [
     { id: 1, provider: "anthropic", identityKey: "email:alice@example.test|org:original", credential: { type: "oauth" } },
     { id: 2, provider: "anthropic", identityKey: null, credential: { type: "api_key" } },
@@ -90,17 +92,24 @@ function fixture(isRoot = false): Fixture {
     },
     services: {
       describe: async ({ machineId }) => ({ machineId, connected: true, services: [{
-        serviceId: "broker", revision: resources.brokerRevision, policySha256: resources.policy,
+        serviceId: BROKER_SERVICE_ID, revision: resources.brokerRevision, policySha256: resources.policy,
         operations: [{ operationId: "metadata", readable: true, invocable: false, ready: true, reason: null }],
       }] }),
-      read: async args => {
-        if (args.operationId !== "metadata" || args.serviceId !== "broker" || args.revision !== resources.brokerRevision || args.policySha256 !== resources.policy) return unavailable();
+      describeInstance: async () => InstanceServiceDescriptionSchema.parse({
+        serviceId: BROKER_SERVICE_ID, defaultOwner: { machineId: "local-master", name: "Local master", online: true },
+        owner: { machineId: resources.brokerOwner, name: "Broker owner", online: true },
+        configuration: { revision: resources.brokerRevision, pluginId: CODE_PLUGIN_ID, enabled: true, policySha256: resources.policy },
+        connected: true, state: "ready", reason: null,
+      }),
+      readInstance: async args => {
+        if (args.operationId !== "metadata" || args.serviceId !== BROKER_SERVICE_ID || args.expectedRevision !== resources.brokerRevision) return unavailable();
         const hook = onMetadata;
         onMetadata = undefined;
         await hook?.();
         return ServiceReplySchema.parse({ type: "service_result", requestId: "metadata-read", ok: true, result: structuredClone(metadata) });
       },
-      invoke: unavailable, readConfiguration: unavailable, configureConfiguration: unavailable,
+      read: unavailable, invoke: unavailable, readConfiguration: unavailable, configureConfiguration: unavailable,
+      listInstances: unavailable, readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable,
     },
   };
   return { ctx, access, resources, metadata,
@@ -142,6 +151,8 @@ const resourceChanges: [string, (f: Fixture) => void][] = [
   ["operation binding", f => { f.resources.binding = "e".repeat(64); }],
   ["installation revision", f => { f.resources.installation = "install-2"; }],
   ["service policy", f => { f.resources.policy = "e".repeat(64); }],
+  ["broker revision", f => { f.resources.brokerRevision = "broker-2"; }],
+  ["broker relocation", f => { f.resources.brokerOwner = "replacement-owner"; f.resources.brokerRevision = "broker-2"; }],
 ];
 
 describe("canonical typed Code actions", () => {
@@ -235,10 +246,12 @@ describe("canonical typed Code actions", () => {
 });
 
 describe("exact native launch preview", () => {
-  test("account choices compile a concrete pool and native model routes without enabling disabled slots", async () => {
+  test("a worker launches with shared account choices without executing on the broker owner or enabling disabled slots", async () => {
     const f = fixture();
+    const describe = f.ctx.jobs.describe;
+    f.ctx.jobs.describe = args => args.machineId === target.machineId ? describe(args) : unavailable();
     const record = await active(f);
-    const accounts = await accepted(f, "accounts", target);
+    const accounts = await accepted(f, "accounts", {});
     const disabled = accounts.accounts.find(account => account.credentialId === 2)!.reference;
     const changed = await accepted(f, "changeAccounts", { ...target, expectedRevision: record.revision, change: { kind: "set-account", reference: disabled, enabled: false } });
     const preview = await accepted(f, "previewLaunch", { ...target, expectedRevision: changed.revision });
@@ -257,12 +270,13 @@ describe("exact native launch preview", () => {
     ["API-key slot replacement", 2, f => { f.metadata.credentials[1]!.id = 4; }],
     ["API-key provider change", 2, f => { f.metadata.credentials[1]!.provider = "openai"; }],
     ["native service scope change", 2, f => { f.resources.brokerRevision = "broker-2"; }],
+    ["broker owner replacement", 2, f => { f.resources.brokerOwner = "other-owner"; f.resources.brokerRevision = "broker-2"; }],
   ];
   for (const [name, slot, change] of accountChanges) {
     test(`fresh metadata cannot broaden a disabled reference after ${name}`, async () => {
       const f = fixture();
       const record = await active(f);
-      const accounts = await accepted(f, "accounts", target);
+      const accounts = await accepted(f, "accounts", {});
       const reference = accounts.accounts.find(account => account.credentialId === slot)!.reference;
       let changed = await accepted(f, "changeAccounts", { ...target, expectedRevision: record.revision, change: { kind: "set-account", reference, enabled: false } });
       await accepted(f, "previewLaunch", { ...target, expectedRevision: changed.revision });
@@ -331,7 +345,7 @@ test("inventory admission refuses account exclusions committed during broker obs
   let started = 0;
   f.ctx.jobs.execute = async () => { started++; return unavailable(); };
   const record = await active(f);
-  const accounts = await accepted(f, "accounts", target);
+  const accounts = await accepted(f, "accounts", {});
   const reference = accounts.accounts.find(account => account.credentialId === 1)!.reference;
   f.duringMetadata(async () => {
     await accepted(f, "changeAccounts", { ...target, expectedRevision: record.revision,
@@ -342,246 +356,116 @@ test("inventory admission refuses account exclusions committed during broker obs
   expect(started).toBe(0);
 });
 
-function keyEnrollmentFixture() {
+test("a worker's inherited broker pin cannot substitute a newer instance registry revision", async () => {
   const f = fixture();
-  const describe = f.ctx.services.describe;
-  const admission = { ready: true, invocable: true };
-  const writes: string[] = [];
-  f.ctx.services.describe = async args => {
-    const result = await describe(args);
-    result.services[0]!.operations.push({ operationId: "enroll-key-openai", readable: false, ...admission, reason: null });
-    return result;
+  const record = await active(f);
+  const describe = f.ctx.services.describeInstance;
+  f.ctx.services.describeInstance = async args => {
+    const description = await describe(args);
+    return { ...description, configuration: { ...description.configuration!, revision: "replacement-revision" } };
   };
-  f.ctx.services.invoke = async args => {
-    if (args.machineId !== target.machineId || args.serviceId !== "broker" ||
-      args.operationId !== "enroll-key-openai" || Object.keys(args.input).length !== 0 ||
-      args.revision !== f.resources.brokerRevision || args.policySha256 !== f.resources.policy) return unavailable();
-    writes.push(args.operationId);
-    f.metadata.credentials.push({ id: 4, provider: "openai", identityKey: null, credential: { type: "api_key" } });
-    return ServiceReplySchema.parse({ type: "service_result", requestId: "enroll-key", ok: true,
-      result: { entries: [{ id: 4, provider: "openai", identityKey: null }] } });
-  };
-  return { ...f, admission, writes };
-}
-
-describe("native-reference API-key enrollment", () => {
-  test("enrollment returns a fresh independent slot without changing saved exclusions", async () => {
-    const f = keyEnrollmentFixture();
-    await initialize(f);
-    const accounts = await accepted(f, "accounts", target);
-    const reference = accounts.accounts.find(account => account.credentialId === 2)!.reference;
-    const original = await accepted(f, "changeAccounts", { ...target, expectedRevision: 1,
-      change: { kind: "set-account", reference, enabled: false } });
-    const result = await accepted(f, "enrollApiKey", { ...target, provider: "openai" });
-    expect(result.status).toBe("fresh");
-    expect(result.accounts.find(account => account.credentialId === 4)?.reference).toEqual({
-      kind: "credential", scope: result.scope, provider: "openai", credentialId: 4,
-    });
-    expect(await configuration(f)).toEqual(original);
-  });
-
-  test("foreign targets and unconfigured or unready operations cannot enroll", async () => {
-    const f = keyEnrollmentFixture();
-    f.access.containerScope = target.containerId;
-    expect(await invoke(f, "enrollApiKey", { ...target, containerId: "container-b", provider: "openai" }))
-      .toEqual({ refused: "code_scope_refused" });
-    f.access.writable.delete(target.containerId);
-    expect(await invoke(f, "enrollApiKey", { ...target, provider: "openai" })).toEqual({ refused: "code_scope_refused" });
-    f.access.writable.add(target.containerId);
-    expect(await invoke(f, "enrollApiKey", { ...target, provider: "anthropic" }))
-      .toEqual({ refused: "code_api_key_enrollment_unavailable" });
-    f.admission.ready = false;
-    expect(await invoke(f, "enrollApiKey", { ...target, provider: "openai" }))
-      .toEqual({ refused: "code_api_key_enrollment_unavailable" });
-    f.admission.ready = true; f.admission.invocable = false;
-    expect(await invoke(f, "enrollApiKey", { ...target, provider: "openai" }))
-      .toEqual({ refused: "code_api_key_enrollment_unavailable" });
-    expect(f.writes).toEqual([]);
-  });
-
-  test("resource changes after enrollment never return accounts from a replacement broker policy", async () => {
-    const f = keyEnrollmentFixture();
-    const enroll = f.ctx.services.invoke;
-    f.ctx.services.invoke = async args => {
-      const response = await enroll(args);
-      f.resources.policy = "e".repeat(64);
-      return response;
-    };
-    expect(await invoke(f, "enrollApiKey", { ...target, provider: "openai" })).toEqual({ refused: "code_resources_changed" });
-    expect(f.writes).toEqual(["enroll-key-openai"]);
-  });
-
-  test("unprojected secrets and another provider's entries are refused rather than echoed", async () => {
-    const f = keyEnrollmentFixture();
-    for (const entry of [
-      { id: 4, provider: "openai", identityKey: null, credential: { type: "api_key", key: "do-not-disclose" } },
-      { id: 4, provider: "anthropic", identityKey: null },
-    ]) {
-      f.ctx.services.invoke = async () => ServiceReplySchema.parse({ type: "service_result", requestId: "enroll-key", ok: true,
-        result: { entries: [entry] } });
-      expect(await invoke(f, "enrollApiKey", { ...target, provider: "openai" })).toEqual({ refused: "code_invalid_service_result" });
-    }
-  });
+  expect(await invoke(f, "previewLaunch", { ...target, expectedRevision: record.revision }))
+    .toEqual({ refused: "code_resources_changed" });
 });
 
-function ownerServiceFixture(isRoot = true) {
+test("a missing shared owner never falls back to a worker's available local broker", async () => {
+  const f = fixture();
+  const record = await active(f);
+  const describe = f.ctx.services.describeInstance;
+  f.ctx.services.describeInstance = async args => ({ ...await describe(args), owner: null, connected: false, state: "unavailable" });
+  expect(await invoke(f, "previewLaunch", { ...target, expectedRevision: record.revision }))
+    .toEqual({ refused: "code_account_unavailable" });
+});
+
+function signInFixture(isRoot = true) {
   const f = fixture(isRoot);
-  const gateway = { runtime: { pluginId: GATEWAY_PLUGIN_ID, operationId: GATEWAY_OPERATION_ID,
-    installationRevision: "gateway-install-1", artifactSha256: "7".repeat(64), resourceBindingDigest: "8".repeat(64) },
-    ready: true, reason: null as string | null };
-  const state = { revision: null as string | null, writes: 0, connected: true, gateway: gateway as typeof gateway | null,
-    policies: [] as ServicePolicy[],
-    references: [
-      { ref: "broker-token", available: true, origins: ["https://broker.example"] },
-      { ref: "openai-key", available: true, origins: ["https://broker.example"] },
-    ] };
-  const allows = f.ctx.auth.allows;
-  f.ctx.auth.allows = async (cap, node) => (cap === "services:configure" && node?.kind === "machine" && node.machineId === target.machineId) || allows(cap, node);
-  f.ctx.services.readConfiguration = async () => ({ configuration: { revision: state.revision, policies: state.policies },
-    connected: state.connected, runtimeCandidates: state.gateway ? [state.gateway] : [], credentialReferences: state.references });
-  f.ctx.services.configureConfiguration = async args => {
-    if (args.expectedRevision !== state.revision) throw new Error("native revision conflict");
-    state.writes++;
-    state.policies = args.policies;
-    state.revision = digestOf(state.policies);
-    return { revision: state.revision, policies: state.policies };
+  const state = { revision: null as string | null, policy: null as ServicePolicy | null, writes: 0,
+    owner: { machineId: f.resources.brokerOwner, name: "Broker owner", online: true } };
+  const describe = f.ctx.services.describeInstance;
+  f.ctx.services.describeInstance = async args => {
+    const description = await describe(args);
+    return { ...description, defaultOwner: { ...state.owner }, owner: state.revision ? { ...state.owner } : null,
+      configuration: state.revision ? { ...description.configuration!, revision: state.revision } : null,
+      connected: state.owner.online, state: state.revision ? "ready" : "unconfigured" };
   };
-  const input: ActionInput<"reviewServices"> = { ...target, expectedServiceRevision: null,
-    broker: { origin: "https://broker.example", credentialRef: "broker-token" }, classifier: null,
-    apiKeys: [{ provider: "openai", credentialRef: "openai-key" }] };
-  return { ...f, state, input };
+  const jobs = f.ctx.jobs.describe;
+  f.ctx.jobs.describe = async args => {
+    if (args.machineId !== state.owner.machineId) return unavailable();
+    const description = await jobs(args);
+    return { ...description, operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
+      [operation, { ready: true, reason: null, resourceBindingDigest: f.resources.binding }])) };
+  };
+  const allows = f.ctx.auth.allows;
+  f.ctx.auth.allows = async (cap, node) =>
+    (cap === "services:configure" && node?.kind === "machine" && node.machineId === state.owner.machineId) || allows(cap, node);
+  f.ctx.services.readInstanceConfiguration = async args => ({ description: await f.ctx.services.describeInstance(args), policy: state.policy });
+  f.ctx.services.configureInstance = async args => {
+    if (args.serviceId !== BROKER_SERVICE_ID || args.machineId !== state.owner.machineId) return unavailable();
+    if (args.expectedRevision !== state.revision) throw new Error("native revision conflict");
+    state.policy = args.policy;
+    state.revision = `registry-${++state.writes}`;
+    return f.ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID });
+  };
+  return { ...f, state };
 }
 
-describe("reviewed native API-key sources", () => {
-  test("first use commits broker without a gateway, then binds an independently promoted ready installation", async () => {
-    const f = ownerServiceFixture();
-    const gateway = f.state.gateway!;
-    f.state.gateway = null;
-    const first = await accepted(f, "reviewServices", f.input);
-    expect(first.gateway).toEqual({ status: "omitted", reason: "not_installed", nativeReason: null });
-    const brokerOnly = await accepted(f, "configureServices", { ...f.input, reviewDigest: first.reviewDigest });
-    expect(brokerOnly.policies.map(policy => policy.serviceId)).toEqual(["broker"]);
-    expect(brokerOnly.policies[0]!.operations["enroll-key-openai"]).toBeDefined();
+describe("instance-owned OMP sign-in", () => {
+  const input = { containerId: target.containerId, expectedBrokerRevision: null };
 
-    f.state.gateway = gateway;
-    const input = { ...f.input, expectedServiceRevision: brokerOnly.revision };
-    const second = await accepted(f, "reviewServices", input);
-    expect(second.gateway.status).toBe("ready");
-    const complete = await accepted(f, "configureServices", { ...input, reviewDigest: second.reviewDigest });
-    const runtime = complete.policies.find(policy => policy.serviceId === "omp")?.runtime;
-    expect(runtime).toEqual({ ...gateway.runtime, input: { accountPool: { input: "accountPool" } } });
-    expect(complete.policies.find(policy => policy.serviceId === "broker")).toEqual(brokerOnly.policies[0]);
-    expect(f.state.writes).toBe(2);
+  test("first use configures one shared owner; later sign-in preserves that broker and worker placement", async () => {
+    const f = signInFixture();
+    const worker = await initialize(f);
+    const first = await accepted(f, "prepareSignIn", input);
+    expect(first.machineId).toBe(f.resources.brokerOwner);
+    expect(first.machineId).not.toBe(target.machineId);
+    expect(first.runtime.operationId).toBe(SIGN_IN_OPERATION_ID);
+    expect(f.state.policy?.runtime?.scope).toBe("instance");
+    const policy = structuredClone(f.state.policy);
+    const second = await accepted(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision });
+    expect(second).toEqual(first);
+    expect(f.state.writes).toBe(1);
+    expect(f.state.policy).toEqual(policy);
+    expect(await configuration(f)).toEqual(worker);
   });
 
-  test("an unavailable gateway removes stale omp only after a fresh explicit review", async () => {
-    const f = ownerServiceFixture();
-    const initial = await accepted(f, "reviewServices", f.input);
-    const applied = await accepted(f, "configureServices", { ...f.input, reviewDigest: initial.reviewDigest });
-    const input = { ...f.input, expectedServiceRevision: applied.revision };
-    const ready = await accepted(f, "reviewServices", input);
-    f.state.gateway = null;
-    expect(await invoke(f, "configureServices", { ...input, reviewDigest: ready.reviewDigest }))
-      .toEqual({ refused: "code_preview_changed" });
-    expect(f.state.policies.some(policy => policy.serviceId === "omp")).toBe(true);
-    const absent = await accepted(f, "reviewServices", input);
-    expect(absent.gateway.status).toBe("omitted");
-    const removed = await accepted(f, "configureServices", { ...input, reviewDigest: absent.reviewDigest });
-    expect(removed.policies.map(policy => policy.serviceId)).toEqual(["broker"]);
-  });
-
-  test("unready native bindings omit runtime and becoming ready invalidates broker-only review", async () => {
-    const f = ownerServiceFixture();
-    f.state.gateway!.ready = false;
-    f.state.gateway!.reason = "service_binding_changed";
-    const unready = await accepted(f, "reviewServices", f.input);
-    expect(unready.gateway).toEqual({ status: "omitted", reason: "resources_unready", nativeReason: "service_binding_changed" });
-    expect(unready.policies.some(policy => policy.serviceId === "omp")).toBe(false);
-    f.state.gateway!.ready = true;
-    f.state.gateway!.reason = null;
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: unready.reviewDigest }))
-      .toEqual({ refused: "code_preview_changed" });
+  test("container scope and owner administration are required before broker mutation", async () => {
+    const nonOwner = signInFixture(false);
+    expect(await invoke(nonOwner, "prepareSignIn", input)).toEqual({ refused: "code_service_owner_required" });
+    expect(nonOwner.state.writes).toBe(0);
+    const f = signInFixture();
+    f.access.writable.clear();
+    expect(await invoke(f, "prepareSignIn", input)).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    f.access.containerScope = "container-b";
+    expect(await invoke(f, "prepareSignIn", input)).toEqual({ refused: "code_scope_refused" });
     expect(f.state.writes).toBe(0);
   });
 
-  test("only ready native service candidates may become the model gateway", async () => {
-    for (const reason of ["installation_disabled", "purge_requested", "installation_unavailable"] as const) {
-      const f = ownerServiceFixture();
-      f.state.gateway!.ready = false;
-      f.state.gateway!.reason = reason;
-      const review = await accepted(f, "reviewServices", f.input);
-      expect(review.gateway).toEqual({ status: "omitted",
-        reason: reason === "installation_unavailable" ? "resources_unready" : reason, nativeReason: reason });
-      expect(review.policies.map(policy => policy.serviceId)).toEqual(["broker"]);
-    }
-    const disconnected = ownerServiceFixture();
-    disconnected.state.connected = false;
-    expect((await accepted(disconnected, "reviewServices", disconnected.input)).gateway)
-      .toEqual({ status: "omitted", reason: "machine_disconnected", nativeReason: null });
-  });
-
-  test("gateway inspection cannot substitute a foreign installation and service setup retains root target authority", async () => {
-    const f = ownerServiceFixture();
-    f.state.gateway!.runtime.pluginId = CODE_PLUGIN_ID;
-    expect((await accepted(f, "reviewServices", f.input)).gateway)
-      .toEqual({ status: "omitted", reason: "not_installed", nativeReason: null });
-    f.state.gateway!.runtime.pluginId = GATEWAY_PLUGIN_ID;
-    const nonOwner = ownerServiceFixture(false);
-    expect(await invoke(nonOwner, "reviewServices", nonOwner.input)).toEqual({ refused: "code_service_owner_required" });
-    const review = await accepted(f, "reviewServices", f.input);
-    f.access.writable.delete(target.containerId);
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_scope_refused" });
-    expect(f.state.writes).toBe(0);
-  });
-
-  test("competing reviewed service writers cannot overwrite the winning native revision", async () => {
-    const f = ownerServiceFixture();
-    const review = await accepted(f, "reviewServices", f.input);
-    const results = await Promise.allSettled([
-      invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }),
-      invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }),
-    ]);
-    expect(results.filter(result => result.status === "fulfilled" && actionSchemas.configureServices.result.safeParse(result.value).success)).toHaveLength(1);
+  test("an offline designated owner cannot be replaced by an available default or workspace worker", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.state.owner.online = false;
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
+      .toEqual({ refused: "code_account_owner_unavailable" });
     expect(f.state.writes).toBe(1);
   });
 
-  test("every key source must remain available and origin-authorized at apply", async () => {
-    const f = ownerServiceFixture();
-    const review = await accepted(f, "reviewServices", f.input);
-    f.state.references[1]!.available = false;
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_credential_reference_unavailable" });
-    f.state.references[1]!.available = true;
-    f.state.references[1]!.origins = ["https://elsewhere.example"];
-    expect(await invoke(f, "reviewServices", f.input)).toEqual({ refused: "code_credential_reference_unavailable" });
-    f.state.references.pop();
-    expect(await invoke(f, "reviewServices", f.input)).toEqual({ refused: "code_credential_reference_unavailable" });
-    expect(f.state.writes).toBe(0);
+  test("competing first-use writers cannot adopt or overwrite the winning native revision", async () => {
+    const f = signInFixture();
+    const results = await Promise.all([invoke(f, "prepareSignIn", input), invoke(f, "prepareSignIn", input)]);
+    expect(results.filter(value => actionSchemas.prepareSignIn.result.safeParse(value).success)).toHaveLength(1);
+    expect(results.filter(value => !actionSchemas.prepareSignIn.result.safeParse(value).success))
+      .toEqual([{ refused: "code_broker_revision_changed" }]);
+    expect(f.state.writes).toBe(1);
+    expect(await invoke(f, "prepareSignIn", input)).toEqual({ refused: "code_broker_revision_changed" });
   });
 
-  test("changed source, native revision and gateway binding invalidate reviewed authority", async () => {
-    const f = ownerServiceFixture();
-    const review = await accepted(f, "reviewServices", f.input);
-    const originalBinding = f.state.gateway!.runtime.resourceBindingDigest;
-    f.state.references.push({ ref: "other-key", available: true, origins: ["https://broker.example"] });
-    expect(await invoke(f, "configureServices", { ...f.input, apiKeys: [{ provider: "openai", credentialRef: "other-key" }],
-      reviewDigest: review.reviewDigest })).toEqual({ refused: "code_preview_changed" });
-    f.state.revision = "a".repeat(64);
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_service_configuration_changed" });
-    f.state.revision = null;
-    f.state.gateway!.runtime.resourceBindingDigest = "e".repeat(64);
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_preview_changed" });
-    f.state.gateway!.runtime.resourceBindingDigest = originalBinding;
-    f.state.gateway!.runtime.installationRevision = "gateway-install-2";
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_preview_changed" });
-    f.state.gateway!.runtime.installationRevision = "gateway-install-1";
-    f.state.gateway!.runtime.artifactSha256 = "9".repeat(64);
-    expect(await invoke(f, "configureServices", { ...f.input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_preview_changed" });
-    expect(f.state.writes).toBe(0);
+  test("changed installed owner resources cannot silently replace an already configured broker", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.resources.binding = "e".repeat(64);
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
+      .toEqual({ refused: "code_resources_changed" });
+    expect(f.state.writes).toBe(1);
   });
 });

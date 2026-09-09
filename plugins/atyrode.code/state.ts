@@ -3,6 +3,7 @@ import { JobDescriptionSchema } from "@manifold/protocol";
 import { initialAccountChoices } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { BROKER_SERVICE_ID } from "./auth-contract.ts";
 import { CODE_PLUGIN_ID, CODE_PREFERENCES_EVENT, ConfigurationSchema,
   PromotedResourcesSchema, type Configuration, type Target, type CatalogReview } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
@@ -71,9 +72,9 @@ export async function resourceSnapshot(ctx: CodeContext, machineId: string): Pro
   const services: z.infer<typeof PromotedResourcesSchema>["services"] = Object.create(null);
   try {
     for (const service of (await ctx.services.describe({ machineId })).services) {
-      if (["broker", "suggest", "omp"].includes(service.serviceId)) {
+      if ([BROKER_SERVICE_ID, "suggest", "omp"].includes(service.serviceId)) {
         const { serviceId, revision, policySha256 } = service;
-        services[serviceId] = { serviceId, revision, policySha256 };
+        services[serviceId === BROKER_SERVICE_ID ? "broker" : serviceId] = { serviceId, revision, policySha256 };
       }
     }
   } catch { /* No observed service means no promoted service authority or implicit fallback. */ }

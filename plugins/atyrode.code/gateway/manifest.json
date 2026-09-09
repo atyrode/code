@@ -59,14 +59,14 @@
                 "path": [
                   "url"
                 ],
-                "serviceId": "broker",
+                "serviceId": "atyrode.code.broker",
                 "value": "url"
               },
               {
                 "path": [
                   "token"
                 ],
-                "serviceId": "broker",
+                "serviceId": "atyrode.code.broker",
                 "value": "bearer"
               }
             ]
@@ -75,7 +75,7 @@
         "providesService": true,
         "services": [
           {
-            "serviceId": "broker",
+            "serviceId": "atyrode.code.broker",
             "revision": "1",
             "operationIds": [
               "gateway-snapshot",

@@ -34,7 +34,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
     requiredOperations.every(operation => currentPins.operations[`${CODE_PLUGIN_ID}.${operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.resourceBindingDigest) &&
     ["broker", "omp"].every(id => {
       const saved = record?.resources?.services[id];
-      return saved && setup.data?.services.some(service => service.serviceId === id && service.revision === saved.revision && service.policySha256 === saved.policySha256);
+      return saved && setup.data?.services.some(service => service.serviceId === saved.serviceId && service.revision === saved.revision && service.policySha256 === saved.policySha256);
     });
   const matchingJobs = history.runs?.flatMap(run => run.job && installation && run.job.installationRevision === installation.revision && run.job.artifactSha256 === installation.artifactSha256 &&
     run.job.resourceBindingDigest === execution?.operations?.[`${CODE_PLUGIN_ID}.prepare-workspace`]?.resourceBindingDigest ? [run.job] : []) ?? [];
