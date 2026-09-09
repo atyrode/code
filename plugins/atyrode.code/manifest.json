@@ -249,50 +249,84 @@
         },
         "stdin": false
       },
-      "atyrode.code.auth-enroll": {
+      "atyrode.code.broker": {
         "argv": [
           {
-            "literal": "/runtime/bin/auth"
+            "literal": "/runtime/bin/broker"
           }
         ],
-        "input": {
-          "provider": {
-            "type": "string",
-            "required": true,
-            "maxLength": 96
-          }
-        },
+        "input": {},
         "runtimeTools": [
           "bun",
-          "auth",
+          "broker",
           "pi-natives",
           "system"
         ],
         "executable": {
           "runtimeTool": "bun"
         },
+        "environment": {
+          "PI_CONFIG_DIR": "omp",
+          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
+        },
         "inputFiles": {
-          "provider": {
-            "input": "provider"
+          "serviceBearer": {
+            "generated": "service-bearer"
           }
         },
-        "services": [
+        "providesService": true,
+        "services": [],
+        "locations": [
           {
-            "serviceId": "broker",
-            "revision": "1",
-            "operationIds": [
-              "enroll-oauth"
-            ]
+            "locationId": "omp-auth",
+            "access": "create"
           }
         ],
-        "locations": [],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 600000,
+          "memoryBytes": 1073741824,
+          "processes": 128,
+          "outputBytes": 262144
+        },
+        "stdin": false
+      },
+      "atyrode.code.sign-in": {
+        "argv": [
+          {
+            "literal": "--allow-home"
+          },
+          {
+            "literal": "--no-session"
+          }
+        ],
+        "input": {},
+        "runtimeTools": [
+          "omp",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "omp"
+        },
+        "environment": {
+          "PI_CONFIG_DIR": "omp",
+          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
+        },
+        "services": [],
+        "locations": [
+          {
+            "locationId": "omp-auth",
+            "access": "create"
+          }
+        ],
         "outputs": [],
         "network": "host",
         "limits": {
           "timeoutMs": 1800000,
           "memoryBytes": 2147483648,
           "processes": 128,
-          "outputBytes": 262144
+          "outputBytes": 8388608
         },
         "stdin": true
       },
@@ -336,6 +370,12 @@
       },
       "atyrode.code.launch": {
         "argv": [
+          {
+            "literal": "--session-dir"
+          },
+          {
+            "literal": "/home/job/omp-sessions"
+          },
           {
             "literal": "--config"
           },
@@ -462,6 +502,16 @@
       }
     },
     "locations": {
+      "omp-auth": {
+        "anchor": "state",
+        "components": [
+          "code",
+          "shared-omp"
+        ],
+        "revision": "1",
+        "kind": "directory",
+        "guestPath": "/home/job/omp"
+      },
       "atyrode.code.workspace": {
         "anchor": "home",
         "components": [
@@ -479,7 +529,7 @@
         ],
         "revision": "1",
         "kind": "directory",
-        "guestPath": "/home/job/.omp/agent/sessions"
+        "guestPath": "/home/job/omp-sessions"
       }
     }
   },
