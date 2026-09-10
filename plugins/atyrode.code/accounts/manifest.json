@@ -48,6 +48,7 @@
           "runtimeTool": "bun"
         },
         "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
           "PI_CONFIG_DIR": "omp",
           "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
         },
@@ -81,9 +82,21 @@
           },
           {
             "literal": "--no-session"
+          },
+          {
+            "literal": "--config"
+          },
+          {
+            "literal": "/home/job/.omp/agent/config.yml"
           }
         ],
-        "input": {},
+        "input": {
+          "config": {
+            "type": "string",
+            "required": true,
+            "maxLength": 128
+          }
+        },
         "runtimeTools": [
           "omp",
           "system"
@@ -92,8 +105,19 @@
           "runtimeTool": "omp"
         },
         "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
           "PI_CONFIG_DIR": "omp",
           "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
+        },
+        "inputFiles": {
+          "config": {
+            "input": "config",
+            "homePath": [
+              ".omp",
+              "agent",
+              "config.yml"
+            ]
+          }
         },
         "services": [],
         "locations": [

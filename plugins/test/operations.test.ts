@@ -507,6 +507,20 @@ describe("instance-owned OMP sign-in", () => {
     expect(f.state.writes).toBe(1);
   });
 
+  test("an unavailable matching broker offers explicit runtime review, never an automatic sign-in restart", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.state.runtimeState = "unavailable";
+    const expectedBrokerRevision = f.state.revision!;
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision: expectedBrokerRevision, state: "unavailable", canSignIn: false, canUpdateRuntime: true,
+    });
+    await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision });
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
+      .toEqual({ refused: "code_account_unavailable" });
+    expect(f.state.writes).toBe(1);
+  });
+
   test("an installed account replacement requires explicit review before the new registry revision can be reused", async () => {
     const f = signInFixture();
     await accepted(f, "prepareSignIn", input);
@@ -700,13 +714,8 @@ function runtimeSetupFixture(isRoot = true) {
     (state.configureAllowed && cap === "services:configure" && node?.kind === "machine" && node.machineId === target.machineId) || allows(cap, node);
   const describe = f.ctx.jobs.describe;
   f.ctx.jobs.describe = async args => {
-    if (args.pluginId !== GATEWAY_PLUGIN_ID) return describe(args);
-    return { machineId: args.machineId, pluginId: args.pluginId, connected: state.connected, platforms: ["linux-x64"],
-      admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
-      installation: { revision: runtime.installationRevision, artifactSha256: runtime.artifactSha256,
-        enabled: state.enabled, ready: state.enabled, purgeRequested: false }, retainedInstallations: [], consents: [],
-      operations: { [GATEWAY_OPERATION_ID]: { ready: state.enabled, reason: state.enabled ? null : "installation_disabled",
-        resourceBindingDigest: runtime.resourceBindingDigest } } };
+    if (args.pluginId !== CODE_PLUGIN_ID) throw new Error("Native job descriptions are plugin-scoped");
+    return describe(args);
   };
   f.ctx.services.readConfiguration = async () => ({
     configuration: structuredClone(state.configuration), connected: state.connected, credentialReferences: [],

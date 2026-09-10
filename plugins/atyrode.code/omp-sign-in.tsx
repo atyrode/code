@@ -86,7 +86,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     await perform(async stillCurrent => {
       await callCodeAction(host, "promoteAccountRuntime", { containerId,
         expectedBrokerRevision: runtimeReview.expectedBrokerRevision, reviewDigest: runtimeReview.reviewDigest });
-      if (stillCurrent()) { setRuntimeReview(null); setMessage("Shared runtime updated. Waiting for OMP readiness…"); }
+      if (stillCurrent()) { setRuntimeReview(null); setMessage("Shared runtime applied. Waiting for OMP readiness…"); }
     });
   }
   return <section className="plugin-atyrode_code plugin-atyrode_code__sign-in" aria-labelledby={`${id}-title`}>
@@ -98,17 +98,17 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
       ? state.owner.online ? `OMP sign-in is unavailable on ${state.owner.name}. Review its native setup.`
         : `${state.owner.name} is offline. Sign-in will be available when its native owner reconnects.`
       : "An instance service owner must be set up before signing in."}</p>}
-    {state?.canUpdateRuntime && !runtimeReview && <p role="status">The approved OMP runtime changed. Review the shared broker update before opening another sign-in terminal.</p>}
+    {state?.canUpdateRuntime && !runtimeReview && <p role="status">The shared account runtime needs review before sign-in. Applying the reviewed configuration can restore an unavailable broker; nothing restarts automatically.</p>}
     {host.containerId && !writable && <p role="status">This workspace is read-only. Open an editable workspace to place an OMP terminal.</p>}
     {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
     {setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
     {runtimeReview ? <>
-      <p>Update the shared account runtime on <strong>{runtimeReview.owner.name}</strong>. This affects every machine using it. The reviewed OMP store remains native-owned; no credentials are copied.</p>
+      <p>Apply the reviewed shared account runtime on <strong>{runtimeReview.owner.name}</strong>. This affects every machine using it. The reviewed OMP store remains native-owned; no credentials are copied.</p>
       {!runtimeReviewCurrent && <p role="status">Shared runtime setup changed. Review its current revision again.</p>}
       <details className="plugin-atyrode_code__details"><summary>Exact shared runtime policy</summary><pre>{JSON.stringify(runtimeReview.policy, null, 2)}</pre></details>
-      <div className="plugin-atyrode_code__account-toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !host.containerId || !runtimeReviewCurrent} onClick={() => void updateRuntime()}>{busy ? "Updating…" : "Update shared runtime"}</button><button type="button" disabled={busy} onClick={() => setRuntimeReview(null)}>back</button></div>
+      <div className="plugin-atyrode_code__account-toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !host.containerId || !runtimeReviewCurrent} onClick={() => void updateRuntime()}>{busy ? "Applying…" : "Apply reviewed runtime"}</button><button type="button" disabled={busy} onClick={() => setRuntimeReview(null)}>back</button></div>
     </> : <div className="plugin-atyrode_code__account-toolbar">
-      {state?.canUpdateRuntime ? <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !host.containerId} onClick={() => void reviewRuntime()}>{busy ? "Reviewing…" : "Review shared runtime update"}</button> : state?.canSignIn
+      {state?.canUpdateRuntime ? <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !host.containerId} onClick={() => void reviewRuntime()}>{busy ? "Reviewing…" : "Review shared runtime"}</button> : state?.canSignIn
         ? <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>
         : state?.owner?.online && <button type="button" onClick={() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`)}>Review OMP setup</button>}
     </div>}

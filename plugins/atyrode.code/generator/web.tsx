@@ -123,7 +123,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       {!launchReady && <button type="button" disabled={busy} onClick={() => setView("setup")}>Review runtime setup</button>}
       {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
     </section>
-    <footer className="plugin-atyrode_code_generator__footer"><span>shared profile · revision {record?.revision}</span><button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>native job history</button></footer>
+    <footer className="plugin-atyrode_code_generator__footer">shared profile</footer>
   </div>;
 }
 

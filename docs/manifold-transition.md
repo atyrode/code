@@ -55,7 +55,7 @@ the same governed boundary as agents. Native events invalidate observations;
 Code does not maintain a replay queue. Unsaved editor state is local, not a
 second preference authority. Concurrent/stale edits refuse rather than overwrite.
 
-Workers require actual machine locality: OMP probes, pinned SDK OAuth flows and
+Workers require actual machine locality: OMP probes, native OMP sign-in and
 the scoped OMP protocol gateway. They use the native SDK's input, cancellation,
 service and job contracts. The gateway is governed by its native lifetime and
 is not a provisioning daemon, broker replacement or credential store. No
@@ -70,8 +70,8 @@ standalone worker executable is an operator-facing Code product.
 | Native resource adoption | `readSetup`, `reviewResources`, `promoteResources`; observe/adopt exact pins, not installation or consent |
 | Service setup | Owner-only `readServiceConfiguration`, `reviewServices`, `configureServices`; existing native references and reviewed policy revisions, no raw secrets |
 | Accounts and usage | `accounts`, `usage`, `clearAccountBlocks`, `disableCredential`; scoped service read/mutation authority, shared account-choice meaning |
-| API-key onboarding | Owner selects an existing source ref in service setup; `enrollApiKey` supplies only target/provider and invokes the admitted policy operation, never a key/source override |
-| OAuth onboarding | `observeEnrollment`, `startEnrollment`, `respondEnrollment`, `cancelEnrollment`; fresh pinned SDK worker flow and native job lifetime |
+| Account sign-in | `readAccountSetup` and `prepareSignIn` observe the configured native instance owner, create or reuse its shared OMP broker, and return a pinned terminal handoff. OMP's ordinary `/login` owns OAuth/API-key entry and persistence; Code receives no credential input |
+| Shared account runtime upgrades | `reviewAccountRuntime` and `promoteAccountRuntime` bind explicit owner authority, broker revision and reviewed runtime digest; no silent upgrade or independent broker supervisor |
 | Inventory and benchmarking | `startInventory` / `inventory`, `startBenchmark` / `benchmark`, `stageBenchmark`; explicit potentially paid provider requests and retained typed receipts, never automatic promotion |
 | Suggestions | `suggest` invokes the promoted scoped classifier, validates and returns a revision-bound selection; saving remains explicit |
 | Reviewed launch | `previewLaunch` binds routes/account slots/resource pins; `prepareLaunch` rechecks and returns `TerminalRuntimeSchema`; `host.authoring.createTerminal` delegates placement to the mounted native renderer |
@@ -113,16 +113,18 @@ semantics.
 
 The selected credential boundary is **native scoped service access**. Owner-held
 source refs are available only for their declared origins. Service configuration
-requires native owner authority and revision-checked review. API-key enrollment
-never takes key values; OAuth uses a fresh supported provider flow and scoped
-upload. Read, credential mutation and runtime authority are separate. Upstream
-secrets remain with the native machine-side resolver; scoped job capabilities
-are injected only through declared native inputs. They must not leak through
-browser/plugin inputs, hub records, argv, logs or ordinary output. Scoped
-access does not magically prevent a process disclosing data it can read.
+requires native owner authority and revision-checked review. Account sign-in is
+an ordinary pinned OMP terminal on the instance broker owner, using OMP's
+supported `/login` flow rather than a Code enrollment worker or credential form.
+Read, credential mutation and runtime authority remain separate. Provider secrets
+stay in the broker owner's native managed home or their existing protected source.
+Only declared scoped service capabilities reach jobs; no provider secret belongs
+in Code's browser inputs, configuration, hub records, argv or ordinary output.
+Scoped access does not prevent a process from disclosing data it can legitimately read.
 
-External brokers can be governed services without becoming a standalone Code
-setup prerequisite. Code does not provision a broker or credential source.
+Code creates or reuses the configured instance-wide OMP broker through Manifold's
+native service lifecycle, after exact runtime/resource review. It neither starts
+a private supervisor nor turns external broker setup into a standalone prerequisite.
 Workspace bindings are likewise not proof of workspace preparation. Use native
 resource lifecycle and report missing capabilities rather than inventing a
 Code daemon, SSH helper or terminal-as-transport workaround.
@@ -170,8 +172,8 @@ final pins, gates and runtime evidence.
 | 1 — plugin resources and operations | in progress | Bootstrap packaging shipped in #107; Manifold #429/#445/#446 supplied earlier runtime/job/storage work. Current integration packs five TS/React/Bun bundles, with an independently installed model gateway avoiding circular service pins, under Manifold #448. Required owner-provided system closure, final exact pins and operational resource evidence remain distinct. |
 | 2 — web-controlled launch | in progress | Current source provides shared dials, exact launch preview, `prepareLaunch` and native terminal placement. The 2026-09-07 old-terminal preview and #148's 2026-09-08 isolated checks were prototype evidence only. Current actual OMP readiness, account-backed execution and native lifecycle evidence remain; #98 stays open. |
 | 3 — native workspace and multiplayer | in progress | Native storage CAS, scoped configuration, declared location creation plus a real OMP version probe, and separately consented repeated launch writes. No private registry or repository cloning. Full native lifetime, two-principal web/agent equivalence and runtime composition require evidence; #99 stays open. |
-| 4 — accounts and usage | in progress | Current source has Accounts/Usage panels, scoped service actions, shared choices, owner-ref-only API-key enrollment and an OAuth worker. No legacy import or second state authority is required. Live projected broker metadata has been read through native authority; complete account workflows, provider enrollment and multiplayer proof remain. #100/#105/#106 stay open. |
-| 5 — catalog, suggestions and first use | in progress | Current source has typed catalog editing/review/promotion, native inventory/benchmark receipts, scoped suggestions and resource/service setup. No CLI generation or provisioning daemon is required. Missing owner resources remain unavailable; complete first-use and real provider/runtime evidence remain under #103. |
+| 4 — accounts and usage | in progress | Current source has Accounts/Usage panels, scoped service actions, shared choices, a native instance-owned OMP broker, ordinary OMP `/login` terminal handoff and explicitly reviewed shared-runtime upgrades. Code accepts no credentials and has no enrollment worker. Live projected broker metadata has been read through native authority; complete account workflows, provider sign-in and multiplayer proof remain. #100/#105/#106 stay open. |
+| 5 — catalog, suggestions and first use | in progress | Current source has typed catalog editing/review/promotion, native inventory/benchmark receipts, scoped suggestions and resource/service setup. First-use permission review is reachable before model setup, and folder preparation follows a retained successful native job rather than local React state. A disposable no-network preparation job exited successfully on 2026-09-10; that does not prove shared-preview acceptance or provider workflows. Complete first-use and real provider/runtime evidence remain under #103 and #152. |
 | 6 — retire deprecated implementation | not completed | Current integration performs the TypeScript-only source/build/docs cutover rather than preserving the old Go/CLI/state/visual-format paths. This is not a claim that main has merged it. Final integrated retirement evidence remains under #101; downstream clients adopt native Code independently and live data handling requires separate authority. |
 
 Draft #148's recorded prototype commit was

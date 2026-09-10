@@ -72,6 +72,9 @@
             "maxLength": 65536
           }
         },
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+        },
         "runtimeTools": [
           "bun",
           "omp",
@@ -175,6 +178,9 @@
             "maxLength": 65536
           }
         },
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+        },
         "runtimeTools": [
           "bun",
           "omp",
@@ -256,6 +262,9 @@
           }
         ],
         "input": {},
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+        },
         "runtimeTools": [
           "omp",
           "system"
@@ -341,9 +350,15 @@
             "required": true
           }
         },
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+          "GIT_SSL_CAINFO": "/etc/ssl/certs/ca-certificates.crt"
+        },
         "runtimeTools": [
           "omp",
-          "system"
+          "bun",
+          "system",
+          "development"
         ],
         "executable": {
           "runtimeTool": "omp"
