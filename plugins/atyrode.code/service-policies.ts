@@ -51,6 +51,7 @@ export function buildSharedBrokerPolicy(runtime: ServiceRuntime): ServicePolicy 
     ["generatedAt"], ["reports", "*", "provider"], ["reports", "*", "fetchedAt"],
     ...["accountId", "email", "orgId"].map(key => ["reports", "*", "metadata", key]),
     ["reports", "*", "limits", "*", "id"],
+    ["reports", "*", "limits", "*", "status"],
     ...["provider", "accountId", "orgId", "tier", "windowId"].map(key => ["reports", "*", "limits", "*", "scope", key]),
     ...["id", "resetsAt", "durationMs"].map(key => ["reports", "*", "limits", "*", "window", key]),
     ...["unit", "usedFraction", "remainingFraction", "used", "limit"].map(key => ["reports", "*", "limits", "*", "amount", key]),

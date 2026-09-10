@@ -16,7 +16,8 @@ function report(id: number, windows: PermittedUsageSnapshot["accounts"][number][
     observedAt: now, status: "reported", windows };
 }
 function window(id: string, usedFraction: number | null, resetsAt = now + 60_000, tier: string | null = null) {
-  return { windowId: id, tier, usedFraction, resetsAt, durationMs: 3_600_000, observedAt: usedFraction === null ? null : now };
+  return { windowId: id, tier, usedFraction, quotaStatus: null, resetsAt, durationMs: 3_600_000,
+    observedAt: usedFraction === null ? null : now };
 }
 function view(rows: PermittedUsageSnapshot["accounts"]) {
   return projectUsage({ scope, observedAt: now, accounts: rows }, accounts, choices, now, freshness);
@@ -122,6 +123,63 @@ const brokerReport = {
 };
 
 describe("actual broker usage adapter", () => {
+  test("provider quota verdict distinguishes allowed-at-limit from exhausted for one selected account", () => {
+    const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
+    const raw = { generatedAt: now, reports: [{ ...brokerReport,
+      limits: [{ ...brokerReport.limits[0]!, amount: { unit: "percent", usedFraction: 1 }, status: "warning" }],
+    }] };
+    const bucket = () => projectUsage(normalizeBrokerUsage(raw, accounts, now), accounts, selected, now, freshness)
+      .providers[0]!.buckets[0]!;
+    expect(bucket().status).toBe("available");
+    raw.reports[0]!.limits[0]!.status = "exhausted";
+    expect(bucket()).toMatchObject({ status: "maxed", resetsAt: now + 60_000 });
+    // The sanctioned verdict, not rounding or amount derivation, is authoritative.
+    raw.reports[0]!.limits[0]!.amount.usedFraction = 0.99;
+    expect(bucket().status).toBe("maxed");
+    raw.reports[0]!.limits.push({ ...raw.reports[0]!.limits[0]!, id: "openai-codex:secondary",
+      scope: { provider: "openai-codex", windowId: "7d" },
+      window: { ...brokerReport.limits[0]!.window, id: "7d", resetsAt: now + 120_000 } });
+    raw.reports[0]!.limits[0]!.status = "warning";
+    expect(bucket()).toMatchObject({ status: "maxed", resetsAt: now + 120_000 });
+  });
+
+  test("provider verdict cannot make stale usage authoritative", () => {
+    const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
+    for (const status of ["warning", "exhausted"]) {
+      const raw = { generatedAt: now, reports: [{ ...brokerReport,
+        limits: [{ ...brokerReport.limits[0]!, amount: { unit: "percent", usedFraction: 1 }, status }],
+      }] };
+      const normalized = normalizeBrokerUsage(raw, accounts, now)!;
+      const bucket = (observed = accounts) =>
+        projectUsage(normalized, observed, selected, now, freshness).providers[0]!.buckets[0]!.status;
+      expect(projectUsage(normalized, accounts, selected, now, { ...freshness, refreshStatus: "failed" })
+        .providers[0]!.buckets[0]!.status).toBe("stale");
+      expect(bucket({ ...accounts, status: "stale" })).toBe("stale");
+      normalized.accounts[0]!.windows[0]!.observedAt = now - 60_001;
+      expect(bucket()).toBe("stale");
+      normalized.accounts[0]!.windows[0]!.observedAt = now - 10;
+      normalized.accounts[0]!.windows[0]!.resetsAt = now;
+      expect(bucket()).toBe("stale");
+    }
+  });
+
+  test("unknown and malformed verdicts cannot claim availability and absent verdicts retain fraction fallback", () => {
+    const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
+    const { status: _status, ...limit } = brokerReport.limits[0]!;
+    const raw = (status: unknown, usedFraction: number | null = 1) => ({ generatedAt: now, reports: [{ ...brokerReport,
+      limits: [{ ...limit, amount: { unit: "percent", ...(usedFraction === null ? {} : { usedFraction }) },
+        ...(status === undefined ? {} : { status }) }],
+    }] });
+    const bucket = (input: unknown) => projectUsage(normalizeBrokerUsage(input, accounts, now), accounts, selected, now, freshness)
+      .providers[0]!.buckets[0]!.status;
+    expect(bucket(raw("unknown"))).toBe("unknown");
+    expect(bucket(raw(undefined))).toBe("maxed");
+    expect(bucket(raw(undefined, 0.2))).toBe("available");
+    expect(bucket(raw("warning", null))).toBe("unknown");
+    expect(() => bucket(raw("allowed"))).toThrow(DomainError);
+    expect(() => bucket(raw({ allowed: true }))).toThrow(DomainError);
+  });
+
   test("joins native broker metadata, preserves source times and drops secret/error bodies", () => {
     const raw = { generatedAt: now, reports: [{ ...brokerReport,
       raw: { accessToken: "PRIVATE" }, notes: ["PRIVATE provider error body"],
