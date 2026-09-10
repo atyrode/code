@@ -72,7 +72,7 @@ not install artifacts, grant consent or make unavailable operations ready.
 The UI checks resource readiness and exact enabled native consent separately.
 Setup needs one workspace route plus inventory and launch permissions; retained
 workspace and inventory results also require their status-read consent. A classifier
-authorized only for invocation remains discoverable without granting metadata reads.
+authorized only for invocation remains discoverable without granting service-read authority.
 
 Managed Bun 1.4.2, OMP/SDK 18.1.14 and pi-natives artifacts are pinned in
 `plugins/runtime-artifacts.json`; `workers/build.ts` supplies the declarations
