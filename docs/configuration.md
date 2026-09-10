@@ -3,7 +3,8 @@
 Code is a Manifold plugin, not an independently configured process. Manifold
 owns storage, credential-source references, service policy, grants/consent,
 resource revisions, jobs, locations and terminals. Code owns typed product
-schemas and governed actions. OMP owns ordinary agent execution and sessions.
+schemas and governed actions. OMP owns provider sign-in, credential storage and
+refresh, ordinary agent execution and sessions.
 The [architecture ledger](manifold-transition.md#6-transition-steps) records
 acceptance; the [plugin guide](../plugins/README.md) covers development.
 
@@ -49,16 +50,18 @@ catalog, selection and resource snapshot, clearing the promoted draft.
 the final OMP boundary produces its overlay/arguments. Disabling model fallback
 does not disable same-model retries or redefine broker account policy.
 
-Catalog editing/review and shared preferences do not start machine jobs and
-can remain useful while execution is unavailable. Resource observations in a
-review are not a readiness claim. A changed product bundle, state, service
-policy or execution binding requires renewed review where the action binds it.
+Catalog editing/review and shared preferences do not start machine jobs or require
+selected accounts, and can remain useful while execution is unavailable. Resource
+observations in a review are not a readiness claim. A changed product bundle,
+state, service policy or execution binding requires renewed review where the
+action binds it.
 
 ## Native resources, services and consent
 
 `readSetup` reports native execution installation/operation readiness, services
-and connectivity. Use native Plugins for artifact installation, resource and
-location bindings, operation consent and retained job lifecycle. In Code,
+(including the configured instance broker) and connectivity. Native Plugins owns
+artifact installation, resource/location bindings, operation consent and retained
+job lifecycle. In Code,
 `reviewResources` followed by `promoteResources` adopts the exact reviewed
 snapshot for a configuration, including before a catalog exists.
 
@@ -75,41 +78,52 @@ library closure. The direct-ELF requirements report is not that closure.
 Missing resources refuse admission; PATH, host files and incidental caches
 are not substitutes.
 
-### Owner-held credential references
+### Machine execution-service setup
 
-The native service setup UI uses `readServiceConfiguration`, `reviewServices`
-and `configureServices`. This requires the root owner's current
-`services:configure` machine authority and applicable container access. Inputs
-select an exact broker origin and existing `credentialRef`, optional classifier
-origin/model, and API-key `{ provider, credentialRef }` selections. A source
-must be available for the exact broker origin. No secret value is accepted.
-Review includes `expectedServiceRevision`; configuration requires the returned
-`reviewDigest` and native compare-and-set semantics. Unrelated native service
-policies are preserved.
+The root actions `readServiceConfiguration`, `reviewServices` and
+`configureServices` manage per-machine execution services, not instance
+authentication. Read/review require native owner authority and authorized target
+access; configuration also requires root `services:configure` machine authority
+and a writable target.
 
-First configure the broker (and optional classifier/API-key operations). If no
-ready gateway exists, the review explicitly omits `omp`. In native Plugins,
-review/install `atyrode.code.gateway` with its broker/system bindings and approve
-the required operation consents. Review service setup again to bind `omp` to
-that gateway's exact installation/artifact/operation revision. Then review/install
-`atyrode.code` with its current service/system/location bindings and explicitly
-approve the bounded caller-to-gateway invocation edges. These are native
-installation and authority changes, not automatic effects of opening Code.
+- `readServiceConfiguration` takes the target and returns the native
+  `ServiceConfigurationReadSchema`.
+- `reviewServices` takes the target, `expectedServiceRevision: string | null`
+  and optional `classifier: { origin, model } | null`. It returns
+  `{ expectedServiceRevision, policies, reviewDigest }`.
+- `configureServices` takes those same inputs plus the exact `reviewDigest`
+  and returns the native `ServiceConfigurationSchema`.
 
-Policies define the `broker`, optional `suggest`, and `omp` scoped services.
-Manifold owns resolution, grants, consent and revision enforcement. Upstream
-secrets stay with the machine-side native resolver. Job-local scoped service
-URLs/bearers are injected into declared sealed input files, not exposed as
-upstream credentials in browser inputs, hub records, argv, logs or job results.
-Read, mutation and runtime operations have distinct authority.
+Omitting `classifier` preserves the existing `suggest` policy; `null` explicitly
+removes it, and a value sets its origin/model. Review and configuration derive
+the current ready `atyrode.code.gateway.serve` installation, artifact and
+operation binding pins themselves, with `accountPool: { input: "accountPool" }`.
+Callers cannot override runtime pins or supply credentials. The exact native
+configuration revision and reviewed candidate digest must still match at commit;
+changed configuration or gateway resources require a fresh review. Every unrelated
+native machine policy, including any broker policy, is preserved.
 
-This UI does not create credential sources, deploy a broker or provision a
-system closure. If the owner has not supplied the required resource, it is
-unavailable. There is no Code provisioning daemon or credential-import recipe.
+In native Plugins, review/install `atyrode.code.gateway` with its instance
+accounts-broker/system bindings and approve the required operation consents.
+Then review/configure the machine's `omp` service and optional `suggest`
+classifier. A missing or unready gateway refuses setup rather than silently
+omitting `omp`. Review/install `atyrode.code` with its current service/system/
+location bindings and explicitly approve the bounded caller-to-gateway
+invocation edges. These are native installation and authority changes, not
+automatic effects of opening Code.
+
+Manifold owns resolution, grants, consent and revision enforcement. OMP's
+instance broker remains independently owned and configured as described below.
+Job-local scoped service URLs/bearers are injected into declared sealed input
+files, not exposed as upstream credentials in browser inputs, hub records, argv,
+logs or job results. Read, mutation and runtime operations have distinct authority.
+Execution-service setup does not acquire credentials, configure the shared
+broker, install artifacts or provision a system closure. Unavailable resources
+stay unavailable; there is no Code provisioning daemon or credential-import recipe.
 
 ## Accounts, usage and onboarding
 
-`accounts` returns permitted metadata with native service scope.
+`accounts` returns permitted metadata from the native instance broker.
 `changeAccounts` commits revision-checked choices: `set-account`,
 `create-preset`, `update-preset`, `activate-preset` or `delete-preset`.
 References distinguish OAuth identities (`kind: "identity"`) from native
@@ -121,21 +135,36 @@ Unavailable, stale, disabled, blocked and exhausted are distinct states.
 `clearAccountBlocks` and `disableCredential` are separately governed service
 mutations, not ordinary preference edits.
 
-**API keys:** the owner first selects an existing native source reference for a
-provider in reviewed service setup. `enrollApiKey` then takes only the target and
-`provider`; it invokes that policy's `enroll-key-<provider>` operation with empty
-input. A caller cannot supply a key, choose another source or override transport.
-Supported provider IDs come from the pinned SDK metadata. A supported schema or
-admitted operation does not establish that an upstream key was accepted.
+**OMP-owned sign-in:** the accounts plugin exposes
+`atyrode.code.accounts.readAccountSetup` with `{}` input. It returns the native
+broker `revision`, declared `owner`, `state`, `canSignIn` and `reason`. The
+configured instance owner is authoritative; before configuration, the native
+default owner is used. Neither workspace machine selection nor filesystem or
+network discovery can choose another owner, and an offline owner has no failover.
 
-**OAuth:** `observeEnrollment` reports supported flows, exact pins, availability
-and native job state. `startEnrollment` binds a machine/provider and those pins;
-`respondEnrollment` handles a correlated callback; `cancelEnrollment` ends the
-native enrollment lifetime. The pinned SDK worker performs a fresh grant and
-uploads through its scoped broker operation. Existing login files or sessions
-are not imported. Authentication remains unavailable without the required
-machine resources, authority and consent. This reference contains no instruction
-to use live accounts or credentials to establish acceptance.
+`atyrode.code.accounts.prepareSignIn` takes
+`{ containerId, expectedBrokerRevision: string | null }` and returns
+`{ machineId, runtime }`. It requires writable container access and the root
+owner's native `services:configure` authority. It creates or reuses the instance
+`atyrode.code.accounts.broker` service on that declared owner, checking the exact
+native broker revision and current ready accounts installation/artifact/operation
+binding pins. Reuse must match the current policy; stale or unavailable resources
+refuse rather than silently adopting another configuration.
+
+The web surface passes the returned pinned `atyrode.code.accounts.sign-in`
+runtime to native terminal creation on that same permitted, online owner.
+The user's ordinary OMP `/login` flow owns OAuth, API keys, credential storage
+and refresh in the owner-local managed OMP home. The native instance service
+hosts OMP's broker against that same store, independently of terminal lifetime,
+and authorized machines share it through native grants. Code does not collect
+keys or callbacks or maintain a private authentication worker.
+
+`omp-sign-in.tsx` refreshes setup and permitted account metadata live. Continue
+appears only after a fresh, successful observation contains an account; OMP
+stays open so more accounts can be added. Closing the Code view does not close
+OMP. An account observation or terminal placement is not proof of provider
+acceptance or an account-backed model response. This reference supplies no
+authorization to use live credentials, relocate existing data or retire a broker.
 
 ## Inventory, benchmarks and suggestions
 
@@ -179,10 +208,12 @@ moved or deleted by inference.
 
 ## Headless clients and evidence
 
-All product actions are `atyrode.code.<name>` through Manifold's governed action
-API. `ActionInput`, `ActionResult` and `actionSchemas` in `contract.ts`, plus the
-enrollment schemas in `auth-contract.ts`, define the exact boundary. Web and
-agent clients use the same authority and state; no printed-output protocol is
+Root product actions are `atyrode.code.<name>` through Manifold's governed action
+API; `readAccountSetup` and `prepareSignIn` belong to `atyrode.code.accounts`.
+`ActionInput`, `ActionResult`, `actionSchemas` and `actionDoor` in `contract.ts`
+define the exact boundary. `auth-contract.ts` defines shared broker and sign-in
+operation identities, not a separate enrollment API. Web and agent clients use
+the same authority and state; no printed-output protocol is
 required. Babel depends on Code, not vice versa. Its native adoption is separate
 and not claimed here; preserving an old engine ABI is not a Code prerequisite.
 

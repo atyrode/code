@@ -10,8 +10,9 @@ is the sole transition ledger. This page records constraints, not another roadma
 
 The current integration source contains typed domain modules, five plugin
 bundles, React launcher/accounts/usage panels, governed catalog/preferences/
-account/service actions, and Bun probe/OAuth/gateway workers. It uses native
-storage CAS, resource and service revision pins, jobs and terminal runtime
+account/service actions, and Bun probe/broker/gateway workers. OMP owns sign-in,
+credential storage and refresh through its pinned terminal and shared broker.
+Code uses native storage CAS, resource and service revision pins, jobs and terminal runtime
 contracts. This corrects the earlier bootstrap-only and Go-worker source
 description; it does **not** claim the integration has merged on main.
 
@@ -46,14 +47,22 @@ retirement decision.
   independently reviewed `runtimeTools.system` closure. The requirements report
   lists direct ELF dependencies; a missing transitive closure, binding, consent,
   service grant or machine connection must remain unavailable.
-- Service setup selects existing native owner-held source references and commits
-  reviewed policies. It does not provision infrastructure or acquire credentials.
-  API-key enrollment is owner-ref-only; OAuth uses the pinned native job worker.
-  Neither an exposed flow nor a successful synthetic fixture proves live provider
-  acceptance.
-- Pure catalog/preferences operations need no machine process. A catalog review
-  can record unavailable execution resources without certifying them. Runtime
-  preview/launch requires current promoted resources and exact selected accounts.
+- Instance sign-in selects the declared native broker owner. `readAccountSetup`
+  observes its state; `prepareSignIn` creates or reuses the broker at exact native
+  revisions and hands off the pinned OMP terminal on that owner. No owner
+  discovery/failover or private Code authentication form is involved. Authorized
+  machines share the broker; Code observes only permitted account metadata.
+- Per-machine service setup reviews and commits the exact native gateway and
+  optional classifier policies, preserving unrelated policies. It does not set
+  up instance authentication, accept credentials or provision infrastructure.
+  Neither an exposed sign-in flow nor a successful synthetic fixture proves
+  live provider enrollment, an account-backed response or current shared-preview
+  browser acceptance. The dated deployment above is not evidence for this source
+  cutover.
+- Pure catalog/preferences operations need no machine process or selected
+  accounts. A catalog review can record unavailable execution resources without
+  certifying them. Runtime preview/launch requires current promoted resources
+  and exact selected accounts.
 - `prepareLaunch` returns a reviewed runtime; native terminal creation/admission
   and actual OMP readiness are different observations. Verify process output,
   cancellation and reconnect before claiming those behaviors.
@@ -92,11 +101,13 @@ when a slot disappears or changes identity.
 ### Native lifetime and privacy
 
 Manifold owns grants, consent, resources, persistence, job/terminal lifetime and
-traces. OMP owns ordinary model retries/fallback, quotas, resume and in-session
-subagent isolation. Source credentials stay with the native machine-side
-resolver; scoped access is not a claim that an authorized process cannot disclose
-data it can read. Declare measured containment only and refuse unavailable
-requirements.
+traces, including instance broker placement and lifetime. OMP owns sign-in,
+credential storage and refresh, ordinary model retries/fallback, quotas, resume
+and in-session subagent isolation. Credentials remain in OMP's owner-local store;
+native service policy projects permitted metadata for Code and separately governs
+gateway access. Scoped access is not a claim that an authorized process cannot
+disclose data it can read. Declare measured containment only and refuse
+unavailable requirements.
 
 Native lifecycle must protect live work, uncommitted changes, child processes
 and retained sessions. A missing workspace is not permission to recreate,
