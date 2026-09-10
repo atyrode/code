@@ -7,7 +7,7 @@ import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery 
 import { OmpSignIn } from "./omp-sign-in.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
-type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks">; credentialId: number };
+type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks"> };
 type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
@@ -42,7 +42,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   const canAdminister = host.authoring !== null && target !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
-    account.credentialId === confirmation.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
+    account.credentialId === confirmation.input.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
   const canConfirm = canAdminister && observedConfirmation != null;
   function refresh() { configuration.refresh(); accountFeed.refresh(); }
   async function saveChoice(change: AccountChoiceChange, revision = current?.revision) {
@@ -134,8 +134,8 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
               <p>{account.type === "oauth" ? "OAuth" : "API key"} · slot {account.credentialId} · scope <code>{account.reference.scope}</code></p>
               {account.blocks.map((block, index) => <p key={index}>{block.scope} · blocked until {time(block.until)}</p>)}
               <div className="plugin-atyrode_code__account-toolbar">
-                <button type="button" disabled={!canAdminister || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "clearAccountBlocks", input: { ...target, reference: account.reference }, credentialId: account.credentialId, title: `Reset blocks for ${account.reference.provider}` }); }}>reset blocks…</button>
-                <button type="button" disabled={!canAdminister || account.disabled || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "disableCredential", input: { ...target, reference: account.reference }, credentialId: account.credentialId, title: `Disable ${account.reference.provider} credential` }); }}>disable credential…</button>
+                <button type="button" disabled={!canAdminister || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "clearAccountBlocks", input: { ...target, reference: account.reference, credentialId: account.credentialId }, title: `Reset blocks for ${account.reference.provider}` }); }}>reset blocks…</button>
+                <button type="button" disabled={!canAdminister || account.disabled || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "disableCredential", input: { ...target, reference: account.reference, credentialId: account.credentialId }, title: `Disable ${account.reference.provider} credential` }); }}>disable credential…</button>
               </div>
             </details>
           </article>;
@@ -189,7 +189,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     </form>}
     {confirmation && <section className="plugin-atyrode_code__account-notice" aria-labelledby={`${id}-confirmation`}>
       <h3 id={`${id}-confirmation`}>{confirmation.title}?</h3>
-      <p>{referenceLabel(confirmation.input.reference)} · slot {confirmation.credentialId}</p>
+      <p>{referenceLabel(confirmation.input.reference)} · slot {confirmation.input.credentialId}</p>
       <p>{confirmation.action === "clearAccountBlocks" ? "Clear this account’s native blocks. This does not enable its selection or repair credentials." : "Disable this credential for every consumer of this instance broker, not only Code. This does not revoke the provider grant."}</p>
       {!observedConfirmation && <p role="alert">This exact account is no longer observed. Cancel and refresh accounts.</p>}
       {!canConfirm && <p role="status">Current availability or authority is not confirmed. This action is disabled.</p>}

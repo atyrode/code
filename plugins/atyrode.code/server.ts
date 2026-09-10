@@ -95,8 +95,8 @@ const productHandlers: ProductHandlers = {
   },
   accounts: ctx => accountObservation(ctx),
   async usage(ctx, args) { return usageObservation(ctx, requireConfiguration(await readConfiguration(ctx, args))); },
-  async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "clear-blocks"); },
-  async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "disable"); },
+  async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, args.credentialId, "clear-blocks"); },
+  async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, args.credentialId, "disable"); },
   async readSetup(ctx, args) {
     await authorizeTarget(ctx, args);
     const services = await ctx.services.describe({ machineId: args.machineId });

@@ -1,7 +1,7 @@
 import { JobDescriptionSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema,
   ServicePolicySchema, TerminalRuntimeSchema } from "@manifold/protocol";
 import { z } from "zod";
-import { AccountChoiceChangeSchema, AccountChoicesSchema, AccountReferenceSchema, AccountsObservationSchema,
+import { AccountChoiceChangeSchema, AccountChoicesSchema, AccountRecordSchema, AccountReferenceSchema, AccountsObservationSchema,
   CatalogDocumentSchema, RuntimeAccountPoolSchema, SelectionSchema, epochMilliseconds, identifier } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
 import { BenchmarkReceiptSchema, CatalogDraftSchema, InventoryReceiptSchema } from "../domain/probe.ts";
@@ -104,8 +104,8 @@ export const rootActionSchemas = {
   changeAccounts: { input: RevisionTargetSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
   accounts: { input: z.strictObject({}), result: AccountsObservationSchema },
   usage: { input: TargetSchema, result: UsageViewSchema },
-  clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
-  disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
+  clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema, credentialId: AccountRecordSchema.shape.credentialId }), result: AccountsObservationSchema },
+  disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema, credentialId: AccountRecordSchema.shape.credentialId }), result: AccountsObservationSchema },
   readSetup: { input: TargetSchema, result: SetupSchema },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },

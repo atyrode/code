@@ -55,13 +55,13 @@ export async function usageObservation(ctx: CodeContext, record: Configuration) 
   return projectUsage(normalizeBrokerUsage(raw, accounts, now), accounts, record.accounts, now,
     { maxAgeMs: 5 * 60_000, refreshStatus });
 }
-export async function mutateCredential(ctx: CodeContext, reference: AccountReference, operationId: "clear-blocks" | "disable") {
+export async function mutateCredential(ctx: CodeContext, reference: AccountReference, credentialId: number, operationId: "clear-blocks" | "disable") {
   const broker = await sharedBrokerReference(ctx);
   const observation = await accountObservation(ctx, broker);
   const account = observation.accounts.find(account => digestOf(account.reference) === digestOf(reference));
-  if (!account) throw new CodeRefusal("account_unavailable");
+  if (!account || account.credentialId !== credentialId) throw new CodeRefusal("account_unavailable");
   const response = await ctx.services.invokeInstance({ serviceId: broker.serviceId, expectedRevision: broker.revision,
-    operationId, input: { credentialId: String(account.credentialId) } });
+    operationId, input: { credentialId: String(credentialId) } });
   if (!response.ok) throw new CodeRefusal(response.refusal);
   if (!z.strictObject({ ok: z.literal(true) }).safeParse(response.result).success) throw new CodeRefusal("invalid_service_result");
   return accountObservation(ctx, broker);
