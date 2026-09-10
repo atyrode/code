@@ -1,6 +1,7 @@
 import type { ActionInput, ActionResult } from "./contract.ts";
+import { describeSharedBroker } from "./broker.ts";
 import { CodeRefusal, type CodeContext } from "./machine-server.ts";
-import { brokerOwner, canAdministerBroker, describeSharedBroker, inspectSharedBrokerRuntime, matchesSharedBrokerPolicy,
+import { brokerOwner, canAdministerBroker, inspectSharedBrokerRuntime, matchesSharedBrokerPolicy,
   prepareSharedBroker, promoteSharedBrokerRuntime, reviewSharedBrokerRuntime, sharedOmpRuntimes } from "./service-setup.ts";
 
 export async function readAccountSetup(ctx: CodeContext): Promise<ActionResult<"readAccountSetup">> {

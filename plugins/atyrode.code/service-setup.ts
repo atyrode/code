@@ -1,6 +1,7 @@
 import { InstanceServiceDescriptionSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema,
   ServiceRuntimeSchema, TerminalRuntimeSchema, type InstanceServiceDescription, type ServiceConfigurationRead, type ServicePolicy } from "@manifold/protocol";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "./auth-contract.ts";
+import { describeSharedBroker } from "./broker.ts";
 import { ACCOUNTS_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { buildCodeServices, buildSharedBrokerPolicy } from "./service-policies.ts";
@@ -67,12 +68,6 @@ export async function configureServices(ctx: CodeContext, args: ActionInput<"con
   }
 }
 
-export async function describeSharedBroker(ctx: CodeContext): Promise<InstanceServiceDescription> {
-  const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
-  if (description.serviceId !== BROKER_SERVICE_ID ||
-    (description.configuration && description.configuration.pluginId !== ACCOUNTS_PLUGIN_ID)) throw new CodeRefusal("resources_changed");
-  return description;
-}
 export function brokerOwner(description: InstanceServiceDescription) {
   return description.configuration ? description.owner : description.defaultOwner;
 }

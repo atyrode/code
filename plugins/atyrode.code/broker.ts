@@ -1,4 +1,4 @@
-import { InstanceServiceDescriptionSchema } from "@manifold/protocol";
+import { InstanceServiceDescriptionSchema, type InstanceServiceDescription } from "@manifold/protocol";
 import { z } from "zod";
 import { projectAccounts } from "../domain/accounts.ts";
 import type { AccountReference, AccountsObservation } from "../domain/contracts.ts";
@@ -7,17 +7,18 @@ import { BROKER_SERVICE_ID, type SharedBrokerReference } from "./auth-contract.t
 import { ACCOUNTS_PLUGIN_ID, ServicePinSchema, type Configuration, type ServicePin } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
 
-/** Native describes inherited instance bindings alongside worker-local services. */
-export async function currentService(ctx: CodeContext, machineId: string, serviceId: typeof BROKER_SERVICE_ID | "suggest" | "omp", expected?: ServicePin) {
+export async function describeSharedBroker(ctx: CodeContext): Promise<InstanceServiceDescription> {
+  const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
+  if (description.serviceId !== BROKER_SERVICE_ID ||
+    (description.configuration && description.configuration.pluginId !== ACCOUNTS_PLUGIN_ID)) throw new CodeRefusal("resources_changed");
+  return description;
+}
+export async function currentService(ctx: CodeContext, machineId: string, serviceId: "suggest" | "omp", expected?: ServicePin) {
   const description = await ctx.services.describe({ machineId });
   const service = description.services.find(service => service.serviceId === serviceId);
   if (!description.connected || !service) throw new CodeRefusal("resources_incomplete");
   const pin = ServicePinSchema.parse({ serviceId, revision: service.revision, policySha256: service.policySha256 });
   if (expected && digestOf(pin) !== digestOf(expected)) throw new CodeRefusal("resources_changed");
-  if (serviceId === BROKER_SERVICE_ID) {
-    const shared = await sharedBrokerReference(ctx);
-    if (pin.revision !== shared.revision) throw new CodeRefusal("resources_changed");
-  }
   return { pin, service };
 }
 export async function serviceRead(ctx: CodeContext, machineId: string, pin: ServicePin, operationId: string) {
@@ -25,12 +26,15 @@ export async function serviceRead(ctx: CodeContext, machineId: string, pin: Serv
   if (!response.ok) throw new CodeRefusal(response.refusal);
   return response.result;
 }
-export async function sharedBrokerReference(ctx: CodeContext): Promise<SharedBrokerReference> {
-  const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
-  if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== ACCOUNTS_PLUGIN_ID ||
-    !description.configuration.enabled || !description.owner?.online || !description.connected || description.state !== "ready")
+export async function sharedBrokerReference(ctx: CodeContext, expected?: ServicePin): Promise<SharedBrokerReference> {
+  const description = await describeSharedBroker(ctx);
+  const configuration = description.configuration;
+  if (!configuration?.enabled || !description.owner?.online || !description.connected || description.state !== "ready")
     throw new CodeRefusal("account_unavailable");
-  return { serviceId: BROKER_SERVICE_ID, revision: description.configuration.revision, machineId: description.owner.machineId };
+  if (expected && digestOf(expected) !== digestOf({
+    serviceId: BROKER_SERVICE_ID, revision: configuration.revision, policySha256: configuration.policySha256,
+  })) throw new CodeRefusal("resources_changed");
+  return { serviceId: BROKER_SERVICE_ID, revision: configuration.revision, machineId: description.owner.machineId };
 }
 async function brokerRead(ctx: CodeContext, reference: SharedBrokerReference, operationId: "metadata" | "usage") {
   const response = await ctx.services.readInstance({ serviceId: reference.serviceId, expectedRevision: reference.revision, operationId, input: {} });

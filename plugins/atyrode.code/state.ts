@@ -4,6 +4,7 @@ import { initialAccountChoices } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { BROKER_SERVICE_ID } from "./auth-contract.ts";
+import { describeSharedBroker } from "./broker.ts";
 import { CODE_PLUGIN_ID, CODE_PREFERENCES_EVENT, ConfigurationSchema,
   PromotedResourcesSchema, type Configuration, type Target, type CatalogReview } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
@@ -72,12 +73,19 @@ export async function resourceSnapshot(ctx: CodeContext, machineId: string): Pro
   const services: z.infer<typeof PromotedResourcesSchema>["services"] = Object.create(null);
   try {
     for (const service of (await ctx.services.describe({ machineId })).services) {
-      if ([BROKER_SERVICE_ID, "suggest", "omp"].includes(service.serviceId)) {
+      if (service.serviceId === "suggest" || service.serviceId === "omp") {
         const { serviceId, revision, policySha256 } = service;
-        services[serviceId === BROKER_SERVICE_ID ? "broker" : serviceId] = { serviceId, revision, policySha256 };
+        services[serviceId] = { serviceId, revision, policySha256 };
       }
     }
   } catch { /* No observed service means no promoted service authority or implicit fallback. */ }
+  try {
+    // Shared reads are pinned by instance configuration CAS, not a worker-local policy revision.
+    const { configuration } = await describeSharedBroker(ctx);
+    if (configuration) services.broker = {
+      serviceId: BROKER_SERVICE_ID, revision: configuration.revision, policySha256: configuration.policySha256,
+    };
+  } catch { /* An unobserved instance cannot contribute a broker pin. */ }
   return PromotedResourcesSchema.parse({ productSha256, execution, services });
 }
 export async function catalogReview(ctx: CodeContext, record: Configuration, source: "active" | "draft"): Promise<CatalogReview> {
