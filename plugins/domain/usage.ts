@@ -6,6 +6,7 @@ import { providerPolicy } from "./providers.ts";
 
 const slot = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const sourceStatus = z.enum(["fresh", "stale", "unknown"]);
+const quotaStatus = z.enum(["ok", "warning", "exhausted", "unknown"]);
 const resetCredits = z.strictObject({
   available: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   expiresAt: z.array(epochMilliseconds).max(1024),
@@ -19,6 +20,7 @@ const usageWindow = z.strictObject({
   windowId: z.string().min(1).max(128),
   tier: z.string().min(1).max(128).nullable(),
   usedFraction: z.number().nonnegative().nullable(),
+  quotaStatus: quotaStatus.nullable(),
   resetsAt: epochMilliseconds.nullable(),
   durationMs: epochMilliseconds.nullable(),
   observedAt: epochMilliseconds.nullable(),
@@ -67,6 +69,7 @@ export const BrokerUsageSnapshotSchema = z.object({
     fetchedAt: epochMilliseconds,
     limits: z.array(z.object({
       id: z.string().min(1).max(128),
+      status: quotaStatus.optional(),
       scope: z.object({
         provider: identifier,
         accountId: z.string().max(1024).optional(),
@@ -182,7 +185,7 @@ export function normalizeBrokerUsage(
         (amount.used !== undefined && amount.limit !== undefined && amount.limit > 0 ? amount.used / amount.limit :
           amount.unit === "percent" && amount.used !== undefined ? amount.used / 100 :
             amount.remainingFraction !== undefined ? Math.max(0, 1 - amount.remainingFraction) : null);
-      windows.push({ windowId, tier: limit.scope.tier || null, usedFraction,
+      windows.push({ windowId, tier: limit.scope.tier || null, usedFraction, quotaStatus: limit.status ?? null,
         resetsAt: limit.window?.resetsAt ?? null, durationMs: limit.window?.durationMs ?? null,
         observedAt: usedFraction === null ? null : report.fetchedAt });
     }
@@ -336,7 +339,7 @@ export function projectUsage(
       windows: [], resetCredits: null, balance: null,
     };
     for (const window of report?.windows ?? []) {
-      const status = window.usedFraction === null ? "unknown" :
+      const status = window.usedFraction === null || window.quotaStatus === "unknown" ? "unknown" :
         fresh && sourceFresh(window.observedAt) && (window.resetsAt === null || window.resetsAt > nowMs) ? "fresh" : "stale";
       row.windows.push({ ...window, status, bucket: quotaBucket(provider, window.tier) });
     }
@@ -366,7 +369,11 @@ export function projectUsage(
           (bucket.name === providerRules.quotaBucketBase ? block.scope === "chat" :
             providerRules.special.some(special => bucket.name === `${providerRules.quotaBucketBase}-${special.bucket}` &&
               (block.scope === special.bucket || block.scope === `tier:${special.bucket}`)))) : [];
-        const exhausted = windows.filter(window => window.status === "fresh" && window.usedFraction !== null && window.usedFraction >= 1);
+        // OMP can report 100% as warning while the provider still permits use.
+        // Only meters without a provider verdict fall back to their fraction.
+        const exhausted = windows.filter(window => window.status === "fresh" &&
+          (window.quotaStatus === "exhausted" ||
+            (window.quotaStatus === null && window.usedFraction !== null && window.usedFraction >= 1)));
         if (blocks.length || exhausted.length) {
           const unknownReset = exhausted.some(window => window.resetsAt === null);
           votes.push({ name: bucket.name, status: blocks.length ? "blocked" : "maxed", resetsAt: unknownReset ? null :

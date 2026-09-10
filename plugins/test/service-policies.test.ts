@@ -53,6 +53,16 @@ describe("Code native service authority", () => {
     expect(projection(usage).filter(path => path.includes(".metadata"))).toEqual([
       "reports.*.metadata.accountId", "reports.*.metadata.email", "reports.*.metadata.orgId",
     ]);
+    // Meter verdicts are public quota facts; the enclosing limit (including
+    // provider notes or other payloads) must not become readable.
+    expect(projection(usage).filter(path => path.startsWith("reports.*.limits"))).toEqual([
+      "reports.*.limits.*.id", "reports.*.limits.*.status",
+      "reports.*.limits.*.scope.provider", "reports.*.limits.*.scope.accountId",
+      "reports.*.limits.*.scope.orgId", "reports.*.limits.*.scope.tier", "reports.*.limits.*.scope.windowId",
+      "reports.*.limits.*.window.id", "reports.*.limits.*.window.resetsAt", "reports.*.limits.*.window.durationMs",
+      "reports.*.limits.*.amount.unit", "reports.*.limits.*.amount.usedFraction",
+      "reports.*.limits.*.amount.remainingFraction", "reports.*.limits.*.amount.used", "reports.*.limits.*.amount.limit",
+    ]);
     expect(projection(usage).some(path => /(^|\.)(raw|notes|credential|error)(\.|$)/.test(path))).toBe(false);
     expect(projection(direct(broker, "clear-blocks"))).toEqual(["ok"]);
     expect(projection(direct(broker, "disable"))).toEqual(["ok"]);
