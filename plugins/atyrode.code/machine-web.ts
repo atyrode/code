@@ -129,7 +129,7 @@ export function useCodeRuns(host: HostServices, target: Target, operation: strin
   return { runs: feed.value?.runs ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 export const ACCOUNT_REFRESH_MS = 1_000;
-export type CodeQuery = "readConfiguration" | "readSetup" | "readAccountSetup" | "accounts" | "usage" | "inventory" | "benchmark";
+export type CodeQuery = "readConfiguration" | "readSetup" | "readServiceConfiguration" | "readAccountSetup" | "accounts" | "usage" | "inventory" | "benchmark";
 /** Native shared feeds invalidate observations; polling never starts work or changes state. */
 export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, input: ActionInput<K> | null, intervalMs = FALLBACK_POLL_MS) {
   const feed = usePolledResource<{ data: ActionResult<K> | null; error: string | null } | null>(async () => {
