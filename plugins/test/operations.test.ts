@@ -388,17 +388,27 @@ test("a missing shared owner never falls back to a worker's available local brok
     .toEqual({ refused: "code_account_unavailable" });
 });
 
-function signInFixture(isRoot = true) {
+interface SignInFixture extends Fixture {
+  accountResources: { installation: string; artifact: string; binding: string; signInBinding: string; ready: boolean };
+  state: { revision: string | null; policy: ServicePolicy | null; writes: number; enabled: boolean;
+    runtimeState: "ready" | "starting" | "stopped" | "unavailable";
+    owner: { machineId: string; name: string; online: boolean } };
+}
+
+function signInFixture(isRoot = true): SignInFixture {
   const f = fixture(isRoot);
-  const accountResources = { installation: "accounts-install-1", artifact: "f".repeat(64), binding: "a".repeat(64) };
-  const state = { revision: null as string | null, policy: null as ServicePolicy | null, writes: 0,
+  const accountResources = { installation: "accounts-install-1", artifact: "f".repeat(64), binding: "a".repeat(64),
+    signInBinding: "a".repeat(64), ready: true };
+  const state = { revision: null as string | null, policy: null as ServicePolicy | null, writes: 0, enabled: true,
+    runtimeState: "ready" as "ready" | "starting" | "stopped" | "unavailable",
     owner: { machineId: f.resources.brokerOwner, name: "Broker owner", online: true } };
   const describe = f.ctx.services.describeInstance;
   f.ctx.services.describeInstance = async args => {
     const description = await describe(args);
     return { ...description, defaultOwner: { ...state.owner }, owner: state.revision ? { ...state.owner } : null,
-      configuration: state.revision ? { ...description.configuration!, revision: state.revision } : null,
-      connected: state.owner.online, state: state.revision ? "ready" : "unconfigured" };
+      configuration: state.revision ? { ...description.configuration!, revision: state.revision, enabled: state.enabled,
+        policySha256: digestOf(state.policy) } : null,
+      connected: state.owner.online, state: state.revision ? state.runtimeState : "unconfigured" };
   };
   const jobs = f.ctx.jobs.describe;
   f.ctx.jobs.describe = async args => {
@@ -409,17 +419,24 @@ function signInFixture(isRoot = true) {
       installation: { revision: accountResources.installation, artifactSha256: accountResources.artifact,
         enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: [],
       operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
-        [operation, { ready: true, reason: null, resourceBindingDigest: accountResources.binding }])) };
+        [operation, { ready: accountResources.ready, reason: null,
+          resourceBindingDigest: operation === SIGN_IN_OPERATION_ID ? accountResources.signInBinding : accountResources.binding }])) };
   };
   const allows = f.ctx.auth.allows;
   f.ctx.auth.allows = async (cap, node) =>
     (cap === "services:configure" && node?.kind === "machine" && node.machineId === state.owner.machineId) || allows(cap, node);
-  f.ctx.services.readInstanceConfiguration = async args => ({ description: await f.ctx.services.describeInstance(args), policy: state.policy });
+  f.ctx.services.readInstanceConfiguration = async args => {
+    if (!f.ctx.auth.isRoot || !await f.ctx.auth.allows("services:configure", { kind: "machine", machineId: state.owner.machineId }))
+      return unavailable();
+    return { description: await f.ctx.services.describeInstance(args), policy: state.policy };
+  };
   f.ctx.services.configureInstance = async args => {
     if (args.serviceId !== BROKER_SERVICE_ID || args.machineId !== state.owner.machineId) return unavailable();
     if (args.expectedRevision !== state.revision) throw new Error("native revision conflict");
     state.policy = args.policy;
+    state.enabled = args.enabled;
     state.revision = `registry-${++state.writes}`;
+    f.resources.brokerRevision = state.revision;
     return f.ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID });
   };
   return { ...f, state, accountResources };
@@ -487,6 +504,171 @@ describe("instance-owned OMP sign-in", () => {
     f.accountResources.binding = "e".repeat(64);
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
       .toEqual({ refused: "code_resources_changed" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("an installed account replacement requires explicit review before the new registry revision can be reused", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    const expectedBrokerRevision = f.state.revision!;
+    const previousPolicy = structuredClone(f.state.policy);
+    f.accountResources.installation = "accounts-install-2";
+    f.accountResources.artifact = "e".repeat(64);
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision })).toEqual({ refused: "code_resources_changed" });
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ canSignIn: false, canUpdateRuntime: true });
+    f.state.runtimeState = "stopped";
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ state: "unavailable", canSignIn: false, canUpdateRuntime: true });
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision });
+    expect(f.state.writes).toBe(1);
+    expect(f.state.policy).toEqual(previousPolicy);
+    const configure = f.ctx.services.configureInstance;
+    f.ctx.services.configureInstance = async args => {
+      f.state.runtimeState = "starting";
+      return configure(args);
+    };
+    const promoted = await accepted(f, "promoteAccountRuntime", {
+      containerId: target.containerId, expectedBrokerRevision, reviewDigest: review.reviewDigest,
+    });
+    expect(promoted.revision).not.toBe(expectedBrokerRevision);
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision: promoted.revision, state: "starting", canSignIn: true, canUpdateRuntime: false,
+    });
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision })).toEqual({ refused: "code_broker_revision_changed" });
+    const terminal = await accepted(f, "prepareSignIn", { ...input, expectedBrokerRevision: promoted.revision });
+    expect(terminal.machineId).toBe(f.state.owner.machineId);
+    expect(terminal.runtime.installationRevision).toBe("accounts-install-2");
+    expect(f.state.writes).toBe(2);
+  });
+
+  const proposalChanges: [string, (f: SignInFixture) => void][] = [
+    ["installation", f => { f.accountResources.installation = "accounts-install-3"; }],
+    ["artifact", f => { f.accountResources.artifact = "d".repeat(64); }],
+    ["broker resources", f => { f.accountResources.binding = "d".repeat(64); }],
+    ["sign-in resources", f => { f.accountResources.signInBinding = "d".repeat(64); }],
+    ["current policy", f => { f.state.policy = { ...f.state.policy!, maxConcurrent: 2 }; }],
+    ["owner", f => { f.state.owner.machineId = f.resources.brokerOwner = "replacement-owner"; }],
+  ];
+  for (const [name, change] of proposalChanges) {
+    test(`a reviewed account runtime cannot be applied after ${name} changes`, async () => {
+      const f = signInFixture();
+      await accepted(f, "prepareSignIn", input);
+      f.accountResources.installation = "accounts-install-2";
+      const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+      change(f);
+      expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+        expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+        .toEqual({ refused: "code_preview_changed" });
+      expect(f.state.writes).toBe(1);
+    });
+  }
+
+  test("relocation to a new native revision invalidates the old review without configuring either owner", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    f.state.owner.machineId = "replacement-owner";
+    f.state.revision = "relocated-revision";
+    expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+      expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_broker_revision_changed" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("nonowners retain account metadata reads but cannot inspect or promote runtime policy", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    f.ctx.auth.isRoot = false;
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision: review.expectedBrokerRevision, owner: f.state.owner, canSignIn: false, canUpdateRuntime: false,
+    });
+    expect((await accepted(f, "accounts", {})).accounts.map(account => account.credentialId)).toEqual([1, 2, 3]);
+    expect(await invoke(f, "reviewAccountRuntime", { expectedBrokerRevision: review.expectedBrokerRevision }))
+      .toEqual({ refused: "code_service_owner_required" });
+    expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+      expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_service_owner_required" });
+    f.ctx.auth.isRoot = true;
+    const allows = f.ctx.auth.allows;
+    f.ctx.auth.allows = async (cap, node) => cap !== "services:configure" && allows(cap, node);
+    expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+      expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_service_owner_required" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("runtime promotion requires a writable in-scope container", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    const promotion = { containerId: target.containerId, expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest };
+    f.access.writable.clear();
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    f.access.containerScope = "container-b";
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_scope_refused" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("disabled brokers and unready or offline owners cannot be made available by runtime promotion", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    const promotion = { containerId: target.containerId, expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest };
+    f.state.enabled = false;
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ state: "unavailable", canSignIn: false, canUpdateRuntime: false });
+    expect(await invoke(f, "reviewAccountRuntime", { expectedBrokerRevision: review.expectedBrokerRevision }))
+      .toEqual({ refused: "code_account_unavailable" });
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_account_unavailable" });
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
+      .toEqual({ refused: "code_account_unavailable" });
+    expect(f.state.enabled).toBe(false);
+    f.state.enabled = true;
+    f.accountResources.ready = false;
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ canSignIn: false, canUpdateRuntime: false });
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_resources_incomplete" });
+    f.accountResources.ready = true;
+    f.state.owner.online = false;
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ canSignIn: false, canUpdateRuntime: false });
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_account_owner_unavailable" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("resources changed during promotion inspection invalidate the proposal before mutation", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    const describe = f.ctx.jobs.describe;
+    let reads = 0;
+    f.ctx.jobs.describe = async args => {
+      const description = await describe(args);
+      if (args.pluginId === ACCOUNTS_PLUGIN_ID && ++reads === 1) f.accountResources.signInBinding = "d".repeat(64);
+      return description;
+    };
+    expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+      expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_resources_changed" });
+    expect(f.state.writes).toBe(1);
+  });
+
+  test("native CAS rejects a registry change after the final promotion observation", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.accountResources.installation = "accounts-install-2";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    const configure = f.ctx.services.configureInstance;
+    f.ctx.services.configureInstance = async args => {
+      f.state.revision = "concurrent-revision";
+      return configure(args);
+    };
+    expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
+      expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_broker_revision_changed" });
     expect(f.state.writes).toBe(1);
   });
 

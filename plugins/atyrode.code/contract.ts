@@ -64,16 +64,24 @@ export const AccountSetupSchema = z.strictObject({
   owner: z.strictObject({ machineId: id, name: z.string().min(1).max(256), online: z.boolean() }).nullable(),
   state: z.enum(["unconfigured", "starting", "ready", "unavailable"]),
   canSignIn: z.boolean(),
+  canUpdateRuntime: z.boolean(),
   reason: z.string().max(256).nullable(),
 });
 export const PrepareSignInInputSchema = z.strictObject({ containerId: id, expectedBrokerRevision: id.nullable() });
 export const PrepareSignInResultSchema = z.strictObject({ machineId: id, runtime: TerminalRuntimeSchema });
+export const AccountRuntimeReviewInputSchema = z.strictObject({ expectedBrokerRevision: id });
+export const AccountRuntimeReviewSchema = z.strictObject({
+  expectedBrokerRevision: id, owner: AccountSetupSchema.shape.owner.unwrap(), policy: ServicePolicySchema, reviewDigest: digest,
+});
 export const InventoryResultSchema = z.strictObject({ job: PublicJobSchema, inventory: InventoryReceiptSchema, draft: CatalogDraftSchema });
 export const BenchmarkResultSchema = z.strictObject({ job: PublicJobSchema, benchmark: BenchmarkReceiptSchema, catalog: CatalogDocumentSchema });
 export const SuggestionSchema = z.strictObject({ revision, selection: SelectionSchema, changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])), evaluator: z.string().max(256) });
 export const accountActionSchemas = {
   readAccountSetup: { input: z.strictObject({}), result: AccountSetupSchema },
   prepareSignIn: { input: PrepareSignInInputSchema, result: PrepareSignInResultSchema },
+  reviewAccountRuntime: { input: AccountRuntimeReviewInputSchema, result: AccountRuntimeReviewSchema },
+  promoteAccountRuntime: { input: AccountRuntimeReviewInputSchema.extend({ containerId: id, reviewDigest: digest }),
+    result: z.strictObject({ revision: id }) },
 } as const;
 export type AccountAction = keyof typeof accountActionSchemas;
 export const ClassifierSchema = z.strictObject({
