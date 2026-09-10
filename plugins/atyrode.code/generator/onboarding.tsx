@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type ActionResult, type Target } from "../contract.ts";
 import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
+import { codeOperationReady } from "../operation-readiness.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
 
@@ -45,13 +46,13 @@ export function Onboarding({ host, target, available, settings = false, onDone }
     reviewedGateway?.artifactSha256 === gateway.runtime.artifactSha256 && reviewedGateway?.resourceBindingDigest === gateway.runtime.resourceBindingDigest;
   const execution = setup.data?.execution;
   const installation = execution?.installation;
-  const workspaceReady = workspaceRoutes.some(route => execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.ready);
-  const installed = installation?.enabled && !installation.purgeRequested && workspaceReady &&
-    requiredOperations.every(operation => execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready);
+  const workspaceReady = workspaceRoutes.some(route => codeOperationReady(execution, target.machineId, route.operation));
+  const installed = workspaceReady &&
+    requiredOperations.every(operation => codeOperationReady(execution, target.machineId, operation));
   const currentPins = record?.resources?.execution;
   const resourcesCurrent = installed && record?.resources?.productSha256 === setup.data?.productSha256 && currentPins && installation && currentPins.installationRevision === installation.revision && currentPins.artifactSha256 === installation.artifactSha256 &&
-    workspaceRoutes.some(route => execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.ready &&
-      currentPins.operations[`${CODE_PLUGIN_ID}.${route.operation}`] === execution.operations[`${CODE_PLUGIN_ID}.${route.operation}`]?.resourceBindingDigest) &&
+    workspaceRoutes.some(route => codeOperationReady(execution, target.machineId, route.operation) &&
+      currentPins.operations[`${CODE_PLUGIN_ID}.${route.operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.resourceBindingDigest) &&
     requiredOperations.every(operation => currentPins.operations[`${CODE_PLUGIN_ID}.${operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.resourceBindingDigest) &&
     ["broker", "omp", ...(setup.data?.services.some(service => service.serviceId === "suggest") || record?.resources?.services.suggest ? ["suggest"] : [])].every(id => {
       const saved = record?.resources?.services[id];
@@ -133,7 +134,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
           <p>Approve folder creation or an existing-folder check, plus model discovery and launch. Paid benchmarks and account changes have separate permissions.</p>
           <ul className="plugin-atyrode_code_generator__requirements">
             <li data-ready={workspaceReady}><span>workspace folders</span><span>{workspaceReady ? "ready" : "native setup needed"}</span></li>
-            {requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "native setup needed"}</span></li>)}
+            {requiredOperations.map(operation => <li key={operation} data-ready={codeOperationReady(execution, target.machineId, operation)}><span>{operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{codeOperationReady(execution, target.machineId, operation) ? "ready" : "native setup needed"}</span></li>)}
           </ul>
           <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review Code permissions</button>
         <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>check again</button>
@@ -154,8 +155,8 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         {matchingJobs.length > 0 && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The workspace check did not finish successfully. Review its result before trying again.</p>}
         {!prepared && workspaceRoutes.map(route => {
           const operationId = `${CODE_PLUGIN_ID}.${route.operation}`;
-          const routeReady = execution?.operations?.[operationId]?.ready === true &&
-            currentPins?.operations[operationId] === execution.operations[operationId]?.resourceBindingDigest;
+          const routeReady = codeOperationReady(execution, target.machineId, route.operation) &&
+            currentPins?.operations[operationId] === execution?.operations?.[operationId]?.resourceBindingDigest;
           const history = route.mode === "create" ? creationHistory : validationHistory;
           return <div key={route.mode}>
             <p>{route.description}</p>
