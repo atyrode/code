@@ -44,8 +44,8 @@ export function useCodeMachines(host: HostServices) {
       key: MACHINES_RESOURCE, restartKey: host.principal.id, initial: null,
       topics: host.topics.machines, events: host.client,
       onError: () => setError("The permitted machine list could not be read."),
+      onSuccess: () => setError(null),
     });
-  useEffect(() => { setError(null); }, [machines]);
   return { machines, error, refresh };
 }
 

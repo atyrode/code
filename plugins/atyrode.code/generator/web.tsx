@@ -7,6 +7,7 @@ import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { CODE_PLUGIN_ID, GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type LaunchPreview, type Target } from "../contract.ts";
 import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
+import { codeOperationReady } from "../operation-readiness.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
@@ -50,7 +51,11 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const writable = host.authoring !== null;
   const canSuggest = setup.data?.services.some(service => service.serviceId === "suggest" && service.operations.some(operation => operation.operationId === "classify" && operation.ready && operation.invocable)) === true;
   const productCurrent = record?.resources !== null && record?.resources?.productSha256 === setup.data?.productSha256;
-  const launchReady = productCurrent && setup.data?.execution?.operations?.[`${CODE_PLUGIN_ID}.launch`]?.ready === true;
+  const execution = setup.data?.execution;
+  const launchPins = record?.resources?.execution;
+  const launchReady = productCurrent && codeOperationReady(execution, target.machineId, "launch") &&
+    launchPins?.installationRevision === execution?.installation?.revision && launchPins?.artifactSha256 === execution?.installation?.artifactSha256 &&
+    launchPins?.operations[`${CODE_PLUGIN_ID}.launch`] === execution?.operations?.[`${CODE_PLUGIN_ID}.launch`]?.resourceBindingDigest;
   function refresh() { configuration.refresh(); setup.refresh(); }
   function back() { setView("profile"); refresh(); }
   async function perform(work: () => Promise<void>) {
@@ -61,8 +66,11 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
   async function launch() {
-    if (!record || !previewCurrent || !preview || !available) return;
+    if (!record || !previewCurrent || !preview || !available || !launchReady) return;
     await perform(async () => {
+      // A refused attempt must return to explicit review, even if the shared profile
+      // revision did not change (for example, the account pool changed independently).
+      setPreview(null);
       const prepared = await callCodeAction(host, "prepareLaunch", { ...target, expectedRevision: preview.revision, previewDigest: preview.previewDigest, prompt });
       const latest = current.current;
       if (!mounted.current || latest.host.client !== host.client || latest.host.principal.id !== host.principal.id || latest.host.authoring !== host.authoring || latest.host.containerId !== target.containerId || !latest.available || latest.machine?.id !== target.machineId || !latest.host.authoring) throw new Error("Destination changed");
