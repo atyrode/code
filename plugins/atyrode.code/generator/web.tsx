@@ -132,17 +132,17 @@ function Launcher({ host }: PanelProps) {
   const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
   return <ScrollRegion className="plugin-atyrode_code plugin-atyrode_code_generator" aria-label="Code workspace"><div className="plugin-atyrode_code_generator__body">
     <header className="plugin-atyrode_code_generator__masthead"><h1>code<span aria-hidden="true">_</span></h1>
-      <div className="plugin-atyrode_code_generator__machine"><span className="plugin-atyrode_code_generator__connection" data-online={available} aria-hidden="true" />
+      {host.containerId && <div className="plugin-atyrode_code_generator__machine"><span className="plugin-atyrode_code_generator__connection" data-online={available} aria-hidden="true" />
         <label htmlFor={`${id}-machine`}>workspace machine</label><select id={`${id}-machine`} value={machineId ?? ""} onChange={event => select(event.target.value || null)}><option value="">choose a machine</option>
           {machineId && !machine && <option value={machineId}>selected machine unavailable</option>}
           {machines?.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.revoked ? " · revoked" : entry.online ? "" : " · offline"}</option>)}
         </select>
-      </div>
+      </div>}
     </header>
     {error && <p role="status" className="plugin-atyrode_code__warning">{error} <button type="button" onClick={refresh}>refresh</button></p>}
     {!host.containerId && <p role="status">Open or create a workspace in Manifold to use Code here.</p>}
     {host.containerId && !target && <p role="status">{machines === null ? "Reading machines…" : machines.length ? "Choose the machine for this workspace." : "Enroll a machine in Manifold to get started."}</p>}
-    {!target && <OmpSignIn host={host} onContinue={() => { document.getElementById(`${id}-machine`)?.focus(); }} />}
+    {host.containerId && !target && <OmpSignIn host={host} onContinue={() => { document.getElementById(`${id}-machine`)?.focus(); }} />}
     {target && <Workbench key={JSON.stringify([host.principal.id, target.containerId, target.machineId])} host={host} target={target} machine={machine} available={available} />}
   </div></ScrollRegion>;
 }

@@ -11,8 +11,8 @@ const kitPack = resolve(pluginRoot, "../../manifold/packages/plugin-kit/src/pack
 const PackResultSchema: z.ZodType<PackResult> = z.strictObject({
   file: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive(),
 });
-// This is also the explicit installation order: parent, native gateway, then UI parts.
-const familyIds = ["atyrode.code", "atyrode.code.gateway", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
+// This is also the explicit installation order: parent, native accounts, gateway, then UI parts.
+const familyIds = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.gateway", "atyrode.code.generator", "atyrode.code.usage"];
 
 function includeSource(path: string): boolean {
   const name = basename(path);
@@ -43,7 +43,7 @@ async function bindWorkerArtifacts(directory: string, expectedId: string, target
     for (const required of built.requiredRuntimeTools) {
       if (!operation.runtimeTools.includes(required)) throw new Error(`${id} must declare the reviewed native '${required}' resource dependency`);
     }
-    if ((target === "gateway" || operation.runtimeTools.includes("auth")) && !operation.runtimeTools.includes("pi-natives")) throw new Error(`${id} must declare the pinned SDK native addon`);
+    if ((target === "gateway" || id === "atyrode.code.accounts.broker") && !operation.runtimeTools.includes("pi-natives")) throw new Error(`${id} must declare the pinned SDK native addon`);
     for (const alias of operation.runtimeTools) usedTools.add(alias);
   }
   for (const alias of Object.keys(built.tools)) {
@@ -66,6 +66,7 @@ export async function pack(outputDirectory?: string): Promise<readonly (PackResu
     await symlink(join(pluginRoot, "node_modules"), join(stage, "node_modules"), "dir");
     const rootDirectory = join(stage, "atyrode.code");
     const built = await bindWorkerArtifacts(rootDirectory, "atyrode.code", "root");
+    await bindWorkerArtifacts(join(rootDirectory, "accounts"), "atyrode.code.accounts", "accounts");
     await bindWorkerArtifacts(join(rootDirectory, "gateway"), "atyrode.code.gateway", "gateway");
     const family = await manifests(rootDirectory);
     const byId = new Map<string, string>();

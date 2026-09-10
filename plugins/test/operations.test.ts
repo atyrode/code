@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceReplySchema, type ServicePolicy } from "@manifold/protocol";
-import { actionSchemas, CODE_PLUGIN_ID, type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
+import { actionDoor, actionSchemas, ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID, type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "../atyrode.code/auth-contract.ts";
 import type { CodeContext } from "../atyrode.code/machine-server.ts";
 import { handlers } from "../atyrode.code/server.ts";
+import { handlers as accountHandlers } from "../atyrode.code/accounts/server.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import type { ProjectedBrokerSnapshot } from "../domain/accounts.ts";
 
@@ -81,12 +82,15 @@ function fixture(isRoot = false): Fixture {
       })],
     },
     jobs: {
-      describe: async ({ machineId }) => ({ machineId, pluginId: CODE_PLUGIN_ID, connected: true, platforms: ["linux-x64"],
-        admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
-        installation: { revision: resources.installation, artifactSha256: resources.artifact, enabled: true, ready: true, purgeRequested: false },
-        retainedInstallations: [], consents: [],
-        operations: { [`${CODE_PLUGIN_ID}.launch`]: { ready: true, reason: null, resourceBindingDigest: resources.binding } },
-      }),
+      describe: async ({ machineId, pluginId }) => {
+        if (pluginId !== CODE_PLUGIN_ID) return unavailable();
+        return { machineId, pluginId, connected: true, platforms: ["linux-x64"],
+          admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
+          installation: { revision: resources.installation, artifactSha256: resources.artifact, enabled: true, ready: true, purgeRequested: false },
+          retainedInstallations: [], consents: [],
+          operations: { [`${CODE_PLUGIN_ID}.launch`]: { ready: true, reason: null, resourceBindingDigest: resources.binding } },
+        };
+      },
       execute: unavailable, status: unavailable, listRuns: unavailable, input: unavailable,
       cancel: unavailable, output: unavailable, follow: unavailable,
     },
@@ -98,7 +102,7 @@ function fixture(isRoot = false): Fixture {
       describeInstance: async () => InstanceServiceDescriptionSchema.parse({
         serviceId: BROKER_SERVICE_ID, defaultOwner: { machineId: "local-master", name: "Local master", online: true },
         owner: { machineId: resources.brokerOwner, name: "Broker owner", online: true },
-        configuration: { revision: resources.brokerRevision, pluginId: CODE_PLUGIN_ID, enabled: true, policySha256: resources.policy },
+        configuration: { revision: resources.brokerRevision, pluginId: ACCOUNTS_PLUGIN_ID, enabled: true, policySha256: resources.policy },
         connected: true, state: "ready", reason: null,
       }),
       readInstance: async args => {
@@ -122,8 +126,12 @@ function fixture(isRoot = false): Fixture {
   };
 }
 
+const actionHandlers = Object.fromEntries([
+  ...Object.entries(handlers).map(([name, handler]) => [`${CODE_PLUGIN_ID}.${name}`, handler]),
+  ...Object.entries(accountHandlers).map(([name, handler]) => [`${ACCOUNTS_PLUGIN_ID}.${name}`, handler]),
+]) as Record<string, (ctx: CodeContext, input: unknown) => Promise<unknown>>;
 async function invoke<K extends CodeAction>(f: Fixture, name: K, input: ActionInput<K>): Promise<unknown> {
-  const handler = (handlers as Record<string, (ctx: CodeContext, input: unknown) => Promise<unknown>>)[name]!;
+  const handler = actionHandlers[actionDoor(name)]!;
   return handler(f.ctx, input);
 }
 async function accepted<K extends CodeAction>(f: Fixture, name: K, input: ActionInput<K>): Promise<ActionResult<K>> {
@@ -379,6 +387,7 @@ test("a missing shared owner never falls back to a worker's available local brok
 
 function signInFixture(isRoot = true) {
   const f = fixture(isRoot);
+  const accountResources = { installation: "accounts-install-1", artifact: "f".repeat(64), binding: "a".repeat(64) };
   const state = { revision: null as string | null, policy: null as ServicePolicy | null, writes: 0,
     owner: { machineId: f.resources.brokerOwner, name: "Broker owner", online: true } };
   const describe = f.ctx.services.describeInstance;
@@ -390,10 +399,14 @@ function signInFixture(isRoot = true) {
   };
   const jobs = f.ctx.jobs.describe;
   f.ctx.jobs.describe = async args => {
+    if (args.pluginId !== ACCOUNTS_PLUGIN_ID) return jobs(args);
     if (args.machineId !== f.resources.brokerOwner) return unavailable();
-    const description = await jobs(args);
-    return { ...description, operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
-      [operation, { ready: true, reason: null, resourceBindingDigest: f.resources.binding }])) };
+    return { machineId: args.machineId, pluginId: ACCOUNTS_PLUGIN_ID, connected: true, platforms: ["linux-x64"],
+      admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
+      installation: { revision: accountResources.installation, artifactSha256: accountResources.artifact,
+        enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: [],
+      operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
+        [operation, { ready: true, reason: null, resourceBindingDigest: accountResources.binding }])) };
   };
   const allows = f.ctx.auth.allows;
   f.ctx.auth.allows = async (cap, node) =>
@@ -406,13 +419,13 @@ function signInFixture(isRoot = true) {
     state.revision = `registry-${++state.writes}`;
     return f.ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID });
   };
-  return { ...f, state };
+  return { ...f, state, accountResources };
 }
 
 describe("instance-owned OMP sign-in", () => {
   const input = { containerId: target.containerId, expectedBrokerRevision: null };
 
-  test("first use configures one shared owner; later sign-in preserves that broker and worker placement", async () => {
+  test("first use configures one shared owner; workspace upgrades preserve sign-in and broker placement", async () => {
     const f = signInFixture();
     const worker = await initialize(f);
     const first = await accepted(f, "prepareSignIn", input);
@@ -421,6 +434,11 @@ describe("instance-owned OMP sign-in", () => {
     expect(first.runtime.operationId).toBe(SIGN_IN_OPERATION_ID);
     expect(f.state.policy?.runtime?.scope).toBe("instance");
     const policy = structuredClone(f.state.policy);
+    f.resources.product = "e".repeat(64);
+    f.resources.artifact = "e".repeat(64);
+    f.resources.binding = "e".repeat(64);
+    f.resources.installation = "worker-install-2";
+    expect((await accepted(f, "readAccountSetup", {})).canSignIn).toBe(true);
     const second = await accepted(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision });
     expect(second).toEqual(first);
     expect(f.state.writes).toBe(1);
@@ -463,7 +481,7 @@ describe("instance-owned OMP sign-in", () => {
   test("changed installed owner resources cannot silently replace an already configured broker", async () => {
     const f = signInFixture();
     await accepted(f, "prepareSignIn", input);
-    f.resources.binding = "e".repeat(64);
+    f.accountResources.binding = "e".repeat(64);
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
       .toEqual({ refused: "code_resources_changed" });
     expect(f.state.writes).toBe(1);

@@ -2,8 +2,21 @@
   "id": "atyrode.code.accounts",
   "version": "0.3.0",
   "title": "code accounts",
-  "description": "Shared account choices in native plugin storage, evaluated against governed service observations.",
-  "capabilities": [],
+  "description": "Shared account choices and independently installed native OMP broker/sign-in administration.",
+  "capabilities": [
+    "containers:read",
+    "containers:write",
+    "terminals:spawn",
+    "machines:run",
+    "jobs:read",
+    "jobs:input",
+    "jobs:cancel",
+    "services:read",
+    "services:configure",
+    "network:host",
+    "locations:read",
+    "locations:write"
+  ],
   "contributes": {
     "panels": [{ "id": "accounts", "title": "Code accounts" }],
     "sections": [],
@@ -12,7 +25,107 @@
     "events": []
   },
   "dependencies": {
-    "atyrode.code": { "type": "required", "reason": "Governed account operations and shared observations live in Code." }
+    "atyrode.code": { "type": "required", "reason": "Shared account choices and observations live in Code." }
   },
-  "entry": { "web": "web.js", "styles": true }
+  "machine": {
+    "artifacts": {},
+    "tools": {},
+    "requiresResourceBindings": true,
+    "operations": {
+      "atyrode.code.accounts.broker": {
+        "argv": [
+          {
+            "literal": "/job/artifact"
+          }
+        ],
+        "input": {},
+        "runtimeTools": [
+          "bun",
+          "pi-natives",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "bun"
+        },
+        "environment": {
+          "PI_CONFIG_DIR": "omp",
+          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
+        },
+        "inputFiles": {
+          "serviceBearer": {
+            "generated": "service-bearer"
+          }
+        },
+        "providesService": true,
+        "services": [],
+        "locations": [
+          {
+            "locationId": "atyrode.code.accounts.omp-auth",
+            "access": "write"
+          }
+        ],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 600000,
+          "memoryBytes": 1073741824,
+          "processes": 128,
+          "outputBytes": 262144
+        },
+        "stdin": false
+      },
+      "atyrode.code.accounts.sign-in": {
+        "argv": [
+          {
+            "literal": "--allow-home"
+          },
+          {
+            "literal": "--no-session"
+          }
+        ],
+        "input": {},
+        "runtimeTools": [
+          "omp",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "omp"
+        },
+        "environment": {
+          "PI_CONFIG_DIR": "omp",
+          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
+        },
+        "services": [],
+        "locations": [
+          {
+            "locationId": "atyrode.code.accounts.omp-auth",
+            "access": "write"
+          }
+        ],
+        "outputs": [],
+        "network": "host",
+        "limits": {
+          "timeoutMs": 1800000,
+          "memoryBytes": 2147483648,
+          "processes": 128,
+          "outputBytes": 8388608
+        },
+        "stdin": true
+      }
+    },
+    "locations": {
+      "atyrode.code.accounts.omp-auth": {
+        "anchor": "state",
+        "components": [
+          "code",
+          "shared-omp"
+        ],
+        "revision": "1",
+        "kind": "directory",
+        "managed": true,
+        "guestPath": "/home/job/omp"
+      }
+    }
+  },
+  "entry": { "server": true, "web": "web.js", "styles": true }
 }

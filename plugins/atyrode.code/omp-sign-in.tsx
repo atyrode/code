@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { CODE_PLUGIN_ID } from "./contract.ts";
+import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
 
 type OmpSignInProps = { host: HostServices; onContinue?: () => void; showAccounts?: boolean };
@@ -66,18 +66,22 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true }: OmpSignInPro
     <p className="plugin-atyrode_code__muted">Connect your providers in OMP. The same accounts are available across this instance.</p>
     {!state && !setup.error && <p role="status">Reading sign-in availability…</p>}
     {state?.state === "starting" && <p role="status">Starting the account broker…</p>}
-    {state?.reason && <p role="status">{state.reason}</p>}
-    {state && !state.canSignIn && !state.reason && <p role="status">Sign-in is unavailable under current native placement, runtime or account administration permissions. Ask the instance owner to review native setup.</p>}
-    {!writable && <p role="status">Read-only workspace. Account discovery remains available; opening OMP requires workspace edit access and account administration permission.</p>}
-    {!host.containerId && <p role="status">Open an editable workspace to place the OMP terminal. Instance accounts can still be observed here.</p>}
-    {setup.error && <p role="status">{setup.error}</p>}
+    {state && !state.canSignIn && <p role="status">{state.owner
+      ? state.owner.online ? `OMP sign-in is unavailable on ${state.owner.name}. Review its native setup.`
+        : `${state.owner.name} is offline. Sign-in will be available when its native owner reconnects.`
+      : "An instance service owner must be set up before signing in."}</p>}
+    {host.containerId && !writable && <p role="status">This workspace is read-only. Open an editable workspace to place an OMP terminal.</p>}
+    {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
+    {setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
     <div className="plugin-atyrode_code__account-toolbar">
-      <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId || !state?.canSignIn} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>
+      {state?.canSignIn
+        ? <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>
+        : state?.owner?.online && <button type="button" onClick={() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`)}>Review OMP setup</button>}
     </div>
     {message && <p role="status">{message}</p>}
-    {feed.error && <p role="status">{feed.error}</p>}
+    {feed.error && state?.state === "ready" && <p role="status">Account discovery is unavailable. Open setup details below.</p>}
     {!observation && !feed.error && <p role="status">Discovering instance accounts…</p>}
-    {observation && <p role="status" className={observation.status === "fresh" ? "plugin-atyrode_code__account-meta" : "plugin-atyrode_code__warning"}>{observation.status === "fresh" ? `${observation.accounts.length} account${observation.accounts.length === 1 ? "" : "s"} observed` : `${observation.status} · waiting for a fresh account observation${onContinue ? " before continuing" : ""}`}</p>}
+    {observation && <p role="status" className={observation.status === "fresh" ? "plugin-atyrode_code__account-meta" : "plugin-atyrode_code__warning"}>{observation.status === "fresh" ? `${observation.accounts.length} account${observation.accounts.length === 1 ? "" : "s"} observed` : "Waiting for a fresh account observation before continuing."}</p>}
     {showAccounts && <div className="plugin-atyrode_code__account-list" aria-label="Instance accounts">
       {observation?.status === "fresh" && observation.accounts.length === 0 && <p>No accounts yet. Add an account in OMP; this list updates automatically.</p>}
       {observation?.accounts.map(account => <article className="plugin-atyrode_code__account-row" key={JSON.stringify([account.reference, account.credentialId])}>
@@ -88,10 +92,13 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true }: OmpSignInPro
     {onContinue && canContinue && <div className="plugin-atyrode_code__account-toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy} onClick={onContinue}>Continue</button><span className="plugin-atyrode_code__muted">OMP stays open. You can add more accounts at any time.</span></div>}
     <details className="plugin-atyrode_code__details">
       <summary>Sign-in setup and permissions</summary>
+      {state?.reason && <p>{state.reason}</p>}
+      {setup.error && <p>{setup.error}</p>}
+      {feed.error && <p>{feed.error}</p>}
       {state?.owner && <p>Account broker · {state.owner.name} · {state.owner.online ? "online" : "offline"} · {state.state}</p>}
       {state?.state === "unconfigured" && <p>Opening OMP prepares the instance broker on its native owner, independently of the selected workspace machine.</p>}
       <p>OMP owns login, API keys, credential storage and refresh. Code reads account metadata; closing this view does not close OMP.</p>
-      <div className="plugin-atyrode_code__account-toolbar"><button type="button" onClick={refresh}>Refresh accounts and setup</button><button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open native permissions</button></div>
+      <div className="plugin-atyrode_code__account-toolbar"><button type="button" onClick={refresh}>Refresh accounts and setup</button><button type="button" onClick={() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`)}>Open native permissions</button></div>
     </details>
   </section>;
 }
