@@ -12,10 +12,10 @@ All five bundles are packed from one tree; each child requires `atyrode.code`.
 
 | Directory | Plugin / surface |
 | --- | --- |
-| `atyrode.code/` | `atyrode.code`: governed product/authentication actions and native machine manifest |
+| `atyrode.code/` | `atyrode.code`: governed product/execution-service actions and native machine manifest |
 | `atyrode.code/gateway/` | `atyrode.code.gateway`: independently installed native model gateway, with no operator-facing panel |
 | `atyrode.code/generator/` | `atyrode.code.generator`: `launcher` React panel, catalog editor, dials, resources, probes, suggestions and terminal launch |
-| `atyrode.code/accounts/` | `atyrode.code.accounts`: `accounts` React panel, shared choices/presets, OAuth and API-key enrollment |
+| `atyrode.code/accounts/` | `atyrode.code.accounts`: `accounts` React panel, shared choices/presets and native OMP sign-in administration |
 | `atyrode.code/usage/` | `atyrode.code.usage`: `usage` React panel and permitted account observations |
 
 - `domain/contracts.ts`, `catalog.ts`, `routing.ts`, `providers.ts`: typed
@@ -26,21 +26,26 @@ All five bundles are packed from one tree; each child requires `atyrode.code`.
   handlers and container/machine-scoped native storage with compare-and-set.
 - `atyrode.code/execution.ts`, `machine-server.ts`: exact resource resolution,
   native jobs, retained results and reviewed terminal-runtime construction.
-- `atyrode.code/service-setup.ts`, `service-policies.ts`, `broker.ts`: owner-only
-  native service-policy review/configuration and scoped service operations.
-- `atyrode.code/auth-contract.ts`, `auth-server.ts`: typed OAuth controls and
-  native enrollment lifetime. API-key enrollment uses native source references,
-  not an OAuth worker prompt or a raw-key form.
-- `workers/probe/`, `workers/auth/`, `workers/gateway/`: machine-local SDK
-  adapters. The gateway is a job-owned scoped OMP protocol adapter, not a
+- `atyrode.code/service-setup.ts`, `service-policies.ts`, `broker.ts`: native
+  instance broker setup, separate owner-only machine execution-service policies
+  and scoped service operations.
+- `atyrode.code/auth-contract.ts`, `auth-server.ts`, `accounts/server.ts`:
+  shared broker identity, exact-revision setup and native sign-in terminal handoff.
+  `omp-sign-in.tsx` opens that terminal and refreshes permitted account metadata;
+  OMP owns login, API keys, credential storage and refresh.
+- `workers/probe/`, `workers/broker/`, `workers/gateway/`: machine-local SDK
+  adapters. The broker hosts OMP's auth service under native instance lifetime.
+  The gateway is a job-owned scoped OMP protocol adapter, not a
   provisioning daemon, credential authority or separate operator product.
 - `workers/build.ts`, `runtime-artifacts.json`, `pack.ts`: worker bundle
   generation, upstream artifact/hash pins and five-bundle packing.
 - `test/` and colocated `*.test.ts`: native contract and domain regressions.
 
-Headless clients invoke `atyrode.code.<action>` through Manifold's action API,
-using `ActionInput`, `ActionResult` and schemas in `contract.ts`; enrollment
-schemas live in `auth-contract.ts`. They do not spawn Code or parse output.
+Headless clients invoke root actions as `atyrode.code.<action>` and sign-in
+administration as `atyrode.code.accounts.readAccountSetup` or
+`atyrode.code.accounts.prepareSignIn` through Manifold's action API. `ActionInput`,
+`ActionResult`, the schemas and `actionDoor` in `contract.ts` define the typed
+boundary. Clients do not spawn Code or parse output.
 Babel may adopt this boundary independently. Code neither depends on Babel nor
 claims its adoption, and does not preserve a former engine process ABI for it.
 
@@ -94,23 +99,34 @@ owners must refuse admission. No host PATH, filesystem discovery or incidental
 cache substitutes for this resource.
 
 Native Plugins manages installation, resource/location bindings, consent and
-retained job lifecycle. First review/install the accounts machine's system and
-managed `atyrode.code.accounts.omp-auth` bindings. Accounts owns the independent
-`atyrode.code.accounts.broker` and `atyrode.code.accounts.sign-in` operations;
-its `readAccountSetup` and `prepareSignIn` administration actions configure the
-instance `atyrode.code.accounts.broker` service and prepare the sign-in terminal.
+retained job lifecycle. First review/install the declared instance owner's system
+and managed `atyrode.code.accounts.omp-auth` bindings. Accounts owns the independent
+`atyrode.code.accounts.broker` and `atyrode.code.accounts.sign-in` operations.
+`readAccountSetup` observes the configured owner, or the native default owner
+before configuration; `prepareSignIn` creates or reuses that owner's instance
+broker at the expected native revision and returns the exactly pinned terminal
+runtime. The web surface places it on that owner, not the workspace machine.
+An unavailable owner is a refusal, not permission for discovery or failover.
 The managed home keeps its existing `code/shared-omp` state components and
 `/home/job/omp` guest path. Broker startup and sign-in need neither a gateway
 installation nor root workspace resources.
+The terminal's ordinary OMP `/login` flow writes its owner-local shared store.
+Code refreshes only permitted metadata and offers Continue once a fresh account
+appears; OMP can stay open to add more. Native grants let authorized machines
+share the broker without moving credentials into Code.
 
-Then review/install the gateway's accounts-broker/system bindings. Review Code
-service setup to bind `omp` to that exact gateway installation. Finally,
-review/install the root's service/system/location bindings and approve its
+Then review/install the gateway's accounts-broker/system bindings.
+`readServiceConfiguration`, `reviewServices` and `configureServices` manage only
+the machine's `omp` gateway and optional `suggest` classifier policies. Review
+derives the ready gateway's exact runtime pins, and configuration commits the
+reviewed native revision/digest while preserving unrelated policies. These
+actions neither configure instance authentication nor accept credential inputs.
+Finally, review/install the root's service/system/location bindings and approve its
 bounded native invocation edges. Accounts, gateway and root have separate native
 installations: promoting workspace or gateway bindings does not replace the
 running broker/sign-in installation. Code's resource promotion adopts these
-exact pins; it does not install or grant consent. Service setup uses existing
-owner-held credential references and never creates a provisioning daemon.
+exact pins; it does not install or grant consent. No step creates a private
+provisioning daemon or supplies the owner's system closure.
 `prepareWorkspace` creates the declared new workspace/session locations and
 runs the pinned OMP version probe as a native job; repeated launches use
 separately consented write access. Preparation never replaces existing locations
