@@ -256,6 +256,53 @@ describe("canonical typed Code actions", () => {
   }
 });
 
+describe("confirmed credential mutations", () => {
+  for (const action of ["clearAccountBlocks", "disableCredential"] as const) {
+    test(`${action} refuses a renewed OAuth slot until that exact slot is confirmed`, async () => {
+      const f = fixture();
+      f.metadata.credentials[0]!.blocks = [{ blockScope: "provider", blockedUntilMs: now + 60_000 }];
+      const reviewed = (await accepted(f, "accounts", {})).accounts.find(account => account.credentialId === 1)!;
+      const confirmation = { ...target, reference: reviewed.reference, credentialId: reviewed.credentialId };
+      let mutations = 0;
+      f.ctx.services.invokeInstance = async args => {
+        mutations++;
+        if (args.serviceId !== BROKER_SERVICE_ID || args.expectedRevision !== f.resources.brokerRevision) return unavailable();
+        const credential = f.metadata.credentials.find(row => String(row.id) === args.input.credentialId);
+        if (!credential) return unavailable();
+        if (args.operationId === "clear-blocks") credential.blocks = [];
+        else if (args.operationId === "disable") credential.disabled = true;
+        else return unavailable();
+        return ServiceReplySchema.parse({ type: "service_result", requestId: "credential-mutation", ok: true, result: { ok: true } });
+      };
+
+      f.metadata.credentials[0]!.id = 4;
+      const replacement = (await accepted(f, "accounts", {})).accounts.find(account => account.credentialId === 4)!;
+      expect(replacement.reference).toEqual(reviewed.reference);
+      expect(await invoke(f, action, confirmation)).toEqual({ refused: "code_account_unavailable" });
+      expect(mutations).toBe(0);
+      expect((await accepted(f, "accounts", {})).accounts.find(account => account.credentialId === 4)).toEqual(replacement);
+
+      const result = await accepted(f, action, { ...target, reference: replacement.reference, credentialId: replacement.credentialId });
+      expect(result.accounts.find(account => account.credentialId === 4)).toEqual({
+        ...replacement, ...(action === "clearAccountBlocks" ? { blocks: [] } : { disabled: true }),
+      });
+      expect(mutations).toBe(1);
+    });
+
+    test(`${action} requires a positive safe credential slot`, async () => {
+      const f = fixture();
+      const account = (await accepted(f, "accounts", {})).accounts[0]!;
+      let mutations = 0;
+      f.ctx.services.invokeInstance = async () => { mutations++; return unavailable(); };
+      for (const credentialId of [undefined, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(await actionHandlers[actionDoor(action)]!(f.ctx, { ...target, reference: account.reference, credentialId }))
+          .toEqual({ refused: "code_invalid_request" });
+      }
+      expect(mutations).toBe(0);
+    });
+  }
+});
+
 describe("exact native launch preview", () => {
   test("a worker launches with shared account choices without executing on the broker owner or enabling disabled slots", async () => {
     const f = fixture();
