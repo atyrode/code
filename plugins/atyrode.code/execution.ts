@@ -99,8 +99,9 @@ export function launchInput(record: Configuration, preview: LaunchPreview, promp
   // Code's governed web flow owns setup; the sealed OMP home is already configured.
   const config = { ...native.config, ...compileOmpOverlay(catalog, preview.review.selection, preview.review.routes),
     startup: { setupWizard: false } };
+  // OMP treats even an empty positional argument as a request, so absence must omit the argv slot.
   const input = { config: JSON.stringify(config), models: JSON.stringify(native.models),
-    accountPool: JSON.stringify(preview.accountPool), prompt, planYolo: record.selection.planYolo };
+    accountPool: JSON.stringify(preview.accountPool), prompt, hasPrompt: prompt.length > 0, planYolo: record.selection.planYolo };
   if (Buffer.byteLength(JSON.stringify(input)) > 64 << 10) throw new CodeRefusal("input_too_large");
   return input;
 }

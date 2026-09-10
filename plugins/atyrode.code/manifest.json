@@ -359,10 +359,18 @@
             }
           },
           {
-            "literal": "--"
+            "literal": "--",
+            "when": {
+              "input": "hasPrompt",
+              "equals": true
+            }
           },
           {
-            "input": "prompt"
+            "input": "prompt",
+            "when": {
+              "input": "hasPrompt",
+              "equals": true
+            }
           }
         ],
         "input": {
@@ -380,6 +388,10 @@
             "type": "string",
             "required": true,
             "maxLength": 65536
+          },
+          "hasPrompt": {
+            "type": "boolean",
+            "required": true
           },
           "prompt": {
             "type": "string",
