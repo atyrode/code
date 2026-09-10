@@ -7,27 +7,24 @@ import { DomainError } from "../domain/contracts.ts";
 import { ProbeError } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
-import { prepareSignIn, readAccountSetup } from "./auth-server.ts";
 import { accountObservation, currentService, mutateCredential, usageObservation } from "./broker.ts";
-import { actionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type CodeAction } from "./contract.ts";
+import { rootActionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { benchmarkResult, inventoryResult, launchInput, launchPreview, requirePromotedOperation, startBenchmark, startInventory } from "./execution.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
   currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
 
-const mutating: Partial<Record<CodeAction, true>> = {
+const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
   stageBenchmark: true, promoteResources: true, clearAccountBlocks: true, disableCredential: true,
-  prepareWorkspace: true, prepareSignIn: true,
+  prepareWorkspace: true,
 };
-const instanceReads: Partial<Record<CodeAction, true>> = { accounts: true, readAccountSetup: true };
+const instanceReads: Partial<Record<RootAction, true>> = { accounts: true };
 // Native APIs resolve stored resource pins and enforce the caller's concrete authority.
-const actionDelegates: Partial<Record<CodeAction, readonly Cap[]>> = {
+const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
   reviewCatalog: ["machines:run", "services:read"],
   promoteCatalog: ["machines:run", "services:read"],
   accounts: ["services:read"],
-  readAccountSetup: ["services:read", "machines:run"],
-  prepareSignIn: ["services:read", "services:configure", "machines:run"],
   usage: ["services:read"],
   clearAccountBlocks: ["services:read", "services:invoke"],
   disableCredential: ["services:read", "services:invoke"],
@@ -51,7 +48,7 @@ function refusal(error: unknown) {
   if (error instanceof z.ZodError) return { refused: "code_invalid_request" };
   return { refused: "code_operation_unavailable" };
 }
-type ProductHandlers = { [K in CodeAction]: (ctx: CodeContext, args: ActionInput<K>) => Promise<ActionResult<K>> };
+type ProductHandlers = { [K in RootAction]: (ctx: CodeContext, args: ActionInput<K>) => Promise<ActionResult<K>> };
 const productHandlers: ProductHandlers = {
   async readConfiguration(ctx, args) {
     const { record } = await readConfiguration(ctx, args);
@@ -89,8 +86,6 @@ const productHandlers: ProductHandlers = {
     return commitConfiguration(ctx, previous, { ...record, accounts: reduceAccountChoices(record.accounts, args.change) });
   },
   accounts: ctx => accountObservation(ctx),
-  readAccountSetup,
-  prepareSignIn,
   async usage(ctx, args) { return usageObservation(ctx, requireConfiguration(await readConfiguration(ctx, args))); },
   async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "clear-blocks"); },
   async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, "disable"); },
@@ -167,19 +162,19 @@ const productHandlers: ProductHandlers = {
       ...pins, input: launchInput(record, preview, args.prompt) } });
   },
 };
-export const handlers = Object.fromEntries((Object.keys(actionSchemas) as CodeAction[]).map(name => [name,
+export const handlers = Object.fromEntries((Object.keys(rootActionSchemas) as RootAction[]).map(name => [name,
   async (ctx: CodeContext, raw: unknown) => {
     try {
-      const args = actionSchemas[name].input.parse(raw);
+      const args = rootActionSchemas[name].input.parse(raw);
       const handler = productHandlers[name] as (context: CodeContext, input: typeof args) => Promise<unknown>;
-      return actionSchemas[name].result.parse(await handler(ctx, args));
+      return rootActionSchemas[name].result.parse(await handler(ctx, args));
     } catch (error) { return refusal(error); }
   },
 ]));
-export default { actions: (Object.keys(actionSchemas) as CodeAction[]).map(name => defineAction({
+export default { actions: (Object.keys(rootActionSchemas) as RootAction[]).map(name => defineAction({
   name, title: name.replace(/([A-Z])/g, " $1"),
   caps: [instanceReads[name] ? "services:read" : mutating[name] ? "containers:write" : "containers:read"],
   ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
   scope: instanceReads[name] ? "workspace" : "container", trace: "opaque",
-  input: actionSchemas[name].input as z.ZodType<unknown>, result: actionSchemas[name].result as z.ZodType<unknown>,
+  input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
 })), handlers };

@@ -4,7 +4,7 @@ import { projectAccounts } from "../domain/accounts.ts";
 import type { AccountReference, AccountsObservation } from "../domain/contracts.ts";
 import { normalizeBrokerUsage, projectUsage } from "../domain/usage.ts";
 import { BROKER_SERVICE_ID, type SharedBrokerReference } from "./auth-contract.ts";
-import { CODE_PLUGIN_ID, ServicePinSchema, type Configuration, type ServicePin } from "./contract.ts";
+import { ACCOUNTS_PLUGIN_ID, ServicePinSchema, type Configuration, type ServicePin } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
 
 /** Native describes inherited instance bindings alongside worker-local services. */
@@ -27,7 +27,7 @@ export async function serviceRead(ctx: CodeContext, machineId: string, pin: Serv
 }
 export async function sharedBrokerReference(ctx: CodeContext): Promise<SharedBrokerReference> {
   const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
-  if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== CODE_PLUGIN_ID ||
+  if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== ACCOUNTS_PLUGIN_ID ||
     !description.configuration.enabled || !description.owner?.online || !description.connected || description.state !== "ready")
     throw new CodeRefusal("account_unavailable");
   return { serviceId: BROKER_SERVICE_ID, revision: description.configuration.revision, machineId: description.owner.machineId };

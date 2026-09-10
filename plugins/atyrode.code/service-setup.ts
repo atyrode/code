@@ -1,14 +1,14 @@
 import { InstanceServiceDescriptionSchema, ServiceRuntimeSchema, TerminalRuntimeSchema,
   type InstanceServiceDescription } from "@manifold/protocol";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "./auth-contract.ts";
-import { CODE_PLUGIN_ID } from "./contract.ts";
+import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { buildSharedBrokerPolicy } from "./service-policies.ts";
 
 export async function describeSharedBroker(ctx: CodeContext): Promise<InstanceServiceDescription> {
   const description = InstanceServiceDescriptionSchema.parse(await ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID }));
   if (description.serviceId !== BROKER_SERVICE_ID ||
-    (description.configuration && description.configuration.pluginId !== CODE_PLUGIN_ID)) throw new CodeRefusal("resources_changed");
+    (description.configuration && description.configuration.pluginId !== ACCOUNTS_PLUGIN_ID)) throw new CodeRefusal("resources_changed");
   return description;
 }
 export function brokerOwner(description: InstanceServiceDescription) {
@@ -24,15 +24,15 @@ export async function canAdministerBroker(ctx: CodeContext, machineId: string): 
 /** One native description pins both installed operations and their promoted resource
  * bindings. The installed artifact declares their common owner-local OMP home. */
 export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
-  const { description, installation } = await currentResources(ctx, machineId);
+  const { description, installation } = await currentResources(ctx, machineId, ACCOUNTS_PLUGIN_ID);
   const broker = description.operations?.[BROKER_OPERATION_ID];
   const signIn = description.operations?.[SIGN_IN_OPERATION_ID];
   if (!broker?.ready || !signIn?.ready) throw new CodeRefusal("resources_incomplete");
   const pins = { installationRevision: installation.revision, artifactSha256: installation.artifactSha256 };
   return {
-    broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: CODE_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
+    broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: ACCOUNTS_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
       ...pins, resourceBindingDigest: broker.resourceBindingDigest, input: {} }),
-    signIn: TerminalRuntimeSchema.parse({ pluginId: CODE_PLUGIN_ID, operationId: SIGN_IN_OPERATION_ID,
+    signIn: TerminalRuntimeSchema.parse({ pluginId: ACCOUNTS_PLUGIN_ID, operationId: SIGN_IN_OPERATION_ID,
       ...pins, resourceBindingDigest: signIn.resourceBindingDigest, input: {} }),
   };
 }
@@ -63,7 +63,7 @@ export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: st
       expectBrokerRevision(await describeSharedBroker(ctx), expectedRevision);
       throw error;
     }
-    if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== CODE_PLUGIN_ID ||
+    if (description.serviceId !== BROKER_SERVICE_ID || description.configuration?.pluginId !== ACCOUNTS_PLUGIN_ID ||
       !description.configuration.enabled || description.owner?.machineId !== owner.machineId)
       throw new CodeRefusal("resources_changed");
   }

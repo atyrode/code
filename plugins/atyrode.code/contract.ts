@@ -70,7 +70,12 @@ export const PrepareSignInResultSchema = z.strictObject({ machineId: id, runtime
 export const InventoryResultSchema = z.strictObject({ job: PublicJobSchema, inventory: InventoryReceiptSchema, draft: CatalogDraftSchema });
 export const BenchmarkResultSchema = z.strictObject({ job: PublicJobSchema, benchmark: BenchmarkReceiptSchema, catalog: CatalogDocumentSchema });
 export const SuggestionSchema = z.strictObject({ revision, selection: SelectionSchema, changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])), evaluator: z.string().max(256) });
-export const actionSchemas = {
+export const accountActionSchemas = {
+  readAccountSetup: { input: z.strictObject({}), result: AccountSetupSchema },
+  prepareSignIn: { input: PrepareSignInInputSchema, result: PrepareSignInResultSchema },
+} as const;
+export type AccountAction = keyof typeof accountActionSchemas;
+export const rootActionSchemas = {
   readConfiguration: { input: TargetSchema, result: ConfigurationReadSchema },
   initializeConfiguration: { input: RevisionTargetSchema, result: ConfigurationSchema },
   stageCatalog: { input: RevisionTargetSchema.extend({ document: CatalogDocumentSchema }), result: ConfigurationSchema },
@@ -79,8 +84,6 @@ export const actionSchemas = {
   select: { input: RevisionTargetSchema.extend({ selection: SelectionSchema }), result: ConfigurationSchema },
   changeAccounts: { input: RevisionTargetSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
   accounts: { input: z.strictObject({}), result: AccountsObservationSchema },
-  readAccountSetup: { input: z.strictObject({}), result: AccountSetupSchema },
-  prepareSignIn: { input: PrepareSignInInputSchema, result: PrepareSignInResultSchema },
   usage: { input: TargetSchema, result: UsageViewSchema },
   clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
   disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
@@ -97,6 +100,11 @@ export const actionSchemas = {
   previewLaunch: { input: RevisionTargetSchema, result: LaunchPreviewSchema },
   prepareLaunch: { input: PrepareLaunchInputSchema, result: PrepareLaunchResultSchema },
 } as const;
+export type RootAction = keyof typeof rootActionSchemas;
+export const actionSchemas = { ...rootActionSchemas, ...accountActionSchemas } as const;
 export type CodeAction = keyof typeof actionSchemas;
 export type ActionInput<K extends CodeAction> = z.infer<(typeof actionSchemas)[K]["input"]>;
 export type ActionResult<K extends CodeAction> = z.infer<(typeof actionSchemas)[K]["result"]>;
+export function actionDoor(name: CodeAction): string {
+  return `${Object.hasOwn(accountActionSchemas, name) ? ACCOUNTS_PLUGIN_ID : CODE_PLUGIN_ID}.${name}`;
+}

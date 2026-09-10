@@ -94,17 +94,27 @@ owners must refuse admission. No host PATH, filesystem discovery or incidental
 cache substitutes for this resource.
 
 Native Plugins manages installation, resource/location bindings, consent and
-retained job lifecycle. Configure the broker service first, then review/install
-the gateway's broker/system bindings. Review Code service setup again to bind
-`omp` to that exact gateway installation. Finally, review/install the root's
-service/system/location bindings and approve its bounded native invocation edges.
-The separate gateway installation avoids a circular installation/service pin.
-Code's resource promotion adopts these exact pins; it does not install or grant
-consent. Service setup uses existing owner-held credential references and never
-creates a provisioning daemon. `prepareWorkspace` creates the declared new
-workspace/session locations and runs the pinned OMP version probe as a native
-job; repeated launches use separately consented write access. Preparation never
-replaces existing locations or clones a repository.
+retained job lifecycle. First review/install the accounts machine's system and
+managed `atyrode.code.accounts.omp-auth` bindings. Accounts owns the independent
+`atyrode.code.accounts.broker` and `atyrode.code.accounts.sign-in` operations;
+its `readAccountSetup` and `prepareSignIn` administration actions configure the
+instance `atyrode.code.accounts.broker` service and prepare the sign-in terminal.
+The managed home keeps its existing `code/shared-omp` state components and
+`/home/job/omp` guest path. Broker startup and sign-in need neither a gateway
+installation nor root workspace resources.
+
+Then review/install the gateway's accounts-broker/system bindings. Review Code
+service setup to bind `omp` to that exact gateway installation. Finally,
+review/install the root's service/system/location bindings and approve its
+bounded native invocation edges. Accounts, gateway and root have separate native
+installations: promoting workspace or gateway bindings does not replace the
+running broker/sign-in installation. Code's resource promotion adopts these
+exact pins; it does not install or grant consent. Service setup uses existing
+owner-held credential references and never creates a provisioning daemon.
+`prepareWorkspace` creates the declared new workspace/session locations and
+runs the pinned OMP version probe as a native job; repeated launches use
+separately consented write access. Preparation never replaces existing locations
+or clones a repository.
 
 ## Publication and mutation authority
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ServiceInputSchema, type ServiceOperationPolicy, type ServicePolicy, type ServiceProxyOperationPolicy } from "@manifold/protocol";
 import { buildCodeServices, buildSharedBrokerPolicy, type CodeServicesInput } from "../atyrode.code/service-policies.ts";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID } from "../atyrode.code/auth-contract.ts";
-import { CODE_PLUGIN_ID } from "../atyrode.code/contract.ts";
+import { ACCOUNTS_PLUGIN_ID } from "../atyrode.code/contract.ts";
 
 function configuration(): CodeServicesInput & { gateway: NonNullable<CodeServicesInput["gateway"]> } {
   return { classifier: { origin: "http://127.0.0.1:11434", model: "qwen3:8b" },
@@ -10,7 +10,7 @@ function configuration(): CodeServicesInput & { gateway: NonNullable<CodeService
       artifactSha256: "a".repeat(64), resourceBindingDigest: "b".repeat(64), input: { accountPool: { input: "accountPool" } } } };
 }
 function service(id: string): ServicePolicy {
-  if (id === BROKER_SERVICE_ID) return buildSharedBrokerPolicy({ scope: "instance", pluginId: CODE_PLUGIN_ID,
+  if (id === BROKER_SERVICE_ID) return buildSharedBrokerPolicy({ scope: "instance", pluginId: ACCOUNTS_PLUGIN_ID,
     operationId: BROKER_OPERATION_ID, installationRevision: "broker-install-1",
     artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64), input: {} });
   const value = buildCodeServices(configuration()).find(policy => policy.serviceId === id);

@@ -13,6 +13,8 @@ const entrypoints = {
   root: {
     inventory: "probe/inventory.ts",
     benchmark: "probe/benchmark.ts",
+  },
+  accounts: {
     broker: "broker/entry.ts",
   },
   gateway: {
@@ -143,6 +145,7 @@ export async function buildWorkerArtifacts(outputDirectory: string, target: Work
   const tools: WorkerArtifacts["tools"] = {};
   for (const [alias, layouts] of Object.entries(runtime.tools)) {
     if (target === "gateway" && alias === "omp") continue;
+    if (target === "root" && alias === "pi-natives") continue;
     tools[alias] = {};
     for (const platform of platforms) tools[alias]![platform] = MachineArtifactSchema.parse(layouts[platform]);
   }
@@ -178,7 +181,7 @@ export async function buildWorkerArtifacts(outputDirectory: string, target: Work
         if (item.path === "bun" || item.path.startsWith("bun:") || item.path.startsWith("node:") || builtinModules.includes(item.path)) continue;
         throw new Error(`Unbundled worker import: ${name}: ${item.path}`);
       }
-      if (usesNative && name !== "broker" && name !== "gateway") throw new Error(`Worker unexpectedly needs native addon: ${name}`);
+      if (usesNative && (target === "root" || (name !== "broker" && name !== "gateway"))) throw new Error(`Worker unexpectedly needs native addon: ${name}`);
       const licenses = await notices(importedFiles);
       let bytes: Buffer;
       let declaration: MachineArtifact;
@@ -202,7 +205,7 @@ export async function buildWorkerArtifacts(outputDirectory: string, target: Work
       await writeFile(join(out, declaration.bundleFile!), bytes);
       bundleFiles.push(declaration.bundleFile!);
       const layouts = Object.fromEntries(platforms.map(platform => [platform, declaration]));
-      if (name === "inventory" || name === "gateway") Object.assign(artifacts, layouts);
+      if (name === "inventory" || name === "broker" || name === "gateway") Object.assign(artifacts, layouts);
       else tools[name] = layouts;
     }
     if (Object.keys(tools).length > 8) throw new Error("Too many native tool maps");
@@ -216,7 +219,7 @@ export async function buildWorkerArtifacts(outputDirectory: string, target: Work
 if (import.meta.main) {
   const target = process.argv[2];
   const output = process.argv[3];
-  if ((target !== "root" && target !== "gateway") || !output || process.argv.length !== 4) throw new Error("Usage: bun plugins/workers/build.ts <root|gateway> <output-directory>");
+  if ((target !== "root" && target !== "accounts" && target !== "gateway") || !output || process.argv.length !== 4) throw new Error("Usage: bun plugins/workers/build.ts <root|accounts|gateway> <output-directory>");
   const result = await buildWorkerArtifacts(output, target);
   await writeFile(join(resolve(output), "worker-artifacts.json"), `${JSON.stringify(result, null, 2)}\n`);
 }

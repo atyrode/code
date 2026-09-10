@@ -10,10 +10,10 @@ export class CodeRefusal extends Error {
 export function digestOf(value: unknown): string {
   return createHash("sha256").update(canonicalJobJson(value)).digest("hex");
 }
-export async function currentResources(ctx: CodeContext, machineId: string) {
-  const description = JobDescriptionSchema.parse(await ctx.jobs.describe({ machineId, pluginId: CODE_PLUGIN_ID }));
+export async function currentResources(ctx: CodeContext, machineId: string, pluginId = CODE_PLUGIN_ID) {
+  const description = JobDescriptionSchema.parse(await ctx.jobs.describe({ machineId, pluginId }));
   const installation = description.installation;
-  if (description.machineId !== machineId || description.pluginId !== CODE_PLUGIN_ID || !description.connected ||
+  if (description.machineId !== machineId || description.pluginId !== pluginId || !description.connected ||
     installation === null || !installation.enabled || installation.purgeRequested) throw new CodeRefusal("resources_incomplete");
   return { description, installation };
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ServicePolicySchema, ServiceRuntimeSchema, type ServiceOperationPolicy, type ServicePolicy,
   type ServiceProxyOperationPolicy, type ServiceRuntime } from "@manifold/protocol";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { CODE_PLUGIN_ID } from "./contract.ts";
+import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 
 export interface CodeServicesInput {
   classifier: { origin: string; model: string } | null;
@@ -36,7 +36,7 @@ function credentialProxy(method: ServiceProxyOperationPolicy["method"], suffix: 
 /** Native projects metadata before crossing into Code. Raw broker routes remain
  * confined to governed worker bindings, never browser-readable operations. */
 export function buildSharedBrokerPolicy(runtime: ServiceRuntime): ServicePolicy {
-  if (runtime.scope !== "instance" || runtime.pluginId !== CODE_PLUGIN_ID || runtime.operationId !== BROKER_OPERATION_ID)
+  if (runtime.scope !== "instance" || runtime.pluginId !== ACCOUNTS_PLUGIN_ID || runtime.operationId !== BROKER_OPERATION_ID)
     throw new Error("Invalid shared broker runtime");
   const metadata = projected("GET", "/v1/snapshot", [
     ["credentials", "*", "id"], ["credentials", "*", "provider"], ["credentials", "*", "identityKey"],

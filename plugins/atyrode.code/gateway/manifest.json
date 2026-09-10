@@ -15,7 +15,11 @@
   "dependencies": {
     "atyrode.code": {
       "type": "required",
-      "reason": "The governed broker contract and account policy belong to the Code product."
+      "reason": "The gateway belongs to Code."
+    },
+    "atyrode.code.accounts": {
+      "type": "required",
+      "reason": "The independently installed broker and account administration belong to Code accounts."
     }
   },
   "machine": {
@@ -59,14 +63,14 @@
                 "path": [
                   "url"
                 ],
-                "serviceId": "atyrode.code.broker",
+                "serviceId": "atyrode.code.accounts.broker",
                 "value": "url"
               },
               {
                 "path": [
                   "token"
                 ],
-                "serviceId": "atyrode.code.broker",
+                "serviceId": "atyrode.code.accounts.broker",
                 "value": "bearer"
               }
             ]
@@ -75,7 +79,7 @@
         "providesService": true,
         "services": [
           {
-            "serviceId": "atyrode.code.broker",
+            "serviceId": "atyrode.code.accounts.broker",
             "revision": "1",
             "operationIds": [
               "gateway-snapshot",

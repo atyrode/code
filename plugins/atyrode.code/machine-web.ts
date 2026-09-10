@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
 import { ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
-import { actionSchemas, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
+import { actionDoor, actionSchemas, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 
 const messages: Readonly<Record<string, string>> = {
@@ -29,7 +29,7 @@ export function codeOperationFailure(reason: unknown): string {
 export async function callCodeAction<K extends CodeAction>(host: HostServices, name: K, input: ActionInput<K>): Promise<ActionResult<K>> {
   const parsed = actionSchemas[name].input.safeParse(input);
   if (!parsed.success) throw new CodeActionError("The action input does not match the typed Code contract.");
-  const outcome = await host.client.action(`${CODE_PLUGIN_ID}.${name}`, parsed.data);
+  const outcome = await host.client.action(actionDoor(name), parsed.data);
   if (!outcome.ok) throw new CodeActionError(messages[outcome.denial.message] ??
     "This action is unavailable under the current native authority or resource configuration.");
   const result = actionSchemas[name].result.safeParse(outcome.result);
@@ -137,7 +137,7 @@ export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, i
     try { return { data: await callCodeAction(host, name, input), error: null }; }
     catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
   }, intervalMs, {
-    key: `${CODE_PLUGIN_ID}.${name}:${JSON.stringify(input)}`, restartKey: host.principal.id,
+    key: `${actionDoor(name)}:${JSON.stringify(input)}`, restartKey: host.principal.id,
     initial: null, enabled: input !== null,
     // OMP writes its store outside native jobs. Subscribing to job events would suppress
     // the SDK timer on a live socket and miss accounts added in the open OMP terminal.
