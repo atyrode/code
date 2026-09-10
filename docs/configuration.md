@@ -69,6 +69,10 @@ Promoted resources contain `productSha256`, nullable `execution` with
 `installationRevision`, `artifactSha256` and per-operation binding digests,
 and service pins with `serviceId`, `revision` and `policySha256`. Promotion does
 not install artifacts, grant consent or make unavailable operations ready.
+The UI checks resource readiness and exact enabled native consent separately.
+Setup needs one workspace route plus inventory and launch permissions; retained
+workspace and inventory results also require their status-read consent. A classifier
+authorized only for invocation remains discoverable without granting metadata reads.
 
 Managed Bun 1.4.2, OMP/SDK 18.1.14 and pi-natives artifacts are pinned in
 `plugins/runtime-artifacts.json`; `workers/build.ts` supplies the declarations
@@ -147,9 +151,13 @@ credential slots (`kind: "credential"`); a launch freezes concrete slots and
 observed identities rather than an open-ended provider pool.
 
 `usage` combines permitted service observations with shared choices and freshness.
-Unavailable, stale, disabled, blocked and exhausted are distinct states.
-`clearAccountBlocks` and `disableCredential` are separately governed service
-mutations, not ordinary preference edits.
+Unavailable, stale, disabled, blocked and exhausted are distinct states. A fresh
+explicit provider quota verdict takes precedence over a rounded usage fraction:
+100% reported as still allowed does not become exhausted.
+`clearAccountBlocks` and `disableCredential` require the confirmed `reference`
+and positive `credentialId` alongside the target. If the same OAuth identity has
+moved to a replacement slot, the stale confirmation refuses without mutating it.
+These are separately governed service mutations, not ordinary preference edits.
 
 **OMP-owned sign-in:** the accounts plugin exposes
 `atyrode.code.accounts.readAccountSetup` with `{}` input. It returns the native
