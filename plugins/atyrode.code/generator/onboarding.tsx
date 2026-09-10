@@ -30,7 +30,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [accountsContinued, setAccountsContinued] = useState(settings);
-  const [selectedStep, setSelectedStep] = useState<number | null>(settings ? 3 : null);
+  const [selectedStep, setSelectedStep] = useState<number | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
