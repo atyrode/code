@@ -1,4 +1,5 @@
-import { JobDescriptionSchema, PublicJobSchema, TerminalRuntimeSchema } from "@manifold/protocol";
+import { JobDescriptionSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema,
+  ServicePolicySchema, TerminalRuntimeSchema } from "@manifold/protocol";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, AccountReferenceSchema, AccountsObservationSchema,
   CatalogDocumentSchema, RuntimeAccountPoolSchema, SelectionSchema, epochMilliseconds, identifier } from "../domain/contracts.ts";
@@ -75,6 +76,16 @@ export const accountActionSchemas = {
   prepareSignIn: { input: PrepareSignInInputSchema, result: PrepareSignInResultSchema },
 } as const;
 export type AccountAction = keyof typeof accountActionSchemas;
+export const ClassifierSchema = z.strictObject({
+  origin: z.string(), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/:-]{0,511}$/),
+});
+export const ServicesReviewInputSchema = TargetSchema.extend({
+  expectedServiceRevision: ServiceConfigurationSchema.shape.revision,
+  classifier: ClassifierSchema.nullable().optional(),
+});
+export const ServicesReviewSchema = z.strictObject({
+  expectedServiceRevision: ServiceConfigurationSchema.shape.revision, policies: z.array(ServicePolicySchema), reviewDigest: digest,
+});
 export const rootActionSchemas = {
   readConfiguration: { input: TargetSchema, result: ConfigurationReadSchema },
   initializeConfiguration: { input: RevisionTargetSchema, result: ConfigurationSchema },
@@ -88,6 +99,9 @@ export const rootActionSchemas = {
   clearAccountBlocks: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
   disableCredential: { input: TargetSchema.extend({ reference: AccountReferenceSchema }), result: AccountsObservationSchema },
   readSetup: { input: TargetSchema, result: SetupSchema },
+  readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
+  reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
+  configureServices: { input: ServicesReviewInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },
   reviewResources: { input: RevisionTargetSchema, result: z.strictObject({ resources: PromotedResourcesSchema, reviewDigest: digest }) },
   promoteResources: { input: RevisionTargetSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
   prepareWorkspace: { input: RevisionTargetSchema, result: PublicJobSchema },

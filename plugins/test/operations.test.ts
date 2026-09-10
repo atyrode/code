@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceReplySchema, type ServicePolicy } from "@manifold/protocol";
-import { actionDoor, actionSchemas, ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID, type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
+import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceConfigurationSchema,
+  ServiceReplySchema, type ServiceConfiguration, type ServicePolicy } from "@manifold/protocol";
+import { actionDoor, actionSchemas, ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID,
+  type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "../atyrode.code/auth-contract.ts";
-import type { CodeContext } from "../atyrode.code/machine-server.ts";
+import { digestOf, type CodeContext } from "../atyrode.code/machine-server.ts";
 import { handlers } from "../atyrode.code/server.ts";
 import { handlers as accountHandlers } from "../atyrode.code/accounts/server.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import type { ProjectedBrokerSnapshot } from "../domain/accounts.ts";
+import { buildCodeServices } from "../atyrode.code/service-policies.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
 const now = Date.UTC(2026, 0, 1, 12);
@@ -501,5 +504,154 @@ describe("instance-owned OMP sign-in", () => {
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
       .toEqual({ refused: "code_broker_revision_changed" });
     expect(f.state.writes).toBe(1);
+  });
+});
+
+function runtimeSetupFixture(isRoot = true) {
+  const f = fixture(isRoot);
+  const state = { configuration: { revision: null, policies: [] } as ServiceConfiguration, writes: 0,
+    enabled: true, connected: true, configureAllowed: true };
+  const runtime = { pluginId: GATEWAY_PLUGIN_ID, operationId: GATEWAY_OPERATION_ID,
+    installationRevision: "gateway-install-1", artifactSha256: "e".repeat(64), resourceBindingDigest: "f".repeat(64) };
+  const allows = f.ctx.auth.allows;
+  f.ctx.auth.allows = async (cap, node) =>
+    (state.configureAllowed && cap === "services:configure" && node?.kind === "machine" && node.machineId === target.machineId) || allows(cap, node);
+  const describe = f.ctx.jobs.describe;
+  f.ctx.jobs.describe = async args => {
+    if (args.pluginId !== GATEWAY_PLUGIN_ID) return describe(args);
+    return { machineId: args.machineId, pluginId: args.pluginId, connected: state.connected, platforms: ["linux-x64"],
+      admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
+      installation: { revision: runtime.installationRevision, artifactSha256: runtime.artifactSha256,
+        enabled: state.enabled, ready: state.enabled, purgeRequested: false }, retainedInstallations: [], consents: [],
+      operations: { [GATEWAY_OPERATION_ID]: { ready: state.enabled, reason: state.enabled ? null : "installation_disabled",
+        resourceBindingDigest: runtime.resourceBindingDigest } } };
+  };
+  f.ctx.services.readConfiguration = async () => ({
+    configuration: structuredClone(state.configuration), connected: state.connected, credentialReferences: [],
+    runtimeCandidates: [{ runtime: { ...runtime }, ready: state.enabled && state.connected,
+      reason: !state.connected ? "resource_owner_unavailable" : state.enabled ? null : "installation_disabled" }],
+  });
+  f.ctx.services.configureConfiguration = async args => {
+    if (args.machineId !== target.machineId || args.expectedRevision !== state.configuration.revision)
+      throw new Error("native service configuration conflict");
+    state.configuration = ServiceConfigurationSchema.parse({ revision: digestOf(args.policies), policies: args.policies });
+    state.writes++;
+    return structuredClone(state.configuration);
+  };
+  return { ...f, state, runtime };
+}
+
+describe("native machine execution service setup", () => {
+  const input = { ...target, expectedServiceRevision: null };
+
+  test("first use reviews and configures a gateway without inspecting or provisioning shared accounts", async () => {
+    const f = runtimeSetupFixture();
+    f.ctx.services.describeInstance = unavailable;
+    const initial = await accepted(f, "readServiceConfiguration", target);
+    expect(initial.configuration).toEqual({ revision: null, policies: [] });
+    const reviewed = await accepted(f, "reviewServices", input);
+    expect(await accepted(f, "reviewServices", input)).toEqual(reviewed);
+    expect(f.state.writes).toBe(0);
+    const configured = await accepted(f, "configureServices", { ...input, reviewDigest: reviewed.reviewDigest });
+    expect(configured.policies.map(policy => policy.serviceId)).toEqual(["omp"]);
+    expect(configured.policies[0]?.runtime).toEqual({ ...f.runtime, input: { accountPool: { input: "accountPool" } } });
+    expect((await accepted(f, "readServiceConfiguration", target)).configuration).toEqual(configured);
+    expect(await configuration(f)).toBeNull();
+  });
+
+  test("disabled native candidates remain observable but cannot be reviewed into availability", async () => {
+    const f = runtimeSetupFixture();
+    f.state.enabled = false;
+    expect((await accepted(f, "readServiceConfiguration", target)).runtimeCandidates[0])
+      .toMatchObject({ ready: false, reason: "installation_disabled" });
+    expect(await invoke(f, "reviewServices", input)).toEqual({ refused: "code_resources_incomplete" });
+    expect(f.state.writes).toBe(0);
+  });
+
+  test("classifier changes preserve unrelated machine policies, including a preexisting broker", async () => {
+    const f = runtimeSetupFixture();
+    const classifier = { origin: "http://127.0.0.1:11434", model: "qwen3:8b" };
+    const suggest = buildCodeServices({ classifier })[0]!;
+    const broker = { ...suggest, serviceId: BROKER_SERVICE_ID, revision: "existing-broker" };
+    f.state.configuration = { revision: digestOf([broker, suggest]), policies: [broker, suggest] };
+    const preserved = await accepted(f, "reviewServices", { ...target, expectedServiceRevision: f.state.configuration.revision });
+    const configured = await accepted(f, "configureServices", { ...target,
+      expectedServiceRevision: preserved.expectedServiceRevision, reviewDigest: preserved.reviewDigest });
+    expect(configured.policies.filter(policy => policy.serviceId !== "omp")).toEqual([broker, suggest]);
+    const removed = await accepted(f, "reviewServices", { ...target, expectedServiceRevision: configured.revision, classifier: null });
+    const withoutClassifier = await accepted(f, "configureServices", { ...target,
+      expectedServiceRevision: configured.revision, classifier: null, reviewDigest: removed.reviewDigest });
+    expect(withoutClassifier.policies.map(policy => policy.serviceId)).toEqual([BROKER_SERVICE_ID, "omp"]);
+    const replacement = { ...classifier, model: "qwen3:14b" };
+    const added = await accepted(f, "reviewServices", { ...target, expectedServiceRevision: withoutClassifier.revision, classifier: replacement });
+    const withClassifier = await accepted(f, "configureServices", { ...target, expectedServiceRevision: withoutClassifier.revision,
+      classifier: replacement, reviewDigest: added.reviewDigest });
+    expect(withClassifier.policies.find(policy => policy.serviceId === "suggest")).toEqual(buildCodeServices({ classifier: replacement })[0]);
+    expect(withClassifier.policies.find(policy => policy.serviceId === BROKER_SERVICE_ID)).toEqual(broker);
+  });
+
+  test("configuration inspection and mutation require native owner authority and a writable in-scope target", async () => {
+    const nonOwner = runtimeSetupFixture(false);
+    expect(await invoke(nonOwner, "readServiceConfiguration", target)).toEqual({ refused: "code_service_owner_required" });
+    expect(await invoke(nonOwner, "reviewServices", input)).toEqual({ refused: "code_service_owner_required" });
+    expect(await invoke(nonOwner, "configureServices", { ...input, reviewDigest: "a".repeat(64) }))
+      .toEqual({ refused: "code_service_owner_required" });
+    expect(nonOwner.state.writes).toBe(0);
+    const f = runtimeSetupFixture();
+    const reviewed = await accepted(f, "reviewServices", input);
+    const configure = { ...input, reviewDigest: reviewed.reviewDigest };
+    f.state.configureAllowed = false;
+    expect(await invoke(f, "configureServices", configure)).toEqual({ refused: "code_service_owner_required" });
+    f.state.configureAllowed = true;
+    f.access.writable.clear();
+    expect(await invoke(f, "configureServices", configure)).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    f.access.containerScope = "container-b";
+    expect(await invoke(f, "configureServices", configure)).toEqual({ refused: "code_scope_refused" });
+    expect(f.state.writes).toBe(0);
+  });
+
+  test("a concurrent native configuration cannot be overwritten by an old review", async () => {
+    const f = runtimeSetupFixture();
+    const reviewed = await accepted(f, "reviewServices", input);
+    await f.ctx.services.configureConfiguration({ machineId: target.machineId, expectedRevision: null, policies: [] });
+    expect(await invoke(f, "configureServices", { ...input, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_service_configuration_changed" });
+    expect(f.state.writes).toBe(1);
+    expect(f.state.configuration.policies).toEqual([]);
+  });
+
+  test("a changed gateway pin invalidates the old review before writing any policy", async () => {
+    const f = runtimeSetupFixture();
+    const reviewed = await accepted(f, "reviewServices", input);
+    f.runtime.resourceBindingDigest = "a".repeat(64);
+    expect(await invoke(f, "configureServices", { ...input, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_preview_changed" });
+    expect(f.state.writes).toBe(0);
+  });
+
+  test("gateway replacement during configuration reinspection cannot admit a stale candidate", async () => {
+    const f = runtimeSetupFixture();
+    const reviewed = await accepted(f, "reviewServices", input);
+    const read = f.ctx.services.readConfiguration;
+    f.ctx.services.readConfiguration = async args => {
+      const result = await read(args);
+      f.runtime.installationRevision = "gateway-install-2";
+      return result;
+    };
+    expect(await invoke(f, "configureServices", { ...input, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_resources_changed" });
+    expect(f.state.writes).toBe(0);
+  });
+
+  test("setup observes instance broker pins without inventing machine operation readiness", async () => {
+    const f = fixture();
+    f.ctx.services.describe = async ({ machineId }) => ({ machineId, connected: true, services: [] });
+    const setup = await accepted(f, "readSetup", target);
+    expect(setup.services).toEqual([{ serviceId: BROKER_SERVICE_ID, revision: f.resources.brokerRevision,
+      policySha256: f.resources.policy, operations: [] }]);
+    const describe = f.ctx.services.describeInstance;
+    f.ctx.services.describeInstance = async args => ({ ...await describe(args), configuration: null, owner: null, state: "unconfigured" });
+    expect((await accepted(f, "readSetup", target)).services).toEqual([]);
   });
 });
