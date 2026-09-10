@@ -5,8 +5,7 @@ import type { RuntimeAccountPool } from "../domain/contracts.ts";
 import { BenchmarkReceiptSchema, InventoryReceiptSchema, benchmarkCandidates, catalogFromObservations,
   projectProbeIdentities, scaffoldInventory } from "../domain/probe.ts";
 import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
-import { BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { accountObservation, currentService, sharedBrokerReference } from "./broker.ts";
+import { accountObservation, sharedBrokerReference } from "./broker.ts";
 import { CODE_PLUGIN_ID, type Configuration, type LaunchPreview } from "./contract.ts";
 import { CodeRefusal, currentOperation, digestOf, readJobResult, type CodeContext } from "./machine-server.ts";
 import { bundledProbeModels } from "./sdk-metadata.macro.ts" with { type: "macro" };
@@ -37,9 +36,7 @@ export function nativeModelConfiguration(pool: RuntimeAccountPool) {
 async function executionAccountPool(ctx: CodeContext, record: Configuration) {
   const broker = record.resources?.services.broker;
   if (!broker) throw new CodeRefusal("resources_incomplete");
-  const reference = await sharedBrokerReference(ctx);
-  if (broker.serviceId !== reference.serviceId || broker.revision !== reference.revision) throw new CodeRefusal("resources_changed");
-  await currentService(ctx, record.machineId, BROKER_SERVICE_ID, broker);
+  const reference = await sharedBrokerReference(ctx, broker);
   return selectedAccountPool(await accountObservation(ctx, reference), record.accounts);
 }
 async function probeInput(ctx: CodeContext, record: Configuration) {

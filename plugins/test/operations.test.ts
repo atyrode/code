@@ -99,7 +99,7 @@ function fixture(isRoot = false): Fixture {
     },
     services: {
       describe: async ({ machineId }) => ({ machineId, connected: true, services: [{
-        serviceId: BROKER_SERVICE_ID, revision: resources.brokerRevision, policySha256: resources.policy,
+        serviceId: BROKER_SERVICE_ID, revision: "broker-policy-1", policySha256: resources.policy,
         operations: [{ operationId: "metadata", readable: true, invocable: false, ready: true, reason: null }],
       }] }),
       describeInstance: async () => InstanceServiceDescriptionSchema.parse({
@@ -308,6 +308,7 @@ describe("exact native launch preview", () => {
     const f = fixture();
     const describe = f.ctx.jobs.describe;
     f.ctx.jobs.describe = args => args.machineId === target.machineId ? describe(args) : unavailable();
+    f.ctx.services.describe = async ({ machineId }) => ({ machineId, connected: true, services: [] });
     const record = await active(f);
     const accounts = await accepted(f, "accounts", {});
     const disabled = accounts.accounts.find(account => account.credentialId === 2)!.reference;
@@ -1005,12 +1006,36 @@ describe("native machine execution service setup", () => {
     expect(f.state.writes).toBe(0);
   });
 
-  test("setup observes instance broker pins without inventing machine operation readiness", async () => {
+  test("setup distinguishes instance revisions from per-machine broker policy authority", async () => {
     const f = fixture();
+    const observed = await f.ctx.services.describe({ machineId: target.machineId });
+    f.ctx.services.describe = async () => observed;
+    const promoted = await active(f);
+    expect((await accepted(f, "readSetup", target)).services).toContainEqual({
+      ...promoted.resources!.services.broker!, operations: observed.services[0]!.operations,
+    });
+    const preview = await accepted(f, "previewLaunch", { ...target, expectedRevision: promoted.revision });
+    f.resources.brokerRevision = "configuration-revision-2";
+    expect(await invoke(f, "prepareLaunch", { ...target, expectedRevision: promoted.revision, previewDigest: preview.previewDigest, prompt: "" }))
+      .toEqual({ refused: "code_resources_changed" });
+    expect((await accepted(f, "readSetup", target)).services).toContainEqual({
+      serviceId: BROKER_SERVICE_ID, revision: "configuration-revision-2", policySha256: f.resources.policy,
+      operations: observed.services[0]!.operations,
+    });
+    f.resources.policy = "e".repeat(64);
+    expect((await accepted(f, "readSetup", target)).services).toContainEqual({
+      serviceId: BROKER_SERVICE_ID, revision: "configuration-revision-2", policySha256: f.resources.policy, operations: [],
+    });
+  });
+
+  test("setup can pin the instance broker without inventing machine-local authority", async () => {
+    const f = fixture();
+    const observe = f.ctx.services.describe;
     f.ctx.services.describe = async ({ machineId }) => ({ machineId, connected: true, services: [] });
-    const setup = await accepted(f, "readSetup", target);
-    expect(setup.services).toEqual([{ serviceId: BROKER_SERVICE_ID, revision: f.resources.brokerRevision,
-      policySha256: f.resources.policy, operations: [] }]);
+    expect((await accepted(f, "readSetup", target)).services).toEqual([{
+      serviceId: BROKER_SERVICE_ID, revision: f.resources.brokerRevision, policySha256: f.resources.policy, operations: [],
+    }]);
+    f.ctx.services.describe = observe;
     const describe = f.ctx.services.describeInstance;
     f.ctx.services.describeInstance = async args => ({ ...await describe(args), configuration: null, owner: null, state: "unconfigured" });
     expect((await accepted(f, "readSetup", target)).services).toEqual([]);

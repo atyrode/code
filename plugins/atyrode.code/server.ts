@@ -8,13 +8,13 @@ import { ProbeError } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { accountObservation, currentService, mutateCredential, usageObservation } from "./broker.ts";
+import { accountObservation, currentService, describeSharedBroker, mutateCredential, usageObservation } from "./broker.ts";
 import { rootActionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { benchmarkResult, inventoryResult, launchInput, launchPreview, requirePromotedOperation, startBenchmark, startInventory } from "./execution.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
   currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
-import { configureServices, describeSharedBroker, readServiceConfiguration, reviewServices } from "./service-setup.ts";
+import { configureServices, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
@@ -103,13 +103,11 @@ const productHandlers: ProductHandlers = {
     const broker = await describeSharedBroker(ctx);
     const observedBroker = services.services.find(service => service.serviceId === BROKER_SERVICE_ID);
     const pins = services.services.filter(service => service.serviceId !== BROKER_SERVICE_ID);
-    if (broker.configuration) {
-      const { revision, policySha256 } = broker.configuration;
-      // Instance descriptions expose policy identity, not per-operation authority.
-      // Reuse operations only when native machine discovery observed these pins.
-      pins.push({ serviceId: BROKER_SERVICE_ID, revision, policySha256,
-        operations: observedBroker?.revision === revision && observedBroker.policySha256 === policySha256 ? observedBroker.operations : [] });
-    }
+    // Broker access uses the instance CAS; only matching native policy observations supply operation authority.
+    if (broker.configuration) pins.push({
+      serviceId: BROKER_SERVICE_ID, revision: broker.configuration.revision, policySha256: broker.configuration.policySha256,
+      operations: observedBroker?.policySha256 === broker.configuration.policySha256 ? observedBroker.operations : [],
+    });
     let execution = null;
     try { execution = (await currentResources(ctx, args.machineId)).description; }
     catch { /* Service-only readiness is useful before worker installation. */ }
