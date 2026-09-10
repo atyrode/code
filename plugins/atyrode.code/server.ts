@@ -36,7 +36,7 @@ const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
   configureServices: ["services:configure"],
   reviewResources: ["machines:run", "services:read"],
   promoteResources: ["machines:run", "services:read"],
-  prepareWorkspace: ["machines:run", "services:read", "locations:create"],
+  prepareWorkspace: ["machines:run", "services:read", "locations:create", "locations:read"],
   startInventory: ["machines:run", "services:read", "services:invoke", "operations:invoke", "network:host"],
   inventory: ["machines:run", "jobs:read"],
   startBenchmark: ["machines:run", "jobs:read", "services:read", "services:invoke", "operations:invoke", "network:host"],
@@ -128,10 +128,11 @@ const productHandlers: ProductHandlers = {
   },
   async prepareWorkspace(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
-    const pins = await requirePromotedOperation(ctx, requireConfiguration(previous), "prepare-workspace");
+    const operation = args.mode === "create" ? "prepare-workspace" : "validate-workspace";
+    const pins = await requirePromotedOperation(ctx, requireConfiguration(previous), operation);
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return PublicJobSchema.parse(await ctx.jobs.execute({ jobId: await ctx.newId(), machineId: args.machineId,
-      operationId: `${CODE_PLUGIN_ID}.prepare-workspace`, ...pins, input: {}, outputs: [] }));
+      operationId: `${CODE_PLUGIN_ID}.${operation}`, ...pins, input: {}, outputs: [] }));
   },
   async startInventory(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);

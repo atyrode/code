@@ -112,7 +112,7 @@ export const rootActionSchemas = {
   configureServices: { input: ServicesReviewInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },
   reviewResources: { input: RevisionTargetSchema, result: z.strictObject({ resources: PromotedResourcesSchema, reviewDigest: digest }) },
   promoteResources: { input: RevisionTargetSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
-  prepareWorkspace: { input: RevisionTargetSchema, result: PublicJobSchema },
+  prepareWorkspace: { input: RevisionTargetSchema.extend({ mode: z.enum(["create", "existing"]) }), result: PublicJobSchema },
   startInventory: { input: RevisionTargetSchema, result: PublicJobSchema },
   inventory: { input: TargetSchema.extend({ jobId: id }), result: InventoryResultSchema },
   startBenchmark: { input: RevisionTargetSchema.extend({ inventoryJobId: id }), result: PublicJobSchema },
