@@ -22,29 +22,29 @@ const mutating: Partial<Record<RootAction, true>> = {
   prepareWorkspace: true, configureServices: true,
 };
 const instanceReads: Partial<Record<RootAction, true>> = { accounts: true };
-// Native APIs resolve stored resource pins and enforce the caller's concrete authority.
+// Discovery preserves invocation-only visibility; native APIs still enforce concrete caller authority.
 const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
-  reviewCatalog: ["machines:run", "services:read"],
-  promoteCatalog: ["machines:run", "services:read"],
+  reviewCatalog: ["machines:run", "services:read", "services:invoke"],
+  promoteCatalog: ["machines:run", "services:read", "services:invoke"],
   accounts: ["services:read"],
   usage: ["services:read"],
   clearAccountBlocks: ["services:read", "services:invoke"],
   disableCredential: ["services:read", "services:invoke"],
-  readSetup: ["machines:run", "services:read"],
+  readSetup: ["machines:run", "services:read", "services:invoke"],
   readServiceConfiguration: ["services:configure"],
   reviewServices: ["services:configure"],
   configureServices: ["services:configure"],
-  reviewResources: ["machines:run", "services:read"],
-  promoteResources: ["machines:run", "services:read"],
-  prepareWorkspace: ["machines:run", "services:read", "locations:create", "locations:read"],
+  reviewResources: ["machines:run", "services:read", "services:invoke"],
+  promoteResources: ["machines:run", "services:read", "services:invoke"],
+  prepareWorkspace: ["machines:run", "services:read", "services:invoke", "locations:create", "locations:read"],
   startInventory: ["machines:run", "services:read", "services:invoke", "operations:invoke", "network:host"],
   inventory: ["machines:run", "jobs:read"],
   startBenchmark: ["machines:run", "jobs:read", "services:read", "services:invoke", "operations:invoke", "network:host"],
   benchmark: ["machines:run", "jobs:read"],
   stageBenchmark: ["machines:run", "jobs:read"],
   suggest: ["services:invoke"],
-  previewLaunch: ["machines:run", "services:read"],
-  prepareLaunch: ["machines:run", "services:read"],
+  previewLaunch: ["machines:run", "services:read", "services:invoke"],
+  prepareLaunch: ["machines:run", "services:read", "services:invoke"],
 };
 function refusal(error: unknown) {
   if (error instanceof CodeRefusal || error instanceof SuggestionError) return { refused: error.message };
