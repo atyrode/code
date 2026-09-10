@@ -6,6 +6,8 @@ import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./mac
 import { buildCodeServices, buildSharedBrokerPolicy } from "./service-policies.ts";
 import { authorizeTarget } from "./state.ts";
 
+const signInConfig = JSON.stringify({ startup: { setupWizard: false } });
+
 async function authorizeServiceConfiguration(ctx: CodeContext, target: Target, write = false): Promise<void> {
   await authorizeTarget(ctx, target, write);
   if (!ctx.auth.isRoot || !await ctx.auth.allows("services:configure", { kind: "machine", machineId: target.machineId }))
@@ -24,16 +26,12 @@ function expectServiceRevision(current: ServiceConfigurationRead, expected: stri
 export async function reviewServices(ctx: CodeContext, args: ActionInput<"reviewServices">) {
   const current = await readServiceConfiguration(ctx, args);
   expectServiceRevision(current, args.expectedServiceRevision);
-  const { description, installation } = await currentResources(ctx, args.machineId, GATEWAY_PLUGIN_ID);
-  const operation = description.operations?.[GATEWAY_OPERATION_ID];
   const candidates = current.runtimeCandidates.filter(candidate => candidate.runtime.pluginId === GATEWAY_PLUGIN_ID &&
     candidate.runtime.operationId === GATEWAY_OPERATION_ID && candidate.runtime.scope !== "instance");
   const candidate = candidates[0];
-  if (!current.connected || candidates.length !== 1 || !candidate?.ready || !operation?.ready)
+  if (!current.connected || candidates.length !== 1 || !candidate?.ready)
     throw new CodeRefusal("resources_incomplete");
   const runtime = candidate.runtime;
-  if (runtime.installationRevision !== installation.revision || runtime.artifactSha256 !== installation.artifactSha256 ||
-    runtime.resourceBindingDigest !== operation.resourceBindingDigest) throw new CodeRefusal("resources_changed");
   const gateway = ServiceRuntimeSchema.parse({ ...runtime, input: { accountPool: { input: "accountPool" } } });
   const replacements = buildCodeServices({ classifier: args.classifier ?? null, gateway });
   // Only Code's execution services are replaced. In particular, omission is not
@@ -97,7 +95,7 @@ export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
     broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: ACCOUNTS_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
       ...pins, resourceBindingDigest: broker.resourceBindingDigest, input: {} }),
     signIn: TerminalRuntimeSchema.parse({ pluginId: ACCOUNTS_PLUGIN_ID, operationId: SIGN_IN_OPERATION_ID,
-      ...pins, resourceBindingDigest: signIn.resourceBindingDigest, input: {} }),
+      ...pins, resourceBindingDigest: signIn.resourceBindingDigest, input: { config: signInConfig } }),
   };
 }
 

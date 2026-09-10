@@ -41,6 +41,9 @@
             "maxLength": 65536
           }
         },
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+        },
         "runtimeTools": [
           "bun",
           "pi-natives",

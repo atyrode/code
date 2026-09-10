@@ -78,6 +78,22 @@ library closure. The direct-ELF requirements report is not that closure.
 Missing resources refuse admission; PATH, host files and incidental caches
 are not substitutes.
 
+Ordinary launch additionally requires the reviewed `development` runtime-tool
+group and managed Bun. Its explicit entrypoints provide `/bin/sh`, Bash and
+coding commands on `/usr/bin`, including Git and Python 3.10+. OMP's bundled
+Python runner requires no Jupyter or additional pip packages.
+Declare their complete package closures, not a host PATH or all of `/nix/store`.
+The NixOS profile supports this through `execution.runtimeToolClosures` alongside
+the existing `runtimeTools` entrypoints. Missing development resources block
+launch rather than opening an incomplete terminal; account sign-in and service
+workers retain their narrower resources.
+
+The `system` group also provides the reviewed public resolver at
+`/etc/resolv.conf` and CA bundle at `/etc/ssl/certs/ca-certificates.crt`.
+Native operations declare the corresponding `SSL_CERT_FILE`; ordinary launch
+also declares `GIT_SSL_CAINFO`. These are explicit in-job resources, not a host
+`/etc` mount or inherited environment.
+
 ### Machine execution-service setup
 
 The root actions `readServiceConfiguration`, `reviewServices` and
@@ -197,9 +213,9 @@ locations for the launch working directory and OMP sessions. These are governed
 location bindings, not arbitrary client paths. On first use, `prepareWorkspace`
 with the current `expectedRevision` starts a native job that creates those
 locations and runs the pinned OMP version probe. Inspect its completed native
-result before launch. Creation refuses existing locations; it does not replace
-or import user data. Launch uses separately consented write access, so later
-sessions reuse the locations rather than trying to create them again.
+result before launch. Preparation creates missing locations and preserves existing
+folders; it does not replace or import user data. Launch uses separately consented
+write access, so later sessions reuse the locations.
 
 Preparation does not clone a repository or introduce a private workspace/session
 registry. Native location and terminal lifecycle and OMP's own in-session

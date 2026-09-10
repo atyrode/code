@@ -19,9 +19,10 @@ export async function readAccountSetup(ctx: CodeContext): Promise<ActionResult<"
       if (description.configuration) {
         const current = await inspectSharedBrokerRuntime(ctx, description.configuration.revision);
         description = current.description;
-        canUpdateRuntime = !matchesSharedBrokerPolicy(current.currentPolicy, current.policy);
+        canUpdateRuntime = !matchesSharedBrokerPolicy(current.currentPolicy, current.policy) ||
+          ["stopped", "unavailable"].includes(current.description.state);
         canSignIn = !canUpdateRuntime && ["ready", "starting"].includes(current.description.state);
-        if (canUpdateRuntime) reason ??= "The installed account runtime has changed. Review and apply it explicitly.";
+        if (canUpdateRuntime) reason ??= "Review the shared broker runtime before starting or restoring it.";
         else if (!canSignIn) reason ??= "The native account broker is unavailable. Review its instance configuration.";
       } else {
         await sharedOmpRuntimes(ctx, owner.machineId);

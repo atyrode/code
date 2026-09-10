@@ -98,6 +98,23 @@ requirements, not a complete provisioned transitive closure. Unconfigured
 owners must refuse admission. No host PATH, filesystem discovery or incidental
 cache substitutes for this resource.
 
+Ordinary `atyrode.code.launch` also requires the owner-reviewed `development`
+tool group and the managed Bun executable. Declare a shell at `/bin/sh`, Bash
+and normal coding commands on `/usr/bin`, including Git and Python 3.10+,
+together with their complete runtime closures. OMP's Python runner requires
+no Jupyter or additional pip packages. Manifold's
+`execution.runtimeToolClosures` can expand explicitly selected Nix packages;
+it never mounts the whole host store. These are private job resources, not
+global host packages or borrowed project environments. Project-specific build
+dependencies remain the workspace's responsibility. Account sign-in and
+service workers do not acquire this broader coding tool group.
+
+The `system` group must also provide the owner's reviewed public resolver at
+`/etc/resolv.conf` and CA bundle at `/etc/ssl/certs/ca-certificates.crt`. Native
+Code operations declare `SSL_CERT_FILE` at that in-job path; ordinary launch
+also declares `GIT_SSL_CAINFO`. Host networking does not supply these files or
+inherit the host environment.
+
 Native Plugins manages installation, resource/location bindings, consent and
 retained job lifecycle. First review/install the declared instance owner's system
 and managed `atyrode.code.accounts.omp-auth` bindings. Accounts owns the independent
@@ -131,6 +148,11 @@ provisioning daemon or supplies the owner's system closure.
 runs the pinned OMP version probe as a native job; repeated launches use
 separately consented write access. Preparation never replaces existing locations
 or clones a repository.
+First-use completion follows a successful retained preparation job for the exact
+current resource binding. Existing folders use that same safe operation; no
+local browser shortcut bypasses the runtime check or loses completion on reload.
+The native permission-review action remains reachable before model-connection
+setup, including when the required invocation consent has not yet been granted.
 
 ## Publication and mutation authority
 

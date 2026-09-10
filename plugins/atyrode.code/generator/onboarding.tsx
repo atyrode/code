@@ -22,7 +22,6 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const [classifierModel, setClassifierModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [existingWorkspace, setExistingWorkspace] = useState(false);
   const [accountsContinued, setAccountsContinued] = useState(settings);
   const [selectedStep, setSelectedStep] = useState<number | null>(settings ? 3 : null);
   const pending = useRef(false);
@@ -54,7 +53,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const prepared = matchingJobs.some(job => job.state === "exited" && job.result?.exitCode === 0);
   const preparing = matchingJobs.find(job => runningStates.has(job.state));
   const latestPreparation = matchingJobs[0];
-  const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
+  const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared ? 4 : 5;
   const step = selectedStep ?? (settings ? nextStep === 2 ? 2 : 3 : nextStep);
   const reviewCurrent = review !== null && record?.revision === review.revision;
   function refresh() { configuration.refresh(); setup.refresh(); serviceConfiguration.refresh(); history.refresh(); }
@@ -117,11 +116,9 @@ export function Onboarding({ host, target, available, settings = false, onDone }
             })}>{busy ? "Configuring…" : "Use this connection"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
           </>}
         </details>}
-        {modelConnection && <>
           <p>Review Code’s workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
           <ul className="plugin-atyrode_code_generator__requirements">{requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "prepare-workspace" ? "workspace preparation" : operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "native setup needed"}</span></li>)}</ul>
           <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review Code permissions</button>
-        </>}
         <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>check again</button>
       </>}
       {step === 3 && <>
@@ -135,12 +132,11 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         </>}
       </>}
       {step === 4 && <>
-        <p>{prepared ? "This runtime has a successful workspace preparation. Existing folders are kept." : "Create the folders declared in native setup, or use folders already bound to this workspace. Existing folders are never replaced."}</p>
+        <p>{prepared ? "This runtime has a successful workspace preparation. Existing folders are kept." : "Prepare the declared workspace folders and verify the approved runtime. Missing folders are created; existing folders are kept. The native result records completion for this exact setup."}</p>
         {history.error && <p role="status">{history.error}</p>}
         {preparing && <p role="status">Preparing workspace · {preparing.state}</p>}
         {latestPreparation && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The last preparation did not complete successfully. Inspect its native result before trying again.</p>}
-        <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || history.runs === null || history.error !== null || !!preparing || prepared} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision }); if (mounted.current) setSelectedStep(null); }); }}>{prepared ? "Workspace prepared" : busy || preparing ? "Preparing…" : "Create new workspace"}</button>
-          {!settings && !prepared && <button type="button" disabled={busy || !!preparing} onClick={() => { setExistingWorkspace(true); setSelectedStep(null); }}>Use existing bound folders</button>}</div>
+        <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || history.runs === null || history.error !== null || !!preparing || prepared} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision }); if (mounted.current) setSelectedStep(null); }); }}>{prepared ? "Workspace prepared" : busy || preparing ? "Preparing…" : "Prepare workspace"}</button>
         <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>preparation history</button>
       </>}
       {step === 5 && <CatalogWorkbench host={host} target={target} available={available} onDone={() => { refresh(); onDone(); }} />}
