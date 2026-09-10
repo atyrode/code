@@ -26,7 +26,7 @@ function document(): CatalogDocument {
 
 interface Fixture {
   ctx: CodeContext;
-  access: { containerScope: string | null; readable: Set<string>; writable: Set<string> };
+  access: { isRoot: boolean; containerScope: string | null; readable: Set<string>; writable: Set<string> };
   resources: { product: string; artifact: string; binding: string; installation: string; brokerRevision: string; brokerOwner: string; policy: string };
   metadata: ProjectedBrokerSnapshot;
   holdTwoReads(): void;
@@ -35,7 +35,7 @@ interface Fixture {
 
 function fixture(isRoot = false): Fixture {
   const store = new Map<string, string>();
-  const access = { containerScope: null as string | null, readable: new Set(["container-a", "container-b"]), writable: new Set(["container-a", "container-b"]) };
+  const access = { isRoot, containerScope: null as string | null, readable: new Set(["container-a", "container-b"]), writable: new Set(["container-a", "container-b"]) };
   const resources = { product: "a".repeat(64), artifact: "b".repeat(64), binding: "c".repeat(64), installation: "install-1",
     brokerRevision: "broker-1", brokerOwner: "broker-owner", policy: "d".repeat(64) };
   const metadata: ProjectedBrokerSnapshot = { credentials: [
@@ -53,7 +53,7 @@ function fixture(isRoot = false): Fixture {
     auth: {
       principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" },
       caps: ["containers:read", "containers:write", "machines:run", "services:read", "services:invoke", "terminals:spawn"],
-      containerScope: null, isRoot,
+      containerScope: null, get isRoot() { return access.isRoot; },
       allows: async (cap, node) => node?.kind === "container" &&
         ((cap === "containers:read" && access.readable.has(node.containerId)) ||
           (cap === "containers:write" && access.writable.has(node.containerId))),
@@ -580,7 +580,7 @@ describe("instance-owned OMP sign-in", () => {
     await accepted(f, "prepareSignIn", input);
     f.accountResources.installation = "accounts-install-2";
     const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
-    f.ctx.auth.isRoot = false;
+    f.access.isRoot = false;
     expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
       revision: review.expectedBrokerRevision, owner: f.state.owner, canSignIn: false, canUpdateRuntime: false,
     });
@@ -590,7 +590,7 @@ describe("instance-owned OMP sign-in", () => {
     expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,
       expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest }))
       .toEqual({ refused: "code_service_owner_required" });
-    f.ctx.auth.isRoot = true;
+    f.access.isRoot = true;
     const allows = f.ctx.auth.allows;
     f.ctx.auth.allows = async (cap, node) => cap !== "services:configure" && allows(cap, node);
     expect(await invoke(f, "promoteAccountRuntime", { containerId: target.containerId,

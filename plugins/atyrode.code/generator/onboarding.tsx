@@ -80,7 +80,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
       {step !== 0 && !available && <p role="status">The selected workspace machine is unavailable. Restore its native connection to prepare or run Code. Instance account sign-in is independent.</p>}
       {step !== 0 && configuration.error && <p role="status">{configuration.error}</p>}
       {step !== 0 && setup.error && <p role="status">{setup.error}</p>}
-      {!settings && <div hidden={step !== 0}><OmpSignIn host={host} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} /></div>}
+      {(!settings || step === 0) && <div hidden={step !== 0}><OmpSignIn host={host} active={step === 0} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} /></div>}
       {step === 1 && <>
         <p>Save this workspace’s profile, model catalog and account choices. Completed setup is remembered here.</p>
         <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>

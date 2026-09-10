@@ -32,6 +32,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   const disabled = choices ? disabledAccountReferences(choices) : [];
   const [draft, setDraft] = useState<PresetDraft | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [signInExpanded, setSignInExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
@@ -93,7 +94,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       <button type="button" onClick={refresh}>refresh</button>
       {onDone && <button type="button" disabled={busy} onClick={onDone}>done</button>}
     </header>
-    {choices ? <details className="plugin-atyrode_code__account-details"><summary>Add or manage accounts in OMP</summary><OmpSignIn host={host} showAccounts={false} /></details> : <OmpSignIn host={host} />}
+    {choices ? <details className="plugin-atyrode_code__account-details" onToggle={event => setSignInExpanded(event.currentTarget.open)}><summary>Add or manage accounts in OMP</summary><OmpSignIn host={host} showAccounts={false} active={signInExpanded} /></details> : <OmpSignIn host={host} />}
     {!target && <p role="status">Choose a workspace machine to edit project account choices. Instance accounts and OMP sign-in do not depend on that selection.</p>}
     {target && !available && <p role="status">Workspace machine unavailable. Project account choices are disabled; instance account discovery and OMP sign-in remain independent.</p>}
     {!host.authoring && <p role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
