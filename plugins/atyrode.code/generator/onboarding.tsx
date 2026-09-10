@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { CODE_PLUGIN_ID, type ActionResult, type Target } from "../contract.ts";
+import { CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type ActionResult, type Target } from "../contract.ts";
 import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
 
 const steps = ["Accounts", "Workspace", "Permissions", "Resources", "Folders", "Models"] as const;
-const titles = ["Connect your accounts", "Set up this workspace", "Approve this machine", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
+const titles = ["Connect your accounts", "Set up this workspace", "Prepare this machine", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
 export function Onboarding({ host, target, available, settings = false, onDone }: {
   host: HostServices; target: Target; available: boolean; settings?: boolean; onDone: () => void;
@@ -16,6 +16,10 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const history = useCodeRuns(host, target, "prepare-workspace");
   const record = configuration.data?.configuration ?? null;
   const [review, setReview] = useState<(ActionResult<"reviewResources"> & { revision: number }) | null>(null);
+  const [serviceReview, setServiceReview] = useState<{ input: ActionInput<"reviewServices">; result: ActionResult<"reviewServices"> } | null>(null);
+  const [classifierMode, setClassifierMode] = useState<"keep" | "set" | "remove">("keep");
+  const [classifierOrigin, setClassifierOrigin] = useState("");
+  const [classifierModel, setClassifierModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [existingWorkspace, setExistingWorkspace] = useState(false);
@@ -25,6 +29,15 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const writable = host.authoring !== null;
+  const serviceConfiguration = useCodeQuery(host, "readServiceConfiguration", record && writable ? target : null);
+  const gateway = serviceConfiguration.data?.runtimeCandidates.find(candidate =>
+    candidate.runtime.pluginId === GATEWAY_PLUGIN_ID && candidate.runtime.operationId === GATEWAY_OPERATION_ID);
+  const modelConnection = setup.data?.services.find(service => service.serviceId === "omp" &&
+    ["models", "stream"].every(id => service.operations.some(operation => operation.operationId === id && operation.ready)));
+  const reviewedGateway = serviceReview?.result.policies.find(policy => policy.serviceId === "omp")?.runtime;
+  const serviceReviewCurrent = serviceReview !== null && serviceConfiguration.data?.configuration.revision === serviceReview.input.expectedServiceRevision &&
+    gateway?.ready === true && reviewedGateway?.installationRevision === gateway.runtime.installationRevision &&
+    reviewedGateway?.artifactSha256 === gateway.runtime.artifactSha256 && reviewedGateway?.resourceBindingDigest === gateway.runtime.resourceBindingDigest;
   const execution = setup.data?.execution;
   const installation = execution?.installation;
   const requiredOperations = ["prepare-workspace", "catalog-inventory", "launch"];
@@ -32,7 +45,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const currentPins = record?.resources?.execution;
   const resourcesCurrent = record?.resources?.productSha256 === setup.data?.productSha256 && currentPins && installation && currentPins.installationRevision === installation.revision && currentPins.artifactSha256 === installation.artifactSha256 &&
     requiredOperations.every(operation => currentPins.operations[`${CODE_PLUGIN_ID}.${operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.resourceBindingDigest) &&
-    ["broker", "omp"].every(id => {
+    ["broker", "omp", ...(setup.data?.services.some(service => service.serviceId === "suggest") || record?.resources?.services.suggest ? ["suggest"] : [])].every(id => {
       const saved = record?.resources?.services[id];
       return saved && setup.data?.services.some(service => service.serviceId === saved.serviceId && service.revision === saved.revision && service.policySha256 === saved.policySha256);
     });
@@ -44,7 +57,7 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared && !existingWorkspace ? 4 : 5;
   const step = selectedStep ?? (settings ? nextStep === 2 ? 2 : 3 : nextStep);
   const reviewCurrent = review !== null && record?.revision === review.revision;
-  function refresh() { configuration.refresh(); setup.refresh(); history.refresh(); }
+  function refresh() { configuration.refresh(); setup.refresh(); serviceConfiguration.refresh(); history.refresh(); }
   async function perform(work: () => Promise<void>) {
     if (pending.current || !writable) return;
     pending.current = true; setBusy(true); setMessage(null);
@@ -73,9 +86,43 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
       </>}
       {step === 2 && <>
-        <p>Approve Code’s runtime, workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
-        <ul className="plugin-atyrode_code_generator__requirements">{requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "prepare-workspace" ? "workspace preparation" : operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "approval needed"}</span></li>)}</ul>
-        <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open native setup</button><button type="button" onClick={() => { setSelectedStep(null); refresh(); }}>check again</button></div>
+        {(!modelConnection || settings) && <details className="plugin-atyrode_code__details" open={!modelConnection}>
+          <summary>Model connection{modelConnection ? " · configured" : ""}</summary>
+          <p>Connect this machine’s reviewed runtime to your shared accounts. Configuring it does not start a provider request or change the account broker.</p>
+          {serviceConfiguration.error && <p role="status">{serviceConfiguration.error}</p>}
+          {settings && <div className="plugin-atyrode_code_generator__fields">
+            <label>Suggestions<select value={classifierMode} disabled={busy} onChange={event => { setClassifierMode(event.target.value as typeof classifierMode); setServiceReview(null); }}>
+              <option value="keep">Keep current configuration</option><option value="set">Configure a classifier</option><option value="remove">Disable suggestions</option>
+            </select></label>
+            {classifierMode === "set" && <>
+              <label>Ollama origin<input type="url" value={classifierOrigin} placeholder="http://127.0.0.1:11434" disabled={busy} onChange={event => { setClassifierOrigin(event.target.value); setServiceReview(null); }} /></label>
+              <label>Classifier model<input value={classifierModel} placeholder="Model name" disabled={busy} onChange={event => { setClassifierModel(event.target.value); setServiceReview(null); }} /></label>
+            </>}
+          </div>}
+          {!serviceReview && (gateway?.ready ? <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceConfiguration.data?.connected || (classifierMode === "set" && (!classifierOrigin.trim() || !classifierModel.trim()))} onClick={() => {
+            if (serviceConfiguration.data) void perform(async () => {
+              const input: ActionInput<"reviewServices"> = { ...target, expectedServiceRevision: serviceConfiguration.data!.configuration.revision,
+                ...(classifierMode === "keep" ? {} : { classifier: classifierMode === "remove" ? null : { origin: classifierOrigin.trim(), model: classifierModel.trim() } }) };
+              const result = await callCodeAction(host, "reviewServices", input);
+              if (mounted.current) setServiceReview({ input, result });
+            });
+          }}>{busy ? "Reviewing…" : "Review model connection"}</button> : <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${serviceConfiguration.data ? GATEWAY_PLUGIN_ID : CODE_PLUGIN_ID}`)}>{serviceConfiguration.data ? "Review gateway runtime" : "Open native setup"}</button>)}
+          {serviceReview && <>
+            <p>The gateway’s exact runtime is pinned. Other machine services and your shared account broker are kept unchanged.</p>
+            {!serviceReviewCurrent && <p role="status">Native setup changed. Review the current connection again.</p>}
+            <details className="plugin-atyrode_code__details"><summary>Exact connection policies</summary><pre>{JSON.stringify(serviceReview.result.policies.filter(policy => policy.serviceId === "omp" || policy.serviceId === "suggest"), null, 2)}</pre></details>
+            <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceReviewCurrent} onClick={() => void perform(async () => {
+              await callCodeAction(host, "configureServices", { ...serviceReview.input, reviewDigest: serviceReview.result.reviewDigest });
+              if (mounted.current) { setServiceReview(null); setSelectedStep(null); }
+            })}>{busy ? "Configuring…" : "Use this connection"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
+          </>}
+        </details>}
+        {modelConnection && <>
+          <p>Review Code’s workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
+          <ul className="plugin-atyrode_code_generator__requirements">{requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "prepare-workspace" ? "workspace preparation" : operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "native setup needed"}</span></li>)}</ul>
+          <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review Code permissions</button>
+        </>}
+        <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>check again</button>
       </>}
       {step === 3 && <>
         <p>Use this machine’s approved runtime with the shared instance account broker. Reviewing does not install anything or grant additional access.</p>
