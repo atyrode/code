@@ -86,7 +86,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     await perform(async stillCurrent => {
       await callCodeAction(host, "promoteAccountRuntime", { containerId,
         expectedBrokerRevision: runtimeReview.expectedBrokerRevision, reviewDigest: runtimeReview.reviewDigest });
-      if (stillCurrent()) { setRuntimeReview(null); setMessage("Shared runtime applied. Waiting for OMP readiness…"); }
+      if (stillCurrent()) { setRuntimeReview(null); setMessage("Shared runtime applied."); }
     });
   }
   return <section className="plugin-atyrode_code plugin-atyrode_code__sign-in" aria-labelledby={`${id}-title`}>

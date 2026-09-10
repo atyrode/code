@@ -8,12 +8,18 @@ import { OmpSignIn } from "../omp-sign-in.tsx";
 const steps = ["Accounts", "Workspace", "Permissions", "Resources", "Folders", "Models"] as const;
 const titles = ["Connect your accounts", "Set up this workspace", "Prepare this machine", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
+const requiredOperations = ["catalog-inventory", "launch"] as const;
+const workspaceRoutes = [
+  { mode: "create", operation: "prepare-workspace", label: "Create new folders", description: "Create new workspace and session folders. Existing folders are never overwritten." },
+  { mode: "existing", operation: "validate-workspace", label: "Check existing folders", description: "Check your existing workspace and session folders without changing their contents." },
+] as const;
 export function Onboarding({ host, target, available, settings = false, onDone }: {
   host: HostServices; target: Target; available: boolean; settings?: boolean; onDone: () => void;
 }) {
   const configuration = useCodeQuery(host, "readConfiguration", target);
   const setup = useCodeQuery(host, "readSetup", target);
-  const history = useCodeRuns(host, target, "prepare-workspace");
+  const creationHistory = useCodeRuns(host, target, "prepare-workspace");
+  const validationHistory = useCodeRuns(host, target, "validate-workspace");
   const record = configuration.data?.configuration ?? null;
   const [review, setReview] = useState<(ActionResult<"reviewResources"> & { revision: number }) | null>(null);
   const [serviceReview, setServiceReview] = useState<{ input: ActionInput<"reviewServices">; result: ActionResult<"reviewServices"> } | null>(null);
@@ -39,24 +45,32 @@ export function Onboarding({ host, target, available, settings = false, onDone }
     reviewedGateway?.artifactSha256 === gateway.runtime.artifactSha256 && reviewedGateway?.resourceBindingDigest === gateway.runtime.resourceBindingDigest;
   const execution = setup.data?.execution;
   const installation = execution?.installation;
-  const requiredOperations = ["prepare-workspace", "catalog-inventory", "launch"];
-  const installed = installation?.enabled && !installation.purgeRequested && requiredOperations.every(operation => execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready);
+  const workspaceReady = workspaceRoutes.some(route => execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.ready);
+  const installed = installation?.enabled && !installation.purgeRequested && workspaceReady &&
+    requiredOperations.every(operation => execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready);
   const currentPins = record?.resources?.execution;
-  const resourcesCurrent = record?.resources?.productSha256 === setup.data?.productSha256 && currentPins && installation && currentPins.installationRevision === installation.revision && currentPins.artifactSha256 === installation.artifactSha256 &&
+  const resourcesCurrent = installed && record?.resources?.productSha256 === setup.data?.productSha256 && currentPins && installation && currentPins.installationRevision === installation.revision && currentPins.artifactSha256 === installation.artifactSha256 &&
+    workspaceRoutes.some(route => execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.ready &&
+      currentPins.operations[`${CODE_PLUGIN_ID}.${route.operation}`] === execution.operations[`${CODE_PLUGIN_ID}.${route.operation}`]?.resourceBindingDigest) &&
     requiredOperations.every(operation => currentPins.operations[`${CODE_PLUGIN_ID}.${operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.resourceBindingDigest) &&
     ["broker", "omp", ...(setup.data?.services.some(service => service.serviceId === "suggest") || record?.resources?.services.suggest ? ["suggest"] : [])].every(id => {
       const saved = record?.resources?.services[id];
       return saved && setup.data?.services.some(service => service.serviceId === saved.serviceId && service.revision === saved.revision && service.policySha256 === saved.policySha256);
     });
-  const matchingJobs = history.runs?.flatMap(run => run.job && installation && run.job.installationRevision === installation.revision && run.job.artifactSha256 === installation.artifactSha256 &&
-    run.job.resourceBindingDigest === execution?.operations?.[`${CODE_PLUGIN_ID}.prepare-workspace`]?.resourceBindingDigest ? [run.job] : []) ?? [];
+  const matchingJobs = workspaceRoutes.flatMap(route => {
+    const history = route.mode === "create" ? creationHistory : validationHistory;
+    const operationId = `${CODE_PLUGIN_ID}.${route.operation}`;
+    const operation = execution?.operations?.[operationId];
+    return history.runs?.flatMap(run => run.job && installation && operation &&
+      run.job.operationId === operationId && run.job.installationRevision === installation.revision && run.job.artifactSha256 === installation.artifactSha256 &&
+      run.job.resourceBindingDigest === operation.resourceBindingDigest ? [run.job] : []) ?? [];
+  });
   const prepared = matchingJobs.some(job => job.state === "exited" && job.result?.exitCode === 0);
   const preparing = matchingJobs.find(job => runningStates.has(job.state));
-  const latestPreparation = matchingJobs[0];
   const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared ? 4 : 5;
   const step = selectedStep ?? (settings ? nextStep === 2 ? 2 : 3 : nextStep);
   const reviewCurrent = review !== null && record?.revision === review.revision;
-  function refresh() { configuration.refresh(); setup.refresh(); serviceConfiguration.refresh(); history.refresh(); }
+  function refresh() { configuration.refresh(); setup.refresh(); serviceConfiguration.refresh(); creationHistory.refresh(); validationHistory.refresh(); }
   async function perform(work: () => Promise<void>) {
     if (pending.current || !writable) return;
     pending.current = true; setBusy(true); setMessage(null);
@@ -116,8 +130,11 @@ export function Onboarding({ host, target, available, settings = false, onDone }
             })}>{busy ? "Configuring…" : "Use this connection"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
           </>}
         </details>}
-          <p>Review Code’s workspace locations and launch permissions in Manifold. Paid benchmarks and account changes remain separate permissions.</p>
-          <ul className="plugin-atyrode_code_generator__requirements">{requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "prepare-workspace" ? "workspace preparation" : operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "native setup needed"}</span></li>)}</ul>
+          <p>Approve folder creation or an existing-folder check, plus model discovery and launch. Paid benchmarks and account changes have separate permissions.</p>
+          <ul className="plugin-atyrode_code_generator__requirements">
+            <li data-ready={workspaceReady}><span>workspace folders</span><span>{workspaceReady ? "ready" : "native setup needed"}</span></li>
+            {requiredOperations.map(operation => <li key={operation} data-ready={execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready === true}><span>{operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.ready ? "ready" : "native setup needed"}</span></li>)}
+          </ul>
           <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review Code permissions</button>
         <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>check again</button>
       </>}
@@ -132,12 +149,22 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         </>}
       </>}
       {step === 4 && <>
-        <p>{prepared ? "This runtime has a successful workspace preparation. Existing folders are kept." : "Prepare the declared workspace folders and verify the approved runtime. Missing folders are created; existing folders are kept. The native result records completion for this exact setup."}</p>
-        {history.error && <p role="status">{history.error}</p>}
-        {preparing && <p role="status">Preparing workspace · {preparing.state}</p>}
-        {latestPreparation && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The last preparation did not complete successfully. Inspect its native result before trying again.</p>}
-        <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || history.runs === null || history.error !== null || !!preparing || prepared} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision }); if (mounted.current) setSelectedStep(null); }); }}>{prepared ? "Workspace prepared" : busy || preparing ? "Preparing…" : "Prepare workspace"}</button>
-        <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>preparation history</button>
+        <p>{prepared ? "Workspace ready. Setup is saved for this runtime." : "Create new workspace folders or check folders you already use."}</p>
+        {preparing && <p role="status">Checking workspace…</p>}
+        {matchingJobs.length > 0 && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The workspace check did not finish successfully. Review its result before trying again.</p>}
+        {!prepared && workspaceRoutes.map(route => {
+          const operationId = `${CODE_PLUGIN_ID}.${route.operation}`;
+          const routeReady = execution?.operations?.[operationId]?.ready === true &&
+            currentPins?.operations[operationId] === execution.operations[operationId]?.resourceBindingDigest;
+          const history = route.mode === "create" ? creationHistory : validationHistory;
+          return <div key={route.mode}>
+            <p>{route.description}</p>
+            {!routeReady && <p role="status">This option needs permission. Review access below, or use the other option if it matches your folders.</p>}
+            {history.error && <p role="status">{history.error}</p>}
+            <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !resourcesCurrent || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision, mode: route.mode }); if (mounted.current) setSelectedStep(null); }); }}>{route.label}</button>
+          </div>;
+        })}
+        <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Permissions and history</button>
       </>}
       {step === 5 && <CatalogWorkbench host={host} target={target} available={available} onDone={() => { refresh(); onDone(); }} />}
     </div>

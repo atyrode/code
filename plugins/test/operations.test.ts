@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceConfigurationSchema,
-  ServiceReplySchema, type ServiceConfiguration, type ServicePolicy } from "@manifold/protocol";
+  PublicJobSchema, ServiceReplySchema, type ServiceConfiguration, type ServicePolicy } from "@manifold/protocol";
 import { actionDoor, actionSchemas, ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "../atyrode.code/auth-contract.ts";
@@ -342,6 +342,129 @@ describe("exact native launch preview", () => {
       expect((await configuration(f))?.selection?.planYolo).toBe(!record.selection!.planYolo);
     });
   }
+});
+
+function workspaceFixture(mode: ActionInput<"prepareWorkspace">["mode"]) {
+  const f = fixture();
+  const operationId = `${CODE_PLUGIN_ID}.${mode === "create" ? "prepare-workspace" : "validate-workspace"}`;
+  const alternateId = `${CODE_PLUGIN_ID}.${mode === "create" ? "validate-workspace" : "prepare-workspace"}`;
+  const state = { ready: true, consent: true, attempts: 0 };
+  const describe = f.ctx.jobs.describe;
+  f.ctx.jobs.describe = async args => {
+    const description = await describe(args);
+    return { ...description, installation: { ...description.installation!, ready: false }, operations: {
+      [operationId]: { ready: state.ready, reason: state.ready ? null : "consent_required", resourceBindingDigest: f.resources.binding },
+      [alternateId]: { ready: false, reason: "consent_required", resourceBindingDigest: "f".repeat(64) },
+    } };
+  };
+  f.ctx.newId = async () => "workspace-attempt";
+  f.ctx.jobs.execute = async args => {
+    state.attempts++;
+    if (args.operationId !== operationId || !state.consent) return unavailable();
+    return PublicJobSchema.parse({
+      jobId: args.jobId, machineId: args.machineId, pluginId: CODE_PLUGIN_ID, operationId,
+      installationRevision: args.installationRevision, artifactSha256: args.artifactSha256,
+      resourceBindingDigest: args.resourceBindingDigest, inputDigest: digestOf(args.input),
+      state: "queued", nextInputSeq: null, result: null,
+      authority: { origin: { kind: "action", traceId: "workspace-trace", door: `${CODE_PLUGIN_ID}.prepareWorkspace` },
+        requester: "writer", executor: null, decision: null },
+    });
+  };
+  return { ...f, state, operationId };
+}
+
+async function promotedWorkspace(f: Fixture) {
+  const initial = await initialize(f);
+  const review = await accepted(f, "reviewResources", { ...target, expectedRevision: initial.revision });
+  return accepted(f, "promoteResources", { ...target, expectedRevision: initial.revision, reviewDigest: review.reviewDigest });
+}
+
+describe("explicit native workspace preparation", () => {
+  for (const mode of ["create", "existing"] as const) {
+    test(`${mode} admits only its selected operation without the alternate consent`, async () => {
+      const f = workspaceFixture(mode);
+      const record = await promotedWorkspace(f);
+      const input = { ...target, expectedRevision: record.revision, mode };
+      expect(await accepted(f, "prepareWorkspace", input)).toMatchObject({ operationId: f.operationId, state: "queued" });
+      expect(await invoke(f, "prepareWorkspace", { ...input, mode: mode === "create" ? "existing" : "create" }))
+        .toEqual({ refused: "code_resources_incomplete" });
+      expect(f.state.attempts).toBe(1);
+    });
+
+  }
+  const mode = "existing" as const;
+    test(`${mode} cannot bypass withdrawn native readiness or admission consent`, async () => {
+      const f = workspaceFixture(mode);
+      const record = await promotedWorkspace(f);
+      const input = { ...target, expectedRevision: record.revision, mode };
+      f.state.ready = false;
+      expect(await invoke(f, "prepareWorkspace", input)).toEqual({ refused: "code_resources_incomplete" });
+      expect(f.state.attempts).toBe(0);
+      f.state.ready = true;
+      f.state.consent = false;
+      expect(await invoke(f, "prepareWorkspace", input)).toEqual({ refused: "code_operation_unavailable" });
+      expect(f.state.attempts).toBe(1);
+    });
+
+    test(`${mode} refuses changed promoted installation, artifact or operation binding before admission`, async () => {
+      for (const change of [
+        (f: Fixture) => { f.resources.installation = "install-2"; },
+        (f: Fixture) => { f.resources.artifact = "e".repeat(64); },
+        (f: Fixture) => { f.resources.binding = "e".repeat(64); },
+      ]) {
+        const f = workspaceFixture(mode);
+        const record = await promotedWorkspace(f);
+        change(f);
+        expect(await invoke(f, "prepareWorkspace", { ...target, expectedRevision: record.revision, mode }))
+          .toEqual({ refused: "code_resources_changed" });
+        expect(f.state.attempts).toBe(0);
+      }
+    });
+
+
+  test("missing or unsupported modes never silently choose a workspace operation", async () => {
+    const f = workspaceFixture("existing");
+    const record = await promotedWorkspace(f);
+    const handler = actionHandlers[actionDoor("prepareWorkspace")]!;
+    for (const input of [
+      { ...target, expectedRevision: record.revision },
+      { ...target, expectedRevision: record.revision, mode: "reuse" },
+    ]) expect(await handler(f.ctx, input)).toEqual({ refused: "code_invalid_request" });
+    expect(f.state.attempts).toBe(0);
+  });
+
+  test("existing validation retains container scope, write authority and revision checks", async () => {
+    const f = workspaceFixture("existing");
+    const record = await promotedWorkspace(f);
+    const input = { ...target, expectedRevision: record.revision, mode: "existing" as const };
+    f.access.containerScope = "container-b";
+    expect(await invoke(f, "prepareWorkspace", input)).toEqual({ refused: "code_scope_refused" });
+    f.access.containerScope = null;
+    f.access.writable.clear();
+    expect(await invoke(f, "prepareWorkspace", input)).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    expect(await invoke(f, "prepareWorkspace", { ...input, expectedRevision: record.revision - 1 }))
+      .toEqual({ refused: "code_stale_preferences" });
+    expect(f.state.attempts).toBe(0);
+  });
+
+  test("existing validation refuses preferences committed during native resource observation", async () => {
+    const f = workspaceFixture("existing");
+    const record = await promotedWorkspace(f);
+    const describe = f.ctx.jobs.describe;
+    let changed = false;
+    f.ctx.jobs.describe = async args => {
+      if (!changed) {
+        changed = true;
+        await accepted(f, "changeAccounts", { ...target, expectedRevision: record.revision,
+          change: { kind: "create-preset", preset: { id: "new", name: "New", disabled: [] } } });
+      }
+      return describe(args);
+    };
+    expect(await invoke(f, "prepareWorkspace", { ...target, expectedRevision: record.revision, mode: "existing" }))
+      .toEqual({ refused: "code_stale_preferences" });
+    expect(f.state.attempts).toBe(0);
+  });
 });
 
 test("inventory admission refuses account exclusions committed during broker observation", async () => {

@@ -211,11 +211,28 @@ governs execution; a returned placement is not OMP readiness.
 The manifest declares `atyrode.code.workspace` and `atyrode.code.sessions`
 locations for the launch working directory and OMP sessions. These are governed
 location bindings, not arbitrary client paths. On first use, `prepareWorkspace`
-with the current `expectedRevision` starts a native job that creates those
-locations and runs the pinned OMP version probe. Inspect its completed native
-result before launch. Preparation creates missing locations and preserves existing
-folders; it does not replace or import user data. Launch uses separately consented
-write access, so later sessions reuse the locations.
+requires `{ containerId, machineId, expectedRevision, mode: "create" | "existing" }`
+and returns a native `PublicJob`:
+
+- `mode: "create"` dispatches `atyrode.code.prepare-workspace` with native
+  exclusive creation. Both declared directories must be new; existing directories
+  are refused, never overwritten or silently adopted.
+- `mode: "existing"` dispatches `atyrode.code.validate-workspace` with read-only
+  workspace and sessions bindings. Both directories must already exist.
+  Validation preserves them and does not create missing locations.
+
+Both operations run the same pinned OMP version probe without network access.
+Only the selected workspace route needs its exact consent: creation does not
+also require the validation read grant, and validation does not require creation.
+Model inventory and launch retain their separate permissions. Launch uses
+separately consented write access, so later sessions reuse the locations.
+
+Inspect the completed native result before launch. First-use setup reads and
+refreshes both operations' retained histories and accepts a successful receipt
+from either only when its installation revision, artifact hash and operation
+binding digest match the current runtime. Completion survives reload; changed
+runtime pins require a new successful proof. There is no local completion
+shortcut or automatic fallback to creating folders after validation fails.
 
 Preparation does not clone a repository or introduce a private workspace/session
 registry. Native location and terminal lifecycle and OMP's own in-session

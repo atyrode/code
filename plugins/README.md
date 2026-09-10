@@ -144,13 +144,21 @@ installations: promoting workspace or gateway bindings does not replace the
 running broker/sign-in installation. Code's resource promotion adopts these
 exact pins; it does not install or grant consent. No step creates a private
 provisioning daemon or supplies the owner's system closure.
-`prepareWorkspace` creates the declared new workspace/session locations and
-runs the pinned OMP version probe as a native job; repeated launches use
-separately consented write access. Preparation never replaces existing locations
-or clones a repository.
-First-use completion follows a successful retained preparation job for the exact
-current resource binding. Existing folders use that same safe operation; no
-local browser shortcut bypasses the runtime check or loses completion on reload.
+`prepareWorkspace` requires `mode: "create" | "existing"` with the current
+`expectedRevision`. Creation dispatches native `prepare-workspace`, which creates
+the declared new workspace/session locations exclusively and refuses existing
+directories. Existing-folder validation dispatches separate `validate-workspace`
+with read-only bindings: both directories must already exist, and validation
+preserves them without creating anything. Both routes run the same pinned,
+no-network OMP version probe as a native job; neither clones a repository.
+Approve one route's exact native consent, not both create and read grants.
+Model discovery and launch still need their own permissions; repeated launches
+use separately consented write access.
+First-use completion follows a successful retained job from either workspace
+operation matching the current installation revision, artifact hash and that
+operation's resource binding digest. Runtime pin changes require a new successful
+proof. Both native histories are refreshed, so reload preserves completion
+without a local browser shortcut, blind creation fallback or skipped runtime check.
 The native permission-review action remains reachable before model-connection
 setup, including when the required invocation consent has not yet been granted.
 

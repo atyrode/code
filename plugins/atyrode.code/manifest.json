@@ -296,6 +296,47 @@
         },
         "stdin": false
       },
+      "atyrode.code.validate-workspace": {
+        "argv": [
+          {
+            "literal": "--version"
+          }
+        ],
+        "input": {},
+        "environment": {
+          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+        },
+        "runtimeTools": [
+          "omp",
+          "system"
+        ],
+        "executable": {
+          "runtimeTool": "omp"
+        },
+        "services": [],
+        "workingDirectory": {
+          "locationId": "atyrode.code.workspace"
+        },
+        "locations": [
+          {
+            "locationId": "atyrode.code.workspace",
+            "access": "read"
+          },
+          {
+            "locationId": "atyrode.code.sessions",
+            "access": "read"
+          }
+        ],
+        "outputs": [],
+        "network": "none",
+        "limits": {
+          "timeoutMs": 60000,
+          "memoryBytes": 2147483648,
+          "processes": 64,
+          "outputBytes": 1048576
+        },
+        "stdin": false
+      },
       "atyrode.code.launch": {
         "argv": [
           {

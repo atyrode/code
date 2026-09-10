@@ -121,7 +121,7 @@ export function useCodeRuns(host: HostServices, target: Target, operation: strin
       })) throw new Error("Unexpected history scope");
       return { runs: value.runs, error: null };
     } catch {
-      return { runs: [], error: "Preparation history could not be read. No work has been restarted." };
+      return { runs: [], error: "Workspace check history could not be read. No work has been restarted." };
     }
   }, FALLBACK_POLL_MS, {
     key: `${CODE_PLUGIN_ID}.runs:${target.machineId}:${operationId}`, restartKey: host.principal.id,
