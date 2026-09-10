@@ -7,17 +7,19 @@ import { DomainError } from "../domain/contracts.ts";
 import { ProbeError } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
+import { BROKER_SERVICE_ID } from "./auth-contract.ts";
 import { accountObservation, currentService, mutateCredential, usageObservation } from "./broker.ts";
 import { rootActionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { benchmarkResult, inventoryResult, launchInput, launchPreview, requirePromotedOperation, startBenchmark, startInventory } from "./execution.ts";
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
   currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
+import { configureServices, describeSharedBroker, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
   stageBenchmark: true, promoteResources: true, clearAccountBlocks: true, disableCredential: true,
-  prepareWorkspace: true,
+  prepareWorkspace: true, configureServices: true,
 };
 const instanceReads: Partial<Record<RootAction, true>> = { accounts: true };
 // Native APIs resolve stored resource pins and enforce the caller's concrete authority.
@@ -29,6 +31,9 @@ const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
   clearAccountBlocks: ["services:read", "services:invoke"],
   disableCredential: ["services:read", "services:invoke"],
   readSetup: ["machines:run", "services:read"],
+  readServiceConfiguration: ["services:configure"],
+  reviewServices: ["services:configure", "machines:run"],
+  configureServices: ["services:configure", "machines:run"],
   reviewResources: ["machines:run", "services:read"],
   promoteResources: ["machines:run", "services:read"],
   prepareWorkspace: ["machines:run", "services:read", "locations:create"],
@@ -50,6 +55,9 @@ function refusal(error: unknown) {
 }
 type ProductHandlers = { [K in RootAction]: (ctx: CodeContext, args: ActionInput<K>) => Promise<ActionResult<K>> };
 const productHandlers: ProductHandlers = {
+  readServiceConfiguration,
+  reviewServices,
+  configureServices,
   async readConfiguration(ctx, args) {
     const { record } = await readConfiguration(ctx, args);
     return { revision: record?.revision ?? 0, configuration: record };
@@ -92,10 +100,20 @@ const productHandlers: ProductHandlers = {
   async readSetup(ctx, args) {
     await authorizeTarget(ctx, args);
     const services = await ctx.services.describe({ machineId: args.machineId });
+    const broker = await describeSharedBroker(ctx);
+    const observedBroker = services.services.find(service => service.serviceId === BROKER_SERVICE_ID);
+    const pins = services.services.filter(service => service.serviceId !== BROKER_SERVICE_ID);
+    if (broker.configuration) {
+      const { revision, policySha256 } = broker.configuration;
+      // Instance descriptions expose policy identity, not per-operation authority.
+      // Reuse operations only when native machine discovery observed these pins.
+      pins.push({ serviceId: BROKER_SERVICE_ID, revision, policySha256,
+        operations: observedBroker?.revision === revision && observedBroker.policySha256 === policySha256 ? observedBroker.operations : [] });
+    }
     let execution = null;
     try { execution = (await currentResources(ctx, args.machineId)).description; }
     catch { /* Service-only readiness is useful before worker installation. */ }
-    return { productSha256: await currentProductSha256(ctx), execution, services: services.services, connected: services.connected };
+    return { productSha256: await currentProductSha256(ctx), execution, services: pins, connected: services.connected };
   },
   async reviewResources(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision); requireConfiguration(previous);

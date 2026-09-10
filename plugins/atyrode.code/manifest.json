@@ -13,6 +13,7 @@
     "jobs:cancel",
     "services:read",
     "services:invoke",
+    "services:configure",
     "network:host",
     "locations:read",
     "locations:write",

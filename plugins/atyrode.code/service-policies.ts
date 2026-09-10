@@ -2,15 +2,15 @@ import { z } from "zod";
 import { ServicePolicySchema, ServiceRuntimeSchema, type ServiceOperationPolicy, type ServicePolicy,
   type ServiceProxyOperationPolicy, type ServiceRuntime } from "@manifold/protocol";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
+import { ACCOUNTS_PLUGIN_ID, ClassifierSchema } from "./contract.ts";
 
 export interface CodeServicesInput {
-  classifier: { origin: string; model: string } | null;
+  classifier: z.infer<typeof ClassifierSchema> | null;
   gateway?: ServiceRuntime | null;
 }
 
 const inputSchema = z.strictObject({
-  classifier: z.strictObject({ origin: z.string(), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/:-]{0,511}$/) }).nullable(),
+  classifier: ClassifierSchema.nullable(),
   gateway: ServiceRuntimeSchema.nullish(),
 });
 const capabilities = { "omp-auth-broker-capabilities": "codex-meter-block-scopes" };
