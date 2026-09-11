@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AuthBrokerServerHandle } from "@oh-my-pi/pi-ai/auth-broker/server";
 import type { RemoteAuthCredentialStore as RemoteStore } from "@oh-my-pi/pi-ai/auth-broker/remote-store";
-import type { SnapshotResponse } from "@oh-my-pi/pi-ai/auth-broker/types";
 import { runSdkScenario, type SdkScenarioContext } from "./isolated-sdk.ts";
 
 await runSdkScenario(async (ctx: SdkScenarioContext) => {
@@ -60,7 +59,7 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
         let broker: AuthBrokerServerHandle | undefined;
         let remote: RemoteStore | undefined;
         let pending: Promise<unknown> | undefined;
-        let notified: SnapshotResponse | undefined;
+        const observer: { accesses?: string[] } = {};
         try {
           storage.upsertCredential(provider, credential("synthetic-initial"));
           broker = startAuthBroker({ storage, bind: "127.0.0.1:0", bearerTokens: [bearer], disableRefresher: true });
@@ -80,10 +79,12 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
           ctx.check(row?.credential.type === "oauth", "missing-mutation-row");
           remote = new RemoteAuthCredentialStore({
             client, initialSnapshot: initial.snapshot, backgroundIdleMs: 60_000,
-            onSnapshot(snapshot) { notified = snapshot; },
+            onSnapshot(snapshot) {
+              observer.accesses = snapshot.credentials.filter(entry => entry.provider === provider)
+                .map(entry => entry.credential.type === "oauth" ? entry.credential.access : "not-oauth");
+            },
           });
-          ctx.check(notified === undefined, "constructor-called-snapshot-hook");
-          await eventually(() => notified !== undefined, "initial-stream-not-accepted");
+          await eventually(() => observer.accesses !== undefined, "initial-stream-not-accepted");
           armed = true;
           const mutation = operation === "refresh"
             ? remote.refreshOAuthCredential(provider, row.id, credential("synthetic-initial"))
@@ -121,7 +122,8 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
             if (operation === "upload" || operation === "replace") {
               ctx.check(Array.isArray(result.value), "mutation-did-not-return-rows");
               ctx.check(later === "removed" ? result.value.length === 0
-                : result.value.length === 1 && result.value[0]?.credential.access === "synthetic-canonical-replacement",
+                : result.value.length === 1 && result.value[0]?.credential.type === "oauth"
+                  && result.value[0].credential.access === "synthetic-canonical-replacement",
               "upload-returned-stale-reply");
             }
           }
@@ -131,18 +133,22 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
             ctx.check(current?.type === "oauth" && current.access === "synthetic-canonical-replacement",
               "refresh-writeback-overwrote-canonical-state");
           }
-          // Observe actual stream deltas, not another direct refresh. Callback
-          // consumers must receive exactly the canonical public snapshot as well.
-          await eventually(() => notified === remote!.snapshot, "canonical-hook-not-published");
+          // Observe credentials published to callback consumers without another
+          // direct refresh that could conceal a missing stream notification.
+          await eventually(() => later === "removed" ? observer.accesses?.length === 0
+            : observer.accesses?.length === 1 && observer.accesses[0] === "synthetic-canonical-replacement",
+          "canonical-hook-not-published");
           storage.upsertCredential(provider, credential("synthetic-stream-replacement"));
           await eventually(() => {
             const current = remote!.listAuthCredentials(provider)[0]?.credential;
             return current?.type === "oauth" && current.access === "synthetic-stream-replacement";
           }, "entry-delta-not-published");
-          ctx.check(notified === remote.snapshot, "entry-delta-missing-canonical-hook");
+          const streamed = observer.accesses;
+          ctx.check(streamed?.length === 1 && streamed[0] === "synthetic-stream-replacement",
+            "entry-delta-missing-canonical-hook");
           await storage.remove(provider);
           await eventually(() => remote!.listAuthCredentials(provider).length === 0, "removal-delta-not-published");
-          ctx.check(notified === remote.snapshot && notified.credentials.length === 0, "removal-delta-missing-canonical-hook");
+          ctx.check(observer.accesses?.length === 0, "removal-delta-missing-canonical-hook");
         } finally {
           releaseReply.resolve();
           await pending;

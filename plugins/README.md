@@ -94,9 +94,11 @@ or pass an existing bundle directory to `bun scripts/verify-browser.ts` to check
 older artifacts. Neither the browser scenario nor the other gate commands prove
 live provider authentication or OMP readiness.
 The unit suite exercises isolated synthetic brokers without provider requests,
-covering pool membership, revocation, shutdown persistence and reconnect ordering.
-A locked Bun patch to `@oh-my-pi/pi-ai` supplies the shutdown and snapshot-ordering
-fixes used by the bundled broker and gateway workers. It does not modify the
+covering pool membership, revocation, shutdown persistence, reconnect ordering
+and delayed credential mutation replies. A locked Bun patch to `@oh-my-pi/pi-ai`
+keeps those replies out of the canonical cache and preserves caller deadlines
+while snapshot reads queue, alongside the shutdown and reconnect fixes. The patch
+is used by the bundled broker and gateway workers. It does not modify the
 separately pinned OMP executable.
 
 ## Managed execution resources
