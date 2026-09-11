@@ -1,3 +1,6 @@
+diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-1706731ba3271cd b/.bun-tag-1706731ba3271cd
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/types/auth-broker/refresher.d.ts b/dist/types/auth-broker/refresher.d.ts
 index a45daf7a413e3f9defcbc3fe17effe6602d92fdc..5e5676b1b5fa731c9c6366edb43d65d213910b13 100644
 --- a/dist/types/auth-broker/refresher.d.ts
@@ -102,7 +105,7 @@ index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9f
  
  	async #refreshOne(id: number): Promise<void> {
 diff --git a/src/auth-broker/remote-store.ts b/src/auth-broker/remote-store.ts
-index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037bdb38c0a 100644
+index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d131a1656 100644
 --- a/src/auth-broker/remote-store.ts
 +++ b/src/auth-broker/remote-store.ts
 @@ -257,6 +257,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
@@ -244,7 +247,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037
  					logger.debug("auth-broker stream snapshot older than local; ignoring", {
  						local: this.#generation,
  						incoming: snapshot.generation,
-@@ -568,12 +588,50 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -568,12 +588,68 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  
  	/** Re-hydrate the in-memory snapshot from the broker. */
  	async refreshSnapshot(): Promise<SnapshotResponse> {
@@ -267,18 +270,32 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037
 +		signal.throwIfAborted();
 +		this.#noteActivity();
 +		const previousGeneration = this.#generation;
++		const deadline = maxWaitMs === undefined ? undefined : performance.now() + maxWaitMs;
++		let queueTimer: ReturnType<typeof setTimeout> | undefined;
++		let queueExpired = false;
++		const queuedTimeout = deadline === undefined ? undefined : new Promise<boolean>(resolve => {
++			queueTimer = setTimeout(() => {
++				queueExpired = true;
++				resolve(false);
++			}, maxWaitMs);
++		});
 +		if (this.#foregroundSnapshotCount++ === 0) {
 +			++this.#snapshotAuthority;
 +			this.#streamingActive = false;
 +			this.#activeBackgroundAbort?.abort();
 +		}
 +		const result = this.#foregroundSnapshotQueue.then(async () => {
++			if (queueTimer !== undefined) clearTimeout(queueTimer);
 +			signal.throwIfAborted();
++			if (queueExpired) return false;
 +			if (maxWaitMs !== undefined && this.#generation !== previousGeneration) return true;
 +			const authority = ++this.#snapshotAuthority;
 +			const response = await this.#raceWithSignal(
 +				this.#client.fetchSnapshot({
-+					...(maxWaitMs === undefined ? {} : { ifGenerationGt: this.#generation, waitMs: maxWaitMs }),
++					...(deadline === undefined ? {} : {
++						ifGenerationGt: this.#generation,
++						waitMs: Math.max(0, Math.ceil(deadline - performance.now())),
++					}),
 +					signal,
 +				}),
 +				signal,
@@ -292,13 +309,17 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037
 +			() => { this.#foregroundSnapshotCount--; },
 +			() => { this.#foregroundSnapshotCount--; },
 +		);
-+		return this.#raceWithSignal(result, signal);
++		try {
++			return await this.#raceWithSignal(queuedTimeout ? Promise.race([result, queuedTimeout]) : result, signal);
++		} finally {
++			if (queueTimer !== undefined) clearTimeout(queueTimer);
++		}
 +	}
 +
  	listAuthCredentials(provider?: string): StoredAuthCredential[] {
  		this.#noteActivity();
  		const out: StoredAuthCredential[] = [];
-@@ -735,15 +793,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -735,15 +811,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  	}
  
  	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
@@ -315,7 +336,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037
  	}
  
  	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
-@@ -1173,13 +1223,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -1173,13 +1241,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  
  	/**
  	 * Reject the awaited promise when the caller's signal aborts, without
