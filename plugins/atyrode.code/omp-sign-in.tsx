@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { ACCOUNTS_PLUGIN_ID, type ActionResult } from "./contract.ts";
-import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
 
 type OmpSignInProps = { host: HostServices; onContinue?: () => void; showAccounts?: boolean; active?: boolean };
 export function OmpSignIn(props: OmpSignInProps) {
@@ -32,7 +32,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
   }, [host.client, host.principal.id, host.containerId, host.authoring]);
   const state = setup.data;
   const observation = feed.data;
-  const writable = host.authoring !== null;
+  const writable = canWriteCodeWorkspace(host);
   const canContinue = observation?.status === "fresh" && observation.accounts.length > 0 && feed.error === null;
   const runtimeReviewCurrent = runtimeReview !== null && state?.revision === runtimeReview.expectedBrokerRevision &&
     state.owner?.machineId === runtimeReview.owner.machineId && state.owner.online && state.canUpdateRuntime;
@@ -43,7 +43,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     const containerId = host.containerId;
     const stillCurrent = () => activeView.current && request.current === issued && current.current.client === host.client &&
       current.current.principal.id === host.principal.id && current.current.containerId === containerId &&
-      current.current.authoring === host.authoring;
+      current.current.authoring === host.authoring && canWriteCodeWorkspace(current.current);
     pending.current = true; setBusy(true); setMessage(null);
     try { await work(stillCurrent); }
     catch (reason) {

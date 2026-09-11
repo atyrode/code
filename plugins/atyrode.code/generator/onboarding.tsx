@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type ActionResult, type Target } from "../contract.ts";
-import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
+import { callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
 import { codeOperationReady } from "../operation-readiness.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
@@ -34,8 +34,8 @@ export function Onboarding({ host, target, available, settings = false, onDone }
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const writable = host.authoring !== null;
-  const serviceConfiguration = useCodeQuery(host, "readServiceConfiguration", record && writable ? target : null);
+  const writable = canWriteCodeWorkspace(host);
+  const serviceConfiguration = useCodeQuery(host, "readServiceConfiguration", record && writable && host.client.selfCaps().includes("*") ? target : null);
   const gateway = serviceConfiguration.data?.runtimeCandidates.find(candidate =>
     candidate.runtime.pluginId === GATEWAY_PLUGIN_ID && candidate.runtime.operationId === GATEWAY_OPERATION_ID);
   const modelConnection = setup.data?.services.find(service => service.serviceId === "omp" &&

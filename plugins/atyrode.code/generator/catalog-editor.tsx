@@ -4,7 +4,7 @@ import { Cluster, Stack } from "@manifold/ui";
 import { CatalogDocumentSchema, CatalogModelSchema, ThinkingLevelSchema, type CatalogDocument, type CatalogModel } from "../../domain/contracts.ts";
 import { compileCatalog } from "../../domain/catalog.ts";
 import { CODE_PLUGIN_ID, type CatalogReview, type Configuration, type Target } from "../contract.ts";
-import { callCodeAction, codeOperationFailure, useCodeJob, useCodeQuery } from "../machine-web.ts";
+import { callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeJob, useCodeQuery } from "../machine-web.ts";
 import { Routing } from "./dials.tsx";
 
 type Editor = { document: CatalogDocument; revision: number };
@@ -62,7 +62,7 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const writable = host.authoring !== null && record !== null;
+  const writable = canWriteCodeWorkspace(host) && record !== null;
   const stale = editor !== null && editor.revision !== record?.revision;
   const parsed = editor ? CatalogDocumentSchema.safeParse(editor.document) : null;
   const currentReview = record && review && review.revision === record.revision && record[review.source]?.digest === review.catalogDigest;
