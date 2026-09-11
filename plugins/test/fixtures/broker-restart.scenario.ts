@@ -38,7 +38,8 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
   };
   const accessIs = (provider: string, access: string) => {
     const rows = remote?.listAuthCredentials(provider) ?? [];
-    return rows.length === 1 && rows[0].credential.type === "oauth" && rows[0].credential.access === access;
+    const first = rows[0];
+    return rows.length === 1 && first?.credential.type === "oauth" && first.credential.access === access;
   };
   try {
     // Generation advances belong to this AuthStorage, not to the persistent DB.
@@ -125,6 +126,98 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
   } finally {
     remote?.close();
     controller.abort();
+    await broker?.close();
+    storage.close();
+  }
+
+  // Keep the real SDK stream parser, but park a decoded first frame in an
+  // abort-ignoring iterator to model a completion already in application code.
+  const raceAbort = new AbortController();
+  const firstFrameReady = Promise.withResolvers<void>();
+  const releaseFirstFrame = Promise.withResolvers<void>();
+  const firstFrameProcessed = Promise.withResolvers<void>();
+  const releaseReplacement = Promise.withResolvers<void>();
+  const releaseOldRemainder = Promise.withResolvers<void>();
+  let raceStreamCount = 0;
+  let firstStreamSignal: AbortSignal | undefined;
+  let replacementApplied = false;
+  class DelayedStreamClient extends AuthBrokerClient {
+    override async *openSnapshotStream(opts: { signal?: AbortSignal } = {}): AsyncGenerator<SnapshotStreamEvent> {
+      const firstStream = ++raceStreamCount === 1;
+      if (firstStream) firstStreamSignal = opts.signal;
+      const signal = firstStream ? raceAbort.signal : AbortSignal.any([raceAbort.signal, opts.signal!]);
+      let firstFrame = true;
+      for await (const event of super.openSnapshotStream({ signal })) {
+        if (firstFrame) {
+          firstFrame = false;
+          if (firstStream) {
+            firstFrameReady.resolve();
+            await releaseFirstFrame.promise;
+            try { yield event; }
+            finally { firstFrameProcessed.resolve(); }
+            // Do not let queued current frames hide a stale first-frame publish.
+            await releaseOldRemainder.promise;
+            continue;
+          }
+          await releaseReplacement.promise;
+        }
+        yield event;
+      }
+    }
+  }
+  const within = async <T>(promise: Promise<T>, code: string): Promise<T> => {
+    const timeout = Promise.withResolvers<T>();
+    const timer = setTimeout(() => {
+      try { ctx.check(false, code); }
+      catch (error) { timeout.reject(error); }
+    }, 3_000);
+    try { return await Promise.race([promise, timeout.promise]); }
+    finally { clearTimeout(timer); }
+  };
+  storage = await AuthStorage.create(join(ctx.root, "authority.db"));
+  broker = undefined;
+  remote = undefined;
+  try {
+    storage.upsertCredential(selected, credential("synthetic-authority-before"));
+    storage.upsertCredential(removed, credential("synthetic-authority-removed"));
+    broker = startAuthBroker({ storage, bind: "127.0.0.1:0", bearerTokens: [token], disableRefresher: true });
+    const fixtureFetch = ctx.fetchTo(broker.url);
+    const fetchImpl: typeof fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      ctx.check((init?.method ?? "GET") === "GET"
+        && ["/v1/snapshot", "/v1/snapshot/stream"].includes(url.pathname), "unexpected-authority-route");
+      return fixtureFetch(input, init);
+    }, { preconnect: () => { ctx.check(false, "unexpected-authority-preconnect"); } });
+    const client = new DelayedStreamClient({ url: broker.url, token, fetchImpl, maxRetries: 0 });
+    const initial = await client.fetchSnapshot({ signal: raceAbort.signal });
+    ctx.check(initial.status === 200, "missing-authority-initial-snapshot");
+    remote = new RemoteAuthCredentialStore({
+      client, initialSnapshot: initial.snapshot, backgroundIdleMs: 60_000,
+      onSnapshot: () => { if (raceStreamCount >= 2) replacementApplied = true; },
+    });
+    await within(firstFrameReady.promise, "first-frame-not-parked");
+    storage.upsertCredential(selected, credential("synthetic-authority-current"));
+    await storage.remove(removed);
+    await within(remote.refreshSnapshot(), "direct-refresh-waited-for-obsolete-stream");
+    ctx.check(accessIs(selected, "synthetic-authority-current")
+      && remote.listAuthCredentials(removed).length === 0, "direct-refresh-not-published");
+    ctx.check(firstStreamSignal?.aborted, "direct-refresh-did-not-retire-stream");
+    const authoritativeGeneration = remote.snapshot.generation;
+    releaseFirstFrame.resolve();
+    await within(firstFrameProcessed.promise, "obsolete-frame-not-processed");
+    ctx.check(accessIs(selected, "synthetic-authority-current")
+      && remote.listAuthCredentials(removed).length === 0, "obsolete-first-frame-restored-credentials");
+    ctx.check(remote.snapshot.generation === authoritativeGeneration, "obsolete-first-frame-reset-generation");
+    releaseReplacement.resolve();
+    await eventually(() => replacementApplied, "replacement-stream-not-published");
+    ctx.check(accessIs(selected, "synthetic-authority-current")
+      && remote.listAuthCredentials(removed).length === 0, "replacement-stream-regressed-credentials");
+  } finally {
+    remote?.close();
+    raceAbort.abort();
+    releaseFirstFrame.resolve();
+    releaseReplacement.resolve();
+    releaseOldRemainder.resolve();
     await broker?.close();
     storage.close();
   }
