@@ -132,6 +132,7 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
   let holdSnapshot = false;
   let pendingRefresh: Promise<unknown> | undefined;
   let pendingWait: Promise<boolean> | undefined;
+  let pendingShortWait: Promise<boolean> | undefined;
   let raceStreamCount = 0;
   let replacementApplied = false;
   class DelayedStreamClient extends AuthBrokerClient {
@@ -220,6 +221,14 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
     storage.upsertCredential(selected, credential("synthetic-queue-current"));
     pendingRefresh = remote.refreshSnapshot();
     await within(snapshotRead.promise, "foreground-snapshot-not-parked");
+    const waiterAbort = new AbortController();
+    pendingWait = remote.waitForFreshSnapshot(10_000, { signal: waiterAbort.signal });
+    pendingShortWait = remote.waitForFreshSnapshot(20);
+    ctx.check(!await within(pendingShortWait, "short-wait-inherited-foreground-delay"),
+      "queued-wait-reported-unpublished-snapshot");
+    waiterAbort.abort();
+    ctx.check(await within(pendingWait.then(() => false, () => true),
+      "queued-abort-waited-for-foreground-read"), "queued-abort-resolved-successfully");
     pendingWait = remote.waitForFreshSnapshot(1_000);
     publishSnapshot.resolve();
     await within(pendingRefresh, "foreground-snapshot-not-published");
@@ -232,7 +241,7 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
     releaseReplacement.resolve();
     releaseOldRemainder.resolve();
     publishSnapshot.resolve();
-    await Promise.allSettled([pendingRefresh, pendingWait]);
+    await Promise.allSettled([pendingRefresh, pendingWait, pendingShortWait]);
     await broker?.close();
     storage.close();
   }
