@@ -18,6 +18,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "@oh-my-pi/pi-ai@18.1.14": "patches/@oh-my-pi%2Fpi-ai@18.1.14.patch",
+  },
   "packages": {
     "@oh-my-pi/omptype": ["@oh-my-pi/omptype@18.1.14", "", {}, "sha512-qVNddFbC69Q9CFewI8RkNA3jn6x4iEF7/2LyJdoooib1u5jwH1YP4e7iOENDvUIevnYOfzkT4STtOh8m/8FEAA=="],
 

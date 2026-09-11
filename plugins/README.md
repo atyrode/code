@@ -93,9 +93,11 @@ owner, terminal or provider request. Run `bun run verify:browser` independently,
 or pass an existing bundle directory to `bun scripts/verify-browser.ts` to check
 older artifacts. Neither the browser scenario nor the other gate commands prove
 live provider authentication or OMP readiness.
-The unit suite also exercises the upstream broker with an isolated synthetic
-multi-account store, disabled background refresh, and guarded SDK requests.
-It verifies exact pool membership and revocation without provider authentication.
+The unit suite exercises isolated synthetic brokers without provider requests,
+covering pool membership, revocation, shutdown persistence and reconnect ordering.
+A locked Bun patch to `@oh-my-pi/pi-ai` supplies the shutdown and snapshot-ordering
+fixes used by the bundled broker and gateway workers. It does not modify the
+separately pinned OMP executable.
 
 ## Managed execution resources
 
