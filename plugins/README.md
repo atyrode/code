@@ -93,6 +93,9 @@ owner, terminal or provider request. Run `bun run verify:browser` independently,
 or pass an existing bundle directory to `bun scripts/verify-browser.ts` to check
 older artifacts. Neither the browser scenario nor the other gate commands prove
 live provider authentication or OMP readiness.
+The unit suite also exercises the upstream broker with an isolated synthetic
+multi-account store, disabled background refresh, and guarded SDK requests.
+It verifies exact pool membership and revocation without provider authentication.
 
 ## Managed execution resources
 
