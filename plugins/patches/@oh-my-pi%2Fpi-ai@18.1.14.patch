@@ -1,6 +1,9 @@
 diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-1706731ba3271cd b/.bun-tag-1706731ba3271cd
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-e86fb79bf05ab620 b/.bun-tag-e86fb79bf05ab620
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/types/auth-broker/refresher.d.ts b/dist/types/auth-broker/refresher.d.ts
 index a45daf7a413e3f9defcbc3fe17effe6602d92fdc..5e5676b1b5fa731c9c6366edb43d65d213910b13 100644
 --- a/dist/types/auth-broker/refresher.d.ts
@@ -14,6 +17,71 @@ index a45daf7a413e3f9defcbc3fe17effe6602d92fdc..5e5676b1b5fa731c9c6366edb43d65d2
      getSchedule(): AuthBrokerRefresherSchedule;
      /** Run one sweep. Exposed for tests. */
      tick(): Promise<void>;
+diff --git a/dist/types/auth-broker/remote-store.d.ts b/dist/types/auth-broker/remote-store.d.ts
+index bd2301f50b8b92616cddf23331910d629a01054e..00c768bf0e68872e551c496356798f21afb7b4fa 100644
+--- a/dist/types/auth-broker/remote-store.d.ts
++++ b/dist/types/auth-broker/remote-store.d.ts
+@@ -23,9 +23,9 @@ export interface RemoteAuthCredentialStoreOptions {
+      */
+     streamSnapshots?: boolean;
+     /**
+-     * Called with each broker-sourced raw full snapshot after the filtered
+-     * public view is applied. The constructor's initial snapshot intentionally
+-     * does not trigger this hook.
++     * Called with the accepted, filtered snapshot after a full snapshot or stream
++     * entry/removal update. Rejected frames do not trigger this hook. The
++     * constructor's initial snapshot intentionally does not trigger it.
+      */
+     onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
+     /**
+@@ -62,11 +62,11 @@ export declare class RemoteAuthCredentialStore implements AuthCredentialStore {
+     deleteCredentialBlocks(credentialId: number): void;
+     cleanExpiredCredentialBlocks(nowMs: number): void;
+     /**
+-     * In-memory update from a successful refresh through the broker. AuthStorage
+-     * calls this after `#replaceCredentialAt`; the broker already persisted the
+-     * authoritative row, so we just mirror it.
++     * AuthStorage writes back its refresh result here, potentially after another
++     * snapshot has been accepted. Keep the broker snapshot authoritative instead
++     * of mirroring that caller-owned credential.
+      */
+-    updateAuthCredential(id: number, credential: AuthCredential): void;
++    updateAuthCredential(_id: number, _credential: AuthCredential): void;
+     deleteAuthCredential(id: number, disabledCause: string): void;
+     deleteAuthCredentialRemote(id: number, disabledCause: string): Promise<boolean>;
+     tryDisableAuthCredentialIfMatches(id: number, _expectedData: string, disabledCause: string): boolean;
+@@ -84,10 +84,8 @@ export declare class RemoteAuthCredentialStore implements AuthCredentialStore {
+     deleteAuthCredentialsForProvider(_provider: string, _disabledCause: string): void;
+     /**
+      * Upsert a single credential through the broker. The broker server is the
+-     * canonical writer — see `POST /v1/credential`. The redacted snapshot
+-     * entries returned by the server replace the provider's rows in our local
+-     * snapshot, and the global snapshot is then refreshed in the background so
+-     * any concurrent peer (refresh, generation bump) stays in sync.
++     * canonical writer — see `POST /v1/credential`. Mutation replies may trail
++     * later writes, so only a fenced snapshot read can publish the current rows.
+      */
+     upsertAuthCredentialRemote(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]>;
+     /**
+@@ -98,8 +96,7 @@ export declare class RemoteAuthCredentialStore implements AuthCredentialStore {
+     replaceAuthCredentialsRemote(provider: string, credentials: AuthCredential[]): Promise<StoredAuthCredential[]>;
+     /**
+      * Logout: disable every active credential for the provider on the broker,
+-     * then drop them from the local snapshot. Refresh fetches the authoritative
+-     * post-state in the background.
++     * then acquire the canonical post-state through the snapshot fence.
+      */
+     deleteAuthCredentialsRemote(provider: string, disabledCause: string): Promise<void>;
+     getCache(key: string): string | null;
+@@ -114,7 +111,7 @@ export declare class RemoteAuthCredentialStore implements AuthCredentialStore {
+      * the broker-redacted credential with {@link REMOTE_REFRESH_SENTINEL} in
+      * the `refresh` slot.
+      */
+-    refreshOAuthCredential(_provider: Provider, credentialId: number, _credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredentials>;
++    refreshOAuthCredential(provider: Provider, credentialId: number, _credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredentials>;
+     /**
+      * Store-level hook consumed by `AuthStorage.fetchUsageReports()` — proxies
+      * to the broker's `/v1/usage` endpoint. The broker's egress IP isn't
 diff --git a/src/auth-broker/refresher.ts b/src/auth-broker/refresher.ts
 index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9fa90c0926 100644
 --- a/src/auth-broker/refresher.ts
@@ -105,10 +173,47 @@ index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9f
  
  	async #refreshOne(id: number): Promise<void> {
 diff --git a/src/auth-broker/remote-store.ts b/src/auth-broker/remote-store.ts
-index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d131a1656 100644
+index 2efb284aa720c028e656eccd53d774d1526d6e35..4c8eda2865b54176e7454e1e1c5fc3ac3a405d96 100644
 --- a/src/auth-broker/remote-store.ts
 +++ b/src/auth-broker/remote-store.ts
-@@ -257,6 +257,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -11,7 +11,6 @@ import * as os from "node:os";
+ import { getAppName, getInstallId, logger } from "@oh-my-pi/pi-utils";
+ import {
+ 	type AuthCredential,
+-	type AuthCredentialSnapshotEntry,
+ 	type AuthCredentialStore,
+ 	type DisabledCredentialSummary,
+ 	type OAuthCredential,
+@@ -121,15 +120,6 @@ function snapshotBlocksChanged(previous: readonly SnapshotEntry[], next: readonl
+ 	return false;
+ }
+ 
+-function credentialEntryWithBlocks(
+-	entry: AuthCredentialSnapshotEntry,
+-	blocks: readonly CredentialBlockSnapshot[] | undefined,
+-): SnapshotEntry {
+-	const incoming: SnapshotEntry = { ...entry, rotatesInMs: null };
+-	if (blocks && blocks.length > 0) incoming.blocks = [...blocks].sort(compareCredentialBlockSnapshots);
+-	return incoming;
+-}
+-
+ function emptySnapshot(): SnapshotResponse {
+ 	return {
+ 		generation: 0,
+@@ -225,9 +215,9 @@ export interface RemoteAuthCredentialStoreOptions {
+ 	 */
+ 	streamSnapshots?: boolean;
+ 	/**
+-	 * Called with each broker-sourced raw full snapshot after the filtered
+-	 * public view is applied. The constructor's initial snapshot intentionally
+-	 * does not trigger this hook.
++	 * Called with the accepted, filtered snapshot after a full snapshot or stream
++	 * entry/removal update. Rejected frames do not trigger this hook. The
++	 * constructor's initial snapshot intentionally does not trigger it.
+ 	 */
+ 	onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
+ 	/**
+@@ -257,6 +247,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  	#generation = 0;
  	#usageOverlays: Map<string, UsageReport> = new Map();
  	#backgroundAbort = new AbortController();
@@ -120,7 +225,23 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  	readonly #backgroundIdleMs: number;
  	/** Last foreground store use; background sync parks `#backgroundIdleMs` after this. */
  	#lastActivityMs = Date.now();
-@@ -375,20 +380,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -325,10 +320,14 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 		this.#snapshot = { ...snapshot, credentials };
+ 		this.#generation = generation;
+ 		this.#snapshotReceivedAt = nowMs;
++		this.#notifySnapshot();
++	}
++
++	#notifySnapshot(): void {
+ 		const onSnapshot = this.#onSnapshot;
+ 		if (!onSnapshot) return;
+ 		try {
+-			onSnapshot(snapshot, generation);
++			onSnapshot(this.#snapshot, this.#generation);
+ 		} catch (error) {
+ 			logger.debug("auth-broker snapshot callback failed", { error: String(error) });
+ 		}
+@@ -375,20 +374,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  	async #runBackground(): Promise<void> {
  		let backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
  		while (!this.#closed && !this.#backgroundAbort.signal.aborted) {
@@ -149,7 +270,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  						if (error instanceof AuthBrokerStreamUnsupportedError) {
  							this.#streamingUnsupported = true;
  							logger.debug("auth-broker snapshot stream unsupported; falling back to long-poll");
-@@ -401,22 +412,28 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -401,22 +406,28 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  					continue;
  				}
  				try {
@@ -184,7 +305,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  			}
  		}
  	}
-@@ -440,9 +457,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -440,9 +451,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  	 * while something else keeps the event loop alive — typically our own
  	 * in-flight broker request, which is exactly what it exists to end.
  	 */
@@ -195,7 +316,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  		let timer: Timer | undefined;
  		const arm = (): void => {
  			const remainingMs = this.#idleRemainingMs();
-@@ -451,13 +467,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -451,13 +461,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  				timer.unref?.();
  				return;
  			}
@@ -210,7 +331,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  			stop: () => clearTimeout(timer),
  		};
  	}
-@@ -483,25 +498,30 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -483,25 +492,30 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  		}
  	}
  
@@ -247,7 +368,20 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  					logger.debug("auth-broker stream snapshot older than local; ignoring", {
  						local: this.#generation,
  						incoming: snapshot.generation,
-@@ -568,12 +588,68 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -548,6 +562,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
+ 		this.#generation = generation;
+ 		this.#snapshotReceivedAt = Date.now();
++		this.#notifySnapshot();
+ 	}
+ 
+ 	#removeStreamCredential(
+@@ -564,16 +579,73 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
+ 		this.#generation = generation;
+ 		this.#snapshotReceivedAt = Date.now();
++		this.#notifySnapshot();
+ 	}
  
  	/** Re-hydrate the in-memory snapshot from the broker. */
  	async refreshSnapshot(): Promise<SnapshotResponse> {
@@ -319,7 +453,40 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  	listAuthCredentials(provider?: string): StoredAuthCredential[] {
  		this.#noteActivity();
  		const out: StoredAuthCredential[] = [];
-@@ -735,15 +811,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -694,17 +766,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	}
+ 
+ 	/**
+-	 * In-memory update from a successful refresh through the broker. AuthStorage
+-	 * calls this after `#replaceCredentialAt`; the broker already persisted the
+-	 * authoritative row, so we just mirror it.
++	 * AuthStorage writes back its refresh result here, potentially after another
++	 * snapshot has been accepted. Keep the broker snapshot authoritative instead
++	 * of mirroring that caller-owned credential.
+ 	 */
+-	updateAuthCredential(id: number, credential: AuthCredential): void {
++	updateAuthCredential(_id: number, _credential: AuthCredential): void {
+ 		this.#noteActivity();
+-		for (const entry of this.#snapshot.credentials) {
+-			if (entry.id !== id) continue;
+-			entry.credential = credential as typeof entry.credential;
+-			return;
+-		}
++		this.#maybeRefreshSnapshot("credential update");
+ 	}
+ 
+ 	deleteAuthCredential(id: number, disabledCause: string): void {
+@@ -721,8 +789,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 		const found = this.#snapshot.credentials.some(entry => entry.id === id);
+ 		if (!found) return false;
+ 		await this.#client.disableCredential(id, disabledCause);
+-		this.#removeCredentialById(id);
+-		this.#maybeRefreshSnapshot("delete credential");
++		await this.#acquireSnapshot();
+ 		return true;
+ 	}
+ 
+@@ -735,15 +802,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  	}
  
  	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
@@ -336,7 +503,156 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..0547e152066dfbc0e7713c8928d9f08d
  	}
  
  	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
-@@ -1173,13 +1241,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+@@ -757,16 +816,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 
+ 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+ 		this.#noteActivity();
+-		const { entry } = await this.#client.refreshCredential(credentialId, opts.signal);
+-		if (entry.credential.type !== "oauth") {
+-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+-		}
+-		if (!this.#applyCredentialEntry(entry)) {
+-			throw new AIError.AuthBrokerError(
+-				`Broker refreshed credential id=${credentialId} outside the configured account pool`,
+-			);
++		const provider = this.#snapshot.credentials.find(entry => entry.id === credentialId)?.provider;
++		await this.#client.refreshCredential(credentialId, opts.signal);
++		await this.#acquireSnapshot(undefined, opts.signal);
++		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
++		if (!entry || entry.provider !== provider || entry.credential.type !== "oauth") {
++			throw new AIError.AuthBrokerError(`Broker refreshed credential id=${credentialId} is no longer available`);
+ 		}
+-		this.#maybeRefreshSnapshot("suspect credential refresh");
+ 	}
+ 
+ 	replaceAuthCredentialsForProvider(_provider: string, _credentials: AuthCredential[]): StoredAuthCredential[] {
+@@ -789,16 +845,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 
+ 	/**
+ 	 * Upsert a single credential through the broker. The broker server is the
+-	 * canonical writer — see `POST /v1/credential`. The redacted snapshot
+-	 * entries returned by the server replace the provider's rows in our local
+-	 * snapshot, and the global snapshot is then refreshed in the background so
+-	 * any concurrent peer (refresh, generation bump) stays in sync.
++	 * canonical writer — see `POST /v1/credential`. Mutation replies may trail
++	 * later writes, so only a fenced snapshot read can publish the current rows.
+ 	 */
+ 	async upsertAuthCredentialRemote(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+ 		this.#noteActivity();
+-		const { entries } = await this.#client.uploadCredential(provider, credential);
+-		this.#applyProviderEntries(provider, entries);
+-		this.#maybeRefreshSnapshot("upload");
++		await this.#client.uploadCredential(provider, credential);
++		await this.#acquireSnapshot();
+ 		return this.listAuthCredentials(provider);
+ 	}
+ 
+@@ -823,21 +876,16 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 				});
+ 			}
+ 		}
+-		// Snapshot reflects the disables before we add the new rows so a concurrent
+-		// reader cannot momentarily see old + new together for the same provider.
+-		this.#removeProviderEntries(provider);
+ 		for (const credential of credentials) {
+-			const { entries } = await this.#client.uploadCredential(provider, credential);
+-			this.#applyProviderEntries(provider, entries);
++			await this.#client.uploadCredential(provider, credential);
+ 		}
+-		this.#maybeRefreshSnapshot("replace");
++		await this.#acquireSnapshot();
+ 		return this.listAuthCredentials(provider);
+ 	}
+ 
+ 	/**
+ 	 * Logout: disable every active credential for the provider on the broker,
+-	 * then drop them from the local snapshot. Refresh fetches the authoritative
+-	 * post-state in the background.
++	 * then acquire the canonical post-state through the snapshot fence.
+ 	 */
+ 	async deleteAuthCredentialsRemote(provider: string, disabledCause: string): Promise<void> {
+ 		const existing = this.listAuthCredentials(provider);
+@@ -852,46 +900,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 				});
+ 			}
+ 		}
+-		this.#removeProviderEntries(provider);
+-		this.#maybeRefreshSnapshot("delete");
+-	}
+-
+-	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[]): void {
+-		// `entries` is the broker's authoritative post-upsert list of rows for
+-		// `provider`. Drop our existing rows for the same provider and splice in
+-		// the fresh set — preserving every other provider's rows in place.
+-		const existingBlocks = new Map(
+-			this.#snapshot.credentials
+-				.filter(entry => entry.provider === provider && entry.blocks !== undefined)
+-				.map(entry => [entry.id, entry.blocks] as const),
+-		);
+-		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
+-		const incoming = entries
+-			.filter(entry => isCredentialInAccountPool(entry, this.#accountPool))
+-			.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
+-		this.#snapshot = { ...this.#snapshot, credentials: [...others, ...incoming] };
+-	}
+-	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): boolean {
+-		if (!isCredentialInAccountPool(entry, this.#accountPool)) {
+-			this.#removeCredentialById(entry.id);
+-			return false;
+-		}
+-		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
+-		const existingBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
+-		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
+-		if (index === -1) {
+-			this.#snapshot = { ...this.#snapshot, credentials: [...this.#snapshot.credentials, incoming] };
+-			return true;
+-		}
+-		const credentials = [...this.#snapshot.credentials];
+-		credentials[index] = incoming;
+-		this.#snapshot = { ...this.#snapshot, credentials };
+-		return true;
+-	}
+-
+-	#removeProviderEntries(provider: string): void {
+-		const next = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
+-		this.#snapshot = { ...this.#snapshot, credentials: next };
++		await this.#acquireSnapshot();
+ 	}
+ 
+ 	#removeCredentialById(id: number): void {
+@@ -1030,25 +1039,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	 * the `refresh` slot.
+ 	 */
+ 	async refreshOAuthCredential(
+-		_provider: Provider,
++		provider: Provider,
+ 		credentialId: number,
+ 		_credential: OAuthCredential,
+ 		signal?: AbortSignal,
+ 	): Promise<OAuthCredentials> {
+ 		this.#noteActivity();
+-		const { entry } = await this.#client.refreshCredential(credentialId, signal);
+-		if (entry.credential.type !== "oauth") {
+-			throw new AIError.AuthBrokerError(`Broker returned non-OAuth credential for id=${credentialId}`);
+-		}
+-		if (!this.#applyCredentialEntry(entry)) {
+-			throw new AIError.AuthBrokerError(
+-				`Broker refreshed credential id=${credentialId} outside the configured account pool`,
+-			);
+-		}
+-		if (!this.#streamingActive) {
+-			await this.refreshSnapshot().catch(error => {
+-				logger.debug("auth-broker snapshot refresh after credential refresh failed", { error: String(error) });
+-			});
++		await this.#client.refreshCredential(credentialId, signal);
++		await this.#acquireSnapshot(undefined, signal);
++		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
++		if (!entry || entry.provider !== provider || entry.credential.type !== "oauth") {
++			throw new AIError.AuthBrokerError(`Broker refreshed credential id=${credentialId} is no longer available`);
+ 		}
+ 		const refreshed = entry.credential;
+ 		return {
+@@ -1173,13 +1174,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
  
  	/**
  	 * Reject the awaited promise when the caller's signal aborts, without
