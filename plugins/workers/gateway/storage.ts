@@ -1,6 +1,6 @@
 import { AuthBrokerClient, type AuthBrokerClientOptions, type FetchSnapshotOptions, type FetchSnapshotResult } from "@oh-my-pi/pi-ai/auth-broker/client";
 import { RemoteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-broker/remote-store";
-import type { SnapshotEntry, SnapshotStreamEvent } from "@oh-my-pi/pi-ai/auth-broker/types";
+import type { SnapshotResponse, SnapshotStreamEvent } from "@oh-my-pi/pi-ai/auth-broker/types";
 import { AuthStorage, type AuthCredentialSnapshotEntry } from "@oh-my-pi/pi-ai/auth-storage";
 import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
@@ -24,41 +24,33 @@ export class PoolBrokerClient extends AuthBrokerClient {
     }
   }
   get revocation(): number { return this.#revocation; }
-  isActive(id: number): boolean { return this.#activeIds.has(id); }
   admits(entry: AuthCredentialSnapshotEntry): boolean {
     const slot = this.#slots.get(entry.id);
     return slot !== undefined && slot.provider === entry.provider && slot.identityKey === entry.identityKey &&
       (entry.credential.type === "api_key" ? entry.identityKey === null : entry.identityKey !== null);
   }
-  #remove(id: number): void {
-    if (this.#activeIds.delete(id)) this.#revocation++;
-  }
-  #snapshot(entries: SnapshotEntry[]): SnapshotEntry[] {
-    const credentials = entries.filter(entry => this.admits(entry));
-    const activeIds = new Set(credentials.map(entry => entry.id));
+  /** Only the remote store's accepted canonical snapshot may change revocation. */
+  acceptSnapshot(snapshot: SnapshotResponse): void {
+    const activeIds = new Set(snapshot.credentials.map(entry => entry.id));
     for (const id of this.#activeIds) if (!activeIds.has(id)) this.#revocation++;
     this.#activeIds = activeIds;
-    return credentials;
   }
   override async fetchSnapshot(options: FetchSnapshotOptions = {}): Promise<FetchSnapshotResult> {
     const result = await super.fetchSnapshot(options);
     if (result.status === 304) return result;
-    return { ...result, snapshot: { ...result.snapshot, credentials: this.#snapshot(result.snapshot.credentials) } };
+    return { ...result, snapshot: { ...result.snapshot, credentials: result.snapshot.credentials.filter(entry => this.admits(entry)) } };
   }
   override async *openSnapshotStream(options: { signal?: AbortSignal } = {}): AsyncGenerator<SnapshotStreamEvent> {
     for await (const event of super.openSnapshotStream(options)) {
       if (event.kind === "snapshot") {
-        yield { ...event, credentials: this.#snapshot(event.credentials) };
+        yield { ...event, credentials: event.credentials.filter(entry => this.admits(entry)) };
       } else if (event.kind === "entry") {
         if (this.admits(event.entry)) {
-          this.#activeIds.add(event.entry.id);
           yield event;
         } else {
-          this.#remove(event.entry.id);
           yield { kind: "removed", id: event.entry.id, generation: event.generation, serverNowMs: event.serverNowMs, refresher: event.refresher };
         }
       } else {
-        if (event.kind === "removed") this.#remove(event.id);
         yield event;
       }
     }
@@ -67,7 +59,6 @@ export class PoolBrokerClient extends AuthBrokerClient {
     if (!this.#activeIds.has(id) || this.#slots.get(id)?.identityKey === null) throw unavailable();
     const result = await super.refreshCredential(id, signal);
     if (!this.#activeIds.has(id) || result.entry.id !== id || !this.admits(result.entry)) {
-      this.#remove(id);
       throw unavailable();
     }
     return result;
@@ -76,10 +67,6 @@ export class PoolBrokerClient extends AuthBrokerClient {
 
 class PoolRemoteStore extends RemoteAuthCredentialStore {
   get revocation(): number { return (this.client as PoolBrokerClient).revocation; }
-  override listAuthCredentials(provider?: string) {
-    const client = this.client as PoolBrokerClient;
-    return super.listAuthCredentials(provider).filter(entry => client.isActive(entry.id));
-  }
 }
 
 /** Reload the SDK's in-memory selection view at request entry. A revocation while
@@ -128,7 +115,12 @@ export async function openPoolStorage(broker: { url: string; token: string }, po
   if (initial.status !== 200) throw unavailable();
   signal.throwIfAborted();
   // Do not pass the SDK's weaker identity-only accountPool as native authority.
-  const remote = new PoolRemoteStore({ client, initialSnapshot: initial.snapshot });
+  const remote = new PoolRemoteStore({
+    client, initialSnapshot: initial.snapshot,
+    onSnapshot: snapshot => client.acceptSnapshot(snapshot),
+  });
+  // The constructor accepts its initial snapshot before registering onSnapshot.
+  client.acceptSnapshot(remote.snapshot);
   const storage = new PoolAuthStorage(remote, pool, signal);
   try { await storage.reload(); signal.throwIfAborted(); return storage; }
   catch { storage.close(); throw unavailable(); }
