@@ -6,7 +6,7 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { CODE_PLUGIN_ID, GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type LaunchPreview, type Target } from "../contract.ts";
-import { callCodeAction, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
+import { callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
 import { codeOperationReady } from "../operation-readiness.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
@@ -48,7 +48,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const stale = dials !== null && dials.revision !== record?.revision;
   const previewCurrent = preview !== null && preview.revision === record?.revision && dials === null;
   const shownReview = previewCurrent ? preview.review : localReview;
-  const writable = host.authoring !== null;
+  const writable = canWriteCodeWorkspace(host);
   const canSuggest = setup.data?.services.some(service => service.serviceId === "suggest" && service.operations.some(operation => operation.operationId === "classify" && operation.ready && operation.invocable)) === true;
   const productCurrent = record?.resources !== null && record?.resources?.productSha256 === setup.data?.productSha256;
   const execution = setup.data?.execution;
@@ -73,7 +73,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       setPreview(null);
       const prepared = await callCodeAction(host, "prepareLaunch", { ...target, expectedRevision: preview.revision, previewDigest: preview.previewDigest, prompt });
       const latest = current.current;
-      if (!mounted.current || latest.host.client !== host.client || latest.host.principal.id !== host.principal.id || latest.host.authoring !== host.authoring || latest.host.containerId !== target.containerId || !latest.available || latest.machine?.id !== target.machineId || !latest.host.authoring) throw new Error("Destination changed");
+      if (!mounted.current || latest.host.client !== host.client || latest.host.principal.id !== host.principal.id || latest.host.authoring !== host.authoring || latest.host.containerId !== target.containerId || !latest.available || latest.machine?.id !== target.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
       if (mounted.current) { setPreview(null); setMessage({ text: "Terminal opened. Follow the session in OMP.", failed: false }); }
     });

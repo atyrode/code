@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
 import type { AccountChoiceChange, AccountReference } from "../domain/contracts.ts";
 import { CODE_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
-import { ACCOUNT_REFRESH_MS, callCodeAction, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
 import { OmpSignIn } from "./omp-sign-in.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
@@ -38,8 +38,9 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const canEdit = host.authoring !== null && target !== null && available && current !== null && !busy;
-  const canAdminister = host.authoring !== null && target !== null && !busy && observation?.status === "fresh";
+  const writable = canWriteCodeWorkspace(host);
+  const canEdit = writable && target !== null && available && current !== null && !busy;
+  const canAdminister = writable && target !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
     account.credentialId === confirmation.input.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
@@ -60,7 +61,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     } finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
   async function initialize() {
-    if (!host.authoring || !target || !available || !configuration.data || current || pending.current) return;
+    if (!writable || !target || !available || !configuration.data || current || pending.current) return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
       await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data.revision });
@@ -97,14 +98,14 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     {choices ? <details className="plugin-atyrode_code__account-details" onToggle={event => setSignInExpanded(event.currentTarget.open)}><summary>Add or manage accounts in OMP</summary><OmpSignIn host={host} showAccounts={false} active={signInExpanded} /></details> : <OmpSignIn host={host} />}
     {!target && <p role="status">Choose a workspace machine to edit project account choices. Instance accounts and OMP sign-in do not depend on that selection.</p>}
     {target && !available && <p role="status">Workspace machine unavailable. Project account choices are disabled; instance account discovery and OMP sign-in remain independent.</p>}
-    {!host.authoring && <p role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
+    {!writable && <p role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
     {configuration.error && <p role="status">{configuration.error}</p>}
     {accountFeed.error && <p role="status">{accountFeed.error}</p>}
     {target && configuration.data === null && !configuration.error && <p role="status">Reading account choices…</p>}
     {observation === null && !accountFeed.error && <p role="status">Reading instance accounts…</p>}
     {configuration.data && current === null && <div className="plugin-atyrode_code__account-notice">
       <p>Set up account choices for this workspace. Existing credentials are not imported.</p>
-      <button type="button" disabled={!host.authoring || !available || busy} onClick={() => void initialize()}>Initialize choices</button>
+      <button type="button" disabled={!writable || !available || busy} onClick={() => void initialize()}>Initialize choices</button>
     </div>}
     {(busy || message) && <p role="status" aria-live="polite">{busy ? "Saving…" : message}</p>}
     {observation && <p className="plugin-atyrode_code__account-meta" role="status">{observation.status === "fresh" ? `Observed ${time(observation.observedAt)}` : `${observation.status} · current availability unknown; credential actions disabled`}</p>}

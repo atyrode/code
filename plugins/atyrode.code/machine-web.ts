@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
-import { ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
+import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
 import { actionDoor, actionSchemas, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 
@@ -23,6 +23,10 @@ const messages: Readonly<Record<string, string>> = {
   code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
   code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
 };
+/** An authoring handle exposes operations; the native cap set grants write access. */
+export function canWriteCodeWorkspace(host: HostServices): boolean {
+  return host.authoring !== null && hasCap(host.client.selfCaps(), "containers:write");
+}
 class CodeActionError extends Error {}
 export function codeOperationFailure(reason: unknown): string {
   return reason instanceof CodeActionError ? reason.message : "The Code action could not be completed.";
