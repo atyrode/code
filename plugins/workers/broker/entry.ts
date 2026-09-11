@@ -65,6 +65,5 @@ try {
   process.off("SIGTERM", stop);
   process.off("SIGINT", stop);
 }
-// SDK close stops its listeners and timers, but does not cancel in-flight OAuth
-// refreshes. Exit after releasing storage; native ownership also reaps the tree.
+// Only terminate after the broker has drained its admitted mutations.
 process.exit(failed ? 1 : 0);

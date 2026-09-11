@@ -1,0 +1,416 @@
+diff --git a/dist/types/auth-broker/refresher.d.ts b/dist/types/auth-broker/refresher.d.ts
+index a45daf7a413e3f9defcbc3fe17effe6602d92fdc..5e5676b1b5fa731c9c6366edb43d65d213910b13 100644
+--- a/dist/types/auth-broker/refresher.d.ts
++++ b/dist/types/auth-broker/refresher.d.ts
+@@ -18,7 +18,7 @@ export declare class AuthBrokerRefresher {
+     #private;
+     constructor(opts: AuthBrokerRefresherOptions);
+     start(): void;
+-    stop(): void;
++    stop(): Promise<void>;
+     getSchedule(): AuthBrokerRefresherSchedule;
+     /** Run one sweep. Exposed for tests. */
+     tick(): Promise<void>;
+diff --git a/src/auth-broker/refresher.ts b/src/auth-broker/refresher.ts
+index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9fa90c0926 100644
+--- a/src/auth-broker/refresher.ts
++++ b/src/auth-broker/refresher.ts
+@@ -37,7 +37,8 @@ export class AuthBrokerRefresher {
+ 	readonly #refreshIntervalMs: number;
+ 	readonly #now: () => number;
+ 	#timer: NodeJS.Timeout | undefined;
+-	#running = false;
++	#inFlight: Promise<void> | undefined;
++	#stopped = false;
+ 	#nextSweepAt: number;
+ 	constructor(opts: AuthBrokerRefresherOptions) {
+ 		this.#storage = opts.storage;
+@@ -49,6 +50,7 @@ export class AuthBrokerRefresher {
+ 
+ 	start(): void {
+ 		if (this.#timer !== undefined) return;
++		this.#stopped = false;
+ 		// Refresh sweep is best-effort; kick once immediately so freshly-booted
+ 		// brokers don't hand out near-expired tokens for the first interval.
+ 		this.#nextSweepAt = this.#now();
+@@ -58,11 +60,13 @@ export class AuthBrokerRefresher {
+ 		}, this.#refreshIntervalMs);
+ 	}
+ 
+-	stop(): void {
++	async stop(): Promise<void> {
++		this.#stopped = true;
+ 		if (this.#timer !== undefined) {
+ 			clearInterval(this.#timer);
+ 			this.#timer = undefined;
+ 		}
++		await this.#inFlight;
+ 	}
+ 
+ 	getSchedule(): AuthBrokerRefresherSchedule {
+@@ -75,28 +79,32 @@ export class AuthBrokerRefresher {
+ 	}
+ 
+ 	/** Run one sweep. Exposed for tests. */
+-	async tick(): Promise<void> {
+-		if (this.#running) return;
+-		this.#running = true;
+-		this.#nextSweepAt = this.#now();
+-		try {
+-			await this.#storage.reload();
+-			const snapshot = this.#storage.exportSnapshot();
+-			const now = this.#now();
+-			const deadline = now + this.#refreshSkewMs;
+-			const targets: number[] = [];
+-			for (const entry of snapshot.credentials) {
+-				if (entry.credential.type !== "oauth") continue;
+-				const expires = entry.credential.expires;
+-				if (typeof expires !== "number" || !Number.isFinite(expires)) continue;
+-				if (expires > deadline) continue;
+-				targets.push(entry.id);
+-			}
+-			await Promise.all(targets.map(id => this.#refreshOne(id)));
+-		} finally {
+-			this.#running = false;
++	tick(): Promise<void> {
++		if (this.#stopped) return this.#inFlight ?? Promise.resolve();
++		if (this.#inFlight) return this.#inFlight;
++		this.#inFlight = this.#sweep().finally(() => {
++			this.#inFlight = undefined;
+ 			this.#nextSweepAt = this.#now() + this.#refreshIntervalMs;
++		});
++		return this.#inFlight;
++	}
++
++	async #sweep(): Promise<void> {
++		this.#nextSweepAt = this.#now();
++		await this.#storage.reload();
++		if (this.#stopped) return;
++		const snapshot = this.#storage.exportSnapshot();
++		const now = this.#now();
++		const deadline = now + this.#refreshSkewMs;
++		const targets: number[] = [];
++		for (const entry of snapshot.credentials) {
++			if (entry.credential.type !== "oauth") continue;
++			const expires = entry.credential.expires;
++			if (typeof expires !== "number" || !Number.isFinite(expires)) continue;
++			if (expires > deadline) continue;
++			targets.push(entry.id);
+ 		}
++		await Promise.all(targets.map(id => this.#refreshOne(id)));
+ 	}
+ 
+ 	async #refreshOne(id: number): Promise<void> {
+diff --git a/src/auth-broker/remote-store.ts b/src/auth-broker/remote-store.ts
+index 2efb284aa720c028e656eccd53d774d1526d6e35..7737326ffd8d3b6997213c2b78591037bdb38c0a 100644
+--- a/src/auth-broker/remote-store.ts
++++ b/src/auth-broker/remote-store.ts
+@@ -257,6 +257,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	#generation = 0;
+ 	#usageOverlays: Map<string, UsageReport> = new Map();
+ 	#backgroundAbort = new AbortController();
++	/** Only the current acquisition may publish snapshots, regardless of broker generation. */
++	#snapshotAuthority = 0;
++	#activeBackgroundAbort: AbortController | undefined;
++	#foregroundSnapshotQueue: Promise<void> = Promise.resolve();
++	#foregroundSnapshotCount = 0;
+ 	readonly #backgroundIdleMs: number;
+ 	/** Last foreground store use; background sync parks `#backgroundIdleMs` after this. */
+ 	#lastActivityMs = Date.now();
+@@ -375,20 +380,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	async #runBackground(): Promise<void> {
+ 		let backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+ 		while (!this.#closed && !this.#backgroundAbort.signal.aborted) {
++			if (this.#foregroundSnapshotCount > 0) {
++				await this.#foregroundSnapshotQueue;
++				continue;
++			}
+ 			if (this.#idleRemainingMs() <= 0) {
+ 				this.#activityWakeup ??= Promise.withResolvers<void>();
+ 				await this.#activityWakeup.promise;
+ 				continue;
+ 			}
++			const authority = ++this.#snapshotAuthority;
+ 			const watchdog = this.#startIdleWatchdog();
++			this.#activeBackgroundAbort = watchdog.controller;
+ 			try {
+ 				if (this.#streamSnapshots && !this.#streamingUnsupported) {
+ 					try {
+-						await this.#consumeSnapshotStream(watchdog.signal);
++						await this.#raceWithSignal(this.#consumeSnapshotStream(watchdog.signal, authority), watchdog.signal);
+ 						backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+ 					} catch (error) {
+ 						if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+-						if (watchdog.idled()) continue;
++						if (authority !== this.#snapshotAuthority || watchdog.signal.aborted) continue;
+ 						if (error instanceof AuthBrokerStreamUnsupportedError) {
+ 							this.#streamingUnsupported = true;
+ 							logger.debug("auth-broker snapshot stream unsupported; falling back to long-poll");
+@@ -401,22 +412,28 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 					continue;
+ 				}
+ 				try {
+-					const result = await this.#client.fetchSnapshot({
+-						ifGenerationGt: this.#generation,
+-						waitMs: BACKGROUND_WAIT_MS,
+-						signal: watchdog.signal,
+-					});
++					const result = await this.#raceWithSignal(
++						this.#client.fetchSnapshot({
++							ifGenerationGt: this.#generation,
++							waitMs: BACKGROUND_WAIT_MS,
++							signal: watchdog.signal,
++						}),
++						watchdog.signal,
++					);
++					if (authority !== this.#snapshotAuthority || watchdog.signal.aborted || this.#closed) continue;
+ 					if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+ 					backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
+ 				} catch (error) {
+ 					if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+-					if (watchdog.idled()) continue;
++					if (authority !== this.#snapshotAuthority || watchdog.signal.aborted) continue;
+ 					logger.debug("auth-broker background snapshot sync failed", { error: String(error) });
+ 					await this.#backoffWait(backoffMs);
+ 					backoffMs = Math.min(BACKGROUND_BACKOFF_MAX_MS, backoffMs * 2);
+ 				}
+ 			} finally {
+ 				watchdog.stop();
++				watchdog.controller.abort();
++				if (this.#activeBackgroundAbort === watchdog.controller) this.#activeBackgroundAbort = undefined;
+ 			}
+ 		}
+ 	}
+@@ -440,9 +457,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	 * while something else keeps the event loop alive — typically our own
+ 	 * in-flight broker request, which is exactly what it exists to end.
+ 	 */
+-	#startIdleWatchdog(): { signal: AbortSignal; idled: () => boolean; stop: () => void } {
++	#startIdleWatchdog(): { signal: AbortSignal; controller: AbortController; stop: () => void } {
+ 		const controller = new AbortController();
+-		let idled = false;
+ 		let timer: Timer | undefined;
+ 		const arm = (): void => {
+ 			const remainingMs = this.#idleRemainingMs();
+@@ -451,13 +467,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 				timer.unref?.();
+ 				return;
+ 			}
+-			idled = true;
+ 			controller.abort(new AIError.AbortError("auth-broker background sync idle"));
+ 		};
+ 		arm();
+ 		return {
+ 			signal: AbortSignal.any([this.#backgroundAbort.signal, controller.signal]),
+-			idled: () => idled,
++			controller,
+ 			stop: () => clearTimeout(timer),
+ 		};
+ 	}
+@@ -483,25 +498,30 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 		}
+ 	}
+ 
+-	async #consumeSnapshotStream(signal: AbortSignal): Promise<void> {
++	async #consumeSnapshotStream(signal: AbortSignal, authority: number): Promise<void> {
+ 		const iterator = this.#client.openSnapshotStream({ signal });
++		let initialEvent = true;
+ 		try {
+ 			for await (const event of iterator) {
+-				if (this.#closed || signal.aborted) break;
++				if (this.#closed || signal.aborted || authority !== this.#snapshotAuthority) break;
+ 				this.#streamingActive = true;
+-				this.#applyStreamEvent(event);
++				this.#applyStreamEvent(event, initialEvent);
++				initialEvent = false;
+ 			}
+ 		} finally {
+-			this.#streamingActive = false;
++			if (authority === this.#snapshotAuthority) this.#streamingActive = false;
+ 		}
+ 	}
+ 
+-	#applyStreamEvent(event: SnapshotStreamEvent): void {
++	#applyStreamEvent(event: SnapshotStreamEvent, initialEvent: boolean): void {
+ 		switch (event.kind) {
+ 			case "snapshot": {
+ 				// Strip the discriminator so we store the wire-shape SnapshotResponse.
+ 				const { kind: _kind, ...snapshot } = event;
+-				if (snapshot.generation < this.#generation) {
++				// Generations are process-local. Each new stream starts with an
++				// authoritative full snapshot, even after a broker restart resets it.
++				// Later frames still cannot roll back this stream's accepted state.
++				if (!initialEvent && snapshot.generation < this.#generation) {
+ 					logger.debug("auth-broker stream snapshot older than local; ignoring", {
+ 						local: this.#generation,
+ 						incoming: snapshot.generation,
+@@ -568,12 +588,50 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 
+ 	/** Re-hydrate the in-memory snapshot from the broker. */
+ 	async refreshSnapshot(): Promise<SnapshotResponse> {
+-		this.#noteActivity();
+-		const result = await this.#client.fetchSnapshot();
+-		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
++		await this.#acquireSnapshot();
+ 		return this.#snapshot;
+ 	}
+ 
++	/**
++	 * Foreground reads take authority before opening a request. Retiring a stream
++	 * must not wait for its iterator to honor abort; its late frames are fenced.
++	 * Queue direct reads so a delayed response cannot overwrite a newer one.
++	 */
++	async #acquireSnapshot(maxWaitMs?: number, callerSignal?: AbortSignal): Promise<boolean> {
++		const signal = callerSignal
++			? AbortSignal.any([this.#backgroundAbort.signal, callerSignal])
++			: this.#backgroundAbort.signal;
++		signal.throwIfAborted();
++		this.#noteActivity();
++		const previousGeneration = this.#generation;
++		if (this.#foregroundSnapshotCount++ === 0) {
++			++this.#snapshotAuthority;
++			this.#streamingActive = false;
++			this.#activeBackgroundAbort?.abort();
++		}
++		const result = this.#foregroundSnapshotQueue.then(async () => {
++			signal.throwIfAborted();
++			if (maxWaitMs !== undefined && this.#generation !== previousGeneration) return true;
++			const authority = ++this.#snapshotAuthority;
++			const response = await this.#raceWithSignal(
++				this.#client.fetchSnapshot({
++					...(maxWaitMs === undefined ? {} : { ifGenerationGt: this.#generation, waitMs: maxWaitMs }),
++					signal,
++				}),
++				signal,
++			);
++			signal.throwIfAborted();
++			if (authority !== this.#snapshotAuthority || this.#closed) return false;
++			if (response.status === 200) this.#applySnapshot(response.snapshot, response.generation);
++			return this.#generation !== previousGeneration;
++		});
++		this.#foregroundSnapshotQueue = result.then(
++			() => { this.#foregroundSnapshotCount--; },
++			() => { this.#foregroundSnapshotCount--; },
++		);
++		return this.#raceWithSignal(result, signal);
++	}
++
+ 	listAuthCredentials(provider?: string): StoredAuthCredential[] {
+ 		this.#noteActivity();
+ 		const out: StoredAuthCredential[] = [];
+@@ -735,15 +793,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 	}
+ 
+ 	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+-		this.#noteActivity();
+-		const previousGeneration = this.#generation;
+-		const result = await this.#client.fetchSnapshot({
+-			ifGenerationGt: this.#generation,
+-			waitMs: maxWaitMs,
+-			signal: opts.signal,
+-		});
+-		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+-		return this.#generation !== previousGeneration;
++		return this.#acquireSnapshot(maxWaitMs, opts.signal);
+ 	}
+ 
+ 	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
+@@ -1173,13 +1223,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
+ 
+ 	/**
+ 	 * Reject the awaited promise when the caller's signal aborts, without
+-	 * affecting the shared upstream fetch. Used to give each caller their
+-	 * own cancel without one caller's abort cascading into a peer's in-flight
+-	 * request through the single-flight `#usageInflight`.
++	 * affecting shared upstream work. Also releases retired snapshot acquisitions
++	 * even if their transport or iterator ignores abort.
+ 	 */
+ 	#raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+ 		if (!signal) return promise;
+-		if (signal.aborted) return Promise.reject(new AIError.AbortError("auth-broker request aborted"));
++		if (signal.aborted) {
++			void promise.catch(() => {});
++			return Promise.reject(new AIError.AbortError("auth-broker request aborted"));
++		}
+ 		return new Promise<T>((resolve, reject) => {
+ 			const onAbort = (): void => {
+ 				signal.removeEventListener("abort", onAbort);
+diff --git a/src/auth-broker/server.ts b/src/auth-broker/server.ts
+index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9ac9f6c3e 100644
+--- a/src/auth-broker/server.ts
++++ b/src/auth-broker/server.ts
+@@ -661,16 +661,22 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 			});
+ 	refresher?.start();
+ 	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
++	let closing = false;
++	let closePromise: Promise<void> | undefined;
++	let requests = 0;
++	let requestsDrained: (() => void) | undefined;
+ 
+ 	const server = Bun.serve({
+ 		hostname: bind.hostname,
+ 		port: bind.port,
+ 		idleTimeout: DEFAULT_SERVER_IDLE_TIMEOUT_S,
+ 		fetch: async (req): Promise<Response> => {
++			if (closing) return json(503, { error: "broker is closing" });
+ 			const url = new URL(req.url);
+ 			const pathname = url.pathname;
+ 			const peer =
+ 				req.headers.get("x-forwarded-for")?.split(",")[0].trim() || req.headers.get("x-real-ip") || "unknown";
++			requests++;
+ 			try {
+ 				if (req.method === "GET" && pathname === "/v1/healthz") {
+ 					const body: HealthzResponse = { ok: true, version };
+@@ -684,7 +690,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs);
+ 				}
+ 				if (req.method === "GET" && pathname === "/v1/snapshot") {
+-					return serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);
++					return await serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);
+ 				}
+ 				if (req.method === "GET" && pathname === "/v1/usage") {
+ 					try {
+@@ -765,7 +771,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 				if (refreshMatch) {
+ 					const id = Number.parseInt(refreshMatch[1], 10);
+ 					try {
+-						const entry = await opts.storage.refreshCredentialById(id, req.signal);
++						// The broker owns this mutation, not the HTTP connection: disconnecting
++						// must not let shutdown race a provider's already-rotated credential.
++						const entry = await opts.storage.refreshCredentialById(id);
+ 						const body: CredentialRefreshResponse = { entry };
+ 						logger.info("auth-broker credential refreshed", {
+ 							id,
+@@ -884,6 +892,8 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 					error: String(error),
+ 				});
+ 				return json(500, { error: "internal error" });
++			} finally {
++				if (--requests === 0) requestsDrained?.();
+ 			}
+ 		},
+ 	});
+@@ -894,10 +904,19 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 		url: `http://${boundHost}:${boundPort}`,
+ 		port: boundPort,
+ 		hostname: boundHost,
+-		close: async () => {
+-			refresher?.stop();
++		close: () => {
++			if (closePromise) return closePromise;
++			closing = true;
++			const requestsStopped = requests === 0 ? undefined : new Promise<void>(resolve => { requestsDrained = resolve; });
++			const refreshStopped = refresher?.stop();
+ 			generationGate.close();
+-			server.stop(true);
++			// Close long-lived streams and stop admission before draining handlers.
++			// Refresh handlers remain attached to their storage mutation, not req.signal.
++			// Even a failed shutdown step must join the others before storage may close.
++			closePromise = Promise.allSettled([server.stop(true), refreshStopped, requestsStopped]).then(results => {
++				for (const result of results) if (result.status === "rejected") throw result.reason;
++			});
++			return closePromise;
+ 		},
+ 	};
+ }

@@ -97,6 +97,7 @@ await runSdkScenario(async (ctx: SdkScenarioContext) => {
 
       const reopened = await AuthStorage.create(database);
       try {
+        await reopened.reload();
         const persisted = reopened.listStoredCredentials().find(row => row.provider === provider)?.credential;
         ctx.check(persisted?.type === "oauth" && persisted.refresh === rotatedRefresh
           && persisted.access === rotatedAccess, "shutdown-rotation-not-persisted");
