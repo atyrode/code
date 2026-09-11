@@ -24,7 +24,6 @@ class FixtureBroker {
   stream?: ReadableStreamDefaultController<Uint8Array>;
   readonly listening = Promise.withResolvers<void>();
   readonly disconnected = Promise.withResolvers<void>();
-  refreshes = 0;
   refreshEntry?: SnapshotEntry;
   readonly encoder = new TextEncoder();
   constructor(entries: SnapshotEntry[]) {
@@ -46,7 +45,6 @@ class FixtureBroker {
     if (url.pathname === "/v1/snapshot") return Response.json(this.snapshot, { headers: { ETag: `"${this.snapshot.generation}"` } });
     if (url.pathname === "/v1/usage") return Response.json({ generatedAt: Date.now(), reports: [] });
     if (url.pathname.endsWith("/refresh")) {
-      this.refreshes++;
       const entry = this.refreshEntry!;
       this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1,
         credentials: this.snapshot.credentials.map(current => current.id === entry.id ? entry : current) };
@@ -132,11 +130,12 @@ describe("native account-pool gateway", () => {
     try {
       await fixture.listening.promise;
       await expect(storage.remote.markCredentialSuspect(3)).rejects.toThrow("gateway_unavailable");
-      expect(fixture.refreshes).toBe(0);
+      storage.pinSessionOAuthAccount("anthropic", "refresh-mismatch-session", 1);
+      expect(await storage.getApiKey("anthropic", "refresh-mismatch-session")).toBe("fixture-access-1");
       fixture.refreshEntry = credential(2, "other");
       await expect(storage.remote.markCredentialSuspect(1)).rejects.toThrow("gateway_unavailable");
-      expect(storage.remote.listAuthCredentials().map(entry => entry.id)).toEqual([2]);
-      expect(await storage.getApiKey("anthropic")).toBe("fixture-access-2");
+      expect(storage.remote.listAuthCredentials().map(entry => entry.id)).toEqual([1, 2]);
+      expect(await storage.getApiKey("anthropic", "refresh-mismatch-session")).toBe("fixture-access-1");
     } finally { controller.abort(); storage.close(); }
   });
 
@@ -171,22 +170,62 @@ describe("native account-pool gateway", () => {
       fixture.refreshEntry = credential(1, "unlisted");
       await expect(storage.remote.markCredentialSuspect(1)).rejects.toThrow("gateway_unavailable");
       expect(await storage.getApiKey("anthropic")).toBeUndefined();
-      expect(fixture.refreshes).toBe(2);
     } finally { controller.abort(); storage.close(); }
   });
 
-  test("an SSE upsert moving a row outside its identity pool becomes a removal", async () => {
+  test("an accepted SSE identity change removes the selected account", async () => {
     const fixture = new FixtureBroker([credential(1, "chosen")]);
     const inputs = parseInputs(broker, { anthropic: [{ credentialId: 1, identityKey: "chosen" }] }, serviceBearer);
     const controller = new AbortController();
-    const client = new PoolBrokerClient({ ...broker, fetchImpl: fixture.fetch }, inputs.accountPool);
-    const iterator = client.openSnapshotStream({ signal: controller.signal });
+    const storage = await openPoolStorage(broker, inputs.accountPool, controller.signal, fixture.fetch);
     try {
-      const first = await iterator.next();
-      expect(first.value?.kind).toBe("snapshot");
+      await fixture.listening.promise;
+      expect(await storage.getApiKey("anthropic", "identity-session")).toBe("fixture-access-1");
       fixture.send({ kind: "entry", entry: credential(1, "unlisted"), generation: 2, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
-      expect((await iterator.next()).value).toMatchObject({ kind: "removed", id: 1 });
-    } finally { controller.abort(); await iterator.return(undefined); }
+      await eventually(() => storage.remote.snapshot.generation === 2);
+      expect(await storage.getApiKey("anthropic", "identity-session")).toBeUndefined();
+    } finally { controller.abort(); storage.close(); }
+  });
+
+  test("rejected stale stream frames cannot restore removed accounts or hide the current selection", async () => {
+    const marker: SnapshotEntry = { id: 9, provider: "openai", identityKey: null, rotatesInMs: null,
+      credential: { type: "api_key", key: "fixture-stream-marker-before" } };
+    const fixture = new FixtureBroker([credential(1, "removed"), marker]);
+    const obsolete = fixture.snapshot;
+    const inputs = parseInputs(broker, {
+      anthropic: [{ credentialId: 1, identityKey: "removed" }, { credentialId: 2, identityKey: "current" }],
+      openai: [{ credentialId: 9, identityKey: null }],
+    }, serviceBearer);
+    const controller = new AbortController();
+    const storage = await openPoolStorage(broker, inputs.accountPool, controller.signal, fixture.fetch);
+    try {
+      await fixture.listening.promise;
+      expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-1");
+      fixture.snapshot = { ...fixture.snapshot, generation: 2, credentials: [...fixture.snapshot.credentials, credential(2, "current")] };
+      fixture.send({ kind: "entry", entry: credential(2, "current"), generation: 2,
+        serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      fixture.remove(1);
+      await eventually(() => storage.remote.snapshot.generation === 3);
+      expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-2");
+      const revocation = storage.remote.revocation;
+
+      fixture.send({ kind: "entry", entry: credential(1, "removed"), generation: 1,
+        serverNowMs: Date.now(), refresher: obsolete.refresher });
+      fixture.send({ kind: "removed", id: 2, generation: 1,
+        serverNowMs: Date.now(), refresher: obsolete.refresher });
+      fixture.send({ kind: "entry", entry: credential(2, "unlisted"), generation: 1,
+        serverNowMs: Date.now(), refresher: obsolete.refresher });
+      fixture.send({ ...obsolete, kind: "snapshot" });
+      // FIFO delivery of an accepted, unrelated slot is the processing barrier:
+      // it must not repair the current account that the obsolete frames omit.
+      fixture.send({ kind: "entry", entry: { ...marker, credential: { type: "api_key", key: "fixture-stream-marker-after" } },
+        generation: 4, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      await eventually(() => storage.remote.snapshot.generation === 4);
+      expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-2");
+      expect(storage.remote.listAuthCredentials("anthropic").map(entry => entry.id)).toEqual([2]);
+      expect(await storage.getApiKey("openai")).toBe("fixture-stream-marker-after");
+      expect(storage.remote.revocation).toBe(revocation);
+    } finally { controller.abort(); storage.close(); }
   });
 
   test("sealed endpoint validation rejects authority tricks and strips ambient credentials before SDK loading", () => {
