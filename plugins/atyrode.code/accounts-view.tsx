@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { HostServices } from "@manifold/plugin";
+import { hasCap } from "@manifold/protocol";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
 import type { AccountChoiceChange, AccountReference } from "../domain/contracts.ts";
 import { CODE_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
@@ -40,7 +41,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const writable = canWriteCodeWorkspace(host);
   const canEdit = writable && target !== null && available && current !== null && !busy;
-  const canAdminister = writable && target !== null && !busy && observation?.status === "fresh";
+  const canAdminister = writable && hasCap(host.client.selfCaps(), "services:invoke") && target !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
     account.credentialId === confirmation.input.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
