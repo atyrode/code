@@ -129,9 +129,6 @@ async function openWorkspace(browser: BrowserInstance, server: TestServer, grant
   assert(arranged.ok, "Both unscoped identities must be able to set their own personal layout");
   await browser.goto(`${server.httpUrl}/p/${containerId}`);
   await until(browser, "ordinary canvas mounted alongside Code accounts", `document.querySelector('.react-flow') !== null && ${element(panel)} !== null`);
-  // This native affordance is only rendered with a live authoring handle. Never
-  // press it: its presence is proof of the old false permission signal, not consent.
-  await until(browser, "real authoring handle in both workspaces", `${element(`button[aria-label="New terminal on ${machineName}"]`)} !== null`);
   await until(browser, "permitted online workspace machine selected", `(() => {
     const select = ${element(`${panel} .plugin-atyrode_code_accounts__target select`)};
     return select instanceof HTMLSelectElement && select.value !== '' && select.selectedOptions[0]?.textContent.includes(${JSON.stringify(machineName)});

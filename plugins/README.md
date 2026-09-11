@@ -84,8 +84,15 @@ adds managed artifact declarations and packs parent before children through the
 pinned kit. Output is `dist/<id>.manifold-plugin.json`, `dist/SHA256SUMS` and
 `dist/native-requirements.json`. Source manifests own operations and requirements;
 packing does not rewrite them or install a worker on an execution machine.
-`verify` uses the kit's disposable server to install, dispatch and uninstall
-bundles. None of these commands proves a live provider request or OMP readiness.
+`verify` first uses the kit's disposable server to install, dispatch and uninstall
+bundles, then runs `scripts/verify-browser.ts` against the packed artifacts.
+The browser scenario requires Chromium (`MANIFOLD_CHROMIUM` can select its binary)
+and uses two isolated, freshly minted Manifold identities to prove viewer write
+refusal and live initialization/profile convergence. It starts no native job
+owner, terminal or provider request. Run `bun run verify:browser` independently,
+or pass an existing bundle directory to `bun scripts/verify-browser.ts` to check
+older artifacts. Neither the browser scenario nor the other gate commands prove
+live provider authentication or OMP readiness.
 
 ## Managed execution resources
 

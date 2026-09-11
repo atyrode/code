@@ -6,7 +6,8 @@
     "check": "tsc -p .",
     "test": "bun test",
     "pack": "./pack.sh",
-    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts dist/*.manifold-plugin.json",
+    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts dist/*.manifold-plugin.json && bun run verify:browser",
+    "verify:browser": "bun scripts/verify-browser.ts",
     "dev": "bun dev.ts"
   },
   "dependencies": {
