@@ -21,9 +21,8 @@ function credential(id: number, identityKey: string | null, provider = "anthropi
 }
 class FixtureBroker {
   snapshot: SnapshotResponse;
-  stream?: ReadableStreamDefaultController<Uint8Array>;
+  readonly streams = new Set<ReadableStreamDefaultController<Uint8Array>>();
   readonly listening = Promise.withResolvers<void>();
-  readonly disconnected = Promise.withResolvers<void>();
   refreshEntry?: SnapshotEntry;
   readonly encoder = new TextEncoder();
   constructor(entries: SnapshotEntry[]) {
@@ -35,27 +34,47 @@ class FixtureBroker {
     expect(url.origin).toBe(broker.url);
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${broker.token}`);
     if (url.pathname === "/v1/snapshot/stream") {
-      return new Response(new ReadableStream<Uint8Array>({ start: controller => {
-        this.stream = controller;
-        this.send({ ...this.snapshot, kind: "snapshot" });
-        init?.signal?.addEventListener("abort", () => { try { controller.close(); } catch {} this.disconnected.resolve(); }, { once: true });
-        this.listening.resolve();
-      } }), { headers: { "Content-Type": "text/event-stream" } });
+      let stream: ReadableStreamDefaultController<Uint8Array>;
+      const disconnect = () => {
+        if (this.streams.delete(stream)) stream.close();
+      };
+      return new Response(new ReadableStream<Uint8Array>({
+        start: controller => {
+          stream = controller;
+          this.streams.add(controller);
+          controller.enqueue(this.encoder.encode(`event: snapshot\ndata: ${JSON.stringify({ ...this.snapshot, kind: "snapshot" })}\n\n`));
+          init?.signal?.addEventListener("abort", disconnect, { once: true });
+          if (init?.signal?.aborted) disconnect();
+          this.listening.resolve();
+        },
+        cancel: () => {
+          this.streams.delete(stream);
+          init?.signal?.removeEventListener("abort", disconnect);
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
     }
     if (url.pathname === "/v1/snapshot") return Response.json(this.snapshot, { headers: { ETag: `"${this.snapshot.generation}"` } });
     if (url.pathname === "/v1/usage") return Response.json({ generatedAt: Date.now(), reports: [] });
     if (url.pathname.endsWith("/refresh")) {
       const entry = this.refreshEntry!;
-      this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1,
-        credentials: this.snapshot.credentials.map(current => current.id === entry.id ? entry : current) };
-      if (this.stream) this.send({ kind: "entry", entry, generation: this.snapshot.generation,
-        serverNowMs: Date.now(), refresher: this.snapshot.refresher });
+      this.publish(entry);
       const { rotatesInMs: _, ...wireEntry } = entry;
       return Response.json({ entry: wireEntry });
     }
     throw new Error("unplanned fixture operation");
   }, { preconnect: fetch.preconnect });
-  send(event: SnapshotStreamEvent): void { this.stream!.enqueue(this.encoder.encode(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`)); }
+  send(event: SnapshotStreamEvent): void {
+    const bytes = this.encoder.encode(`event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`);
+    for (const stream of this.streams) stream.enqueue(bytes);
+  }
+  publish(entry: SnapshotEntry): void {
+    const existing = this.snapshot.credentials.some(current => current.id === entry.id);
+    this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1,
+      credentials: existing ? this.snapshot.credentials.map(current => current.id === entry.id ? entry : current)
+        : [...this.snapshot.credentials, entry] };
+    this.send({ kind: "entry", entry, generation: this.snapshot.generation,
+      serverNowMs: Date.now(), refresher: this.snapshot.refresher });
+  }
   remove(id: number): void {
     this.snapshot = { ...this.snapshot, generation: this.snapshot.generation + 1, credentials: this.snapshot.credentials.filter(entry => entry.id !== id) };
     this.send({ kind: "removed", id, generation: this.snapshot.generation, serverNowMs: Date.now(), refresher: this.snapshot.refresher });
@@ -98,11 +117,11 @@ describe("native account-pool gateway", () => {
       expect(await storage.getApiKey("openai", "api-key-session")).toBe("fixture-selected-api-key");
       expect(await storage.getApiKey("anthropic")).toBeUndefined();
       // Rotating bytes in the same authorized slot is allowed without widening it.
-      fixture.send({ kind: "entry", entry: { ...selected, credential: { type: "api_key", key: "fixture-rotated-api-key" } }, generation: 2, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      fixture.publish({ ...selected, credential: { type: "api_key", key: "fixture-rotated-api-key" } });
       await eventually(() => storage.remote.listAuthCredentials("openai").some(entry => entry.credential.type === "api_key" && entry.credential.key === "fixture-rotated-api-key"));
       expect(await storage.getApiKey("openai", "api-key-session")).toBe("fixture-rotated-api-key");
       // Null does not admit an OAuth identity newly assigned to the same row.
-      fixture.send({ kind: "entry", entry: credential(7, "new-identity", "openai"), generation: 3, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      fixture.publish(credential(7, "new-identity", "openai"));
       await eventually(() => storage.remote.listAuthCredentials("openai").length === 0);
       expect(await storage.getApiKey("openai", "api-key-session")).toBeUndefined();
     } finally { controller.abort(); storage.close(); }
@@ -151,7 +170,7 @@ describe("native account-pool gateway", () => {
       await eventually(() => storage.remote.listAuthCredentials().length === 0);
       expect(await storage.getApiKey("anthropic", "fixture-session")).toBeUndefined();
     } finally { controller.abort(); storage.close(); }
-    await fixture.disconnected.promise;
+    await eventually(() => fixture.streams.size === 0);
   });
 
   test("refresh uses the SDK broker hook and refuses an identity change", async () => {
@@ -181,7 +200,8 @@ describe("native account-pool gateway", () => {
     try {
       await fixture.listening.promise;
       expect(await storage.getApiKey("anthropic", "identity-session")).toBe("fixture-access-1");
-      fixture.send({ kind: "entry", entry: credential(1, "unlisted"), generation: 2, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      await eventually(() => fixture.streams.size > 0);
+      fixture.publish(credential(1, "unlisted"));
       await eventually(() => storage.remote.snapshot.generation === 2);
       expect(await storage.getApiKey("anthropic", "identity-session")).toBeUndefined();
     } finally { controller.abort(); storage.close(); }
@@ -201,14 +221,13 @@ describe("native account-pool gateway", () => {
     try {
       await fixture.listening.promise;
       expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-1");
-      fixture.snapshot = { ...fixture.snapshot, generation: 2, credentials: [...fixture.snapshot.credentials, credential(2, "current")] };
-      fixture.send({ kind: "entry", entry: credential(2, "current"), generation: 2,
-        serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      fixture.publish(credential(2, "current"));
       fixture.remove(1);
       await eventually(() => storage.remote.snapshot.generation === 3);
       expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-2");
       const revocation = storage.remote.revocation;
 
+      await eventually(() => fixture.streams.size > 0);
       fixture.send({ kind: "entry", entry: credential(1, "removed"), generation: 1,
         serverNowMs: Date.now(), refresher: obsolete.refresher });
       fixture.send({ kind: "removed", id: 2, generation: 1,
@@ -218,8 +237,7 @@ describe("native account-pool gateway", () => {
       fixture.send({ ...obsolete, kind: "snapshot" });
       // FIFO delivery of an accepted, unrelated slot is the processing barrier:
       // it must not repair the current account that the obsolete frames omit.
-      fixture.send({ kind: "entry", entry: { ...marker, credential: { type: "api_key", key: "fixture-stream-marker-after" } },
-        generation: 4, serverNowMs: Date.now(), refresher: fixture.snapshot.refresher });
+      fixture.publish({ ...marker, credential: { type: "api_key", key: "fixture-stream-marker-after" } });
       await eventually(() => storage.remote.snapshot.generation === 4);
       expect(await storage.getApiKey("anthropic", "stale-stream-session")).toBe("fixture-access-2");
       expect(storage.remote.listAuthCredentials("anthropic").map(entry => entry.id)).toEqual([2]);
@@ -295,7 +313,7 @@ describe("native account-pool gateway", () => {
       expect(response.status).toBe(401);
       expect(await response.text()).not.toContain("No credential available");
     } finally { controller.abort(); await gateway.close(); }
-    await fixture.disconnected.promise;
+    await eventually(() => fixture.streams.size === 0);
     await expect(fetch(url + "/v1/models")).rejects.toThrow();
   });
 });
