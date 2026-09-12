@@ -77,10 +77,10 @@ index bd2301f50b8b92616cddf23331910d629a01054e..00c768bf0e68872e551c496356798f21
       * Store-level hook consumed by `AuthStorage.fetchUsageReports()` — proxies
       * to the broker's `/v1/usage` endpoint. The broker's egress IP isn't
 diff --git a/dist/types/auth-broker/server.d.ts b/dist/types/auth-broker/server.d.ts
-index b12f98cb320aa5cf1eb61429001db8d1de2d7620..28baae37ef694126e3b339945e1275ce8e571d8f 100644
+index b12f98cb320aa5cf1eb61429001db8d1de2d7620..bc591b04ad906f8049fabad71df5303005a51165 100644
 --- a/dist/types/auth-broker/server.d.ts
 +++ b/dist/types/auth-broker/server.d.ts
-@@ -15,8 +15,10 @@ export interface AuthBrokerServerOptions {
+@@ -15,8 +15,12 @@ export interface AuthBrokerServerOptions {
      storage: AuthStorage;
      /** Listen address; accepts `host:port` or just `port`. */
      bind?: string;
@@ -89,9 +89,33 @@ index b12f98cb320aa5cf1eb61429001db8d1de2d7620..28baae37ef694126e3b339945e1275ce
      bearerTokens: string[];
 +    /** Additional SHA-256 bearer verifiers: a nonempty array of exact lowercase 64-character hex digests. */
 +    bearerTokenHashes?: readonly string[];
++    /** Enable cooperative control endpoints for this configured plaintext bearer only. */
++    controlBearerToken?: string;
      /** Broker version string surfaced on `/v1/healthz`. */
      version?: string;
      /** Refresh credentials expiring within this window. Default 5 min. */
+@@ -42,6 +46,8 @@ export interface AuthBrokerServerHandle {
+     url: string;
+     port: number;
+     hostname: string;
++    /** Permanently stop work admission and drain storage, retaining the control listener. */
++    quiesce(): Promise<void>;
+     close(): Promise<void>;
+ }
+ /** Boot the broker. Caller owns lifecycle; `handle.close()` to stop. */
+diff --git a/dist/types/auth-storage.d.ts b/dist/types/auth-storage.d.ts
+index 92b7d5082865dfa2f79fb6b964294e1fcb7b9e65..5b89f0a4ce88f63aba3b6cd5c0a0e7986a825f04 100644
+--- a/dist/types/auth-storage.d.ts
++++ b/dist/types/auth-storage.d.ts
+@@ -738,6 +738,8 @@ export declare class AuthStorage {
+      * After calling this, the instance must not be reused.
+      */
+     close(): void;
++    /** Join owned usage/refresh work after the caller has stopped request/sweep admission. */
++    drainRefreshes(): Promise<void>;
+     getGeneration(): number;
+     /**
+      * Reload state after another process commits to the backing store, then
 diff --git a/src/auth-broker/refresher.ts b/src/auth-broker/refresher.ts
 index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9fa90c0926 100644
 --- a/src/auth-broker/refresher.ts
@@ -683,7 +707,7 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..4c8eda2865b54176e7454e1e1c5fc3ac
  			const onAbort = (): void => {
  				signal.removeEventListener("abort", onAbort);
 diff --git a/src/auth-broker/server.ts b/src/auth-broker/server.ts
-index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b1485190062362b00dbaa 100644
+index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..981da451bfea2f1b1aa48a670e09dd030e98d88f 100644
 --- a/src/auth-broker/server.ts
 +++ b/src/auth-broker/server.ts
 @@ -10,9 +10,11 @@
@@ -698,7 +722,7 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
  import { parseBind } from "../utils/parse-bind";
  import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
  import type {
-@@ -55,8 +57,10 @@ export interface AuthBrokerServerOptions {
+@@ -55,8 +57,12 @@ export interface AuthBrokerServerOptions {
  	storage: AuthStorage;
  	/** Listen address; accepts `host:port` or just `port`. */
  	bind?: string;
@@ -707,23 +731,39 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
  	bearerTokens: string[];
 +	/** Additional SHA-256 bearer verifiers: a nonempty array of exact lowercase 64-character hex digests. */
 +	bearerTokenHashes?: readonly string[];
++	/** Enable cooperative control endpoints for this configured plaintext bearer only. */
++	controlBearerToken?: string;
  	/** Broker version string surfaced on `/v1/healthz`. */
  	version?: string;
  	/** Refresh credentials expiring within this window. Default 5 min. */
-@@ -97,13 +101,21 @@ function empty(status: number, headers?: Record<string, string>): Response {
+@@ -83,6 +89,8 @@ export interface AuthBrokerServerHandle {
+ 	url: string;
+ 	port: number;
+ 	hostname: string;
++	/** Permanently stop work admission and drain storage, retaining the control listener. */
++	quiesce(): Promise<void>;
+ 	close(): Promise<void>;
+ }
+ 
+@@ -97,13 +105,24 @@ function empty(status: number, headers?: Record<string, string>): Response {
  	return new Response(null, { status, headers });
  }
  
 -function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
 -	if (tokens.size === 0) return true;
++function requestBearer(req: Request): string | undefined {
+ 	const header = req.headers.get("authorization");
+-	if (!header) return false;
++	if (!header) return undefined;
+ 	const match = header.match(/^Bearer\s+(.+)$/i);
+-	if (!match) return false;
+-	return tokens.has(match[1].trim());
++	return match?.[1].trim() || undefined;
++}
++
 +function isAuthorized(req: Request, tokens: ReadonlySet<string>, tokenHashes: readonly Buffer[]): boolean {
 +	if (tokens.size === 0 && tokenHashes.length === 0) return true;
- 	const header = req.headers.get("authorization");
- 	if (!header) return false;
- 	const match = header.match(/^Bearer\s+(.+)$/i);
- 	if (!match) return false;
--	return tokens.has(match[1].trim());
-+	const candidate = match[1].trim();
++	const candidate = requestBearer(req);
 +	if (!candidate) return false;
 +	if (tokens.has(candidate)) return true;
 +	if (tokenHashes.length === 0) return false;
@@ -735,7 +775,62 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
  }
  
  function supportsCodexMeterBlockScopes(req: Request): boolean {
-@@ -648,6 +660,18 @@ function serveSnapshotStream(
+@@ -424,6 +443,7 @@ async function serveSnapshot(
+ 	gate: GenerationGate,
+ 	refresher: AuthBrokerRefresher | undefined,
+ 	peer: string,
++	shutdownSignal: AbortSignal,
+ ): Promise<Response> {
+ 	await storage.reload();
+ 	const clientSupportsCodexMeterBlockScopes = supportsCodexMeterBlockScopes(req);
+@@ -443,7 +463,7 @@ async function serveSnapshot(
+ 
+ 	const delay = delayResult(waitMs);
+ 	const waitController = new AbortController();
+-	const waitSignal = AbortSignal.any([req.signal, waitController.signal]);
++	const waitSignal = AbortSignal.any([req.signal, waitController.signal, shutdownSignal]);
+ 	const result = await Promise.race([gate.waitForChange(clientGeneration, waitSignal), delay.promise]);
+ 	delay.cancel();
+ 	waitController.abort();
+@@ -495,6 +515,7 @@ function serveSnapshotStream(
+ 	refresher: AuthBrokerRefresher | undefined,
+ 	peer: string,
+ 	keepaliveMs: number,
++	shutdownSignal: AbortSignal,
+ ): Response {
+ 	const encoder = new TextEncoder();
+ 	const openedAt = Date.now();
+@@ -522,6 +543,7 @@ function serveSnapshotStream(
+ 		}
+ 		if (abortHandler) {
+ 			req.signal.removeEventListener("abort", abortHandler);
++			shutdownSignal.removeEventListener("abort", abortHandler);
+ 			abortHandler = null;
+ 		}
+ 		try {
+@@ -610,7 +632,12 @@ function serveSnapshotStream(
+ 	const stream = new ReadableStream<Uint8Array>({
+ 		async start(c) {
+ 			controller = c;
++			abortHandler = (): void => cleanup();
++			req.signal.addEventListener("abort", abortHandler);
++			shutdownSignal.addEventListener("abort", abortHandler);
++			if (req.signal.aborted || shutdownSignal.aborted) { cleanup(); return; }
+ 			await storage.reload();
++			if (closed) return;
+ 			const initial = buildSnapshot(storage, refresher, clientSupportsCodexMeterBlockScopes);
+ 			lastGeneration = initial.generation;
+ 			for (const entry of initial.credentials) lastByCredId.set(entry.id, fingerprintEntry(entry));
+@@ -623,8 +650,6 @@ function serveSnapshotStream(
+ 			unsubscribe = storage.onGenerationChanged(() => {
+ 				void processGenerationBump();
+ 			});
+-			abortHandler = (): void => cleanup();
+-			req.signal.addEventListener("abort", abortHandler);
+ 			logger.info("auth-broker stream opened", { peer, generation: initial.generation });
+ 		},
+ 		cancel() {
+@@ -648,6 +673,24 @@ function serveSnapshotStream(
  export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServerHandle {
  	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_BROKER_BIND);
  	const tokens = new Set<string>(opts.bearerTokens);
@@ -751,28 +846,49 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
 +			tokenHashes.push(Buffer.from(hash, "hex"));
 +		}
 +	}
++	const controlBearerToken = opts.controlBearerToken;
++	if (controlBearerToken !== undefined && (typeof controlBearerToken !== "string"
++		|| controlBearerToken.length === 0 || controlBearerToken.trim() !== controlBearerToken
++		|| !tokens.has(controlBearerToken))) {
++		throw new AIError.ConfigurationError("controlBearerToken must be a configured nonempty plaintext bearer.");
++	}
  	const version = opts.version;
  	const streamKeepaliveMs = opts.streamKeepaliveMs ?? DEFAULT_STREAM_KEEPALIVE_MS;
  	const externalChangePollMs = opts.externalChangePollMs ?? DEFAULT_EXTERNAL_CHANGE_POLL_MS;
-@@ -659,24 +683,28 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -659,8 +702,12 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  				refreshSkewMs: opts.refreshSkewMs ?? DEFAULT_REFRESH_SKEW_MS,
  				refreshIntervalMs: opts.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
  			});
 -	refresher?.start();
 -	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
-+	let closing = false;
++	let state: "active" | "draining" | "drained" = "active";
++	let drainPromise: Promise<void> | undefined;
++	const shutdown = new AbortController();
 +	let closePromise: Promise<void> | undefined;
 +	let requests = 0;
 +	let requestsDrained: (() => void) | undefined;
  
  	const server = Bun.serve({
  		hostname: bind.hostname,
- 		port: bind.port,
- 		idleTimeout: DEFAULT_SERVER_IDLE_TIMEOUT_S,
+@@ -669,22 +716,38 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  		fetch: async (req): Promise<Response> => {
-+			if (closing) return json(503, { error: "broker is closing" });
  			const url = new URL(req.url);
  			const pathname = url.pathname;
++			if (pathname === "/v1/control/state" || pathname === "/v1/control/quiesce") {
++				if (controlBearerToken === undefined) return json(404, { error: "control unavailable" });
++				if (requestBearer(req) !== controlBearerToken) return json(401, { error: "unauthorized" });
++				if (pathname === "/v1/control/state" && req.method === "GET") return json(200, { state });
++				if (pathname === "/v1/control/quiesce" && req.method === "POST") {
++					try {
++						await quiesce();
++						return json(200, { state });
++					} catch {
++						return json(503, { error: "broker drain failed" });
++					}
++				}
++				return json(405, { error: "method not allowed" });
++			}
++			if (state !== "active") return json(503, { error: "broker is draining" });
  			const peer =
  				req.headers.get("x-forwarded-for")?.split(",")[0].trim() || req.headers.get("x-real-ip") || "unknown";
 +			requests++;
@@ -786,16 +902,17 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
  					logger.info("auth-broker request unauthorized", { method: req.method, path: pathname, peer });
  					return json(401, { error: "unauthorized" });
  				}
-@@ -684,7 +712,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
- 					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs);
+ 				if (req.method === "GET" && pathname === "/v1/snapshot/stream") {
+-					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs);
++					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs, shutdown.signal);
  				}
  				if (req.method === "GET" && pathname === "/v1/snapshot") {
 -					return serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);
-+					return await serveSnapshot(req, url, opts.storage, generationGate, refresher, peer);
++					return await serveSnapshot(req, url, opts.storage, generationGate, refresher, peer, shutdown.signal);
  				}
  				if (req.method === "GET" && pathname === "/v1/usage") {
  					try {
-@@ -765,7 +793,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -765,7 +828,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  				if (refreshMatch) {
  					const id = Number.parseInt(refreshMatch[1], 10);
  					try {
@@ -806,7 +923,7 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
  						const body: CredentialRefreshResponse = { entry };
  						logger.info("auth-broker credential refreshed", {
  							id,
-@@ -884,9 +914,14 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -884,9 +949,33 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  					error: String(error),
  				});
  				return json(500, { error: "internal error" });
@@ -818,29 +935,84 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b148519006236
 +	// A failed fixed-port bind must not start another canonical refresher.
 +	refresher?.start();
 +	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
++	const quiesce = (): Promise<void> => {
++		if (drainPromise) return drainPromise;
++		state = "draining";
++		shutdown.abort();
++		const requestsStopped = requests === 0 ? undefined : new Promise<void>(resolve => { requestsDrained = resolve; });
++		drainPromise = (async () => {
++			const results = await Promise.allSettled([
++				refresher?.stop(),
++				requestsStopped,
++				Promise.resolve().then(() => generationGate.close()),
++			]);
++			// A usage timeout may have completed the HTTP handler while its
++			// single-flight OAuth rotation still owns the durable credential.
++			await opts.storage.drainRefreshes();
++			for (const result of results) if (result.status === "rejected") throw result.reason;
++			state = "drained";
++		})();
++		return drainPromise;
++	};
  
  	const boundHost = server.hostname ?? bind.hostname;
  	const boundPort = server.port ?? bind.port;
-@@ -894,10 +929,19 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -894,10 +983,19 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  		url: `http://${boundHost}:${boundPort}`,
  		port: boundPort,
  		hostname: boundHost,
 -		close: async () => {
 -			refresher?.stop();
+-			generationGate.close();
+-			server.stop(true);
++		quiesce,
 +		close: () => {
 +			if (closePromise) return closePromise;
-+			closing = true;
-+			const requestsStopped = requests === 0 ? undefined : new Promise<void>(resolve => { requestsDrained = resolve; });
-+			const refreshStopped = refresher?.stop();
- 			generationGate.close();
--			server.stop(true);
-+			// Close long-lived streams and stop admission before draining handlers.
-+			// Refresh handlers remain attached to their storage mutation, not req.signal.
-+			// Even a failed shutdown step must join the others before storage may close.
-+			closePromise = Promise.allSettled([server.stop(true), refreshStopped, requestsStopped]).then(results => {
-+				for (const result of results) if (result.status === "rejected") throw result.reason;
-+			});
++			closePromise = (async () => {
++				try {
++					await quiesce();
++				} finally {
++					// Explicit close retires the listener only after every owned
++					// operation has settled, including a failed drain.
++					await server.stop(true);
++				}
++			})();
 +			return closePromise;
  		},
  	};
  }
+diff --git a/src/auth-storage.ts b/src/auth-storage.ts
+index 2ac6e6bb314c95178a04b4d519ba34282c94230b..67abd190e9490c554b392c5bdd354d99245f28d8 100644
+--- a/src/auth-storage.ts
++++ b/src/auth-storage.ts
+@@ -1471,6 +1471,30 @@ export class AuthStorage {
+ 		this.#store.close();
+ 	}
+ 
++	/**
++	 * Join owned refresh work after the caller has stopped request/sweep admission.
++	 * Usage cancellation can detach a credential refresh, and serialized usage
++	 * probes can create later refreshes. Join both roots and the actual refresh
++	 * maps to a fixed point; do not replace this with another refresh request.
++	 */
++	async drainRefreshes(): Promise<void> {
++		let failure: PromiseRejectedResult | undefined;
++		for (;;) {
++			const pending = [
++				...this.#usageReportsInFlight.values(),
++				...this.#usageRequestInFlight.values(),
++				...this.#oauthRefreshInFlight.values(),
++				...this.#oauthCredentialRefreshInFlight.values(),
++			];
++			if (pending.length === 0) break;
++			const results = await Promise.allSettled(pending);
++			for (const result of results) {
++				if (result.status === "rejected") failure ??= result;
++			}
++		}
++		if (failure) throw failure.reason;
++	}
++
+ 	getGeneration(): number {
+ 		return this.#generation;
+ 	}
