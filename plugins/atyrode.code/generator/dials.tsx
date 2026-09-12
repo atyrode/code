@@ -20,37 +20,85 @@ export function DialIcon({ kind }: { kind: keyof typeof icons }) {
   return <svg className="plugin-atyrode_code_generator__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[kind]} /></svg>;
 }
 
-type Option = { value: string; label: string; title?: string };
+type Option = { value: string; label: string; description: string; family?: string };
 function Dial({ label, icon, value, options, disabled, change }: {
   label: string; icon: keyof typeof icons; value: string; options: readonly Option[]; disabled: boolean; change: (value: string) => void;
 }) {
   const id = useId();
-  const dragging = useRef(false);
+  const dragging = useRef<{ pointerId: number; value: string } | null>(null);
+  const selected = options.find(option => option.value === value);
+  function choose(button: HTMLButtonElement | null) {
+    const next = button?.dataset.value;
+    if (!button || button.disabled || next === undefined) return;
+    button.focus({ preventScroll: true });
+    if (next !== (dragging.current?.value ?? value)) {
+      if (dragging.current) dragging.current.value = next;
+      change(next);
+    }
+  }
   return <div className="plugin-atyrode_code_generator__dial">
     <span id={id} className="plugin-atyrode_code_generator__dial-label"><DialIcon kind={icon} />{label}</span>
-    <div className="plugin-atyrode_code_generator__dial-options" role="radiogroup" aria-labelledby={id}
-      onPointerDown={event => { dragging.current = event.button === 0 && !disabled; }} onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }} onPointerLeave={() => { dragging.current = false; }}>
-      {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} disabled={disabled}
-        tabIndex={value === option.value ? 0 : -1} data-choice={index} title={option.title} onClick={() => { if (value !== option.value) change(option.value); }}
-        onPointerEnter={event => { if (dragging.current && event.buttons === 1 && value !== option.value) change(option.value); }}
-        onKeyDown={event => {
-          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-          event.preventDefault(); event.stopPropagation();
-          const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
-          change(options[next]!.value);
-          event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`button[data-choice="${next}"]`)?.focus();
-        }}>{option.label}</button>)}
+    <div className="plugin-atyrode_code_generator__dial-control">
+      <div className="plugin-atyrode_code_generator__dial-options" role="radiogroup" aria-labelledby={id} aria-describedby={`${id}-detail`}
+        onPointerDown={event => {
+          if (event.button !== 0 || !event.isPrimary || disabled) return;
+          const button = (event.target as Element).closest<HTMLButtonElement>("button[data-value]");
+          if (!button || !event.currentTarget.contains(button)) return;
+          dragging.current = { pointerId: event.pointerId, value };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          choose(button);
+        }}
+        onPointerMove={event => {
+          if (dragging.current?.pointerId !== event.pointerId || disabled) return;
+          const button = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLButtonElement>("button[data-value]") ?? null;
+          if (button && event.currentTarget.contains(button)) choose(button);
+        }}
+        onPointerUp={event => { dragging.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        onPointerCancel={() => { dragging.current = null; }} onLostPointerCapture={() => { dragging.current = null; }}>
+        {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} aria-describedby={`${id}-detail`} disabled={disabled}
+          tabIndex={value === option.value ? 0 : -1} data-choice={index} data-value={option.value} data-family={option.family} title={option.description}
+          onClick={() => { if (value !== option.value) change(option.value); }}
+          onKeyDown={event => {
+            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+            event.preventDefault(); event.stopPropagation();
+            const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+            change(options[next]!.value);
+            event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`button[data-choice="${next}"]`)?.focus();
+          }}>{option.label}</button>)}
+      </div>
+      <p id={`${id}-detail`} className="plugin-atyrode_code_generator__dial-detail">{selected?.description}</p>
     </div>
   </div>;
 }
 
-function laneLabel(lane: Lane): string {
-  if (lane.kind === "mixed") return "mixed";
-  const label = lane.family === "openai" ? "gpt" : lane.family === "anthropic" ? "claude" : familyPolicy(lane.family)?.label.toLowerCase() ?? lane.family;
-  return `${label}-${lane.blend}`;
+function laneOption(lane: Lane): Option {
+  const value = JSON.stringify(lane);
+  if (lane.kind === "mixed") return { value, label: "Mixed", description: "OpenAI leads execution; Anthropic handles planning and deeper review." };
+  const label = familyPolicy(lane.family)?.label ?? lane.family;
+  return { value, family: lane.family, label: `${label} ${lane.blend}`,
+    description: lane.blend === "only" ? `Keep routing within ${label}; vision may use another provider if needed.` : `${label} leads, with another provider for independent reviews and fallback options.` };
 }
-const levels = { 1: "fast", 2: "normal", 3: "smart", 4: "max" } as const;
-const toggles = [{ value: "true", label: "on" }, { value: "false", label: "off" }] as const;
+const levels = { 1: "Fast", 2: "Balanced", 3: "Capable", 4: "Maximum" } as const;
+const capabilityDetails = {
+  1: "Lighter models for quick, contained work. Planning and review can use a higher tier.",
+  2: "A balanced model tier for everyday implementation and problem solving.",
+  3: "More capable lead models for larger changes and harder reasoning.",
+  4: "The highest available model tier; utility roles remain right-sized.",
+} as const;
+const thinkingOptions = [
+  { value: "minimal", label: "Minimal", description: "Request the least thinking available across roles." },
+  { value: "low", label: "Light", description: "Keep reasoning light; planning and review get extra room." },
+  { value: "medium", label: "Balanced", description: "Balance reasoning effort, with more for reviews and less for utility roles." },
+  { value: "high", label: "Deep", description: "Give difficult work more reasoning effort; utility roles stay lighter." },
+  { value: "xhigh", label: "Deeper", description: "Request extra-high reasoning where supported by the routed model." },
+  { value: "max", label: "Maximum", description: "Request maximum thinking across roles, capped by each model's support." },
+] as const;
+const advisorOptions = [
+  { value: "off", label: "Off", description: "No advisor model is added to the session." },
+  { value: "glance", label: "Glance", description: "Add a lightweight advisor for a second perspective." },
+  { value: "review", label: "Review", description: "Use a stronger advisor with a lighter fallback when fallbacks are enabled." },
+  { value: "audit", label: "Audit", description: "Use a deeper advisor and enable advice for delegated tasks." },
+] as const;
 
 export function Dials({ selection, review, catalog, disabled, update }: {
   selection: Selection; review: Review; catalog: CompiledCatalog; disabled: boolean; update: (selection: Selection) => void;
@@ -64,44 +112,76 @@ export function Dials({ selection, review, catalog, disabled, update }: {
       spark: selection.spark && available.spark, priority: selection.priority && available.priority });
   }
   return <div className="plugin-atyrode_code_generator__dials">
-    <Dial label="lane" icon="lane" value={JSON.stringify(selection.lane)} options={lanes.map(lane => ({ value: JSON.stringify(lane), label: laneLabel(lane) }))} disabled={disabled} change={changeLane} />
-    <Dial label="model" icon="model" value={String(selection.capability)} options={review.available.capabilities.map(value => ({ value: String(value), label: levels[value] }))} disabled={disabled} change={value => update({ ...selection, capability: SelectionSchema.shape.capability.parse(Number(value)) })} />
-    <Dial label="thinking" icon="thinking" value={selection.thinking} options={ThinkingLevelSchema.options.map(value => ({ value, label: value }))} disabled={disabled} change={value => update({ ...selection, thinking: ThinkingLevelSchema.parse(value) })} />
-    <Dial label="advisors" icon="advisor" value={selection.advisor} options={SelectionSchema.shape.advisor.options.map(value => ({ value, label: value }))} disabled={disabled} change={value => update({ ...selection, advisor: SelectionSchema.shape.advisor.parse(value) })} />
-    {review.available.priority && <Dial label="fast" icon="priority" value={String(selection.priority)} options={toggles} disabled={disabled} change={value => update({ ...selection, priority: value === "true" })} />}
-    {review.available.spark && <Dial label="spark" icon="spark" value={String(selection.spark)} options={toggles} disabled={disabled} change={value => update({ ...selection, spark: value === "true" })} />}
-    <details className="plugin-atyrode_code_generator__extra-dials"><summary>more dials{selection.prewalk || selection.planYolo ? " · enabled" : ""}</summary>
-      <Dial label="prewalk" icon="prewalk" value={String(selection.prewalk)} options={toggles} disabled={disabled} change={value => update({ ...selection, prewalk: value === "true" })} />
-      <Dial label="plans" icon="planYolo" value={String(selection.planYolo)} options={[{ value: "false", label: "ask" }, { value: "true", label: "auto-approve", title: "Automatically approve plans in the launched session" }]} disabled={disabled} change={value => update({ ...selection, planYolo: value === "true" })} />
-      <Dial label="fallback" icon="fallback" value={String(selection.fallback)} options={toggles} disabled={disabled} change={value => update({ ...selection, fallback: value === "true" })} />
+    <Dial label="Provider" icon="lane" value={JSON.stringify(selection.lane)} options={lanes.map(laneOption)} disabled={disabled} change={changeLane} />
+    <Dial label="Capability" icon="model" value={String(selection.capability)} options={review.available.capabilities.map(value => ({ value: String(value), label: levels[value], description: capabilityDetails[value] }))} disabled={disabled} change={value => update({ ...selection, capability: SelectionSchema.shape.capability.parse(Number(value)) })} />
+    <Dial label="Thinking" icon="thinking" value={selection.thinking} options={thinkingOptions} disabled={disabled} change={value => update({ ...selection, thinking: ThinkingLevelSchema.parse(value) })} />
+    <Dial label="Advisor" icon="advisor" value={selection.advisor} options={advisorOptions} disabled={disabled} change={value => update({ ...selection, advisor: SelectionSchema.shape.advisor.parse(value) })} />
+    {review.available.priority && <Dial label="Priority" icon="priority" value={String(selection.priority)} options={[
+      { value: "false", label: "Standard", description: "Use standard provider service tiers." },
+      { value: "true", label: "Priority", description: "Request OpenAI's priority service tier. Higher cost; not a latency guarantee." },
+    ]} disabled={disabled} change={value => update({ ...selection, priority: value === "true" })} />}
+    {review.available.spark && <Dial label="Spark" icon="spark" value={String(selection.spark)} options={[
+      { value: "false", label: "Off", description: "Use the regular model ladder for small utility work." },
+      { value: "true", label: "On", description: "Route tiny and commit work to Spark; also Sonic at the Fast capability tier." },
+    ]} disabled={disabled} change={value => update({ ...selection, spark: value === "true" })} />}
+    <details className="plugin-atyrode_code_generator__extra-dials"><summary>Session behavior <span>{[selection.prewalk ? "prewalk on" : null, selection.planYolo ? "auto-approve plans" : null, selection.fallback ? "fallbacks on" : "fallbacks off"].filter(Boolean).join(" · ")}</span></summary>
+      <Dial label="Prewalk" icon="prewalk" value={String(selection.prewalk)} options={[
+        { value: "false", label: "Off", description: "Leave automatic repository prewalk disabled." },
+        { value: "true", label: "On", description: "Enable OMP's repository prewalk for the session and delegated tasks." },
+      ]} disabled={disabled} change={value => update({ ...selection, prewalk: value === "true" })} />
+      <Dial label="Plans" icon="planYolo" value={String(selection.planYolo)} options={[
+        { value: "false", label: "Ask first", description: "Keep explicit plan approval in the launched session." },
+        { value: "true", label: "Auto-approve", description: "Automatically approve plans in the launched session. Launch itself still requires review." },
+      ]} disabled={disabled} change={value => update({ ...selection, planYolo: value === "true" })} />
+      <Dial label="Fallbacks" icon="fallback" value={String(selection.fallback)} options={[
+        { value: "false", label: "Off", description: "Keep retries on the selected models, without switching to fallback models." },
+        { value: "true", label: "On", description: "Allow the ordered fallback chains shown in routing when a lead model cannot serve the request." },
+      ]} disabled={disabled} change={value => update({ ...selection, fallback: value === "true" })} />
     </details>
   </div>;
 }
 
 export function Estimates({ value }: { value: Review["estimates"] }) {
-  return <dl className="plugin-atyrode_code_generator__estimates">{(["cost", "speed"] as const).map(label => {
-    const score = value[label === "cost" ? "costScore" : "speedScore"];
-    return <div key={label} data-estimate={label}><dt>{label}</dt><dd role="img" aria-label={`Estimated relative ${label}: ${score} out of 5`} title={`Estimated relative ${label}; not a live quota or performance guarantee`}>
-      {Array.from({ length: 5 }, (_, index) => <span key={index} aria-hidden="true" data-filled={index < score}>{label === "cost" ? "$" : "»"}</span>)}
-    </dd></div>;
-  })}</dl>;
+  return <div className="plugin-atyrode_code_generator__estimate-panel">
+    <dl className="plugin-atyrode_code_generator__estimates">{(["cost", "speed"] as const).map(label => {
+      const score = value[label === "cost" ? "costScore" : "speedScore"];
+      const description = (label === "cost" ? ["Lowest", "Lower", "Moderate", "Higher", "Highest"] : ["Most deliberate", "Deliberate", "Balanced", "Faster", "Fastest"])[score - 1];
+      return <div key={label} data-estimate={label}><dt>Relative {label}</dt><dd>
+        <span className="plugin-atyrode_code_generator__estimate-value" key={score}>{description} <small>{score}/5</small></span>
+        <span className="plugin-atyrode_code_generator__estimate-meter" aria-hidden="true">{[1, 2, 3, 4, 5].map(step => <span key={step} data-filled={step <= score} />)}</span>
+      </dd></div>;
+    })}</dl>
+    <p>Catalog-based estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p>
+  </div>;
 }
 
 export function Routing({ value, catalog, local = false }: { value: Review; catalog: CompiledCatalog; local?: boolean }) {
+  const id = useId();
   const [fallbacks, setFallbacks] = useState(false);
+  const [fullIds, setFullIds] = useState(false);
+  const fallbackCount = value.routes.reduce((count, route) => count + route.fallback.length, 0);
   function choice(key: string, thinking: string) {
     const model = catalog.model(key);
     const family = catalog.family(key);
-    return <span className="plugin-atyrode_code_generator__model" data-family={family} title={`${model.provider}/${model.id} · ${thinking}`}>
-      <span>{model.key.length <= model.id.length ? model.key : model.id}</span><span className="plugin-atyrode_code_generator__thinking">:{thinking}</span>
+    return <span key={`${key}:${thinking}`} className="plugin-atyrode_code_generator__model" data-family={family}>
+      <span className="plugin-atyrode_code_generator__model-name">{model.key}</span>
+      <span className="plugin-atyrode_code_generator__model-meta"><span className="plugin-atyrode_code_generator__provider">{familyPolicy(family)?.label ?? model.provider}</span><span className="plugin-atyrode_code_generator__thinking" data-level={thinking}>{thinking} thinking</span></span>
+      {fullIds && <code className="plugin-atyrode_code_generator__model-id">{model.provider}/{model.id}</code>}
     </span>;
   }
   return <section className="plugin-atyrode_code_generator__routing" aria-label="Routing preview">
-    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">routing</h2><span className="plugin-atyrode_code__muted" role="status">{local ? "Local preview" : "Profile preview"}</span></header>
-    <dl className="plugin-atyrode_code_generator__routes">{value.routes.map(route => <div key={route.role}>
-      <dt><span className="plugin-atyrode_code_generator__agent-marker" title={route.agentBacked ? "Agent role" : undefined} aria-hidden="true">{route.agentBacked ? "●" : ""}</span>{route.role}</dt>
-      <dd>{choice(route.lead.key, route.lead.thinking)}{fallbacks && route.fallback.map((fallback, index) => <span key={`${fallback.key}:${index}`} className="plugin-atyrode_code_generator__fallback"><span aria-hidden="true">↳ </span>{choice(fallback.key, fallback.thinking)}</span>)}</dd>
+    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">Routing</h2><span className="plugin-atyrode_code_generator__route-status" data-local={local} role="status">{local ? "Local preview" : "Profile preview"} · {value.routes.length} roles</span></header>
+    <div className="plugin-atyrode_code_generator__routing-tools">
+      <p>Lead models <span className="plugin-atyrode_code_generator__agent-legend"><span aria-hidden="true">●</span> delegated agent</span></p>
+      <div className="plugin-atyrode_code__toolbar">
+        <button type="button" aria-pressed={fullIds} aria-controls={`${id}-routes`} onClick={() => setFullIds(!fullIds)}>Full model IDs</button>
+        {fallbackCount > 0 && <button type="button" aria-expanded={fallbacks} aria-controls={`${id}-routes`} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "Hide" : "Show"} fallbacks <span className="plugin-atyrode_code_generator__count">{fallbackCount}</span></button>}
+      </div>
+    </div>
+    <dl id={`${id}-routes`} className="plugin-atyrode_code_generator__routes">{value.routes.map(route => <div key={route.role}>
+      <dt><span className="plugin-atyrode_code_generator__agent-marker" aria-hidden="true">{route.agentBacked ? "●" : ""}</span>{route.role}{route.agentBacked && <span className="plugin-atyrode_code_generator__sr-only">, delegated agent</span>}</dt>
+      <dd>{choice(route.lead.key, route.lead.thinking)}{fallbacks && route.fallback.length > 0 && <ol className="plugin-atyrode_code_generator__fallbacks" aria-label={`${route.role} fallbacks in order`}>{route.fallback.map((fallback, index) => <li key={`${fallback.key}:${index}`} className="plugin-atyrode_code_generator__fallback"><span className="plugin-atyrode_code_generator__fallback-order" aria-hidden="true">{index + 1}</span>{choice(fallback.key, fallback.thinking)}</li>)}</ol>}</dd>
     </div>)}</dl>
-    {value.routes.some(route => route.fallback.length > 0) && <button type="button" className="plugin-atyrode_code_generator__fallback-toggle" aria-pressed={fallbacks} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "Hide fallbacks" : "Show fallbacks"}</button>}
+    <p className="plugin-atyrode_code_generator__routing-note">{fallbackCount > 0 ? "Fallbacks are tried in order. Thinking is adjusted to each model's supported levels." : value.selection.fallback ? "No alternate models in this profile's fallback chains." : "Model fallback is off. Retries stay on the selected model."}</p>
   </section>;
 }
