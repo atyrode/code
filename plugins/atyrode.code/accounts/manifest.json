@@ -38,7 +38,9 @@
             "literal": "/job/artifact"
           }
         ],
-        "input": {},
+        "input": {
+          "clientAccess": { "type": "string", "required": true, "maxLength": 1024 }
+        },
         "runtimeTools": [
           "bun",
           "pi-natives",
@@ -53,6 +55,7 @@
           "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
         },
         "inputFiles": {
+          "clientAccess": { "input": "clientAccess" },
           "serviceBearer": {
             "generated": "service-bearer"
           }

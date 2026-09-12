@@ -25,7 +25,7 @@ function Dial({ label, icon, value, options, disabled, change }: {
   label: string; icon: keyof typeof icons; value: string; options: readonly Option[]; disabled: boolean; change: (value: string) => void;
 }) {
   const id = useId();
-  const dragging = useRef<{ pointerId: number; value: string } | null>(null);
+  const dragging = useRef<{ pointerId: number; value: string; startX: number; startY: number; intent: "pending" | "horizontal" | "vertical" } | null>(null);
   const selected = options.find(option => option.value === value);
   function choose(button: HTMLButtonElement | null) {
     const next = button?.dataset.value;
@@ -44,20 +44,35 @@ function Dial({ label, icon, value, options, disabled, change }: {
           if (event.button !== 0 || !event.isPrimary || disabled) return;
           const button = (event.target as Element).closest<HTMLButtonElement>("button[data-value]");
           if (!button || !event.currentTarget.contains(button)) return;
-          dragging.current = { pointerId: event.pointerId, value };
+          dragging.current = { pointerId: event.pointerId, value, startX: event.clientX, startY: event.clientY, intent: event.pointerType === "touch" ? "pending" : "horizontal" };
           event.currentTarget.setPointerCapture(event.pointerId);
-          choose(button);
+          if (event.pointerType !== "touch") choose(button);
         }}
         onPointerMove={event => {
-          if (dragging.current?.pointerId !== event.pointerId || disabled) return;
+          const gesture = dragging.current;
+          if (gesture?.pointerId !== event.pointerId || disabled || gesture.intent === "vertical") return;
+          if (gesture.intent === "pending") {
+            const horizontal = Math.abs(event.clientX - gesture.startX);
+            const vertical = Math.abs(event.clientY - gesture.startY);
+            if (Math.max(horizontal, vertical) < 8) return;
+            gesture.intent = horizontal > vertical ? "horizontal" : "vertical";
+            if (gesture.intent === "vertical") return;
+          }
           const button = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLButtonElement>("button[data-value]") ?? null;
           if (button && event.currentTarget.contains(button)) choose(button);
         }}
-        onPointerUp={event => { dragging.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        onPointerUp={event => {
+          if (dragging.current?.pointerId === event.pointerId && dragging.current.intent !== "vertical" && !disabled) {
+            const button = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLButtonElement>("button[data-value]") ?? null;
+            if (button && event.currentTarget.contains(button)) choose(button);
+          }
+          dragging.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
         onPointerCancel={() => { dragging.current = null; }} onLostPointerCapture={() => { dragging.current = null; }}>
         {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} aria-describedby={`${id}-detail`} disabled={disabled}
           tabIndex={value === option.value ? 0 : -1} data-choice={index} data-value={option.value} data-family={option.family} title={option.description}
-          onClick={() => { if (value !== option.value) change(option.value); }}
+          onClick={event => { if (event.detail === 0 && value !== option.value) change(option.value); }}
           onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
             event.preventDefault(); event.stopPropagation();

@@ -11,7 +11,7 @@ function AccountsPanel({ host }: PanelProps) {
   return <ScrollRegion className="plugin-atyrode_code plugin-atyrode_code_accounts" aria-label="Code accounts">
     <div className="plugin-atyrode_code_accounts__body">
       <div className="plugin-atyrode_code_accounts__target">
-        <label htmlFor={`${id}-machine`}>workspace machine · project choices only</label>
+        <label htmlFor={`${id}-machine`}>execution destination · choices are shared</label>
         <select id={`${id}-machine`} value={machineId ?? ""} onChange={event => { if (event.target.value) select(event.target.value); }} aria-describedby={`${id}-machine-status`}>
           <option value="" disabled>Choose machine</option>
           {machineId !== null && !machine && <option value={machineId}>{machineId} · unavailable</option>}
@@ -19,7 +19,7 @@ function AccountsPanel({ host }: PanelProps) {
         </select>
         <button type="button" onClick={refresh}>refresh machines</button>
       </div>
-      <p id={`${id}-machine-status`} role="status" className="plugin-atyrode_code__muted">{error ?? (machines === null ? "Reading workspace machines…" : machineId === null ? "No workspace machine selected. Instance accounts are shown below." : !machine ? "Selected workspace machine is no longer visible; it has not been replaced." : machine.revoked === true ? "Selected workspace machine is revoked; project choices unavailable." : !machine.online ? "Selected workspace machine is offline; project choices unavailable." : !host.containerId ? "Mount an editable workspace to save project account choices or open OMP." : null)}</p>
+      <p id={`${id}-machine-status`} role="status" className="plugin-atyrode_code__muted">{error ?? (machines === null ? "Reading execution destinations…" : !host.containerId ? "Open a workspace to save shared account choices." : machineId === null ? "No execution destination selected. Shared account choices remain available." : !machine ? "Selected destination is no longer visible; it has not been replaced. Shared choices remain available." : machine.revoked === true ? "Selected destination is revoked. Shared choices remain available." : !machine.online ? "Selected destination is offline. Shared choices remain available." : null)}</p>
       <AccountsView host={host} target={target} available={available} />
     </div>
   </ScrollRegion>;

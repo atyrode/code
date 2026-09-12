@@ -181,7 +181,7 @@ export async function buildWorkerArtifacts(outputDirectory: string, target: Work
         if (item.path === "bun" || item.path.startsWith("bun:") || item.path.startsWith("node:") || builtinModules.includes(item.path)) continue;
         throw new Error(`Unbundled worker import: ${name}: ${item.path}`);
       }
-      if (usesNative && (target === "root" || (name !== "broker" && name !== "gateway"))) throw new Error(`Worker unexpectedly needs native addon: ${name}`);
+      if (usesNative && target === "root") throw new Error(`Worker unexpectedly needs native addon: ${name}`);
       const licenses = await notices(importedFiles);
       let bytes: Buffer;
       let declaration: MachineArtifact;

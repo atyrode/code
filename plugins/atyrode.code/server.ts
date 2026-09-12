@@ -15,6 +15,7 @@ import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./mac
 import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
   currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
 import { configureServices, readServiceConfiguration, reviewServices } from "./service-setup.ts";
+import { readPermissionPlan } from "./permission-plan.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
@@ -31,6 +32,7 @@ const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
   clearAccountBlocks: ["services:read", "services:invoke"],
   disableCredential: ["services:read", "services:invoke"],
   readSetup: ["machines:run", "services:read", "services:invoke"],
+  readPermissionPlan: ["machines:run", "services:read", "services:invoke"],
   readServiceConfiguration: ["services:configure"],
   reviewServices: ["services:configure"],
   configureServices: ["services:configure"],
@@ -55,12 +57,13 @@ function refusal(error: unknown) {
 }
 type ProductHandlers = { [K in RootAction]: (ctx: CodeContext, args: ActionInput<K>) => Promise<ActionResult<K>> };
 const productHandlers: ProductHandlers = {
+  readPermissionPlan,
   readServiceConfiguration,
   reviewServices,
   configureServices,
   async readConfiguration(ctx, args) {
-    const { record } = await readConfiguration(ctx, args);
-    return { revision: record?.revision ?? 0, configuration: record };
+    const { record, legacyMachineId } = await readConfiguration(ctx, args);
+    return { revision: record?.revision ?? 0, configuration: record, legacyMachineId };
   },
   initializeConfiguration: (ctx, args) => initializeConfiguration(ctx, args, args.expectedRevision),
   async stageCatalog(ctx, args) {
@@ -71,15 +74,16 @@ const productHandlers: ProductHandlers = {
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return catalogReview(ctx, requireConfiguration(previous), args.source);
+    return catalogReview(ctx, requireConfiguration(previous), args.machineId, args.source);
   },
   async promoteCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const reviewed = await catalogReview(ctx, record, args.source);
+    const reviewed = await catalogReview(ctx, record, args.machineId, args.source);
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
     return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
-      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection, resources: reviewed.resources });
+      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection,
+      resourcesByMachine: { ...record.resourcesByMachine, [args.machineId]: reviewed.resources } });
   },
   async select(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
@@ -114,32 +118,34 @@ const productHandlers: ProductHandlers = {
     return { productSha256: await currentProductSha256(ctx), execution, services: pins, connected: services.connected };
   },
   async reviewResources(ctx, args) {
-    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision); requireConfiguration(previous);
+    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
+    const record = requireConfiguration(previous);
     const resources = await resourceSnapshot(ctx, args.machineId);
-    return { resources, reviewDigest: digestOf({ ...previous.target, revision: args.expectedRevision, resources }) };
+    return { resources, reviewDigest: digestOf({ containerId: args.containerId, machineId: args.machineId, revision: args.expectedRevision, resources }),
+      current: digestOf(record.resourcesByMachine[args.machineId] ?? null) === digestOf(resources) };
   },
   async promoteResources(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous), resources = await resourceSnapshot(ctx, args.machineId);
-    if (args.reviewDigest !== digestOf({ ...previous.target, revision: args.expectedRevision, resources })) throw new CodeRefusal("preview_changed");
-    return commitConfiguration(ctx, previous, { ...record, resources });
+    if (args.reviewDigest !== digestOf({ containerId: args.containerId, machineId: args.machineId, revision: args.expectedRevision, resources })) throw new CodeRefusal("preview_changed");
+    return commitConfiguration(ctx, previous, { ...record, resourcesByMachine: { ...record.resourcesByMachine, [args.machineId]: resources } });
   },
   async prepareWorkspace(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const operation = args.mode === "create" ? "prepare-workspace" : "validate-workspace";
-    const pins = await requirePromotedOperation(ctx, requireConfiguration(previous), operation);
+    const pins = await requirePromotedOperation(ctx, requireConfiguration(previous), args.machineId, operation);
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return PublicJobSchema.parse(await ctx.jobs.execute({ jobId: await ctx.newId(), machineId: args.machineId,
       operationId: `${CODE_PLUGIN_ID}.${operation}`, ...pins, input: {}, outputs: [] }));
   },
   async startInventory(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return startInventory(ctx, requireConfiguration(previous));
+    return startInventory(ctx, requireConfiguration(previous), args.machineId);
   },
   async inventory(ctx, args) { await authorizeTarget(ctx, args); return inventoryResult(ctx, args.machineId, args.jobId); },
   async startBenchmark(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return startBenchmark(ctx, requireConfiguration(previous), args.inventoryJobId);
+    return startBenchmark(ctx, requireConfiguration(previous), args.machineId, args.inventoryJobId);
   },
   async benchmark(ctx, args) { await authorizeTarget(ctx, args); return benchmarkResult(ctx, args.machineId, args.inventoryJobId, args.jobId); },
   async stageBenchmark(ctx, args) {
@@ -152,7 +158,7 @@ const productHandlers: ProductHandlers = {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
     if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-    const pin = record.resources?.services.suggest;
+    const pin = record.resourcesByMachine[args.machineId]?.services.suggest;
     if (!pin) throw new CodeRefusal("resources_incomplete");
     await currentService(ctx, args.machineId, "suggest", pin);
     const catalog = compileCatalog(record.active.document);
@@ -165,15 +171,15 @@ const productHandlers: ProductHandlers = {
   },
   async previewLaunch(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    const result = await launchPreview(ctx, requireConfiguration(previous));
+    const result = await launchPreview(ctx, requireConfiguration(previous), args.machineId);
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return result;
   },
   async prepareLaunch(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    const record = requireConfiguration(previous), preview = await launchPreview(ctx, record);
+    const record = requireConfiguration(previous), preview = await launchPreview(ctx, record, args.machineId);
     if (preview.previewDigest !== args.previewDigest) throw new CodeRefusal("preview_changed");
-    const pins = await requirePromotedOperation(ctx, record, "launch");
+    const pins = await requirePromotedOperation(ctx, record, args.machineId, "launch");
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return PrepareLaunchResultSchema.parse({ runtime: { pluginId: CODE_PLUGIN_ID, operationId: `${CODE_PLUGIN_ID}.launch`,
       ...pins, input: launchInput(record, preview, args.prompt) } });

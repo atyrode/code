@@ -115,6 +115,25 @@ describe("structured route selection", () => {
     expect(route(elite.routes, "commit").lead.key).toBe("a1");
   });
 
+  test("saved three-level catalogs keep operator-assigned tiers rather than being reclassified", () => {
+    const input = document();
+    input.models = input.models.filter(value => value.tier >= 1 && value.tier <= 3 && value.provider !== "deepseek")
+      .map(value => ({ ...value, inputCostPerMillion: 10 - value.tier, contextWindow: (4 - value.tier) * 100000 }))
+      .reverse();
+    const catalog = compileCatalog(input);
+    for (const [family, prefix] of [["openai", "o"], ["anthropic", "a"]] as const) {
+      for (const capability of [1, 2, 3] as const) {
+        const saved = selection({ lane: { kind: "provider", family, blend: "only" }, capability });
+        const review = reviewCatalog(catalog, saved, daytime);
+        expect(review.available.capabilities).toEqual([1, 2, 3]);
+        expect(route(review.routes, "default").lead.key).toBe(`${prefix}${capability}`);
+        expect(route(review.routes, "plan").lead.key).toBe(`${prefix}${Math.min(3, capability + 1)}`);
+      }
+      expect(() => reviewCatalog(catalog, selection({ lane: { kind: "provider", family, blend: "only" }, capability: 4 }), daytime))
+        .toThrow("code_invalid_selection");
+    }
+  });
+
   test("led reviewers and advisors cross families while pure routes stay within family", () => {
     const catalog = compileCatalog(document());
     for (const blend of ["led", "only"] as const) {
@@ -158,6 +177,18 @@ describe("structured route selection", () => {
     const impossible = compileCatalog({ ...input, models: input.models.map(value => ({ ...value, images: false })) });
     expect(() => reviewCatalog(impossible, selection(), daytime)).toThrow("code_invalid_selection");
     expect(() => defaultSelection(impossible)).toThrow("code_invalid_selection");
+  });
+
+  test("alternate vision families retain priority across asymmetric three- and four-rung ladders", () => {
+    const input = document();
+    input.models = input.models.map(value => ({ ...value, images: value.key === "a4" || value.key === "d2" }));
+    const pure = selection({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    const review = reviewCatalog(compileCatalog(input), pure, daytime);
+    expect(route(review.routes, "default").lead.key).toBe("o3");
+    expect(route(review.routes, "vision")).toMatchObject({ lead: { key: "a4" }, fallback: [] });
+    input.models = input.models.filter(value => value.key !== "a4");
+    const shorter = reviewCatalog(compileCatalog(input), pure, daytime);
+    expect(route(shorter.routes, "vision")).toMatchObject({ lead: { key: "d2" }, fallback: [] });
   });
 
   test("spark and priority require actual lane availability and spark drains only its utility seats", () => {
