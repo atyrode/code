@@ -130,7 +130,11 @@ export async function inspectSharedBrokerRuntime(ctx: CodeContext, expectedRevis
 }
 
 export async function reviewSharedBrokerRuntime(ctx: CodeContext, expectedRevision: string) {
-  const { owner, currentPolicy, runtimes, policy } = await inspectSharedBrokerRuntime(ctx, expectedRevision);
+  const { description, owner, currentPolicy, runtimes, policy: installedPolicy } = await inspectSharedBrokerRuntime(ctx, expectedRevision);
+  // Native treats an identical enabled configuration as a no-op. A reviewed
+  // recovery needs a fresh policy revision without an intermediate disabled state.
+  const recovering = ["stopped", "unavailable"].includes(description.state) && matchesSharedBrokerPolicy(currentPolicy, installedPolicy);
+  const policy = recovering ? { ...installedPolicy, revision: digestOf({ expectedRevision, policy: installedPolicy }) } : installedPolicy;
   const review = { expectedBrokerRevision: expectedRevision, owner, policy };
   // Bind both operations: a sign-in-only resource change also invalidates consent.
   return { ...review, reviewDigest: digestOf({ ownerMachineId: owner.machineId,

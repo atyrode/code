@@ -133,6 +133,9 @@ Native Plugins manages installation, resource/location bindings, consent and
 retained job lifecycle. First review/install the declared instance owner's system
 and managed `atyrode.code.accounts.omp-auth` bindings. Accounts owns the independent
 `atyrode.code.accounts.broker` and `atyrode.code.accounts.sign-in` operations.
+Both operations require exact native `machines:run` and `network:host` consents;
+their managed auth location also requires `locations:write`. Installation
+readiness alone does not authorize sign-in or broker startup.
 `readAccountSetup` observes the configured owner, or the native default owner
 before configuration; `prepareSignIn` creates or reuses that owner's instance
 broker at the expected native revision and returns the exactly pinned terminal
@@ -141,6 +144,10 @@ An unavailable owner is a refusal, not permission for discovery or failover.
 The managed home keeps its existing `code/shared-omp` state components and
 `/home/job/omp` guest path. Broker startup and sign-in need neither a gateway
 installation nor root workspace resources.
+An enabled but unavailable broker requires explicit runtime review and apply.
+Recovery issues a revision-bound replacement even when its runtime pins are
+unchanged, using one native compare-and-set rather than disabling the shared
+service first. Reading setup or opening ordinary sign-in never restarts it.
 The terminal's ordinary OMP `/login` flow writes its owner-local shared store.
 Code refreshes only permitted metadata and offers Continue once a fresh account
 appears; OMP can stay open to add more. Native grants let authorized machines

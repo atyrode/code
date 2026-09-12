@@ -617,6 +617,8 @@ function signInFixture(isRoot = true): SignInFixture {
   f.ctx.services.configureInstance = async args => {
     if (args.serviceId !== BROKER_SERVICE_ID || args.machineId !== state.owner.machineId) return unavailable();
     if (args.expectedRevision !== state.revision) throw new Error("native revision conflict");
+    if (state.enabled === args.enabled && digestOf(state.policy) === digestOf(args.policy))
+      return f.ctx.services.describeInstance({ serviceId: BROKER_SERVICE_ID });
     state.policy = args.policy;
     state.enabled = args.enabled;
     state.revision = `registry-${++state.writes}`;
@@ -727,7 +729,7 @@ describe("instance-owned OMP sign-in", () => {
     expect(f.state.writes).toBe(1);
   });
 
-  test("an unavailable matching broker offers explicit runtime review, never an automatic sign-in restart", async () => {
+  test("an unavailable matching broker recovers only through explicit review, not ordinary sign-in", async () => {
     const f = signInFixture();
     await accepted(f, "prepareSignIn", input);
     f.state.runtimeState = "unavailable";
@@ -735,10 +737,40 @@ describe("instance-owned OMP sign-in", () => {
     expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
       revision: expectedBrokerRevision, state: "unavailable", canSignIn: false, canUpdateRuntime: true,
     });
-    await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision });
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision });
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
       .toEqual({ refused: "code_broker_unavailable" });
     expect(f.state.writes).toBe(1);
+    const configure = f.ctx.services.configureInstance;
+    f.ctx.services.configureInstance = async args => {
+      const previousRevision = f.state.revision;
+      const result = await configure(args);
+      if (f.state.revision !== previousRevision) f.state.runtimeState = "starting";
+      return result;
+    };
+    const promoted = await accepted(f, "promoteAccountRuntime", {
+      containerId: target.containerId, expectedBrokerRevision, reviewDigest: review.reviewDigest,
+    });
+    expect(promoted.revision).not.toBe(expectedBrokerRevision);
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
+      .toEqual({ refused: "code_broker_revision_changed" });
+    await accepted(f, "prepareSignIn", { ...input, expectedBrokerRevision: promoted.revision });
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision: promoted.revision, state: "starting", canSignIn: true, canUpdateRuntime: false,
+    });
+  });
+
+  test("a recovered broker invalidates a stale recovery review before any configuration write", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    f.state.runtimeState = "unavailable";
+    const review = await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision: f.state.revision! });
+    f.state.runtimeState = "ready";
+    expect(await invoke(f, "promoteAccountRuntime", {
+      containerId: target.containerId, expectedBrokerRevision: review.expectedBrokerRevision, reviewDigest: review.reviewDigest,
+    })).toEqual({ refused: "code_preview_changed" });
+    expect(f.state.writes).toBe(1);
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ state: "ready", canSignIn: true, canUpdateRuntime: false });
   });
 
   test("an installed account replacement requires explicit review before the new registry revision can be reused", async () => {
