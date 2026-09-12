@@ -198,8 +198,13 @@ function modelFamily(id: string): { name: string; version: number[] } {
 function supersede(models: InventoryModel[]): InventoryModel[] {
   const latest = new Map<string, InventoryModel>();
   for (const model of models) {
-    const family = modelFamily(model.id), old = latest.get(family.name);
-    if (!old) { latest.set(family.name, model); continue; }
+    const family = modelFamily(model.id);
+    // Version spelling alone cannot erase a distinct observed capability/price profile.
+    // All identities remain in the inventory and benchmark, including equivalent versions.
+    const profile = JSON.stringify([family.name, model.inputCostPerMillion, model.outputCostPerMillion,
+      model.contextWindow, model.maxTokens, model.images, [...new Set(model.thinkingLevels)].sort(compare)]);
+    const old = latest.get(profile);
+    if (!old) { latest.set(profile, model); continue; }
     const previous = modelFamily(old.id).version;
     let order = 0;
     for (let i = 0; i < Math.max(previous.length, family.version.length); i++) {
@@ -208,30 +213,98 @@ function supersede(models: InventoryModel[]): InventoryModel[] {
     }
     const providers = providerPolicy(model.provider)!.providers;
     if (order > 0 || (order === 0 && (providers.indexOf(model.provider) < providers.indexOf(old.provider) ||
-      (model.provider === old.provider && compare(model.id, old.id) < 0)))) latest.set(family.name, model);
+      (model.provider === old.provider && compare(model.id, old.id) < 0)))) latest.set(profile, model);
   }
   return [...latest.values()];
 }
-const ceiling = (model: InventoryModel): number => Math.max(...model.thinkingLevels.map(level => ThinkingLevelSchema.options.indexOf(level)));
-const capable = (a: InventoryModel, b: InventoryModel): number => ceiling(b) - ceiling(a) || (b.contextWindow ?? 0) - (a.contextWindow ?? 0) || b.inputCostPerMillion - a.inputCostPerMillion || compare(probeAddress(a), probeAddress(b));
-const cheaper = (a: InventoryModel, b: InventoryModel): number => a.inputCostPerMillion - b.inputCostPerMillion || capable(a, b);
 function ladder(models: InventoryModel[]): InventoryModel[] {
-  const sorted = [...models].sort(cheaper);
-  if (sorted.length < 2) return sorted;
-  const first = sorted[0]!, ranked = sorted.filter(model => model !== first && validTierPair(first, model)).sort(capable);
-  let fallback: InventoryModel[] | undefined;
-  for (const top of ranked) {
-    const chosen = [first, top];
-    fallback ??= chosen;
-    for (const candidate of ranked) {
-      if (candidate === top || candidate.inputCostPerMillion > top.inputCostPerMillion) continue;
-      if (chosen.every(model => cheaper(candidate, model) < 0 ? validTierPair(candidate, model) : validTierPair(model, candidate))) chosen.push(candidate);
-      if (chosen.length === 4) break;
+  if (models.length === 0) return [];
+  const ordered = models.map(model => {
+    let ceiling = -1;
+    for (const level of model.thinkingLevels) ceiling = Math.max(ceiling, ThinkingLevelSchema.options.indexOf(level));
+    return { model, ceiling, context: model.contextWindow ?? 0, address: probeAddress(model), strength: 0 };
+  }).sort((a, b) => a.model.inputCostPerMillion - b.model.inputCostPerMillion || a.ceiling - b.ceiling ||
+    a.context - b.context || compare(a.address, b.address));
+  // Equal-price evidence orders weak -> strong, independently of selection preference.
+  const ranked = [...ordered].sort((a, b) => b.ceiling - a.ceiling || b.context - a.context ||
+    b.model.inputCostPerMillion - a.model.inputCostPerMillion || compare(a.address, b.address));
+  for (let index = 0; index < ranked.length; index++) ranked[index]!.strength = index;
+  const cheaper = (a: number, b: number): number => ordered[a]!.model.inputCostPerMillion - ordered[b]!.model.inputCostPerMillion ||
+    ordered[a]!.strength - ordered[b]!.strength;
+  const size = ordered.length, width = size + 1;
+  const edges = new Uint8Array(size * size);
+  for (let lower = 0; lower < size; lower++) {
+    for (let higher = lower + 1; higher < size; higher++) {
+      edges[lower * size + higher] = Number(validTierPair(ordered[lower]!.model, ordered[higher]!.model));
     }
-    // A fourth rung must not make an otherwise valid ladder unusable.
-    if (chosen.length >= 3) return chosen.sort(cheaper);
   }
-  return fallback ?? [first];
+
+  // A prefix is identified by its last model and last non-null context (0 = none).
+  // Adjacent thinking ceilings are transitive; nullable contexts are not. Keeping
+  // the last known context makes an extension compatible with every earlier rung.
+  // For each state, retain only the preferred two- and three-rung prefixes.
+  const firstOfTwo = new Int16Array(size * width).fill(-1);
+  const firstOfThree = new Int16Array(size * width).fill(-1);
+  const middleOfThree = new Int16Array(size * width).fill(-1);
+  let bestLength = 1, bestFirst = 0, bestMiddle = -1, bestUpper = -1, bestTop = 0;
+  for (let index = 1; index < size; index++) {
+    if (cheaper(index, bestFirst) < 0) bestFirst = bestTop = index;
+  }
+  const consider = (length: number, first: number, middle: number, upper: number, top: number): void => {
+    if (length < bestLength) return;
+    if (length === bestLength) {
+      let preference = cheaper(first, bestFirst) || ordered[top]!.strength - ordered[bestTop]!.strength;
+      if (preference === 0 && length === 3) preference = ordered[middle]!.strength - ordered[bestMiddle]!.strength;
+      if (preference === 0 && length === 4) {
+        const a = ordered[middle]!.strength, b = ordered[upper]!.strength;
+        const oldA = ordered[bestMiddle]!.strength, oldB = ordered[bestUpper]!.strength;
+        preference = Math.min(a, b) - Math.min(oldA, oldB) || Math.max(a, b) - Math.max(oldA, oldB);
+      }
+      if (preference >= 0) return;
+    }
+    bestLength = length;
+    bestFirst = first;
+    bestMiddle = middle;
+    bestUpper = upper;
+    bestTop = top;
+  };
+
+  // O(n²) evidence checks and storage, O(n³) cached-edge state transitions.
+  // A state's preferred prefix remains preferred under any common extension:
+  // cheapest start first, then strongest intermediates; the top is shared.
+  for (let top = 1; top < size; top++) {
+    const topKnown = ordered[top]!.model.contextWindow !== null;
+    for (let lower = 0; lower < top; lower++) {
+      if (!edges[lower * size + top]) continue;
+      consider(2, lower, -1, -1, top);
+      const lowerKnown = ordered[lower]!.model.contextWindow !== null;
+      const pairState = top * width + (topKnown ? top + 1 : lowerKnown ? lower + 1 : 0);
+      const oldFirst = firstOfTwo[pairState]!;
+      if (oldFirst < 0 || cheaper(lower, oldFirst) < 0) firstOfTwo[pairState] = lower;
+      for (let known = lowerKnown ? lower + 1 : 0; known <= (lowerKnown ? lower + 1 : lower); known++) {
+        const state = lower * width + known;
+        const firstTwo = firstOfTwo[state]!, firstThree = firstOfThree[state]!;
+        if (firstTwo < 0 && firstThree < 0) continue;
+        if (known > 0 && !edges[(known - 1) * size + top]) continue;
+        if (firstThree >= 0) consider(4, firstThree, middleOfThree[state]!, lower, top);
+        if (firstTwo < 0) continue;
+        consider(3, firstTwo, lower, -1, top);
+        const next = top * width + (topKnown ? top + 1 : known);
+        const previous = firstOfThree[next]!;
+        const preference = previous < 0 ? -1 : cheaper(firstTwo, previous) ||
+          ordered[lower]!.strength - ordered[middleOfThree[next]!]!.strength;
+        if (preference < 0) {
+          firstOfThree[next] = firstTwo;
+          middleOfThree[next] = lower;
+        }
+      }
+    }
+  }
+  const result = [ordered[bestFirst]!.model];
+  if (bestLength >= 3) result.push(ordered[bestMiddle]!.model);
+  if (bestLength === 4) result.push(ordered[bestUpper]!.model);
+  if (bestLength >= 2) result.push(ordered[bestTop]!.model);
+  return result;
 }
 function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: Map<string, BenchmarkReceipt["results"][number]>): CatalogDocument {
   const models: CatalogModel[] = [];

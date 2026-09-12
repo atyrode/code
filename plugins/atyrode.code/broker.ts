@@ -45,7 +45,8 @@ export async function accountObservation(ctx: CodeContext, expected?: SharedBrok
   const reference = await sharedBrokerReference(ctx);
   if (expected && digestOf(reference) !== digestOf(expected)) throw new CodeRefusal("resources_changed");
   const metadata = await brokerRead(ctx, reference, "metadata");
-  const observedAt = ctx.now();
+  // Hardened actions carry their dispatch clock across asynchronous native reads.
+  const observedAt = Date.now();
   return projectAccounts(metadata, digestOf(reference), observedAt, observedAt);
 }
 export async function usageObservation(ctx: CodeContext, record: Configuration) {
@@ -55,7 +56,7 @@ export async function usageObservation(ctx: CodeContext, record: Configuration) 
   let refreshStatus: "succeeded" | "failed" = "succeeded";
   try { raw = await brokerRead(ctx, reference, "usage"); }
   catch { refreshStatus = "failed"; }
-  const now = ctx.now();
+  const now = Date.now();
   return projectUsage(normalizeBrokerUsage(raw, accounts, now), accounts, record.accounts, now,
     { maxAgeMs: 5 * 60_000, refreshStatus });
 }

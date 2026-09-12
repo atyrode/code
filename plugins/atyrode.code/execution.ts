@@ -14,11 +14,11 @@ import { expectRevision, readConfiguration, resourceSnapshot } from "./state.ts"
 const bundledModels = bundledProbeModels();
 const bundledProviders = Object.keys(bundledModels);
 
-export async function requirePromotedOperation(ctx: CodeContext, record: Configuration, operation: string) {
-  const resources = record.resources;
-  if (!resources?.execution || digestOf(resources) !== digestOf(await resourceSnapshot(ctx, record.machineId))) throw new CodeRefusal("resources_changed");
+export async function requirePromotedOperation(ctx: CodeContext, record: Configuration, machineId: string, operation: string) {
+  const resources = record.resourcesByMachine[machineId];
+  if (!resources?.execution || digestOf(resources) !== digestOf(await resourceSnapshot(ctx, machineId))) throw new CodeRefusal("resources_changed");
   const operationId = `${CODE_PLUGIN_ID}.${operation}`;
-  const pins = await currentOperation(ctx, record.machineId, operationId);
+  const pins = await currentOperation(ctx, machineId, operationId);
   if (pins.installationRevision !== resources.execution.installationRevision || pins.artifactSha256 !== resources.execution.artifactSha256 ||
     pins.resourceBindingDigest !== resources.execution.operations[operationId]) throw new CodeRefusal("resources_changed");
   return pins;
@@ -33,25 +33,25 @@ export function nativeModelConfiguration(pool: RuntimeAccountPool) {
   const config = { extensions: [], disabledProviders: bundledProviders.filter(provider => !providers.includes(provider)), extendedContext: true };
   return { models, config, providers };
 }
-async function executionAccountPool(ctx: CodeContext, record: Configuration) {
-  const broker = record.resources?.services.broker;
+async function executionAccountPool(ctx: CodeContext, record: Configuration, machineId: string) {
+  const broker = record.resourcesByMachine[machineId]?.services.broker;
   if (!broker) throw new CodeRefusal("resources_incomplete");
   const reference = await sharedBrokerReference(ctx, broker);
   return selectedAccountPool(await accountObservation(ctx, reference), record.accounts);
 }
-async function probeInput(ctx: CodeContext, record: Configuration) {
-  const pool = await executionAccountPool(ctx, record);
+async function probeInput(ctx: CodeContext, record: Configuration, machineId: string) {
+  const pool = await executionAccountPool(ctx, record, machineId);
   const { models, config, providers } = nativeModelConfiguration(pool);
   const registry = bundledProviders.filter(provider => providers.includes(provider)).flatMap(provider => bundledModels[provider]!);
   const identities = projectProbeIdentities(registry, providers);
   return { models: JSON.stringify(models), config: JSON.stringify(config), modelIdentities: JSON.stringify(identities), accountPool: JSON.stringify(pool) };
 }
-export async function startInventory(ctx: CodeContext, record: Configuration) {
-  const pins = await requirePromotedOperation(ctx, record, "catalog-inventory");
-  const input = await probeInput(ctx, record);
+export async function startInventory(ctx: CodeContext, record: Configuration, machineId: string) {
+  const pins = await requirePromotedOperation(ctx, record, machineId, "catalog-inventory");
+  const input = await probeInput(ctx, record, machineId);
   const jobId = await ctx.newId();
   expectRevision(await readConfiguration(ctx, record), record.revision);
-  return PublicJobSchema.parse(await ctx.jobs.execute({ jobId, machineId: record.machineId,
+  return PublicJobSchema.parse(await ctx.jobs.execute({ jobId, machineId,
     operationId: `${CODE_PLUGIN_ID}.catalog-inventory`, ...pins, input, outputs: [] }));
 }
 export async function inventoryResult(ctx: CodeContext, machineId: string, jobId: string) {
@@ -59,14 +59,14 @@ export async function inventoryResult(ctx: CodeContext, machineId: string, jobId
   const inventory = InventoryReceiptSchema.parse(value);
   return { job, inventory, draft: scaffoldInventory(inventory) };
 }
-export async function startBenchmark(ctx: CodeContext, record: Configuration, inventoryJobId: string) {
-  const pins = await requirePromotedOperation(ctx, record, "catalog-benchmark");
-  const source = await inventoryResult(ctx, record.machineId, inventoryJobId);
+export async function startBenchmark(ctx: CodeContext, record: Configuration, machineId: string, inventoryJobId: string) {
+  const pins = await requirePromotedOperation(ctx, record, machineId, "catalog-benchmark");
+  const source = await inventoryResult(ctx, machineId, inventoryJobId);
   if (source.job.installationRevision !== pins.installationRevision || source.job.artifactSha256 !== pins.artifactSha256) throw new CodeRefusal("resources_changed");
-  const input = { ...await probeInput(ctx, record), candidates: JSON.stringify(benchmarkCandidates(source.inventory)) };
+  const input = { ...await probeInput(ctx, record, machineId), candidates: JSON.stringify(benchmarkCandidates(source.inventory)) };
   const jobId = await ctx.newId();
   expectRevision(await readConfiguration(ctx, record), record.revision);
-  return PublicJobSchema.parse(await ctx.jobs.execute({ jobId, machineId: record.machineId,
+  return PublicJobSchema.parse(await ctx.jobs.execute({ jobId, machineId,
     operationId: `${CODE_PLUGIN_ID}.catalog-benchmark`, ...pins, input, outputs: [] }));
 }
 export async function benchmarkResult(ctx: CodeContext, machineId: string, inventoryJobId: string, jobId: string) {
@@ -76,10 +76,10 @@ export async function benchmarkResult(ctx: CodeContext, machineId: string, inven
   const benchmark = BenchmarkReceiptSchema.parse(result.value);
   return { job: result.job, benchmark, catalog: catalogFromObservations(source.inventory, benchmark) };
 }
-export async function launchPreview(ctx: CodeContext, record: Configuration): Promise<LaunchPreview> {
-  await requirePromotedOperation(ctx, record, "launch");
+export async function launchPreview(ctx: CodeContext, record: Configuration, machineId: string): Promise<LaunchPreview> {
+  await requirePromotedOperation(ctx, record, machineId, "launch");
   if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-  const accountPool = await executionAccountPool(ctx, record);
+  const accountPool = await executionAccountPool(ctx, record, machineId);
   const catalog = compileCatalog(record.active.document);
   const review = reviewCatalog(catalog, record.selection, ctx.now());
   for (const route of review.routes) {
@@ -87,9 +87,9 @@ export async function launchPreview(ctx: CodeContext, record: Configuration): Pr
       if (!accountPool[catalog.model(choice.key).provider]?.length) throw new CodeRefusal("account_unavailable");
     }
   }
-  const resources = record.resources!;
-  return { revision: record.revision, review, accountPool, resources,
-    previewDigest: digestOf({ containerId: record.containerId, machineId: record.machineId, revision: record.revision,
+  const resources = record.resourcesByMachine[machineId]!;
+  return { machineId, revision: record.revision, review, accountPool, resources,
+    previewDigest: digestOf({ containerId: record.containerId, machineId, revision: record.revision,
       catalog: record.active.digest, selection: review.selection, routes: review.routes, accountPool, resources }) };
 }
 export function launchInput(record: Configuration, preview: LaunchPreview, prompt: string) {

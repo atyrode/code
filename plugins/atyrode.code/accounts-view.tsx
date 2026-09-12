@@ -3,9 +3,10 @@ import type { HostServices } from "@manifold/plugin";
 import { hasCap } from "@manifold/protocol";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
 import type { AccountChoiceChange, AccountRecord, AccountReference } from "../domain/contracts.ts";
-import { CODE_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
+import type { ActionInput, ActionResult, Target } from "./contract.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
 import { OmpSignIn } from "./omp-sign-in.tsx";
+import { PermissionReview } from "./permission-review.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
 type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks"> };
@@ -22,13 +23,49 @@ function accountLabel(account: AccountRecord): string {
   return account.email ?? `${account.type === "oauth" ? "OAuth account" : "API key"} ${account.credentialId}`;
 }
 
+/** Recovery is explicit and destination-specific; normal reads only use the container key. */
+export function LegacyWorkspaceAdoption({ host, target, onAdopt }: { host: HostServices; target: Target; onAdopt: () => void }) {
+  const [review, setReview] = useState<ActionResult<"readConfiguration"> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const pending = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  async function perform(work: () => Promise<void>) {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setMessage(null);
+    try { await work(); }
+    catch (reason) { if (mounted.current) setMessage(codeOperationFailure(reason)); }
+    finally { pending.current = false; if (mounted.current) setBusy(false); }
+  }
+  return <details className="plugin-atyrode_code__details">
+    <summary>Recover choices from an older machine-scoped workspace</summary>
+    <p>Read only this destination’s legacy record, then explicitly adopt its choices for the container. No other machine is searched or merged; the original remains recovery data.</p>
+    <button type="button" disabled={busy} onClick={() => void perform(async () => {
+      const value = await callCodeAction(host, "readConfiguration", { containerId: host.containerId!, legacyMachineId: target.machineId });
+      if (!mounted.current) return;
+      setReview(value);
+      if (value.configuration && value.legacyMachineId === null) onAdopt();
+    })}>Read this destination’s legacy choices</button>
+    {review && (review.legacyMachineId && review.configuration ? <>
+      <pre>{JSON.stringify(review.configuration, null, 2)}</pre>
+      <button type="button" disabled={busy || !canWriteCodeWorkspace(host)} onClick={() => void perform(async () => {
+        await callCodeAction(host, "initializeConfiguration", { containerId: host.containerId!, legacyMachineId: review.legacyMachineId!, expectedRevision: review.revision });
+        if (mounted.current) onAdopt();
+      })}>Adopt these choices for the workspace</button>
+    </> : <p role="status">{review.configuration ? "This container already has shared choices. They take precedence." : "No legacy choices are stored for this destination."}</p>)}
+    {message && <p role="status">{message}</p>}
+  </details>;
+}
+
 export function AccountsView(props: AccountsViewProps) {
-  return <ScopedAccountsView key={JSON.stringify([props.host.principal.id, props.target?.containerId, props.target?.machineId])} {...props} />;
+  return <ScopedAccountsView key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
 
 function ScopedAccountsView({ host, target, available, onDone }: AccountsViewProps) {
   const id = useId();
-  const configuration = useCodeQuery(host, "readConfiguration", target);
+  const workspace = host.containerId ? { containerId: host.containerId } : null;
+  const configuration = useCodeQuery(host, "readConfiguration", workspace);
   const accountFeed = useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const current = configuration.data?.configuration ?? null;
   const observation = accountFeed.data;
@@ -53,20 +90,21 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     hadDraft.current = draftId !== undefined;
   }, [draftId]);
   useEffect(() => { if (confirmation) confirmCancel.current?.focus(); }, [confirmation]);
+  useEffect(() => { setConfirmation(null); }, [target?.machineId]);
   const writable = canWriteCodeWorkspace(host);
-  const canEdit = writable && target !== null && available && current !== null && !busy;
+  const canEdit = writable && workspace !== null && current !== null && !busy;
   const canAdminister = writable && hasCap(host.client.selfCaps(), "services:invoke") && target !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
     account.credentialId === confirmation.input.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
-  const canConfirm = canAdminister && observedConfirmation != null;
+  const canConfirm = canAdminister && observedConfirmation != null && confirmation?.input.machineId === target?.machineId;
   function refresh() { configuration.refresh(); accountFeed.refresh(); }
   async function saveChoice(change: AccountChoiceChange, revision = current?.revision) {
-    if (!target || !canEdit || revision === undefined || revision !== current?.revision || pending.current || confirmation) return;
+    if (!workspace || !canEdit || revision === undefined || revision !== current?.revision || pending.current || confirmation) return;
     if (change.kind === "set-account" && observation?.status !== "fresh") return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
-      await callCodeAction(host, "changeAccounts", { ...target, expectedRevision: revision, change });
+      await callCodeAction(host, "changeAccounts", { ...workspace, expectedRevision: revision, change });
       if (mounted.current) {
         setMessage(change.kind === "create-preset" ? "Preset saved. Select it as the active pool when you want to use it." :
           change.kind === "update-preset" ? "Preset saved. Running sessions are unchanged." :
@@ -79,10 +117,10 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     } finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
   async function initialize() {
-    if (!writable || !target || !available || !configuration.data || current || pending.current) return;
+    if (!writable || !workspace || !configuration.data || current || pending.current) return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
-      await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data.revision });
+      await callCodeAction(host, "initializeConfiguration", { ...workspace, expectedRevision: configuration.data.revision });
       if (mounted.current) setMessage("Account choices initialized.");
     } catch (reason) { if (mounted.current) setMessage(codeOperationFailure(reason)); }
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
@@ -211,16 +249,17 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
         {onDone && <button type="button" disabled={busy || draft !== null || confirmation !== null} onClick={onDone}>Done</button>}
       </div>
     </header>
-    {!target && <p className="plugin-atyrode_code__account-notice" role="status">Choose a workspace machine to edit project account choices. Instance accounts and OMP sign-in do not depend on that selection.</p>}
-    {target && !available && <p className="plugin-atyrode_code__account-notice" role="status">Workspace machine unavailable. Project account choices are disabled; instance account discovery and OMP sign-in remain independent.</p>}
+    {!workspace && <p className="plugin-atyrode_code__account-notice" role="status">Open a workspace to edit shared account choices. Instance accounts and OMP sign-in do not depend on an execution destination.</p>}
+    {target && !available && <p className="plugin-atyrode_code__account-notice" role="status">Execution destination unavailable. Shared account choices, instance account discovery and OMP sign-in remain available.</p>}
     {!writable && <p className="plugin-atyrode_code__account-notice" role="status">Read-only workspace. Project choices and credential actions require edit access.</p>}
     {configuration.error && <p className="plugin-atyrode_code__account-notice" role="status">{configuration.error}</p>}
     {accountFeed.error && <p className="plugin-atyrode_code__account-notice" role="status">{accountFeed.error}</p>}
-    {target && configuration.data === null && !configuration.error && <p role="status">Reading account choices…</p>}
+    {workspace && configuration.data === null && !configuration.error && <p role="status">Reading account choices…</p>}
     {observation === null && !accountFeed.error && <p role="status">Reading instance accounts…</p>}
     {configuration.data && current === null && <div className="plugin-atyrode_code__account-notice">
       <p>Set up account choices for this workspace. Existing credentials are not imported.</p>
-      <button type="button" disabled={!writable || !available || busy} onClick={() => void initialize()}>Initialize choices</button>
+      <button type="button" disabled={!writable || busy} onClick={() => void initialize()}>Initialize choices</button>
+      {target && <LegacyWorkspaceAdoption key={target.machineId} host={host} target={target} onAdopt={refresh} />}
     </div>}
     <p className="plugin-atyrode_code__account-feedback" role="status" aria-live="polite" data-pending={busy}>{busy ? confirmation ? "Applying native action…" : "Saving account choices…" : message}</p>
     {choices && current && <section className="plugin-atyrode_code__account-pool" aria-label="Active account pool">
@@ -319,15 +358,15 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     <details className="plugin-atyrode_code__account-details plugin-atyrode_code__account-diagnostics">
       <summary>Scope &amp; diagnostics</summary>
       <dl className="plugin-atyrode_code__account-facts">
-        <dt>Workspace</dt><dd><code>{target?.containerId ?? "none"}</code></dd>
-        <dt>Machine</dt><dd><code>{target?.machineId ?? "none"}</code></dd>
+        <dt>Workspace</dt><dd><code>{host.containerId ?? "none"}</code></dd>
+        <dt>Execution destination</dt><dd><code>{target?.machineId ?? "none"}</code></dd>
         <dt>Account scope</dt><dd><code>{observation?.scope ?? "unknown"}</code></dd>
         <dt>Revision</dt><dd>{current?.revision ?? "unknown"}</dd>
         <dt>Last observed</dt><dd>{time(observation?.observedAt ?? null)}</dd>
       </dl>
       <p>Unblocked counts included, enabled credentials with no native blocks reported. It is not a quota or provider-availability guarantee. Included and excluded counts refer to reported accounts; unobserved exclusions are kept separately.</p>
       <p>Reads do not start jobs. Saved choices do not change running sessions. Account observations refresh automatically; OMP owns credential storage and sign-in.</p>
-      <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Native setup / consent</button>
+      <PermissionReview host={host} target={target} intent="accounts" label="Review account capabilities" onReady={refresh} />
     </details>
   </section>;
 }

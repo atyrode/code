@@ -569,9 +569,9 @@
 @media (prefers-reduced-motion: no-preference) {
   .plugin-atyrode_code .plugin-atyrode_code__account-editor,
   .plugin-atyrode_code .plugin-atyrode_code__account-confirmation,
-  .plugin-atyrode_code .plugin-atyrode_code__account-record[open] > :not(summary) { animation: code-account-reveal 160ms ease-out; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-record[open] > :not(summary) { animation: plugin-atyrode_code__account-reveal 160ms ease-out; }
 }
-@keyframes code-account-reveal {
+@keyframes plugin-atyrode_code__account-reveal {
   from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: translateY(0); }
 }
@@ -592,3 +592,33 @@
   .plugin-atyrode_code .plugin-atyrode_code__account-facts { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
   .plugin-atyrode_code .plugin-atyrode_code__account-facts dd { margin-block-end: 0.4rem; }
 }
+.plugin-atyrode_code__permission-dialog {
+  width: min(58rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 1.25rem;
+  overflow: auto;
+  border: 1px solid var(--code-rule);
+  border-radius: 8px;
+}
+.plugin-atyrode_code__permission-dialog[open],
+.plugin-atyrode_code__permission-dialog section,
+.plugin-atyrode_code__permission-choices {
+  display: grid;
+  gap: 0.8rem;
+}
+.plugin-atyrode_code__permission-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.plugin-atyrode_code__permission-choice {
+  padding-block: 0.8rem;
+  border-bottom: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code__permission-choice > label { display: flex; align-items: baseline; gap: 0.6rem; font-weight: 600; }
+.plugin-atyrode_code .plugin-atyrode_code__permission-choice > label > input {
+  flex: 0 0 1rem;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--code-accent);
+}
+.plugin-atyrode_code__permission-choice > button,
+.plugin-atyrode_code__permission-dialog section > button { justify-self: start; }

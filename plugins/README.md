@@ -23,7 +23,7 @@ All five bundles are packed from one tree; each child requires `atyrode.code`.
 - `domain/accounts.ts`, `usage.ts`, `probe.ts`, `suggestions.ts`: identity/slot
   selection, freshness, typed probe receipts and suggestion validation.
 - `atyrode.code/contract.ts`, `server.ts`, `state.ts`: action schemas, governed
-  handlers and container/machine-scoped native storage with compare-and-set.
+  handlers and container-scoped native storage with compare-and-set.
 - `atyrode.code/execution.ts`, `machine-server.ts`: exact resource resolution,
   native jobs, retained results and reviewed terminal-runtime construction.
 - `atyrode.code/service-setup.ts`, `service-policies.ts`, `broker.ts`: native
@@ -48,6 +48,20 @@ administration as `atyrode.code.accounts.readAccountSetup` or
 boundary. Clients do not spawn Code or parse output.
 Babel may adopt this boundary independently. Code neither depends on Babel nor
 claims its adoption, and does not preserve a former engine process ABI for it.
+
+Catalogs, profiles and account-pool choices belong to the container. Changing the
+execution destination preserves the prompt, visited editors and unsaved drafts;
+only native resource pins and launch reviews are destination-specific. Existing
+machine-keyed records are adopted only through an explicit `legacyMachineId`;
+canonical container state wins, and unrelated machine records are never merged.
+A newer shared revision keeps a local draft visible but refuses an unreviewed save.
+
+First-use and contextual capability reviews share the typed headless plan.
+Account, gateway, folder creation, existing-folder validation, discovery,
+benchmark and session requests can be chosen independently and reconsidered
+later. Closing or declining never revokes existing access. Exact native owner
+approval, runtime progress and product-configuration promotion remain distinct;
+a selected checkbox or running broker is not evidence of the caller's authority.
 
 ## Pinned SDK and development gate
 
@@ -87,12 +101,15 @@ packing does not rewrite them or install a worker on an execution machine.
 `verify` first uses the kit's disposable server to install, dispatch and uninstall
 bundles, then runs `scripts/verify-browser.ts` against the packed artifacts.
 The browser scenario requires Chromium (`MANIFOLD_CHROMIUM` can select its binary)
-and uses two isolated, freshly minted Manifold identities to prove viewer write
-refusal and live initialization/profile convergence. It starts no native job
-owner, terminal or provider request. Run `bun run verify:browser` independently,
-or pass an existing bundle directory to `bun scripts/verify-browser.ts` to check
-older artifacts. Neither the browser scenario nor the other gate commands prove
-live provider authentication or OMP readiness.
+and uses two isolated, freshly minted Manifold identities and two permitted
+destinations to prove viewer write refusal, shared-state convergence, preserved
+drafts, four-level selection, hidden first-use navigation and configuration-read
+recovery. Separate synthetic responses exercise folder-only readiness and stale
+launch refusal; they are not native execution or consent evidence. It starts no
+native job owner, terminal or provider request. Run `bun run verify:browser`
+independently, or pass an existing bundle directory to
+`bun scripts/verify-browser.ts`. These gates do not prove live provider
+authentication or OMP readiness.
 The unit suite exercises isolated synthetic brokers without provider requests,
 covering pool membership, revocation, shutdown persistence, reconnect ordering
 and delayed credential mutation replies. A locked Bun patch to `@oh-my-pi/pi-ai`

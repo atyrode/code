@@ -1,12 +1,12 @@
-import { InstanceServiceDescriptionSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema,
+import { InstanceServiceDescriptionSchema, JobDescriptionSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema,
   ServiceRuntimeSchema, TerminalRuntimeSchema, type InstanceServiceDescription, type ServiceConfigurationRead, type ServicePolicy } from "@manifold/protocol";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "./auth-contract.ts";
 import { describeSharedBroker } from "./broker.ts";
 import { ACCOUNTS_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type Target } from "./contract.ts";
-import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
+import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
 import { buildCodeServices, buildSharedBrokerPolicy } from "./service-policies.ts";
 import { authorizeTarget } from "./state.ts";
-import { accountOperationReady } from "./operation-readiness.ts";
+import { accountOperationRefusal } from "./operation-readiness.ts";
 
 const signInConfig = JSON.stringify({ startup: { setupWizard: false } });
 
@@ -47,7 +47,8 @@ export async function reviewServices(ctx: CodeContext, args: ActionInput<"review
     if (!policies.some(value => value.serviceId === policy.serviceId)) policies.push(policy);
   }
   const review = { expectedServiceRevision: args.expectedServiceRevision, policies };
-  return { ...review, reviewDigest: digestOf({ target: { containerId: args.containerId, machineId: args.machineId }, ...review }) };
+  return { ...review, reviewDigest: digestOf({ target: { containerId: args.containerId, machineId: args.machineId }, ...review }),
+    current: digestOf(policies) === digestOf(current.configuration.policies) };
 }
 
 export async function configureServices(ctx: CodeContext, args: ActionInput<"configureServices">) {
@@ -81,17 +82,17 @@ export async function canAdministerBroker(ctx: CodeContext, machineId: string): 
 
 /** One native description pins both installed operations and their promoted resource
  * bindings. The installed artifact declares their common owner-local OMP home. */
-export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
-  const { description, installation } = await currentResources(ctx, machineId, ACCOUNTS_PLUGIN_ID);
-  const broker = description.operations?.[BROKER_OPERATION_ID];
-  const signIn = description.operations?.[SIGN_IN_OPERATION_ID];
-  if (!installation.ready || !broker?.ready || !signIn?.ready) throw new CodeRefusal("resources_incomplete");
-  if (!accountOperationReady(description, machineId, "broker") || !accountOperationReady(description, machineId, "sign-in"))
-    throw new CodeRefusal("native_consent_required");
+export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string, clientAccess = "{}") {
+  const description = JobDescriptionSchema.parse(await ctx.jobs.describe({ machineId, pluginId: ACCOUNTS_PLUGIN_ID }));
+  const refusal = accountOperationRefusal(description, machineId, "broker") ?? accountOperationRefusal(description, machineId, "sign-in");
+  if (refusal !== null) throw new CodeRefusal(refusal);
+  const installation = description.installation!;
+  const broker = description.operations![BROKER_OPERATION_ID]!;
+  const signIn = description.operations![SIGN_IN_OPERATION_ID]!;
   const pins = { installationRevision: installation.revision, artifactSha256: installation.artifactSha256 };
   return {
     broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: ACCOUNTS_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
-      ...pins, resourceBindingDigest: broker.resourceBindingDigest, input: {} }),
+      ...pins, resourceBindingDigest: broker.resourceBindingDigest, input: { clientAccess: { literal: clientAccess } } }),
     signIn: TerminalRuntimeSchema.parse({ pluginId: ACCOUNTS_PLUGIN_ID, operationId: SIGN_IN_OPERATION_ID,
       ...pins, resourceBindingDigest: signIn.resourceBindingDigest, input: { config: signInConfig } }),
   };
@@ -100,6 +101,14 @@ export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
 export function matchesSharedBrokerPolicy(current: ServicePolicy | null, policy: ServicePolicy): boolean {
   // The native registry revision is not the policy builder's initial revision.
   return current !== null && digestOf({ ...current, revision: policy.revision }) === digestOf(policy);
+}
+
+function brokerClientAccess(policy: ServicePolicy | null): string {
+  const value = policy?.runtime?.input.clientAccess;
+  if (value === undefined) return "{}";
+  if (!("literal" in value) || typeof value.literal !== "string")
+    throw new CodeRefusal("resources_changed");
+  return value.literal;
 }
 
 function requireExistingBroker(description: InstanceServiceDescription, expectedRevision: string, machineId?: string) {
@@ -122,14 +131,25 @@ export async function inspectSharedBrokerRuntime(ctx: CodeContext, expectedRevis
   const current = await ctx.services.readInstanceConfiguration({ serviceId: BROKER_SERVICE_ID });
   requireExistingBroker(current.description, expectedRevision, owner.machineId);
   if (!current.policy) throw new CodeRefusal("resources_changed");
-  const runtimes = await sharedOmpRuntimes(ctx, owner.machineId);
+  const runtimes = await sharedOmpRuntimes(ctx, owner.machineId, brokerClientAccess(current.policy));
   const policy = buildSharedBrokerPolicy(runtimes.broker);
   const latest = await describeSharedBroker(ctx);
   requireExistingBroker(latest, expectedRevision, owner.machineId);
   return { description: latest, owner, currentPolicy: current.policy, runtimes, policy };
 }
 
-export async function reviewSharedBrokerRuntime(ctx: CodeContext, expectedRevision: string) {
+export async function reviewSharedBrokerRuntime(ctx: CodeContext, expectedRevision: string | null) {
+  if (expectedRevision === null) {
+    const description = await describeSharedBroker(ctx);
+    expectBrokerRevision(description, null);
+    const owner = brokerOwner(description);
+    if (!owner?.online || !description.connected) throw new CodeRefusal("account_owner_unavailable");
+    if (!await canAdministerBroker(ctx, owner.machineId)) throw new CodeRefusal("service_owner_required");
+    const runtimes = await sharedOmpRuntimes(ctx, owner.machineId);
+    const policy = buildSharedBrokerPolicy(runtimes.broker);
+    return { expectedBrokerRevision: null, owner, policy, current: false,
+      reviewDigest: digestOf({ ownerMachineId: owner.machineId, expectedBrokerRevision: null, currentPolicy: null, policy, runtimes }) };
+  }
   const { description, owner, currentPolicy, runtimes, policy: installedPolicy } = await inspectSharedBrokerRuntime(ctx, expectedRevision);
   // Native treats an identical enabled configuration as a no-op. A reviewed
   // recovery needs a fresh policy revision without an intermediate disabled state.
@@ -137,7 +157,8 @@ export async function reviewSharedBrokerRuntime(ctx: CodeContext, expectedRevisi
   const policy = recovering ? { ...installedPolicy, revision: digestOf({ expectedRevision, policy: installedPolicy }) } : installedPolicy;
   const review = { expectedBrokerRevision: expectedRevision, owner, policy };
   // Bind both operations: a sign-in-only resource change also invalidates consent.
-  return { ...review, reviewDigest: digestOf({ ownerMachineId: owner.machineId,
+  return { ...review, current: !recovering && matchesSharedBrokerPolicy(currentPolicy, policy) && ["ready", "starting"].includes(description.state),
+    reviewDigest: digestOf({ ownerMachineId: owner.machineId,
     expectedBrokerRevision: expectedRevision, currentPolicy, policy, runtimes }) };
 }
 
@@ -147,7 +168,12 @@ export async function promoteSharedBrokerRuntime(ctx: CodeContext, args: ActionI
   const latest = await reviewSharedBrokerRuntime(ctx, args.expectedBrokerRevision);
   if (latest.reviewDigest !== reviewed.reviewDigest) throw new CodeRefusal("resources_changed");
   await authorizeServiceConfiguration(ctx, { containerId: args.containerId, machineId: latest.owner.machineId }, true);
-  requireExistingBroker(await describeSharedBroker(ctx), args.expectedBrokerRevision, latest.owner.machineId);
+  const before = await describeSharedBroker(ctx);
+  expectBrokerRevision(before, args.expectedBrokerRevision);
+  const owner = brokerOwner(before);
+  if (owner?.machineId !== latest.owner.machineId || !owner.online || !before.connected)
+    throw new CodeRefusal("account_owner_unavailable");
+  if (args.expectedBrokerRevision !== null) requireExistingBroker(before, args.expectedBrokerRevision, latest.owner.machineId);
   let configured: InstanceServiceDescription;
   try {
     // Native CAS protects registry/owner changes, but does not atomically compare
@@ -173,17 +199,22 @@ export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: st
   const owner = brokerOwner(description);
   if (!owner?.online || !description.connected) throw new CodeRefusal("account_owner_unavailable");
   if (!await canAdministerBroker(ctx, owner.machineId)) throw new CodeRefusal("service_owner_required");
-  const runtimes = await sharedOmpRuntimes(ctx, owner.machineId);
-  const policy = buildSharedBrokerPolicy(runtimes.broker);
+  let currentPolicy: ServicePolicy | null = null;
   if (description.configuration) {
     if (!description.configuration.enabled || !["ready", "starting"].includes(description.state))
       throw new CodeRefusal("broker_unavailable");
     const current = await ctx.services.readInstanceConfiguration({ serviceId: BROKER_SERVICE_ID });
     expectBrokerRevision(current.description, expectedRevision);
-    if (!matchesSharedBrokerPolicy(current.policy, policy))
+    currentPolicy = current.policy;
+  }
+  const clientAccess = brokerClientAccess(currentPolicy);
+  const runtimes = await sharedOmpRuntimes(ctx, owner.machineId, clientAccess);
+  const policy = buildSharedBrokerPolicy(runtimes.broker);
+  if (description.configuration) {
+    if (!matchesSharedBrokerPolicy(currentPolicy, policy))
       throw new CodeRefusal("resources_changed");
   } else {
-    const latest = await sharedOmpRuntimes(ctx, owner.machineId);
+    const latest = await sharedOmpRuntimes(ctx, owner.machineId, clientAccess);
     if (digestOf(latest) !== digestOf(runtimes)) throw new CodeRefusal("resources_changed");
     const current = await describeSharedBroker(ctx);
     expectBrokerRevision(current, expectedRevision);
@@ -202,7 +233,7 @@ export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: st
       !description.configuration.enabled || description.owner?.machineId !== owner.machineId)
       throw new CodeRefusal("resources_changed");
   }
-  const latest = await sharedOmpRuntimes(ctx, owner.machineId);
+  const latest = await sharedOmpRuntimes(ctx, owner.machineId, clientAccess);
   if (digestOf(latest) !== digestOf(runtimes)) throw new CodeRefusal("resources_changed");
   const revision = description.configuration!.revision;
   const current = await describeSharedBroker(ctx);

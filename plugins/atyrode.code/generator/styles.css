@@ -43,6 +43,7 @@
 .plugin-atyrode_code_generator__workbench,
 .plugin-atyrode_code_generator__view { display: grid; gap: 1rem; min-width: 0; }
 .plugin-atyrode_code_generator__view { scroll-margin-block-start: 6rem; }
+.plugin-atyrode_code_generator__view[hidden] { display: none; }
 .plugin-atyrode_code_generator__workspace-nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; padding: 0.4rem; border: 1px solid var(--code-rule); border-radius: 0.65rem; background: var(--code-bg); box-shadow: 0 0.3rem 0.8rem color-mix(in srgb, var(--code-bg) 90%, transparent); }
 .plugin-atyrode_code_generator__workspace-nav nav { display: flex; flex-wrap: wrap; gap: 0.2rem; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button { min-height: 2.2rem; padding-inline: 0.8rem; }
@@ -229,11 +230,11 @@
   .plugin-atyrode_code_generator__routes > div { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
   .plugin-atyrode_code_generator__routes dd { padding-inline-start: 0.9rem; }
 }
-@keyframes code-generator-enter {
+@keyframes plugin-atyrode_code_generator__enter {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes code-generator-choice {
+@keyframes plugin-atyrode_code_generator__choice {
   from { background-color: color-mix(in srgb, var(--code-accent) 14%, transparent); }
   to { background-color: transparent; }
 }
@@ -241,9 +242,9 @@
   .plugin-atyrode_code_generator__view,
   .plugin-atyrode_code_generator__draft,
   .plugin-atyrode_code_generator__feedback,
-  .plugin-atyrode_code_generator__launch-review { animation: code-generator-enter 180ms ease-out both; }
+  .plugin-atyrode_code_generator__launch-review { animation: plugin-atyrode_code_generator__enter 180ms ease-out both; }
   .plugin-atyrode_code_generator__model,
-  .plugin-atyrode_code_generator__estimate-value { animation: code-generator-choice 500ms ease-out; }
+  .plugin-atyrode_code_generator__estimate-value { animation: plugin-atyrode_code_generator__choice 500ms ease-out; }
   .plugin-atyrode_code_generator__workspace-nav button,
   .plugin-atyrode_code_generator__dial-options button,
   .plugin-atyrode_code_generator__routing-tools button,

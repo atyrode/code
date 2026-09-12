@@ -60,7 +60,7 @@ try {
     storage,
     bind: clientAccess?.bind ?? "127.0.0.1:0",
     bearerTokens: [serviceBearer],
-    bearerTokenHashes: clientAccess ? [clientAccess.bearerSha256] : undefined,
+    ...(clientAccess ? { bearerTokenHashes: [clientAccess.bearerSha256] } : {}),
     controlBearerToken: serviceBearer,
   });
   await context.announceServiceReady(broker.port);

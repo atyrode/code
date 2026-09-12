@@ -137,7 +137,14 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       fallbackLevels = levels.slice(1);
     } else if (role === "vision") {
       const family = lane.kind === "mixed" && capability >= 3 ? "anthropic" : primary;
-      const imageLead = vision(family) ?? catalog.families.filter(candidate => candidate !== family).map(vision).find(key => key !== undefined);
+      let imageLead = vision(family);
+      if (imageLead === undefined) {
+        for (const candidate of catalog.families) {
+          if (candidate === family) continue;
+          imageLead = vision(candidate);
+          if (imageLead !== undefined) break;
+        }
+      }
       if (!imageLead) throw new DomainError("invalid_selection");
       lead = imageLead;
       level = extreme ? thinking : "low";
