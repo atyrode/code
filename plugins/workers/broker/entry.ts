@@ -3,7 +3,7 @@ import { writeSync } from "node:fs";
 import { openWorkerContext, type WorkerContext } from "@manifold/sdk/worker";
 import type { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import type { AuthBrokerServerHandle } from "@oh-my-pi/pi-ai/auth-broker/server";
-import { isolateEnvironment, readServiceBearer } from "./inputs.ts";
+import { isolateEnvironment, readBrokerInputs } from "./inputs.ts";
 
 // No upstream runtime imports before the gateway's output/error containment.
 isolateEnvironment(process.env);
@@ -33,7 +33,7 @@ try {
   context = openWorkerContext();
   await context.ready;
   context.signal.throwIfAborted();
-  const serviceBearer = readServiceBearer();
+  const { serviceBearer, clientAccess } = readBrokerInputs();
   // pi-utils eagerly loads home/config/agent/project .env files. Bootstrap in
   // the sealed input root, never in the persistent OMP store or a host project.
   process.chdir("/inputs");
@@ -53,7 +53,12 @@ try {
   await storage.reload();
   context.signal.throwIfAborted();
   // OMP owns endpoints, cross-process SQLite polling and background refresh.
-  broker = startAuthBroker({ storage, bind: "127.0.0.1:0", bearerTokens: [serviceBearer] });
+  broker = startAuthBroker({
+    storage,
+    bind: clientAccess?.bind ?? "127.0.0.1:0",
+    bearerTokens: [serviceBearer],
+    bearerTokenHashes: clientAccess ? [clientAccess.bearerSha256] : undefined,
+  });
   await context.announceServiceReady(broker.port);
   if (!context.signal.aborted) await new Promise<void>(resolve => context!.signal.addEventListener("abort", () => resolve(), { once: true }));
 } catch {

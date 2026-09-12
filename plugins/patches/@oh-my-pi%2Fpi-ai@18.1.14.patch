@@ -1,9 +1,3 @@
-diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-1706731ba3271cd b/.bun-tag-1706731ba3271cd
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-e86fb79bf05ab620 b/.bun-tag-e86fb79bf05ab620
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/types/auth-broker/refresher.d.ts b/dist/types/auth-broker/refresher.d.ts
 index a45daf7a413e3f9defcbc3fe17effe6602d92fdc..5e5676b1b5fa731c9c6366edb43d65d213910b13 100644
 --- a/dist/types/auth-broker/refresher.d.ts
@@ -82,6 +76,22 @@ index bd2301f50b8b92616cddf23331910d629a01054e..00c768bf0e68872e551c496356798f21
      /**
       * Store-level hook consumed by `AuthStorage.fetchUsageReports()` — proxies
       * to the broker's `/v1/usage` endpoint. The broker's egress IP isn't
+diff --git a/dist/types/auth-broker/server.d.ts b/dist/types/auth-broker/server.d.ts
+index b12f98cb320aa5cf1eb61429001db8d1de2d7620..28baae37ef694126e3b339945e1275ce8e571d8f 100644
+--- a/dist/types/auth-broker/server.d.ts
++++ b/dist/types/auth-broker/server.d.ts
+@@ -15,8 +15,10 @@ export interface AuthBrokerServerOptions {
+     storage: AuthStorage;
+     /** Listen address; accepts `host:port` or just `port`. */
+     bind?: string;
+-    /** Accept any of these bearer tokens. Empty disables auth (loopback only). */
++    /** Accept any of these bearer tokens. Empty disables auth only when hashes are omitted (loopback only). */
+     bearerTokens: string[];
++    /** Additional SHA-256 bearer verifiers: a nonempty array of exact lowercase 64-character hex digests. */
++    bearerTokenHashes?: readonly string[];
+     /** Broker version string surfaced on `/v1/healthz`. */
+     version?: string;
+     /** Refresh credentials expiring within this window. Default 5 min. */
 diff --git a/src/auth-broker/refresher.ts b/src/auth-broker/refresher.ts
 index 5bb4c0e25ef97948fdefcb51ac8942a0d3fa40a4..4bc57b1ae02fd25c39141072f2f89e9fa90c0926 100644
 --- a/src/auth-broker/refresher.ts
@@ -673,13 +683,83 @@ index 2efb284aa720c028e656eccd53d774d1526d6e35..4c8eda2865b54176e7454e1e1c5fc3ac
  			const onAbort = (): void => {
  				signal.removeEventListener("abort", onAbort);
 diff --git a/src/auth-broker/server.ts b/src/auth-broker/server.ts
-index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9ac9f6c3e 100644
+index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7fb334f5ac7fd52f609b1485190062362b00dbaa 100644
 --- a/src/auth-broker/server.ts
 +++ b/src/auth-broker/server.ts
-@@ -661,16 +661,22 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -10,9 +10,11 @@
+  * the server only checks a bearer token against an allow-list per request.
+  */
+ 
++import { createHash, timingSafeEqual } from "node:crypto";
+ import { type Type, type } from "@oh-my-pi/omptype";
+ import { logger } from "@oh-my-pi/pi-utils";
+ import type { AuthStorage, StoredCredentialBlock } from "../auth-storage";
++import * as AIError from "../error";
+ import { parseBind } from "../utils/parse-bind";
+ import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
+ import type {
+@@ -55,8 +57,10 @@ export interface AuthBrokerServerOptions {
+ 	storage: AuthStorage;
+ 	/** Listen address; accepts `host:port` or just `port`. */
+ 	bind?: string;
+-	/** Accept any of these bearer tokens. Empty disables auth (loopback only). */
++	/** Accept any of these bearer tokens. Empty disables auth only when hashes are omitted (loopback only). */
+ 	bearerTokens: string[];
++	/** Additional SHA-256 bearer verifiers: a nonempty array of exact lowercase 64-character hex digests. */
++	bearerTokenHashes?: readonly string[];
+ 	/** Broker version string surfaced on `/v1/healthz`. */
+ 	version?: string;
+ 	/** Refresh credentials expiring within this window. Default 5 min. */
+@@ -97,13 +101,21 @@ function empty(status: number, headers?: Record<string, string>): Response {
+ 	return new Response(null, { status, headers });
+ }
+ 
+-function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
+-	if (tokens.size === 0) return true;
++function isAuthorized(req: Request, tokens: ReadonlySet<string>, tokenHashes: readonly Buffer[]): boolean {
++	if (tokens.size === 0 && tokenHashes.length === 0) return true;
+ 	const header = req.headers.get("authorization");
+ 	if (!header) return false;
+ 	const match = header.match(/^Bearer\s+(.+)$/i);
+ 	if (!match) return false;
+-	return tokens.has(match[1].trim());
++	const candidate = match[1].trim();
++	if (!candidate) return false;
++	if (tokens.has(candidate)) return true;
++	if (tokenHashes.length === 0) return false;
++	const digest = createHash("sha256").update(candidate).digest();
++	for (const hash of tokenHashes) {
++		if (timingSafeEqual(digest, hash)) return true;
++	}
++	return false;
+ }
+ 
+ function supportsCodexMeterBlockScopes(req: Request): boolean {
+@@ -648,6 +660,18 @@ function serveSnapshotStream(
+ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServerHandle {
+ 	const bind = parseBind(opts.bind ?? DEFAULT_AUTH_BROKER_BIND);
+ 	const tokens = new Set<string>(opts.bearerTokens);
++	const tokenHashes: Buffer[] = [];
++	if (opts.bearerTokenHashes !== undefined) {
++		if (!Array.isArray(opts.bearerTokenHashes) || opts.bearerTokenHashes.length === 0) {
++			throw new AIError.ConfigurationError("bearerTokenHashes must be a nonempty array of SHA-256 digests.");
++		}
++		for (const hash of opts.bearerTokenHashes) {
++			if (typeof hash !== "string" || hash.length !== 64 || !/^[0-9a-f]{64}$/.test(hash)) {
++				throw new AIError.ConfigurationError("bearerTokenHashes must contain exact lowercase SHA-256 digests.");
++			}
++			tokenHashes.push(Buffer.from(hash, "hex"));
++		}
++	}
+ 	const version = opts.version;
+ 	const streamKeepaliveMs = opts.streamKeepaliveMs ?? DEFAULT_STREAM_KEEPALIVE_MS;
+ 	const externalChangePollMs = opts.externalChangePollMs ?? DEFAULT_EXTERNAL_CHANGE_POLL_MS;
+@@ -659,24 +683,28 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 				refreshSkewMs: opts.refreshSkewMs ?? DEFAULT_REFRESH_SKEW_MS,
+ 				refreshIntervalMs: opts.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
  			});
- 	refresher?.start();
- 	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
+-	refresher?.start();
+-	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
 +	let closing = false;
 +	let closePromise: Promise<void> | undefined;
 +	let requests = 0;
@@ -699,7 +779,14 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9
  			try {
  				if (req.method === "GET" && pathname === "/v1/healthz") {
  					const body: HealthzResponse = { ok: true, version };
-@@ -684,7 +690,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+ 					return json(200, body);
+ 				}
+-				if (!isAuthorized(req, tokens)) {
++				if (!isAuthorized(req, tokens, tokenHashes)) {
+ 					logger.info("auth-broker request unauthorized", { method: req.method, path: pathname, peer });
+ 					return json(401, { error: "unauthorized" });
+ 				}
+@@ -684,7 +712,7 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  					return serveSnapshotStream(req, opts.storage, refresher, peer, streamKeepaliveMs);
  				}
  				if (req.method === "GET" && pathname === "/v1/snapshot") {
@@ -708,7 +795,7 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9
  				}
  				if (req.method === "GET" && pathname === "/v1/usage") {
  					try {
-@@ -765,7 +771,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -765,7 +793,9 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  				if (refreshMatch) {
  					const id = Number.parseInt(refreshMatch[1], 10);
  					try {
@@ -719,7 +806,7 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9
  						const body: CredentialRefreshResponse = { entry };
  						logger.info("auth-broker credential refreshed", {
  							id,
-@@ -884,6 +892,8 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
+@@ -884,9 +914,14 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  					error: String(error),
  				});
  				return json(500, { error: "internal error" });
@@ -728,7 +815,13 @@ index 48bd0c9a269df9aa0db6f347c036bc97e5216df3..7569b30d5d3d87d1a33b653f8d58c1b9
  			}
  		},
  	});
-@@ -894,10 +904,19 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
++	// A failed fixed-port bind must not start another canonical refresher.
++	refresher?.start();
++	const generationGate = new GenerationGate(opts.storage, externalChangePollMs);
+ 
+ 	const boundHost = server.hostname ?? bind.hostname;
+ 	const boundPort = server.port ?? bind.port;
+@@ -894,10 +929,19 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
  		url: `http://${boundHost}:${boundPort}`,
  		port: boundPort,
  		hostname: boundHost,
