@@ -6,8 +6,8 @@ import { codeOperationReady } from "../operation-readiness.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
 
-const steps = ["Accounts", "Workspace", "Permissions", "Resources", "Folders", "Models"] as const;
-const titles = ["Connect your accounts", "Set up this workspace", "Prepare this machine", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
+const steps = ["Accounts", "Workspace", "Machine", "Resources", "Folders", "Models"] as const;
+const titles = ["Connect your accounts", "Set up this workspace", "One-time machine setup", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
 const requiredOperations = ["catalog-inventory", "launch"] as const;
 const workspaceRoutes = [
@@ -100,9 +100,10 @@ export function Onboarding({ host, target, available, settings = false, onDone }
         <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { ...target, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
       </>}
       {step === 2 && <>
+        <p>Account sign-in and machine setup are separate. This step lets Code use your shared accounts and run OMP on the selected machine. It does not move your credentials or start a model request.</p>
         {(!modelConnection || settings) && <details className="plugin-atyrode_code__details" open={!modelConnection}>
-          <summary>Model connection{modelConnection ? " · configured" : ""}</summary>
-          <p>Connect this machine’s reviewed runtime to your shared accounts. Configuring it does not start a provider request or change the account broker.</p>
+          <summary>{modelConnection ? "Model connection · ready" : "Next: connect this machine to your accounts"}</summary>
+          <p>The model gateway connects OMP to your instance’s account broker. Review its software and access in Manifold, then return here to use the connection. Code checks readiness automatically.</p>
           {serviceConfiguration.error && <p role="status">{serviceConfiguration.error}</p>}
           {settings && <div className="plugin-atyrode_code_generator__fields">
             <label>Suggestions<select value={classifierMode} disabled={busy} onChange={event => { setClassifierMode(event.target.value as typeof classifierMode); setServiceReview(null); }}>
@@ -120,9 +121,9 @@ export function Onboarding({ host, target, available, settings = false, onDone }
               const result = await callCodeAction(host, "reviewServices", input);
               if (mounted.current) setServiceReview({ input, result });
             });
-          }}>{busy ? "Reviewing…" : "Review model connection"}</button> : <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${serviceConfiguration.data ? GATEWAY_PLUGIN_ID : CODE_PLUGIN_ID}`)}>{serviceConfiguration.data ? "Review gateway runtime" : "Open native setup"}</button>)}
+          }}>{busy ? "Reviewing…" : "Review this connection"}</button> : <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${serviceConfiguration.data ? GATEWAY_PLUGIN_ID : CODE_PLUGIN_ID}`)}>{serviceConfiguration.data ? "Review model connection software" : "Review Code setup access"}</button>)}
           {serviceReview && <>
-            <p>The gateway’s exact runtime is pinned. Other machine services and your shared account broker are kept unchanged.</p>
+            <p>This connects the reviewed gateway to your shared accounts. Other machine services and your account broker stay unchanged.</p>
             {!serviceReviewCurrent && <p role="status">Native setup changed. Review the current connection again.</p>}
             <details className="plugin-atyrode_code__details"><summary>Exact connection policies</summary><pre>{JSON.stringify(serviceReview.result.policies.filter(policy => policy.serviceId === "omp" || policy.serviceId === "suggest"), null, 2)}</pre></details>
             <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceReviewCurrent} onClick={() => void perform(async () => {
@@ -131,13 +132,22 @@ export function Onboarding({ host, target, available, settings = false, onDone }
             })}>{busy ? "Configuring…" : "Use this connection"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
           </>}
         </details>}
-          <p>Approve folder creation or an existing-folder check, plus model discovery and launch. Paid benchmarks and account changes have separate permissions.</p>
+        {modelConnection ? <>
+          <p>Next, review what Code may do on this machine. Choose either new folders or an existing-folder check; you do not need both. Paid benchmarks and account changes are separate.</p>
           <ul className="plugin-atyrode_code_generator__requirements">
-            <li data-ready={workspaceReady}><span>workspace folders</span><span>{workspaceReady ? "ready" : "native setup needed"}</span></li>
-            {requiredOperations.map(operation => <li key={operation} data-ready={codeOperationReady(execution, target.machineId, operation)}><span>{operation === "catalog-inventory" ? "model discovery" : "terminal launch"}</span><span>{codeOperationReady(execution, target.machineId, operation) ? "ready" : "native setup needed"}</span></li>)}
+            <li data-ready={workspaceReady}><span>Use workspace and session folders</span><span>{workspaceReady ? "ready" : "review needed"}</span></li>
+            {requiredOperations.map(operation => <li key={operation} data-ready={codeOperationReady(execution, target.machineId, operation)}><span>{operation === "catalog-inventory" ? "Discover available models" : "Open OMP sessions"}</span><span>{codeOperationReady(execution, target.machineId, operation) ? "ready" : "review needed"}</span></li>)}
           </ul>
-          <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review Code permissions</button>
-        <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>check again</button>
+          <button type="button" className="plugin-atyrode_code__primary-action" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Review machine access</button>
+        </> : <p>After the connection is ready, Code will guide you through folder access and session permissions. There is no need to configure those separately now.</p>}
+        <details className="plugin-atyrode_code__details">
+          <summary>Advanced permissions and troubleshooting</summary>
+          <p>Code’s permission review remains available if access is missing before the model connection can be prepared.</p>
+          <div className="plugin-atyrode_code__toolbar">
+            <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open Code permissions</button>
+            <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>Refresh setup</button>
+          </div>
+        </details>
       </>}
       {step === 3 && <>
         <p>Use this machine’s approved runtime with the shared instance account broker. Reviewing does not install anything or grant additional access.</p>

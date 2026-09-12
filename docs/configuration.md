@@ -65,6 +65,14 @@ job lifecycle. In Code,
 `reviewResources` followed by `promoteResources` adopts the exact reviewed
 snapshot for a configuration, including before a catalog exists.
 
+Account sign-in and one-time machine setup are separate. The launcher first
+guides you through the model connection: review the gateway software and access
+in Native Plugins, return to Code, then review and use that connection. Once it
+is ready, Code presents folder, model-discovery and session permissions as the
+next step. Readiness updates automatically; advanced permissions remain available
+for troubleshooting. Reviewing setup does not move credentials or start a model
+request, and paid benchmarks keep their separate approval.
+
 Promoted resources contain `productSha256`, nullable `execution` with
 `installationRevision`, `artifactSha256` and per-operation binding digests,
 and service pins with `serviceId`, `revision` and `policySha256`. Promotion does
