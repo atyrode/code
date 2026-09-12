@@ -6,6 +6,7 @@ import { ACCOUNTS_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type Actio
 import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
 import { buildCodeServices, buildSharedBrokerPolicy } from "./service-policies.ts";
 import { authorizeTarget } from "./state.ts";
+import { accountOperationReady } from "./operation-readiness.ts";
 
 const signInConfig = JSON.stringify({ startup: { setupWizard: false } });
 
@@ -85,6 +86,8 @@ export async function sharedOmpRuntimes(ctx: CodeContext, machineId: string) {
   const broker = description.operations?.[BROKER_OPERATION_ID];
   const signIn = description.operations?.[SIGN_IN_OPERATION_ID];
   if (!installation.ready || !broker?.ready || !signIn?.ready) throw new CodeRefusal("resources_incomplete");
+  if (!accountOperationReady(description, machineId, "broker") || !accountOperationReady(description, machineId, "sign-in"))
+    throw new CodeRefusal("native_consent_required");
   const pins = { installationRevision: installation.revision, artifactSha256: installation.artifactSha256 };
   return {
     broker: ServiceRuntimeSchema.parse({ scope: "instance", pluginId: ACCOUNTS_PLUGIN_ID, operationId: BROKER_OPERATION_ID,
@@ -106,7 +109,7 @@ function requireExistingBroker(description: InstanceServiceDescription, expected
   const owner = brokerOwner(description);
   if (!owner?.online || !description.connected) throw new CodeRefusal("account_owner_unavailable");
   if (machineId !== undefined && owner.machineId !== machineId) throw new CodeRefusal("resources_changed");
-  if (!description.configuration.enabled) throw new CodeRefusal("account_unavailable");
+  if (!description.configuration.enabled) throw new CodeRefusal("broker_unavailable");
   return owner;
 }
 
@@ -170,7 +173,7 @@ export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: st
   const policy = buildSharedBrokerPolicy(runtimes.broker);
   if (description.configuration) {
     if (!description.configuration.enabled || !["ready", "starting"].includes(description.state))
-      throw new CodeRefusal("account_unavailable");
+      throw new CodeRefusal("broker_unavailable");
     const current = await ctx.services.readInstanceConfiguration({ serviceId: BROKER_SERVICE_ID });
     expectBrokerRevision(current.description, expectedRevision);
     if (!matchesSharedBrokerPolicy(current.policy, policy))
@@ -201,6 +204,6 @@ export async function prepareSharedBroker(ctx: CodeContext, expectedRevision: st
   const current = await describeSharedBroker(ctx);
   expectBrokerRevision(current, revision);
   if (current.owner?.machineId !== owner.machineId || !current.owner.online || !current.connected ||
-    !current.configuration?.enabled || !["ready", "starting"].includes(current.state)) throw new CodeRefusal("account_unavailable");
+    !current.configuration?.enabled || !["ready", "starting"].includes(current.state)) throw new CodeRefusal("broker_unavailable");
   return { machineId: owner.machineId, runtime: runtimes.signIn };
 }

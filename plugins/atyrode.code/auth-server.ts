@@ -15,6 +15,8 @@ export async function readAccountSetup(ctx: CodeContext): Promise<ActionResult<"
   else if (!await canAdministerBroker(ctx, owner.machineId)) reason ??= "Instance account administration requires the native owner’s authority.";
   else if (description.configuration && !description.configuration.enabled)
     reason ??= "The native account broker is disabled. Review its instance configuration.";
+  else if (description.reason === "machine_draining")
+    reason = "The account owner is in maintenance. Sign-in remains unavailable until native admission reopens.";
   else {
     try {
       if (description.configuration) {
@@ -29,7 +31,11 @@ export async function readAccountSetup(ctx: CodeContext): Promise<ActionResult<"
         await sharedOmpRuntimes(ctx, owner.machineId);
         canSignIn = true;
       }
-    } catch { reason ??= "The owner’s installed OMP sign-in and broker resources are not ready or permitted."; }
+    } catch (error) {
+      if (error instanceof CodeRefusal && error.code === "native_consent_required")
+        reason = "Native permissions for the account broker and OMP sign-in are not approved. Review OMP setup before continuing.";
+      else reason ??= "The owner’s installed OMP sign-in and broker resources are not ready or permitted.";
+    }
   }
   return { revision: description.configuration?.revision ?? null, owner,
     state: !available || description.configuration?.enabled === false || description.state === "stopped" ? "unavailable" : description.state,

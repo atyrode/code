@@ -30,7 +30,7 @@ export async function sharedBrokerReference(ctx: CodeContext, expected?: Service
   const description = await describeSharedBroker(ctx);
   const configuration = description.configuration;
   if (!configuration?.enabled || !description.owner?.online || !description.connected || description.state !== "ready")
-    throw new CodeRefusal("account_unavailable");
+    throw new CodeRefusal("broker_unavailable");
   if (expected && digestOf(expected) !== digestOf({
     serviceId: BROKER_SERVICE_ID, revision: configuration.revision, policySha256: configuration.policySha256,
   })) throw new CodeRefusal("resources_changed");

@@ -10,6 +10,7 @@ const messages: Readonly<Record<string, string>> = {
   code_preview_changed: "The catalog, accounts or native resources changed. Review again before launching.",
   code_resources_changed: "Promoted native resources changed. Review and promote their exact revisions again.",
   code_resources_incomplete: "The selected machine does not have the required native resources and consent.",
+  code_native_consent_required: "Native permissions for the account broker and OMP sign-in are not approved. Review OMP setup before continuing.",
   code_configuration_missing: "Initialize Code for this container and machine first.",
   code_catalog_missing: "Stage, review and promote a catalog first.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",

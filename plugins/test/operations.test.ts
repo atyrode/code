@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { InstanceServiceDescriptionSchema, PluginRosterEntrySchema, ServiceConfigurationSchema,
-  PublicJobSchema, ServiceReplySchema, type ServiceConfiguration, type ServicePolicy } from "@manifold/protocol";
+  PublicJobSchema, ServiceReplySchema, formatManifoldUri, type JobDescription, type ServiceConfiguration, type ServicePolicy } from "@manifold/protocol";
 import { actionDoor, actionSchemas, ACCOUNTS_PLUGIN_ID, CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { BROKER_OPERATION_ID, BROKER_SERVICE_ID, SIGN_IN_OPERATION_ID } from "../atyrode.code/auth-contract.ts";
@@ -556,22 +556,35 @@ test("a missing shared owner never falls back to a worker's available local brok
   const describe = f.ctx.services.describeInstance;
   f.ctx.services.describeInstance = async args => ({ ...await describe(args), owner: null, connected: false, state: "unavailable" });
   expect(await invoke(f, "previewLaunch", { ...target, expectedRevision: record.revision }))
-    .toEqual({ refused: "code_account_unavailable" });
+    .toEqual({ refused: "code_broker_unavailable" });
 });
 
 interface SignInFixture extends Fixture {
-  accountResources: { installation: string; artifact: string; binding: string; signInBinding: string; ready: boolean };
+  accountResources: { installation: string; artifact: string; binding: string; signInBinding: string; ready: boolean; consents: JobDescription["consents"] };
   state: { revision: string | null; policy: ServicePolicy | null; writes: number; enabled: boolean;
     runtimeState: "ready" | "starting" | "stopped" | "unavailable";
+    reason: string | null;
     owner: { machineId: string; name: string; online: boolean } };
+}
+
+function signInConsents(machineId: string): JobDescription["consents"] {
+  return [
+    ...[BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].flatMap(operationId =>
+      (["machines:run", "network:host"] as const).map(cap => ({
+        node: formatManifoldUri({ kind: "operation", machineId, operationId }),
+        cap, enabled: true, revision: "permission-1",
+      }))),
+    { node: formatManifoldUri({ kind: "location", machineId, locationId: `${ACCOUNTS_PLUGIN_ID}.omp-auth` }),
+      cap: "locations:write", enabled: true, revision: "permission-1" },
+  ];
 }
 
 function signInFixture(isRoot = true): SignInFixture {
   const f = fixture(isRoot);
   const accountResources = { installation: "accounts-install-1", artifact: "f".repeat(64), binding: "a".repeat(64),
-    signInBinding: "a".repeat(64), ready: true };
+    signInBinding: "a".repeat(64), ready: true, consents: signInConsents(f.resources.brokerOwner) };
   const state = { revision: null as string | null, policy: null as ServicePolicy | null, writes: 0, enabled: true,
-    runtimeState: "ready" as "ready" | "starting" | "stopped" | "unavailable",
+    runtimeState: "ready" as "ready" | "starting" | "stopped" | "unavailable", reason: null as string | null,
     owner: { machineId: f.resources.brokerOwner, name: "Broker owner", online: true } };
   const describe = f.ctx.services.describeInstance;
   f.ctx.services.describeInstance = async args => {
@@ -579,7 +592,7 @@ function signInFixture(isRoot = true): SignInFixture {
     return { ...description, defaultOwner: { ...state.owner }, owner: state.revision ? { ...state.owner } : null,
       configuration: state.revision ? { ...description.configuration!, revision: state.revision, enabled: state.enabled,
         policySha256: digestOf(state.policy) } : null,
-      connected: state.owner.online, state: state.revision ? state.runtimeState : "unconfigured" };
+      connected: state.owner.online, state: state.revision ? state.runtimeState : "unconfigured", reason: state.reason };
   };
   const jobs = f.ctx.jobs.describe;
   f.ctx.jobs.describe = async args => {
@@ -588,7 +601,7 @@ function signInFixture(isRoot = true): SignInFixture {
     return { machineId: args.machineId, pluginId: ACCOUNTS_PLUGIN_ID, connected: true, platforms: ["linux-x64"],
       admissionPublicKey: "-----BEGIN PUBLIC KEY-----offline-fixture",
       installation: { revision: accountResources.installation, artifactSha256: accountResources.artifact,
-        enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: [],
+        enabled: true, ready: true, purgeRequested: false }, retainedInstallations: [], consents: accountResources.consents,
       operations: Object.fromEntries([BROKER_OPERATION_ID, SIGN_IN_OPERATION_ID].map(operation =>
         [operation, { ready: accountResources.ready, reason: null,
           resourceBindingDigest: operation === SIGN_IN_OPERATION_ID ? accountResources.signInBinding : accountResources.binding }])) };
@@ -615,6 +628,42 @@ function signInFixture(isRoot = true): SignInFixture {
 
 describe("instance-owned OMP sign-in", () => {
   const input = { containerId: target.containerId, expectedBrokerRevision: null };
+
+  test("sign-in requires current native consents before configuration and after revocation", async () => {
+    const f = signInFixture();
+    const approved = f.accountResources.consents;
+    f.accountResources.consents = [];
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision: null, state: "unconfigured", canSignIn: false, canUpdateRuntime: false,
+    });
+    expect(await invoke(f, "prepareSignIn", input)).toEqual({ refused: "code_native_consent_required" });
+    expect((await accepted(f, "readAccountSetup", {})).revision).toBeNull();
+    f.accountResources.consents = approved;
+    await accepted(f, "prepareSignIn", input);
+    const revision = f.state.revision;
+    const signInNode = formatManifoldUri({ kind: "operation", machineId: f.resources.brokerOwner, operationId: SIGN_IN_OPERATION_ID });
+    f.accountResources.consents = approved.filter(consent => consent.node !== signInNode || consent.cap !== "network:host");
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision, canSignIn: false, canUpdateRuntime: false,
+    });
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: revision }))
+      .toEqual({ refused: "code_native_consent_required" });
+    expect((await accepted(f, "readAccountSetup", {})).revision).toBe(revision);
+  });
+
+  test("maintenance is not a broker runtime upgrade", async () => {
+    const f = signInFixture();
+    await accepted(f, "prepareSignIn", input);
+    const revision = f.state.revision;
+    f.state.runtimeState = "unavailable";
+    f.state.reason = "machine_draining";
+    expect(await accepted(f, "readAccountSetup", {})).toMatchObject({
+      revision, state: "unavailable", canSignIn: false, canUpdateRuntime: false,
+    });
+    expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: revision }))
+      .toEqual({ refused: "code_broker_unavailable" });
+    expect((await accepted(f, "readAccountSetup", {})).revision).toBe(revision);
+  });
 
   test("first use configures one shared owner; workspace upgrades preserve sign-in and broker placement", async () => {
     const f = signInFixture();
@@ -688,7 +737,7 @@ describe("instance-owned OMP sign-in", () => {
     });
     await accepted(f, "reviewAccountRuntime", { expectedBrokerRevision });
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision }))
-      .toEqual({ refused: "code_account_unavailable" });
+      .toEqual({ refused: "code_broker_unavailable" });
     expect(f.state.writes).toBe(1);
   });
 
@@ -731,7 +780,10 @@ describe("instance-owned OMP sign-in", () => {
     ["broker resources", f => { f.accountResources.binding = "d".repeat(64); }],
     ["sign-in resources", f => { f.accountResources.signInBinding = "d".repeat(64); }],
     ["current policy", f => { f.state.policy = { ...f.state.policy!, maxConcurrent: 2 }; }],
-    ["owner", f => { f.state.owner.machineId = f.resources.brokerOwner = "replacement-owner"; }],
+    ["owner", f => {
+      f.state.owner.machineId = f.resources.brokerOwner = "replacement-owner";
+      f.accountResources.consents = signInConsents(f.resources.brokerOwner);
+    }],
   ];
   for (const [name, change] of proposalChanges) {
     test(`a reviewed account runtime cannot be applied after ${name} changes`, async () => {
@@ -807,10 +859,10 @@ describe("instance-owned OMP sign-in", () => {
     f.state.enabled = false;
     expect(await accepted(f, "readAccountSetup", {})).toMatchObject({ state: "unavailable", canSignIn: false, canUpdateRuntime: false });
     expect(await invoke(f, "reviewAccountRuntime", { expectedBrokerRevision: review.expectedBrokerRevision }))
-      .toEqual({ refused: "code_account_unavailable" });
-    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_account_unavailable" });
+      .toEqual({ refused: "code_broker_unavailable" });
+    expect(await invoke(f, "promoteAccountRuntime", promotion)).toEqual({ refused: "code_broker_unavailable" });
     expect(await invoke(f, "prepareSignIn", { ...input, expectedBrokerRevision: f.state.revision }))
-      .toEqual({ refused: "code_account_unavailable" });
+      .toEqual({ refused: "code_broker_unavailable" });
     expect(f.state.enabled).toBe(false);
     f.state.enabled = true;
     f.accountResources.ready = false;
