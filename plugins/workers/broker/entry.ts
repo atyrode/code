@@ -19,7 +19,8 @@ let context: WorkerContext | undefined;
 let storage: AuthStorage | undefined;
 let broker: AuthBrokerServerHandle | undefined;
 let failed = false;
-const stop = (): void => { context?.close(); };
+const shutdown = new AbortController();
+const stop = (): void => { shutdown.abort(); };
 const fail = (): void => {
   if (!failed) writeSync(2, "broker_unavailable\n");
   failed = true;
@@ -32,7 +33,9 @@ process.on("unhandledRejection", fatal);
 try {
   context = openWorkerContext();
   await context.ready;
-  context.signal.throwIfAborted();
+  context.signal.addEventListener("abort", stop, { once: true });
+  if (context.signal.aborted) stop();
+  shutdown.signal.throwIfAborted();
   const { serviceBearer, clientAccess } = readBrokerInputs();
   // pi-utils eagerly loads home/config/agent/project .env files. Bootstrap in
   // the sealed input root, never in the persistent OMP store or a host project.
@@ -42,31 +45,36 @@ try {
   const { AuthStorage } = await import("@oh-my-pi/pi-ai/auth-storage");
   const { startAuthBroker } = await import("@oh-my-pi/pi-ai/auth-broker/server");
   const { getAgentDbPath, setAgentDir } = await import("@oh-my-pi/pi-utils/dirs");
-  context.signal.throwIfAborted();
+  shutdown.signal.throwIfAborted();
   // The owner's ordinary OMP terminal uses this same default-profile mapping.
   // setAgentDir rebuilds the SDK resolver without reloading dotenv or discovery.
   process.env.HOME = "/home/job";
   process.env.PI_CONFIG_DIR = "omp";
   setAgentDir("/home/job/omp/agent");
   storage = await AuthStorage.create(getAgentDbPath());
-  context.signal.throwIfAborted();
+  shutdown.signal.throwIfAborted();
   await storage.reload();
-  context.signal.throwIfAborted();
+  shutdown.signal.throwIfAborted();
   // OMP owns endpoints, cross-process SQLite polling and background refresh.
   broker = startAuthBroker({
     storage,
     bind: clientAccess?.bind ?? "127.0.0.1:0",
     bearerTokens: [serviceBearer],
     bearerTokenHashes: clientAccess ? [clientAccess.bearerSha256] : undefined,
+    controlBearerToken: serviceBearer,
   });
   await context.announceServiceReady(broker.port);
-  if (!context.signal.aborted) await new Promise<void>(resolve => context!.signal.addEventListener("abort", () => resolve(), { once: true }));
+  if (!shutdown.signal.aborted) await new Promise<void>(resolve => shutdown.signal.addEventListener("abort", () => resolve(), { once: true }));
 } catch {
-  if (!context?.signal.aborted) fail();
+  if (!shutdown.signal.aborted) fail();
 } finally {
-  context?.close();
   try { await broker?.close(); } catch { fail(); }
+  try { await storage?.drainRefreshes(); } catch { fail(); }
   try { storage?.close(); } catch { fail(); }
+  context?.signal.removeEventListener("abort", stop);
+  // Closing the native context can immediately terminate the job cgroup.
+  // It must be the last lifecycle action, after every owned refresh and write.
+  context?.close();
   process.off("SIGTERM", stop);
   process.off("SIGINT", stop);
 }
