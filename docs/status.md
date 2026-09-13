@@ -9,9 +9,9 @@ cross-repository integration. The
 [architecture's section 6](manifold-transition.md#6-transition-steps) is the sole
 transition ledger. This page records constraints, not another roadmap.
 
-## Source is not deployment
+## Integrated source and preview acceptance
 
-Current integration source contains four Code bundles: container-CAS
+The integrated source contains four Code bundles: container-CAS
 catalog/routing/account-choice/suggestion policy and the launcher/accounts/usage
 React surfaces. It imports the typed OMP caller package and has no machine
 manifest, broker, gateway, probe workers or runtime artifact pins. The shared
@@ -19,22 +19,30 @@ headless workflow calls OMP's public owner-scoped actions through ordinary
 Manifold dispatch, rechecking Code composition, OMP defaults, destinations and
 native review pins before effects.
 
-This is not yet a claim that the integration has merged or replaced the preview
-runtime. Local evidence must name the exact revisions and path. The current
-source gate prepares three real OMP bundles, verifies them with Code's four
-bundles on a disposable server, and drives two real browsers; because the
-fixture has no native resources or credentials, it proves composition,
-container-shared state, UI behavior and refusal boundaries, not consent success
-or an account-backed response. OMP's separate packaged verification exercises
-its real workers under explicit disposable native containment without providers
-or existing credentials.
+The 2026-09-13 source gate pinned Manifold
+`c731aa2364531ec6cf14e6ffb13c3a806dff9f6b` and OMP
+`19223eb4d08ad8aef70b31fb8ff9d716d91e597b`. It passed 87 Code tests with
+530 assertions, packed and verified all three OMP and four Code bundles, and
+drove two independent real browser identities. The browser proof covered shared
+state convergence, draft and navigation retention, first-use recovery,
+responsive and keyboard interaction, permission refusal and stale or
+cross-destination review fences.
 
-The 2026-09-09 preview installation was five Code-owned bundles at an older
-Manifold revision. Its broker metadata, inventory and terminal observations
-predate the independent OMP owner and do not certify this source cutover. The
-current live broker was restored through existing native authority without
-moving credentials; it remains under its existing custody until the explicit
-preview transfer sequence passes every acceptance criterion.
+The same revisions were then accepted on the preview through native actions.
+OMP's root, account and gateway deployments reached ready on `dev-01` and the
+separately enrolled `Code isolated destination`. Both destinations validated a
+real workspace, produced a readable 11-model inventory from the complete saved
+account pool and opened account-backed OMP terminal sessions with output. The
+actual Code panel rendered the permitted online and offline destinations and,
+because no classifier service is configured, withheld rather than faked its
+suggestion control.
+
+The shared OMP broker now has one runtime owner. Existing account identities,
+saved choices and legacy Code/Usage clients continued across the reviewed
+transfer and restart without reauthentication; a legacy client completed a
+fresh quota observation afterward. Run-scoped credentials and grants were
+revoked after each proof. Existing credential backups were retained, and no
+production deployment, backup disposal or personal-session mutation occurred.
 
 See [plugin development](../plugins/README.md) for the Bun 1.4.2 and pinned
 Code/OMP/Manifold gate, and [configuration](configuration.md) for the exact

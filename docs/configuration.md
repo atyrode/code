@@ -166,13 +166,13 @@ auto-install, enable or grant anything.
 Manifold SDK pin to equal Code's, prepares OMP's declared build inputs and runs
 OMP's own packer. `scripts/gate.sh` then typechecks/tests/packs Code and verifies
 the three real OMP bundles plus Code's four bundles on a disposable server and
-in real browsers. The fixture deliberately has no native resource or credential
-configuration, so it proves composition/refusal and UI behavior, not provider
-success.
+in real browsers. Its credential-free fixture proves composition, refusal and UI
+behavior. The 2026-09-13 preview acceptance separately exercised real native
+workspace, inventory and account-backed terminal paths on both enrolled
+destinations; [status](status.md) records the exact revisions and boundaries.
 
 Babel may consume the headless boundary independently; Code does not depend on
 Babel or retain an old process ABI for it. Source, merge, CI, release,
-installation, native consent, provider response and custody transfer are
-separate evidence. The historical five-Code-bundle preview predates the OMP
-owner and does not certify this cutover. Production changes, credential
-relocation, broker transfer and backup disposal require separate authorization.
+installation, native consent, provider response and custody transfer remain
+separate authority and evidence. Production changes, credential relocation,
+backup disposal and destructive data changes require separate authorization.

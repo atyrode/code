@@ -57,12 +57,12 @@ pin and `scripts/gate.sh`. The gate prepares real OMP bundles, then runs Code's
   and native workflows, not legacy state-format setup.
 - [Architecture and transition ledger](docs/manifold-transition.md): #149's
   ratified design and the sole progress ledger, under integration issue #161.
-- [Status and caveats](docs/status.md): source versus operational evidence.
+- [Status and caveats](docs/status.md): exact source and preview evidence.
 
-This describes integration source, not a claim that it is merged or deployed.
-The historical five-Code-bundle preview predates the separate OMP owner and does
-not certify this cutover, current consent, provider enrollment or an
-account-backed session. Production deployment, releases, credential relocation,
-broker transfer and destructive data changes require separate authorization.
+The 2026-09-13 preview acceptance installed the pinned independent OMP bundles,
+preserved the existing account store, and completed native workspace, inventory
+and account-backed terminal paths on two separately enrolled destinations.
+Source merge still authorizes neither production deployment nor release,
+credential relocation, backup disposal or other destructive data changes.
 
 [MIT](LICENSE).
