@@ -314,7 +314,10 @@ func TestEngineDescribeReportsTheProfileHalfOnly(t *testing.T) {
 			t.Errorf("--describe omits %q", want)
 		}
 	}
-	for _, absent := range []string{"containment", "finished", "exit_code", "resources"} {
+	for _, absent := range []string{
+		"containment", "finished", "exit_code", "resources",
+		"stage", "stage_since", "updated_at", "turns", "usage",
+	} {
 		if _, ok := report[absent]; ok {
 			t.Errorf("--describe claims %q, which only a launch can establish", absent)
 		}
@@ -858,6 +861,147 @@ func TestWriteRuntimeReportIsAtomicAndPrivate(t *testing.T) {
 	}
 }
 
+// TestEngineReportsEveryTurnWithTheModelThatAnswered is the run record the
+// report did not carry: two requests to a model, the model that answered
+// each, what each one used, and which of them was a re-attempt rather than an
+// answer of its own. Without it a sidecar says a run started and a run ended,
+// and a client watching thirty-six of them cannot tell a burn from a retry
+// storm.
+func TestEngineReportsEveryTurnWithTheModelThatAnswered(t *testing.T) {
+	l, _ := newTestLauncher(t)
+	run := serveFake(t, l, "turns", "")
+	if run.err != nil || run.status != 0 {
+		t.Fatalf("serve = %d, %v; stderr: %s", run.status, run.err, run.stderr)
+	}
+
+	// Reading the stream changed none of it: the client's bytes are the
+	// child's, frame for frame, in order.
+	lines := strings.Split(strings.TrimSuffix(string(run.stdout), "\n"), "\n")
+	if len(lines) < 1 || !strings.HasPrefix(lines[0], `{"type":"ready"`) {
+		t.Fatalf("stdout does not open with the child's ready frame:\n%s", run.stdout)
+	}
+	if got := lines[1:]; !slices.Equal(got, ompFakeTurnFrames) {
+		t.Errorf("the client received:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(ompFakeTurnFrames, "\n"))
+	}
+
+	if len(run.report.Turns) != 2 {
+		t.Fatalf("the report lists %d turns, want the two the child answered: %s", len(run.report.Turns), run.rawInfo)
+	}
+	first, second := run.report.Turns[0], run.report.Turns[1]
+	if first.Model != "claude-opus-5" || first.Provider != anthropicProvider {
+		t.Errorf("turn 1 = %+v, want the model that answered it", first)
+	}
+	if first.Status != "error" || first.Retry {
+		t.Errorf("turn 1 = %+v, want the first attempt, which retried nothing", first)
+	}
+	if first.InputTokens != 2215 || first.OutputTokens != 2 ||
+		first.CachedInputTokens != 11 || first.CacheWriteTokens != 7 {
+		t.Errorf("turn 1 tokens = %+v, want what the child reported", first)
+	}
+	if second.Model != "claude-fable-5" || second.Status != "stop" {
+		t.Errorf("turn 2 = %+v, want the model that answered the re-attempt", second)
+	}
+	if !second.Retry {
+		t.Error("the attempt OMP announced as a retry reads as an answer of its own")
+	}
+	if second.At.Before(first.At) {
+		t.Errorf("the turns are out of order: %s then %s", first.At, second.At)
+	}
+
+	usage := run.report.Usage
+	if usage == nil {
+		t.Fatalf("the report totals nothing: %s", run.rawInfo)
+	}
+	if usage.Turns != 2 || usage.Retries != 1 {
+		t.Errorf("usage = %+v, want two turns of which one was a retry", *usage)
+	}
+	if usage.InputTokens != 2255 || usage.OutputTokens != 902 ||
+		usage.CachedInputTokens != 11 || usage.CacheWriteTokens != 7 {
+		t.Errorf("usage = %+v, want the sum over the turns", *usage)
+	}
+	// The measured price of what ran, which the profile's estimate in Cost is
+	// not: that one was made before anything was called.
+	if usage.Cost != 1 {
+		t.Errorf("usage cost = %v, want the 1.0 OMP priced the two calls at", usage.Cost)
+	}
+	if run.report.Stage != runtimeStageFinished {
+		t.Errorf("stage = %q after the child exited, want %q", run.report.Stage, runtimeStageFinished)
+	}
+	if run.report.StageSince == nil || run.report.UpdatedAt == nil {
+		t.Fatalf("the report carries no clock, so nothing can be read as live or dead: %s", run.rawInfo)
+	}
+}
+
+// TestRuntimeJournalHeartbeatKeepsALiveRunFresh pins the property a client
+// reads liveness with. A report that is rewritten twice — at launch and at
+// exit — is a signal with two values and no way to act on either, which is
+// what left a two-hour burn unobservable; a report that keeps moving while the
+// run is alive and stops when it is accounted for is one an "older than a
+// minute" rule can be built on. Both halves are asserted here, and so is the
+// beat being short enough that a minute is two missed writes rather than one
+// late one.
+func TestRuntimeJournalHeartbeatKeepsALiveRunFresh(t *testing.T) {
+	if 2*runtimeBeat > time.Minute {
+		t.Errorf("the beat is %s, so a report older than a minute is one late write rather than a dead run", runtimeBeat)
+	}
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	j := newRuntimeJournal(path, runtimeReportOf(testProfile()), 5*time.Millisecond)
+	if err := j.publish(); err != nil {
+		t.Fatalf("publishing the first report: %v", err)
+	}
+	launching := readRuntimeReport(t, path)
+	if launching.Stage != runtimeStageLaunching || launching.UpdatedAt == nil {
+		t.Fatalf("the first report = %+v, want a launching run with a clock on it", launching)
+	}
+
+	// The run says nothing at all for the whole window: no turn, no stage
+	// change, nothing but the heartbeat keeping the file current.
+	j.start()
+	seen := []time.Time{*launching.UpdatedAt}
+	for deadline := time.Now().Add(10 * time.Second); len(seen) < 4 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+		if at := readRuntimeReport(t, path).UpdatedAt; at.After(seen[len(seen)-1]) {
+			seen = append(seen, *at)
+		}
+	}
+	if len(seen) < 4 {
+		t.Fatalf("a live run with nothing to say rewrote its report %d times, want a beat that keeps it fresh", len(seen)-1)
+	}
+
+	if err := j.finish(7, runUsage{}, nil); err != nil {
+		t.Fatalf("finishing: %v", err)
+	}
+	finished := readRuntimeReport(t, path)
+	if finished.Stage != runtimeStageFinished || finished.ExitCode == nil || *finished.ExitCode != 7 {
+		t.Fatalf("the finished report = %+v, want the stage and the status of a run that accounted for itself", finished)
+	}
+	if finished.Finished == nil || !*finished.Finished {
+		t.Errorf("the finished report is not marked finished: %+v", finished)
+	}
+	// And nothing writes after that: a finished report that kept being
+	// refreshed would read as a run that is still alive, forever.
+	time.Sleep(20 * time.Millisecond)
+	if after := readRuntimeReport(t, path).UpdatedAt; !after.Equal(*finished.UpdatedAt) {
+		t.Errorf("the report was rewritten after the run finished: %s then %s", finished.UpdatedAt, after)
+	}
+	if err := j.failure(); err != nil {
+		t.Errorf("a write failed while the run was alive: %v", err)
+	}
+}
+
+func readRuntimeReport(t *testing.T, path string) runtimeReport {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the runtime report: %v", err)
+	}
+	var report runtimeReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("the runtime report does not parse: %v\n%s", err, data)
+	}
+	return report
+}
+
 // ── redaction ────────────────────────────────────────────────────────────────
 
 func TestSecretRedactorCoversRawAndEscapedForms(t *testing.T) {
@@ -1064,6 +1208,34 @@ func ompFakeArgs() []string {
 	return nil
 }
 
+// ompFakeTurnFrames is what OMP writes around two requests to a model, in the
+// shape omp/18.1.14 writes it: the turn opens, the assistant message ends
+// carrying the model that answered and what it used, and the turn ends with
+// that message. The first attempt is refused with a retryable status, which
+// ends its own turn and is announced before the next attempt opens — so the
+// second model call here is a re-attempt of the first request rather than a
+// second answer, which is the distinction the run record exists to make.
+//
+// Recorded off a live `omp --mode rpc` session and trimmed to the fields the
+// engine reads, with a hosted provider's model and price in place of the
+// local one the recording used.
+var ompFakeTurnFrames = []string{
+	`{"type":"agent_start"}`,
+	`{"type":"turn_start"}`,
+	`{"type":"turn_end","message":{"role":"assistant","content":[],"api":"anthropic-messages",` +
+		`"provider":"anthropic","model":"claude-opus-5","usage":{"input":2215,"output":2,"cacheRead":11,` +
+		`"cacheWrite":7,"totalTokens":2235,"cost":{"input":0.2,"output":0.05,"total":0.25}},` +
+		`"stopReason":"error","errorStatus":529,"errorMessage":"529 overloaded","duration":15532.27},` +
+		`"toolResults":[]}`,
+	`{"type":"auto_retry_start","attempt":1,"maxAttempts":10,"delayMs":499.71,"errorMessage":"529 overloaded"}`,
+	`{"type":"turn_start"}`,
+	`{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],` +
+		`"api":"anthropic-messages","provider":"anthropic","model":"claude-fable-5","usage":{"input":40,` +
+		`"output":900,"cacheRead":0,"cacheWrite":0,"totalTokens":940,"cost":{"input":0.1,"output":0.65,` +
+		`"total":0.75}},"stopReason":"stop","duration":982.81,"ttft":799.03},"toolResults":[]}`,
+	`{"type":"agent_end","isTerminal":true}`,
+}
+
 func ompFakeMain(args []string) {
 	scenario, record := args[0], args[1]
 	state := ompFakeRecord{Argv: args[2:], Env: os.Environ()}
@@ -1108,6 +1280,11 @@ func ompFakeMain(args []string) {
 		emit(`{"type":"diag","token":"` + token + `"}`)
 		escaped, _ := json.Marshal("rejected \"" + token + "\"")
 		emit(`{"type":"diag","message":` + string(escaped) + `}`)
+	}
+	if scenario == "turns" {
+		for _, frame := range ompFakeTurnFrames {
+			emit(frame)
+		}
 	}
 	if scenario == "hang" {
 		// A grandchild in the same process group, so a cancellation that only

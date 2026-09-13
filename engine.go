@@ -12,8 +12,9 @@ package main
 // with, which provider credential it authenticates with, what boundary it is
 // contained in, and what it used — and that contribution travels in one file
 // beside the stream rather than in it: the runtime report named by
-// --runtime-info, written before the first byte of the stream is forwarded
-// and rewritten once the child has exited.
+// --runtime-info, written before the first byte of the stream is forwarded,
+// kept current while the run lives — the stage it is in, every request to a
+// model as it ends — and rewritten once the child has exited.
 //
 // Three other modes serve the profile the launch needs. --configure runs the
 // dial UI on the operator's terminal and mints an immutable revision out of
@@ -45,6 +46,7 @@ package main
 // left no status at all.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,8 +66,11 @@ import (
 const engineWorkerName = "code"
 
 // runtimeReportSchema names the runtime report's shape. A client compares it
-// before reading anything else, so a field added later goes under a new
-// version rather than surprising a reader of this one.
+// before reading anything else, so the version is a statement about what a
+// reader may assume. A field added beside the existing ones keeps it: every
+// reader of this document parses it loosely and reads what it does not know
+// as an addition rather than as a contradiction. A field whose meaning
+// changes, or one that goes away, is what mints a new version.
 const runtimeReportSchema = "code.runtime/1"
 
 // engineVersion reports this build. Code carries no version constant and is
@@ -136,10 +141,16 @@ const engineHelp = `code engine — a contained omp --mode rpc under a confirmed
       report, a JSON file (schema %s) written to --runtime-info
       before the first byte of the stream is forwarded — the profile, its
       disclosure class and cost estimate, the non-secret provider metadata,
-      this build, and the containment the session was launched inside — and
-      rewritten after the child exits with its exit status and the resources
-      it used. The report is mode 0600 and written atomically; a client reads
-      it before it discloses anything, and again after the stream ends.
+      this build, and the containment the session was launched inside.
+      From there it is kept current rather than left until the end: the stage
+      the run is in, every request to a model as it ends with the model that
+      answered, what it used and whether it was a retry of the one before,
+      the totals, and a timestamp rewritten at least every %s — so a reader
+      can tell a run that is thinking from one whose wrapper was killed. It
+      is written once more after the child exits, with its exit status and
+      the resources it used. The report is mode 0600 and every write is
+      atomic; a client reads it before it discloses anything, and may watch
+      it for as long as the run lasts.
 
       The child runs with a private HOME, no built-in tools, no extensions,
       skills or rules, and — where the machine can establish it — inside a
@@ -185,7 +196,7 @@ const engineHelp = `code engine — a contained omp --mode rpc under a confirmed
 `
 
 func engineHelpText() string {
-	return fmt.Sprintf(engineHelp, runtimeReportSchema, defaultProfileID, codeSelectionStateEnv, profileStateEnv)
+	return fmt.Sprintf(engineHelp, runtimeReportSchema, runtimeBeat, defaultProfileID, codeSelectionStateEnv, profileStateEnv)
 }
 
 // runEngine is the `code engine` subcommand.
@@ -349,6 +360,24 @@ type runtimeReport struct {
 	// whatever the outcome, because a run that failed while reaching for
 	// somewhere it was not allowed is precisely the case to see.
 	Egress []sandboxConnect `json:"egress,omitempty"`
+
+	// Stage is where the run is: launching until the first request to a
+	// model, at the model from then on, finished once the child has exited
+	// and been accounted for. StageSince and UpdatedAt are the engine's
+	// clock, and they are what make the file readable while the run is still
+	// going: a stage with nothing under it for minutes is a stalled run, and
+	// an updated_at that has stopped moving is a run whose wrapper is gone.
+	// All three are absent from a report no launch wrote.
+	Stage      string     `json:"stage,omitempty"`
+	StageSince *time.Time `json:"stage_since,omitempty"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	// Turns is what the engine saw of the run's requests to a model, read off
+	// the stream it forwards, and Usage totals them. Together they are the
+	// difference between a launch record and a run record: which model
+	// answered, what it used, and which of the attempts were retries of the
+	// one before rather than answers of their own.
+	Turns []runtimeTurn `json:"turns,omitempty"`
+	Usage *runtimeUsage `json:"usage,omitempty"`
 }
 
 // runtimeReportOf renders the profile half of a report.
@@ -398,6 +427,399 @@ func writeRuntimeReport(path string, report runtimeReport) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// ── the run's account of itself ──────────────────────────────────────────────
+
+// runtimeBeat is how often a live run rewrites its report with nothing new to
+// say. A reader tells a live run from a dead one by how old updated_at is, so
+// the interval has to leave room for a missed write: at thirty seconds, a
+// report older than the minute a client reads with has missed two beats, and
+// that is a statement about the run rather than about its luck.
+const runtimeBeat = 30 * time.Second
+
+// runtimeTurnsKept bounds the turn list. Usage counts every turn; the list
+// keeps the most recent ones, because the file is rewritten whole after each
+// turn and a run of thousands would otherwise rewrite megabytes every time.
+const runtimeTurnsKept = 512
+
+// runtimeLabelBytes bounds one label the child supplied. A model id and a stop
+// reason are names; the cap is what keeps a child that sent something else
+// from growing a file a client trusts.
+const runtimeLabelBytes = 64
+
+// The stages a run passes through. Nothing between them is a stage: a run is
+// either getting ready, talking to a model, or over.
+const (
+	runtimeStageLaunching = "launching"
+	runtimeStageAtModel   = "at the model"
+	runtimeStageFinished  = "finished"
+)
+
+// The frames the journal reads, by the prefix OMP's encoder gives them. type
+// is written first (engineredact.go relies on the same ordering for chunks),
+// so a line that does not begin with one of these is dismissed by comparing
+// its first bytes — which is what keeps the message deltas that make up almost
+// all of a stream free of a parse and a copy.
+var (
+	runtimeTurnPrefix  = []byte(`{"type":"turn_`)
+	runtimeRetryPrefix = []byte(`{"type":"auto_retry_start"`)
+)
+
+// runtimeTurn is one request to a model as the engine saw it end: which model
+// answered, what it used, how it stopped, and whether it was a re-attempt of
+// the request before it rather than an answer of its own.
+//
+// That last distinction is the reason the list exists. A run that sends a great
+// deal and receives almost nothing is a run that is being refused and retried,
+// and a report without it reads as a run that is answering.
+type runtimeTurn struct {
+	// At is the engine's clock when the turn ended, not the child's. Every
+	// other time in this report is the engine's too, and two clocks in one
+	// document cannot be read as one timeline.
+	At                time.Time `json:"at"`
+	Model             string    `json:"model,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	InputTokens       int64     `json:"inputTokens"`
+	OutputTokens      int64     `json:"outputTokens"`
+	CachedInputTokens int64     `json:"cachedInputTokens"`
+	CacheWriteTokens  int64     `json:"cacheWriteTokens"`
+	Status            string    `json:"status,omitempty"`
+	Retry             bool      `json:"retry"`
+}
+
+// runtimeUsage totals the run's turns — every one of them, including the ones
+// the list dropped. Cost is what OMP priced the calls at as they happened,
+// which is the measured figure the report's Cost, a profile's estimate made
+// before anything ran, is not.
+type runtimeUsage struct {
+	Turns             int64   `json:"turns"`
+	Retries           int64   `json:"retries"`
+	InputTokens       int64   `json:"inputTokens"`
+	OutputTokens      int64   `json:"outputTokens"`
+	CachedInputTokens int64   `json:"cachedInputTokens"`
+	CacheWriteTokens  int64   `json:"cacheWriteTokens"`
+	Cost              float64 `json:"cost"`
+}
+
+// runtimeJournal keeps one run's report current. It owns the report from the
+// moment the child is running: the launch hands it what it established, the
+// stream hands it every turn as it ends, and the outcome closes it.
+//
+// It writes on two occasions, and the second is the load-bearing one. A turn
+// ending is news, so the file is rewritten then. But a client holding a report
+// cannot tell a run that is thinking from a run whose wrapper was killed
+// unless the file keeps moving, so it is rewritten every beat as well, with
+// nothing new in it but the time. Two writes — one at launch, one at exit —
+// give a reader a liveness signal with two values and no way to act on either.
+type runtimeJournal struct {
+	path string
+	beat time.Duration
+
+	// mu guards every field below it and the write itself, so a heartbeat and
+	// a turn can never put two halves of one report on disk.
+	mu     sync.Mutex
+	report runtimeReport
+	usage  runtimeUsage
+	// retrying is set by OMP's retry announcement and consumed by the next
+	// turn that ends, which is the attempt it announced.
+	retrying bool
+	closed   bool
+	failed   error
+
+	// started says whether the heartbeat is running, so finish knows whether
+	// there is a goroutine to wait for. Both are the launch's own goroutine.
+	started bool
+	stop    chan struct{}
+	done    chan struct{}
+}
+
+func newRuntimeJournal(path string, report runtimeReport, beat time.Duration) *runtimeJournal {
+	j := &runtimeJournal{
+		path:   path,
+		beat:   beat,
+		report: report,
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
+	}
+	j.enter(runtimeStageLaunching)
+	// The report points at the journal's own totals rather than a copy, so a
+	// turn updates them in one place and every write carries what is there.
+	j.report.Usage = &j.usage
+	return j
+}
+
+// enter moves the run to a stage. The caller holds the lock, or is the
+// constructor, where there is nobody to race.
+func (j *runtimeJournal) enter(stage string) {
+	at := time.Now()
+	j.report.Stage = stage
+	j.report.StageSince = &at
+}
+
+// publish writes the report as it stands. The launch calls it once before it
+// forwards a byte, and a failure there is a refused launch: a client that
+// reads the file before the stream has nothing to read.
+func (j *runtimeJournal) publish() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.write()
+}
+
+// write stamps the report with the time and puts it on disk whole. The caller
+// holds the lock.
+func (j *runtimeJournal) write() error {
+	at := time.Now()
+	j.report.UpdatedAt = &at
+	return writeRuntimeReport(j.path, j.report)
+}
+
+// record keeps the first write that failed. A report nobody could rewrite goes
+// stale, and a stale report reads as a dead run, so the reason is worth a line
+// on the engine's stderr rather than silence. The caller holds the lock.
+func (j *runtimeJournal) record(err error) {
+	if err != nil && j.failed == nil {
+		j.failed = err
+	}
+}
+
+// failure reports the first write that failed while the run was alive.
+func (j *runtimeJournal) failure() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.failed
+}
+
+// start runs the heartbeat until finish stops it.
+func (j *runtimeJournal) start() {
+	j.started = true
+	go func() {
+		defer close(j.done)
+		beat := time.NewTicker(j.beat)
+		defer beat.Stop()
+		for {
+			select {
+			case <-j.stop:
+				return
+			case <-beat.C:
+				j.mu.Lock()
+				if !j.closed {
+					j.record(j.write())
+				}
+				j.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// finish closes the report: the heartbeat stops, the outcome the launch
+// measured goes in, and the stage says the run was accounted for. A client
+// that finds a report in any other stage with an updated_at that has stopped
+// moving is holding the record of a run whose wrapper died, which is exactly
+// what the stage and the clock are there to tell it.
+func (j *runtimeJournal) finish(exitCode int, usage runUsage, egress []sandboxConnect) error {
+	if j.started {
+		close(j.stop)
+		<-j.done
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	finished := true
+	j.report.Finished = &finished
+	j.report.ExitCode = &exitCode
+	j.report.Resources = usage.report()
+	j.report.ResourcesProvenance = usage.provenance()
+	j.report.Egress = egress
+	j.enter(runtimeStageFinished)
+	j.closed = true
+	err := j.write()
+	j.record(err)
+	return err
+}
+
+// observe reads one frame of the child's stdout and updates the report from
+// it. It runs on the forwarding path, after redaction, so nothing it copies
+// into the file can be a secret the child printed.
+func (j *runtimeJournal) observe(frame []byte) {
+	// The shape is omp/18.1.14's, recorded off a real `omp --mode rpc`
+	// session: a turn opens with turn_start, ends with turn_end carrying the
+	// assistant message the provider answered with, and a retryable failure
+	// ends its own turn and is announced before the next attempt opens.
+	var wire struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Provider   string `json:"provider"`
+			Model      string `json:"model"`
+			StopReason string `json:"stopReason"`
+			Usage      *struct {
+				Input      int64 `json:"input"`
+				Output     int64 `json:"output"`
+				CacheRead  int64 `json:"cacheRead"`
+				CacheWrite int64 `json:"cacheWrite"`
+				Cost       *struct {
+					Total float64 `json:"total"`
+				} `json:"cost"`
+			} `json:"usage"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(frame, &wire) != nil {
+		// A frame this build cannot read is a frame it does not count. The
+		// client already has it, whole and unaltered, which is the contract
+		// that matters; this file is Code's reading of it, not the record.
+		return
+	}
+	switch wire.Type {
+	case "turn_start":
+		j.atTheModel()
+	case "auto_retry_start":
+		j.announceRetry()
+	case "turn_end":
+		turn := runtimeTurn{At: time.Now()}
+		cost := 0.0
+		if wire.Message != nil {
+			turn.Model = runtimeLabel(wire.Message.Model)
+			turn.Provider = runtimeLabel(wire.Message.Provider)
+			turn.Status = runtimeLabel(wire.Message.StopReason)
+			if u := wire.Message.Usage; u != nil {
+				turn.InputTokens = u.Input
+				turn.OutputTokens = u.Output
+				turn.CachedInputTokens = u.CacheRead
+				turn.CacheWriteTokens = u.CacheWrite
+				if u.Cost != nil {
+					cost = u.Cost.Total
+				}
+			}
+		}
+		j.appendTurn(turn, cost)
+	}
+}
+
+// atTheModel records the first request to a model. The stage does not come
+// back: a run between turns is still a run at the model, and a client watching
+// one wants to know that it got there at all and when.
+func (j *runtimeJournal) atTheModel() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed || j.report.Stage == runtimeStageAtModel {
+		return
+	}
+	j.enter(runtimeStageAtModel)
+	j.record(j.write())
+}
+
+// announceRetry marks the next turn as a re-attempt. It writes nothing itself:
+// the attempt it announces opens within the backoff and writes then, and the
+// heartbeat is what keeps the file fresh in between.
+func (j *runtimeJournal) announceRetry() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.retrying = true
+}
+
+// appendTurn adds one ended turn and rewrites the report, because a turn
+// ending is the news a reader of this file is waiting for.
+func (j *runtimeJournal) appendTurn(turn runtimeTurn, cost float64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	turn.Retry, j.retrying = j.retrying, false
+	j.usage.Turns++
+	if turn.Retry {
+		j.usage.Retries++
+	}
+	j.usage.InputTokens += turn.InputTokens
+	j.usage.OutputTokens += turn.OutputTokens
+	j.usage.CachedInputTokens += turn.CachedInputTokens
+	j.usage.CacheWriteTokens += turn.CacheWriteTokens
+	j.usage.Cost += cost
+	j.report.Turns = append(j.report.Turns, turn)
+	if len(j.report.Turns) > runtimeTurnsKept {
+		j.report.Turns = append(j.report.Turns[:0], j.report.Turns[len(j.report.Turns)-runtimeTurnsKept:]...)
+	}
+	if j.closed {
+		return
+	}
+	j.record(j.write())
+}
+
+// runtimeLabel is one name the child supplied, bounded.
+func runtimeLabel(s string) string {
+	if len(s) > runtimeLabelBytes {
+		return s[:runtimeLabelBytes]
+	}
+	return s
+}
+
+// runtimeObserver forwards the child's stdout to the client and reads the
+// frames the report is made of on the way past.
+//
+// It writes first and reads second, always. The client's stream is the
+// product, and nothing this file wants out of it is worth a byte of latency on
+// it — nor a byte of difference: the observer alters nothing, and a frame it
+// cannot make sense of is a frame the client still received.
+type runtimeObserver struct {
+	dst     io.Writer
+	journal *runtimeJournal
+
+	frame []byte // the line so far, while it could still be one we read
+	skip  bool   // this line is not one we read
+}
+
+func (o *runtimeObserver) Write(p []byte) (int, error) {
+	n, err := o.dst.Write(p)
+	if n > 0 {
+		o.read(p[:n])
+	}
+	return n, err
+}
+
+// read finds the line boundaries in what was forwarded and hands the
+// interesting lines to the journal. They are found rather than assumed: a
+// redacted chunk run arrives as several lines in one write, an oversized line
+// as several writes of one, and a stream with no secret to redact arrives in
+// whatever pieces the copy buffer made.
+func (o *runtimeObserver) read(p []byte) {
+	for len(p) > 0 {
+		line := p
+		complete := false
+		if i := bytes.IndexByte(p, '\n'); i >= 0 {
+			line, p, complete = p[:i], p[i+1:], true
+		} else {
+			p = nil
+		}
+		if !o.skip {
+			o.frame = append(o.frame, line...)
+			// A frame beyond one physical line is not one of OMP's: its own
+			// cap is half this, and an object above it travels as chunks,
+			// which the prefix dismisses like anything else.
+			if len(o.frame) > ompFrameBytes || !runtimeFrameWanted(o.frame) {
+				o.skip = true
+				o.frame = o.frame[:0]
+			}
+		}
+		if complete {
+			if !o.skip && len(o.frame) > 0 {
+				o.journal.observe(o.frame)
+			}
+			o.frame, o.skip = o.frame[:0], false
+		}
+	}
+}
+
+// runtimeFrameWanted reports whether a line, so far, could still be one of the
+// frames the journal reads.
+func runtimeFrameWanted(frame []byte) bool {
+	for _, prefix := range [][]byte{runtimeTurnPrefix, runtimeRetryPrefix} {
+		if len(frame) < len(prefix) {
+			if bytes.Equal(frame, prefix[:len(frame)]) {
+				return true
+			}
+			continue
+		}
+		if bytes.HasPrefix(frame, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // runEngineDescribe reports a saved profile the way a launch would, minus
@@ -696,15 +1118,24 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 	// holds what the child has already written, so nothing is lost by
 	// writing the file first, and a client that reads the report before it
 	// touches the stream knows exactly what it is talking to.
+	//
+	// From there the report is the journal's. It keeps the file current while
+	// the run lives, so a client can tell a run that is thinking from one
+	// whose wrapper was killed, and it is what the outcome is written through
+	// once the child has exited.
 	report := runtimeReportOf(profile)
 	declaration := l.containment()
 	report.Containment = &declaration
-	finished := false
-	report.Finished = &finished
-	if err := writeRuntimeReport(opts.runtimeInfo, report); err != nil {
+	// False rather than absent from the first write on: a client reading the
+	// file mid-run sees a run that has not accounted for itself yet.
+	notFinished := false
+	report.Finished = &notFinished
+	journal := newRuntimeJournal(opts.runtimeInfo, report, runtimeBeat)
+	if err := journal.publish(); err != nil {
 		session.stop()
 		return 1, fmt.Errorf("the runtime report could not be written to %s: %w", opts.runtimeInfo, err)
 	}
+	journal.start()
 
 	// stdin is the client's to close, and closing it is how the run ends. The
 	// child's stdin is closed in turn so OMP drains and exits on its own; a
@@ -720,7 +1151,7 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 			_ = ompTerminateTree(session.cmd, session.pgid, false)
 		}
 	}()
-	forwardErr := l.redactor.forward(out, session.stdout)
+	forwardErr := l.redactor.forward(&runtimeObserver{dst: out, journal: journal}, session.stdout)
 	close(forwarded)
 
 	// The host captured whole-scope counters before acknowledging helper
@@ -729,13 +1160,13 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 	usage = usage.fillFrom(l.scratchUsage(ctx, contained, dir))
 	exitCode := session.exitCode()
 
-	finished = true
-	report.ExitCode = &exitCode
-	report.Resources = usage.report()
-	report.ResourcesProvenance = usage.provenance()
-	report.Egress = contained.egressLog()
-	if err := writeRuntimeReport(opts.runtimeInfo, report); err != nil {
+	if err := journal.finish(exitCode, usage, contained.egressLog()); err != nil {
 		fmt.Fprintln(errw, "code engine: the finished runtime report could not be written:", err)
+	} else if err := journal.failure(); err != nil {
+		// The client's copy is right now, but it was stale while the run was
+		// alive, and a stale report reads as a run that died. This line is
+		// what tells an operator why it looked that way.
+		fmt.Fprintln(errw, "code engine: the runtime report went unrefreshed while the run was alive:", err)
 	}
 	if forwardErr != nil {
 		fmt.Fprintln(errw, "code engine: forwarding omp's output:", l.redactor.redactString(forwardErr.Error()))
