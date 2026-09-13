@@ -152,6 +152,23 @@ func ompFakeGet(endpoint string) string {
 	return strconv.Itoa(response.StatusCode)
 }
 
+// ompFakeGetAuth is the same request with a bearer, which is what a real OMP
+// sends to an OpenAI-compatible provider it holds a key for (omp/18.1.14 sends
+// it on model discovery and on every completion alike).
+func ompFakeGetAuth(endpoint, bearer string) string {
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	request.Header.Set("Authorization", "Bearer "+bearer)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	defer response.Body.Close()
+	return strconv.Itoa(response.StatusCode)
+}
+
 // ── discovery ────────────────────────────────────────────────────────────────
 
 // TestLocalLaneDiscoversWhatTheEndpointServes is the lane's first claim: the

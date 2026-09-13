@@ -106,6 +106,12 @@ type sandboxEgressPolicy struct {
 	// instead (locallane.go). Both empty for a hosted run.
 	modelAddr string
 	modelURL  string
+	// modelMeter watches a brokered run's model responses for the two refusals
+	// that end it, and latches on the first (brokeredlane.go). It is nil for
+	// every other lane: a local endpoint is a daemon on this machine with
+	// nobody metering it, and a hosted run's traffic is inside a TLS tunnel
+	// this process cannot read and has no business reading.
+	modelMeter *brokeredMeter
 }
 
 // routed reports whether the policy gives the run any way to reach a model at
@@ -300,6 +306,7 @@ func (e *sandboxEgress) describe(provider string) sandboxEgressDescription {
 		allowed:  append([]string(nil), e.policy.allowed...),
 		relay:    e.broker != nil,
 		local:    e.policy.modelAddr,
+		brokered: e.policy.modelMeter != nil,
 	}
 }
 
@@ -360,9 +367,17 @@ func (e *sandboxEgress) serveBroker() {
 	}
 }
 
-// serveModel relays a local-lane run's model calls to the endpoint on this
-// host. It is serveBroker's twin and decides nothing either: the address it
-// dials was fixed by the policy before any socket existed.
+// serveModel relays a run's model calls to the endpoint they are served from:
+// a daemon on this host for a local-lane run, the machine owner's metered proxy
+// for a brokered one (locallane.go, brokeredlane.go). It is serveBroker's twin
+// and decides as little: the address it dials was fixed by the policy before
+// any socket existed.
+//
+// The one decision it does make is the refused one. A brokered run whose meter
+// has latched has spent the budget its job named, so the relay stops dialling
+// the owner rather than forwarding a call the owner is obliged to refuse — the
+// provider is asked exactly once for a ceiling that has been reached, and the
+// attempt is recorded so a reviewer sees the refusal rather than a silence.
 func (e *sandboxEgress) serveModel() {
 	for {
 		conn, err := e.model.Accept()
@@ -371,12 +386,19 @@ func (e *sandboxEgress) serveModel() {
 		}
 		go func() {
 			defer conn.Close()
+			if reason := e.policy.modelMeter.refusal(); reason != "" {
+				e.record(e.policy.modelAddr, false, "this run's inference ended on "+reason)
+				return
+			}
 			upstream, err := net.DialTimeout("tcp", e.policy.modelAddr, sandboxDialTimeout)
 			if err != nil {
 				return
 			}
 			defer upstream.Close()
-			sandboxSplice(conn, upstream)
+			// The responses are watched on their way past and forwarded
+			// untouched; a nil meter makes this the plain splice the local lane
+			// has always had.
+			sandboxSpliceReader(upstream, e.policy.modelMeter.reader(upstream), conn)
 		}()
 	}
 }

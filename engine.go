@@ -114,6 +114,11 @@ type engineOptions struct {
 	// bound read-only inside the boundary at their own paths, never at the
 	// working directory.
 	inputs []string
+	// brokered is the file naming the machine owner's inference endpoint and
+	// this job's bearer, when the launch is a brokered one (brokeredlane.go).
+	// It is the whole difference between a run that holds a provider
+	// credential and one that holds nothing but a metered route.
+	brokered string
 
 	configure  bool
 	resultFile string
@@ -123,7 +128,7 @@ type engineOptions struct {
 
 const engineHelp = `code engine — a contained omp --mode rpc under a confirmed profile
 
-  code engine --profile ID[@REV] --runtime-info PATH [--input PATH]...
+  code engine --profile ID[@REV] --runtime-info PATH [--brokered PATH] [--input PATH]...
   code engine --describe [--profile ID[@REV]]
   code engine --configure --result-file PATH [--profile ID]
   code engine --import-profiles DIR
@@ -152,6 +157,17 @@ const engineHelp = `code engine — a contained omp --mode rpc under a confirmed
                              directory should be private to the caller
         --input PATH         a host path the run may read, bound read-only at
                              its own path inside the boundary (repeatable)
+        --brokered PATH      run the brokered lane: the file at PATH names the
+                             machine owner's inference endpoint and this job's
+                             bearer, as {"url":"http://127.0.0.1:PORT",
+                             "bearer":"..."}, and the run makes its model calls
+                             there instead of at a provider. No provider
+                             credential is resolved, no auth broker is
+                             consulted, the boundary's only route is that
+                             loopback endpoint, and the bearer is redacted from
+                             every byte the engine writes. The profile still
+                             names the model, the thinking level and the
+                             disclosure class; its own lane does not apply
 
   The other modes:
 
@@ -224,6 +240,12 @@ func runEngine(args []string) int {
 				return 2
 			}
 			opts.inputs = append(opts.inputs, path)
+		case "--brokered":
+			path, ok := value(&i, "--brokered")
+			if !ok {
+				return 2
+			}
+			opts.brokered = path
 		case "--configure":
 			opts.configure = true
 		case "--result-file":
@@ -270,6 +292,11 @@ func runEngine(args []string) int {
 		fmt.Fprintln(os.Stderr, "code engine: --result-file is only answered by --configure")
 		return 2
 	}
+	if opts.brokered != "" && modes > 0 {
+		fmt.Fprintln(os.Stderr, "code engine: --brokered names the endpoint a launch's model calls go to, "+
+			"and only a launch makes any")
+		return 2
+	}
 	switch {
 	case opts.configure:
 		// The ceremony owns stdin and stdout as a terminal, so it is
@@ -307,6 +334,18 @@ func runEngine(args []string) int {
 
 // ── the runtime report ───────────────────────────────────────────────────────
 
+// The lanes a run can take, as the report names them. A client reads the lane
+// before it reads a cost: a brokered run's spend lands on the machine owner's
+// bill and is metered against the job's ceilings, a local run's on nobody's,
+// and a hosted run's on the operator's own provider account. The three are
+// different claims about the same numbers, so the document says which it is
+// making rather than leaving it to be inferred from the metadata.
+const (
+	laneBrokered = "brokered"
+	laneLocal    = "local"
+	laneHosted   = "hosted"
+)
+
 // runtimeWorker identifies the build that wrote a report.
 type runtimeWorker struct {
 	Name    string `json:"name"`
@@ -332,6 +371,11 @@ type runtimeReport struct {
 	Privacy  profilePrivacy    `json:"privacy"`
 	Cost     profileCost       `json:"cost"`
 	Metadata map[string]string `json:"metadata"`
+	// Lane is how this run reaches a model: brokered, local or hosted. It is
+	// a property of the launch rather than of the profile alone — --brokered
+	// takes a profile of either other lane and runs it brokered — so it is
+	// stated rather than derived from the metadata by a reader.
+	Lane string `json:"lane"`
 
 	Containment *sandboxDeclaration `json:"containment,omitempty"`
 	Finished    *bool               `json:"finished,omitempty"`
@@ -349,10 +393,24 @@ type runtimeReport struct {
 	// whatever the outcome, because a run that failed while reaching for
 	// somewhere it was not allowed is precisely the case to see.
 	Egress []sandboxConnect `json:"egress,omitempty"`
+	// Failure is why Code ended this run itself, when it did: "ceiling" when
+	// the machine owner refused a call at a budget the job named, and
+	// "price_unknown" when a cost ceiling met a model the owner has no price
+	// for (brokeredlane.go). It is absent for every run that ended on its
+	// own, and it is a code rather than a sentence because a client decides
+	// differently between a spent budget and a model that would not answer —
+	// the prose beside it is on stderr, where a person reads it.
+	Failure string `json:"failure,omitempty"`
 }
 
-// runtimeReportOf renders the profile half of a report.
+// runtimeReportOf renders the profile half of a report, with the lane the
+// profile alone implies. A brokered launch overrides that: the file it was
+// pointed at, not the profile, is what decides where its calls go.
 func runtimeReportOf(profile resolvedProfile) runtimeReport {
+	lane := laneHosted
+	if isLocalProfile(profile.Metadata) {
+		lane = laneLocal
+	}
 	return runtimeReport{
 		Schema:  runtimeReportSchema,
 		Worker:  runtimeWorker{Name: engineWorkerName, Version: engineVersion()},
@@ -363,6 +421,7 @@ func runtimeReportOf(profile resolvedProfile) runtimeReport {
 		},
 		Cost:     profile.Cost,
 		Metadata: cloneMetadata(profile.Metadata),
+		Lane:     lane,
 	}
 }
 
@@ -466,6 +525,15 @@ type ompLauncher struct {
 	// launch that never authenticated and must not proceed, and one with
 	// keyless true is a run that has nothing to authenticate with by design.
 	keyless bool
+	// brokered is the run's whole provider configuration when the launch named
+	// --brokered: the machine owner's loopback endpoint, this job's bearer, and
+	// the model the profile names (brokeredlane.go). It is checked before
+	// credential, keyless and profile lane anywhere it matters, because a
+	// brokered run authenticates with something none of those describe.
+	brokered *brokeredTarget
+	// meter is the brokered run's refusal latch, shared with the egress relay
+	// that watches the owner's responses. Nil for every other lane.
+	meter *brokeredMeter
 	// redactor holds the secrets every forwarded byte is scrubbed against. It
 	// exists from the moment the credential is resolved, so a diagnostic
 	// written between resolution and launch is covered too.
@@ -565,6 +633,31 @@ func ompProfileName(ref profileRef) string {
 	return "profile " + ref.String()
 }
 
+// openBrokered reads the endpoint the launch was pointed at and registers this
+// job's bearer with the redactor, before the profile is resolved and before
+// anything is launched.
+//
+// The bearer is registered here rather than with the credential because it is
+// readable from here on: the moment this function returns, a diagnostic could
+// carry it, and the redactor is what keeps every byte the engine writes clear
+// of it (engineredact.go).
+func (l *ompLauncher) openBrokered(path string) error {
+	endpoint, err := loadBrokeredEndpoint(path)
+	if err != nil {
+		return err
+	}
+	l.brokered = &brokeredTarget{endpoint: endpoint}
+	l.redactor = newSecretRedactor([]string{endpoint.Bearer})
+	// One meter per run, and only one: the relay latches the meter the policy
+	// carries and the report reads the meter this field holds, so a second one
+	// would mean a refusal recorded where nothing reads it. A caller that
+	// already installed one therefore keeps it.
+	if l.meter == nil {
+		l.meter = newBrokeredMeter()
+	}
+	return nil
+}
+
 // resolveCredential resolves what this run will authenticate with, before
 // anything is launched, and registers the secret strings it consists of with
 // the redactor so they stay out of every byte the engine writes.
@@ -581,6 +674,16 @@ func ompProfileName(ref profileRef) string {
 // fallback, and a reference that will not open leaves the credential required
 // — the stricter answer, and the one whose failure openProfile then reports.
 func (l *ompLauncher) resolveCredential(ref profileRef) error {
+	if l.brokered != nil {
+		// A brokered run has nothing to resolve and nothing to ask: the bearer
+		// the endpoint file delivered is the whole credential, it authenticates
+		// to the machine owner's proxy alone, and the auth broker, the vault
+		// manifest, the account pool and every OAuth path are not consulted at
+		// all. That is the point of the lane rather than an optimisation of it
+		// — a job that drives a model never holds the model's credential — so
+		// it is decided before anything else here can decide otherwise.
+		return nil
+	}
 	if profile, err := l.openProfile(ref); err == nil && isLocalProfile(profile.Metadata) {
 		if _, err := localTargetOf(profile.Metadata); err != nil {
 			return err
@@ -626,7 +729,7 @@ func (l *ompLauncher) containment() sandboxDeclaration {
 // and a listener that existed for a run the client then refused would be a
 // boundary opened for nothing.
 func (l *ompLauncher) egressDescription() sandboxEgressDescription {
-	provider, policy, err := sandboxRunEgress(l.profile, l.credential.broker.URL)
+	provider, policy, err := l.runEgress()
 	if err != nil {
 		// No profile has been resolved yet, or its endpoint cannot be resolved.
 		// The mechanism is still exactly what it is; only the target is
@@ -640,7 +743,27 @@ func (l *ompLauncher) egressDescription() sandboxEgressDescription {
 		allowed:  policy.allowed,
 		relay:    policy.brokerAddr != "",
 		local:    policy.modelAddr,
+		brokered: l.brokered != nil,
 	}
+}
+
+// runEgress is this run's egress plan, decided in one place so the declaration
+// the client reads and the sockets the launch opens cannot describe different
+// boundaries.
+//
+// A brokered run's plan is the local lane's exactly — an empty CONNECT
+// allowlist and a raw relay to a loopback endpoint — because that is what it
+// is: the only thing on the other side of the hole is the machine owner's
+// proxy, on this host, and the profile's own lane decides nothing about it. The
+// meter rides along so the relay can watch the owner's refusals go past
+// (brokeredlane.go).
+func (l *ompLauncher) runEgress() (string, sandboxEgressPolicy, error) {
+	if l.brokered != nil {
+		policy, err := sandboxResolveLocalEgress(l.brokered.endpoint.URL)
+		policy.modelMeter = l.meter
+		return laneBrokered, policy, err
+	}
+	return sandboxRunEgress(l.profile, l.credential.broker.URL)
 }
 
 // serve is the launch: resolve the profile and the credential, build the
@@ -649,6 +772,15 @@ func (l *ompLauncher) egressDescription() sandboxEgressDescription {
 // the child exits. It returns the process exit status and, for a refusal
 // before any byte reached stdout, the reason.
 func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reader, out, errw io.Writer) (int, error) {
+	// The endpoint file comes first, before the profile and before any model
+	// work: a brokered launch that cannot read it is a launch with no route to
+	// a model at all, and saying so here costs the client a sentence instead of
+	// a run that fails on its first call.
+	if opts.brokered != "" {
+		if err := l.openBrokered(opts.brokered); err != nil {
+			return 1, err
+		}
+	}
 	profile, err := l.openProfile(opts.profile)
 	if err != nil {
 		return 1, err
@@ -656,17 +788,28 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 	if err := l.resolveCredential(opts.profile); err != nil {
 		return 1, err
 	}
-	if !l.credential.configured() && !l.keyless {
+	if !l.credential.configured() && !l.keyless && l.brokered == nil {
 		// Unreachable: resolveCredential either set one or refused. Kept as a
 		// check because launching unauthenticated is the one thing this
 		// function must never do by accident.
 		return 1, errOmpNoCredential
 	}
+	// The overlay the child launches with is the profile's, except under
+	// --brokered: there the profile's routing names providers this run has no
+	// route to and no price for, so the brokered lane renders its own
+	// (brokeredlane.go).
+	config := profile.ConfigYAML
+	if l.brokered != nil {
+		if err := l.brokered.bind(profile); err != nil {
+			return 1, err
+		}
+		config = l.brokered.overlayYAML()
+	}
 	binary, err := l.lookOmp()
 	if err != nil {
 		return 1, fmt.Errorf("no omp to launch: %w", err)
 	}
-	dir, err := ompNewRunDir(profile.ConfigYAML)
+	dir, err := ompNewRunDir(config)
 	if err != nil {
 		return 1, fmt.Errorf("the run directory could not be created: %w", err)
 	}
@@ -697,6 +840,9 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 	// writing the file first, and a client that reads the report before it
 	// touches the stream knows exactly what it is talking to.
 	report := runtimeReportOf(profile)
+	if l.brokered != nil {
+		report.Lane = laneBrokered
+	}
 	declaration := l.containment()
 	report.Containment = &declaration
 	finished := false
@@ -720,6 +866,24 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 			_ = ompTerminateTree(session.cmd, session.pgid, false)
 		}
 	}()
+
+	// A refusal from the machine owner ends the run rather than being retried.
+	// The child already has the complete refusal and the relay has latched, so
+	// nothing it tries next reaches the provider; the grace is for its own
+	// error event, which is what a client reads the reason beside, and the
+	// teardown is what keeps a spent budget from becoming a session that sits
+	// out omp's retry schedule against a route that is closed.
+	go func() {
+		select {
+		case <-l.meter.announced():
+			select {
+			case <-forwarded:
+			case <-time.After(ompExitGrace):
+				_ = ompTerminateTree(session.cmd, session.pgid, false)
+			}
+		case <-forwarded:
+		}
+	}()
 	forwardErr := l.redactor.forward(out, session.stdout)
 	close(forwarded)
 
@@ -734,6 +898,7 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 	report.Resources = usage.report()
 	report.ResourcesProvenance = usage.provenance()
 	report.Egress = contained.egressLog()
+	report.Failure = l.meter.refusal()
 	if err := writeRuntimeReport(opts.runtimeInfo, report); err != nil {
 		fmt.Fprintln(errw, "code engine: the finished runtime report could not be written:", err)
 	}
@@ -767,16 +932,31 @@ func (l *ompLauncher) launchPlan(profile resolvedProfile, inputs []string, dir *
 	if err != nil {
 		return ompLaunch{}, nil, err
 	}
-	// A local-lane run's model calls go to the endpoint its profile recorded,
-	// and the environment is how omp's implicit local engine is told where that
-	// is (locallane.go). The inherited endpoint variables are replaced rather
-	// than added to, so nothing ambient can redirect a supervised run.
-	local, isLocal, err := localRunProfile(profile)
-	if err != nil {
-		return ompLaunch{}, nil, err
+	// Where a run's model calls go is decided here, once, for both ends of the
+	// boundary: a brokered run calls the machine owner's proxy with this job's
+	// bearer (brokeredlane.go), a local-lane run calls the endpoint its profile
+	// recorded (locallane.go), and a hosted one goes through the CONNECT proxy
+	// with the credential omp resolved. The inherited endpoint variables are
+	// replaced rather than added to in either keyless lane, so nothing ambient
+	// can redirect a supervised run.
+	//
+	// A brokered launch does not read the profile's lane at all. Its metadata
+	// describes calls this run is not making, and reading it would refuse a
+	// local-lane profile whose recorded daemon happens to be down for a run
+	// that was never going to talk to it.
+	var local localTarget
+	isLocal := false
+	if l.brokered == nil {
+		local, isLocal, err = localRunProfile(profile)
+		if err != nil {
+			return ompLaunch{}, nil, err
+		}
 	}
 	env := ompChildEnv(l.environ(), dir.home, auth)
-	if isLocal {
+	switch {
+	case l.brokered != nil:
+		env = l.brokered.childEnv(env, l.brokered.endpoint.URL)
+	case isLocal:
 		env = localChildEnv(env, local, local.Endpoint)
 	}
 	plain := ompLaunch{
@@ -790,13 +970,13 @@ func (l *ompLauncher) launchPlan(profile resolvedProfile, inputs []string, dir *
 		return plain, nil, nil
 	}
 
-	// The boundary follows the profile: a CONNECT allowlist of exactly the
-	// hosted provider's endpoint, or a raw relay to the local endpoint this
-	// run's model is served from. An endpoint Code cannot resolve ends the run
-	// here: a proxy with nothing allowed would strand the session, and one
-	// with everything allowed would contradict the declaration the client is
-	// about to read.
-	_, policy, err := sandboxRunEgress(profile, auth.broker.URL)
+	// The boundary follows the run's lane: a CONNECT allowlist of exactly the
+	// hosted provider's endpoint, or a raw relay to the loopback endpoint this
+	// run's model is served from — a daemon on this machine, or the owner's
+	// metered proxy. An endpoint Code cannot resolve ends the run here: a proxy
+	// with nothing allowed would strand the session, and one with everything
+	// allowed would contradict the declaration the client is about to read.
+	_, policy, err := l.runEgress()
 	if err != nil {
 		return ompLaunch{}, nil, err
 	}
@@ -830,10 +1010,13 @@ func (l *ompLauncher) launchPlan(profile resolvedProfile, inputs []string, dir *
 		return ompLaunch{}, nil, err
 	}
 	guestEnv := sandboxProxyEnv(ompChildEnv(l.environ(), sandboxHomePath, guest))
-	if isLocal {
-		// Inside, the endpoint is the sandbox's own loopback relay rather than
-		// the host address: there is no such host in there, and the relay is
-		// what carries the bytes back out to it.
+	switch {
+	case l.brokered != nil:
+		// Inside, the owner's proxy is reachable at the sandbox's own loopback
+		// relay rather than at the host address: there is no such host in
+		// there, and the relay is what carries the bytes back out to it.
+		guestEnv = l.brokered.childEnv(guestEnv, policy.modelURL)
+	case isLocal:
 		guestEnv = localChildEnv(guestEnv, local, policy.modelURL)
 	}
 	return ompLaunch{

@@ -400,8 +400,18 @@ func TestOmpChildEnvReplacesAmbientAuthWithTheRunsOwnCredential(t *testing.T) {
 	}
 }
 
+// TestOmpChildEnvWithoutACredentialAddsNoBrokerVariables covers the keyless
+// lanes (locallane.go, brokeredlane.go): a run that resolved no credential
+// must reach its endpoint with no broker at all, including the one the
+// launching shell exported. An inherited token would let such a run
+// authenticate anyway, to a provider its profile never named.
 func TestOmpChildEnvWithoutACredentialAddsNoBrokerVariables(t *testing.T) {
-	got := ompChildEnv([]string{"PATH=/usr/bin"}, "/tmp/run/home", ompAuth{})
+	got := ompChildEnv([]string{
+		"PATH=/usr/bin",
+		"OMP_AUTH_BROKER_URL=http://ambient.invalid/auth",
+		"OMP_AUTH_BROKER_TOKEN=ambient-token",
+		"OMP_AUTH_BROKER_ACCOUNT_POOL_FILE=/ambient/account-pool.json",
+	}, "/tmp/run/home", ompAuth{})
 	for _, entry := range got {
 		if strings.HasPrefix(entry, "OMP_AUTH_BROKER_") {
 			t.Errorf("an unauthenticated child was given %s", entry)
@@ -432,12 +442,20 @@ func serveFake(t *testing.T, l *ompLauncher, scenario string, stdin string) engi
 
 func serveFakeCtx(t *testing.T, ctx context.Context, l *ompLauncher, scenario string, stdin string) engineRun {
 	t.Helper()
+	return serveFakeOpts(t, ctx, l, scenario, stdin, testLaunchOptions(t))
+}
+
+// serveFakeOpts is the same launch with the options spelled out, for the lanes
+// a flag rather than a profile selects.
+func serveFakeOpts(t *testing.T, ctx context.Context, l *ompLauncher, scenario, stdin string,
+	opts engineOptions,
+) engineRun {
+	t.Helper()
 	fake, record := ompFakeBinary(t, scenario)
 	l.lookOmp = func() (string, error) { return fake, nil }
 	if l.environ == nil {
 		l.environ = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
 	}
-	opts := testLaunchOptions(t)
 	var out, errw bytes.Buffer
 	status, err := l.serve(ctx, opts, strings.NewReader(stdin), &out, &errw)
 	run := engineRun{status: status, err: err, stdout: out.Bytes(), stderr: errw.Bytes(), record: record, info: opts.runtimeInfo}
@@ -1001,10 +1019,13 @@ type ompFakeRecord struct {
 	// name.
 	Pool string `json:"pool"`
 	// ModelEndpoint is where the child was told the model is served, and
-	// ModelReached is what it got by asking. Together they are the local
-	// lane's whole claim (locallane.go).
+	// ModelReached is what it got by asking. Together they are the keyless
+	// lanes' whole claim (locallane.go, brokeredlane.go).
 	ModelEndpoint string `json:"model_endpoint,omitempty"`
 	ModelReached  string `json:"model_reached,omitempty"`
+	// ModelKey is the API key the child was given for that endpoint, which a
+	// brokered run has and a local one does not.
+	ModelKey string `json:"model_key,omitempty"`
 }
 
 // ompFakeBinary writes a wrapper that re-executes this test binary as the fake
@@ -1092,6 +1113,16 @@ func ompFakeMain(args []string) {
 		state.ModelReached = ompFakeGet(state.ModelEndpoint + "/api/tags")
 		save()
 	}
+	if scenario == "brokeredmodel" {
+		// A real OMP discovers an OpenAI-compatible provider's models at this
+		// route, with the API key it was configured with, before it calls one.
+		// What matters is which address and which key the child was handed, and
+		// whether the owner's proxy answered them.
+		state.ModelEndpoint = os.Getenv("LM_STUDIO_BASE_URL")
+		state.ModelKey = os.Getenv("LM_STUDIO_API_KEY")
+		state.ModelReached = ompFakeGetAuth(state.ModelEndpoint+"/models", state.ModelKey)
+		save()
+	}
 
 	emit := func(frame string) {
 		_, _ = os.Stdout.WriteString(frame + "\n")
@@ -1107,6 +1138,16 @@ func ompFakeMain(args []string) {
 		_, _ = os.Stderr.WriteString("omp: authentication rejected for " + token + "\n")
 		emit(`{"type":"diag","token":"` + token + `"}`)
 		escaped, _ := json.Marshal("rejected \"" + token + "\"")
+		emit(`{"type":"diag","message":` + string(escaped) + `}`)
+	}
+	if scenario == "brokeredleak" {
+		// The same hazard as credleak, for the credential a brokered run
+		// actually holds: the job's bearer, printed where a failing
+		// authentication would print it.
+		bearer := os.Getenv("LM_STUDIO_API_KEY")
+		_, _ = os.Stderr.WriteString("omp: authentication rejected for " + bearer + "\n")
+		emit(`{"type":"diag","token":"` + bearer + `"}`)
+		escaped, _ := json.Marshal("rejected \"" + bearer + "\"")
 		emit(`{"type":"diag","message":` + string(escaped) + `}`)
 	}
 	if scenario == "hang" {

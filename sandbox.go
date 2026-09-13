@@ -430,11 +430,17 @@ type sandboxEgressDescription struct {
 	// relay reports that a second unix socket carries the run's auth-broker
 	// traffic straight through, which is the case for a broker on loopback.
 	relay bool
-	// local is the host address a local-lane run's model calls are relayed to,
-	// empty for a hosted run. It is named rather than implied because "no
-	// route off the machine" and "a route to a daemon on the machine" are
-	// different boundaries, and the second is the one a local run has.
+	// local is the host address a local-lane or brokered run's model calls are
+	// relayed to, empty for a hosted run. It is named rather than implied
+	// because "no route off the machine" and "a route to a service on the
+	// machine" are different boundaries, and the second is the one a keyless
+	// lane has.
 	local string
+	// brokered reports that the service at local is the machine owner's
+	// metered inference proxy rather than a model daemon, which changes two
+	// claims a reviewer weighs: what a compromised session can spend, and
+	// which credential is inside the boundary (brokeredlane.go).
+	brokered bool
 }
 
 // escape is Code's statement of what it does not contain.
@@ -453,8 +459,12 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 			"disk, and nothing it writes outside Code's temporary run directory is cleaned up. ")
 		b.WriteString("Code tried to contain it and could not: ")
 		b.WriteString(strings.Join(f.degraded, "; "))
-		b.WriteString(". Treat every finding from this run as produced by unconfined code that held the " +
-			"provider credential.")
+		b.WriteString(". Treat every finding from this run as produced by unconfined code that held ")
+		if egress.brokered {
+			b.WriteString("this job's brokered inference bearer.")
+		} else {
+			b.WriteString("the provider credential.")
+		}
 		return b.String()
 	}
 
@@ -507,18 +517,30 @@ func (f sandboxFacts) escape(egress sandboxEgressDescription) string {
 			"uses, which is a service on this host, so a compromised worker can also drive that broker for " +
 			"as long as the run lasts.")
 	}
-	if egress.local != "" {
+	if egress.local != "" && egress.brokered {
+		b.WriteString(" A second unix socket relays this run's model calls to the machine owner's metered " +
+			"inference proxy, " + egress.local + " on this host, so a compromised worker can also spend " +
+			"this job's inference budget — and read whatever the model will answer — until that budget or " +
+			"the run ends.")
+	} else if egress.local != "" {
 		b.WriteString(" A second unix socket relays this run's model calls to the local endpoint they are " +
 			"served from, " + egress.local + " on this host, so a compromised worker can also drive that " +
 			"daemon — and read whatever it will answer — for as long as the run lasts.")
 	}
 	b.WriteString("\n\n")
 
-	if egress.local != "" {
+	switch {
+	case egress.brokered:
+		b.WriteString("Second, the credential inside the boundary is not a provider's. This run's model " +
+			"calls are made for it by the machine owner, and what it holds is a bearer minted for this " +
+			"job alone: it authenticates to the proxy above, buys only what the job's ceilings allow, and " +
+			"is worthless the moment the job ends. No provider token is in here, and there is none to " +
+			"steal.\n\n")
+	case egress.local != "":
 		b.WriteString("Second, there is no provider credential to be inside the boundary: this run's model " +
 			"is served on this machine and authenticates with nothing, so a compromised session has no " +
 			"token that outlives it. What it has instead is the relay above.\n\n")
-	} else {
+	default:
 		b.WriteString("Second, the provider credential is inside the boundary. OMP authenticates for itself, so " +
 			"the auth-broker token this run was issued is in the sandbox's environment. Anything that " +
 			"compromises the session has it, and it is valid outside this run.\n\n")

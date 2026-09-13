@@ -517,10 +517,14 @@ func ompChildEnv(base []string, home string, auth ompAuth) []string {
 		"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
 	)
 	if !auth.configured() {
-		// Unreachable from a run, which refuses to launch without a credential.
-		// Returning the environment untouched keeps it that way instead of
-		// handing OMP empty broker variables that read as a configured broker.
-		return out
+		// A run with nothing to authenticate with is a keyless or brokered one
+		// (locallane.go, brokeredlane.go), and it must reach its endpoint with
+		// no broker at all rather than with whatever the launching shell
+		// exported: an inherited OMP_AUTH_BROKER_TOKEN would let a run that
+		// resolved no credential authenticate anyway, to a provider this
+		// profile never named. Stripping them is the same rule withAuthEnv
+		// applies below, with nothing to put in their place.
+		return removeEnvKeys(out, authEnvKeys)
 	}
 	return withAuthEnv(out, auth.broker, auth.poolPath)
 }
