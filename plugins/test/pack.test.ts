@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pack } from "../pack.ts";
 
-test("unchanged source preserves every installable bundle digest across private staging directories", async () => {
+test("unchanged source preserves every installable bundle digest across output directories", async () => {
   const directory = await mkdtemp(join(tmpdir(), "code-pack-test-"));
   try {
     const first = await pack(join(directory, "first"));

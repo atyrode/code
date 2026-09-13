@@ -1,13 +1,11 @@
 import { z } from "zod";
-import { JobDescriptionSchema } from "@manifold/protocol";
+import type { ServerMigration } from "@manifold/plugin-kit/server";
 import { initialAccountChoices } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
-import { BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { describeSharedBroker } from "./broker.ts";
-import { CODE_PLUGIN_ID, CODE_PREFERENCES_EVENT, ConfigurationSchema,
-  ConfigurationLookupSchema, PromotedResourcesSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview } from "./contract.ts";
-import { CodeRefusal, digestOf, type CodeContext } from "./machine-server.ts";
+import { CODE_PREFERENCES_EVENT, ConfigurationSchema,
+  ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview } from "./contract.ts";
+import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 
 export async function authorizeTarget(ctx: CodeContext, target: Workspace, write = false): Promise<void> {
   if (await ctx.outsideScope(target.containerId) || !(await ctx.auth.allows(write ? "containers:write" : "containers:read",
@@ -20,15 +18,42 @@ export interface StoredConfiguration {
   workspace: Workspace;
   legacyMachineId: string | null;
 }
-const LegacyConfigurationSchema = ConfigurationSchema.omit({ resourcesByMachine: true }).extend({
-  schemaVersion: z.literal(1), machineId: TargetSchema.shape.machineId, resources: PromotedResourcesSchema.nullable(),
+// Old native resource pins are discarded, never interpreted as present authority.
+const Version2ConfigurationSchema = ConfigurationSchema.extend({
+  schemaVersion: z.literal(2), resourcesByMachine: z.record(TargetSchema.shape.machineId, z.unknown()),
 });
+const LegacyConfigurationSchema = ConfigurationSchema.extend({
+  schemaVersion: z.literal(1), machineId: TargetSchema.shape.machineId, resources: z.unknown(),
+});
+const StoredConfigurationSchema = z.union([ConfigurationSchema, Version2ConfigurationSchema.transform(({ resourcesByMachine: _pins, ...record }) =>
+  ConfigurationSchema.parse({ ...record, schemaVersion: 3 }))]);
+const ConfigurationVersionSchema = z.object({ schemaVersion: z.number().int() });
+
+/** Native install/ledger transaction owns this one-time major-version change.
+ * It never adopts machine-local records or advances the container's policy revision. */
+export const configurationMigration: ServerMigration = {
+  name: "canonical-configuration-v3", to: { major: 2, minor: 0 },
+  async migrate(storage) {
+    for (const key of await storage.keys("configuration/")) {
+      const raw = await storage.get(key);
+      if (raw === null) continue;
+      const value: unknown = JSON.parse(raw);
+      const { schemaVersion } = ConfigurationVersionSchema.parse(value);
+      if (schemaVersion === 1) continue;
+      const record = StoredConfigurationSchema.parse(value);
+      if (key !== `configuration/${digestOf({ containerId: record.containerId })}`) throw new CodeRefusal("invalid_configuration");
+      if (schemaVersion === 3) continue;
+      if (!await storage.compareAndSet(key, raw, JSON.stringify(record))) throw new CodeRefusal("stale_preferences");
+    }
+  },
+};
+
 export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof ConfigurationLookupSchema>, write = false): Promise<StoredConfiguration> {
   await authorizeTarget(ctx, input, write);
   const workspace = { containerId: input.containerId };
   const key = `configuration/${digestOf(workspace)}`;
   const raw = await ctx.storage.get(key);
-  let record = raw === null ? null : ConfigurationSchema.parse(JSON.parse(raw));
+  let record = raw === null ? null : StoredConfigurationSchema.parse(JSON.parse(raw));
   let legacyMachineId: string | null = null;
   if (record && record.containerId !== input.containerId) throw new CodeRefusal("invalid_configuration");
   // Only an explicitly selected legacy destination may be adopted. The canonical
@@ -36,9 +61,9 @@ export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof 
   if (raw === null && input.legacyMachineId !== undefined) {
     const legacyRaw = await ctx.storage.get(`configuration/${digestOf({ ...workspace, machineId: input.legacyMachineId })}`);
     if (legacyRaw !== null) {
-      const { machineId, resources, ...legacy } = LegacyConfigurationSchema.parse(JSON.parse(legacyRaw));
+      const { machineId, resources: _pins, ...legacy } = LegacyConfigurationSchema.parse(JSON.parse(legacyRaw));
       if (legacy.containerId !== input.containerId || machineId !== input.legacyMachineId) throw new CodeRefusal("invalid_configuration");
-      record = ConfigurationSchema.parse({ ...legacy, schemaVersion: 2, resourcesByMachine: resources === null ? {} : { [machineId]: resources } });
+      record = ConfigurationSchema.parse({ ...legacy, schemaVersion: 3 });
       legacyMachineId = machineId;
     }
   }
@@ -67,53 +92,18 @@ export async function initializeConfiguration(ctx: CodeContext, input: z.infer<t
   expectRevision(previous, expected);
   if (previous.raw !== null) throw new CodeRefusal("stale_preferences");
   return commitConfiguration(ctx, previous, previous.record ?? {
-    ...previous.workspace, schemaVersion: 2, revision: 1, accounts: initialAccountChoices(), active: null, draft: null,
-    selection: null, resourcesByMachine: {}, updatedBy: ctx.auth.principal.id, updatedAt: ctx.now(),
+    ...previous.workspace, schemaVersion: 3, revision: 1, accounts: initialAccountChoices(), active: null, draft: null,
+    selection: null, updatedBy: ctx.auth.principal.id, updatedAt: ctx.now(),
   });
 }
-export async function currentProductSha256(ctx: CodeContext): Promise<string> {
-  const product = (await ctx.host.roster()).find(row => row.manifest.id === CODE_PLUGIN_ID);
-  if (!product?.enabled || !product.install || product.install.refusal) throw new CodeRefusal("resources_incomplete");
-  return product.install.sha256;
-}
-export async function resourceSnapshot(ctx: CodeContext, machineId: string): Promise<z.infer<typeof PromotedResourcesSchema>> {
-  const productSha256 = await currentProductSha256(ctx);
-  let execution: z.infer<typeof PromotedResourcesSchema>["execution"] = null;
-  try {
-    const description = JobDescriptionSchema.parse(await ctx.jobs.describe({ machineId, pluginId: CODE_PLUGIN_ID }));
-    const installed = description.installation;
-    if (installed?.enabled && !installed.purgeRequested) execution = {
-      installationRevision: installed.revision, artifactSha256: installed.artifactSha256,
-      operations: Object.fromEntries(Object.entries(description.operations ?? {}).map(([id, value]) => [id, value.resourceBindingDigest])),
-    };
-  } catch { /* Pure catalog review remains usable without execution authority; it never claims readiness. */ }
-  const services: z.infer<typeof PromotedResourcesSchema>["services"] = Object.create(null);
-  try {
-    for (const service of (await ctx.services.describe({ machineId })).services) {
-      if (service.serviceId === "suggest" || service.serviceId === "omp") {
-        const { serviceId, revision, policySha256 } = service;
-        services[serviceId] = { serviceId, revision, policySha256 };
-      }
-    }
-  } catch { /* No observed service means no promoted service authority or implicit fallback. */ }
-  try {
-    // Shared reads are pinned by instance configuration CAS, not a worker-local policy revision.
-    const { configuration } = await describeSharedBroker(ctx);
-    if (configuration) services.broker = {
-      serviceId: BROKER_SERVICE_ID, revision: configuration.revision, policySha256: configuration.policySha256,
-    };
-  } catch { /* An unobserved instance cannot contribute a broker pin. */ }
-  return PromotedResourcesSchema.parse({ productSha256, execution, services });
-}
-export async function catalogReview(ctx: CodeContext, record: Configuration, machineId: string, source: "active" | "draft"): Promise<CatalogReview> {
+export function catalogReview(ctx: CodeContext, record: Configuration, source: "active" | "draft"): CatalogReview {
   const catalog = record[source];
   if (!catalog) throw new CodeRefusal("catalog_missing");
   const compiled = compileCatalog(catalog.document);
   const selection = source === "active" && record.selection ? record.selection : defaultSelection(compiled);
   const review = reviewCatalog(compiled, selection, ctx.now());
-  const resources = await resourceSnapshot(ctx, machineId);
-  const facts = { revision: record.revision, source, catalogDigest: catalog.digest, review, resources };
-  // Prices may depend on time of day. The exact route/selection is authoritative; an estimate is not a resource revision.
-  return { ...facts, reviewDigest: digestOf({ target: { containerId: record.containerId, machineId },
-    revision: facts.revision, source, catalogDigest: catalog.digest, selection: review.selection, routes: review.routes, resources }) };
+  const facts = { revision: record.revision, source, catalogDigest: catalog.digest, review };
+  // Time-dependent estimates do not change the reviewed route and selection.
+  return { ...facts, reviewDigest: digestOf({ containerId: record.containerId,
+    revision: facts.revision, source, catalogDigest: catalog.digest, selection: review.selection, routes: review.routes }) };
 }

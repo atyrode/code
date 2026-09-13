@@ -4,16 +4,17 @@
 
 **Manifold is the application; `atyrode.code` is a plugin within it.** The
 operator ratified this replacement on 2026-09-08 in
-[Code #149](https://github.com/atyrode/code/issues/149), with integration under
-[#102](https://github.com/atyrode/code/issues/102). This is not a web front end
-for an independently configured terminal product.
+[Code #149](https://github.com/atyrode/code/issues/149), with the ownership
+cutover integrated under [#161](https://github.com/atyrode/code/issues/161).
+This is not a web front end for an independently configured terminal product.
 
-Code's implementation is TypeScript domain logic and governed actions, React
-surfaces and Bun machine-local workers. It depends on Manifold's public native
-contracts and OMP's agent runtime. The standalone Go program/module, launchers,
-Nix product outputs, release machinery, private stores, visual catalog parser
-and process protocol are not compatibility requirements. No CLI recovery
-ceremony, environment compatibility or publisher belongs in the replacement.
+Code's implementation is TypeScript domain policy, governed actions and React
+surfaces. It depends on Manifold's public native contracts and the independent
+`atyrode.omp` plugin's typed client. OMP owns every machine runtime path. The
+standalone Go program/module, launchers, Nix product outputs, runtime artifact
+pins, workers, private stores, visual catalog parser and process protocol are
+not compatibility requirements. No CLI recovery ceremony, environment
+compatibility or publisher belongs in the replacement.
 A hypothetical future CLI would be a native client, not today's scope.
 
 **Babel depends on Code, not the reverse.** Code exports typed native headless
@@ -30,15 +31,15 @@ and [status.md](status.md) records caveats. Section 6 is the sole progress ledge
 
 | Concern | Owner and current boundary |
 | --- | --- |
-| Catalogs, ladders, selection, routing, estimates, account-choice and usage semantics | Code's typed `plugins/domain/` modules; no recovery of meaning from terminal output |
-| Human and headless access | React surfaces and `atyrode.code.<action>` through Manifold; `contract.ts` / `auth-contract.ts` define typed requests and results |
-| Fleet, identity, grants and consent | Manifold's canonical machine/container/resource scopes; no Code inventory, ACL or label-based retargeting |
-| Durable product state and concurrency | Native plugin storage; Code checks container authority and commits one target-scoped record with `ctx.storage.compareAndSet`, revision and attribution |
-| Credential sources and service policy | Native owner-held references/resolver, scoped service contracts and policy revisions; Code supplies domain policy adapters, never a credential authority |
-| Artifacts, bindings and installation | Native managed resources and exact reviewed revisions; no separately configured Code installation |
-| Jobs, cancellation, retained results and provenance | Native job execution/history; no publisher, timer service, job database or second audit ledger |
-| Workspaces and terminals | Native location bindings and terminal lifecycle; declarations do not prove repository/worktree preparation exists |
-| Ordinary agent behavior | OMP's retries/fallback, quotas, resume and in-session subagent isolation; terminal is an execution surface, not Code's control plane |
+| Catalogs, ladders, selection, routing, estimates, account-choice and usage projection | Code's typed `plugins/domain/` modules; no recovery from terminal output |
+| Human and headless access | React surfaces and `createCodeWorkflowClient` use the same ordinary Manifold action transport across Code and OMP |
+| Fleet, identity, grants and consent | Manifold's canonical principal/machine/container/resource scopes; no Code inventory, ACL or label-based retargeting |
+| Durable product state and concurrency | Manifold plugin storage/migrations; Code owns one container record committed by native CAS |
+| Broker, gateway, provider observations and credential controls | Independent `atyrode.omp` root/accounts/gateway plugins; Code receives typed permitted results only |
+| Artifacts, bindings and installation | Manifold native resources and exact reviewed revisions; OMP alone declares its runtime artifacts |
+| Jobs, cancellation, retained results and provenance | Manifold's native execution/history, invoked through OMP doors; no Code job database, proxy or second ledger |
+| Workspaces and terminals | OMP-reviewed native location/job/session operations and Manifold terminal placement |
+| Ordinary agent behavior | OMP retries/fallback, quotas, resume and in-session isolation; Code supplies no runtime control plane |
 
 Manifold's [axioms](https://github.com/atyrode/manifold/blob/main/AXIOMS.md),
 [contracts](https://github.com/atyrode/manifold/blob/main/docs/CONTRACTS.md) and
@@ -49,34 +50,34 @@ Code/provider branches or a parallel registry, transport or scheduler.
 
 ### Implementation boundaries
 
-Pure catalog, routing and preference operations run in plugin actions, not
-machine jobs. The web can render typed previews, but authoritative changes use
-the same governed boundary as agents. Native events invalidate observations;
-Code does not maintain a replay queue. Unsaved editor state is local, not a
-second preference authority. Concurrent/stale edits refuse rather than overwrite.
+Pure catalog, routing and preference operations run in Code plugin actions, not
+machine jobs. The web renders typed previews, while authoritative changes use
+the same governed Code/OMP workflow as headless callers. Native events
+invalidate observations; Code has no replay queue. Unsaved editor state is
+local, not a second preference authority. Concurrent edits refuse rather than
+overwrite.
 
-Workers require actual machine locality: OMP probes, native OMP sign-in and
-the scoped OMP protocol gateway. They use the native SDK's input, cancellation,
-service and job contracts. The gateway is governed by its native lifetime and
-is not a provisioning daemon, broker replacement or credential store. No
-standalone worker executable is an operator-facing Code product.
+Everything requiring machine locality is owned by `atyrode.omp`: broker and
+gateway workers, provider probes, workspace jobs and session construction. Code
+imports the public caller API and dispatches its doors as the principal; it does
+not proxy, package or configure OMP runtime work. Its only native service policy
+is the optional external suggestion classifier.
 
 ## 3. Product workflows and shared state
 
 | Workflow | Current source path and authority |
 | --- | --- |
-| Initialize and edit shared choices | `initializeConfiguration`, `select`, `changeAccounts`; target `{ containerId, machineId }`, revision checks and native CAS |
-| Catalog edit/review/promotion | `stageCatalog`, `reviewCatalog`, `promoteCatalog`; typed document and exact review digest, no machine process |
-| Native resource adoption | `readSetup`, `reviewResources`, `promoteResources`; observe/adopt exact pins, not installation or consent |
-| Service setup | Owner-only `readServiceConfiguration`, `reviewServices`, `configureServices`; existing native references and reviewed policy revisions, no raw secrets |
-| Accounts and usage | `accounts`, `usage`, `clearAccountBlocks`, `disableCredential`; scoped service read/mutation authority, shared account-choice meaning |
-| Account sign-in | `readAccountSetup` and `prepareSignIn` observe the configured native instance owner, create or reuse its shared OMP broker, and return a pinned terminal handoff. OMP's ordinary `/login` owns OAuth/API-key entry and persistence; Code receives no credential input |
-| Shared account runtime upgrades | `reviewAccountRuntime` and `promoteAccountRuntime` bind explicit owner authority, broker revision and reviewed runtime digest; no silent upgrade or independent broker supervisor |
-| Inventory and benchmarking | `startInventory` / `inventory`, `startBenchmark` / `benchmark`, `stageBenchmark`; explicit potentially paid provider requests and retained typed receipts, never automatic promotion |
-| Suggestions | `suggest` invokes the promoted scoped classifier, validates and returns a revision-bound selection; saving remains explicit |
-| Reviewed launch | `previewLaunch` binds routes/account slots/resource pins; `prepareLaunch` rechecks and returns `TerminalRuntimeSchema`; `host.authoring.createTerminal` delegates placement to the mounted native renderer |
-| Workspace/session access | `prepareWorkspace` creates declared new locations and probes pinned OMP through a native job; launch reuses them with write consent. No cloning or private worktree registry |
-| Supervising clients | Typed native product actions and native job/runtime references; downstream clients adopt independently |
+| Initialize and edit shared choices | Code `initializeConfiguration`, `select`, `changeAccounts`; `{ containerId }`, revision checks and native CAS |
+| Catalog edit/review/promotion | Code `stageCatalog`, `reviewCatalog`, `promoteCatalog`; typed document and exact review digest, no machine process |
+| Native permission review | Headless Code client composes exact `engine.jobs` deployment requests from OMP owner observations; no checked choice grants authority |
+| Suggestion setup | Code `readServiceConfiguration`, `reviewServices`, `configureServices` bind only the optional external classifier |
+| Accounts and usage | OMP accounts/usage/control doors own observations and effects; Code projects shared exact-slot choices |
+| Account sign-in/runtime | OMP accounts owner reviews/promotes its broker and returns the sign-in terminal; Code receives no credential input |
+| Gateway configuration | OMP gateway owner reviews/promotes destination service policy; Code has no gateway server |
+| Inventory and benchmark | OMP starts/reads typed native receipts; Code `draftInventory`/`deriveCatalog` produce unpromoted catalog data |
+| Reviewed session | Code `composeSession` freezes policy; OMP reviews/rechecks defaults, destination and accounts and returns `TerminalRuntimeSchema` |
+| Workspace access | OMP owns separately reviewed create and existing-folder validation; no Code registry or cloning |
+| Supervising clients | `createCodeWorkflowClient(dispatch)` is React-free; downstream clients adopt independently |
 
 Catalog/preferences operations remain useful without execution readiness.
 Missing machine/service resources are explicit per-operation unavailable states,
@@ -89,45 +90,31 @@ needed adoption is a separately authorized bounded native operation.
 
 ## 4. Execution resources, revisions and credentials
 
-[Manifold #447](https://github.com/atyrode/manifold/issues/447) owns the native
-resource/runtime/scoped-service requirement, refining
-[#153](https://github.com/atyrode/manifold/issues/153). Code consumes those
-contracts rather than matching an installed Code command or wrapper.
+Manifold owns the generic resource/runtime/scoped-service contract. OMP consumes
+it for managed artifacts, system/development tool closures, broker/gateway
+services, workspace/probe/session operations and exact reviews. Code consumes
+only the ordinary public OMP action contract; it has no machine manifest,
+runtime-artifacts file, generated worker or private execution helper.
 
-`runtime-artifacts.json` records managed Bun 1.4.2, OMP/SDK 18.1.14 and pi-natives
-pins for Linux x64/arm64. The packer bundles TypeScript workers and generates
-artifact/tool declarations. Every operation declares the required
-`runtimeTools.system` closure. The native owner must independently supply,
-review and promote its interpreter and transitive libraries; direct ELF
-requirements in `native-requirements.json` are not a ready closure. No PATH,
-host filesystem or incidental cache fallback is permitted. An unconfigured
-owner must report unavailable resources and refuse admission.
+The selected policy is **explicit review of exact revisions at every owner**:
+Code configuration/composition digest, OMP defaults and account observations,
+native deployment review, destination installation/artifact/binding revisions
+and service policy revisions. Each workflow re-observes its inputs immediately
+before the effect and refuses a changed one. Product CAS, native deployment,
+service configuration and provider freshness are distinct.
 
-The selected policy is **explicit promotion of exact revisions**: product
-bundle hash, configuration/catalog revision, execution installation/artifact
-and operation binding digests, service revisions and policy hashes. Review and
-startup must not silently resolve different inputs. Resource promotion neither
-provisions a machine nor grants consent. Fresh usage and equivalent secret
-rotation are not software upgrades; their freshness/authority still need truthful
-semantics.
+The credential boundary is the OMP accounts plugin's native scoped service
+access. Owner-held secrets stay in its protected managed location. Ordinary
+read, credential mutation, broker configuration, gateway invocation and Code
+preference mutation retain separate authority. No credential or service bearer
+belongs in Code's browser inputs, configuration, server, bundle, argv, logs or
+output.
 
-The selected credential boundary is **native scoped service access**. Owner-held
-source refs are available only for their declared origins. Service configuration
-requires native owner authority and revision-checked review. Account sign-in is
-an ordinary pinned OMP terminal on the instance broker owner, using OMP's
-supported `/login` flow rather than a Code enrollment worker or credential form.
-Read, credential mutation and runtime authority remain separate. Provider secrets
-stay in the broker owner's native managed home or their existing protected source.
-Only declared scoped service capabilities reach jobs; no provider secret belongs
-in Code's browser inputs, configuration, hub records, argv or ordinary output.
-Scoped access does not prevent a process from disclosing data it can legitimately read.
-
-Code creates or reuses the configured instance-wide OMP broker through Manifold's
-native service lifecycle, after exact runtime/resource review. It neither starts
-a private supervisor nor turns external broker setup into a standalone prerequisite.
-Workspace bindings are likewise not proof of workspace preparation. Use native
-resource lifecycle and report missing capabilities rather than inventing a
-Code daemon, SSH helper or terminal-as-transport workaround.
+Moving from the historical Code-owned broker to OMP changes the native service
+scope intentionally. Saved Code choices may be rebound only after an explicit
+live observation proves the same provider, positive credential id and concrete
+identity/slot under the OMP owner. Ambiguous email matching, a scope alias or
+automatic fan-out would silently broaden authority and is prohibited.
 
 ## 5. Cutover and acceptance
 
@@ -139,15 +126,15 @@ estimates, no account-pool broadening, freshness and honest probe outcomes.
 
 | Scenario | Failure condition |
 | --- | --- |
-| Clean plugin build/install | Requires Go, a Code binary/wrapper, Nix Code product or legacy state directories |
-| Catalog/preferences with offline machines | Requires a worker/broker for pure computation or falsely claims execution readiness |
-| Two principals, web and agent clients | Different authority/state paths, stale overwrite, or Code ACL/replication substitute |
-| Changed state/product/execution/service revisions | Silently uses different reviewed inputs instead of refusing stale use |
-| First use, account types, catalog, suggestions, launch | Hidden CLI ceremony, unsupported required account path, missing artifact or placeholder substitutes for capability |
-| Scoped service reads/mutations and revocation | Read grants mutation/runtime authority, source secret escapes, account selection broadens or revoked authority causes an effect |
-| Real OMP, reconnect and cancellation | Admission/tile is reported ready or gateway/child escapes its native owner |
-| Native workspace lifetime | Private Code registry or terminal transport remains required; declared locations are misrepresented as implemented preparation |
-| Reusable native primitive | Behavior depends on a privileged Code/provider identifier rather than generic contracts |
+| Clean plugin build/install | Requires Go, a Code binary/wrapper, Code runtime artifacts, legacy state paths or fabricated OMP bundles |
+| Catalog/preferences with offline machines | Requires a machine process or falsely claims execution readiness |
+| Two principals, web and headless clients | Different action paths, stale overwrite, or Code ACL/replication substitute |
+| Changed Code/OMP/native revisions | Silently uses a different reviewed input instead of refusing stale use |
+| First use, accounts, catalog, suggestions, session | Hidden CLI ceremony, unsupported account kind, fake dependency or placeholder substitutes for capability |
+| OMP read/mutation/runtime authority | Read grants mutation/setup authority, source secret escapes, account selection broadens or revoked authority causes an effect |
+| Real OMP, reconnect and cancellation | Admission/tile is reported as provider success or worker/child escapes native ownership |
+| Native workspace lifetime | Private Code registry/transport remains required, or validation silently creates |
+| Reusable native primitive | Behavior depends on a privileged Code/OMP identifier rather than generic contracts |
 
 Source gates, built artifacts, disposable-server dispatch, browser interaction and
 real machine/provider behavior establish different facts. Run the safe available
@@ -168,18 +155,17 @@ final pins, gates and runtime evidence.
 
 | Step | Status | Evidence and remaining acceptance |
 | --- | --- | --- |
-| 0 — architecture | ratified | Operator direction on 2026-09-08, #149: Code is Manifold-native, with scoped services, explicit exact-revision promotion and one native state authority. Babel is a downstream consumer, not a prerequisite. Documentation is not implementation proof. |
-| 1 — plugin resources and operations | in progress | Bootstrap packaging shipped in #107; Manifold #429/#445/#446 supplied earlier runtime/job/storage work. Current integration packs five TS/React/Bun bundles, with an independently installed model gateway avoiding circular service pins, under Manifold #448. Required owner-provided system closure, final exact pins and operational resource evidence remain distinct. |
-| 2 — web-controlled launch | in progress | Current source provides shared dials, exact launch preview, `prepareLaunch` and native terminal placement. The 2026-09-07 old-terminal preview and #148's 2026-09-08 isolated checks were prototype evidence only. Current actual OMP readiness, account-backed execution and native lifecycle evidence remain; #98 stays open. |
-| 3 — native workspace and multiplayer | in progress | Native storage CAS, scoped configuration, separately consented folder creation or read-only existing-folder validation, a real OMP version probe, and separately consented repeated launch writes. Successful preparation receipts must match the selected operation, installation and resource pins. No private registry or repository cloning. Full native lifetime, two-principal web/agent equivalence and runtime composition require evidence; #99 stays open. |
-| 4 — accounts and usage | in progress | Current source has Accounts/Usage panels, scoped service actions, shared choices, a native instance-owned OMP broker, ordinary OMP `/login` terminal handoff and explicitly reviewed shared-runtime upgrades. Code accepts no credentials and has no enrollment worker. On 2026-09-10 the normal browser review/apply flow restored an unavailable broker in a disposable local hub; no provider sign-in or shared-preview activation occurred. Complete account workflows and multiplayer proof remain. #100/#105/#106 stay open. |
-| 5 — catalog, suggestions and first use | in progress | Current source has typed catalog editing/review/promotion, native inventory/benchmark receipts, scoped suggestions and resource/service setup. First-use permission review is reachable before model setup, and folder preparation follows a retained successful native job rather than local React state. The 2026-09-10 pinned-Bun plugin gate passed 143 tests and all five bundle lifecycle checks. A disposable no-network preparation job exited successfully; neither establishes shared-preview acceptance or provider workflows. Complete first-use and real provider/runtime evidence remain under #103 and #152. |
-| 6 — retire deprecated implementation | not completed | Current integration performs the TypeScript-only source/build/docs cutover rather than preserving the old Go/CLI/state/visual-format paths. This is not a claim that main has merged it. Final integrated retirement evidence remains under #101; downstream clients adopt native Code independently and live data handling requires separate authority. |
+| 0 — architecture | ratified | Operator direction on 2026-09-08, #149: Code is Manifold-native; #161 separates OMP into its own native plugin while Code remains policy/presentation. Babel is downstream. Documentation is not implementation proof. |
+| 1 — plugin resources and operations | in progress | Current integration packs three OMP runtime bundles and four Code policy/presentation bundles. Real required-dependency ordering, in-memory compilation and exact Git/Manifold pins replace Code staging and duplicated runtime manifests. Final pins, merged CI and operational resource evidence remain. |
+| 2 — web-controlled launch | in progress | `createCodeWorkflowClient` composes Code policy and OMP review/prepare doors; the workbench rechecks composition/defaults/destination before passing OMP's terminal descriptor to native placement. Disposable browser evidence proves refusal and interaction, not account-backed execution or lifecycle. #98 remains. |
+| 3 — native workspace and multiplayer | in progress | Configuration is one container CAS with a named native schema-2-to-3 migration. Existing and create workspace routes are separately reviewed OMP jobs. Two ordinary browser identities share state while destination changes preserve prompts/drafts. Live workspace/session evidence remains under #99. |
+| 4 — accounts and usage | in progress | OMP owns account/runtime/sign-in/usage doors and real broker/gateway workers; Code owns exact-slot choices and usage projection. Browser evidence covers freshness/refusal and Code controls; packaged OMP tests cover reconnect, shutdown, redaction and concrete-slot fallback without providers. Preview custody/rebind and account-backed proof remain under #100/#105/#106. |
+| 5 — catalog, suggestions and first use | in progress | Code retains typed catalog/routing and external suggestion policy; OMP owns defaults, inventory and benchmark receipts. The headless permission plan is the web path, exposes independent choices and never equates review with authority. Final pinned gates and real provider/session evidence remain under #103/#152. |
+| 6 — retire deprecated implementation | in progress | #161 removes the Go/CLI/Nix/state/runtime-worker surface, Code broker/gateway/probe artifacts and obsolete tests after explicit reachability checks. Four Code bundles depend on the real OMP owner with no shim. Merge, CI and bounded preview data/custody acceptance remain before shipped/proven. |
 
-Draft #148's recorded prototype commit was
-`381ac912707e1ccc2b6ecbf8f4dcc75c8e99ab17`; its historical Go/plugin gates and
-2026-09-08 isolated smokes apply only to that implementation. They do not certify
-this cutover. The broader integration record remains #102, without a publisher
-or wrapper-preservation requirement. The shared preview's exact deployment and
-bounded live observations are recorded in [status](status.md#source-is-not-deployment);
-they do not imply a main-branch merge or complete runtime acceptance.
+Draft #148's prototype commit
+`381ac912707e1ccc2b6ecbf8f4dcc75c8e99ab17` and the 2026-09-09 five-Code-bundle
+preview apply only to that historical implementation. They do not certify this
+cutover. #161 records the cross-repository source integration; merge, releases,
+native review, preview custody and account-backed runtime evidence remain
+separate.

@@ -2,25 +2,19 @@ import { useCallback, useEffect, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
 import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
-import { actionDoor, actionSchemas, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
+import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
+import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { createCodeWorkflowClient, WorkflowError } from "./workflow.ts";
 
 const messages: Readonly<Record<string, string>> = {
   code_stale_preferences: "Shared choices changed. Read the current revision before committing your edit.",
-  code_preview_changed: "The catalog, accounts or native resources changed. Review again before launching.",
-  code_resources_changed: "Promoted native resources changed. Review and promote their exact revisions again.",
-  code_resources_incomplete: "The selected machine does not have the required native resources and consent.",
-  code_native_consent_required: "Native permissions for the account broker and OMP sign-in are not approved. Review OMP setup before continuing.",
+  code_composition_changed: "The saved profile, account pool or OMP defaults changed. Review the session again before launching.",
   code_configuration_missing: "Initialize Code for this container first.",
   code_catalog_missing: "Stage, review and promote a catalog first.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_scope_refused: "Your current authority does not cover this container.",
-  code_result_unavailable: "This native result is incomplete, no longer retained, or not readable with your current authority.",
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
-  code_broker_revision_changed: "The instance broker configuration changed. Refresh and review its current revision again.",
-  code_broker_unavailable: "The instance account broker is unavailable. Ask the instance owner to review its native placement and runtime.",
-  code_account_owner_unavailable: "The declared account owner is unavailable. No other machine will be used.",
-  code_account_admin_required: "Account administration requires native permission. Ask the instance owner to grant access.",
   code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
   code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
 };
@@ -28,19 +22,21 @@ const messages: Readonly<Record<string, string>> = {
 export function canWriteCodeWorkspace(host: HostServices): boolean {
   return host.authoring !== null && hasCap(host.client.selfCaps(), "containers:write");
 }
-class CodeActionError extends Error {}
 export function codeOperationFailure(reason: unknown): string {
-  return reason instanceof CodeActionError ? reason.message : "The Code action could not be completed.";
+  return reason instanceof WorkflowError ? messages[reason.message] ?? reason.message : "The Code action could not be completed.";
+}
+export function codeWorkflow(host: HostServices) {
+  return createCodeWorkflowClient(async (door, input) => {
+    const outcome = await host.client.action(door, input);
+    if (!outcome.ok) throw new WorkflowError(`${door}: ${outcome.denial.message}. No approval or readiness is assumed.`);
+    return outcome.result;
+  });
 }
 export async function callCodeAction<K extends CodeAction>(host: HostServices, name: K, input: ActionInput<K>): Promise<ActionResult<K>> {
-  const parsed = actionSchemas[name].input.safeParse(input);
-  if (!parsed.success) throw new CodeActionError("The action input does not match the typed Code contract.");
-  const outcome = await host.client.action(actionDoor(name), parsed.data);
-  if (!outcome.ok) throw new CodeActionError(messages[outcome.denial.message] ??
-    "This action is unavailable under the current native authority or resource configuration.");
-  const result = actionSchemas[name].result.safeParse(outcome.result);
-  if (!result.success) throw new CodeActionError("The Code action returned an invalid result.");
-  return result.data as ActionResult<K>;
+  return codeWorkflow(host).code(name, input);
+}
+export async function callOmpAction<K extends OmpAction>(host: HostServices, name: K, input: OmpInput<K>): Promise<OmpResult<K>> {
+  return codeWorkflow(host).omp(name, input);
 }
 export function useCodeMachines(host: HostServices) {
   const [error, setError] = useState<string | null>(null);
@@ -84,18 +80,16 @@ export function useCodeTarget(host: HostServices) {
 }
 
 /** Job progress is a projection of native lifecycle, not a second Code job registry. */
-export function useCodeJob(host: HostServices, node: { kind: "job"; machineId: string; operationId: string; jobId: string } | null) {
+export function useOmpJob(host: HostServices, node: { kind: "job"; machineId: string; operationId: string; jobId: string } | null) {
   const feed = usePolledResource<{
     job: ReturnType<typeof PublicJobSchema.parse> | null;
     error: string | null;
   } | null>(async () => {
     if (node === null) return null;
     try {
-      const result = await host.client.action("engine.jobs.status", { node });
-      if (!result.ok) return { job: null, error: "Job status is unavailable. Open native history for details." };
-      return { job: PublicJobSchema.parse(result.result), error: null };
-    } catch {
-      return { job: null, error: "Job status could not be read. The job has not been restarted." };
+      return { job: await codeWorkflow(host).readJob(node), error: null };
+    } catch (reason) {
+      return { job: null, error: `${codeOperationFailure(reason)} The job has not been restarted.` };
     }
   }, FALLBACK_POLL_MS, {
     key: `${CODE_PLUGIN_ID}.job:${JSON.stringify(node)}`, restartKey: host.principal.id,
@@ -104,25 +98,18 @@ export function useCodeJob(host: HostServices, node: { kind: "job"; machineId: s
   return { job: feed.value?.job ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 
-/** Setup reads retained native receipts so reloading never repeats workspace creation. */
-export function useCodeRuns(host: HostServices, target: Target | null, operation: string) {
-  const operationId = `${CODE_PLUGIN_ID}.${operation}`;
+/** Native history is explicitly filtered to the actual OMP job owner. */
+export function useOmpRuns(host: HostServices, target: Target | null, operationId: string) {
   const feed = usePolledResource<{
     runs: ReturnType<typeof ListJobRunsResultSchema.parse>["runs"];
     error: string | null;
   } | null>(async () => {
     if (!target) return null;
     try {
-      const result = await host.client.action("engine.jobs.listRuns", { machineId: target.machineId, pluginId: CODE_PLUGIN_ID, operationId, limit: 100 });
-      if (!result.ok) throw new Error("History unavailable");
-      const value = ListJobRunsResultSchema.parse(result.result);
-      if (value.runs.some(run => {
-        const identity = run.job ?? run.occurrence;
-        return identity && (identity.machineId !== target.machineId || identity.pluginId !== CODE_PLUGIN_ID || identity.operationId !== operationId);
-      })) throw new Error("Unexpected history scope");
+      const value = await codeWorkflow(host).listRuns(target, operationId);
       return { runs: value.runs, error: null };
-    } catch {
-      return { runs: [], error: "Workspace check history could not be read. No work has been restarted." };
+    } catch (reason) {
+      return { runs: [], error: `${codeOperationFailure(reason)} No work has been restarted.` };
     }
   }, FALLBACK_POLL_MS, {
     key: `${CODE_PLUGIN_ID}.runs:${target?.machineId ?? ""}:${operationId}`, restartKey: host.principal.id,
@@ -131,26 +118,30 @@ export function useCodeRuns(host: HostServices, target: Target | null, operation
   return { runs: feed.value?.runs ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 export const ACCOUNT_REFRESH_MS = 1_000;
-export type CodeQuery = "readConfiguration" | "readSetup" | "readServiceConfiguration" | "readAccountSetup" | "accounts" | "usage" | "inventory" | "benchmark";
-/** Native shared feeds invalidate state; externally changing broker observations keep their polling cadence. */
+export type CodeQuery = "readConfiguration" | "readServiceConfiguration";
 export function useCodeQuery<K extends CodeQuery>(host: HostServices, name: K, input: ActionInput<K> | null, intervalMs = FALLBACK_POLL_MS) {
-  const key = `${actionDoor(name)}:${JSON.stringify(input)}`;
-  const enabled = input !== null;
+  return useWorkflowQuery(host, `${actionDoor(name)}:${JSON.stringify(input)}`, input !== null,
+    () => callCodeAction(host, name, input!), intervalMs);
+}
+export function useOmpQuery<K extends OmpAction>(host: HostServices, name: K, input: OmpInput<K> | null, intervalMs = FALLBACK_POLL_MS) {
+  return useWorkflowQuery(host, `${ompDoor(name)}:${JSON.stringify(input)}`, input !== null,
+    () => callOmpAction(host, name, input!), intervalMs);
+}
+/** Poll even with a live event channel: native broker/provider observations can
+ * change independently of Manifold events. Keys isolate target-bound observations. */
+export function useWorkflowQuery<T>(host: HostServices, key: string, enabled: boolean, observe: () => Promise<T>, intervalMs = FALLBACK_POLL_MS) {
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => { setRefreshing(false); }, [key, host.principal.id]);
-  const feed = usePolledResource<{ data: ActionResult<K> | null; error: string | null } | null>(async () => {
-    if (input === null) return null;
-    try { return { data: await callCodeAction(host, name, input), error: null }; }
+  const feed = usePolledResource<{ data: T | null; error: string | null } | null>(async () => {
+    if (!enabled) return null;
+    try { return { data: await observe(), error: null }; }
     catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
   }, intervalMs, {
     key, restartKey: host.principal.id,
     initial: null, enabled,
     onSuccess: () => setRefreshing(false),
     onError: () => setRefreshing(false),
-    // Broker accounts and provider quotas change outside Manifold's event plane.
-    // A live native subscription would suppress their timer without replacing it.
-    topics: input === null || name === "accounts" || name === "readAccountSetup" || name === "usage" ? [] :
-      [...("containerId" in input ? [{ kind: "container" as const, containerId: input.containerId }] : []), CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
+    topics: [], events: host.client,
   });
   const refresh = useCallback(() => {
     if (!enabled) return;

@@ -1,32 +1,8 @@
-import { z } from "zod";
-import {
-  AccountChoiceChangeSchema, AccountChoicesSchema, AccountsObservationSchema,
-  DomainError, epochMilliseconds, identifier, RuntimeAccountPoolSchema,
-  type AccountChoiceChange, type AccountChoices, type AccountRecord,
-  type AccountReference, type AccountsObservation, type RuntimeAccountPool,
-} from "./contracts.ts";
+import { AccountsObservationSchema, RuntimeAccountPoolSchema,
+  type AccountRecord, type AccountReference, type AccountsObservation, type RuntimeAccountPool } from "@atyrode/manifold-omp";
+import { AccountChoiceChangeSchema, AccountChoicesSchema, DomainError,
+  type AccountChoiceChange, type AccountChoices } from "./contracts.ts";
 
-const nonblank = z.string().min(1).max(1024).refine(value => value.trim().length > 0);
-const slot = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-
-/** Only native, secret-free broker metadata may cross this seam. */
-export const ProjectedBrokerSnapshotSchema = z.strictObject({
-  credentials: z.array(z.strictObject({
-    id: slot,
-    provider: identifier,
-    identityKey: nonblank.nullable(),
-    credential: z.strictObject({
-      type: z.enum(["oauth", "api_key"]),
-      email: z.string().max(512).nullable().optional(),
-    }),
-    disabled: z.boolean().optional(),
-    blocks: z.array(z.strictObject({
-      blockScope: z.string().max(128),
-      blockedUntilMs: epochMilliseconds,
-    })).max(64).optional(),
-  })).max(1024),
-});
-export type ProjectedBrokerSnapshot = z.infer<typeof ProjectedBrokerSnapshotSchema>;
 
 function referenceKey(reference: AccountReference): string {
   return JSON.stringify([reference.scope, reference.provider, reference.kind,
@@ -128,63 +104,34 @@ export function reduceAccountChoices(state: AccountChoices, change: AccountChoic
   return parseChoices(choices);
 }
 
-/** The caller owns freshness policy and must not pass an expired read as a fresh observation. */
-export function projectAccounts(
-  rawProjectedBrokerSnapshot: unknown, scope: string, observedAtMs: number | null, nowMs: number,
-): AccountsObservation {
-  if (!nonblank.safeParse(scope).success || !epochMilliseconds.safeParse(nowMs).success ||
-    (observedAtMs !== null && (!epochMilliseconds.safeParse(observedAtMs).success || observedAtMs > nowMs))) {
-    throw new DomainError("invalid_accounts");
-  }
-  if (rawProjectedBrokerSnapshot === null) return { scope, observedAt: null, status: "unavailable", accounts: [] };
-  const parsed = ProjectedBrokerSnapshotSchema.safeParse(rawProjectedBrokerSnapshot);
-  if (!parsed.success) throw new DomainError("invalid_accounts");
-  const ids = new Set<number>();
-  const identities = new Set<string>();
-  const accounts: AccountRecord[] = [];
-  for (const row of parsed.data.credentials) {
-    const type = row.credential.type;
-    if (ids.has(row.id) || (type === "oauth" ? row.identityKey === null : row.identityKey !== null)) {
-      throw new DomainError("invalid_accounts");
-    }
-    ids.add(row.id);
-    const reference: AccountReference = type === "oauth" ?
-      { kind: "identity", scope, provider: row.provider, identityKey: row.identityKey! } :
-      { kind: "credential", scope, provider: row.provider, credentialId: row.id };
-    const key = referenceKey(reference);
-    if (identities.has(key)) throw new DomainError("invalid_accounts");
-    identities.add(key);
-    const blockScopes = new Set<string>();
-    const blocks: AccountRecord["blocks"] = [];
-    for (const block of row.blocks ?? []) {
-      if (blockScopes.has(block.blockScope)) throw new DomainError("invalid_accounts");
-      blockScopes.add(block.blockScope);
-      if (block.blockedUntilMs > nowMs) blocks.push({ scope: block.blockScope, until: block.blockedUntilMs });
-    }
-    blocks.sort((left, right) => right.until - left.until);
-    accounts.push({ reference, credentialId: row.id, type, identityKey: row.identityKey,
-      email: row.credential.email ?? null, disabled: row.disabled ?? false, blocks });
-  }
-  return { scope, observedAt: observedAtMs, status: observedAtMs === null ? "stale" : "fresh", accounts };
-}
 
 /** Validate stored observations too: public schemas alone cannot express cross-record identity invariants. */
 export function checkedAccountsObservation(raw: AccountsObservation): AccountsObservation {
   const parsed = AccountsObservationSchema.safeParse(raw);
   if (!parsed.success) throw new DomainError("invalid_accounts");
   const observation = parsed.data;
-  if ((observation.status === "fresh" && observation.observedAt === null) ||
+  if (!observation.scope.trim() || (observation.status === "fresh" && observation.observedAt === null) ||
     (observation.status === "unavailable" && (observation.accounts.length !== 0 || observation.observedAt !== null))) {
     throw new DomainError("invalid_accounts");
   }
-  const projected = projectAccounts({ credentials: observation.accounts.map(account => ({
-    id: account.credentialId, provider: account.reference.provider, identityKey: account.identityKey,
-    credential: { type: account.type, email: account.email }, disabled: account.disabled,
-    blocks: account.blocks.map(block => ({ blockScope: block.scope, blockedUntilMs: block.until })),
-  })) }, observation.scope, observation.observedAt, observation.observedAt ?? 0);
-  for (let index = 0; index < observation.accounts.length; index++) {
-    if (referenceKey(observation.accounts[index]!.reference) !== referenceKey(projected.accounts[index]!.reference)) {
+  const ids = new Set<number>();
+  const identities = new Set<string>();
+  for (const account of observation.accounts) {
+    const reference = account.reference;
+    if (ids.has(account.credentialId) || reference.scope !== observation.scope ||
+      (account.type === "oauth"
+        ? reference.kind !== "identity" || !account.identityKey?.trim() || reference.identityKey !== account.identityKey
+        : reference.kind !== "credential" || account.identityKey !== null || reference.credentialId !== account.credentialId)) {
       throw new DomainError("invalid_accounts");
+    }
+    ids.add(account.credentialId);
+    const key = referenceKey(reference);
+    if (identities.has(key)) throw new DomainError("invalid_accounts");
+    identities.add(key);
+    const blockScopes = new Set<string>();
+    for (const block of account.blocks) {
+      if (blockScopes.has(block.scope)) throw new DomainError("invalid_accounts");
+      blockScopes.add(block.scope);
     }
   }
   return observation;
@@ -214,7 +161,7 @@ export function selectedAccountPool(observation: AccountsObservation, choices: A
     const provider = account.reference.provider;
     pool[provider] ??= [];
     if (account.disabled || disabled.some(reference => sameDisabledIdentity(reference, account.reference))) continue;
-    pool[provider]!.push({ credentialId: account.credentialId, identityKey: account.identityKey });
+    pool[provider]!.push({ scope: accounts.scope, credentialId: account.credentialId, identityKey: account.identityKey });
   }
   const parsed = RuntimeAccountPoolSchema.safeParse(pool);
   if (!parsed.success) throw new DomainError("invalid_accounts");

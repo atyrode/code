@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { CODE_PLUGIN_ID, GATEWAY_OPERATION_ID, GATEWAY_PLUGIN_ID, type ActionInput, type ActionResult, type Target } from "../contract.ts";
-import { callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useCodeRuns } from "../machine-web.ts";
-import { codeOperationReady } from "../operation-readiness.ts";
+import { OMP_PLUGIN_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID } from "@atyrode/manifold-omp";
+import type { ActionInput, ActionResult, Target } from "../contract.ts";
+import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useOmpRuns } from "../machine-web.ts";
+import { operationReady } from "../permission-plan.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { OmpSignIn } from "../omp-sign-in.tsx";
 import { PermissionReview } from "../permission-review.tsx";
@@ -11,21 +12,20 @@ import { LegacyWorkspaceAdoption } from "../accounts-view.tsx";
 const steps = ["Accounts", "Workspace", "Machine", "Resources", "Folders", "Models"] as const;
 const titles = ["Connect your accounts", "Set up this workspace", "One-time machine setup", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
-const requiredOperations = ["catalog-inventory", "launch"] as const;
+const requiredOperations = [INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID] as const;
 const workspaceRoutes = [
-  { mode: "create", operation: "prepare-workspace", label: "Create new folders", description: "Create new workspace and session folders. Existing folders are never overwritten." },
-  { mode: "existing", operation: "validate-workspace", label: "Check existing folders", description: "Check your existing workspace and session folders without changing their contents." },
+  { mode: "create", operation: PREPARE_WORKSPACE_OPERATION_ID, label: "Create new folders", description: "Create new workspace and session folders. Existing folders are never overwritten." },
+  { mode: "existing", operation: VALIDATE_WORKSPACE_OPERATION_ID, label: "Check existing folders", description: "Check your existing workspace and session folders without changing their contents." },
 ] as const;
 export function Onboarding({ host, target, available, visible, settings = false, onDone }: {
   host: HostServices; target: Target | null; available: boolean; visible: boolean; settings?: boolean; onDone: () => void;
 }) {
   const machineId = target?.machineId ?? "";
   const configuration = useCodeQuery(host, "readConfiguration", { containerId: host.containerId! });
-  const setup = useCodeQuery(host, "readSetup", target);
-  const creationHistory = useCodeRuns(host, target, "prepare-workspace");
-  const validationHistory = useCodeRuns(host, target, "validate-workspace");
+  const setup = useOmpQuery(host, "describeDestination", target);
+  const creationHistory = useOmpRuns(host, target, PREPARE_WORKSPACE_OPERATION_ID);
+  const validationHistory = useOmpRuns(host, target, VALIDATE_WORKSPACE_OPERATION_ID);
   const record = configuration.data?.configuration ?? null;
-  const [review, setReview] = useState<(ActionResult<"reviewResources"> & { revision: number; machineId: string }) | null>(null);
   const [serviceReview, setServiceReview] = useState<{ input: ActionInput<"reviewServices">; result: ActionResult<"reviewServices"> } | null>(null);
   const [classifierMode, setClassifierMode] = useState<"keep" | "set" | "remove">("keep");
   const [classifierOrigin, setClassifierOrigin] = useState("");
@@ -44,49 +44,29 @@ export function Onboarding({ host, target, available, visible, settings = false,
   const generation = destination.current.generation;
   function destinationCurrent() { return mounted.current && generation === destination.current.generation; }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { setReview(null); setServiceReview(null); }, [machineId]);
+  useEffect(() => { setServiceReview(null); }, [machineId]);
   useEffect(() => { if (visible) setPermissionsVisited(true); }, [visible]);
   const writable = canWriteCodeWorkspace(host);
   const serviceConfiguration = useCodeQuery(host, "readServiceConfiguration", record && writable && host.client.selfCaps().includes("*") ? target : null);
-  const gateway = serviceConfiguration.data?.runtimeCandidates.find(candidate =>
-    candidate.runtime.pluginId === GATEWAY_PLUGIN_ID && candidate.runtime.operationId === GATEWAY_OPERATION_ID);
-  const modelConnection = setup.data?.services.find(service => service.serviceId === "omp" &&
-    ["models", "stream"].every(id => service.operations.some(operation => operation.operationId === id && operation.ready)));
-  const reviewedGateway = serviceReview?.result.policies.find(policy => policy.serviceId === "omp")?.runtime;
-  const serviceReviewCurrent = serviceReview !== null && serviceReview.input.machineId === machineId && serviceConfiguration.data?.configuration.revision === serviceReview.input.expectedServiceRevision &&
-    gateway?.ready === true && reviewedGateway?.installationRevision === gateway.runtime.installationRevision &&
-    reviewedGateway?.artifactSha256 === gateway.runtime.artifactSha256 && reviewedGateway?.resourceBindingDigest === gateway.runtime.resourceBindingDigest;
-  const execution = setup.data?.execution;
-  const installation = execution?.installation;
-  const workspaceReady = workspaceRoutes.some(route => codeOperationReady(execution, machineId, route.operation));
-  const installed = workspaceReady &&
-    requiredOperations.every(operation => codeOperationReady(execution, machineId, operation));
-  const resources = record?.resourcesByMachine[machineId];
-  const currentPins = resources?.execution;
-  const executionCurrent = resources?.productSha256 === setup.data?.productSha256 && currentPins && installation &&
-    currentPins.installationRevision === installation.revision && currentPins.artifactSha256 === installation.artifactSha256;
-  const resourcesCurrent = installed && executionCurrent &&
-    workspaceRoutes.some(route => codeOperationReady(execution, machineId, route.operation) &&
-      currentPins.operations[`${CODE_PLUGIN_ID}.${route.operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${route.operation}`]?.resourceBindingDigest) &&
-    requiredOperations.every(operation => currentPins.operations[`${CODE_PLUGIN_ID}.${operation}`] === execution?.operations?.[`${CODE_PLUGIN_ID}.${operation}`]?.resourceBindingDigest) &&
-    ["broker", "omp", ...(setup.data?.services.some(service => service.serviceId === "suggest") || resources?.services.suggest ? ["suggest"] : [])].every(id => {
-      const saved = resources?.services[id];
-      return saved && setup.data?.services.some(service => service.serviceId === saved.serviceId && service.revision === saved.revision && service.policySha256 === saved.policySha256);
-    });
+  const modelConnection = setup.data?.services.find(service => service.serviceId === "omp" && service.state === "ready");
+  const serviceReviewCurrent = serviceReview !== null && serviceReview.input.machineId === machineId &&
+    serviceConfiguration.data?.configuration.revision === serviceReview.input.expectedServiceRevision;
+  const workspaceReady = workspaceRoutes.some(route => operationReady(setup.data, route.operation));
+  const installed = workspaceReady && requiredOperations.every(operation => operationReady(setup.data, operation));
+  const resourcesCurrent = installed && modelConnection !== undefined;
   const matchingJobs = workspaceRoutes.flatMap(route => {
     const history = route.mode === "create" ? creationHistory : validationHistory;
-    const operationId = `${CODE_PLUGIN_ID}.${route.operation}`;
-    const operation = execution?.operations?.[operationId];
-    return history.runs?.flatMap(run => run.job && installation && operation &&
-      run.job.machineId === machineId && run.job.operationId === operationId && run.job.installationRevision === installation.revision && run.job.artifactSha256 === installation.artifactSha256 &&
-      run.job.resourceBindingDigest === operation.resourceBindingDigest ? [run.job] : []) ?? [];
+    const operationId = route.operation;
+    const pins = setup.data?.operations.find(operation => operation.operationId === operationId)?.pins;
+    return history.runs?.flatMap(run => run.job && pins &&
+      run.job.machineId === machineId && run.job.operationId === operationId && run.job.installationRevision === pins.installationRevision &&
+      run.job.artifactSha256 === pins.artifactSha256 && run.job.resourceBindingDigest === pins.resourceBindingDigest ? [run.job] : []) ?? [];
   });
   const prepared = matchingJobs.some(job => job.state === "exited" && job.result?.exitCode === 0);
   const preparing = matchingJobs.find(job => runningStates.has(job.state));
   const nextStep = !accountsContinued && !record ? 0 : !record ? 1 : !installed ? 2 : !resourcesCurrent ? 3 : !prepared ? 4 : 5;
   const step = selectedStep ?? (settings ? nextStep === 2 ? 2 : 3 : nextStep);
   useEffect(() => { if (step === 5) setModelsVisited(true); }, [step]);
-  const reviewCurrent = review !== null && review.machineId === machineId && record?.revision === review.revision;
   function refresh() { configuration.refresh(); setup.refresh(); serviceConfiguration.refresh(); creationHistory.refresh(); validationHistory.refresh(); }
   async function perform(work: () => Promise<void>) {
     if (pending.current || !writable) return;
@@ -125,11 +105,15 @@ export function Onboarding({ host, target, available, visible, settings = false,
       </>}
       {step === 2 && <>
         <p>Account sign-in and machine setup are separate. This step lets Code use your shared accounts and run OMP on the selected machine. It does not move your credentials or start a model request.</p>
-        {(!modelConnection || settings) && <details className="plugin-atyrode_code__details" open={!modelConnection}>
+        <details className="plugin-atyrode_code__details" open={!modelConnection}>
           <summary>{modelConnection ? "Model connection · ready" : "Next: connect this machine to your accounts"}</summary>
-          <p>The model gateway connects OMP to your instance’s account broker. Review the exact software and native access here, then separately approve the connection policy. Code checks readiness before continuing.</p>
+          <p>The model gateway connects OMP to your instance’s account broker. Its owner reviews native rights and gateway configuration independently of Code’s classifier.</p>
+          <PermissionReview host={host} target={target} intent="gateway" label="Review model connection prerequisites" onReady={refresh} />
+        </details>
+        {settings && <details className="plugin-atyrode_code__details"><summary>External suggestion classifier</summary>
           {serviceConfiguration.error && <p role="status">{serviceConfiguration.error}</p>}
-          {settings && <div className="plugin-atyrode_code_generator__fields">
+          <p>Code may send task descriptions to this explicitly configured external classifier. This policy does not configure OMP, its broker or its gateway.</p>
+          <div className="plugin-atyrode_code_generator__fields">
             <label>Suggestions<select value={classifierMode} disabled={busy} onChange={event => { setClassifierMode(event.target.value as typeof classifierMode); setServiceReview(null); }}>
               <option value="keep">Keep current configuration</option><option value="set">Configure a classifier</option><option value="remove">Disable suggestions</option>
             </select></label>
@@ -137,30 +121,30 @@ export function Onboarding({ host, target, available, visible, settings = false,
               <label>Ollama origin<input type="url" value={classifierOrigin} placeholder="http://127.0.0.1:11434" disabled={busy} onChange={event => { setClassifierOrigin(event.target.value); setServiceReview(null); }} /></label>
               <label>Classifier model<input value={classifierModel} placeholder="Model name" disabled={busy} onChange={event => { setClassifierModel(event.target.value); setServiceReview(null); }} /></label>
             </>}
-          </div>}
-          {!serviceReview && (gateway?.ready ? <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceConfiguration.data?.connected || (classifierMode === "set" && (!classifierOrigin.trim() || !classifierModel.trim()))} onClick={() => {
-            if (target && serviceConfiguration.data) void perform(async () => {
+          </div>
+          {!serviceReview && <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceConfiguration.data?.connected || classifierMode === "keep" || (classifierMode === "set" && (!classifierOrigin.trim() || !classifierModel.trim()))} onClick={() => {
+            if (target && serviceConfiguration.data && classifierMode !== "keep") void perform(async () => {
               const input: ActionInput<"reviewServices"> = { ...target, expectedServiceRevision: serviceConfiguration.data!.configuration.revision,
-                ...(classifierMode === "keep" ? {} : { classifier: classifierMode === "remove" ? null : { origin: classifierOrigin.trim(), model: classifierModel.trim() } }) };
+                classifier: classifierMode === "remove" ? null : { origin: classifierOrigin.trim(), model: classifierModel.trim() } };
               const result = await callCodeAction(host, "reviewServices", input);
               if (destinationCurrent()) setServiceReview({ input, result });
             });
-          }}>{busy ? "Reviewing…" : "Review this connection"}</button> : <PermissionReview host={host} target={target} intent="gateway" label="Review model connection prerequisites" onReady={refresh} />)}
+          }}>{busy ? "Reviewing…" : "Review classifier policy"}</button>}
           {serviceReview && <>
-            <p>This connects the reviewed gateway to your shared accounts. Other machine services and your account broker stay unchanged.</p>
-            {!serviceReviewCurrent && <p role="status">Native setup changed. Review the current connection again.</p>}
-            <details className="plugin-atyrode_code__details"><summary>Exact connection policies</summary><pre>{JSON.stringify(serviceReview.result.policies.filter(policy => policy.serviceId === "omp" || policy.serviceId === "suggest"), null, 2)}</pre></details>
+            <p>Only Code’s external suggestion classifier changes. Other machine services and your OMP runtime stay unchanged.</p>
+            {!serviceReviewCurrent && <p role="status">Native configuration changed. Review the current classifier policy again.</p>}
+            <details className="plugin-atyrode_code__details"><summary>Exact classifier policy</summary><pre>{JSON.stringify(serviceReview.result.policies.filter(policy => policy.serviceId === "suggest"), null, 2)}</pre></details>
             <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceReviewCurrent} onClick={() => void perform(async () => {
               await callCodeAction(host, "configureServices", { ...serviceReview.input, reviewDigest: serviceReview.result.reviewDigest });
               if (destinationCurrent()) { setServiceReview(null); setSelectedStep(null); }
-            })}>{busy ? "Configuring…" : "Use this connection"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
+            })}>{busy ? "Configuring…" : "Use classifier policy"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
           </>}
         </details>}
         {modelConnection ? <>
           <p>Next, review what Code may do on this machine. Choose either new folders or an existing-folder check; you do not need both. Paid benchmarks and account changes are separate.</p>
           <ul className="plugin-atyrode_code_generator__requirements">
             <li data-ready={workspaceReady}><span>Use workspace and session folders</span><span>{workspaceReady ? "ready" : "review needed"}</span></li>
-            {requiredOperations.map(operation => <li key={operation} data-ready={codeOperationReady(execution, machineId, operation)}><span>{operation === "catalog-inventory" ? "Discover available models" : "Open OMP sessions"}</span><span>{codeOperationReady(execution, machineId, operation) ? "ready" : "review needed"}</span></li>)}
+            {requiredOperations.map(operation => <li key={operation} data-ready={operationReady(setup.data, operation)}><span>{operation === INVENTORY_OPERATION_ID ? "Discover available models" : "Open OMP sessions"}</span><span>{operationReady(setup.data, operation) ? "ready" : "review needed"}</span></li>)}
           </ul>
           <PermissionReview host={host} target={target} intent="setup" label="Review machine capabilities" onReady={refresh} />
         </> : <p>Unprepared capabilities can be reconsidered independently. Closing a review does not revoke previously approved access.</p>}
@@ -174,32 +158,26 @@ export function Onboarding({ host, target, available, visible, settings = false,
         </details>
       </>}
       {step === 3 && <>
-        <p>Use this machine’s approved runtime with the shared instance account broker. Reviewing does not install anything or grant additional access.</p>
-        {!review && <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !record || !available} onClick={() => { if (record && target) void perform(async () => { const result = await callCodeAction(host, "reviewResources", { ...target, expectedRevision: record.revision }); if (destinationCurrent()) setReview({ ...result, revision: record.revision, machineId }); }); }}>{busy ? "Reviewing…" : "Review resources"}</button>}
-        {review && <>
-          <dl className="plugin-atyrode_code_generator__setup-facts"><dt>runtime</dt><dd>{review.resources.execution ? "pinned native installation" : "not installed"}</dd><dt>connections</dt><dd>{Object.keys(review.resources.services).join(", ") || "none"}</dd></dl>
-          {!reviewCurrent && <p role="status">Shared choices changed. Review the current resources again.</p>}
-          <details className="plugin-atyrode_code__details"><summary>Exact resources and revisions</summary><pre>{JSON.stringify(review.resources, null, 2)}</pre></details>
-          <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !reviewCurrent} onClick={() => { if (target) void perform(async () => { await callCodeAction(host, "promoteResources", { ...target, expectedRevision: review.revision, reviewDigest: review.reviewDigest }); if (destinationCurrent()) { setReview(null); setSelectedStep(null); if (settings) onDone(); } }); }}>Use these resources</button><button type="button" disabled={busy} onClick={() => setReview(null)}>back</button></div>
-        </>}
+        <p>OMP owns native resource revisions and execution authority. Code does not promote or store runtime pins after preparation.</p>
+        <details open className="plugin-atyrode_code__details"><summary>Current native destination observation</summary><pre>{JSON.stringify(setup.data, null, 2)}</pre></details>
+        <PermissionReview host={host} target={target} intent="setup" label="Review native resources and capabilities" onReady={refresh} />
+        <button type="button" disabled={busy} onClick={() => { refresh(); setSelectedStep(4); }}>Continue to folders</button>
       </>}
       {step === 4 && <>
         <p>{prepared ? "Workspace ready. Setup is saved for this runtime." : "Create new workspace folders or check folders you already use."}</p>
         {preparing && <p role="status">Checking workspace…</p>}
         {matchingJobs.length > 0 && !preparing && !prepared && <p role="status" className="plugin-atyrode_code__warning">The workspace check did not finish successfully. Review its result before trying again.</p>}
         {!prepared && workspaceRoutes.map(route => {
-          const operationId = `${CODE_PLUGIN_ID}.${route.operation}`;
-          const routeReady = executionCurrent && codeOperationReady(execution, machineId, route.operation) &&
-            currentPins?.operations[operationId] === execution?.operations?.[operationId]?.resourceBindingDigest;
+          const routeReady = operationReady(setup.data, route.operation);
           const history = route.mode === "create" ? creationHistory : validationHistory;
           return <div key={route.mode}>
             <p>{route.description}</p>
             {!routeReady && <><p role="status">This option needs permission. Review its exact scope, or choose the other option if it matches your folders.</p><PermissionReview host={host} target={target} intent={route.mode === "create" ? "workspace-create" : "workspace-existing"} label={`Review permission: ${route.label}`} onReady={refresh} /></>}
             {history.error && <p role="status">{history.error}</p>}
-            <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record && target) void perform(async () => { await callCodeAction(host, "prepareWorkspace", { ...target, expectedRevision: record.revision, mode: route.mode }); if (destinationCurrent()) setSelectedStep(null); }); }}>{route.label}</button>
+            <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record && target) void perform(async () => { await codeWorkflow(host).prepareWorkspace(target, route.mode); if (destinationCurrent()) setSelectedStep(null); }); }}>{route.label}</button>
           </div>;
         })}
-        <button type="button" onClick={() => host.navigate(`manifold://plugin/${CODE_PLUGIN_ID}`)}>Open native job history</button>
+        <button type="button" onClick={() => host.navigate(`manifold://plugin/${OMP_PLUGIN_ID}`)}>Open native job history</button>
       </>}
       {(step === 5 || modelsVisited) && <div hidden={step !== 5}><CatalogWorkbench host={host} target={target} available={available} onDone={() => { refresh(); onDone(); }} /></div>}
     </div>

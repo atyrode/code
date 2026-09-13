@@ -2,21 +2,8 @@
   "id": "atyrode.code.accounts",
   "version": "0.3.0",
   "title": "code accounts",
-  "description": "Shared account choices and independently installed native OMP broker/sign-in administration.",
-  "capabilities": [
-    "containers:read",
-    "containers:write",
-    "terminals:spawn",
-    "machines:run",
-    "jobs:read",
-    "jobs:input",
-    "jobs:cancel",
-    "services:read",
-    "services:configure",
-    "network:host",
-    "locations:read",
-    "locations:write"
-  ],
+  "description": "Shared account-pool choices and an ordinary client of OMP account observation and sign-in authority.",
+  "capabilities": [],
   "contributes": {
     "panels": [{ "id": "accounts", "title": "Code accounts" }],
     "sections": [],
@@ -25,134 +12,8 @@
     "events": []
   },
   "dependencies": {
-    "atyrode.code": { "type": "required", "reason": "Shared account choices and observations live in Code." }
+    "atyrode.code": { "type": "required", "reason": "Code owns shared account-pool choices." },
+    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns shared account observations, broker custody and sign-in." }
   },
-  "machine": {
-    "artifacts": {},
-    "tools": {},
-    "requiresResourceBindings": true,
-    "operations": {
-      "atyrode.code.accounts.broker": {
-        "argv": [
-          {
-            "literal": "/job/artifact"
-          }
-        ],
-        "input": {
-          "clientAccess": { "type": "string", "required": true, "maxLength": 1024 }
-        },
-        "runtimeTools": [
-          "bun",
-          "pi-natives",
-          "system"
-        ],
-        "executable": {
-          "runtimeTool": "bun"
-        },
-        "environment": {
-          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
-          "PI_CONFIG_DIR": "omp",
-          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
-        },
-        "inputFiles": {
-          "clientAccess": { "input": "clientAccess" },
-          "serviceBearer": {
-            "generated": "service-bearer"
-          }
-        },
-        "providesService": true,
-        "services": [],
-        "locations": [
-          {
-            "locationId": "atyrode.code.accounts.omp-auth",
-            "access": "write"
-          }
-        ],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 600000,
-          "memoryBytes": 1073741824,
-          "processes": 128,
-          "outputBytes": 262144
-        },
-        "stdin": false
-      },
-      "atyrode.code.accounts.sign-in": {
-        "argv": [
-          {
-            "literal": "--allow-home"
-          },
-          {
-            "literal": "--no-session"
-          },
-          {
-            "literal": "--config"
-          },
-          {
-            "literal": "/home/job/.omp/agent/config.yml"
-          }
-        ],
-        "input": {
-          "config": {
-            "type": "string",
-            "required": true,
-            "maxLength": 128
-          }
-        },
-        "runtimeTools": [
-          "omp",
-          "system"
-        ],
-        "executable": {
-          "runtimeTool": "omp"
-        },
-        "environment": {
-          "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
-          "PI_CONFIG_DIR": "omp",
-          "PI_CODING_AGENT_DIR": "/home/job/omp/agent"
-        },
-        "inputFiles": {
-          "config": {
-            "input": "config",
-            "homePath": [
-              ".omp",
-              "agent",
-              "config.yml"
-            ]
-          }
-        },
-        "services": [],
-        "locations": [
-          {
-            "locationId": "atyrode.code.accounts.omp-auth",
-            "access": "write"
-          }
-        ],
-        "outputs": [],
-        "network": "host",
-        "limits": {
-          "timeoutMs": 1800000,
-          "memoryBytes": 2147483648,
-          "processes": 128,
-          "outputBytes": 8388608
-        },
-        "stdin": true
-      }
-    },
-    "locations": {
-      "atyrode.code.accounts.omp-auth": {
-        "anchor": "state",
-        "components": [
-          "code",
-          "shared-omp"
-        ],
-        "revision": "1",
-        "kind": "directory",
-        "managed": true,
-        "guestPath": "/home/job/omp"
-      }
-    }
-  },
-  "entry": { "server": true, "web": "web.js", "styles": true }
+  "entry": { "web": "web.js", "styles": true }
 }

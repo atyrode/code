@@ -2,14 +2,15 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { hasCap } from "@manifold/protocol";
 import { accountSelectionDisabled, disabledAccountReferences } from "../domain/accounts.ts";
-import type { AccountChoiceChange, AccountRecord, AccountReference } from "../domain/contracts.ts";
-import type { ActionInput, ActionResult, Target } from "./contract.ts";
-import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
+import type { AccountChoiceChange } from "../domain/contracts.ts";
+import type { AccountRecord, AccountReference, ActionInput as OmpInput } from "@atyrode/manifold-omp";
+import type { ActionResult, Target } from "./contract.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, callOmpAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery } from "./machine-web.ts";
 import { OmpSignIn } from "./omp-sign-in.tsx";
 import { PermissionReview } from "./permission-review.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
-type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: ActionInput<"clearAccountBlocks"> };
+type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: OmpInput<"clearAccountBlocks"> };
 type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
@@ -66,7 +67,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   const id = useId();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
-  const accountFeed = useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
+  const accountFeed = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const current = configuration.data?.configuration ?? null;
   const observation = accountFeed.data;
   const choices = current?.accounts ?? null;
@@ -90,14 +91,13 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     hadDraft.current = draftId !== undefined;
   }, [draftId]);
   useEffect(() => { if (confirmation) confirmCancel.current?.focus(); }, [confirmation]);
-  useEffect(() => { setConfirmation(null); }, [target?.machineId]);
   const writable = canWriteCodeWorkspace(host);
   const canEdit = writable && workspace !== null && current !== null && !busy;
-  const canAdminister = writable && hasCap(host.client.selfCaps(), "services:invoke") && target !== null && !busy && observation?.status === "fresh";
+  const canAdminister = writable && hasCap(host.client.selfCaps(), "services:invoke") && workspace !== null && !busy && observation?.status === "fresh";
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
     account.credentialId === confirmation.input.credentialId && referenceKey(account.reference) === referenceKey(confirmation.input.reference)) : null;
-  const canConfirm = canAdminister && observedConfirmation != null && confirmation?.input.machineId === target?.machineId;
+  const canConfirm = canAdminister && observedConfirmation != null && confirmation?.input.containerId === workspace?.containerId;
   function refresh() { configuration.refresh(); accountFeed.refresh(); }
   async function saveChoice(change: AccountChoiceChange, revision = current?.revision) {
     if (!workspace || !canEdit || revision === undefined || revision !== current?.revision || pending.current || confirmation) return;
@@ -129,7 +129,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     if (!confirmation || !canConfirm || pending.current) return;
     pending.current = true; setBusy(true); setMessage(null);
     try {
-      const result = await callCodeAction(host, confirmation.action, confirmation.input);
+      const result = await callOmpAction(host, confirmation.action, confirmation.input);
       if (mounted.current) {
         setMessage(`Native action returned ${result.status} accounts. ${result.status === "fresh" ? "Review the account rows below." : "Current account availability is not confirmed."}`);
         setConfirmation(null);
@@ -221,11 +221,11 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
           <details className="plugin-atyrode_code__account-details plugin-atyrode_code__account-credential-actions">
             <summary>Instance-wide credential actions</summary>
             <p>These act on the native broker, not just this pool. To leave an account out of Code, change its inclusion instead.</p>
-            {!canAdminister && <p>Requires workspace edit access, native service permission, a selected machine and fresh account metadata.</p>}
+            {!canAdminister && <p>Requires workspace edit access, native service permission and fresh account metadata. These actions use the declared account owner, not the execution destination.</p>}
             {draft && <p>Save or discard your preset draft before changing native credentials.</p>}
             <div className="plugin-atyrode_code__account-toolbar">
-              <button type="button" disabled={!canAdminister || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "clearAccountBlocks", input: { ...target, reference: account.reference, credentialId: account.credentialId }, title: `Reset blocks for ${account.reference.provider} · ${accountLabel(account)}` }); }}>Reset blocks…</button>
-              <button type="button" className="plugin-atyrode_code__account-danger-action" disabled={!canAdminister || account.disabled || confirmation !== null || draft !== null} onClick={() => { if (target) setConfirmation({ action: "disableCredential", input: { ...target, reference: account.reference, credentialId: account.credentialId }, title: `Disable ${account.reference.provider} · ${accountLabel(account)}` }); }}>Disable credential…</button>
+              <button type="button" disabled={!canAdminister || confirmation !== null || draft !== null} onClick={() => { if (workspace) setConfirmation({ action: "clearAccountBlocks", input: { ...workspace, reference: account.reference, credentialId: account.credentialId }, title: `Reset blocks for ${account.reference.provider} · ${accountLabel(account)}` }); }}>Reset blocks…</button>
+              <button type="button" className="plugin-atyrode_code__account-danger-action" disabled={!canAdminister || account.disabled || confirmation !== null || draft !== null} onClick={() => { if (workspace) setConfirmation({ action: "disableCredential", input: { ...workspace, reference: account.reference, credentialId: account.credentialId }, title: `Disable ${account.reference.provider} · ${accountLabel(account)}` }); }}>Disable credential…</button>
             </div>
           </details>
         </details>

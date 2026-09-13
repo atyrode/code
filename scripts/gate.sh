@@ -33,6 +33,7 @@ fi
 (cd -- "$manifold" && bun install --frozen-lockfile)
 cd -- "$here/plugins"
 bun install --frozen-lockfile
+bun run prepare:integration
 bun run check
 bun run test
 bun run pack
