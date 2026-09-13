@@ -41,8 +41,9 @@ package main
 //     tree, along with everything it spawned.
 //
 // Exit status: the child's own once it has run, 1 when the launch was refused
-// before any byte reached stdout, 2 for a usage error, 3 when a killed child
-// left no status at all.
+// before any byte reached stdout, 2 for a usage error, 3 when no status came
+// out of OMP at all — either because the launch was refused for a reason the
+// report's failure names, or because a killed child left none.
 
 import (
 	"context"
@@ -140,6 +141,10 @@ const engineHelp = `code engine — a contained omp --mode rpc under a confirmed
       rewritten after the child exits with its exit status and the resources
       it used. The report is mode 0600 and written atomically; a client reads
       it before it discloses anything, and again after the stream ends.
+      A launch refused before OMP is started — an auth broker that does not
+      answer, say — writes that same file with the failure's name and the
+      reason under it, and exits 3, so a client waiting for the stream has
+      something to report other than a handshake that never came.
 
       The child runs with a private HOME, no built-in tools, no extensions,
       skills or rules, and — where the machine can establish it — inside a
@@ -332,6 +337,14 @@ type runtimeReport struct {
 	Privacy  profilePrivacy    `json:"privacy"`
 	Cost     profileCost       `json:"cost"`
 	Metadata map[string]string `json:"metadata"`
+	// Failure names a refusal in one token a client can branch on, and
+	// Reason carries the error underneath it. A launch that refused before
+	// OMP was started is the one failure a client cannot read out of the
+	// stream — there is no ready frame and no child status to read a cause
+	// from — so it is read here instead, and Finished is true on such a
+	// report because the wrapper did account for the launch: it refused it.
+	Failure string `json:"failure,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 
 	Containment *sandboxDeclaration `json:"containment,omitempty"`
 	Finished    *bool               `json:"finished,omitempty"`
@@ -441,6 +454,25 @@ func runEngineImport(opts engineOptions) int {
 // errOmpProfileUnavailable marks the one refusal an operator can act on by
 // name: the launch named a profile this installation cannot back.
 var errOmpProfileUnavailable = errors.New("profile unavailable")
+
+// engineFailureBrokerUnavailable is the report's name for the refusal an
+// operator answers by starting a service rather than by editing a profile: the
+// auth broker that holds their accounts did not answer, and a run launched
+// without its snapshot would reach a provider under no account policy at all.
+// The same spelling is the failure in the report and the head of the refusal's
+// own error, so a launcher that reads either one names the same thing.
+const engineFailureBrokerUnavailable = "broker_unavailable"
+
+// errOmpBrokerUnavailable marks that refusal. ompResolveAuth wraps the
+// snapshot's own error in it and serve turns it into the report.
+var errOmpBrokerUnavailable = errors.New(engineFailureBrokerUnavailable)
+
+// engineRefusedStatus is what a launch refused for a reason the report names
+// exits with. A client that was waiting for a ready frame reads any nonzero
+// status as "no session"; this one says the report explains why, and it is
+// distinct from the 1 an unresolvable profile exits with because the remedy is
+// on the machine rather than in the reference the client sent.
+const engineRefusedStatus = 3
 
 // ompLauncher runs one contained OMP session under a saved profile.
 //
@@ -654,6 +686,9 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 		return 1, err
 	}
 	if err := l.resolveCredential(opts.profile); err != nil {
+		if errors.Is(err, errOmpBrokerUnavailable) {
+			return l.refuse(opts, profile, engineFailureBrokerUnavailable, err, errw)
+		}
 		return 1, err
 	}
 	if !l.credential.configured() && !l.keyless {
@@ -750,6 +785,32 @@ func (l *ompLauncher) serve(ctx context.Context, opts engineOptions, in io.Reade
 		return 3, nil
 	}
 	return exitCode, nil
+}
+
+// refuse reports a launch nothing was started for, and answers with the status
+// that says so.
+//
+// A refusal the machine causes is the one failure a client cannot read out of
+// the stream: there is no child, so there is no ready frame and no exit status
+// to carry a cause, and a client timing the handshake can only report that the
+// engine closed its stdout before announcing itself — the symptom, never the
+// reason. So the report is written although no run began, and carries the
+// failure's name, the reason under it, and nothing that could be mistaken for
+// a session: no containment, because none was established, and no resources,
+// because nothing spent any.
+func (l *ompLauncher) refuse(opts engineOptions, profile resolvedProfile, failure string,
+	cause error, errw io.Writer,
+) (int, error) {
+	report := runtimeReportOf(profile)
+	report.Failure = failure
+	report.Reason = l.redactor.redactString(cause.Error())
+	finished, status := true, engineRefusedStatus
+	report.Finished = &finished
+	report.ExitCode = &status
+	if err := writeRuntimeReport(opts.runtimeInfo, report); err != nil {
+		fmt.Fprintf(errw, "code engine: the refusal could not be reported to %s: %v\n", opts.runtimeInfo, err)
+	}
+	return engineRefusedStatus, cause
 }
 
 // launchPlan builds the boundary this run goes inside, and the launch that

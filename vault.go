@@ -118,7 +118,16 @@ func legacyManifestFirstBroker(raw, path string) brokerConfig {
 	return broker
 }
 
-func loadAccounts(broker brokerConfig) (map[string][]account, error) {
+// accountSnapshotTimeout is how long a surface with an operator in front of it
+// waits for the snapshot. Nothing is lost by waiting: the panel has nothing
+// else to show until the accounts arrive.
+const accountSnapshotTimeout = 20 * time.Second
+
+// loadAccounts reads the broker's account snapshot. The timeout is the
+// caller's because the two callers have different obligations: a panel waits,
+// and a launch a client is timing a handshake against refuses instead
+// (ompSnapshotBudget).
+func loadAccounts(broker brokerConfig, timeout time.Duration) (map[string][]account, error) {
 	accounts := emptyAccounts()
 	if strings.TrimSpace(broker.URL) == "" || strings.TrimSpace(broker.Token) == "" {
 		return accounts, errors.New("central auth broker is not configured")
@@ -129,7 +138,7 @@ func loadAccounts(broker brokerConfig) (map[string][]account, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+broker.Token)
 	req.Header.Set("OMP-Auth-Broker-Capabilities", "codex-meter-block-scopes")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return accounts, err
 	}

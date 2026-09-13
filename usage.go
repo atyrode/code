@@ -407,7 +407,7 @@ func parseAvailability(accounts map[string][]account, accountsOK bool, out []byt
 // plus — when the snapshot carries a DeepSeek api_key — the upstream prepaid
 // balance, fetched concurrently so neither request delays the other.
 func loadAvailability(broker brokerConfig) availability {
-	accounts, err := loadAccounts(broker)
+	accounts, err := loadAccounts(broker, accountSnapshotTimeout)
 	accountsOK := err == nil
 	if !accountsOK {
 		accounts = map[string][]account{}

@@ -34,7 +34,7 @@ func TestLoadAccountsValidatesFiltersAndSortsCentralSnapshot(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got, err := loadAccounts(brokerConfig{URL: server.URL, Token: "central-secret"})
+	got, err := loadAccounts(brokerConfig{URL: server.URL, Token: "central-secret"}, accountSnapshotTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestLoadAccountsSendsMeterScopeCapability(t *testing.T) {
 		_, _ = w.Write([]byte(`{"credentials":[]}`))
 	}))
 	defer server.Close()
-	if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "t"}); err != nil {
+	if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "t"}, accountSnapshotTimeout); err != nil {
 		t.Fatal(err)
 	}
 	if capability != "codex-meter-block-scopes" {
@@ -77,7 +77,7 @@ func TestLoadAccountsRejectsMalformedRelevantIdentities(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(snapshot)) }))
 			defer server.Close()
-			if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "token"}); err == nil {
+			if _, err := loadAccounts(brokerConfig{URL: server.URL, Token: "token"}, accountSnapshotTimeout); err == nil {
 				t.Fatal("malformed snapshot accepted")
 			}
 		})
