@@ -1,0 +1,624 @@
+.plugin-atyrode_code {
+  --code-bg: #1b1e26;
+  --code-fg: #edf0f5;
+  --code-muted: #adb4c3;
+  --code-dim: #8790a2;
+  --code-accent: #b6a3eb;
+  --code-blue: #70b7e8;
+  --code-amber: #e7ad74;
+  --code-positive: #8bcbb4;
+  --code-warning: #ded77b;
+  --code-danger: #ef929f;
+  --code-rule: #4b515f;
+  color: var(--code-fg);
+  background: var(--code-bg);
+  --code-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color-scheme: dark;
+}
+.plugin-atyrode_code,
+.plugin-atyrode_code * { box-sizing: border-box; }
+.plugin-atyrode_code :is(h1, h2, h3, h4, h5, p, dl) { margin: 0; }
+.plugin-atyrode_code :is(h1, h2, h3, h4, h5) { font: inherit; font-weight: 600; }
+.plugin-atyrode_code :is(h2, h3) { color: var(--code-accent); }
+.plugin-atyrode_code :is(code, pre, kbd) { font-family: var(--code-mono); font-size: 0.9em; }
+.plugin-atyrode_code pre { max-width: 100%; overflow: auto; white-space: pre-wrap; }
+.plugin-atyrode_code :is(ul, ol) { margin: 0; padding-inline-start: 1.4em; }
+.plugin-atyrode_code :is(button, input, select, textarea) {
+  max-width: 100%;
+  min-width: 0;
+  color: var(--code-fg);
+  font: inherit;
+  accent-color: var(--code-accent);
+}
+.plugin-atyrode_code :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  border: 1px solid var(--code-rule);
+  border-radius: 4px;
+  padding: 0.35rem 0.55rem;
+  background: var(--code-bg);
+}
+.plugin-atyrode_code textarea { width: 100%; resize: vertical; }
+.plugin-atyrode_code input::placeholder,
+.plugin-atyrode_code textarea::placeholder { color: var(--code-muted); opacity: 1; }
+.plugin-atyrode_code button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  min-height: 2rem;
+  padding: 0.3rem 0.55rem;
+  background: transparent;
+  color: var(--code-muted);
+  line-height: 1.4;
+  text-align: center;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code button:hover:not(:disabled) {
+  color: var(--code-accent);
+  background: color-mix(in srgb, var(--code-accent) 9%, transparent);
+}
+.plugin-atyrode_code button[aria-pressed="true"],
+.plugin-atyrode_code button[aria-selected="true"] {
+  color: var(--code-accent);
+  background: color-mix(in srgb, var(--code-accent) 13%, var(--code-bg));
+  font-weight: 600;
+}
+.plugin-atyrode_code :is(button, input, select, textarea):disabled { color: var(--code-dim); cursor: not-allowed; }
+.plugin-atyrode_code a { color: var(--code-accent); text-underline-offset: 0.18em; }
+.plugin-atyrode_code :is(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--code-accent);
+  outline-offset: 3px;
+}
+.plugin-atyrode_code :is(button, summary) { touch-action: manipulation; }
+.plugin-atyrode_code details { min-width: 0; }
+.plugin-atyrode_code summary { cursor: pointer; color: var(--code-muted); }
+.plugin-atyrode_code summary::marker { color: var(--code-accent); }
+.plugin-atyrode_code summary:hover { color: var(--code-accent); }
+.plugin-atyrode_code details[open] > summary { margin-bottom: 0.45rem; }
+.plugin-atyrode_code hr { width: 100%; border: 0; border-top: 1px solid var(--code-rule); }
+.plugin-atyrode_code fieldset { min-width: 0; border: 1px solid var(--code-rule); padding: 0.6rem; }
+.plugin-atyrode_code legend { color: var(--code-accent); padding-inline: 0.3rem; }
+.plugin-atyrode_code .plugin-atyrode_code__primary-action {
+  color: var(--code-bg);
+  background: var(--code-accent);
+  border-color: var(--code-accent);
+  padding-inline: 0.9rem;
+  font-weight: 700;
+}
+.plugin-atyrode_code .plugin-atyrode_code__primary-action:hover:not(:disabled) {
+  color: var(--code-bg);
+  background: color-mix(in srgb, var(--code-accent) 80%, white);
+}
+.plugin-atyrode_code .plugin-atyrode_code__primary-action:disabled {
+  color: var(--code-muted);
+  background: transparent;
+  border-color: var(--code-rule);
+}
+.plugin-atyrode_code .plugin-atyrode_code__section-label {
+  display: inline-block;
+  align-self: center;
+  width: fit-content;
+  padding: 0;
+  color: var(--code-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1.5;
+}
+.plugin-atyrode_code .plugin-atyrode_code__section-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.45rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__muted { color: var(--code-muted); }
+.plugin-atyrode_code .plugin-atyrode_code__dim { color: var(--code-dim); }
+.plugin-atyrode_code .plugin-atyrode_code__warning { color: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__provider-blue { color: var(--code-blue); }
+.plugin-atyrode_code .plugin-atyrode_code__provider-amber { color: var(--code-amber); }
+.plugin-atyrode_code .plugin-atyrode_code__notice {
+  border-inline-start: 2px solid var(--code-rule);
+  padding-inline-start: 0.65rem;
+  color: var(--code-muted);
+}
+.plugin-atyrode_code .plugin-atyrode_code__details { color: var(--code-muted); font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__details > :not(summary) + :not(summary) { margin-top: 0.35rem; }
+.plugin-atyrode_code.plugin-atyrode_code__usage { display: grid; gap: 0.6rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-observation { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-providers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+  align-items: start;
+  gap: 1rem 2rem;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-provider {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  container-type: inline-size;
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-account { min-width: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-account + .plugin-atyrode_code__usage-account {
+  border-top: 1px solid var(--code-rule);
+  padding-top: 0.45rem;
+  margin-top: 0.3rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.75rem;
+  color: var(--code-muted);
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-identity h4 { font-weight: 400; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-identity > span { font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-windows { display: grid; gap: 0.15rem; list-style: none; padding: 0; margin-block: 0.2rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window {
+  display: grid;
+  grid-template-columns: minmax(4rem, 7rem) minmax(3rem, 7.5rem) 9ch minmax(0, 1fr);
+  gap: 0.25rem 0.6rem;
+  align-items: center;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-window-label { min-width: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter,
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter-unknown {
+  display: block;
+  appearance: none;
+  width: 100%;
+  height: 0.9rem;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--code-rule);
+  overflow: hidden;
+}
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-positive); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-level="high"] .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-level="exhausted"] .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-danger); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter::-webkit-meter-bar { border: 0; border-radius: 0; height: 0.9rem; background: var(--code-rule); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter::-webkit-meter-optimum-value { background: var(--code-meter-fill); border-radius: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter::-moz-meter-bar { background: var(--code-meter-fill); border-radius: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-state="stale"] .plugin-atyrode_code__usage-meter { --code-meter-fill: repeating-linear-gradient(90deg, var(--code-amber) 0 3px, var(--code-rule) 3px 5px); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window[data-state="inactive"] .plugin-atyrode_code__usage-meter { --code-meter-fill: var(--code-dim); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-meter-unknown { border: 1px dashed var(--code-dim); background: transparent; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-percent { text-align: right; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-reset { color: var(--code-muted); font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-account-details { margin-top: 0.25rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.8rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-facts dt { color: var(--code-fg); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-facts dd { margin: 0; min-width: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-window-detail { border-inline-start: 1px solid var(--code-rule); padding-inline-start: 0.65rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool { padding-top: 0.2rem; }
+@container (max-width: 27rem) {
+  .plugin-atyrode_code .plugin-atyrode_code__usage-window { grid-template-columns: minmax(0, 1fr) minmax(2rem, 1fr) max-content; }
+  .plugin-atyrode_code .plugin-atyrode_code__usage-reset { grid-column: 1 / -1; padding-bottom: 0.15rem; }
+}
+@container (max-width: 18rem) {
+  .plugin-atyrode_code .plugin-atyrode_code__usage-facts { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+  .plugin-atyrode_code .plugin-atyrode_code__usage-facts dd { margin-bottom: 0.4rem; }
+  .plugin-atyrode_code .plugin-atyrode_code__usage-window { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .plugin-atyrode_code .plugin-atyrode_code__usage-window-label { grid-column: 1 / -1; }
+}
+
+.plugin-atyrode_code .plugin-atyrode_code__accounts,
+.plugin-atyrode_code.plugin-atyrode_code__accounts,
+.plugin-atyrode_code .plugin-atyrode_code__sign-in,
+.plugin-atyrode_code.plugin-atyrode_code__sign-in {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.75rem;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-toolbar select {
+  width: auto;
+  max-width: 100%;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-toolbar > label {
+  color: var(--code-muted);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-list {
+  display: grid;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto;
+  gap: 0.2rem 1rem;
+  padding-block: 0.5rem;
+  border-block-end: 1px solid var(--code-rule);
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.7rem;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-identity strong {
+  min-width: 7ch;
+  font-weight: 600;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-identity [data-provider-tone="blue"] { color: var(--code-blue); }
+.plugin-atyrode_code .plugin-atyrode_code__account-identity [data-provider-tone="amber"] { color: var(--code-amber); }
+.plugin-atyrode_code .plugin-atyrode_code__account-meta {
+  color: var(--code-muted);
+  font-size: 0.9em;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-details {
+  color: var(--code-muted);
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-row > .plugin-atyrode_code__account-details {
+  grid-column: 1 / -1;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-details > summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-details[open] > summary { margin-block-end: 0.5rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-details p + p { margin-block-start: 0.3rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-notice,
+.plugin-atyrode_code .plugin-atyrode_code__account-editor {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid var(--code-rule);
+  border-radius: 8px;
+  min-width: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-notice {
+  border-inline-start: 3px solid var(--code-warning);
+  background: color-mix(in srgb, var(--code-warning) 5%, var(--code-bg));
+}
+.plugin-atyrode_code.plugin-atyrode_code__accounts { container-type: inline-size; }
+.plugin-atyrode_code .plugin-atyrode_code__account-identity input { flex: 0 0 auto; accent-color: var(--code-accent); }
+@container (max-width: 38rem) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-row { grid-template-columns: minmax(0, 1fr); }
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-profile {
+  padding-block: 0.65rem;
+  border-block-end: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-heading {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem 1rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-heading h2 {
+  color: var(--code-fg);
+  font-size: 1.05rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-heading p,
+.plugin-atyrode_code .plugin-atyrode_code__account-editor-footer > p {
+  color: var(--code-muted);
+  font-size: 0.8125rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--code-accent) 45%, var(--code-rule));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--code-accent) 5%, var(--code-bg));
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-choice {
+  display: grid;
+  flex: 1 1 12rem;
+  gap: 0.3rem;
+  min-width: 0;
+  max-width: 26rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-choice > label,
+.plugin-atyrode_code .plugin-atyrode_code__account-name-field > label {
+  color: var(--code-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-choice > select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  font-weight: 600;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  max-width: 36rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats > div + div {
+  border-inline-start: 1px solid var(--code-rule);
+  padding-inline-start: 0.85rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats dt {
+  color: var(--code-muted);
+  font-size: 0.75rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats dd {
+  margin: 0;
+  color: var(--code-fg);
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats dd > span {
+  color: var(--code-muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-pool-stats dd[data-state="positive"] { color: var(--code-positive); }
+.plugin-atyrode_code .plugin-atyrode_code__account-observation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.65rem;
+  color: var(--code-muted);
+  font-size: 0.75rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-feedback {
+  color: var(--code-fg);
+  border-inline-start: 2px solid var(--code-accent);
+  padding-inline-start: 0.65rem;
+  font-size: 0.8125rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-feedback:empty { display: none; }
+.plugin-atyrode_code .plugin-atyrode_code__account-feedback[data-pending="true"] { color: var(--code-accent); }
+.plugin-atyrode_code .plugin-atyrode_code__account-group {
+  --account-provider: var(--code-accent);
+  min-width: 0;
+  border: 1px solid var(--code-rule);
+  border-radius: 8px;
+  margin-block-end: 0.7rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group[data-provider-tone="blue"] { --account-provider: var(--code-blue); }
+.plugin-atyrode_code .plugin-atyrode_code__account-group[data-provider-tone="amber"] { --account-provider: var(--code-amber); }
+.plugin-atyrode_code .plugin-atyrode_code__account-group-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.8rem;
+  padding: 0.55rem 0.75rem;
+  border-block-end: 1px solid var(--code-rule);
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--account-provider) 6%, var(--code-bg));
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group-heading h3 { color: var(--account-provider); }
+.plugin-atyrode_code .plugin-atyrode_code__account-group-heading > span { color: var(--code-muted); font-size: 0.75rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.8rem;
+  padding: 0.7rem 0.75rem;
+  border-inline-start: 2px solid transparent;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row:last-child { border-block-end: 0; border-radius: 0 0 7px 7px; }
+.plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row[data-included="true"] {
+  border-inline-start-color: color-mix(in srgb, var(--account-provider) 65%, transparent);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row:focus-within {
+  background: color-mix(in srgb, var(--code-accent) 5%, var(--code-bg));
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group .plugin-atyrode_code__account-identity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-group .plugin-atyrode_code__account-identity input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-identity-text { display: grid; min-width: 0; gap: 0.1rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-identity-text > strong { color: var(--code-fg); font-weight: 500; }
+.plugin-atyrode_code .plugin-atyrode_code__account-identity-text > span { color: var(--code-muted); font-size: 0.75rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 5px;
+  color: var(--code-muted);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  font-weight: 500;
+  vertical-align: middle;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="included"],
+.plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="draft"] {
+  color: var(--code-accent);
+  background: color-mix(in srgb, var(--code-accent) 8%, transparent);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="positive"] { color: var(--code-positive); }
+.plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="warning"],
+.plugin-atyrode_code .plugin-atyrode_code__account-caution { color: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="danger"] { color: var(--code-danger); }
+.plugin-atyrode_code .plugin-atyrode_code__account-record { margin-inline-start: 1.65rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-record > summary { font-size: 0.75rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-record[open] > summary { color: var(--code-fg); }
+.plugin-atyrode_code .plugin-atyrode_code__account-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.25rem 0.85rem;
+  font-size: 0.8125rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-facts dt { color: var(--code-muted); }
+.plugin-atyrode_code .plugin-atyrode_code__account-facts dd { margin: 0; min-width: 0; color: var(--code-fg); user-select: text; }
+.plugin-atyrode_code .plugin-atyrode_code__account-blocks,
+.plugin-atyrode_code .plugin-atyrode_code__account-credential-actions {
+  margin-block-start: 0.7rem;
+  padding-block-start: 0.6rem;
+  border-block-start: 1px solid var(--code-rule);
+  font-size: 0.8125rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-blocks > p { color: var(--code-warning); margin-block-end: 0.25rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-blocks li > span { margin-inline-start: 0.65rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-credential-actions > .plugin-atyrode_code__account-toolbar { margin-block-start: 0.5rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-outline-action { border-color: var(--code-rule); color: var(--code-fg); }
+.plugin-atyrode_code .plugin-atyrode_code__account-danger-action:not(:disabled) { color: var(--code-danger); border-color: color-mix(in srgb, var(--code-danger) 45%, var(--code-rule)); }
+.plugin-atyrode_code .plugin-atyrode_code__account-danger-action:hover:not(:disabled) { color: var(--code-danger); background: color-mix(in srgb, var(--code-danger) 10%, transparent); }
+.plugin-atyrode_code .plugin-atyrode_code__account-danger-action:focus-visible { outline-color: var(--code-danger); }
+.plugin-atyrode_code .plugin-atyrode_code__account-exclusions { padding-block: 0.2rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-exclusions > p,
+.plugin-atyrode_code .plugin-atyrode_code__account-library > p { margin-block: 0.5rem; font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-reference-list { list-style: none; padding: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__account-reference-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem 0.8rem;
+  padding-block: 0.5rem;
+  border-block-end: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-reference-list > li > span { min-width: 0; flex: 1 1 16rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-reference-list .plugin-atyrode_code__account-chip { margin-inline-start: 0.5rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-editor {
+  border-color: color-mix(in srgb, var(--code-accent) 60%, var(--code-rule));
+  border-inline-start: 3px solid var(--code-accent);
+  background: color-mix(in srgb, var(--code-accent) 3%, var(--code-bg));
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-editor-heading { justify-content: space-between; }
+.plugin-atyrode_code .plugin-atyrode_code__account-name-field { display: grid; gap: 0.3rem; max-width: 30rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-name-field input { width: 100%; }
+.plugin-atyrode_code .plugin-atyrode_code__account-editor-footer {
+  display: grid;
+  gap: 0.65rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-library,
+.plugin-atyrode_code .plugin-atyrode_code__account-connect,
+.plugin-atyrode_code .plugin-atyrode_code__account-diagnostics {
+  padding-block: 0.7rem;
+  border-block-start: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-library > summary,
+.plugin-atyrode_code .plugin-atyrode_code__account-connect > summary { color: var(--code-fg); font-size: 0.875rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-library > summary .plugin-atyrode_code__account-chip,
+.plugin-atyrode_code .plugin-atyrode_code__account-profile > summary .plugin-atyrode_code__account-chip { margin-inline-start: 0.4rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-profile > .plugin-atyrode_code__account-toolbar { margin-block: 0.6rem 0.35rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-confirmation {
+  border-inline-start-color: var(--code-danger);
+  background: color-mix(in srgb, var(--code-danger) 5%, var(--code-bg));
+  scroll-margin-block: 1rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-confirmation h3 { color: var(--code-fg); }
+.plugin-atyrode_code .plugin-atyrode_code__account-diagnostics > p { margin-block-start: 0.6rem; font-size: 0.8125rem; }
+.plugin-atyrode_code .plugin-atyrode_code__account-empty {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  margin-block-end: 0.6rem;
+  border: 1px dashed var(--code-rule);
+  border-radius: 8px;
+  color: var(--code-muted);
+}
+.plugin-atyrode_code .plugin-atyrode_code__account-empty strong { color: var(--code-fg); font-weight: 500; }
+@media (hover: hover) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row:hover {
+    background: color-mix(in srgb, var(--account-provider) 4%, var(--code-bg));
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-editor,
+  .plugin-atyrode_code .plugin-atyrode_code__account-confirmation,
+  .plugin-atyrode_code .plugin-atyrode_code__account-record[open] > :not(summary) { animation: plugin-atyrode_code__account-reveal 160ms ease-out; }
+}
+@keyframes plugin-atyrode_code__account-reveal {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-chip,
+  .plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row { transition: none; }
+}
+@container (max-width: 38rem) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-group > .plugin-atyrode_code__account-row { grid-template-columns: minmax(0, 1fr); }
+  .plugin-atyrode_code .plugin-atyrode_code__account-chips { justify-content: flex-start; margin-inline-start: 1.65rem; }
+}
+@container (max-width: 22rem) {
+  .plugin-atyrode_code .plugin-atyrode_code__account-pool,
+  .plugin-atyrode_code .plugin-atyrode_code__account-editor { padding: 0.65rem; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-pool-stats > div + div { padding-inline-start: 0.5rem; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-record { margin-inline-start: 0; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-record > summary > span { display: none; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-facts { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+  .plugin-atyrode_code .plugin-atyrode_code__account-facts dd { margin-block-end: 0.4rem; }
+}
+.plugin-atyrode_code__permission-dialog {
+  width: min(58rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 1.25rem;
+  overflow: auto;
+  border: 1px solid var(--code-rule);
+  border-radius: 8px;
+}
+.plugin-atyrode_code__permission-dialog[open],
+.plugin-atyrode_code__permission-dialog section,
+.plugin-atyrode_code__permission-choices {
+  display: grid;
+  gap: 0.8rem;
+}
+.plugin-atyrode_code__permission-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.plugin-atyrode_code__permission-choice {
+  padding-block: 0.8rem;
+  border-bottom: 1px solid var(--code-rule);
+}
+.plugin-atyrode_code__permission-choice > label { display: flex; align-items: baseline; gap: 0.6rem; font-weight: 600; }
+.plugin-atyrode_code .plugin-atyrode_code__permission-choice > label > input {
+  flex: 0 0 1rem;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--code-accent);
+}
+.plugin-atyrode_code__permission-choice > button,
+.plugin-atyrode_code__permission-dialog section > button { justify-self: start; }

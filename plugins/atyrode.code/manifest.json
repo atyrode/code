@@ -1,15 +1,42 @@
 {
   "id": "atyrode.code",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "title": "code",
-  "description": "The code launcher's baseline: the door that authorizes a launch of code on an enrolled machine and records it, and the ledger of the launches it recorded.",
-  "capabilities": ["terminals:spawn"],
+  "description": "Shared catalogs, routing, account choices and reviewed session composition over the native OMP plugin.",
+  "capabilities": [
+    "containers:read",
+    "containers:write",
+    "services:read",
+    "services:invoke",
+    "services:configure"
+  ],
+  "dataVersion": {
+    "major": 2,
+    "minor": 0
+  },
+  "purges": [
+    "storage"
+  ],
   "contributes": {
     "panels": [],
     "sections": [],
     "elements": [],
     "tools": [],
-    "events": [{ "id": "launch_recorded", "title": "Launch recorded" }]
+    "events": [
+      {
+        "id": "preferences_changed",
+        "title": "Shared Code configuration changed"
+      }
+    ]
   },
-  "entry": { "server": true, "web": "web.js" }
+  "dependencies": {
+    "atyrode.omp": { "type": "required", "reason": "OMP owns destination readiness, workspace preparation, probing and reviewed session execution." },
+    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns the shared account broker, usage observations and sign-in authority." },
+    "atyrode.omp.gateway": { "type": "required", "reason": "OMP owns the governed per-destination model gateway." }
+  },
+  "entry": {
+    "server": true,
+    "web": "web.js",
+    "styles": true
+  }
 }

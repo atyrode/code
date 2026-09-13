@@ -1,0 +1,19 @@
+{
+  "id": "atyrode.code.accounts",
+  "version": "0.3.0",
+  "title": "code accounts",
+  "description": "Shared account-pool choices and an ordinary client of OMP account observation and sign-in authority.",
+  "capabilities": [],
+  "contributes": {
+    "panels": [{ "id": "accounts", "title": "Code accounts" }],
+    "sections": [],
+    "elements": [],
+    "tools": [],
+    "events": []
+  },
+  "dependencies": {
+    "atyrode.code": { "type": "required", "reason": "Code owns shared account-pool choices." },
+    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns shared account observations, broker custody and sign-in." }
+  },
+  "entry": { "web": "web.js", "styles": true }
+}

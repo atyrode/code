@@ -1,0 +1,32 @@
+.plugin-atyrode_code_usage {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+}
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__body {
+  display: grid;
+  gap: 0.8rem;
+  width: 100%;
+  max-width: 90rem;
+  margin-inline: auto;
+  padding: clamp(0.65rem, 2cqi, 1.2rem);
+}
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__target {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+}
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__target select {
+  flex: 1 1 12rem;
+  width: auto;
+  max-width: 32rem;
+}
+.plugin-atyrode_code_usage .plugin-atyrode_code_usage__footer {
+  border-top: 1px solid var(--code-rule);
+  padding-top: 0.4rem;
+}
