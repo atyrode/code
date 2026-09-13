@@ -6,9 +6,11 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { familyPolicy, providerPolicy } from "../../domain/providers.ts";
-import { CODE_PLUGIN_ID, GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type LaunchPreview, type Target } from "../contract.ts";
-import { callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useCodeTarget } from "../machine-web.ts";
-import { codeOperationReady } from "../operation-readiness.ts";
+import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type Target } from "../contract.ts";
+import { LAUNCH_OPERATION_ID } from "@atyrode/manifold-omp";
+import type { SessionReview } from "../workflow.ts";
+import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery, useCodeTarget } from "../machine-web.ts";
+import { operationReady } from "../permission-plan.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
@@ -21,7 +23,9 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const machineId = target?.machineId ?? "";
   const id = useId();
   const configuration = useCodeQuery(host, "readConfiguration", { containerId: host.containerId! });
-  const setup = useCodeQuery(host, "readSetup", target);
+  const setup = useOmpQuery(host, "describeDestination", target);
+  const classifier = useWorkflowQuery(host, `classifier:${JSON.stringify(target)}`, target !== null, () => codeWorkflow(host).classifier(target!));
+  const defaults = useOmpQuery(host, "readDefaults", {});
   const record = configuration.data?.configuration ?? null;
   const [navigationState, setNavigationState] = useState<{ view: View; visited: readonly View[] }>({ view: "profile", visited: ["profile"] });
   const { view, visited } = navigationState;
@@ -31,7 +35,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     });
   }
   const [dials, setDials] = useState<{ selection: Selection; revision: number; baseSelection: Selection | null; catalogDigest: string | null } | null>(null);
-  const [preview, setPreview] = useState<LaunchPreview | null>(null);
+  const [preview, setPreview] = useState<SessionReview | null>(null);
   const [suggestion, setSuggestion] = useState<ActionResult<"suggest"> | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionPrompt, setSuggestionPrompt] = useState("");
@@ -76,18 +80,13 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     try { return reviewCatalog(compiled, selection, Date.now()); } catch { return null; }
   }, [compiled, selection]);
   const stale = dials !== null && dials.revision !== record?.revision;
-  const previewCurrent = preview !== null && preview.machineId === machineId && preview.revision === record?.revision && dials === null;
-  const shownReview = previewCurrent ? preview.review : localReview;
+  const previewCurrent = preview !== null && preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
+    preview.composition.prompt === prompt && preview.native.defaultsRevision === defaults.data?.revision && dials === null;
+  const shownReview = previewCurrent ? preview.composition.review : localReview;
   const writable = canWriteCodeWorkspace(host);
-  const canSuggest = setup.data?.services.some(service => service.serviceId === "suggest" && service.operations.some(operation => operation.operationId === "classify" && operation.ready && operation.invocable)) === true;
-  const resources = record?.resourcesByMachine[machineId];
-  const productCurrent = resources !== undefined && resources.productSha256 === setup.data?.productSha256;
-  const execution = setup.data?.execution;
-  const launchPins = resources?.execution;
-  const launchReady = productCurrent && codeOperationReady(execution, machineId, "launch") &&
-    launchPins?.installationRevision === execution?.installation?.revision && launchPins?.artifactSha256 === execution?.installation?.artifactSha256 &&
-    launchPins?.operations[`${CODE_PLUGIN_ID}.launch`] === execution?.operations?.[`${CODE_PLUGIN_ID}.launch`]?.resourceBindingDigest;
-  function refresh() { configuration.refresh(); setup.refresh(); }
+  const canSuggest = classifier.data !== null && classifier.data !== undefined;
+  const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
+  function refresh() { configuration.refresh(); setup.refresh(); classifier.refresh(); defaults.refresh(); }
   function back() { setView("profile"); refresh(); }
   async function perform(work: () => Promise<void>) {
     if (pending.current || !writable) return;
@@ -102,9 +101,10 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       // A refused attempt must return to explicit review, even if the shared profile
       // revision did not change (for example, the account pool changed independently).
       setPreview(null);
-      const prepared = await callCodeAction(host, "prepareLaunch", { ...target, expectedRevision: preview.revision, previewDigest: preview.previewDigest, prompt });
+      const prepared = await codeWorkflow(host).prepareSession(preview);
       const latest = current.current;
-      if (!destinationCurrent() || preview.machineId !== latest.target?.machineId || latest.host.principal.id !== host.principal.id || latest.host.containerId !== target.containerId || latest.machine?.id !== machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
+      if (!destinationCurrent() || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
+        latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
       if (mounted.current) { setPreview(null); setMessage({ text: "Terminal opened. Follow the session in OMP.", failed: false }); }
     });
@@ -174,13 +174,13 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
           {canSuggest && <div className="plugin-atyrode_code_generator__suggestion">
             {!suggesting ? <button type="button" aria-expanded={false} onClick={() => setSuggesting(true)}>Suggest a profile from my task <span aria-hidden="true">→</span></button> : <>
               <label htmlFor={`${id}-suggest`}>What are you working on?</label><textarea id={`${id}-suggest`} value={suggestionPrompt} rows={2} maxLength={16384} placeholder="A quick fix, a design review, a larger refactor…" onChange={event => setSuggestionPrompt(event.target.value)} />
-              <div className="plugin-atyrode_code__toolbar"><button type="button" disabled={busy || !writable || !available || !record || !suggestionPrompt.trim()} onClick={() => { if (record && target) void perform(async () => { const value = await callCodeAction(host, "suggest", { ...target, expectedRevision: record.revision, prompt: suggestionPrompt }); if (destinationCurrent()) setSuggestion(value); }); }}>{busy ? "Working…" : "Suggest profile"}</button><button type="button" disabled={busy} onClick={() => { setSuggesting(false); setSuggestion(null); }}>Close suggestion</button></div>
+              <div className="plugin-atyrode_code__toolbar"><button type="button" disabled={busy || !writable || !available || !record || !suggestionPrompt.trim() || !classifier.data} onClick={() => { if (record && target && classifier.data) void perform(async () => { const value = await callCodeAction(host, "suggest", { ...target, expectedRevision: record.revision, expectedServiceRevision: classifier.data!.revision, prompt: suggestionPrompt }); if (destinationCurrent()) setSuggestion(value); }); }}>{busy ? "Working…" : "Suggest profile"}</button><button type="button" disabled={busy} onClick={() => { setSuggesting(false); setSuggestion(null); }}>Close suggestion</button></div>
               <p className="plugin-atyrode_code__muted">Sends this description to the configured classifier; does not change your profile.</p>
               {suggestion && <div className="plugin-atyrode_code__notice"><p>{suggestion.changed.length ? `Suggested changes: ${suggestion.changed.join(", ")}` : "Your current profile already fits."}</p>
                 <dl className="plugin-atyrode_code_generator__suggested-values">{suggestion.changed.map(key => <div key={key}><dt>{key}</dt><dd>{typeof suggestion.selection[key] === "object" ? JSON.stringify(suggestion.selection[key]) : String(suggestion.selection[key])}</dd></div>)}</dl>
-                <button type="button" disabled={busy || !!dials || suggestion.revision !== record?.revision} onClick={() => { setDials({ selection: suggestion.selection, revision: suggestion.revision, baseSelection: record.selection, catalogDigest: record.active?.digest ?? null }); setPreview(null); setSuggesting(false); }}>Try this profile</button>
+                <button type="button" disabled={busy || !!dials || suggestion.revision !== record?.revision || suggestion.serviceRevision !== classifier.data?.revision} onClick={() => { setDials({ selection: suggestion.selection, revision: suggestion.revision, baseSelection: record.selection, catalogDigest: record.active?.digest ?? null }); setPreview(null); setSuggesting(false); }}>Try this profile</button>
                 {!!dials && <p>Save or discard your local changes before trying a suggestion.</p>}
-                {suggestion.revision !== record?.revision && <p role="status">Shared choices changed. Request a new suggestion.</p>}
+                {(suggestion.revision !== record?.revision || suggestion.serviceRevision !== classifier.data?.revision) && <p role="status">Shared choices or classifier policy changed. Request a new suggestion.</p>}
               </div>}
             </>}
           </div>}
@@ -191,16 +191,16 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
             <div><h2 id={`${id}-launch-heading`} className="plugin-atyrode_code__section-label">Start a session</h2><p>{previewCurrent ? "2 / 2 · Confirm and open OMP" : "1 / 2 · Review before opening"}</p></div>
             <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !launchReady || !!dials || !localReview} aria-describedby={`${id}-launch-status`} onClick={() => {
               if (previewCurrent) { void launch(); return; }
-              if (record && target) void perform(async () => { const value = await callCodeAction(host, "previewLaunch", { ...target, expectedRevision: record.revision }); if (destinationCurrent() && value.machineId === machineId) setPreview(value); });
+              if (record && target) void perform(async () => { const value = await codeWorkflow(host).reviewSession(target, record.revision, prompt); if (destinationCurrent() && value.destination.machineId === machineId) setPreview(value); });
             }}>{busy ? "Working…" : previewCurrent ? "Launch OMP" : "Review launch"}<span aria-hidden="true">{previewCurrent ? "↗" : "→"}</span></button>
           </div>
-          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to review and launch." : dials ? "Save your profile first. Local changes are not launched." : !available ? "The execution destination is offline." : !resources ? "Review and promote resources for this destination. Other machines’ pins are not reused." : !productCurrent ? "Code updated. Review the runtime setup." : !launchReady ? "Runtime approval is needed before launch." : !localReview ? "Resolve the profile's model catalog before launch." : previewCurrent ? "Reviewed against this saved revision and destination. Opens a terminal in this workspace." : "Checks the current account pool and pinned runtime. No terminal opens yet."}</p>
+          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to review and launch." : dials ? "Save your profile first. Local changes are not launched." : !available ? "The execution destination is offline." : !launchReady ? "Runtime approval is needed before launch." : !localReview ? "Resolve the profile's model catalog before launch." : previewCurrent ? "Reviewed against this saved revision, prompt, OMP defaults and destination. Opens a terminal in this workspace." : "Checks the current account pool and OMP-owned runtime. No terminal opens yet."}</p>
           {previewCurrent && <div className="plugin-atyrode_code_generator__launch-review" role="status"><h3>Reviewed account pool</h3>
-            <ul>{Object.entries(preview.accountPool).map(([provider, accounts]) => <li key={provider} data-family={providerPolicy(provider)?.family ?? provider}><span>{providerPolicy(provider)?.label ?? provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
-            <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ accounts: preview.accountPool, resources: preview.resources, reviewDigest: preview.previewDigest }, null, 2)}</pre></details>
+            <ul>{Object.entries(preview.composition.accountPool).map(([provider, accounts]) => <li key={provider} data-family={providerPolicy(provider)?.family ?? provider}><span>{providerPolicy(provider)?.label ?? provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
+            <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ composition: preview.composition, native: preview.native }, null, 2)}</pre></details>
           </div>}
           <label htmlFor={`${id}-prompt`}>First prompt <span className="plugin-atyrode_code__dim">optional</span></label>
-          <textarea id={`${id}-prompt`} rows={2} maxLength={16384} value={prompt} placeholder="What should this session work on?" onChange={event => setPrompt(event.target.value)} />
+          <textarea id={`${id}-prompt`} rows={2} maxLength={16384} value={prompt} placeholder="What should this session work on?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
           {!launchReady && <PermissionReview host={host} target={target} intent="session" label="Review runtime setup" onReady={refresh} />}
           {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
         </section>

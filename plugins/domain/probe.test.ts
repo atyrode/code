@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { PROBE_MODEL_LIMIT, benchmarkCandidates, catalogFromObservations, parseBenchmarkInput, parseBenchmarkObservation, parseInventoryObservation, parseOmpVersion, projectProbeIdentities, scaffoldInventory, type InventoryReceipt } from "./probe.ts";
+import { PROBE_MODEL_LIMIT, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt } from "@atyrode/manifold-omp";
+import { benchmarkCandidates, catalogFromObservations, scaffoldInventory } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
 
@@ -41,68 +42,6 @@ function fourLevelInventory(): InventoryReceipt {
   return inv;
 }
 
-describe("exact OMP observations", () => {
-  test("normalizes the real pinned executable banner and rejects runtime drift", () => {
-    expect(parseOmpVersion("omp/18.1.14\n")).toBe("18.1.14");
-    expect(() => parseOmpVersion("omp/18.2.0\n")).toThrow("probe_unsupported_version");
-    expect(() => parseOmpVersion("18.1.14\n")).toThrow("probe_unsupported_version");
-  });
-  test("provider and backend API come from exact registry identity, not model spelling", () => {
-    const registry = [{ provider: "openai", id: "claude-sonnet-5", api: "openai-responses", extra: "private" }];
-    const identities = projectProbeIdentities(registry, ["openai"]);
-    const receipt = parseInventoryObservation({ models: [row("openai")] }, identities, 100, "18.1.14");
-    expect(receipt.models[0]).toMatchObject({ provider: "openai", api: "openai-responses", images: true, thinkingLevels: ["low", "high"] });
-    expect(JSON.stringify(receipt)).not.toContain("private");
-    expect(JSON.stringify(receipt)).not.toContain("not part of the receipt");
-    expect(parseInventoryObservation({ models: [row()] }, identities, 100, "18.1.14").models).toEqual([]);
-  });
-  test("unroutable provider registries cannot block the supported model inventory", () => {
-    const outside = Array.from({ length: PROBE_MODEL_LIMIT + 1 }, (_, index) => ({
-      provider: "unregistered", id: `@preset/${index}`, api: "openai-completions",
-    }));
-    const identities = projectProbeIdentities([identity, ...outside], [identity.provider, "unregistered"]);
-    const unpriced = { ...row("unregistered", "@preset/0"), cost: { input: -1, output: -1, cacheRead: 0, cacheWrite: 0 } };
-    const receipt = parseInventoryObservation({ models: [row(), unpriced] }, identities, 100, "18.1.14");
-    expect(receipt.models).toEqual([expect.objectContaining(identity)]);
-  });
-  test("duplicate API, case-folded identities and wrong selectors are refused", () => {
-    expect(() => parseInventoryObservation({ models: [row()] }, [identity, { ...identity, api: "openai-responses" }], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
-    expect(() => parseInventoryObservation({ models: [row(), row("Anthropic")] }, [identity], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
-    expect(() => parseInventoryObservation({ models: [{ ...row(), selector: "openai/claude-sonnet-5" }] }, [identity], 100, "18.1.14")).toThrow("probe_ambiguous_identity");
-  });
-  test("unknown thinking/modalities, absent context metadata and version drift fail closed", () => {
-    for (const change of [{ thinking: ["off", "turbo"] }, { input: ["audio"] }, { contextWindow: undefined }, { cost: { ...row().cost, input: -1 } }]) {
-      expect(() => parseInventoryObservation({ models: [{ ...row(), ...change }] }, [identity], 100, "18.1.14")).toThrow("probe_invalid_observation");
-    }
-    expect(() => parseInventoryObservation({ models: [row()] }, [identity], 100, "18.2.0")).toThrow("probe_unsupported_version");
-  });
-  test("benchmark observes exact resolution and streaming rate, never aggregate total rate", () => {
-    const input = benchmarkCandidates(inventory());
-    const receipt = parseBenchmarkObservation(report(input), input, 101, 200);
-    expect(receipt.results[0]).toMatchObject({ ...input.candidates[0], status: "reachable", tokensPerSecond: 62, timeToFirstTokenMs: 700 });
-    const raw = report(input);
-    raw.models[0]!.model = "openai/claude-sonnet-5";
-    expect(parseBenchmarkObservation(raw, input, 101, 200).results[0]).toMatchObject({ status: "unmatched", tokensPerSecond: null, timeToFirstTokenMs: null });
-    expect(parseBenchmarkObservation({ ...raw, models: [] }, input, 101, 200).results[0]!.status).toBe("unmatched");
-  });
-  test("failed runs never retain error bodies or fabricate metrics", () => {
-    const input = benchmarkCandidates(inventory());
-    for (const [error, status] of [["401 secret-provider-token", "unresolved"], ["not_found_error private-body", "not_found"], ["claude_code_version_too_old private-body", "client_blocked"]]) {
-      const raw = report(input);
-      const receipt = parseBenchmarkObservation({ ...raw, failures: 1, models: [{ ...raw.models[0], results: [{ ok: false, error }], stats: null }] }, input, 101, 200);
-      expect(receipt.results[0]).toMatchObject({ status, tokensPerSecond: null, timeToFirstTokenMs: null });
-      expect(JSON.stringify(receipt)).not.toContain("private-body");
-      expect(JSON.stringify(receipt)).not.toContain("secret-provider-token");
-    }
-  });
-  test("partial metrics and duplicate reports cannot certify a successful probe", () => {
-    const input = benchmarkCandidates(inventory()), raw = report(input);
-    expect(parseBenchmarkObservation({ ...raw, models: [{ ...raw.models[0], stats: null }] }, input, 101, 200).results[0]!.status).toBe("unresolved");
-    expect(() => parseBenchmarkObservation({ ...raw, models: [raw.models[0], raw.models[0]] }, input, 101, 200)).toThrow("probe_ambiguous_identity");
-    expect(() => parseBenchmarkInput({ ...input, candidates: [{ ...input.candidates[0], id: "sonnet:high" }] })).toThrow("probe_invalid_input");
-    expect(() => parseBenchmarkInput({ ...input, argv: ["--help"] })).toThrow("probe_invalid_input");
-  });
-});
 
 describe("pure typed scaffolding", () => {
   test("drafts are unmeasured; certified documents preserve family tiers and registry quota buckets", () => {
@@ -132,7 +71,7 @@ describe("pure typed scaffolding", () => {
           lane: { kind: "provider", family, blend: "only" } }, 200);
         expect(review.available.capabilities).toEqual([1, 2, 3, 4]);
         const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
-        expect(overlay.modelRoles.default).toBe(`${provider}/series-${capability}:${["low", "medium", "high", "max"][capability - 1]}`);
+        expect(overlay.modelRoles?.default).toBe(`${provider}/series-${capability}:${["low", "medium", "high", "max"][capability - 1]}`);
         expect(review.routes.find(route => route.role === "plan")?.lead.key).toBe(`${provider}.series-${Math.min(4, capability + 1)}`);
         if (capability === 4) {
           expect(review.routes.find(route => route.role === "task")?.fallback.map(choice => choice.key))
@@ -196,7 +135,7 @@ describe("pure typed scaffolding", () => {
     const catalog = compileCatalog(scaffoldInventory(inv).document);
     expect([1, 2, 3, 4].map(tier => catalog.model(catalog.rung("anthropic", tier)).id)).toEqual(["series-1", "series-2", "series-3", "series-4"]);
     const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability: 4 }, 200);
-    expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles.default).toBe("anthropic/series-4:max");
+    expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default).toBe("anthropic/series-4:max");
   });
   test("unknown context preserves earlier evidence without discarding a viable prefix", () => {
     const inv = fourLevelInventory(), base = inv.models[0]!;

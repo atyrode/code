@@ -6,14 +6,13 @@
     "check": "tsc -p .",
     "test": "bun test",
     "pack": "./pack.sh",
-    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts dist/*.manifold-plugin.json && bun run verify:browser",
+    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts --hardened .integration/omp/plugins/dist/*.manifold-plugin.json && bun ../../manifold/packages/plugin-kit/src/verify.ts .integration/omp/plugins/dist/*.manifold-plugin.json dist/*.manifold-plugin.json && bun run verify:browser",
     "verify:browser": "bun scripts/verify-browser.ts",
+    "prepare:integration": "bun scripts/prepare-integration.ts",
     "dev": "bun dev.ts"
   },
   "dependencies": {
-    "@oh-my-pi/pi-ai": "18.1.14",
-    "@oh-my-pi/pi-catalog": "18.1.14",
-    "@oh-my-pi/pi-utils": "18.1.14",
+    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#273d7db12731e9a78fe78f9fd1d8d8a88b676a1a",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -21,8 +20,5 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "typescript": "^5.9.3"
-  },
-  "patchedDependencies": {
-    "@oh-my-pi/pi-ai@18.1.14": "patches/@oh-my-pi%2Fpi-ai@18.1.14.patch"
   }
 }

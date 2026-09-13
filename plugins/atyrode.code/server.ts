@@ -1,52 +1,30 @@
 import { defineAction } from "@manifold/plugin";
-import { PublicJobSchema, type Cap } from "@manifold/protocol";
+import type { Cap } from "@manifold/protocol";
+import { ProbeError } from "@atyrode/manifold-omp";
 import { z } from "zod";
-import { reduceAccountChoices } from "../domain/accounts.ts";
+import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
-import { ProbeError } from "../domain/probe.ts";
-import { reviewCatalog } from "../domain/routing.ts";
+import { catalogFromObservations, scaffoldInventory } from "../domain/probe.ts";
+import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
-import { BROKER_SERVICE_ID } from "./auth-contract.ts";
-import { accountObservation, currentService, describeSharedBroker, mutateCredential, usageObservation } from "./broker.ts";
-import { rootActionSchemas, CODE_PLUGIN_ID, PrepareLaunchResultSchema, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
-import { benchmarkResult, inventoryResult, launchInput, launchPreview, requirePromotedOperation, startBenchmark, startInventory } from "./execution.ts";
-import { CodeRefusal, currentResources, digestOf, type CodeContext } from "./machine-server.ts";
-import { authorizeTarget, catalogReview, commitConfiguration, expectRevision, initializeConfiguration,
-  currentProductSha256, readConfiguration, requireConfiguration, resourceSnapshot } from "./state.ts";
-import { configureServices, readServiceConfiguration, reviewServices } from "./service-setup.ts";
-import { readPermissionPlan } from "./permission-plan.ts";
+import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
+import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
+import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
+  readConfiguration, requireConfiguration } from "./state.ts";
+import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
-  stageBenchmark: true, promoteResources: true, clearAccountBlocks: true, disableCredential: true,
-  prepareWorkspace: true, configureServices: true,
+  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true, configureServices: true,
 };
-const instanceReads: Partial<Record<RootAction, true>> = { accounts: true };
-// Discovery preserves invocation-only visibility; native APIs still enforce concrete caller authority.
+const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
+// Only Code's external suggestion policy needs native authority. Policy
+// composition never delegates OMP execution, jobs, accounts or terminals.
 const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
-  reviewCatalog: ["machines:run", "services:read", "services:invoke"],
-  promoteCatalog: ["machines:run", "services:read", "services:invoke"],
-  accounts: ["services:read"],
-  usage: ["services:read"],
-  clearAccountBlocks: ["services:read", "services:invoke"],
-  disableCredential: ["services:read", "services:invoke"],
-  readSetup: ["machines:run", "services:read", "services:invoke"],
-  readPermissionPlan: ["machines:run", "services:read", "services:invoke"],
   readServiceConfiguration: ["services:configure"],
   reviewServices: ["services:configure"],
   configureServices: ["services:configure"],
-  reviewResources: ["machines:run", "services:read", "services:invoke"],
-  promoteResources: ["machines:run", "services:read", "services:invoke"],
-  prepareWorkspace: ["machines:run", "services:read", "services:invoke", "locations:create", "locations:read"],
-  startInventory: ["machines:run", "services:read", "services:invoke", "operations:invoke", "network:host"],
-  inventory: ["machines:run", "jobs:read"],
-  startBenchmark: ["machines:run", "jobs:read", "services:read", "services:invoke", "operations:invoke", "network:host"],
-  benchmark: ["machines:run", "jobs:read"],
-  stageBenchmark: ["machines:run", "jobs:read"],
   suggest: ["services:invoke"],
-  previewLaunch: ["machines:run", "services:read", "services:invoke"],
-  prepareLaunch: ["machines:run", "services:read", "services:invoke"],
 };
 function refusal(error: unknown) {
   if (error instanceof CodeRefusal || error instanceof SuggestionError) return { refused: error.message };
@@ -57,7 +35,6 @@ function refusal(error: unknown) {
 }
 type ProductHandlers = { [K in RootAction]: (ctx: CodeContext, args: ActionInput<K>) => Promise<ActionResult<K>> };
 const productHandlers: ProductHandlers = {
-  readPermissionPlan,
   readServiceConfiguration,
   reviewServices,
   configureServices,
@@ -74,16 +51,15 @@ const productHandlers: ProductHandlers = {
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return catalogReview(ctx, requireConfiguration(previous), args.machineId, args.source);
+    return catalogReview(ctx, requireConfiguration(previous), args.source);
   },
   async promoteCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const reviewed = await catalogReview(ctx, record, args.machineId, args.source);
+    const reviewed = catalogReview(ctx, record, args.source);
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
     return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
-      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection,
-      resourcesByMachine: { ...record.resourcesByMachine, [args.machineId]: reviewed.resources } });
+      draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection });
   },
   async select(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
@@ -97,92 +73,53 @@ const productHandlers: ProductHandlers = {
     const record = requireConfiguration(previous);
     return commitConfiguration(ctx, previous, { ...record, accounts: reduceAccountChoices(record.accounts, args.change) });
   },
-  accounts: ctx => accountObservation(ctx),
-  async usage(ctx, args) { return usageObservation(ctx, requireConfiguration(await readConfiguration(ctx, args))); },
-  async clearAccountBlocks(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, args.credentialId, "clear-blocks"); },
-  async disableCredential(ctx, args) { await authorizeTarget(ctx, args, true); return mutateCredential(ctx, args.reference, args.credentialId, "disable"); },
-  async readSetup(ctx, args) {
-    await authorizeTarget(ctx, args);
-    const services = await ctx.services.describe({ machineId: args.machineId });
-    const broker = await describeSharedBroker(ctx);
-    const observedBroker = services.services.find(service => service.serviceId === BROKER_SERVICE_ID);
-    const pins = services.services.filter(service => service.serviceId !== BROKER_SERVICE_ID);
-    // Broker access uses the instance CAS; only matching native policy observations supply operation authority.
-    if (broker.configuration) pins.push({
-      serviceId: BROKER_SERVICE_ID, revision: broker.configuration.revision, policySha256: broker.configuration.policySha256,
-      operations: observedBroker?.policySha256 === broker.configuration.policySha256 ? observedBroker.operations : [],
-    });
-    let execution = null;
-    try { execution = (await currentResources(ctx, args.machineId)).description; }
-    catch { /* Service-only readiness is useful before worker installation. */ }
-    return { productSha256: await currentProductSha256(ctx), execution, services: pins, connected: services.connected };
-  },
-  async reviewResources(ctx, args) {
+  async composeProbe(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const resources = await resourceSnapshot(ctx, args.machineId);
-    return { resources, reviewDigest: digestOf({ containerId: args.containerId, machineId: args.machineId, revision: args.expectedRevision, resources }),
-      current: digestOf(record.resourcesByMachine[args.machineId] ?? null) === digestOf(resources) };
-  },
-  async promoteResources(ctx, args) {
-    const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
-    const record = requireConfiguration(previous), resources = await resourceSnapshot(ctx, args.machineId);
-    if (args.reviewDigest !== digestOf({ containerId: args.containerId, machineId: args.machineId, revision: args.expectedRevision, resources })) throw new CodeRefusal("preview_changed");
-    return commitConfiguration(ctx, previous, { ...record, resourcesByMachine: { ...record.resourcesByMachine, [args.machineId]: resources } });
-  },
-  async prepareWorkspace(ctx, args) {
-    const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
-    const operation = args.mode === "create" ? "prepare-workspace" : "validate-workspace";
-    const pins = await requirePromotedOperation(ctx, requireConfiguration(previous), args.machineId, operation);
+    if (args.accounts.observedAt !== null && args.accounts.observedAt > ctx.now()) throw new DomainError("invalid_accounts");
+    const accountPool = selectedAccountPool(args.accounts, record.accounts);
+    if (!Object.values(accountPool).some(accounts => accounts.length > 0)) throw new CodeRefusal("account_unavailable");
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return PublicJobSchema.parse(await ctx.jobs.execute({ jobId: await ctx.newId(), machineId: args.machineId,
-      operationId: `${CODE_PLUGIN_ID}.${operation}`, ...pins, input: {}, outputs: [] }));
+    return { revision: record.revision, accountPool };
   },
-  async startInventory(ctx, args) {
+  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory); },
+  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark); },
+  async composeSession(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return startInventory(ctx, requireConfiguration(previous), args.machineId);
-  },
-  async inventory(ctx, args) { await authorizeTarget(ctx, args); return inventoryResult(ctx, args.machineId, args.jobId); },
-  async startBenchmark(ctx, args) {
-    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    return startBenchmark(ctx, requireConfiguration(previous), args.machineId, args.inventoryJobId);
-  },
-  async benchmark(ctx, args) { await authorizeTarget(ctx, args); return benchmarkResult(ctx, args.machineId, args.inventoryJobId, args.jobId); },
-  async stageBenchmark(ctx, args) {
-    const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
-    const { catalog } = await benchmarkResult(ctx, args.machineId, args.inventoryJobId, args.jobId);
-    return commitConfiguration(ctx, previous, { ...record, draft: { document: catalog, digest: digestOf(catalog) } });
+    if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
+    if (args.accounts.observedAt !== null && args.accounts.observedAt > ctx.now()) throw new DomainError("invalid_accounts");
+    const accountPool = selectedAccountPool(args.accounts, record.accounts);
+    const catalog = compileCatalog(record.active.document);
+    const review = reviewCatalog(catalog, record.selection, ctx.now());
+    for (const route of review.routes) {
+      for (const choice of [route.lead, ...route.fallback]) {
+        if (!accountPool[catalog.model(choice.key).provider]?.length) throw new CodeRefusal("account_unavailable");
+      }
+    }
+    const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
+    const facts = { revision: record.revision, review, accountPool, overlay, prompt: args.prompt, planYolo: review.selection.planYolo };
+    const compositionDigest = digestOf({ containerId: record.containerId, revision: record.revision,
+      catalog: record.active.digest, selection: review.selection, routes: review.routes, accountPool,
+      overlay, prompt: args.prompt, planYolo: facts.planYolo });
+    if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
+    return { ...facts, compositionDigest };
   },
   async suggest(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
     if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-    const pin = record.resourcesByMachine[args.machineId]?.services.suggest;
-    if (!pin) throw new CodeRefusal("resources_incomplete");
-    await currentService(ctx, args.machineId, "suggest", pin);
+    const pin = await currentSuggestionService(ctx, args.machineId, args.expectedServiceRevision);
     const catalog = compileCatalog(record.active.document);
     const input = buildSuggestionRequest(catalog, record.selection, args.prompt, ctx.now());
+    if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     const response = await ctx.services.invoke({ machineId: args.machineId, ...pin, operationId: "classify", input });
     if (!response.ok) throw new CodeRefusal(response.refusal);
     const suggestion = parseSuggestionResponse(catalog, record.selection, response.result, ctx.now());
+    const current = await currentSuggestionService(ctx, args.machineId, args.expectedServiceRevision);
+    if (digestOf(current) !== digestOf(pin)) throw new CodeRefusal("resources_changed");
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return { revision: record.revision, ...suggestion };
-  },
-  async previewLaunch(ctx, args) {
-    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    const result = await launchPreview(ctx, requireConfiguration(previous), args.machineId);
-    if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return result;
-  },
-  async prepareLaunch(ctx, args) {
-    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    const record = requireConfiguration(previous), preview = await launchPreview(ctx, record, args.machineId);
-    if (preview.previewDigest !== args.previewDigest) throw new CodeRefusal("preview_changed");
-    const pins = await requirePromotedOperation(ctx, record, args.machineId, "launch");
-    if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return PrepareLaunchResultSchema.parse({ runtime: { pluginId: CODE_PLUGIN_ID, operationId: `${CODE_PLUGIN_ID}.launch`,
-      ...pins, input: launchInput(record, preview, args.prompt) } });
+    return { revision: record.revision, serviceRevision: pin.revision, ...suggestion };
   },
 };
 export const handlers = Object.fromEntries((Object.keys(rootActionSchemas) as RootAction[]).map(name => [name,
@@ -196,8 +133,8 @@ export const handlers = Object.fromEntries((Object.keys(rootActionSchemas) as Ro
 ]));
 export default { actions: (Object.keys(rootActionSchemas) as RootAction[]).map(name => defineAction({
   name, title: name.replace(/([A-Z])/g, " $1"),
-  caps: [instanceReads[name] ? "services:read" : mutating[name] ? "containers:write" : "containers:read"],
+  caps: pure[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
   ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
-  scope: instanceReads[name] ? "workspace" : "container", trace: "opaque",
+  scope: pure[name] ? "workspace" : "container", trace: "opaque",
   input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
-})), handlers };
+})), handlers, migrations: [configurationMigration] };

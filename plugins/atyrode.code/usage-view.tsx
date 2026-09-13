@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { HostServices } from "@manifold/plugin";
 import type { UsageView } from "../domain/usage.ts";
-import { useCodeQuery } from "./machine-web.ts";
+import { codeWorkflow, useCodeQuery, useWorkflowQuery } from "./machine-web.ts";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const percentFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
@@ -126,7 +126,8 @@ function WorkspaceUsageOverview({ host }: { host: HostServices }) {
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
   const current = configuration.data?.configuration;
-  const feed = useCodeQuery(host, "usage", current ? workspace : null, usageRefreshMs);
+  const feed = useWorkflowQuery(host, `usage:${JSON.stringify([workspace, current?.accounts])}`, !!current,
+    () => codeWorkflow(host).usage(current!.accounts), usageRefreshMs);
   const retained = useRef<{ choices: string; value: UsageView } | null>(null);
   const choices = current ? JSON.stringify(current.accounts) : "";
   if (feed.data && (retained.current?.value !== feed.data || retained.current.choices !== choices)) retained.current = { choices, value: feed.data };

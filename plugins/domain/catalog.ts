@@ -1,7 +1,5 @@
-import {
-  CatalogDocumentSchema, DomainError, ThinkingLevelSchema,
-  type CatalogDocument, type CatalogModel, type ThinkingLevel,
-} from "./contracts.ts";
+import { ThinkingLevelSchema, type ThinkingLevel } from "@atyrode/manifold-omp";
+import { CatalogDocumentSchema, DomainError, type CatalogDocument, type CatalogModel } from "./contracts.ts";
 import { familyOrder, familyPolicy, providerPolicy } from "./providers.ts";
 
 type Model = Readonly<Omit<CatalogModel, "thinkingLevels">> & { readonly thinkingLevels: readonly ThinkingLevel[] };

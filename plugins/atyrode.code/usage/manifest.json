@@ -2,7 +2,7 @@
   "id": "atyrode.code.usage",
   "version": "0.3.0",
   "title": "code usage",
-  "description": "Machine-scoped usage observations and explicit governed refresh requests.",
+  "description": "Shared OMP usage observations projected through the workspace's Code account choices.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "usage", "title": "Code usage" }],
@@ -12,7 +12,8 @@
     "events": []
   },
   "dependencies": {
-    "atyrode.code": { "type": "required", "reason": "Governed machine operations and shared usage observations live in Code." }
+    "atyrode.code": { "type": "required", "reason": "Code owns the shared account choices used to explain available capacity." },
+    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns shared usage observations and governed refresh requests." }
   },
   "entry": { "web": "web.js", "styles": true }
 }

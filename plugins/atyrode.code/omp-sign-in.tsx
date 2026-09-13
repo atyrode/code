@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { PermissionReview } from "./permission-review.tsx";
-import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useOmpQuery } from "./machine-web.ts";
 
 type OmpSignInProps = { host: HostServices; onContinue?: () => void; showAccounts?: boolean; active?: boolean };
 export function OmpSignIn(props: OmpSignInProps) {
@@ -12,8 +12,8 @@ export function OmpSignIn(props: OmpSignInProps) {
 
 function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: OmpSignInProps & { activeView: { current: boolean } }) {
   const id = useId();
-  const setup = useCodeQuery(host, "readAccountSetup", {}, ACCOUNT_REFRESH_MS);
-  const feed = useCodeQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
+  const setup = useOmpQuery(host, "readAccountSetup", {}, ACCOUNT_REFRESH_MS);
+  const feed = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -49,10 +49,10 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     }
   }
   async function openOmp() {
-    if (!state?.canSignIn || !host.containerId) return;
+    if (!state?.canSignIn || !state.revision || !host.containerId) return;
     const containerId = host.containerId;
     await perform(async stillCurrent => {
-      const prepared = await callCodeAction(host, "prepareSignIn", { containerId, expectedBrokerRevision: state.revision });
+      const prepared = await codeWorkflow(host).prepareSignIn(containerId, state.revision!);
       if (!stillCurrent()) return;
       const machines = await host.client.machines();
       if (!stillCurrent()) return;
@@ -73,18 +73,18 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     <h3 id={`${id}-title`}>Sign in with OMP</h3>
     <p className="plugin-atyrode_code__muted">Connect your providers in OMP. The same accounts are available across this instance.</p>
     {!state && !setup.error && <p role="status">Reading sign-in availability…</p>}
-    {state?.state === "starting" && <p role="status">Starting the account broker…</p>}
-    {state && !state.canSignIn && !state.canUpdateRuntime && <p role="status">{state.owner
-      ? state.owner.online ? `OMP sign-in is unavailable on ${state.owner.name}. Review its native setup.`
-        : `${state.owner.name} is offline. Sign-in will be available when its native owner reconnects.`
-      : "An instance service owner must be set up before signing in."}</p>}
-    {state?.canUpdateRuntime && <p role="status">The shared account runtime needs review before sign-in. Native rights and the shared runtime policy are separate approvals; nothing restarts automatically.</p>}
+    {state?.brokerState === "starting" && <p role="status">Starting the account broker…</p>}
+    {state && !state.canSignIn && <p role="status">{state.callerRefusal ?? (state.owner
+      ? state.owner.online ? `OMP sign-in is unavailable on ${state.owner.machineId}. Review its native setup.`
+        : `${state.owner.machineId} is offline. Sign-in will be available when its native owner reconnects.`
+      : "An instance service owner must be set up before signing in.")}</p>}
+    {state?.canReview && !state.canSignIn && <p role="status">The shared account runtime needs review before sign-in. Native rights and the shared runtime policy are separate approvals; nothing restarts automatically.</p>}
     {host.containerId && !writable && <p role="status">This workspace is read-only. Open an editable workspace to place an OMP terminal.</p>}
     {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
     {setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
     <div className="plugin-atyrode_code__account-toolbar">
       {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
-      <PermissionReview host={host} intent="accounts" label={state?.canUpdateRuntime ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />
+      <PermissionReview host={host} intent="accounts" label={state?.canReview && !state.canSignIn ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />
     </div>
     {message && <p role="status">{message}</p>}
     {feed.error && state?.state === "ready" && <p role="status">Account discovery is unavailable. Open setup details below.</p>}
@@ -103,8 +103,8 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
       {state?.reason && <p>{state.reason}</p>}
       {setup.error && <p>{setup.error}</p>}
       {feed.error && <p>{feed.error}</p>}
-      {state?.owner && <p>Account broker · {state.owner.name} · {state.owner.online ? "online" : "offline"} · {state.state}</p>}
-      {state?.state === "unconfigured" && <p>Opening OMP prepares the instance broker on its native owner, independently of the selected workspace machine.</p>}
+      {state?.owner && <p>Account broker · {state.owner.machineId} · {state.owner.online ? "online" : "offline"} · {state.brokerState}</p>}
+      {state?.brokerState === "unconfigured" && <p>Review the instance broker on its native owner before opening OMP, independently of the selected workspace machine.</p>}
       <p>OMP owns login, API keys, credential storage and refresh. Code reads account metadata; closing this view does not close OMP.</p>
       <div className="plugin-atyrode_code__account-toolbar"><button type="button" onClick={refresh}>Refresh accounts and setup</button></div>
     </details>

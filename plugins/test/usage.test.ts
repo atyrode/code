@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { initialAccountChoices, projectAccounts, reduceAccountChoices } from "../domain/accounts.ts";
-import { normalizeBrokerUsage, projectUsage, UsageViewSchema, type PermittedUsageSnapshot } from "../domain/usage.ts";
+import { z } from "zod";
+import { PermittedUsageSnapshotSchema, type AccountsObservation } from "@atyrode/manifold-omp";
+import { initialAccountChoices, reduceAccountChoices } from "../domain/accounts.ts";
+import { projectUsage, UsageViewSchema } from "../domain/usage.ts";
+type PermittedUsageSnapshot = z.infer<typeof PermittedUsageSnapshotSchema>;
 import { DomainError } from "../domain/contracts.ts";
 
 const scope = "machine/broker-scope";
 const now = 1_700_000_000_000;
 const freshness = { maxAgeMs: 60_000, refreshStatus: "succeeded" as const };
-const accounts = projectAccounts({ credentials: [
-  { id: 1, provider: "openai-codex", identityKey: "alice@example.test", credential: { type: "oauth", email: "alice@example.test" } },
-  { id: 2, provider: "openai-codex", identityKey: "bob@example.test", credential: { type: "oauth", email: "bob@example.test" } },
-] }, scope, now, now);
+const accounts: AccountsObservation = { scope, observedAt: now, status: "fresh",
+  accounts: ["alice@example.test", "bob@example.test"].map((identityKey, index) => ({
+    reference: { kind: "identity", scope, provider: "openai-codex", identityKey }, credentialId: index + 1,
+    identityKey, type: "oauth", email: identityKey, disabled: false, blocks: [],
+  })) };
 const choices = initialAccountChoices();
 function report(id: number, windows: PermittedUsageSnapshot["accounts"][number]["windows"]): PermittedUsageSnapshot["accounts"][number] {
   return { provider: "openai-codex", credentialId: id, identityKey: id === 1 ? "alice@example.test" : "bob@example.test",
@@ -99,10 +103,10 @@ describe("sanctioned usage observations", () => {
   });
 
   test("projects scoped prepaid balance and reset credits with source freshness, without fetching", () => {
-    const prepaid = projectAccounts({ credentials: [
-      { id: 7, provider: "deepseek", identityKey: null, credential: { type: "api_key" } },
-      { id: 8, provider: "deepseek", identityKey: null, credential: { type: "api_key" } },
-    ] }, scope, now, now);
+    const prepaid: AccountsObservation = { scope, observedAt: now, status: "fresh", accounts: [7, 8].map(credentialId => ({
+      reference: { kind: "credential", scope, provider: "deepseek", credentialId }, credentialId,
+      identityKey: null, type: "api_key", email: null, disabled: false, blocks: [],
+    })) };
     const result = projectUsage({ scope, observedAt: now, accounts: [{
       provider: "deepseek", credentialId: 7, identityKey: null, observedAt: now, status: "no_usage", windows: [],
       balance: { currency: "USD", total: "12.3400", observedAt: now },
@@ -114,130 +118,63 @@ describe("sanctioned usage observations", () => {
   });
 });
 
-const brokerReport = {
-  provider: "openai-codex", fetchedAt: now - 10,
-  metadata: { email: "ALICE@example.test", accountId: "provider-account-uuid", endpoint: "https://provider.invalid" },
-  limits: [{ id: "openai-codex:primary", label: "5 Hour", scope: { provider: "openai-codex", windowId: "5h" },
-    window: { id: "5h", label: "5 Hour", resetsAt: now + 60_000, durationMs: 18_000_000 },
-    amount: { unit: "percent", usedFraction: 0.7 }, status: "ok" }],
-};
-
-describe("actual broker usage adapter", () => {
-  test("provider quota verdict distinguishes allowed-at-limit from exhausted for one selected account", () => {
+describe("Code quota policy over OMP usage facts", () => {
+  test("provider verdict distinguishes allowed-at-limit from exhausted for one selected account", () => {
     const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
-    const raw = { generatedAt: now, reports: [{ ...brokerReport,
-      limits: [{ ...brokerReport.limits[0]!, amount: { unit: "percent", usedFraction: 1 }, status: "warning" }],
-    }] };
-    const bucket = () => projectUsage(normalizeBrokerUsage(raw, accounts, now), accounts, selected, now, freshness)
-      .providers[0]!.buckets[0]!;
+    const snapshot: PermittedUsageSnapshot = { scope, observedAt: now, accounts: [report(1, [{
+      ...window("5h", 1), quotaStatus: "warning",
+    }])] };
+    const bucket = () => projectUsage(snapshot, accounts, selected, now, freshness).providers[0]!.buckets[0]!;
     expect(bucket().status).toBe("available");
-    raw.reports[0]!.limits[0]!.status = "exhausted";
+    snapshot.accounts[0]!.windows[0]!.quotaStatus = "exhausted";
     expect(bucket()).toMatchObject({ status: "maxed", resetsAt: now + 60_000 });
-    // The sanctioned verdict, not rounding or amount derivation, is authoritative.
-    raw.reports[0]!.limits[0]!.amount.usedFraction = 0.99;
+    snapshot.accounts[0]!.windows[0]!.usedFraction = 0.99;
     expect(bucket().status).toBe("maxed");
-    raw.reports[0]!.limits.push({ ...raw.reports[0]!.limits[0]!, id: "openai-codex:secondary",
-      scope: { provider: "openai-codex", windowId: "7d" },
-      window: { ...brokerReport.limits[0]!.window, id: "7d", resetsAt: now + 120_000 } });
-    raw.reports[0]!.limits[0]!.status = "warning";
+    snapshot.accounts[0]!.windows.push({ ...window("7d", 1, now + 120_000), quotaStatus: "exhausted" });
+    snapshot.accounts[0]!.windows[0]!.quotaStatus = "warning";
     expect(bucket()).toMatchObject({ status: "maxed", resetsAt: now + 120_000 });
   });
 
-  test("provider verdict cannot make stale usage authoritative", () => {
+  test("a provider verdict cannot make stale account, quota, reset or refresh facts authoritative", () => {
     const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
-    for (const status of ["warning", "exhausted"]) {
-      const raw = { generatedAt: now, reports: [{ ...brokerReport,
-        limits: [{ ...brokerReport.limits[0]!, amount: { unit: "percent", usedFraction: 1 }, status }],
-      }] };
-      const normalized = normalizeBrokerUsage(raw, accounts, now)!;
-      const bucket = (observed = accounts) =>
-        projectUsage(normalized, observed, selected, now, freshness).providers[0]!.buckets[0]!.status;
-      expect(projectUsage(normalized, accounts, selected, now, { ...freshness, refreshStatus: "failed" })
+    for (const quotaStatus of ["warning", "exhausted"] as const) {
+      const snapshot: PermittedUsageSnapshot = { scope, observedAt: now, accounts: [report(1, [{
+        ...window("5h", 1), quotaStatus,
+      }])] };
+      const bucket = (observed = accounts) => projectUsage(snapshot, observed, selected, now, freshness).providers[0]!.buckets[0]!.status;
+      expect(projectUsage(snapshot, accounts, selected, now, { ...freshness, refreshStatus: "failed" })
         .providers[0]!.buckets[0]!.status).toBe("stale");
       expect(bucket({ ...accounts, status: "stale" })).toBe("stale");
-      normalized.accounts[0]!.windows[0]!.observedAt = now - 60_001;
+      expect(bucket({ ...accounts, observedAt: now - 60_001 })).toBe("stale");
+      snapshot.accounts[0]!.windows[0]!.observedAt = now - 60_001;
       expect(bucket()).toBe("stale");
-      normalized.accounts[0]!.windows[0]!.observedAt = now - 10;
-      normalized.accounts[0]!.windows[0]!.resetsAt = now;
+      snapshot.accounts[0]!.windows[0]!.observedAt = now;
+      snapshot.accounts[0]!.windows[0]!.resetsAt = now;
       expect(bucket()).toBe("stale");
     }
   });
 
-  test("unknown and malformed verdicts cannot claim availability and absent verdicts retain fraction fallback", () => {
+  test("unknown verdicts never claim availability; absent verdicts use the observed fraction", () => {
     const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
-    const { status: _status, ...limit } = brokerReport.limits[0]!;
-    const raw = (status: unknown, usedFraction: number | null = 1) => ({ generatedAt: now, reports: [{ ...brokerReport,
-      limits: [{ ...limit, amount: { unit: "percent", ...(usedFraction === null ? {} : { usedFraction }) },
-        ...(status === undefined ? {} : { status }) }],
-    }] });
-    const bucket = (input: unknown) => projectUsage(normalizeBrokerUsage(input, accounts, now), accounts, selected, now, freshness)
-      .providers[0]!.buckets[0]!.status;
-    expect(bucket(raw("unknown"))).toBe("unknown");
-    expect(bucket(raw(undefined))).toBe("maxed");
-    expect(bucket(raw(undefined, 0.2))).toBe("available");
-    expect(bucket(raw("warning", null))).toBe("unknown");
-    expect(() => bucket(raw("allowed"))).toThrow(DomainError);
-    expect(() => bucket(raw({ allowed: true }))).toThrow(DomainError);
+    const bucket = (quotaStatus: PermittedUsageSnapshot["accounts"][number]["windows"][number]["quotaStatus"], usedFraction: number | null = 1) =>
+      projectUsage({ scope, observedAt: now, accounts: [report(1, [{ ...window("5h", usedFraction), quotaStatus }])] },
+        accounts, selected, now, freshness).providers[0]!.buckets[0]!.status;
+    expect(bucket("unknown")).toBe("unknown");
+    expect(bucket(null)).toBe("maxed");
+    expect(bucket(null, 0.2)).toBe("available");
+    expect(bucket("warning", null)).toBe("unknown");
   });
 
-  test("joins native broker metadata, preserves source times and drops secret/error bodies", () => {
-    const raw = { generatedAt: now, reports: [{ ...brokerReport,
-      raw: { accessToken: "PRIVATE" }, notes: ["PRIVATE provider error body"],
-      metadata: { ...brokerReport.metadata, authorization: "PRIVATE" },
-      resetCredits: { availableCount: 1, credits: [{ status: "available", expiresAt: new Date(now + 50_000).toISOString() }] },
+  test("credential-disabled facts apply only to the exact concrete API-key slot", () => {
+    const keys: AccountsObservation = { scope, observedAt: now, status: "fresh", accounts: [10, 11].map(credentialId => ({
+      reference: { kind: "credential", scope, provider: "openai", credentialId }, credentialId,
+      identityKey: null, type: "api_key", email: null, disabled: false, blocks: [],
+    })) };
+    const snapshot: PermittedUsageSnapshot = { scope, observedAt: now, accounts: [{
+      provider: "openai", credentialId: 11, identityKey: null, observedAt: now,
+      status: "credential_disabled", disabledAt: now - 100, windows: [],
     }] };
-    const normalized = normalizeBrokerUsage(raw, accounts, now)!;
-    expect(normalized.accounts[0]!.credentialId).toBe(1);
-    expect(normalized.accounts[0]!.windows[0]!.observedAt).toBe(now - 10);
-    expect(normalized.accounts[0]!.resetCredits).toEqual({ available: 1, expiresAt: [now + 50_000] });
-    expect(JSON.stringify(projectUsage(normalized, accounts, choices, now, freshness))).not.toContain("PRIVATE");
-  });
-
-  test("leaves ambiguous email unknown but accepts explicit same-scope identity and org qualification", () => {
-    const shared = projectAccounts({ credentials: [
-      { id: 1, provider: "anthropic", identityKey: "email:shared@example.test|org:a", credential: { type: "oauth", email: "shared@example.test" } },
-      { id: 2, provider: "anthropic", identityKey: "email:shared@example.test|org:b", credential: { type: "oauth", email: "shared@example.test" } },
-    ] }, scope, now, now);
-    const report = { provider: "anthropic", fetchedAt: now, limits: [], metadata: { email: "shared@example.test" } };
-    expect(normalizeBrokerUsage({ generatedAt: now, reports: [report] }, shared, now)!.accounts).toEqual([]);
-    const org = normalizeBrokerUsage({ generatedAt: now, reports: [{ ...report, metadata: { ...report.metadata, orgId: "b" } }] }, shared, now)!;
-    expect(org.accounts.map(account => account.credentialId)).toEqual([2]);
-    const exact = normalizeBrokerUsage({ generatedAt: now, reports: [{ ...report,
-      metadata: { accountId: "email:shared@example.test|org:a" } }] }, shared, now)!;
-    expect(exact.accounts.map(account => account.credentialId)).toEqual([1]);
-  });
-
-  test("refuses duplicate matched reports, keeps missing identity unknown, and honors amount precedence", () => {
-    expect(() => normalizeBrokerUsage({ generatedAt: now, reports: [brokerReport, brokerReport] }, accounts, now)).toThrow(DomainError);
-    const unmapped = { ...brokerReport, metadata: {} };
-    expect(normalizeBrokerUsage({ generatedAt: now, reports: [unmapped] }, accounts, now)!.accounts).toEqual([]);
-    const overage = { ...brokerReport, limits: [{ ...brokerReport.limits[0]!, amount: { unit: "tokens", used: 12, limit: 10 } }] };
-    expect(normalizeBrokerUsage({ generatedAt: now, reports: [overage] }, accounts, now)!.accounts[0]!.windows[0]!.usedFraction).toBe(1.2);
-  });
-
-  test("an exact identity cannot override conflicting email or organization evidence", () => {
-    const conflict = { ...brokerReport, metadata: { accountId: "alice@example.test", email: "bob@example.test" } };
-    expect(normalizeBrokerUsage({ generatedAt: now, reports: [conflict] }, accounts, now)!.accounts).toEqual([]);
-  });
-
-  test("native disabled API-key facts target only their concrete slot", () => {
-    const keys = projectAccounts({ credentials: [
-      { id: 10, provider: "openai", identityKey: null, credential: { type: "api_key" } },
-      { id: 11, provider: "openai", identityKey: null, credential: { type: "api_key" } },
-    ] }, scope, now, now);
-    const normalized = normalizeBrokerUsage({ generatedAt: now, reports: [], disabledCredentials: [
-      { id: 11, provider: "openai", type: "api_key", disabledAtMs: now - 100, cause: "PRIVATE" },
-    ] }, keys, now)!;
-    expect(projectUsage(normalized, keys, choices, now, freshness).providers[0]!.accounts.map(account => account.status))
+    expect(projectUsage(snapshot, keys, choices, now, freshness).providers[0]!.accounts.map(account => account.status))
       .toEqual(["unknown", "credential_disabled"]);
-  });
-
-  test("copies health verdict only, never arbitrary cause text", () => {
-    const normalized = normalizeBrokerUsage({ generatedAt: now, reports: [], disabledCredentials: [
-      { provider: "openai-codex", accountId: "alice@example.test", disabledAtMs: now - 100, cause: "PRIVATE refresh token" },
-    ], accountsWithoutUsage: [{ provider: "openai-codex", email: "bob@example.test" }] }, accounts, now)!;
-    const result = projectUsage(normalized, accounts, choices, now, freshness);
-    expect(result.providers[0]!.accounts.map(account => account.status)).toEqual(["credential_disabled", "no_usage"]);
-    expect(JSON.stringify(result)).not.toContain("PRIVATE");
   });
 });

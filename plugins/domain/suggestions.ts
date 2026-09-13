@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CompiledCatalog } from "./catalog.ts";
-import { DomainError, SelectionSchema, ThinkingLevelSchema, type Selection } from "./contracts.ts";
+import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
+import { DomainError, SelectionSchema, type Selection } from "./contracts.ts";
 import { reviewCatalog, type Review } from "./routing.ts";
 
 /** Refusals never include classifier text or upstream diagnostics. */

@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
-import { SelectionSchema, ThinkingLevelSchema, type Lane, type Selection } from "../../domain/contracts.ts";
+import { SelectionSchema, type Lane, type Selection } from "../../domain/contracts.ts";
+import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import { familyPolicy } from "../../domain/providers.ts";
 import { reviewCatalog, type Review } from "../../domain/routing.ts";
 

@@ -97,7 +97,7 @@ describe("catalog capabilities and identity", () => {
     input.models[0]!.id = "changed";
     input.models[0]!.thinkingLevels.splice(0);
     const review = reviewCatalog(catalog, selection({ capability: 1 }), daytime);
-    expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles.default).toBe("openai/native-o1:medium");
+    expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default).toBe("openai/native-o1:medium");
   });
 });
 
@@ -215,21 +215,21 @@ describe("review to OMP boundary", () => {
     const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
     for (const value of review.routes) {
       const lead = catalog.model(value.lead.key);
-      expect(overlay.modelRoles[value.role]).toBe(`${lead.provider}/${lead.id}:${value.lead.thinking}`);
-      expect(overlay.retry.fallbackChains?.[value.role]).toEqual(value.fallback.map(fallback => {
+      expect(overlay.modelRoles?.[value.role]).toBe(`${lead.provider}/${lead.id}:${value.lead.thinking}`);
+      expect(overlay.retry?.fallbackChains?.[value.role]).toEqual(value.fallback.map(fallback => {
         const model = catalog.model(fallback.key);
         return `${model.provider}/${model.id}:${fallback.thinking}`;
       }));
       if (value.agentBacked) expect(overlay.task?.agentModelOverrides?.[value.role]).toBe(`@${value.role}`);
     }
-    expect(overlay.modelRoles.default).toBe("openai-codex/native-o2:medium");
-    expect(overlay.retry.fallbackChains?.default?.[0]).toBe("openai/native-o1:medium");
-    expect(overlay.retry.fallbackChains?.commit).toEqual([]);
+    expect(overlay.modelRoles?.default).toBe("openai-codex/native-o2:medium");
+    expect(overlay.retry?.fallbackChains?.default?.[0]).toBe("openai/native-o1:medium");
+    expect(overlay.retry?.fallbackChains?.commit).toEqual([]);
     expect(overlay.task?.agentAdvisor).toEqual({ task: "on" });
     expect(overlay.task?.prewalk).toBe(true);
     expect(overlay.prewalk?.enabled).toBe(true);
     expect(overlay.tier).toEqual({ openai: "priority" });
-    expect(overlay.advisor.enabled).toBe(true);
+    expect(overlay.advisor?.enabled).toBe(true);
   });
 
   test("advisor intensity selects independent power, separate from the model dial", () => {

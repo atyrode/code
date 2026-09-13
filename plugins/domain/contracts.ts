@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AccountReferenceSchema, ThinkingLevelSchema, identifier } from "@atyrode/manifold-omp";
 
 export class DomainError extends Error {
   constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
@@ -7,11 +8,6 @@ export class DomainError extends Error {
   }
 }
 
-export const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)
-  .refine(value => !["constructor", "prototype", "__proto__"].includes(value));
-export const epochMilliseconds = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const ThinkingLevelSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]);
-export type ThinkingLevel = z.infer<typeof ThinkingLevelSchema>;
 export const CapabilitySchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 export const LaneSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("mixed") }),
@@ -82,31 +78,6 @@ export interface ProviderPolicy {
   readonly offPeak?: { readonly startMinutesUtc: number; readonly endMinutesUtc: number; readonly multiplier: number };
 }
 
-/** Only the final OMP boundary turns structured routes into its model-reference strings. */
-export interface OmpOverlay {
-  modelRoles: Record<string, string>;
-  retry: {
-    enabled: true;
-    modelFallback: boolean;
-    fallbackRevertPolicy?: "cooldown-expiry";
-    fallbackChains?: Record<string, string[]>;
-  };
-  task?: { agentModelOverrides?: Record<string, string>; agentAdvisor?: { task: "on" }; prewalk?: true };
-  prewalk?: { enabled: true };
-  defaultThinkingLevel: ThinkingLevel;
-  advisor: { enabled: boolean };
-  tier?: Record<string, string>;
-}
-
-const accountScope = z.string().min(1).max(1024);
-const identityKey = z.string().min(1).max(1024);
-const credentialId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-/** An API key has no OAuth identity key; its native service-scoped credential slot is explicit. */
-export const AccountReferenceSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("identity"), scope: accountScope, provider: identifier, identityKey }),
-  z.strictObject({ kind: z.literal("credential"), scope: accountScope, provider: identifier, credentialId }),
-]);
-export type AccountReference = z.infer<typeof AccountReferenceSchema>;
 export const AccountPresetSchema = z.strictObject({
   id: identifier,
   name: z.string().trim().min(1).max(120),
@@ -126,26 +97,3 @@ export const AccountChoiceChangeSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("delete-preset"), id: identifier }),
 ]);
 export type AccountChoiceChange = z.infer<typeof AccountChoiceChangeSchema>;
-export const AccountRecordSchema = z.strictObject({
-  reference: AccountReferenceSchema,
-  credentialId,
-  type: z.enum(["oauth", "api_key"]),
-  identityKey: identityKey.nullable(),
-  email: z.string().max(512).nullable(),
-  disabled: z.boolean(),
-  blocks: z.array(z.strictObject({ scope: z.string().max(128), until: epochMilliseconds })).max(64),
-});
-export type AccountRecord = z.infer<typeof AccountRecordSchema>;
-export const AccountsObservationSchema = z.strictObject({
-  scope: accountScope,
-  observedAt: epochMilliseconds.nullable(),
-  status: z.enum(["fresh", "stale", "unavailable"]),
-  accounts: z.array(AccountRecordSchema).max(1024),
-});
-export type AccountsObservation = z.infer<typeof AccountsObservationSchema>;
-/** A launch freezes concrete slots and their observed identities, never an open-ended provider pool. */
-export const RuntimeAccountPoolSchema = z.record(identifier, z.array(z.strictObject({
-  credentialId,
-  identityKey: identityKey.nullable(),
-})).max(1024)).refine(value => Object.keys(value).length <= 64);
-export type RuntimeAccountPool = z.infer<typeof RuntimeAccountPoolSchema>;

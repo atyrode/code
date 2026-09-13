@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { ThinkingLevelSchema, epochMilliseconds, type Overlay, type ThinkingLevel } from "@atyrode/manifold-omp";
 import {
-  CapabilitySchema, DomainError, epochMilliseconds, EstimatesSchema, LaneSchema, RouteSchema, SelectionSchema,
-  ThinkingLevelSchema, type Estimates, type Lane, type ModelChoice, type OmpOverlay, type Route,
-  type Selection, type ThinkingLevel,
+  CapabilitySchema, DomainError, EstimatesSchema, LaneSchema, RouteSchema, SelectionSchema,
+  type Estimates, type Lane, type ModelChoice, type Route, type Selection,
 } from "./contracts.ts";
 import type { CompiledCatalog } from "./catalog.ts";
 import { advisorFamilyOrder, familyPolicy, providerPolicy } from "./providers.ts";
@@ -230,7 +230,7 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
 }
 
 /** Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. */
-export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[]): OmpOverlay {
+export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[]): Overlay {
   const { selection } = selectionFacts(catalog, input);
   const expected = selectedRoutes(catalog, selection);
   const parsed = z.array(RouteSchema).max(32).safeParse(routes);
@@ -257,7 +257,7 @@ export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, ro
     fallbackChains[route.role] = route.fallback.map(reference);
     if (route.agentBacked) agentModelOverrides[route.role] = `@${route.role}`;
   }
-  const overlay: OmpOverlay = {
+  const overlay: Overlay = {
     modelRoles,
     retry: selection.fallback
       ? { enabled: true, modelFallback: true, fallbackRevertPolicy: "cooldown-expiry", fallbackChains }

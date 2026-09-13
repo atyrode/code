@@ -11,11 +11,13 @@ import type * as CdpModule from "../../../manifold/scripts/cdp.ts";
 import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
-import type * as ProtocolModule from "../../../manifold/packages/protocol/src/index.ts";
 import type { ActionResult } from "../atyrode.code/contract.ts";
+import type { ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import type { PermissionPlan } from "../atyrode.code/permission-plan.ts";
 
 const HELP = `Usage: bun plugins/scripts/verify-browser.ts [bundle-directory]
-Uses the five prepacked Code family bundles (default: plugins/dist), never Code source.
+Uses four prepacked Code bundles (default: plugins/dist) and three real upstream OMP bundles
+(default: plugins/.integration/omp/plugins/dist; CODE_OMP_BUNDLES_DIR may explicitly override), never Code source.
 MANIFOLD_DIR selects the pinned SDK checkout; default: the sibling manifold directory.
 Requires installed SDK dependencies and Chromium (MANIFOLD_CHROMIUM may select its binary).
 MANIFOLD_GATE_DIST may supply an existing SDK web build; otherwise gate-dist builds a
@@ -36,7 +38,9 @@ if (process.argv.length > 3 || process.argv[2]?.startsWith("-")) throw new Error
 const pluginRoot = resolve(import.meta.dir, "..");
 const manifold = resolve(process.env.MANIFOLD_DIR ?? join(pluginRoot, "../../manifold"));
 const bundleDirectory = resolve(process.argv[2] ?? join(pluginRoot, "dist"));
-const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.gateway", "atyrode.code.generator", "atyrode.code.usage"];
+const ompBundleDirectory = resolve(process.env.CODE_OMP_BUNDLES_DIR ?? join(pluginRoot, ".integration/omp/plugins/dist"));
+const ompFamily = ["atyrode.omp", "atyrode.omp.accounts", "atyrode.omp.gateway"];
+const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
 const panel = ".plugin-atyrode_code_accounts";
 const accounts = `${panel} .plugin-atyrode_code__accounts`;
 const profile = `${accounts} [aria-label="Active account pool"] select`;
@@ -169,15 +173,17 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   })) };
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { containerId: first.containerId, expectedRevision: (excluded.result as Configuration).revision, document });
   assert(staged.ok, "Writer stages a real shared catalog without native installation");
-  const reviewInput = { ...first, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
+  const reviewInput = { containerId: first.containerId, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
   const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
-  assert(reviewed.ok, "Catalog resource review remains possible without execution readiness");
+  assert(reviewed.ok, "Catalog policy review remains possible without execution readiness");
   const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
   assert(promoted.ok, "Reviewed catalog is promoted through the real container CAS");
   const initial = promoted.result as Configuration;
-  assert.equal(initial.resourcesByMachine[first.machineId]?.execution, null, "The real fixture has no native installation");
-  assert.equal(initial.resourcesByMachine[second.machineId], undefined, "The second destination has no promoted pins");
-  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 });
+  const destination = await callAction(server, writer.token, "atyrode.omp.describeDestination", first);
+  const refusalCode = !destination.ok && /^omp_[a-z_]+$/.test(destination.denial.message) ? destination.denial.message : "unknown";
+  assert(destination.ok, `A caller with native readiness authority can inspect the OMP destination (${refusalCode})`);
+  assert((destination.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady), "The real fixture has no native installation");
+  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const layout = await callAction(server, writer.token, "core.space.setLayout", { layout: {
     root: { id: "root", dir: "row", ratios: [1, 3], children: ["container", "code"], ref: null },
     container: { id: "container", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "core.shell.container-view" } },
@@ -219,7 +225,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await browser.typeText(importDraft);
   await click(browser, workspaceButton("Accounts"));
   await until(browser, "broker-less account observation settles before the editor gesture",
-    `!!${element(`${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-notice[role="status"]`)}?.getClientRects().length`);
+    `[...document.querySelectorAll('${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-observation, ${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-notice[role="status"]')].some(el => el.getClientRects().length)`);
   await control(browser, "shared saved account pool is editable", workspaceButton("Edit pool"), false);
   await click(browser, workspaceButton("Edit pool"));
   const accountDraft = element(`${generator} .plugin-atyrode_code__accounts form[aria-label="Profile editor"] input[required]`);
@@ -246,7 +252,6 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(saved.configuration?.selection?.capability, 4, "The fourth capability saves unchanged from the second destination");
   assert.equal(saved.configuration?.selection?.planYolo, true);
   assert.deepEqual(saved.configuration?.accounts, initial.accounts, "Saving dials preserves shared account pools and exclusions");
-  assert.deepEqual(saved.configuration?.resourcesByMachine, initial.resourcesByMachine, "Saving dials never copies destination pins");
   await control(browser, "unprepared second destination cannot launch", launchControl, true);
   await selectDestination(browser, generatorDestination, first.machineId);
   assert.equal(await browser.evaluate(`${promptField}.value`), prompt);
@@ -264,7 +269,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate(`document.activeElement === ${promptField}`), true, "The prompt remains pointer- and keyboard-accessible at the narrow viewport");
   assert.equal(await browser.evaluate(`${promptField}.value`), prompt, "Responsive layout keeps the same prompt");
   await browser.send("Emulation.clearDeviceMetricsOverride", {});
-  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 }), deployments,
+  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
 }
 
@@ -364,55 +369,24 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
   }
 }
 
-/** Synthetic setup, promoted pins and empty history exercise folder-control
- * transitions only. No native permission is granted; prepareWorkspace always refuses. */
+/** Synthetic OMP observations exercise folder controls only. The real upstream
+ * owners are installed; no native consent or execution success is simulated. */
 async function syntheticFolderReadinessScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, target: Target): Promise<void> {
   const saved = await readConfiguration(server, writer, target);
   assert(saved.configuration?.active);
-  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 });
-  const file = join(bundleDirectory, "atyrode.code.manifold-plugin.json");
-  const packed = JSON.parse(readFileSync(file, "utf8")) as { manifest: { machine: { operations: Record<string, {
-    network: string; locations: { locationId: string; access: "read" | "write" | "create" }[];
-  }> } } };
-  // MANIFOLD_DIR selects the protocol checkout at runtime, not the source sibling.
-  const { formatManifoldUri } = await import(pathToFileURL(join(manifold, "packages/protocol/src/index.ts")).href) as typeof ProtocolModule;
+  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
+  const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
+    manifest: { machine: { operations: Record<string, unknown> } };
+  };
   const routes = [
-    { mode: "existing", operation: "validate-workspace", label: "Check existing folders" },
-    { mode: "create", operation: "prepare-workspace", label: "Create new folders" },
+    { mode: "validate", operation: "atyrode.omp.validate-workspace", label: "Check existing folders" },
+    { mode: "create", operation: "atyrode.omp.prepare-workspace", label: "Create new folders" },
   ] as const;
   let selected: typeof routes[number] = routes[0];
   let folderReady = false, intercepting = true;
-  const artifactSha256 = "e".repeat(64), binding = "f".repeat(64);
-  const productSha256 = createHash("sha256").update(readFileSync(file)).digest("hex");
-  function resources() {
-    return { productSha256, execution: { installationRevision: "synthetic-folder-ui-only", artifactSha256,
-      operations: { [`atyrode.code.${selected.operation}`]: binding } }, services: {} };
-  }
-  function setup(): ActionResult<"readSetup"> {
-    const operationId = `atyrode.code.${selected.operation}`;
-    const declaration = packed.manifest.machine.operations[operationId];
-    assert(declaration, "Synthetic folder scope comes from the packed operation declaration");
-    const node = formatManifoldUri({ kind: "operation", machineId: target.machineId, operationId });
-    const consents = [
-      ...(["machines:run", "jobs:read"] as const).map(cap => ({ node, cap, enabled: true, revision: "synthetic-folder-ui-only" })),
-      ...(declaration.network === "host" ? [{ node, cap: "network:host" as const, enabled: true, revision: "synthetic-folder-ui-only" }] : []),
-      ...declaration.locations.map(location => ({ node: formatManifoldUri({ kind: "location", machineId: target.machineId, locationId: location.locationId }),
-        cap: `locations:${location.access}` as const, enabled: true, revision: "synthetic-folder-ui-only" })),
-    ];
-    const unavailable = { ready: false, reason: "native_consent_required", resourceBindingDigest: binding };
-    return { productSha256, connected: true, services: [], execution: {
-      machineId: target.machineId, pluginId: "atyrode.code", connected: true, platforms: ["linux-x64"],
-      admissionPublicKey: "-----BEGIN PUBLIC KEY-----synthetic-folder-browser-only",
-      installation: { revision: "synthetic-folder-ui-only", artifactSha256, enabled: true, ready: true, purgeRequested: false },
-      retainedInstallations: [], consents: folderReady ? consents : [], operations: {
-        "atyrode.code.catalog-inventory": unavailable, "atyrode.code.launch": unavailable,
-        "atyrode.code.prepare-workspace": unavailable, "atyrode.code.validate-workspace": unavailable,
-        [operationId]: { ready: folderReady, reason: folderReady ? null : "native_consent_required", resourceBindingDigest: binding },
-      },
-    } };
-  }
-  const requested: Record<string, unknown>[] = [];
-  const unrelatedApprovals: string[] = [];
+  const pins = { installationRevision: "synthetic-folder-ui-only", artifactSha256: "e".repeat(64), resourceBindingDigest: "f".repeat(64) };
+  const reviewDigest = "a".repeat(64);
+  const requested: Record<string, unknown>[] = [], unrelatedApprovals: string[] = [];
   const pending = new Set<Promise<void>>();
   let fixtureFailure: unknown;
   browser.on("Fetch.requestPaused", event => {
@@ -423,29 +397,29 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
       const name = decodeURIComponent(new URL(request.url).pathname.split("/").at(-1)!);
       const input = JSON.parse(request.postData ?? "{}") as Record<string, unknown>;
       let outcome: unknown;
-      if (["engine.jobs.reviewDeployment", "engine.jobs.applyDeployment", "engine.jobs.execute",
-        "atyrode.code.configureServices", "atyrode.code.promoteResources"].includes(name)) {
+      if (["engine.jobs.applyDeployment", "engine.jobs.execute", "atyrode.omp.gateway.configureGateway", "atyrode.omp.accounts.promoteAccountRuntime", "atyrode.code.configureServices"].includes(name)) {
         unrelatedApprovals.push(name);
         outcome = { ok: false, denial: { rule: "forbidden", message: "synthetic_ui_never_approves_native_access" } };
-      } else if (name === "atyrode.code.readConfiguration") {
-        assert.equal(input.containerId, target.containerId);
-        const result: ConfigurationRead = { ...saved, configuration: {
-          ...saved.configuration!, resourcesByMachine: { [target.machineId]: resources() },
-        } };
+      } else if (name === "atyrode.omp.describeDestination") {
+        assert.deepEqual(input, target);
+        const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "missing", reason: "synthetic_ui_only",
+          services: [], deployment: null, operations: routes.map(route => {
+            assert(packed.manifest.machine.operations[route.operation], "Synthetic scope must name a real upstream operation");
+            const ready = folderReady && route === selected;
+            return { operationId: route.operation, nativeReady: ready, callerRefusal: null, state: ready ? "ready" : "approval_required",
+              reason: ready ? null : "native_consent_required", pins };
+          }) };
         outcome = { ok: true, result };
-      } else if (name === "atyrode.code.readSetup") {
-        assert.equal(input.containerId, target.containerId);
-        assert.equal(input.machineId, target.machineId);
-        outcome = { ok: true, result: setup() };
-      } else if (name === "engine.jobs.listRuns" && input.pluginId === "atyrode.code" &&
-        routes.some(route => input.operationId === `atyrode.code.${route.operation}`)) {
+      } else if (name === "engine.jobs.listRuns" && input.pluginId === "atyrode.omp" && routes.some(route => input.operationId === route.operation)) {
         assert.equal(input.machineId, target.machineId);
         outcome = { ok: true, result: { runs: [], nextCursor: null } };
-      } else if (name === "atyrode.code.prepareWorkspace") {
-        assert.equal(input.containerId, target.containerId);
-        assert.equal(input.machineId, target.machineId);
-        assert.equal(input.expectedRevision, saved.revision);
-        assert.equal(input.mode, selected.mode, "Only the independently enabled folder operation may be requested");
+      } else if (name === "atyrode.omp.reviewWorkspace") {
+        assert.deepEqual(input, { ...target, mode: selected.mode });
+        assert(folderReady);
+        const result: OmpResult<"reviewWorkspace"> = { destination: target, operationId: selected.operation, pins, reviewDigest };
+        outcome = { ok: true, result };
+      } else if (name === "atyrode.omp.prepareWorkspace") {
+        assert.deepEqual(input, { ...target, mode: selected.mode, reviewDigest }, "Preparation preserves the exact native destination, mode and review");
         requested.push(input);
         outcome = { ok: false, denial: { rule: "forbidden", message: "synthetic_folder_execution_refused" } };
       } else {
@@ -483,90 +457,78 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
       await until(browser, "synthetic folder execution refusal is visible", `!!${onboarding}?.querySelector('.plugin-atyrode_code__warning')?.textContent`);
       await control(browser, "refused folder request can be reconsidered", workspaceButton(route.label), false);
     }
-    assert.deepEqual(requested.map(input => input.mode), ["existing", "create"]);
-    assert.deepEqual(unrelatedApprovals, [], "Folder controls must not request unrelated native approval or configuration promotion");
+    assert.deepEqual(requested.map(input => input.mode), ["validate", "create"]);
+    assert.deepEqual(unrelatedApprovals, [], "Folder preparation never requests unrelated native approval or configuration");
     if (fixtureFailure) throw fixtureFailure;
   } finally {
     await Promise.allSettled([...pending]);
     await browser.send("Fetch.disable", {});
     intercepting = false;
   }
-  assert.deepEqual(await readConfiguration(server, writer, target), saved, "Synthetic folder transitions never mutate real resource pins");
-  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 }), deployments,
+  assert.deepEqual(await readConfiguration(server, writer, target), saved, "Synthetic folder transitions never mutate real Code choices");
+  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Synthetic folder readiness is not native approval evidence and creates no deployments");
 }
 
-/** Synthetic HTTP responses exercise only packed-browser receipt invalidation.
- * Real configuration, native permissions and launch admission are never modified.
- * In particular prepareLaunch always refuses, so this fixture cannot open a terminal. */
+/** Synthetic OMP review responses exercise browser invalidation only. Code's real
+ * policy composes synthetic account facts; OMP preparation always refuses.
+ * This cannot create credentials, approve consent or open a terminal. */
 async function syntheticPreviewScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, first: Target, second: Target): Promise<void> {
   const saved = await readConfiguration(server, writer, first);
   assert(saved.configuration?.active && saved.configuration.selection);
-  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", { ...first, expectedRevision: saved.revision, source: "active" });
-  assert(reviewed.ok);
-  const catalogReview = reviewed.result as ActionResult<"reviewCatalog">;
-  const file = join(bundleDirectory, "atyrode.code.manifold-plugin.json");
-  const packed = JSON.parse(readFileSync(file, "utf8")) as { manifest: { machine: { operations: Record<string, {
-    network: string; locations: { locationId: string; access: "read" | "write" | "create" }[];
-  }> } } };
-  const declaration = packed.manifest.machine.operations["atyrode.code.launch"];
-  assert(declaration, "Synthetic evidence derives its scope from the installed packed manifest");
-  // MANIFOLD_DIR selects the SDK at runtime; a static runtime import would bypass it.
-  const { formatManifoldUri } = await import(pathToFileURL(join(manifold, "packages/protocol/src/index.ts")).href) as typeof ProtocolModule;
-  const operationId = "atyrode.code.launch";
-  const artifactSha256 = "b".repeat(64), binding = "c".repeat(64), previewDigest = "d".repeat(64);
-  const resources = { productSha256: createHash("sha256").update(readFileSync(file)).digest("hex"),
-    execution: { installationRevision: "synthetic-ui-only", artifactSha256, operations: { [operationId]: binding } }, services: {} };
-  const configuration: ConfigurationRead = { revision: saved.revision, legacyMachineId: null,
-    configuration: { ...saved.configuration, resourcesByMachine: { [first.machineId]: resources } } };
-  const preview: ActionResult<"previewLaunch"> = { machineId: first.machineId, revision: saved.revision,
-    review: catalogReview.review, resources, previewDigest, accountPool: { anthropic: [{ credentialId: 1, identityKey: null }] } };
-  function setup(machineId: string): ActionResult<"readSetup"> {
-    const node = formatManifoldUri({ kind: "operation", machineId, operationId });
-    const consents = [
-      { node, cap: "machines:run" as const, enabled: true, revision: "synthetic-ui-only" },
-      ...(declaration!.network === "host" ? [{ node, cap: "network:host" as const, enabled: true, revision: "synthetic-ui-only" }] : []),
-      ...declaration!.locations.map(location => ({ node: formatManifoldUri({ kind: "location", machineId, locationId: location.locationId }),
-        cap: `locations:${location.access}` as const, enabled: true, revision: "synthetic-ui-only" })),
-    ];
-    return { productSha256: resources.productSha256, connected: true, services: [], execution: {
-      machineId, pluginId: "atyrode.code", connected: true, platforms: ["linux-x64"],
-      admissionPublicKey: "-----BEGIN PUBLIC KEY-----synthetic-browser-only",
-      installation: { revision: "synthetic-ui-only", artifactSha256, enabled: true, ready: true, purgeRequested: false },
-      retainedInstallations: [], consents, operations: { [operationId]: { ready: true, reason: null, resourceBindingDigest: binding } },
-    } };
-  }
-  let previewRequests = 0, prepareRequests = 0;
-  let holdNextPreview = false;
+  const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
+    manifest: { machine: { operations: Record<string, unknown> } };
+  };
+  const operationId = "atyrode.omp.launch";
+  assert(packed.manifest.machine.operations[operationId], "Synthetic review names the installed upstream launch operation");
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "b".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const reviewDigest = "d".repeat(64);
+  const defaults = await callAction(server, writer.token, "atyrode.omp.readDefaults", {});
+  assert(defaults.ok);
+  const defaultsRevision = (defaults.result as OmpResult<"readDefaults">).revision;
+  let previewRequests = 0, prepareRequests = 0, holdNextPreview = false, intercepting = true;
+  let reviewedInput: Record<string, unknown> | null = null;
   const held = { release: null as (() => void) | null };
   let fixtureFailure: unknown;
   const pending = new Set<Promise<void>>();
   browser.on("Fetch.requestPaused", event => {
+    if (!intercepting) return;
     const work = (async () => {
       const requestId = event.requestId as string;
       const request = event.request as { url: string; postData?: string };
       const name = decodeURIComponent(new URL(request.url).pathname.split("/").at(-1)!);
       const input = JSON.parse(request.postData ?? "{}") as Record<string, unknown>;
-      if (!["atyrode.code.readConfiguration", "atyrode.code.readSetup", "atyrode.code.previewLaunch", "atyrode.code.prepareLaunch"].includes(name)) {
-        await browser.send("Fetch.continueRequest", { requestId }); return;
-      }
-      assert.equal(input.containerId, first.containerId, "Synthetic responses are restricted to this fixture container");
       let outcome: unknown;
-      if (name === "atyrode.code.readConfiguration") outcome = { ok: true, result: configuration };
-      else if (name === "atyrode.code.readSetup") {
+      if (name === "atyrode.omp.accounts.accounts") {
+        const scope = "browser-fixture-account-scope";
+        const result: OmpResult<"accounts"> = { scope, status: "fresh", observedAt: Date.now(), accounts: [1, 7].map(credentialId => ({
+          reference: { kind: "credential", scope, provider: "anthropic", credentialId }, credentialId,
+          type: "api_key", identityKey: null, email: null, disabled: false, blocks: [],
+        })) };
+        outcome = { ok: true, result };
+      } else if (name === "atyrode.omp.describeDestination") {
+        assert.equal(input.containerId, first.containerId);
         assert(input.machineId === first.machineId || input.machineId === second.machineId);
-        outcome = { ok: true, result: setup(input.machineId) };
-      } else if (name === "atyrode.code.previewLaunch") {
+        const ready = input.machineId === first.machineId;
+        const result: OmpResult<"describeDestination"> = { containerId: first.containerId, machineId: input.machineId, pluginId: "atyrode.omp",
+          state: ready ? "ready" : "missing", reason: ready ? null : "synthetic_unprepared_destination", deployment: null, services: [],
+          operations: [{ operationId, pins, nativeReady: ready, callerRefusal: null, state: ready ? "ready" : "missing", reason: ready ? null : "native_resources_missing" }] };
+        outcome = { ok: true, result };
+      } else if (name === "atyrode.omp.reviewSession") {
         previewRequests++;
-        assert.equal(input.machineId, first.machineId, "The destination without pins must never issue a launch preview");
-        assert.equal(input.expectedRevision, saved.revision);
+        assert.equal(input.containerId, first.containerId);
+        assert.equal(input.machineId, first.machineId, "An unprepared destination cannot request a session review");
+        assert.equal(input.expectedDefaultsRevision, defaultsRevision);
+        reviewedInput = input;
         if (holdNextPreview) { holdNextPreview = false; await new Promise<void>(resolve => { held.release = resolve; }); held.release = null; }
-        outcome = { ok: true, result: preview };
-      } else {
+        outcome = { ok: true, result: { destination: first, operationId, pins, reviewDigest, defaultsRevision,
+          effectiveOverlay: input.overlay, accountPool: input.accountPool } };
+      } else if (name === "atyrode.omp.prepareSession") {
         prepareRequests++;
-        assert.equal(input.machineId, first.machineId);
-        assert.equal(input.previewDigest, preview.previewDigest, "Launch confirmation must use its matching destination review");
-        outcome = { ok: false, denial: { rule: "forbidden", message: "code_preview_changed" } };
+        assert.deepEqual(input, { ...reviewedInput, reviewDigest }, "Prepare preserves the exact native target/defaults/overlay/prompt/account pool and review");
+        outcome = { ok: false, denial: { rule: "forbidden", message: "omp_review_changed" } };
+      } else {
+        await browser.send("Fetch.continueRequest", { requestId }); return;
       }
       await browser.send("Fetch.fulfillRequest", { requestId, responseCode: 200,
         responseHeaders: [{ name: "Content-Type", value: "application/json" }], body: Buffer.from(JSON.stringify(outcome)).toString("base64") });
@@ -574,7 +536,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     pending.add(work);
     void work.catch(error => { fixtureFailure = error; }).finally(() => pending.delete(work));
   });
-  await browser.send("Fetch.enable", { patterns: [{ urlPattern: `${server.httpUrl}/api/actions/atyrode.code.*`, requestStage: "Request" }] });
+  await browser.send("Fetch.enable", { patterns: [{ urlPattern: `${server.httpUrl}/api/actions/*`, requestStage: "Request" }] });
   try {
     await browser.goto(`${server.httpUrl}/p/${first.containerId}`);
     await selectDestination(browser, generatorDestination, first.machineId);
@@ -582,8 +544,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await click(browser, launchControl);
     await until(browser, "synthetic first destination review displayed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
     await selectDestination(browser, generatorDestination, second.machineId);
-    await control(browser, "second destination cannot reuse first destination pins", launchControl, true);
-    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Changing destination invalidates the existing preview");
+    await control(browser, "second destination cannot reuse first destination review", launchControl, true);
+    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Changing destination invalidates the existing review");
     assert.equal(prepareRequests, 0, "Destination selection never prepares a launch");
     await selectDestination(browser, generatorDestination, first.machineId);
     await control(browser, "returning destination requires another review", launchControl, false);
@@ -609,8 +571,9 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     held.release?.();
     await Promise.allSettled([...pending]);
     await browser.send("Fetch.disable", {});
+    intercepting = false;
   }
-  assert.deepEqual(await readConfiguration(server, writer, first), saved, "Synthetic browser responses never change real saved choices or resource pins");
+  assert.deepEqual(await readConfiguration(server, writer, first), saved, "Synthetic observations never change real saved choices");
 }
 
 async function run(): Promise<void> {
@@ -620,8 +583,8 @@ async function run(): Promise<void> {
   const expectedRevision = readFileSync(join(pluginRoot, "MANIFOLD_REV"), "utf8").trim();
   const revision = Bun.spawnSync(["git", "-C", manifold, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
   assert(revision.success && revision.stdout.toString().trim() === expectedRevision, "MANIFOLD_DIR must be checked out at plugins/MANIFOLD_REV");
-  const bundles = family.map(id => {
-    const file = join(bundleDirectory, `${id}.manifold-plugin.json`);
+  const bundles = [...ompFamily.map(id => ({ id, directory: ompBundleDirectory })), ...family.map(id => ({ id, directory: bundleDirectory }))].map(({ id, directory }) => {
+    const file = join(directory, `${id}.manifold-plugin.json`);
     assert(existsSync(file), `Missing prepacked bundle: ${id}`);
     return { id, file, sha256: createHash("sha256").update(readFileSync(file)).digest("hex") };
   });
@@ -645,7 +608,7 @@ async function run(): Promise<void> {
     assert(["localhost", "127.0.0.1"].includes(new URL(server.httpUrl).hostname), "Fixture must stay on loopback");
     for (const bundle of bundles) {
       phase = `installing ${bundle.id}`;
-      await ownerAction(server, "engine.plugins.install", { source: bundle.file, sha256: bundle.sha256, hardened: false });
+      await ownerAction(server, "engine.plugins.install", { source: bundle.file, sha256: bundle.sha256, hardened: ompFamily.includes(bundle.id) });
     }
     phase = "isolated fixture machine";
     const enrolled = await enrollMachine(server, machineName);
@@ -662,8 +625,10 @@ async function run(): Promise<void> {
     const container = await createContainer(server, "Code browser regression", "canvas");
     const target = { containerId: container.id, machineId: agent.machineId };
     const secondTarget = { containerId: container.id, machineId: secondAgent.machineId };
-    const writer = await mintToken(server, { principal: { kind: "human", name: "Code writer", color: "#336699" }, caps: ["containers:read", "containers:write", "services:read"] });
-    const viewer = await mintToken(server, { principal: { kind: "human", name: "Code viewer", color: "#996633" }, caps: ["containers:read", "services:read"] });
+    const writer = await mintToken(server, { principal: { kind: "human", name: "Code writer", color: "#336699" },
+      caps: ["containers:read", "containers:write", "machines:read", "machines:run", "jobs:read", "services:read"] });
+    const viewer = await mintToken(server, { principal: { kind: "human", name: "Code viewer", color: "#996633" },
+      caps: ["containers:read", "machines:read", "machines:run", "jobs:read", "services:read"] });
     assert.notEqual(writer.principal.id, viewer.principal.id, "Writer and viewer must be different native identities");
     phase = "opening two independent workspaces";
     const opened = await Promise.allSettled([openWorkspace(writerBrowser, server, writer, container.id), openWorkspace(viewerBrowser, server, viewer, container.id)]);
@@ -712,7 +677,7 @@ async function run(): Promise<void> {
     assert.equal(await writerBrowser.evaluate(`${nameField}.value`), presetName, "Returning to the first destination must retain its shared draft");
 
     phase = "contextual choices preserve a live account draft";
-    const permissionsBefore = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 });
+    const permissionsBefore = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
     await click(writerBrowser, element(`${accounts} .plugin-atyrode_code__account-diagnostics > summary`));
     const reviewTrigger = button("Review account capabilities");
     await control(writerBrowser, "contextual account review available while editing", reviewTrigger, false);
@@ -731,28 +696,28 @@ async function run(): Promise<void> {
       const plan = JSON.parse(text).result;
       return plan.steps.length === 1 && plan.steps[0].request.operationIds.length === 2;
     })()`);
-    const grouped = await writerBrowser.evaluate<ActionResult<"readPermissionPlan">>(`JSON.parse(${displayedPlan}.textContent).result`);
+    const grouped = await writerBrowser.evaluate<PermissionPlan>(`JSON.parse(${displayedPlan}.textContent).result`);
     assert.equal(grouped.ownerApprovalRequired, true, "Writer must see actual native owner authority requirement");
     assert.deepEqual(grouped.steps.map(step => ({ pluginId: step.request.pluginId, targets: step.request.targets, operations: step.request.operationIds })), [{
-      pluginId: "atyrode.code", targets: [{ machineId: target.machineId }],
-      operations: ["atyrode.code.catalog-inventory", "atyrode.code.catalog-benchmark"],
+      pluginId: "atyrode.omp", targets: [{ machineId: target.machineId }],
+      operations: ["atyrode.omp.inventory", "atyrode.omp.benchmark"],
     }], "Independent choices must not implicitly approve account or gateway operations");
     await click(writerBrowser, capability("benchmark"));
     await until(writerBrowser, "declining only removes the new benchmark request", `(() => {
       const text = ${displayedPlan}?.textContent;
-      return !!text && JSON.stringify(JSON.parse(text).result.steps[0]?.request.operationIds) === JSON.stringify(["atyrode.code.catalog-inventory"]);
+      return !!text && JSON.stringify(JSON.parse(text).result.steps[0]?.request.operationIds) === JSON.stringify(["atyrode.omp.inventory"]);
     })()`);
     await until(writerBrowser, "native authority requirement is visible", `(() => {
       const notice = ${element(`${permissionDialog} .plugin-atyrode_code__notice[role="status"]`)};
       return !!notice && notice.getClientRects().length > 0;
     })()`);
-    const currentPlan = await writerBrowser.evaluate<ActionResult<"readPermissionPlan">>(`JSON.parse(${displayedPlan}.textContent).result`);
+    const currentPlan = await writerBrowser.evaluate<PermissionPlan>(`JSON.parse(${displayedPlan}.textContent).result`);
     const nativeRefusal = await callAction(server, writer.token, "engine.jobs.reviewDeployment", currentPlan.steps[0]!.request);
     assert(!nativeRefusal.ok, "An ordinary workspace writer cannot bypass the native owner review boundary");
     assert.equal(nativeRefusal.denial.rule, "forbidden", "A valid native request is denied on authority, not malformed input");
     assert.equal(await writerBrowser.evaluate(`document.querySelector('${permissionDialog} [aria-label="Capability readiness"]') === null`), true,
       "A root-only native denial must never become cosmetic permission success");
-    assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 }), permissionsBefore,
+    assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), permissionsBefore,
       "Choices, decline and refused review must not create or revoke native approval");
     await key(writerBrowser, "Escape", 27);
     await until(writerBrowser, "contextual review closes without navigation", `${element(permissionDialog)} === null`);
@@ -810,13 +775,13 @@ async function run(): Promise<void> {
     await click(writerBrowser, capability("workspace-existing"));
     await until(writerBrowser, "workspace-only request keeps its exact operation", `(() => {
       const text = ${displayedPlan}?.textContent;
-      return !!text && JSON.stringify(JSON.parse(text).result.steps[0]?.request.operationIds) === JSON.stringify(["atyrode.code.validate-workspace"]);
+      return !!text && JSON.stringify(JSON.parse(text).result.steps[0]?.request.operationIds) === JSON.stringify(["atyrode.omp.validate-workspace"]);
     })()`);
     await key(writerBrowser, "Escape", 27);
     await until(writerBrowser, "onboarding can defer permission review", `${element(permissionDialog)} === null`);
     assert.equal((await readConfiguration(server, writer, { containerId: firstUse.id })).configuration, null,
       "Initial choices and closing review do not initialize or promote a profile");
-    assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.code", limit: 100 }), permissionsBefore);
+    assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), permissionsBefore);
     phase = "deferred first-use and standalone Usage configuration recovery";
     await configurationRecoveryScenario(writerBrowser, server, writer, { containerId: firstUse.id }, target);
     phase = "synthetic independent folder-only UI readiness";
@@ -829,7 +794,7 @@ async function run(): Promise<void> {
     // verifier line numbers, never driver messages or captured page-console output.
     const frames = error instanceof Error ? error.stack?.match(/verify-browser\.ts:\d+:\d+/g)?.slice(0, 4).join(", ") : undefined;
     failure = error instanceof assert.AssertionError || error instanceof ProofFailure
-      ? new Error(error.message)
+      ? new Error(`Browser proof failed during ${phase}: ${error.message}`)
       : new Error(`Browser proof failed during ${phase}${frames ? `; local frames: ${frames}` : ""}`);
   } finally {
     const cleanup = async (name: string, action: () => unknown | Promise<unknown>) => {
