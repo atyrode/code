@@ -42,12 +42,12 @@ an authoritative store.
 
 All Code actions are `atyrode.code.<name>`:
 
-| Purpose | Actions |
-| --- | --- |
-| Configuration | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts` |
-| Catalog authoring | `stageCatalog`, `reviewCatalog`, `promoteCatalog` |
-| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession` |
-| External classifier | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
+| Purpose               | Actions                                                                      |
+| --------------------- | ---------------------------------------------------------------------------- |
+| Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
+| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                            |
+| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`          |
+| External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
 `initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `select` and
 `changeAccounts` take `expectedRevision`. A catalog review takes
@@ -132,6 +132,10 @@ OMP's accounts action door owns `accounts`, `usage`, `clearAccountBlocks`,
 `promoteAccountRuntime` and `prepareSignIn`. Gateway ownership similarly remains
 under OMP's gateway door. Code receives no credential input, service bearer,
 provider error body or raw broker snapshot.
+Broker promotion may also review an exact unprivileged loopback bind and
+SHA-256 bearer verifier for existing clients. Omitting that field retains the
+current declaration; `null` explicitly removes it. Plaintext client bearers
+remain outside the review, policy serialization and Code.
 
 A move from an older Code-owned broker changes the service scope by design.
 Operational cutover must first prove the same concrete provider, credential id
