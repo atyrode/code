@@ -136,6 +136,9 @@ Broker promotion may also review an exact unprivileged loopback bind and
 SHA-256 bearer verifier for existing clients. Omitting that field retains the
 current declaration; `null` explicitly removes it. Plaintext client bearers
 remain outside the review, policy serialization and Code.
+A paused broker remains disabled during reads and sign-in preparation. Its
+owner can review and explicitly promote recovery against the exact paused
+revision, native permissions and retained client-access declaration.
 
 A move from an older Code-owned broker changes the service scope by design.
 Operational cutover must first prove the same concrete provider, credential id
