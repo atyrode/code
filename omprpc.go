@@ -439,6 +439,16 @@ func ompVaultManifest() string {
 	return filepath.Join(base, "code", ompVaultManifestName)
 }
 
+// ompSnapshotBudget bounds the account snapshot a launch waits on. The broker
+// is a service on the launch's own machine answering a document under a
+// megabyte, so five seconds is three orders of magnitude of headroom over a
+// healthy answer; what the bound buys is the other case, a broker that accepts
+// the connection and then says nothing, which is refused by name here rather
+// than after the twenty seconds an operator's panel is content to wait. A
+// broker that is not listening at all — the outage this exists for — is
+// refused in the milliseconds a rejected connection takes.
+const ompSnapshotBudget = 5 * time.Second
+
 // ompResolveAuth resolves the run's credential the way an interactive trusted
 // launch resolves it — the same broker, the same account snapshot, the same
 // disabled-account selection — rather than growing a second resolution beside
@@ -449,12 +459,12 @@ func ompResolveAuth() (ompAuth, error) {
 	if !broker.configured() {
 		return ompAuth{}, nil
 	}
-	accounts, err := loadAccounts(broker)
+	accounts, err := loadAccounts(broker, ompSnapshotBudget)
 	if err != nil {
 		// Wrapping the reason is safe: the broker's token travels in an
 		// Authorization header, and no error loadAccounts builds formats it.
-		return ompAuth{}, fmt.Errorf("the account snapshot is unavailable, so the run would launch "+
-			"with no account policy at all: %w", err)
+		return ompAuth{}, fmt.Errorf("%w: the account snapshot is unavailable, so the run would launch "+
+			"with no account policy at all: %w", errOmpBrokerUnavailable, err)
 	}
 	// A disabled account stays disabled. The selection is the operator's, and
 	// an engine that ignored it would route a supervised run through an

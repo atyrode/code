@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -599,6 +600,172 @@ func TestEngineWithoutACredentialRefusesToLaunch(t *testing.T) {
 	}
 	if _, statErr := os.Stat(record); statErr == nil {
 		t.Error("omp was launched with nothing to authenticate with")
+	}
+}
+
+// closedBrokerURL is an address nothing is listening on: a real port, bound
+// long enough to be real and then closed, so a connection to it is refused at
+// once. It is the auth broker of 2026-09-13, whose unit was down for seventeen
+// minutes while runs kept launching into it.
+func closedBrokerURL(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Close()
+	return server.URL
+}
+
+// TestEngineRefusesByNameWhenTheBrokerSnapshotIsUnavailable is the refusal a
+// client can act on without reading the stream. The broker is unreachable, so
+// the account policy the run would be held to cannot be built; the launch must
+// refuse before omp exists, name the failure in the report, and take no longer
+// over it than a caller's go/no-go allows — a client that waited out its
+// handshake budget instead would report a missing ready frame, which says
+// nothing about a broker.
+func TestEngineRefusesByNameWhenTheBrokerSnapshotIsUnavailable(t *testing.T) {
+	isolateEngineEnv(t)
+	t.Setenv("OMP_AUTH_BROKER_URL", closedBrokerURL(t))
+	t.Setenv("OMP_AUTH_BROKER_TOKEN", testProviderToken)
+
+	l, _ := newTestLauncher(t)
+	// The real resolution against a dead address, not a seam returning an
+	// error: the classification is the thing under test, and it is made where
+	// the broker is consulted.
+	l.auth = ompResolveAuth
+	fake, record := ompFakeBinary(t, "plain")
+	l.lookOmp = func() (string, error) { return fake, nil }
+	opts := testLaunchOptions(t)
+
+	var out, errw bytes.Buffer
+	start := time.Now()
+	status, err := l.serve(context.Background(), opts, strings.NewReader(""), &out, &errw)
+	elapsed := time.Since(start)
+
+	if status != engineRefusedStatus || !errors.Is(err, errOmpBrokerUnavailable) {
+		t.Fatalf("serve = %d, %v; want %d, errOmpBrokerUnavailable", status, err, engineRefusedStatus)
+	}
+	if !strings.Contains(err.Error(), engineFailureBrokerUnavailable) {
+		t.Errorf("the refusal a launcher prints does not name the failure: %v", err)
+	}
+	if elapsed >= 2*time.Second {
+		t.Errorf("refusing a dead broker took %s; a client's go/no-go allows two seconds", elapsed)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a refused launch wrote to stdout: %s", out.Bytes())
+	}
+	if _, statErr := os.Stat(record); statErr == nil {
+		t.Error("omp was launched with no account policy at all")
+	}
+
+	data, err := os.ReadFile(opts.runtimeInfo)
+	if err != nil {
+		t.Fatalf("a named refusal wrote no runtime report: %v (stderr: %s)", err, errw.String())
+	}
+	var report runtimeReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("the runtime report does not parse: %v\n%s", err, data)
+	}
+	if report.Failure != engineFailureBrokerUnavailable {
+		t.Errorf("report failure = %q, want %q", report.Failure, engineFailureBrokerUnavailable)
+	}
+	if !strings.Contains(report.Reason, "account snapshot is unavailable") {
+		t.Errorf("report reason = %q; it carries no cause an operator could act on", report.Reason)
+	}
+	if report.Schema != runtimeReportSchema || report.Profile != testProfile().Ref {
+		t.Errorf("the refusal is not attributed: schema %q, profile %+v", report.Schema, report.Profile)
+	}
+	if report.Finished == nil || !*report.Finished {
+		t.Errorf("the refusal reads as a wrapper that never accounted for itself: %s", data)
+	}
+	if report.ExitCode == nil || *report.ExitCode != engineRefusedStatus {
+		t.Errorf("report exit_code = %v, want %d", report.ExitCode, engineRefusedStatus)
+	}
+	if report.Containment != nil || report.Resources != nil {
+		t.Errorf("a launch that started nothing claims containment %+v and resources %+v",
+			report.Containment, report.Resources)
+	}
+	if strings.Contains(string(data), testProviderToken) {
+		t.Fatal("the broker token is in the runtime report")
+	}
+}
+
+// TestEngineBinaryRefusesADeadBrokerWithExitThree measures the two things only
+// the process can answer: the status a launcher waits on, and the wall clock it
+// waits for. Everything else about the refusal is pinned above; this run exists
+// because a client reads an exit status, not a Go return value.
+func TestEngineBinaryRefusesADeadBrokerWithExitThree(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		fmt.Fprintf(os.Stderr, "\nUNVERIFIED (%s): no go toolchain on PATH to build the binary "+
+			"with, so the refusal's exit status and timing went unmeasured on a real process.\n\n", t.Name())
+		t.Skip("no go toolchain on PATH to build the binary with")
+	}
+	binary := filepath.Join(t.TempDir(), "code")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("go build: %v", err)
+	}
+
+	isolateEngineEnv(t)
+	catalog := engineCatalogFixture(t)
+	t.Setenv("CODE_GENERATED", catalog)
+	store := t.TempDir()
+	t.Setenv(profileStateEnv, store)
+	dials := turnedDials(t, map[string]string{"lane": "claude-led", "model": "fast", "thinking": "low"})
+	minted, err := newProfileStore(store).save(describeDials(dials, "hosted-e2e"))
+	if err != nil {
+		t.Fatalf("minting the profile the engine resolves: %v", err)
+	}
+
+	info := filepath.Join(t.TempDir(), "runtime.json")
+	cmd := exec.Command(binary, "engine", "--profile", minted.ID, "--runtime-info", info)
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		// An omp that is not there: if the refusal ever stopped happening
+		// before the launch, the run would fail for the wrong reason and this
+		// test would say so rather than pass by accident.
+		"CODE_OMP=" + filepath.Join(t.TempDir(), "absent-omp"),
+		profileStateEnv + "=" + store,
+		"CODE_GENERATED=" + catalog,
+		"CODE_SELECTION_STATE=",
+		"XDG_STATE_HOME=" + t.TempDir(),
+		"CODE_RUNTIME_BROKER=",
+		"CODE_AUTH_VAULTS=",
+		"CODE_AUTH_VAULTS_FILE=" + filepath.Join(t.TempDir(), "absent.json"),
+		"OMP_AUTH_BROKER_URL=" + closedBrokerURL(t),
+		"OMP_AUTH_BROKER_TOKEN=" + testProviderToken,
+	}
+	cmd.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	start := time.Now()
+	runErr := cmd.Run()
+	elapsed := time.Since(start)
+
+	var exit *exec.ExitError
+	if !errors.As(runErr, &exit) || exit.ExitCode() != engineRefusedStatus {
+		t.Fatalf("code engine = %v, want exit %d; stderr: %s", runErr, engineRefusedStatus, stderr.String())
+	}
+	if elapsed >= 2*time.Second {
+		t.Errorf("the process took %s to refuse a dead broker; a client's go/no-go allows two seconds", elapsed)
+	}
+	if !strings.Contains(stderr.String(), engineFailureBrokerUnavailable) {
+		t.Errorf("stderr does not name the failure a launcher tees into its log: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("a refused launch wrote to stdout: %q", stdout.String())
+	}
+
+	data, err := os.ReadFile(info)
+	if err != nil {
+		t.Fatalf("the refusal wrote no runtime report: %v (stderr: %s)", err, stderr.String())
+	}
+	var report runtimeReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("the runtime report does not parse: %v\n%s", err, data)
+	}
+	if report.Failure != engineFailureBrokerUnavailable {
+		t.Errorf("report failure = %q, want %q (report: %s)", report.Failure, engineFailureBrokerUnavailable, data)
 	}
 }
 

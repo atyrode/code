@@ -479,7 +479,7 @@ func runTrusted(session *sessionHandle, envName string, fallbacks []string,
 		}
 		return childStatus(err)
 	}
-	accounts, err := loadAccounts(broker)
+	accounts, err := loadAccounts(broker, accountSnapshotTimeout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "code: account snapshot unavailable; refusing unrestricted launch:", err)
 		return 1
