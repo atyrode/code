@@ -54,6 +54,47 @@ describe("Code account selection over explicit OMP observations", () => {
     }
   });
 
+  test("rebinds every saved exclusion atomically while preserving each effective account pool", () => {
+    const choices = {
+      activePreset: "focus", manualDisabled: [slot],
+      presets: [{ id: "focus", name: "Focus", disabled: [alice] }, { id: "other", name: "Other", disabled: [slot, alice] }],
+    };
+    const current = { ...snapshot, scope: "omp-owned-broker",
+      accounts: snapshot.accounts.map(account => ({ ...account, reference: { ...account.reference, scope: "omp-owned-broker" } })) };
+    const rebound = reduceAccountChoices(choices, { kind: "rebind-scope", previous: snapshot, current });
+    for (const activePreset of [null, "focus", "other"]) {
+      const before = selectedAccountPool(snapshot, { ...choices, activePreset });
+      const expected = Object.fromEntries(Object.entries(before).map(([provider, accounts]) =>
+        [provider, accounts.map(account => ({ ...account, scope: current.scope }))]));
+      expect(selectedAccountPool(current, { ...rebound, activePreset })).toEqual(expected);
+      expectCode(() => selectedAccountPool(snapshot, { ...rebound, activePreset }), "account_unavailable");
+    }
+    expect(rebound.activePreset).toBe("focus");
+    expect(selectedAccountPool(snapshot, choices).anthropic).toEqual([]);
+  });
+
+  test("scope rebind refuses changed identity, credential population or unavailable evidence without losing exclusions", () => {
+    const choices = { activePreset: null, manualDisabled: [slot],
+      presets: [{ id: "focus", name: "Focus", disabled: [alice] }] };
+    const current = { ...snapshot, scope: "omp-owned-broker",
+      accounts: snapshot.accounts.map(account => ({ ...account, reference: { ...account.reference, scope: "omp-owned-broker" } })) };
+    const relogged = structuredClone(current);
+    relogged.accounts[0]!.identityKey = "email:Alice@example.test|org:new";
+    relogged.accounts[0]!.reference = { ...alice, scope: current.scope, identityKey: relogged.accounts[0]!.identityKey };
+    for (const changed of [
+      relogged,
+      { ...current, accounts: current.accounts.slice(0, -1) },
+      { ...current, status: "stale" as const },
+    ]) {
+      expectCode(() => reduceAccountChoices(choices, { kind: "rebind-scope", previous: snapshot, current: changed }), "account_unavailable");
+      expect(selectedAccountPool(snapshot, choices).openai).toEqual([{ scope, credentialId: 3, identityKey: null }]);
+      expect(selectedAccountPool(snapshot, { ...choices, activePreset: "focus" }).anthropic).toEqual([]);
+    }
+    const missing = { ...choices, presets: [{ id: "focus", name: "Focus", disabled: [{ ...alice, identityKey: "missing" }] }] };
+    expectCode(() => reduceAccountChoices(missing, { kind: "rebind-scope", previous: snapshot, current }), "account_unavailable");
+    expect(selectedAccountPool(snapshot, missing).openai).toEqual([{ scope, credentialId: 3, identityKey: null }]);
+  });
+
   test("re-login email protection remains provider- and service-scoped without weakening exact launch refusal", () => {
     const observation = structuredClone(snapshot);
     const identityKey = "email:alice@EXAMPLE.test|org:new";

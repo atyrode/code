@@ -58,13 +58,37 @@ export function initialAccountChoices(): AccountChoices {
   return { activePreset: null, manualDisabled: [], presets: [] };
 }
 
-/** Pure edit: no persistence, revision arbitration, or observation is implied. */
+/** Pure edit over explicit metadata; no persistence, native custody, or revision arbitration is implied. */
 export function reduceAccountChoices(state: AccountChoices, change: AccountChoiceChange): AccountChoices {
   const choices = parseChoices(state);
   const parsed = AccountChoiceChangeSchema.safeParse(change);
   if (!parsed.success) throw new DomainError("invalid_choices");
   const edit = parsed.data;
   switch (edit.kind) {
+    case "rebind-scope": {
+      const previous = checkedAccountsObservation(edit.previous);
+      const current = checkedAccountsObservation(edit.current);
+      if (previous.status !== "fresh" || current.status !== "fresh" || previous.scope === current.scope ||
+        previous.accounts.length !== current.accounts.length) throw new DomainError("account_unavailable");
+      const currentSlots = new Map(current.accounts.map(account => [account.credentialId, account]));
+      const replacements = new Map<string, AccountReference>();
+      for (const account of previous.accounts) {
+        const next = currentSlots.get(account.credentialId);
+        if (!next || next.reference.provider !== account.reference.provider || next.type !== account.type ||
+          next.identityKey !== account.identityKey || next.disabled !== account.disabled) throw new DomainError("account_unavailable");
+        replacements.set(referenceKey(account.reference), next.reference);
+      }
+      // Every saved preset moves in the same revision; an unresolved exclusion
+      // must never disappear or transiently admit a broader account pool.
+      const rebind = (references: AccountReference[]) => references.map(reference => {
+        const replacement = replacements.get(referenceKey(reference));
+        if (!replacement) throw new DomainError("account_unavailable");
+        return replacement;
+      });
+      choices.manualDisabled = rebind(choices.manualDisabled);
+      for (const preset of choices.presets) preset.disabled = rebind(preset.disabled);
+      break;
+    }
     case "set-account": {
       const disabled = currentDisabled(choices);
       const next = edit.enabled ? disabled.filter(reference => !sameDisabledIdentity(reference, edit.reference)) :

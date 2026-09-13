@@ -136,9 +136,14 @@ provider error body or raw broker snapshot.
 A move from an older Code-owned broker changes the service scope by design.
 Operational cutover must first prove the same concrete provider, credential id
 and identity slots under the new OMP owner, then update saved choices through
-revision-checked `changeAccounts`; it must not add a compatibility alias or
-match ambiguous email. Credential bytes and protected backups are not part of
-Code configuration.
+revision-checked `changeAccounts` with `change: { kind: "rebind-scope", previous,
+current }`. These are permitted account-metadata observations retained before
+and read after cutover, never raw broker snapshots. The action requires a
+one-to-one unchanged provider/credential/identity population and moves every
+manual and preset exclusion in one revision. Missing evidence or changed slots
+refuse without changing choices; no compatibility alias, email-only match or
+intermediate widened pool is created. Credential bytes and protected backups
+are not part of Code configuration.
 
 ## Native installation and evidence
 

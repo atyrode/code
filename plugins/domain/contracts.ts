@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AccountReferenceSchema, ThinkingLevelSchema, identifier } from "@atyrode/manifold-omp";
+import { AccountReferenceSchema, AccountsObservationSchema, ThinkingLevelSchema, identifier } from "@atyrode/manifold-omp";
 
 export class DomainError extends Error {
   constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
@@ -95,5 +95,6 @@ export const AccountChoiceChangeSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("update-preset"), preset: AccountPresetSchema }),
   z.strictObject({ kind: z.literal("activate-preset"), id: identifier.nullable() }),
   z.strictObject({ kind: z.literal("delete-preset"), id: identifier }),
+  z.strictObject({ kind: z.literal("rebind-scope"), previous: AccountsObservationSchema, current: AccountsObservationSchema }),
 ]);
 export type AccountChoiceChange = z.infer<typeof AccountChoiceChangeSchema>;
