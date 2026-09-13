@@ -932,6 +932,40 @@ func TestEngineReportsEveryTurnWithTheModelThatAnswered(t *testing.T) {
 	}
 }
 
+// TestEngineDoesNotCallAnUnrelatedTurnARetry is the other half of the retry
+// mark, and the half that is easy to get wrong: OMP announces a re-attempt
+// and then does not make one — a backoff cancelled from the client, a retry
+// budget that ran out, a continuation that failed locally — and the next turn
+// on the stream belongs to a fresh prompt. Marking that one as a retry would
+// overcount the retries in the totals and, worse, describe an ordinary answer
+// as a run being refused, which is precisely the reading the mark exists to
+// make possible.
+func TestEngineDoesNotCallAnUnrelatedTurnARetry(t *testing.T) {
+	l, _ := newTestLauncher(t)
+	run := serveFake(t, l, "cancelledretry", "")
+	if run.err != nil || run.status != 0 {
+		t.Fatalf("serve = %d, %v; stderr: %s", run.status, run.err, run.stderr)
+	}
+	if len(run.report.Turns) != 2 {
+		t.Fatalf("the report lists %d turns, want the failed attempt and the fresh one: %s",
+			len(run.report.Turns), run.rawInfo)
+	}
+	abandoned, fresh := run.report.Turns[0], run.report.Turns[1]
+	if abandoned.Status != "error" || abandoned.Retry {
+		t.Errorf("the refused first attempt = %+v, want a failed turn that retried nothing", abandoned)
+	}
+	if fresh.Retry {
+		t.Errorf("the fresh prompt's turn = %+v, want an answer of its own: the announced retry was cancelled "+
+			"and never opened", fresh)
+	}
+	if fresh.Status != "stop" || fresh.OutputTokens != 120 {
+		t.Errorf("the fresh prompt's turn = %+v, want what the child reported", fresh)
+	}
+	if usage := run.report.Usage; usage == nil || usage.Turns != 2 || usage.Retries != 0 {
+		t.Errorf("usage = %+v, want two turns and no retry: none was ever made", usage)
+	}
+}
+
 // TestRuntimeJournalHeartbeatKeepsALiveRunFresh pins the property a client
 // reads liveness with. A report that is rewritten twice — at launch and at
 // exit — is a signal with two values and no way to act on either, which is
@@ -1233,6 +1267,38 @@ var ompFakeTurnFrames = []string{
 		`"api":"anthropic-messages","provider":"anthropic","model":"claude-fable-5","usage":{"input":40,` +
 		`"output":900,"cacheRead":0,"cacheWrite":0,"totalTokens":940,"cost":{"input":0.1,"output":0.65,` +
 		`"total":0.75}},"stopReason":"stop","duration":982.81,"ttft":799.03},"toolResults":[]}`,
+	// The announcement's other end, which OMP writes once the attempt it
+	// announced has answered — after the turn it belongs to, so it takes
+	// nothing back.
+	`{"type":"auto_retry_end","success":true,"attempt":1,"retryErrors":[]}`,
+	`{"type":"agent_end","isTerminal":true}`,
+}
+
+// ompFakeCancelledRetryFrames is the promise OMP does not keep: a retryable
+// failure, an announcement, and then auto_retry_end with success false and no
+// attempt after it — what a backoff aborted from the client, an exhausted
+// retry budget and a continuation that failed on this machine all produce.
+// The run then takes a fresh prompt, whose turn is nobody's re-attempt.
+//
+// Recorded off a live `omp --mode rpc` session driven against an endpoint
+// answering 503, with the retry cancelled during the backoff.
+var ompFakeCancelledRetryFrames = []string{
+	`{"type":"agent_start"}`,
+	`{"type":"turn_start"}`,
+	`{"type":"turn_end","message":{"role":"assistant","content":[],"api":"anthropic-messages",` +
+		`"provider":"anthropic","model":"claude-opus-5","usage":{"input":2215,"output":0,"cacheRead":0,` +
+		`"cacheWrite":0,"totalTokens":2215,"cost":{"total":0.2}},"stopReason":"error","errorStatus":503,` +
+		`"errorMessage":"503 overloaded"},"toolResults":[]}`,
+	`{"type":"auto_retry_start","attempt":1,"maxAttempts":10,"delayMs":7776.32,"errorMessage":"503 overloaded"}`,
+	`{"type":"auto_retry_end","success":false,"attempt":1,"finalError":"Retry cancelled"}`,
+	`{"type":"agent_end","isTerminal":true}`,
+	// A fresh prompt, minutes later as far as the report can tell.
+	`{"type":"agent_start"}`,
+	`{"type":"turn_start"}`,
+	`{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],` +
+		`"api":"anthropic-messages","provider":"anthropic","model":"claude-opus-5","usage":{"input":60,` +
+		`"output":120,"cacheRead":0,"cacheWrite":0,"totalTokens":180,"cost":{"total":0.3}},` +
+		`"stopReason":"stop"},"toolResults":[]}`,
 	`{"type":"agent_end","isTerminal":true}`,
 }
 
@@ -1283,6 +1349,11 @@ func ompFakeMain(args []string) {
 	}
 	if scenario == "turns" {
 		for _, frame := range ompFakeTurnFrames {
+			emit(frame)
+		}
+	}
+	if scenario == "cancelledretry" {
+		for _, frame := range ompFakeCancelledRetryFrames {
 			emit(frame)
 		}
 	}

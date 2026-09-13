@@ -463,7 +463,7 @@ const (
 // all of a stream free of a parse and a copy.
 var (
 	runtimeTurnPrefix  = []byte(`{"type":"turn_`)
-	runtimeRetryPrefix = []byte(`{"type":"auto_retry_start"`)
+	runtimeRetryPrefix = []byte(`{"type":"auto_retry_`)
 )
 
 // runtimeTurn is one request to a model as the engine saw it end: which model
@@ -527,11 +527,15 @@ type runtimeJournal struct {
 	closed   bool
 	failed   error
 
-	// started says whether the heartbeat is running, so finish knows whether
-	// there is a goroutine to wait for. Both are the launch's own goroutine.
+	// started says whether the heartbeat is running, so a kick knows there is
+	// a goroutine to answer it and finish knows there is one to wait for.
 	started bool
 	stop    chan struct{}
 	done    chan struct{}
+	// kick asks the heartbeat for a write now. One slot: a burst of turns
+	// costs one write, which is all a reader of a whole file could tell apart
+	// anyway.
+	kick chan struct{}
 }
 
 func newRuntimeJournal(path string, report runtimeReport, beat time.Duration) *runtimeJournal {
@@ -541,6 +545,7 @@ func newRuntimeJournal(path string, report runtimeReport, beat time.Duration) *r
 		report: report,
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
+		kick:   make(chan struct{}, 1),
 	}
 	j.enter(runtimeStageLaunching)
 	// The report points at the journal's own totals rather than a copy, so a
@@ -590,9 +595,13 @@ func (j *runtimeJournal) failure() error {
 	return j.failed
 }
 
-// start runs the heartbeat until finish stops it.
+// start runs the heartbeat until finish stops it. It answers a kick as well as
+// its own tick, so a turn is on disk within a goroutine hop of ending rather
+// than at the next beat.
 func (j *runtimeJournal) start() {
+	j.mu.Lock()
 	j.started = true
+	j.mu.Unlock()
 	go func() {
 		defer close(j.done)
 		beat := time.NewTicker(j.beat)
@@ -600,16 +609,42 @@ func (j *runtimeJournal) start() {
 		for {
 			select {
 			case <-j.stop:
+				// Whatever a pending kick was for is in the report, and
+				// finish writes it.
 				return
+			case <-j.kick:
 			case <-beat.C:
-				j.mu.Lock()
-				if !j.closed {
-					j.record(j.write())
-				}
-				j.mu.Unlock()
 			}
+			j.mu.Lock()
+			if !j.closed {
+				j.record(j.write())
+			}
+			j.mu.Unlock()
 		}
 	}()
+}
+
+// kickWrite asks for the report to be written. The caller holds the lock.
+//
+// The write happens on the heartbeat's goroutine rather than the caller's,
+// because the caller is the one forwarding the client's stream: a temporary
+// file, an fsync and a rename between two of its writes would put a stalled
+// filesystem in the middle of a session, which is a cost the client never
+// agreed to for a file it is not reading yet.
+func (j *runtimeJournal) kickWrite() {
+	if j.closed {
+		return
+	}
+	if !j.started {
+		// Nobody to ask: a journal driven directly rather than by a launch
+		// writes where it stands.
+		j.record(j.write())
+		return
+	}
+	select {
+	case j.kick <- struct{}{}:
+	default:
+	}
 }
 
 // finish closes the report: the heartbeat stops, the outcome the launch
@@ -645,8 +680,19 @@ func (j *runtimeJournal) observe(frame []byte) {
 	// session: a turn opens with turn_start, ends with turn_end carrying the
 	// assistant message the provider answered with, and a retryable failure
 	// ends its own turn and is announced before the next attempt opens.
+	//
+	// The announcement is a promise OMP does not always keep. A backoff that
+	// is aborted, a budget that runs out and a continuation that fails on this
+	// machine all end in auto_retry_end with success false and no attempt
+	// after it, so the mark has to be taken back or the next turn — a fresh
+	// prompt's, possibly minutes later — would be reported as a retry of
+	// something that was abandoned.
 	var wire struct {
-		Type    string `json:"type"`
+		Type string `json:"type"`
+		// Success is auto_retry_end's, and only a false one is acted on: the
+		// true one arrives after the attempt it succeeded at, by which time
+		// the mark has already been spent on that turn.
+		Success bool `json:"success"`
 		Message *struct {
 			Provider   string `json:"provider"`
 			Model      string `json:"model"`
@@ -673,6 +719,10 @@ func (j *runtimeJournal) observe(frame []byte) {
 		j.atTheModel()
 	case "auto_retry_start":
 		j.announceRetry()
+	case "auto_retry_end":
+		if !wire.Success {
+			j.cancelRetry()
+		}
 	case "turn_end":
 		turn := runtimeTurn{At: time.Now()}
 		cost := 0.0
@@ -704,7 +754,7 @@ func (j *runtimeJournal) atTheModel() {
 		return
 	}
 	j.enter(runtimeStageAtModel)
-	j.record(j.write())
+	j.kickWrite()
 }
 
 // announceRetry marks the next turn as a re-attempt. It writes nothing itself:
@@ -716,8 +766,16 @@ func (j *runtimeJournal) announceRetry() {
 	j.retrying = true
 }
 
-// appendTurn adds one ended turn and rewrites the report, because a turn
-// ending is the news a reader of this file is waiting for.
+// cancelRetry takes the mark back, for the attempt that was announced and then
+// never opened.
+func (j *runtimeJournal) cancelRetry() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.retrying = false
+}
+
+// appendTurn adds one ended turn and asks for a write, because a turn ending
+// is the news a reader of this file is waiting for.
 func (j *runtimeJournal) appendTurn(turn runtimeTurn, cost float64) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -735,10 +793,7 @@ func (j *runtimeJournal) appendTurn(turn runtimeTurn, cost float64) {
 	if len(j.report.Turns) > runtimeTurnsKept {
 		j.report.Turns = append(j.report.Turns[:0], j.report.Turns[len(j.report.Turns)-runtimeTurnsKept:]...)
 	}
-	if j.closed {
-		return
-	}
-	j.record(j.write())
+	j.kickWrite()
 }
 
 // runtimeLabel is one name the child supplied, bounded.
@@ -752,10 +807,12 @@ func runtimeLabel(s string) string {
 // runtimeObserver forwards the child's stdout to the client and reads the
 // frames the report is made of on the way past.
 //
-// It writes first and reads second, always. The client's stream is the
-// product, and nothing this file wants out of it is worth a byte of latency on
-// it — nor a byte of difference: the observer alters nothing, and a frame it
-// cannot make sense of is a frame the client still received.
+// It writes first and reads second, always, and the read costs the stream
+// nothing it can measure: the report's own write happens on the heartbeat's
+// goroutine (kickWrite), so a stalled disk never lands between two writes to
+// the client. Nor does the stream differ by a byte — the observer alters
+// nothing, and a frame it cannot make sense of is a frame the client still
+// received.
 type runtimeObserver struct {
 	dst     io.Writer
 	journal *runtimeJournal
