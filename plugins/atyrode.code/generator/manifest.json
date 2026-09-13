@@ -1,11 +1,12 @@
 {
   "id": "atyrode.code.generator",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "title": "code generator",
-  "description": "The launch panel: pick an online machine and open code in a terminal tile, through the baseline's launch door; shows the launches the baseline recorded.",
+  "description": "Native Code dials, routing previews and reviewed governed launches.",
   "capabilities": [],
   "contributes": {
     "panels": [{ "id": "launcher", "title": "code" }],
+    "seats": [{ "panel": "launcher", "order": 150, "ratio": 1.5 }],
     "sections": [],
     "elements": [],
     "tools": [],
@@ -14,8 +15,8 @@
   "dependencies": {
     "atyrode.code": {
       "type": "required",
-      "reason": "The launch door and the launch ledger live in the baseline."
+      "reason": "Governed Code observations, shared account choices and launch preparation live in the parent."
     }
   },
-  "entry": { "web": "web.js" }
+  "entry": { "web": "web.js", "styles": true }
 }

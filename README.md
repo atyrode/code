@@ -1,86 +1,68 @@
 # Code — `atyrode.code`
 
-**A Manifold-native coding-agent plugin, controlled through the web GUI.**
+**A TypeScript/React policy and presentation plugin inside
+[Manifold](https://github.com/atyrode/manifold), using the independent
+[`atyrode.omp`](https://github.com/atyrode/manifold-omp) plugin for governed
+agent execution.**
 
-Code provides the coding-domain decisions around
-[oh-my-pi (OMP)](https://github.com/can1357/oh-my-pi): model capability
-ladders, provider-pool routing, thinking and review settings, routing previews,
-and quota-aware cost and speed estimates. It is a plugin **inside
-[Manifold](https://github.com/atyrode/manifold)**, not a separately configured
-product alongside it.
+Code supplies typed model catalogs, four-level capability ladders, routing and
+estimates, shared account choices, suggestions and the workbench. Its web panels
+and headless client use the same typed Code/OMP workflow. There is no standalone
+Code binary, machine runtime, broker, gateway, credential store or public
+process ABI.
 
-> **Architecture direction, not a completed migration.** The standalone Code
-> CLI/TUI is **deprecated**. The source baseline at `main@288190f` still
-> contains that implementation and bootstrap plugins. The candidate
-> headless/React/native-job work in [draft PR #148](https://github.com/atyrode/code/pull/148)
-> needs rework: its standalone coexistence assumptions are rejected. Neither
-> that draft nor this documentation establishes a supported, preview-ready,
-> or live-accepted Manifold-native product.
+## Ownership
 
-The operator-ratified correction is tracked in
-[#149](https://github.com/atyrode/code/issues/149). Start with the
-[owning architecture](docs/manifold-transition.md), not the old terminal
-launcher or its installation instructions.
+| Code | Manifold | OMP |
+| --- | --- | --- |
+| Domain validation; routing, catalogs, container preferences and account-choice semantics; suggestion policy; React panels and typed caller workflow | Fleet identity, grants and consent; durable storage and migrations; artifact/binding revisions; jobs, locations, terminals and traces | Native broker/gateway placement and service policy; provider sign-in, credential storage and observations; workspace/probe/session operations; model runtime, retries, fallback, quotas and session resume |
 
-## Product and platform boundaries
+Code depends on Manifold and the separately versioned `atyrode.omp` plugin and
+typed client package. **Babel is a downstream consumer of Code, not a Code
+dependency.** Its adoption is independent work; no old Code engine or runtime
+protocol is retained for it.
 
-| Code owns | Manifold owns |
-| --- | --- |
-| Coding-domain configuration and validation; model ladders and routing policy; previews, estimates and coding workflows; plugin GUI and domain actions | Fleet and placement; permissions and scoped service access; multiplayer/shared state and persistence; resource lifecycle; execution and scheduling; traces |
+## Native workflows
 
-There is **one Manifold-owned source of Code state**. Code must not keep a
-second authoritative preference, account-selection, session or worktree store.
-A missing generic platform capability belongs in Manifold; Code must not
-emulate it with a private broker, registry, scheduler or transport.
+- **Code workbench:** initialize container-scoped configuration; edit, stage,
+  review and promote a structured catalog; save shared dials; inspect routes and
+  estimates. Changing the execution destination preserves shared choices,
+  prompts and drafts.
+- **Accounts / Usage:** choose exact OMP-observed identities or credential
+  slots, manage shared presets and inspect selected capacity with source age and
+  refresh status. OMP owns the shared broker, sign-in terminal, observations,
+  credential mutation and gateway.
+- **Workspace / probes / sessions:** the shared headless workflow opens exact
+  OMP native reviews, re-observes current revisions before preparation, and
+  returns OMP's retained job receipts or terminal descriptor. Explicit
+  inventory and benchmark jobs may contact providers and incur cost.
+- **Suggestions:** Code reviews and invokes only its optional external
+  classifier service. This policy is separate from OMP account and gateway
+  configuration.
 
-Legacy or external services can be governed as native Manifold resources.
-Their existence does not justify retaining the standalone Code architecture.
-Access must use native, scoped service contracts rather than requiring the
-operator's shell environment or a personal wrapper.
+Native Plugins installs and governs OMP's root, accounts and gateway bundles,
+managed resources, locations, service bindings and operation consent. Code has
+no duplicate runtime pins or machine declarations. Missing resources, caller
+authority or consent remain explicit refusals; a checked box, installed bundle,
+retained job or terminal placement is not provider success.
 
-## GUI to OMP runtime
+## Development and evidence
 
-The target flow is:
+Use Bun **1.4.2**, the pinned sibling Manifold checkout, the exact OMP Git client
+pin and `scripts/gate.sh`. The gate prepares real OMP bundles, then runs Code's
+`check`, `test`, `pack` and disposable-server/browser `verify`; see
+[plugin development](plugins/README.md).
 
-1. Configure a coding task in Code's Manifold web GUI and inspect its routing
-   and resource requirements.
-2. Submit a domain action through Manifold's permission and resource model.
-3. Have Manifold resolve scoped service access, place and execute the work,
-   and own its lifecycle, persistent state and traces.
-4. Use OMP for agent execution. An OMP terminal is an **execution surface
-   only**, not the control plane or a hidden Code configuration UI.
+- [Configuration and APIs](docs/configuration.md): current schemas, authority
+  and native workflows, not legacy state-format setup.
+- [Architecture and transition ledger](docs/manifold-transition.md): #149's
+  ratified design and the sole progress ledger, under integration issue #161.
+- [Status and caveats](docs/status.md): source versus operational evidence.
 
-Internal worker executables may implement domain work behind these native
-contracts. They are not a second Code product to install or configure. OMP's
-agent behavior, including model retries and fallback, should be used rather
-than reimplemented; Manifold remains responsible for platform execution and
-resource governance.
+This describes integration source, not a claim that it is merged or deployed.
+The historical five-Code-bundle preview predates the separate OMP owner and does
+not certify this cutover, current consent, provider enrollment or an
+account-backed session. Production deployment, releases, credential relocation,
+broker transfer and destructive data changes require separate authorization.
 
-There is no target requirement for CLI/TUI parity, `CODE_*` compatibility,
-standalone installation, a dotfiles wrapper, dual preference stores or a
-permanent CLI recovery path. A future CLI, if needed, would be designed as a
-Manifold client rather than preserve the deprecated launcher.
-
-## Development entry points
-
-- [Architecture and decisions](docs/manifold-transition.md) define the target
-  contracts and platform prerequisites. Its
-  [section 6](docs/manifold-transition.md#6-transition-steps) is the **sole
-  transition ledger**.
-- [Plugin development](plugins/README.md) describes the plugin tree, SDK pin
-  and local development mechanics. Existing bootstrap code is an implementation
-  reference, not proof of the target UX or architecture.
-- [Status and caveats](docs/status.md) separates source evidence, draft work
-  and operational acceptance, and records domain/runtime constraints.
-- [Deprecated configuration reference](docs/configuration.md) explains legacy
-  catalog and launcher mechanics when reading or extracting existing code. It
-  is not Manifold onboarding or a required setup path.
-
-Develop against explicitly identified Code and Manifold revisions. Promotion
-must explicitly select exact revisions; building, packaging or checking a
-plugin does not authorize installing it into a live environment. This work
-does not authorize deployment, releases, credential relocation, broker
-retirement or destructive state changes.
-
-[MIT](LICENSE) — originally extracted from
-[atyrode/dotfiles](https://github.com/atyrode/dotfiles).
+[MIT](LICENSE).

@@ -6,71 +6,32 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      CODE_TEST_REQUIRE_OMP: "1"
-      CODE_OMP_SMOKE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          go-version: stable
-      - uses: cachix/install-nix-action@v31
-      - name: Install the bundled OMP pin
-        # Use the same derivation as with-omp, not a second CI version or latest.
-        # A failed fetch/build fails CI before any canary can skip.
+          path: code
+          persist-credentials: false
+      - name: Read the pinned Manifold revision
+        id: manifold
         run: |
-          nix build .#omp --out-link "$RUNNER_TEMP/code-omp"
-          echo "$RUNNER_TEMP/code-omp/bin" >> "$GITHUB_PATH"
-      - name: gofmt
-        run: |
-          out=$(gofmt -l .)
-          if [ -n "$out" ]; then
-            echo "gofmt needed on:" && echo "$out" && exit 1
-          fi
-      - name: vet
-        run: go vet ./...
-      - name: Provision the containment backend
-        # The escape scenarios in sandbox_linux_test.go are the only evidence
-        # that the boundary Babel refuses runs without actually holds, and they
-        # need bubblewrap plus a systemd user session. ubuntu-latest ships
-        # neither: without this step every scenario skips and the job stays
-        # green, which retires the gate for every later change. The tests fail
-        # rather than skip when CI is set, so a regression here is loud.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-
-          # Ubuntu 23.10 onward confines unprivileged user namespaces with
-          # AppArmor, and bwrap is not a profiled binary here, so creating the
-          # network namespace succeeds but bringing up its loopback fails with
-          # "Failed RTM_NEWADDR: Operation not permitted". The sandbox is built
-          # on unprivileged userns by design (decision 57), so this restriction
-          # has to be lifted for the runner rather than worked around. It is a
-          # property of the CI host only; the operator's own machine already
-          # allows it, and a machine that does not is expected to refuse the
-          # backend rather than to weaken it.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-          sudo loginctl enable-linger "$USER"
-          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
-          for i in $(seq 1 30); do
-            [ -S "/run/user/$(id -u)/bus" ] && break
-            sleep 1
-          done
-
-          # Assert the composition, not each half. The first version of this
-          # step checked bwrap --version and an empty scope separately; both
-          # passed while the thing the tests actually need — bwrap unsharing
-          # the network inside a scope — failed, so a provisioning problem
-          # surfaced as ten test failures instead of a named step failure.
-          export XDG_RUNTIME_DIR=/run/user/$(id -u)
-          systemd-run --user --scope --quiet -p MemoryMax=256M -p TasksMax=32 -- \
-            bwrap --unshare-all --die-with-parent --ro-bind /usr /usr \
-              --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev \
-              --size 1048576 --tmpfs /tmp -- /usr/bin/test -d /tmp
-          echo "bubblewrap unshares the network inside a transient user scope"
-      - name: test
-        run: go test ./...
+          rev="$(tr -d '[:space:]' < code/plugins/MANIFOLD_REV)"
+          [ -n "$rev" ] || { echo "MANIFOLD_REV is empty"; exit 1; }
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: atyrode/manifold
+          ref: ${{ steps.manifold.outputs.rev }}
+          path: manifold
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - name: Native plugin gate
+        working-directory: code
+        run: bash scripts/gate.sh

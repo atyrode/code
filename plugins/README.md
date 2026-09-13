@@ -1,138 +1,195 @@
 # Code's Manifold plugin
 
-Code is a **Manifold-native plugin first**, controlled through Manifold's web GUI.
-The current standalone Code CLI/TUI is **deprecated**, not a second product to
-keep alongside Manifold. Architectural ownership and implementation status live
-in [the transition record, section 6](../docs/manifold-transition.md#6-transition-steps),
-the sole transition ledger for [#149](https://github.com/atyrode/code/issues/149).
+Code is TypeScript policy and React presentation inside Manifold. Manifold owns
+identity, grants, consent, storage, native resources, jobs and terminals. The
+independently installed `atyrode.omp` plugin owns the broker, gateway, provider
+observations, workspace operations, inventory, benchmark and reviewed session
+preparation. Code imports its typed caller API; it does not proxy or reimplement
+those operations. The
+[transition ledger](../docs/manifold-transition.md#6-transition-steps) is the
+sole progress record; source descriptions here do not imply deployment.
 
-## Authoring requirements
+## Family and source map
 
-- Provision Code through Manifold's plugin and declarative resource mechanisms.
-  Users must not need a standalone Code installation, wrapper, separate setup,
-  or a permanent CLI recovery path. A future CLI would be designed as a Manifold
-  client, not retained for compatibility with the deprecated launcher.
-- Manifold owns fleet, permissions, multiplayer/shared state, persistence,
-  resource lifecycle, execution, scheduling, and traces. Code supplies its domain
-  behavior and web controls; it must not recreate these generic facilities.
-  A missing generic capability belongs in Manifold before Code consumes it.
-- Keep **one Manifold-owned source of Code state**, including configuration and
-  preferences. Do not synchronize independent CLI and GUI preference stores or
-  make `CODE_*` variables an alternate authority. If useful existing data is
-  adopted, that is an explicit native operation, not mandatory legacy setup or
-  a second permanent store.
-- Describe required resources declaratively and let Manifold govern their
-  provisioning and lifecycle. Use native scoped service access and current
-  native permissions and audit for operations; neither a Code-specific policy
-  layer nor direct service credentials may bypass that authority. Legacy or
-  external services can become governed native resources without preserving
-  standalone Code architecture.
-- Use private worker executables only where execution requires them. They are
-  implementation details provisioned and operated by Manifold, not a separately
-  installed or configured Code product. OMP's terminal is an execution surface,
-  not the control plane or source of Code state. No CLI/TUI parity requirement
-  constrains the web rework.
-- Promote exact, reviewed revisions explicitly. Identify the Code revision,
-  pinned Manifold revision, and bundle hashes; do not silently follow a moving
-  checkout or replace published release bytes. Local build evidence is not live
-  acceptance or permission to install a revision on a shared environment.
+Code packs four bundles. The three visible parts require the root, and the root
+declares the OMP root, accounts and gateway plugins as required dependencies.
 
-These are implementation requirements, **not claims about APIs already present
-on main**. Native resource, service-access, execution, permission, and audit
-integration must use the actual Manifold contract as it is implemented. Missing
-primitives must be added there rather than hidden behind Code-local substitutes.
+| Directory | Plugin / surface |
+| --- | --- |
+| `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |
+| `atyrode.code/generator/` | `atyrode.code.generator`: workbench, catalog editor, dials, workspace/probe/session flows |
+| `atyrode.code/accounts/` | `atyrode.code.accounts`: account-pool choices and OMP sign-in presentation |
+| `atyrode.code/usage/` | `atyrode.code.usage`: selected-capacity and OMP usage presentation |
 
-## What the checkout currently contains
+- `domain/contracts.ts`, `catalog.ts`, `routing.ts`, `providers.ts`: typed
+  catalogs, four-level ladders, selections, estimates and the OMP overlay
+  boundary.
+- `domain/accounts.ts`, `usage.ts`, `probe.ts`, `suggestions.ts`: exact account
+  selection, freshness and Code-owned catalog/suggestion policy over typed OMP
+  observations.
+- `atyrode.code/contract.ts`, `server.ts`, `state.ts`: container-scoped
+  configuration actions, compare-and-set and the named schema-2-to-3 migration.
+- `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
+  React-free ordinary-client workflow used by both headless callers and the web.
+- `service-setup.ts` and `service-policies.ts`: only Code's optional external
+  `suggest` classifier policy. They do not configure OMP runtime services.
+- `pack.ts`: four policy/presentation bundles. There are no Code machine
+  operations, runtime artifacts, broker, gateway or probe workers.
 
-Main at `288190f` still contains the deprecated CLI/TUI and these bootstrap
-plugins. A child plugin directory is nested inside its parent's directory:
+Headless callers create `createCodeWorkflowClient(dispatch)` and supply the same
+ordinary Manifold action transport as the browser. The workflow composes the
+typed `atyrode.code.*` policy doors with `@atyrode/manifold-omp`; it receives
+exact OMP job receipts and native terminal descriptors rather than parsing
+output or spawning a Code process. `createCodeClient`, `ActionInput`,
+`ActionResult`, the schemas and `actionDoor` in `contract.ts` are the smaller
+policy-only boundary.
 
-| Directory | Id | Current bootstrap behavior — not the target setup |
-| --- | --- | --- |
-| `atyrode.code/` | `atyrode.code` | `atyrode.code.launch` authorizes and records a launch of the legacy `code` program; `atyrode.code.listLaunches` reads that ledger; `launch_recorded` reports the recording. |
-| `atyrode.code/generator/` | `atyrode.code.generator` | The `launcher` panel selects a machine and opens legacy `code` in a terminal tile after calling the baseline. Requires `atyrode.code`. |
+## Shared state and review boundaries
 
-Ids, door names, storage keys, event kinds, and panel ids are shared through
-`atyrode.code/contract.ts`; bundles import it and `test/contract.test.ts` checks
-the manifests against it. The existing launch action declares `terminals:spawn`,
-checks machine availability, and records the current principal in host storage.
-The panel opens the terminal separately. That bootstrap launch record is not
-proof of native resource provisioning, execution completion, or the target audit
-and lifecycle integration.
+Catalogs, profiles and account-pool choices belong to the container. Schema
+version 3 stores no destination runtime pins. Changing Run on preserves the
+prompt, visited editors and unsaved drafts; only selected destination,
+permission progress and launch review are invalidated. An installed schema
+version 2 canonical record is transformed by the named native migration while
+preserving revisions and choices and dropping obsolete runtime pins. A schema
+version 1 machine record remains recovery data and is adopted only through an
+explicit `legacyMachineId`; canonical container state always wins.
 
-[Draft PR #148](https://github.com/atyrode/code/pull/148)
-(`feat/manifold-runtime-controls`) contains candidate headless, React, and
-native-job work, not APIs available on main. Its standalone coexistence
-assumptions were rejected and need rework. Neither those candidates nor the
-bootstrap bundles establish a completed or preview-ready native Code plugin.
-Implementation progress and future live acceptance belong only in the
-[transition ledger](../docs/manifold-transition.md#6-transition-steps).
+Configuration mutation is native compare-and-set. A newer shared revision keeps
+a local draft visible and refuses an unreviewed save. Catalog review and
+promotion remain separate from native execution. Account choices refer to exact
+OMP service scopes and concrete OAuth identities or API-key slots; a changed or
+missing observation refuses rather than broadening to a peer.
 
-## The SDK is a sibling checkout
+First-use and contextual permission review use the same typed headless plan.
+Account runtime, gateway, folder creation, existing-folder validation,
+inventory, benchmark and session requests are independently selectable and may
+be reconsidered. Closing or declining writes nothing and does not revoke an
+existing grant. Installation readiness, operation consent, caller authority and
+product configuration are independent facts. A checked box, running broker or
+stale retained job is never permission.
 
-The current bootstrap plugins use `@manifold/plugin-kit` and
-`@manifold/protocol` from [atyrode/manifold](https://github.com/atyrode/manifold)
-at the exact revision recorded in `MANIFOLD_REV`. The sibling checkout is the SDK
-used by the current development tooling; `tsconfig.json` maps those packages to
-`../../manifold/packages/{plugin-kit,protocol}/src`:
+The client observes each native owner through its public door:
+
+- `atyrode.omp.accounts` owns account/usage observations, broker review,
+  credential controls and the sign-in terminal handoff.
+- `atyrode.omp.gateway` owns destination gateway review and configuration.
+- `atyrode.omp` owns destination readiness, workspace review/preparation,
+  inventory/benchmark receipts, defaults and reviewed session preparation.
+- `engine.jobs` owns exact native deployment review/progress. Code matches
+  operation ids and targets; it never infers another plugin's jobs from its own
+  server context.
+
+Workspace existing maps to OMP validation and create maps to OMP creation. Both
+re-observe the reviewed native pins before preparation. Inventory and benchmark
+remain explicit potentially paid jobs; OMP returns their typed retained
+receipts, then Code's pure policy scaffolds or derives a catalog for explicit
+CAS staging. Session preparation re-composes Code policy and re-reads OMP
+defaults before using the OMP review digest. Only OMP's returned destination and
+runtime reach native terminal placement.
+
+Usage polls the OMP accounts owner through the live event channel, retains the
+last permitted reading while refresh is pending or refused, and labels source
+age separately from quota reset time. Unknown, stale, blocked, disabled and
+exhausted remain distinct. Code projects these observations through shared
+account choices; it does not fetch a provider or mutate broker state.
+
+## Pinned dependencies and gate
+
+Use Bun 1.4.2 and two immutable revisions:
 
 ```text
 <parent>/
-  code/plugins/      this directory
-  manifold/          atyrode/manifold at the revision in code/plugins/MANIFOLD_REV
+  code/plugins/
+  manifold/       exact SDK checkout selected by code/plugins/MANIFOLD_REV
 ```
 
-Run `bun install --frozen-lockfile` in the Manifold checkout once to install its
-workspace dependencies. In `code/plugins`, the local package installs `zod`
-(pinned to the kit's version), TypeScript, and Bun types. This is a developer SDK
-layout, not an instruction to install standalone Code on target machines.
-The reusable workflow reference in `.github/workflows/manifold-plugins.yml` and
-`MANIFOLD_REV` must move together when changing the SDK pin. The pinned kit's
-commands are described in Manifold's `docs/PLUGINS.md` section 9; a pin is not
-evidence that it already supplies all primitives required by the native target.
+`plugins/package.json` pins `@atyrode/manifold-omp` to one published Git commit.
+`scripts/prepare-integration.ts` checks that commit out into ignored
+`.integration/`, requires its `MANIFOLD_REV` to match Code's, prepares its
+declared build dependencies, and invokes OMP's own staging-free packer. It
+installs no daemon, credentials, service policy or machine resource.
+`tsconfig.json` resolves the OMP caller API from that exact prepared snapshot.
+Keep Code's `MANIFOLD_REV`, OMP's `MANIFOLD_REV` and both reusable-workflow refs
+synchronized.
 
-## Available development commands
-
-From `code/plugins`, the current scripts are:
+From the Code root:
 
 ```sh
-bun install --frozen-lockfile
-bun run check          # TypeScript over the bootstrap plugins and tests
-bun test               # panel programs against a fake host; doors against a fake context
-bun run pack           # dist/<id>.manifold-plugin.json and dist/SHA256SUMS
-bun run verify         # kit verifier: spawned server, bundle install, door dispatch, uninstall
+scripts/gate.sh
 ```
 
-These checks exercise the bundles that exist in the checkout. Passing them does
-not prove the target web workflow, native resource lifecycle, or live acceptance.
+The gate checks the Bun and SDK revisions, frozen-installs both workspaces,
+prepares the real pinned OMP dependency, then runs:
 
-`bun run dev -- --hub <development-hub-url> --deliver <delivery-target>` is also
-available through the pinned kit. It packs, installs, watches, and reinstalls
-bundles; it is **mutating**, not a read-only check. Use it only with an explicitly
-authorized development target. No installed preview is promised by this guide.
+```sh
+bun run check
+bun run test
+bun run pack
+bun run verify
+```
 
-## Bundle identity and existing release wiring
+`pack` compiles the complete Code family in memory before replacing `dist/`.
+Output is the four `dist/<id>.manifold-plugin.json` files and `SHA256SUMS`;
+runtime artifact declarations belong only to OMP. `verify` gives the generic kit
+the three real pinned OMP bundles followed by Code's four bundles. Dependency
+ordering installs OMP before its Code clients and uninstalls in reverse. The
+browser verifier installs those same real bundles into a disposable server and
+drives two ordinary identities and two permitted destinations through shared
+drafts, four-level routing, permission denial and stale-review behavior. Its
+native resources remain deliberately unconfigured, so it claims no provider
+request, consent success or account-backed session.
 
-`pack.sh` runs the pinned kit's packer over each plugin's `manifest.json`, writes
-`dist/<id>.manifold-plugin.json`, and records the bundle SHA-256 values in
-`dist/SHA256SUMS`. `engine.plugins.install` requires the bundle's hash pin.
-All bundles are built together from one tree. Preserve immutable release
-identity: released URLs and hashes must identify the reviewed bytes, and a
-changed bundle needs a new release rather than replacement of an existing asset.
+The standalone OMP repository separately proves packaged workers under its
+explicit native containment fixture. Code retains only consumer policy tests and
+headless workflow regressions; broker shutdown/reconnect, secret redaction,
+concrete-slot fallback and gateway boundaries live with their OMP owner.
 
-The existing `.github/workflows/manifold-plugins.yml` invokes Manifold's pinned
-reusable workflow for checks, tests, packing, and verification on relevant main
-pushes and pull requests. The existing `v*` release workflow builds legacy
-binaries, attaches plugin bundles and checksums, and has a preview receiver step
-that runs only when `DEV_DEPLOY_HOST` is configured. Its upload command currently
-allows clobbering assets; that mechanism is not permission to overwrite an
-immutable release. These are legacy workflow facts, not the native product's
-release design or evidence that any preview has received a bundle. The existing
-production path is an operator installation from a release URL in Manifold's
-plugin manager, not an automatic production deployment.
+## Native resources and suggestions
 
-Target promotion must be explicit for exact revisions under the transition
-record's acceptance process. This documentation change authorizes no release,
-live deployment, credential relocation, broker retirement, or destructive state
-change. Do not run a tag release or remote development install to establish the
-native target's status.
+Native Plugins installs and reviews OMP's root, accounts and gateway bundles,
+their managed artifacts, locations, service bindings and per-operation consent.
+OMP's declarations are the sole truth for its Bun/SDK/pi-natives/system and
+development-tool closures. Code neither duplicates those pins nor supplies a
+host PATH, ambient files, credentials or a provisioning daemon.
+
+Code's one native service policy is the optional external `suggest` classifier.
+`readServiceConfiguration`, `reviewServices` and `configureServices` bind only
+that service's exact revision while preserving unrelated native policies.
+`suggest` invokes the reviewed `classify` operation and returns a validated
+revision-bound selection; saving remains an explicit Code CAS. It does not
+configure the OMP gateway or account broker.
+
+No actual deployed revision, credential or account-backed provider proof is
+supplied by this source guide. Operational acceptance must name the installed
+Manifold, OMP and Code revisions, exact hub and surface, native review/action and
+observed result.
+
+## Publication and mutation authority
+
+CI runs the plugin gate. The tag-only release workflow publishes plugin bundles
+and their checksums, not standalone binaries. Published release bytes, tags and
+hashes remain immutable; corrections need a new version. A release is not an
+installation or machine activation. Production installation remains operator-only
+from the release URL in native Plugins, never automated by this task.
+
+Releases are artifact-only: CI installs nothing on preview or production.
+The React panels use Manifold's normal in-realm renderer, not its hardened
+`PanelProgram` worker renderer. The operator reviews that execution trust and
+the exact bundle before installation through native Plugins, parent before
+children. Machine installations, service policies and consent remain separate
+explicit native actions. Source verification performs no tag or delivery.
+
+`bun run dev -- --hub <development-hub-url> --deliver <delivery-target>` builds
+and watches Code's four bundles. Install the exact pinned OMP release first;
+dependency order does not grant authority or auto-install an absent external
+plugin. The native loop orders Code parent before parts and reinstalls only
+changed bytes. Use only an explicitly authorized development target. Reload the
+browser after a successful cycle; plugin Update checks published bundles, not
+working source. Restart the command after changing the development driver or
+build scripts; ordinary Code source edits are picked up by the running loop.
+
+Report Code, OMP and Manifold revisions, bundle hashes and the exercised surface
+separately from merge, publication and operational acceptance. This guide grants
+no release, live deployment, credential relocation, broker transfer or
+destructive state change.
