@@ -73,7 +73,9 @@ function fixture(hub = true): Fixture {
     if (rejection !== undefined) throw new Error(rejection);
     await omp.during.get(door)?.();
     const refused = omp.refuse.get(door);
-    if (refused !== undefined) return { refused };
+    // manifold#576's own shape: a callee handler's `{ refused }` is settled as the `refused`
+    // class and thrown at the edge, never answered to the caller as a value.
+    if (refused !== undefined) throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (${refused})`);
     // The fake parses every input against OMP's own published schema, so a door that composed
     // something OMP would reject fails here rather than in a claim about it.
     if (door === accountsDoor) return omp.accounts;
@@ -226,7 +228,7 @@ describe("the session a dependent plugin posts through Code", () => {
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_session_conflict" });
   });
 
-  test("a hub without manifold#575 refuses by age, and a refused edge keeps the plugin that refused", async () => {
+  test("only OMP's own word survives the edge: the hub's age, its classes and a broken door are named apart", async () => {
     const f = fixture(false);
     const record = await configured(f);
     const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
@@ -234,12 +236,23 @@ describe("the session a dependent plugin posts through Code", () => {
     expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_session_unknown" });
     const live = fixture();
     const saved = await configured(live);
-    live.omp.reject.set(accountsDoor, `dependency_unavailable: ${CODE_PLUGIN_ID} -> atyrode.omp.accounts`);
-    expect(await invoke(live, "runSession", { ...input, expectedRevision: saved.revision }))
-      .toEqual({ refused: "code_omp_accounts_dependency_unavailable" });
-    live.omp.reject.set(accountsDoor, "the host said nothing a caller can act on");
-    expect(await invoke(live, "runSession", { ...input, expectedRevision: saved.revision }))
-      .toEqual({ refused: "code_omp_accounts_refused" });
+    const posted = { ...input, expectedRevision: saved.revision };
+    const refusals: Readonly<Record<string, string>> = {
+      [`dependency_unavailable: ${CODE_PLUGIN_ID} -> atyrode.omp.accounts`]: "code_omp_accounts_dependency_unavailable",
+      [`caller_ceiling: ${CODE_PLUGIN_ID} -> ${accountsDoor} (services:read)`]: "code_omp_accounts_caller_ceiling",
+      [`capability: ${CODE_PLUGIN_ID} -> ${accountsDoor} (omp_scope_refused)`]: "code_omp_accounts_capability",
+      // A door that threw, and a door called wrong, are the host's account of the edge — never
+      // a word OMP published, so neither may be re-raised as one.
+      [`refused: ${CODE_PLUGIN_ID} -> ${accountsDoor} (failed)`]: "code_omp_accounts_refused",
+      [`refused: ${CODE_PLUGIN_ID} -> ${accountsDoor} (invalid_args: accounts takes no arguments)`]: "code_omp_accounts_refused",
+      [`refused: ${CODE_PLUGIN_ID} -> ${accountsDoor} (omp_broker_unavailable)`]: "code_omp_broker_unavailable",
+      "the host said nothing a caller can act on": "code_omp_accounts_refused",
+    };
+    for (const [sentence, refused] of Object.entries(refusals)) {
+      live.omp.reject.set(accountsDoor, sentence);
+      expect(await invoke(live, "runSession", posted)).toEqual({ refused });
+    }
+    expect(live.omp.posted).toEqual([]);
   });
 });
 

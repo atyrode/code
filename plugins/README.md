@@ -57,6 +57,14 @@ only a profile, a destination and a prompt. The profile's `revision` is the
 handle: a composition the operator changed in the generator after a caller read
 it refuses rather than posting quietly.
 
+A refusal on that edge is a rejection, not a value: the host settles a callee
+handler's own `{ refused }` as its `refused` class, so OMP's word survives only
+because Code re-raises a token OMP's published grammar admits
+(`code_omp_review_changed`). The host's own classes keep the callee and the
+class instead — `code_omp_accounts_dependency_unavailable`,
+`code_omp_caller_ceiling` — and a door that threw or was called wrong is
+`code_omp_refused`, never mistaken for something OMP said.
+
 ## Shared state and review boundaries
 
 Catalogs, profiles and account-pool choices belong to the container. Schema

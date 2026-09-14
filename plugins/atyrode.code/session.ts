@@ -61,12 +61,12 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
   return { ...facts, compositionDigest };
 }
 
-/** One door of one OMP plugin. A refusal OMP answered keeps its own name — `omp_review_changed`
- * reads `code_omp_review_changed` — so a caller learns which side refused and why. */
+/** One door of one OMP plugin. A refusal is thrown at the edge, never answered as a value, and
+ * OMP's own grammar is what carries its word through: `omp_review_changed` reads
+ * `code_omp_review_changed`, so a caller learns which side refused and why. */
 async function ompReply<T>(ctx: CodeContext, plugin: string, action: string, input: unknown, result: z.ZodType<T>): Promise<T> {
-  const reply = await dependencyCall(ctx, { plugin, action, input });
-  const refused = OmpRefusalSchema.safeParse(reply);
-  if (refused.success) throw new CodeRefusal(refused.data.refused);
+  const reply = await dependencyCall(ctx, { plugin, action, input,
+    refusals: detail => OmpRefusalSchema.safeParse({ refused: detail }).success });
   const parsed = result.safeParse(reply);
   if (!parsed.success) throw new CodeRefusal("invalid_omp_result");
   return parsed.data;
