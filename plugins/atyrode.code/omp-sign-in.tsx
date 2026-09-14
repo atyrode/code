@@ -12,7 +12,9 @@ export function OmpSignIn(props: OmpSignInProps) {
 
 function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: OmpSignInProps & { activeView: { current: boolean } }) {
   const id = useId();
-  const setup = useOmpQuery(host, "readAccountSetup", {}, ACCOUNT_REFRESH_MS);
+  const writable = canWriteCodeWorkspace(host);
+  const canManageRuntime = writable && host.client.selfCaps().includes("*");
+  const setup = useOmpQuery(host, "readAccountSetup", canManageRuntime ? {} : null, ACCOUNT_REFRESH_MS);
   const feed = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState(false);
@@ -30,9 +32,11 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
   }, [host.client, host.principal.id, host.containerId, host.authoring]);
   const state = setup.data;
   const observation = feed.data;
-  const writable = canWriteCodeWorkspace(host);
   const canContinue = observation?.status === "fresh" && observation.accounts.length > 0 && feed.error === null;
-  function refresh() { setup.refresh(); feed.refresh(); }
+  function refresh() {
+    if (canManageRuntime) setup.refresh();
+    feed.refresh();
+  }
   async function perform(work: (stillCurrent: () => boolean) => Promise<void>) {
     if (pending.current || !activeView.current || !writable || !host.containerId) return;
     const issued = ++request.current;
@@ -72,19 +76,20 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
   return <section className="plugin-atyrode_code plugin-atyrode_code__sign-in" aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>Sign in with OMP</h3>
     <p className="plugin-atyrode_code__muted">Connect your providers in OMP. The same accounts are available across this instance.</p>
-    {!state && !setup.error && <p role="status">Reading sign-in availability…</p>}
-    {state?.brokerState === "starting" && <p role="status">Starting the account broker…</p>}
-    {state && !state.canSignIn && <p role="status">{state.callerRefusal ?? (state.owner
+    {canManageRuntime && !state && !setup.error && <p role="status">Reading sign-in availability…</p>}
+    {canManageRuntime && state?.brokerState === "starting" && <p role="status">Starting the account broker…</p>}
+    {canManageRuntime && state && !state.canSignIn && <p role="status">{state.callerRefusal ?? (state.owner
       ? state.owner.online ? `OMP sign-in is unavailable on ${state.owner.machineId}. Review its native setup.`
         : `${state.owner.machineId} is offline. Sign-in will be available when its native owner reconnects.`
       : "An instance service owner must be set up before signing in.")}</p>}
-    {state?.canReview && !state.canSignIn && <p role="status">The shared account runtime needs review before sign-in. Native rights and the shared runtime policy are separate approvals; nothing restarts automatically.</p>}
+    {canManageRuntime && state?.canReview && !state.canSignIn && <p role="status">The shared account runtime needs review before sign-in. Native rights and the shared runtime policy are separate approvals; nothing restarts automatically.</p>}
+    {!canManageRuntime && <p role="status">Account availability is shown below. An instance owner can review the shared OMP runtime and open a sign-in terminal from an editable workspace.</p>}
     {host.containerId && !writable && <p role="status">This workspace is read-only. Open an editable workspace to place an OMP terminal.</p>}
     {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
-    {setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
+    {canManageRuntime && setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
     <div className="plugin-atyrode_code__account-toolbar">
       {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
-      <PermissionReview host={host} intent="accounts" label={state?.canReview && !state.canSignIn ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />
+      {canManageRuntime && <PermissionReview host={host} intent="accounts" label={state?.canReview && !state.canSignIn ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />}
     </div>
     {message && <p role="status">{message}</p>}
     {feed.error && state?.state === "ready" && <p role="status">Account discovery is unavailable. Open setup details below.</p>}
@@ -99,14 +104,14 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     </div>}
     {onContinue && canContinue && <div className="plugin-atyrode_code__account-toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy} onClick={onContinue}>Continue</button><span className="plugin-atyrode_code__muted">OMP stays open. You can add more accounts at any time.</span></div>}
     <details className="plugin-atyrode_code__details">
-      <summary>Sign-in setup and permissions</summary>
-      {state?.reason && <p>{state.reason}</p>}
-      {setup.error && <p>{setup.error}</p>}
+      <summary>{canManageRuntime ? "Sign-in setup and permissions" : "Account observation details"}</summary>
+      {canManageRuntime && state?.reason && <p>{state.reason}</p>}
+      {canManageRuntime && setup.error && <p>{setup.error}</p>}
       {feed.error && <p>{feed.error}</p>}
-      {state?.owner && <p>Account broker · {state.owner.machineId} · {state.owner.online ? "online" : "offline"} · {state.brokerState}</p>}
-      {state?.brokerState === "unconfigured" && <p>Review the instance broker on its native owner before opening OMP, independently of the selected workspace machine.</p>}
+      {canManageRuntime && state?.owner && <p>Account broker · {state.owner.machineId} · {state.owner.online ? "online" : "offline"} · {state.brokerState}</p>}
+      {canManageRuntime && state?.brokerState === "unconfigured" && <p>Review the instance broker on its native owner before opening OMP, independently of the selected workspace machine.</p>}
       <p>OMP owns login, API keys, credential storage and refresh. Code reads account metadata; closing this view does not close OMP.</p>
-      <div className="plugin-atyrode_code__account-toolbar"><button type="button" onClick={refresh}>Refresh accounts and setup</button></div>
+      <div className="plugin-atyrode_code__account-toolbar"><button type="button" onClick={refresh}>{canManageRuntime ? "Refresh accounts and setup" : "Refresh accounts"}</button></div>
     </details>
   </section>;
 }

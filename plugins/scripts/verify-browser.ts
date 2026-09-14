@@ -117,8 +117,15 @@ async function readConfiguration(server: TestServer, grant: TokenGrant, workspac
   return result;
 }
 
-async function openWorkspace(browser: BrowserInstance, server: TestServer, grant: TokenGrant, containerId: string): Promise<void> {
+async function openWorkspace(
+  browser: BrowserInstance,
+  server: TestServer,
+  grant: TokenGrant,
+  containerId: string,
+  afterLaunch?: () => Promise<void>,
+): Promise<void> {
   await browser.launch({ incognito: true });
+  await afterLaunch?.();
   await browser.goto(server.httpUrl);
   await until(browser, "fixture web document", "document.readyState === 'complete'");
   // A native minted identity in the normal storage shape, not an owner browser or a
@@ -631,11 +638,26 @@ async function run(): Promise<void> {
       caps: ["containers:read", "machines:read", "machines:run", "jobs:read", "services:read"] });
     assert.notEqual(writer.principal.id, viewer.principal.id, "Writer and viewer must be different native identities");
     phase = "opening two independent workspaces";
-    const opened = await Promise.allSettled([openWorkspace(writerBrowser, server, writer, container.id), openWorkspace(viewerBrowser, server, viewer, container.id)]);
+    const viewerActions: string[] = [];
+    const watchViewerActions = async () => {
+      viewerBrowser.on("Network.requestWillBeSent", event => {
+        const request = event.request as { url?: string } | undefined;
+        const prefix = `${server!.httpUrl}/api/actions/`;
+        if (request?.url?.startsWith(prefix)) viewerActions.push(decodeURIComponent(request.url.slice(prefix.length)));
+      });
+      await viewerBrowser.send("Network.enable", {});
+    };
+    const opened = await Promise.allSettled([
+      openWorkspace(writerBrowser, server, writer, container.id),
+      openWorkspace(viewerBrowser, server, viewer, container.id, watchViewerActions),
+    ]);
     for (const result of opened) if (result.status === "rejected") throw result.reason;
     const accountDestination = `${panel} .plugin-atyrode_code_accounts__target select`;
     await selectDestination(writerBrowser, accountDestination, target.machineId);
     await selectDestination(viewerBrowser, accountDestination, target.machineId);
+    await waitFor(() => viewerActions.includes("atyrode.omp.accounts.accounts"), timeout, 50);
+    assert(!viewerActions.includes("atyrode.omp.accounts.readAccountSetup"),
+      "A read-only account view must not request owner-only account setup");
     const documentMarker = randomBytes(16).toString("hex");
     await viewerBrowser.evaluate(`globalThis.__codeBrowserDocument = ${JSON.stringify(documentMarker)}`);
 
