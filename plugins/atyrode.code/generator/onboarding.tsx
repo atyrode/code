@@ -97,7 +97,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
       </div>}
       {step === 1 && <>
         <p>Save this workspace’s profile, model catalog and account choices. Completed setup is remembered here.</p>
-        <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { containerId: host.containerId!, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
+        <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.initializeConfiguration" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { containerId: host.containerId!, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
         {!record && target && <LegacyWorkspaceAdoption key={machineId} host={host} target={target} onAdopt={refresh} />}
       </>}
       {step === 2 && <>
@@ -119,7 +119,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
               <label>Classifier model<input value={classifierModel} placeholder="Model name" disabled={busy} onChange={event => { setClassifierModel(event.target.value); setServiceReview(null); }} /></label>
             </>}
           </div>
-          {!serviceReview && <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceConfiguration.data?.connected || classifierMode === "keep" || (classifierMode === "set" && (!classifierOrigin.trim() || !classifierModel.trim()))} onClick={() => {
+          {!serviceReview && <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.reviewServices" disabled={busy || !writable || !available || !serviceConfiguration.data?.connected || classifierMode === "keep" || (classifierMode === "set" && (!classifierOrigin.trim() || !classifierModel.trim()))} onClick={() => {
             if (target && serviceConfiguration.data && classifierMode !== "keep") void perform(async () => {
               const input: ActionInput<"reviewServices"> = { ...target, expectedServiceRevision: serviceConfiguration.data!.configuration.revision,
                 classifier: classifierMode === "remove" ? null : { origin: classifierOrigin.trim(), model: classifierModel.trim() } };
@@ -131,7 +131,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
             <p>Only Code’s external suggestion classifier changes. Other machine services and your OMP runtime stay unchanged.</p>
             {!serviceReviewCurrent && <p role="status">Native configuration changed. Review the current classifier policy again.</p>}
             <details className="plugin-atyrode_code__details"><summary>Exact classifier policy</summary><pre>{JSON.stringify(serviceReview.result.policies.filter(policy => policy.serviceId === "suggest"), null, 2)}</pre></details>
-            <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !serviceReviewCurrent} onClick={() => void perform(async () => {
+            <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.configureServices" disabled={busy || !writable || !available || !serviceReviewCurrent} onClick={() => void perform(async () => {
               await callCodeAction(host, "configureServices", { ...serviceReview.input, reviewDigest: serviceReview.result.reviewDigest });
               if (destinationCurrent()) { setServiceReview(null); setSelectedStep(null); }
             })}>{busy ? "Configuring…" : "Use classifier policy"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
@@ -171,7 +171,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
             <p>{route.description}</p>
             {!routeReady && <><p role="status">This option needs permission. Review its exact scope, or choose the other option if it matches your folders.</p><PermissionReview host={host} target={target} intent={route.mode === "create" ? "workspace-create" : "workspace-existing"} label={`Review permission: ${route.label}`} onReady={refresh} /></>}
             {history.error && <p role="status">{history.error}</p>}
-            <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !available || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record && target) void perform(async () => { await codeWorkflow(host).prepareWorkspace(target, route.mode); if (destinationCurrent()) setSelectedStep(null); }); }}>{route.label}</button>
+            <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.omp.prepareWorkspace" disabled={busy || !writable || !available || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record && target) void perform(async () => { await codeWorkflow(host).prepareWorkspace(target, route.mode); if (destinationCurrent()) setSelectedStep(null); }); }}>{route.label}</button>
           </div>;
         })}
         <button type="button" onClick={() => host.navigate(`manifold://plugin/${OMP_PLUGIN_ID}`)}>Open native job history</button>

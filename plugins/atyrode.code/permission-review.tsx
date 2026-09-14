@@ -214,7 +214,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
         </section>)}
       </div></fieldset>
       {plan.blockers.map(reason => <p key={reason} role="status">{reason}</p>)}
-      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || planKey !== inputKey || plan.steps.length === 0 || plan.blockers.length > 0} onClick={() => void perform(valid => nextGroup({ plan, index: 0, phase: "review", review: null, deployment: null, configuration: null }, valid))}>Review selected requests</button><button type="button" onClick={onClose}>Not now — keep existing access</button></div>
+      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="engine.jobs.reviewDeployment" disabled={busy || planKey !== inputKey || plan.steps.length === 0 || plan.blockers.length > 0} onClick={() => void perform(valid => nextGroup({ plan, index: 0, phase: "review", review: null, deployment: null, configuration: null }, valid))}>Review selected requests</button><button type="button" onClick={onClose}>Not now — keep existing access</button></div>
     </>}
     {step && <p>Request {flow!.index + 1} of {flow!.plan.steps.length} · {step.featureIds.map(id => flow!.plan.features.find(feature => feature.id === id)?.title).join(" + ")}</p>}
     {flow?.phase === "review" && flow.review && <section aria-label="Exact native rights review">
@@ -229,7 +229,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
         <details className="plugin-atyrode_code__details"><summary>Exact artifact, resources and binding revisions</summary><pre>{JSON.stringify(target, null, 2)}</pre></details>
       </section>)}
       {!flow.review.approvable && <p role="status">This declaration or destination is not approvable. Resolve the native reason and review again; no fallback destination or permission is substituted.</p>}
-      <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable || !flow.review.approvable} onClick={() => void approveNative()}>Approve exact native scope</button>
+      <button type="button" className="plugin-atyrode_code__primary-action" data-action="engine.jobs.applyDeployment" disabled={busy || !writable || !flow.review.approvable} onClick={() => void approveNative()}>Approve exact native scope</button>
       <details className="plugin-atyrode_code__details"><summary>Published native apply request</summary><pre>{JSON.stringify({ request: flow.review.request, reviewDigest: flow.review.reviewDigest }, null, 2)}</pre></details>
     </section>}
     {flow?.deployment && <section aria-label="Native deployment progress"><h3>Native progress</h3><p>Approval is stored by Manifold. Ready requires acknowledgement from the actual native owner, not a successful submit.</p>
@@ -238,7 +238,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
     {configuration && <section aria-label="OMP runtime configuration review"><h3>Separate OMP runtime configuration</h3>
       <p>{configuration.kind === "account-runtime" ? "Use this exact shared account runtime on its declared owner. This affects the instance; credential custody remains with OMP." : "Connect this destination to the reviewed OMP gateway. Other service policies and the account broker stay unchanged."}</p>
       <details open className="plugin-atyrode_code__details"><summary>Exact configuration and revision</summary><pre>{JSON.stringify(configuration, null, 2)}</pre></details>
-      <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy || !writable} onClick={() => void applyConfiguration()}>Apply reviewed OMP configuration</button>
+      <button type="button" className="plugin-atyrode_code__primary-action" data-action={configuration.kind === "account-runtime" ? "atyrode.omp.accounts.promoteAccountRuntime" : "atyrode.omp.gateway.configureGateway"} disabled={busy || !writable} onClick={() => void applyConfiguration()}>Apply reviewed OMP configuration</button>
     </section>}
     {flow?.phase === "ready" && <section aria-label="Capability readiness"><h3>Reviewed capabilities are ready</h3><p>The native owners acknowledged readiness. Continue with your existing draft; discovery, folder preparation, paid benchmarks and session launch remain separate actions.</p>
       <button type="button" className="plugin-atyrode_code__primary-action" disabled={busy} onClick={() => void perform(valid => nextGroup(flow, valid, true))}>Continue to feature</button>

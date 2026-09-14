@@ -139,7 +139,7 @@ function WorkspaceUsageOverview({ host }: { host: HostServices }) {
       <h2 className="plugin-atyrode_code__section-label">usage</h2>
       {activeProfile !== null && <span className="plugin-atyrode_code__muted" title="Saved account pool">{activeProfile === "Manual" ? "Manual account pool" : activeProfile}</span>}
       <div className="plugin-atyrode_code__toolbar">
-        <button type="button" disabled={!workspace || configuration.refreshing || feed.refreshing} onClick={() => { configuration.refresh(); feed.refresh(); }} title="Check the broker for updated provider quota readings">{configuration.refreshing || feed.refreshing ? "Checking usage…" : error ? "Retry usage" : "Refresh usage"}</button>
+        <button type="button" data-action="atyrode.omp.accounts.usage" disabled={!workspace || configuration.refreshing || feed.refreshing} onClick={() => { configuration.refresh(); feed.refresh(); }} title="Check the broker for updated provider quota readings">{configuration.refreshing || feed.refreshing ? "Checking usage…" : error ? "Retry usage" : "Refresh usage"}</button>
       </div>
     </header>
     {error && <div className="plugin-atyrode_code__notice plugin-atyrode_code__warning" role="status"><p>Usage could not be refreshed{value ? " · showing the last known readings" : ""}.</p><p>{error}</p></div>}
