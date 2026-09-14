@@ -7,6 +7,7 @@ import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
 import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient, WorkflowError } from "./workflow.ts";
 
+const CODE_PREFERENCES_TOPIC = { kind: "plugin", pluginId: CODE_PLUGIN_ID } as const;
 const messages: Readonly<Record<string, string>> = {
   code_stale_preferences: "Shared choices changed. Read the current revision before committing your edit.",
   code_composition_changed: "The saved profile, account pool or OMP defaults changed. Review the session again before launching.",
@@ -128,7 +129,8 @@ export function useOmpQuery<K extends OmpAction>(host: HostServices, name: K, in
     () => callOmpAction(host, name, input!), intervalMs);
 }
 /** Poll even with a live event channel: native broker/provider observations can
- * change independently of Manifold events. Keys isolate target-bound observations. */
+ * change independently of Manifold events. Code configuration commits also fan out
+ * on the declared plugin topic so peer workspaces refresh without waiting to poll. */
 export function useWorkflowQuery<T>(host: HostServices, key: string, enabled: boolean, observe: () => Promise<T>, intervalMs = FALLBACK_POLL_MS) {
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => { setRefreshing(false); }, [key, host.principal.id]);
@@ -141,7 +143,7 @@ export function useWorkflowQuery<T>(host: HostServices, key: string, enabled: bo
     initial: null, enabled,
     onSuccess: () => setRefreshing(false),
     onError: () => setRefreshing(false),
-    topics: [], events: host.client,
+    topics: [CODE_PREFERENCES_TOPIC], events: host.client,
   });
   const refresh = useCallback(() => {
     if (!enabled) return;
