@@ -224,6 +224,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await click(browser, workspaceButton("Models"));
   await click(browser, workspaceButton("Edit or import models"));
   const catalog = `${generator} [aria-label="Model catalog"]`;
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${catalog} .plugin-atyrode_code_generator__fields label')].slice(0, 4).map(label => label.textContent?.trim())`), [
+    "Catalog key · routing label", "Provider identifier", "Provider model ID", "API family",
+  ], "Catalog editor labels explain each routing identity field");
+  const capabilityTier = `[...document.querySelectorAll('${catalog} .plugin-atyrode_code_generator__fields select')][0]`;
+  assert.equal(await browser.evaluate(`${capabilityTier}?.closest("label")?.firstChild?.textContent?.trim()`), "Capability tier",
+    "Catalog editor labels the numeric capability tier");
   const importSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'JSON import / export')`;
   await click(browser, importSummary);
   const importField = element(`${catalog} textarea:not([readonly])`);
