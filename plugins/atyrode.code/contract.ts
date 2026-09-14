@@ -1,7 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
-import { AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, OverlaySchema,
-  RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds, identifier,
-  modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
+import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
+  OverlaySchema, RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds,
+  identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
@@ -57,9 +57,13 @@ export const ProfileModelSchema = z.strictObject({
   model: modelId, thinking: ThinkingLevelSchema, capability: CapabilitySchema, advisor: SelectionSchema.shape.advisor,
 });
 /** One account a profile spends. `identityKey` is null for an API-key slot, which has a
- * credential and no login, and `label` is the login the observation named when it named one. */
+ * credential and no login, and `label` is the login the observation named when it named one.
+ * Both bounds are OMP's own record's, so a long login narrows nothing here and one account
+ * can never refuse the whole list. */
 export const ProfileAccountSchema = z.strictObject({
-  provider: identifier, identityKey: id.nullable(), label: z.string().max(256).optional(),
+  provider: identifier,
+  identityKey: AccountRecordSchema.shape.identityKey,
+  label: AccountRecordSchema.shape.email.unwrap().optional(),
 });
 export type ProfileAccount = z.infer<typeof ProfileAccountSchema>;
 /** A configured workspace, which is what a Code profile is: its catalog, selection and

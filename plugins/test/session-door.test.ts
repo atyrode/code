@@ -174,8 +174,11 @@ describe("Code profiles a dependent plugin may offer", () => {
         capability: record.selection!.capability, advisor: record.selection!.advisor },
       accounts: everyAccount, resolved: true }]);
     f.access.readable.add("container-b");
-    expect((await accepted(f, "listProfiles", {})).profiles.map(profile => profile.containerId))
-      .toEqual([target.containerId, other.containerId]);
+    f.calls.length = 0;
+    const both = await accepted(f, "listProfiles", {});
+    expect(both.profiles.map(profile => profile.containerId)).toEqual([target.containerId, other.containerId]);
+    // The accounts owner is asked once for the whole list, never once per profile.
+    expect(f.calls).toEqual([accountsDoor]);
     f.access.containerScope = target.containerId;
     expect((await accepted(f, "listProfiles", {})).profiles.map(profile => profile.containerId)).toEqual([target.containerId]);
   });

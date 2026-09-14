@@ -60,6 +60,14 @@ only a profile, a destination and a prompt. The profile's `revision` is the
 handle: a composition the operator changed in the generator after a caller read
 it refuses rather than posting quietly.
 
+A profile also says which accounts it spends. Account choices are stored as
+exclusions over an observation, so `listProfiles` asks the accounts owner once
+for the whole list and resolves them: `accounts` names what a run would spend
+and `resolved` says whether a live observation backed it. An owner that cannot
+answer, a stale observation, or saved exclusions that no longer resolve all give
+`resolved: false` with no names — ask again, rather than read it as spending
+nothing — and never the exclusions themselves.
+
 A refusal on that edge is a rejection, not a value: the host settles a callee
 handler's own `{ refused }` as its `refused` class, so OMP's word survives only
 because Code re-raises a token OMP's published grammar admits
