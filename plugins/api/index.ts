@@ -20,21 +20,27 @@ export {
   CODE_PREFERENCES_EVENT,
   /** `${CODE_PLUGIN_ID}.${action}`: the door name an ordinary client dispatches. */
   actionDoor,
-  /** Every published door, input and result. `runSession`, `readSession` and `listProfiles`
-   * are the job-shaped session; the rest is the configuration a profile is made of. */
+  /** Every published door, input and result. `listProfiles`, `runSession`, `readSession` and
+   * `cancelSession` are the job-shaped session; the rest is the configuration a profile is
+   * made of. A run is watched through `readSession`, whose receipt is null until it exited 0. */
   actionSchemas,
   /** A Code refusal is `code_` followed by its own token, the way an OMP refusal is `omp_`:
    * a caller that carries this word keeps both the plugin that refused and the reason. */
   RefusalSchema,
   /** The typed ordinary-client adapter. It neither grants nor proxies native authority. */
   createCodeClient,
-  /** A profile is a configured workspace; these are what `listProfiles` answers. */
+  /** A profile is a configured workspace; these are what `listProfiles` answers. `accounts` is
+   * what Code says the profile spends, and `resolved` says whether a live observation backed
+   * it — a caller displays Code's answer rather than inferring an account of its own. */
   ProfileSchema,
   ProfileModelSchema,
+  ProfileAccountSchema,
   ProfileListSchema,
-  /** The two session doors' inputs, and the composition a run is made from. */
+  /** The session doors' inputs, and the composition a run is made from. `readSession` answers
+   * a run at any point in its life, `cancelSession` ends one; both name a job Code posted. */
   SessionRunInputSchema,
   SessionReadInputSchema,
+  SessionCancelInputSchema,
   SessionCompositionSchema,
   /** A workspace, and a workspace plus the destination a caller chose for it. */
   WorkspaceSchema,
@@ -49,6 +55,7 @@ export {
   type ActionResult,
   type CodeAction,
   type Profile,
+  type ProfileAccount,
   type SessionComposition,
   type Target,
   type Workspace,

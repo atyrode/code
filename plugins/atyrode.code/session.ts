@@ -7,13 +7,13 @@
  * session, never chooses an account and never reaches OMP itself.
  */
 import { OMP_PLUGIN_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal, actionDoor as ompDoor,
-  actionSchemas as ompActionSchemas, epochMilliseconds, type ActionInput as OmpInput,
-  type ActionResult as OmpResult, type OmpAction } from "@atyrode/manifold-omp";
+  actionSchemas as ompActionSchemas, epochMilliseconds, type AccountsObservation,
+  type ActionInput as OmpInput, type ActionResult as OmpResult, type OmpAction } from "@atyrode/manifold-omp";
 import type { ActionCallRefusal } from "@manifold/protocol";
 import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
-import { DomainError, type CatalogDocument, type Selection } from "../domain/contracts.ts";
+import { DomainError, type AccountChoices, type CatalogDocument, type Selection } from "../domain/contracts.ts";
 import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
 import { digest, id, revision, sessionInput, type ActionInput, type ActionResult,
   type Profile, type SessionComposition } from "./contract.ts";
@@ -119,14 +119,48 @@ async function observedSession(ctx: CodeContext, args: ActionInput<"runSession">
  * which is the obligation `scope: "container"` puts on a handler rather than a hole in it.
  */
 export async function listProfiles(ctx: CodeContext, _args: ActionInput<"listProfiles">): Promise<ActionResult<"listProfiles">> {
+  // One observation for the whole list: the accounts owner is asked once, and an owner that
+  // cannot answer leaves every row unresolved rather than failing a list of profiles that
+  // exist either way.
+  let observed: AccountsObservation | null = null;
+  try {
+    observed = await ompCall(ctx, "accounts", {});
+  } catch (error) {
+    if (!(error instanceof CodeRefusal)) throw error;
+  }
   const profiles: Profile[] = [];
   for (const record of await readableConfigurations(ctx)) {
     if (!record.active || !record.selection) continue;
     profiles.push({ containerId: record.containerId, revision: record.revision,
       selected: selectedModel(record.active.document, record.selection, ctx.now()),
-      machineId: await lastDestination(ctx, record.containerId) });
+      machineId: await lastDestination(ctx, record.containerId),
+      ...spentAccounts(observed, record.accounts) });
   }
   return { profiles };
+}
+/**
+ * The accounts this profile spends, which is what `selectedAccountPool` would put in a run's
+ * pool. Code's choices are exclusions over an observation, so an observation is what makes
+ * them nameable: without one — or with one the choices no longer resolve against, which is
+ * the same refusal a launch would meet — the answer is `resolved: false` and no names, never
+ * a guess and never the exclusions themselves.
+ */
+function spentAccounts(observed: AccountsObservation | null, choices: AccountChoices): Pick<Profile, "accounts" | "resolved"> {
+  if (observed === null) return { accounts: [], resolved: false };
+  try {
+    const pool = selectedAccountPool(observed, choices);
+    const logins = new Map(observed.accounts.map(account => [account.credentialId, account.email]));
+    const accounts = Object.entries(pool).flatMap(([provider, entries]) => entries.map(entry => {
+      const label = logins.get(entry.credentialId) ?? null;
+      return { provider, identityKey: entry.identityKey, ...(label === null ? {} : { label }) };
+    }));
+    // A pool wider than a display row can carry is not truncated into a half-truth: the
+    // profile spends all of them, and a caller that needs every one composes a session.
+    return accounts.length > 64 ? { accounts: [], resolved: false } : { accounts, resolved: true };
+  } catch (error) {
+    if (error instanceof DomainError) return { accounts: [], resolved: false };
+    throw error;
+  }
 }
 /** A selection its catalog no longer supports summarises as nothing: the generator is where it
  * is resolved, and a caller must not read a stale dial as the model a run would use. */
@@ -194,18 +228,47 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     throw new CodeRefusal("session_conflict");
   return job;
 }
-/** The run Code posted, read back through OMP. The destination is the one Code retained, not
- * one the caller supplies: a job id alone never widens to another machine's run. */
-export async function readSession(ctx: CodeContext, args: ActionInput<"readSession">): Promise<ActionResult<"readSession">> {
-  await authorizeTarget(ctx, args);
+/** The session Code retained under this workspace. Both job doors start here: a job id alone
+ * is nothing, and the destination is the one Code recorded rather than one a caller supplies,
+ * so no job id ever widens to another machine's run. */
+async function retainedSession(ctx: CodeContext, args: { containerId: string; jobId: string }): Promise<SessionProvenance> {
   const raw = await ctx.storage.get(`sessions/${digestOf({ containerId: args.containerId })}/${args.jobId}`);
   if (raw === null) throw new CodeRefusal("session_unknown");
   const provenance = SessionProvenanceSchema.parse(JSON.parse(raw));
   if (provenance.containerId !== args.containerId || provenance.jobId !== args.jobId) throw new CodeRefusal("session_unknown");
+  return provenance;
+}
+/** The job OMP answered for the session Code retained, whatever its state. */
+function sameJob(job: ActionResult<"cancelSession">["job"], provenance: SessionProvenance): boolean {
+  return job.jobId === provenance.jobId && job.machineId === provenance.machineId &&
+    job.pluginId === OMP_PLUGIN_ID && job.operationId === provenance.operationId;
+}
+/**
+ * The run Code posted, read back through OMP at any point in its life. `job` is the job's own
+ * state — queued, started, cancelled, exited — and `session` is the receipt, which exists only
+ * once the run exited 0 and its transcript was sealed. A running or failed session is therefore
+ * an ANSWER with `session: null`, not a refusal: a caller watching a run reads `job.state` and
+ * `job.result`, and only a job Code never posted is refused.
+ */
+export async function readSession(ctx: CodeContext, args: ActionInput<"readSession">): Promise<ActionResult<"readSession">> {
+  await authorizeTarget(ctx, args);
+  const provenance = await retainedSession(ctx, args);
   const reply = await ompCall(ctx, "readSession", { containerId: provenance.containerId,
     machineId: provenance.machineId, jobId: provenance.jobId });
-  if (reply.job.jobId !== provenance.jobId || reply.job.machineId !== provenance.machineId ||
-    reply.job.pluginId !== OMP_PLUGIN_ID || reply.job.operationId !== provenance.operationId)
-    throw new CodeRefusal("omp_review_changed");
+  if (!sameJob(reply.job, provenance)) throw new CodeRefusal("omp_review_changed");
+  return reply;
+}
+/**
+ * End the run Code posted. OMP cancels its own job, so a settled one answers itself rather
+ * than failing: cancelling twice, or cancelling a run that already exited, is the same answer
+ * both times. Code writes nothing here — the provenance is what it already retained — but the
+ * door is a write because ending someone's run is not a read of it.
+ */
+export async function cancelSession(ctx: CodeContext, args: ActionInput<"cancelSession">): Promise<ActionResult<"cancelSession">> {
+  await authorizeTarget(ctx, args, true);
+  const provenance = await retainedSession(ctx, args);
+  const reply = await ompCall(ctx, "cancelSession", { containerId: provenance.containerId,
+    machineId: provenance.machineId, jobId: provenance.jobId });
+  if (!sameJob(reply.job, provenance)) throw new CodeRefusal("omp_review_changed");
   return reply;
 }

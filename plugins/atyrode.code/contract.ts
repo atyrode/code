@@ -1,7 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, OverlaySchema,
-  RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds, modelId,
-  type ActionInput as OmpInput } from "@atyrode/manifold-omp";
+  RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds, identifier,
+  modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
@@ -56,16 +56,30 @@ export function sessionInput(target: Target, composition: SessionComposition,
 export const ProfileModelSchema = z.strictObject({
   model: modelId, thinking: ThinkingLevelSchema, capability: CapabilitySchema, advisor: SelectionSchema.shape.advisor,
 });
+/** One account a profile spends. `identityKey` is null for an API-key slot, which has a
+ * credential and no login, and `label` is the login the observation named when it named one. */
+export const ProfileAccountSchema = z.strictObject({
+  provider: identifier, identityKey: id.nullable(), label: z.string().max(256).optional(),
+});
+export type ProfileAccount = z.infer<typeof ProfileAccountSchema>;
 /** A configured workspace, which is what a Code profile is: its catalog, selection and
  * account choices are the container's, and `machineId` is where Code last posted a session
- * for it — a destination is the caller's choice, never a saved pin. */
+ * for it — a destination is the caller's choice, never a saved pin.
+ *
+ * `accounts` is what this profile spends: the container's saved choices resolved against the
+ * live account observation. Code's choices are stored as EXCLUSIONS, so without an
+ * observation there is no list to give — `resolved` is false and `accounts` is empty, rather
+ * than exclusions dressed up as selections. A caller displays what Code says and nothing it
+ * inferred; `resolved: false` means ask again, never "spends nothing". */
 export const ProfileSchema = z.strictObject({
   containerId: id, revision: revision.positive(), selected: ProfileModelSchema.nullable(), machineId: id.nullable(),
+  accounts: z.array(ProfileAccountSchema).max(64), resolved: z.boolean(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchema).max(4096) });
 export const SessionRunInputSchema = RevisionTargetSchema.extend({ prompt: z.string().min(1).max(16384) });
 export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
+export const SessionCancelInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SuggestionSchema = z.strictObject({ revision, serviceRevision: id, selection: SelectionSchema,
   changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])),
   evaluator: z.string().max(256) });
@@ -117,7 +131,10 @@ export const rootActionSchemas = {
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: z.string().max(16384) }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
-  readSession: { input: SessionReadInputSchema, result: z.strictObject({ job: PublicJobSchema, session: SessionReceiptSchema }) },
+  // The receipt exists only once a run exited 0 and its transcript was sealed; a running,
+  // cancelled or failed session is answered by its job with no receipt beside it.
+  readSession: { input: SessionReadInputSchema, result: z.strictObject({ job: PublicJobSchema, session: SessionReceiptSchema.nullable() }) },
+  cancelSession: { input: SessionCancelInputSchema, result: z.strictObject({ job: PublicJobSchema }) },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
   configureServices: { input: ServicesReviewInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },
