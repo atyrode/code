@@ -12,12 +12,12 @@ import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
   readConfiguration, requireConfiguration } from "./state.ts";
-import { composeSession, listProfiles, readSession, runSession } from "./session.ts";
+import { cancelSession, composeSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
   initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
-  configureServices: true, runSession: true,
+  configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
 // Only Code's external suggestion policy needs native authority. Policy
@@ -90,6 +90,7 @@ const productHandlers: ProductHandlers = {
   listProfiles,
   runSession,
   readSession,
+  cancelSession,
   async suggest(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);

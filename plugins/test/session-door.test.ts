@@ -26,11 +26,23 @@ function document(): CatalogDocument {
 }
 function observation(): AccountsObservation {
   const scope = "explicit-caller-observation";
+  const alice = "email:alice@example.test|org:original";
+  const bob = "email:bob@example.test|org:original";
   return { scope, observedAt: now, status: "fresh", accounts: [
-    { reference: { kind: "identity", scope, provider: "anthropic", identityKey: "email:alice@example.test|org:original" },
-      credentialId: 1, identityKey: "email:alice@example.test|org:original", type: "oauth", email: null, disabled: false, blocks: [] },
+    { reference: { kind: "identity", scope, provider: "anthropic", identityKey: alice },
+      credentialId: 1, identityKey: alice, type: "oauth", email: "alice@example.test", disabled: false, blocks: [] },
+    { reference: { kind: "credential", scope, provider: "anthropic", credentialId: 2 },
+      credentialId: 2, identityKey: null, type: "api_key", email: null, disabled: false, blocks: [] },
+    { reference: { kind: "identity", scope, provider: "anthropic", identityKey: bob },
+      credentialId: 3, identityKey: bob, type: "oauth", email: "bob@example.test", disabled: false, blocks: [] },
   ] };
 }
+/** Every account the observation names, as `listProfiles` reports them. */
+const everyAccount = [
+  { provider: "anthropic", identityKey: "email:alice@example.test|org:original", label: "alice@example.test" },
+  { provider: "anthropic", identityKey: null },
+  { provider: "anthropic", identityKey: "email:bob@example.test|org:original", label: "bob@example.test" },
+];
 function job(jobId = "job-a"): PublicJob {
   return PublicJobSchema.parse({
     jobId, machineId: target.machineId, operationId: SESSION_OPERATION_ID, pluginId: OMP_PLUGIN_ID,
@@ -52,9 +64,9 @@ interface Fixture {
   store: Map<string, string>;
   calls: string[];
   omp: {
-    accounts: AccountsObservation; defaults: OmpResult<"readDefaults">; job: PublicJob; session: SessionReceipt;
+    accounts: AccountsObservation; defaults: OmpResult<"readDefaults">; job: PublicJob; session: SessionReceipt | null;
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
-    reviewed: unknown[]; posted: unknown[]; read: unknown[];
+    reviewed: unknown[]; posted: unknown[]; read: unknown[]; cancelled: unknown[];
   };
 }
 function fixture(): Fixture {
@@ -64,7 +76,7 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
-    refuse: new Map(), reject: new Map(), during: new Map(), reviewed: [], posted: [], read: [] };
+    refuse: new Map(), reject: new Map(), during: new Map(), reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
     const door = `${plugin}.${action}`;
     calls.push(door);
@@ -94,6 +106,12 @@ function fixture(): Fixture {
     if (door === `${OMP_PLUGIN_ID}.readSession`) {
       omp.read.push(ompActionSchemas.readSession.input.parse(input));
       return { job: omp.job, session: omp.session };
+    }
+    if (door === `${OMP_PLUGIN_ID}.cancelSession`) {
+      omp.cancelled.push(ompActionSchemas.cancelSession.input.parse(input));
+      // OMP cancels its own job and answers it; a settled one answers itself unchanged.
+      omp.job = { ...omp.job, state: omp.job.state === "exited" ? "exited" : "cancelled" };
+      return { job: omp.job };
     }
     throw new Error(`unknown_action: ${CODE_PLUGIN_ID} -> ${door}`);
   };
@@ -153,10 +171,14 @@ describe("Code profiles a dependent plugin may offer", () => {
     const listed = await accepted(f, "listProfiles", {});
     expect(listed.profiles).toEqual([{ containerId: target.containerId, revision: record.revision, machineId: null,
       selected: { model: "anthropic/native-model-2", thinking: record.selection!.thinking,
-        capability: record.selection!.capability, advisor: record.selection!.advisor } }]);
+        capability: record.selection!.capability, advisor: record.selection!.advisor },
+      accounts: everyAccount, resolved: true }]);
     f.access.readable.add("container-b");
-    expect((await accepted(f, "listProfiles", {})).profiles.map(profile => profile.containerId))
-      .toEqual([target.containerId, other.containerId]);
+    f.calls.length = 0;
+    const both = await accepted(f, "listProfiles", {});
+    expect(both.profiles.map(profile => profile.containerId)).toEqual([target.containerId, other.containerId]);
+    // The accounts owner is asked once for the whole list, never once per profile.
+    expect(f.calls).toEqual([accountsDoor]);
     f.access.containerScope = target.containerId;
     expect((await accepted(f, "listProfiles", {})).profiles.map(profile => profile.containerId)).toEqual([target.containerId]);
   });
@@ -169,8 +191,27 @@ describe("Code profiles a dependent plugin may offer", () => {
     f.store.set(`configuration/${digestOf(workspace)}`, JSON.stringify({ ...record,
       active: { document: narrowed, digest: digestOf(narrowed) } }));
     expect((await accepted(f, "listProfiles", {})).profiles).toEqual([
-      { containerId: target.containerId, revision: record.revision, machineId: null, selected: null },
+      { containerId: target.containerId, revision: record.revision, machineId: null, selected: null,
+        accounts: everyAccount, resolved: true },
     ]);
+  });
+
+  test("a profile names the accounts its choices resolve to, and says so when nothing resolved them", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    // The workspace excludes one login; the two it still spends are the ones reported, with the
+    // login the observation named and the API-key slot's absent one.
+    const chosen = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: record.revision,
+      change: { kind: "set-account", reference: observation().accounts[2]!.reference, enabled: false } });
+    const spending = (await accepted(f, "listProfiles", {})).profiles[0];
+    expect(spending).toMatchObject({ revision: chosen.revision, resolved: true });
+    expect(spending?.accounts).toEqual(everyAccount.slice(0, 2));
+    // No observation, and a stale one, are the same answer: Code names nothing it cannot resolve.
+    f.omp.refuse.set(accountsDoor, "omp_broker_unavailable");
+    expect((await accepted(f, "listProfiles", {})).profiles[0]).toMatchObject({ accounts: [], resolved: false });
+    f.omp.refuse.clear();
+    f.omp.accounts = { ...observation(), status: "stale" };
+    expect((await accepted(f, "listProfiles", {})).profiles[0]).toMatchObject({ accounts: [], resolved: false });
   });
 });
 
@@ -254,7 +295,7 @@ describe("the session a dependent plugin posts through Code", () => {
   });
 });
 
-describe("reading back a session Code posted", () => {
+describe("reading back and ending a session Code posted", () => {
   test("OMP's receipt passes through unchanged for the job Code retained, and for no other", async () => {
     const f = fixture();
     const record = await configured(f);
@@ -269,5 +310,45 @@ describe("reading back a session Code posted", () => {
     f.access.readable.add(target.containerId);
     f.omp.job = job("job-another-door-placed");
     expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_omp_review_changed" });
+  });
+
+  test("a session still running, and one that failed, are answered by their job with no receipt", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
+    // A run OMP has not sealed a transcript for: the answer is the job's own state, not a
+    // refusal, so a caller can watch a session it started.
+    f.omp.session = null;
+    expect(await accepted(f, "readSession", { ...workspace, jobId: "job-a" }))
+      .toEqual({ job: { ...job(), state: "started" }, session: null });
+    const failed = { ...job(), state: "exited" as const, result: { jobId: "job-a", requestDigest: "f".repeat(64),
+      ownerId: "owner", ownerGeneration: 1, state: "exited" as const, exitCode: 1, reason: null,
+      startedAt: now, finishedAt: now + 1_000, usage: null, outputs: [],
+      limits: { timeoutMs: 600_000, memoryBytes: 1 << 30, processes: 64, outputBytes: 1 << 20 } } };
+    f.omp.job = PublicJobSchema.parse(failed);
+    const answered = await accepted(f, "readSession", { ...workspace, jobId: "job-a" });
+    expect(answered.session).toBeNull();
+    expect(answered.job.result?.exitCode).toBe(1);
+  });
+
+  test("cancelling ends the run Code posted, twice over, and never another plugin's job", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    await configured(f, "container-b");
+    await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
+    const ended = await accepted(f, "cancelSession", { ...workspace, jobId: "job-a" });
+    expect(ended.job.state).toBe("cancelled");
+    expect(f.omp.cancelled).toEqual([{ ...target, jobId: "job-a" }]);
+    // Idempotent at OMP: a settled job answers itself, so a second call is the same answer.
+    expect((await accepted(f, "cancelSession", { ...workspace, jobId: "job-a" })).job.state).toBe("cancelled");
+    expect(await invoke(f, "cancelSession", { ...workspace, jobId: "job-nobody-posted" })).toEqual({ refused: "code_session_unknown" });
+    expect(await invoke(f, "cancelSession", { containerId: "container-b", jobId: "job-a" })).toEqual({ refused: "code_session_unknown" });
+    expect(f.omp.cancelled).toHaveLength(2);
+    // Ending someone's run is a write, not a read of it.
+    f.access.writable.delete(target.containerId);
+    expect(await invoke(f, "cancelSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    f.omp.job = job("job-another-door-placed");
+    expect(await invoke(f, "cancelSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_omp_review_changed" });
   });
 });
