@@ -336,15 +336,23 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await key(browser, "Enter", 13);
       await until(browser, "keyboard navigation still activates Models", `${workspaceButton("Models")}.getAttribute('aria-current') === 'page'`);
       await click(browser, workspaceButton("Profile"));
-      await until(browser, "first-use review opens only after Profile is visible", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
+      await until(browser, "first-use profile is visible without an automatic review", `${onboarding}?.getClientRects().length > 0 && ${element(modal)} === null`);
+      await control(browser, "first-use account decision remains available", workspaceButton("Not now — continue workspace setup"), false);
+      await click(browser, workspaceButton("Choose or reconsider capabilities"));
+      await until(browser, "explicit capability review opens from its trigger", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
+      await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('input[type="checkbox"]').length > 0`);
+      assert.equal(await browser.evaluate(`${element(modal)}.querySelectorAll('[aria-pressed]').length === 0`), true,
+        "Each capability has one checkbox rather than an inverted Not now control");
+      assert.equal(await browser.evaluate(`${element(modal)}.querySelector('[id$="-title"]')?.textContent.includes('Choose or reconsider capabilities')`), true,
+        "The review identifies the action that opened it");
       await key(browser, "Escape", 27);
-      await until(browser, "deferred first-use review closes normally", `${element(modal)} === null`);
+      await until(browser, "explicit first-use review closes normally", `${element(modal)} === null`);
       assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose or reconsider capabilities")}`), true,
         "Escape returns focus to the visible permission trigger");
       await click(browser, workspaceButton("Models"));
       await click(browser, workspaceButton("Profile"));
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true,
-        "Revisiting does not repeat an already dismissed first-use modal");
+        "Revisiting does not repeat an automatic first-use modal");
     }
     assert.equal((await readConfiguration(server, writer, firstUse)).configuration, null,
       "Navigation and deferred dialogs never initialize the workspace");
@@ -791,6 +799,9 @@ async function run(): Promise<void> {
     } });
     assert(arranged.ok, "Writer can open the ordinary Code workspace surface");
     await writerBrowser.goto(`${server.httpUrl}/p/${firstUse.id}`);
+    const firstUseReview = workspaceButton("Choose or reconsider capabilities");
+    await until(writerBrowser, "first-use review remains an explicit choice", `${firstUseReview}?.getClientRects().length > 0 && ${element(permissionDialog)} === null`);
+    await click(writerBrowser, firstUseReview);
     await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${permissionDialog} [data-code-capability] input[type="checkbox"]').length === 7`);
     assert.equal(await writerBrowser.evaluate(`document.querySelectorAll('${permissionDialog} input[type="checkbox"]:checked').length`), 0,
       "Initial setup must not pre-accept permissions");
