@@ -11,6 +11,12 @@ import { PermissionReview } from "../permission-review.tsx";
 import { operationReady } from "../permission-plan.ts";
 
 type Editor = { document: CatalogDocument; revision: number; activeDigest: string | null; draftDigest: string | null };
+const identityFields = [
+  { field: "key", label: "Catalog key · routing label" },
+  { field: "provider", label: "Provider identifier" },
+  { field: "id", label: "Provider model ID" },
+  { field: "api", label: "API family" },
+] as const;
 const numericFields = ["inputCostPerMillion", "outputCostPerMillion", "tokensPerSecond", "timeToFirstTokenMs", "contextWindow"] as const;
 const numericLabels = { inputCostPerMillion: "Input / million tokens", outputCostPerMillion: "Output / million tokens", tokensPerSecond: "Tokens / second", timeToFirstTokenMs: "First token (ms)", contextWindow: "Context tokens" };
 function ModelEditor({ model, index, disabled, update, remove }: {
@@ -19,12 +25,12 @@ function ModelEditor({ model, index, disabled, update, remove }: {
   return <fieldset disabled={disabled}><legend>Model {index + 1} · {model.key || "new model"}</legend>
     <Stack gap="0.65rem">
       <Cluster className="plugin-atyrode_code_generator__fields" gap="0.65rem">
-        {(["key", "provider", "id", "api"] as const).map((field) => <label key={field}>{field}
+        {identityFields.map(({ field, label }) => <label key={field}>{label}
           <input value={model[field]} maxLength={field === "id" ? 512 : 128} onChange={(event) => update({ ...model, [field]: event.target.value })} />
         </label>)}
       </Cluster>
       <Cluster className="plugin-atyrode_code_generator__fields" gap="0.65rem">
-        <label>Tier<select value={model.tier} onChange={(event) => update({ ...model, tier: CatalogModelSchema.shape.tier.parse(Number(event.target.value)) })}>
+        <label>Capability tier<select value={model.tier} onChange={(event) => update({ ...model, tier: CatalogModelSchema.shape.tier.parse(Number(event.target.value)) })}>
           {[0, 1, 2, 3, 4].map((tier) => <option key={tier} value={tier}>{tier}</option>)}
         </select></label>
         <label>Quota bucket (blank = none)<input value={model.quotaBucket ?? ""} maxLength={128} onChange={(event) => update({ ...model, quotaBucket: event.target.value || null })} /></label>
