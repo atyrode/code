@@ -2,7 +2,7 @@ import { createOmpClient, OMP_PLUGIN_ID, PREPARE_WORKSPACE_OPERATION_ID, VALIDAT
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
   JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, canonicalJobJson } from "@manifold/protocol";
 import { z } from "zod";
-import { createCodeClient, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
+import { createCodeClient, sessionInput, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { projectUsage } from "../domain/usage.ts";
 import type { AccountChoices } from "../domain/contracts.ts";
@@ -52,9 +52,6 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   async function composeSession(target: Target, expectedRevision: number, prompt: string) {
     const accounts = await omp("accounts", {});
     return code("composeSession", { containerId: target.containerId, expectedRevision, accounts, prompt });
-  }
-  function sessionInput(target: Target, composition: ActionResult<"composeSession">, expectedDefaultsRevision: number): OmpInput<"reviewSession"> {
-    return { ...target, expectedDefaultsRevision, accountPool: composition.accountPool, overlay: composition.overlay, prompt: composition.prompt, planYolo: composition.planYolo };
   }
   return {
     code, omp, native,

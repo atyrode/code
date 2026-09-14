@@ -1,8 +1,9 @@
-import { JobDeploymentRequestSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
+import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, OverlaySchema,
-  RuntimeAccountPoolSchema, epochMilliseconds } from "@atyrode/manifold-omp";
+  RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds, modelId,
+  type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
-import { AccountChoiceChangeSchema, AccountChoicesSchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
+import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
 import { CatalogDraftSchema } from "../domain/probe.ts";
 
@@ -15,7 +16,7 @@ export const CODE_PREFERENCES_EVENT = "preferences_changed";
 export const CODE_JOB_TOPIC = { kind: "plugin", pluginId: "engine.jobs" } as const;
 export const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const id = z.string().min(1).max(128);
+export const id = z.string().min(1).max(128);
 export const WorkspaceSchema = z.strictObject({ containerId: id });
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const RevisionWorkspaceSchema = WorkspaceSchema.extend({ expectedRevision: revision });
@@ -41,6 +42,30 @@ export const SessionCompositionSchema = z.strictObject({
   revision, review: ReviewSchema, accountPool: RuntimeAccountPoolSchema, overlay: OverlaySchema,
   prompt: z.string().max(16384), planYolo: z.boolean(), compositionDigest: digest,
 });
+export type SessionComposition = z.infer<typeof SessionCompositionSchema>;
+/** OMP's reviewed session input, composed from one Code composition and OMP's own defaults.
+ * The web's review, the web's preparation and the `runSession` door all pass through here, so
+ * a job-shaped session is reviewed against the very input a terminal one is. */
+export function sessionInput(target: Target, composition: SessionComposition,
+  expectedDefaultsRevision: number): OmpInput<"reviewSession"> {
+  return { ...target, expectedDefaultsRevision, accountPool: composition.accountPool,
+    overlay: composition.overlay, prompt: composition.prompt, planYolo: composition.planYolo };
+}
+/** What the generator's dials show for a saved selection: the model leading the default role,
+ * spelled as the OMP overlay spells it, and the depth that role thinks at. */
+export const ProfileModelSchema = z.strictObject({
+  model: modelId, thinking: ThinkingLevelSchema, capability: CapabilitySchema, advisor: SelectionSchema.shape.advisor,
+});
+/** A configured workspace, which is what a Code profile is: its catalog, selection and
+ * account choices are the container's, and `machineId` is where Code last posted a session
+ * for it — a destination is the caller's choice, never a saved pin. */
+export const ProfileSchema = z.strictObject({
+  containerId: id, revision: revision.positive(), selected: ProfileModelSchema.nullable(), machineId: id.nullable(),
+});
+export type Profile = z.infer<typeof ProfileSchema>;
+export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchema).max(4096) });
+export const SessionRunInputSchema = RevisionTargetSchema.extend({ prompt: z.string().min(1).max(16384) });
+export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SuggestionSchema = z.strictObject({ revision, serviceRevision: id, selection: SelectionSchema,
   changed: z.array(z.enum(Object.keys(SelectionSchema.shape) as [keyof z.infer<typeof SelectionSchema>, ...(keyof z.infer<typeof SelectionSchema>)[]])),
   evaluator: z.string().max(256) });
@@ -90,6 +115,9 @@ export const rootActionSchemas = {
   draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema }), result: CatalogDraftSchema },
   deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema }), result: CatalogDocumentSchema },
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: z.string().max(16384) }), result: SessionCompositionSchema },
+  listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
+  runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
+  readSession: { input: SessionReadInputSchema, result: z.strictObject({ job: PublicJobSchema, session: SessionReceiptSchema }) },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
   configureServices: { input: ServicesReviewInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },

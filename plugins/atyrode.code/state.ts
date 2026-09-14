@@ -7,9 +7,14 @@ import { CODE_PREFERENCES_EVENT, ConfigurationSchema,
   ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 
+/** Whether this principal reaches the workspace at all. `authorizeTarget` is the refusing
+ * form; a list of workspaces needs the question answered without refusing the whole list. */
+export async function allowsWorkspace(ctx: CodeContext, target: Workspace, write = false): Promise<boolean> {
+  return !(await ctx.outsideScope(target.containerId)) && await ctx.auth.allows(write ? "containers:write" : "containers:read",
+    { kind: "container", containerId: target.containerId });
+}
 export async function authorizeTarget(ctx: CodeContext, target: Workspace, write = false): Promise<void> {
-  if (await ctx.outsideScope(target.containerId) || !(await ctx.auth.allows(write ? "containers:write" : "containers:read",
-    { kind: "container", containerId: target.containerId }))) throw new CodeRefusal("scope_refused");
+  if (!(await allowsWorkspace(ctx, target, write))) throw new CodeRefusal("scope_refused");
 }
 export interface StoredConfiguration {
   key: string;
@@ -68,6 +73,25 @@ export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof 
     }
   }
   return { key, raw, record, workspace, legacyMachineId };
+}
+/**
+ * Every canonical configuration this principal may read, ordered by container. A schema-1
+ * machine record stays recovery data — `readConfiguration` adopts one only when a caller
+ * names it — and a record whose key does not bind its own container refuses the read here as
+ * it does there, because a misbound record is corruption and not a workspace.
+ */
+export async function readableConfigurations(ctx: CodeContext): Promise<Configuration[]> {
+  const records: Configuration[] = [];
+  for (const key of await ctx.storage.keys("configuration/")) {
+    const raw = await ctx.storage.get(key);
+    if (raw === null) continue;
+    const value: unknown = JSON.parse(raw);
+    if (ConfigurationVersionSchema.parse(value).schemaVersion === 1) continue;
+    const record = StoredConfigurationSchema.parse(value);
+    if (key !== `configuration/${digestOf({ containerId: record.containerId })}`) throw new CodeRefusal("invalid_configuration");
+    if (await allowsWorkspace(ctx, record)) records.push(record);
+  }
+  return records.sort((left, right) => left.containerId.localeCompare(right.containerId));
 }
 export function expectRevision(previous: StoredConfiguration, expected: number): void {
   if ((previous.record?.revision ?? 0) !== expected || expected === Number.MAX_SAFE_INTEGER) throw new CodeRefusal("stale_preferences");

@@ -31,6 +31,11 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
   React-free ordinary-client workflow used by both headless callers and the web.
+- `atyrode.code/session.ts`: `listProfiles`, `runSession` and `readSession` —
+  the same composition, posted as an OMP job for a plugin that depends on Code
+  through `ctx.actions.call`. A Code profile is a configured workspace; there is
+  no second profile concept. The job runs on `atyrode.omp.session`, the one-shot
+  sibling of the interactive `atyrode.omp.launch` the review names.
 - `service-setup.ts` and `service-policies.ts`: only Code's optional external
   `suggest` classifier policy. They do not configure OMP runtime services.
 - `pack.ts`: four policy/presentation bundles. There are no Code machine
@@ -43,6 +48,21 @@ exact OMP job receipts and native terminal descriptors rather than parsing
 output or spawning a Code process. `createCodeClient`, `ActionInput`,
 `ActionResult`, the schemas and `actionDoor` in `contract.ts` are the smaller
 policy-only boundary.
+
+A dependent plugin's server reaches those three doors through
+`ctx.actions.call`, under the principal of the request it is answering; Code
+reads the account observation and OMP's defaults itself, so a caller supplies
+only a profile, a destination and a prompt. The profile's `revision` is the
+handle: a composition the operator changed in the generator after a caller read
+it refuses rather than posting quietly.
+
+A refusal on that edge is a rejection, not a value: the host settles a callee
+handler's own `{ refused }` as its `refused` class, so OMP's word survives only
+because Code re-raises a token OMP's published grammar admits
+(`code_omp_review_changed`). The host's own classes keep the callee and the
+class instead — `code_omp_accounts_dependency_unavailable`,
+`code_omp_caller_ceiling` — and a door that threw or was called wrong is
+`code_omp_refused`, never mistaken for something OMP said.
 
 ## Shared state and review boundaries
 
