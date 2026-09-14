@@ -38,6 +38,7 @@
     }
   },
   "include": [
+    "api/**/*",
     "atyrode.code/**/*",
     "domain/**/*",
     "scripts/**/*",
