@@ -15,13 +15,13 @@ type Flow = {
 };
 type PermissionReviewProps = {
   host: HostServices; target?: Target | null; intent: PermissionFeatureId | "setup";
-  label: string; onReady?: () => void; initiallyOpen?: boolean;
+  label: string; onReady?: () => void;
 };
 
 /** This component keeps only choices, exact reviews and native receipts. Closing
  * it never cancels native approval, revokes consent or discards the feature draft. */
-export function PermissionReview({ initiallyOpen = false, ...props }: PermissionReviewProps) {
-  const [open, setOpen] = useState(initiallyOpen);
+export function PermissionReview(props: PermissionReviewProps) {
+  const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(open);
   useEffect(() => {
@@ -40,7 +40,7 @@ export function PermissionReview({ initiallyOpen = false, ...props }: Permission
   </>;
 }
 
-function PermissionDialog({ host, target, intent, onReady, onClose, containerId }: PermissionReviewProps & { containerId: string; onClose: () => void }) {
+function PermissionDialog({ host, target, intent, label, onReady, onClose, containerId }: PermissionReviewProps & { containerId: string; onClose: () => void }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -197,18 +197,20 @@ function PermissionDialog({ host, target, intent, onReady, onClose, containerId 
   const configuration = flow?.configuration;
   return <dialog ref={dialog} className="plugin-atyrode_code plugin-atyrode_code__permission-dialog" aria-labelledby={`${id}-title`} aria-busy={busy}
     onCancel={event => { event.preventDefault(); onClose(); }}>
-    <header className="plugin-atyrode_code__section-heading"><h2 ref={heading} tabIndex={-1} id={`${id}-title`}>Review Code capabilities</h2><button type="button" onClick={onClose} aria-label="Close permission review">Close</button></header>
-    <p>Choices are requests, not grants. Native rights and OMP runtime configuration are separate approvals. Code’s shared catalog and account choices remain separate saves. Not now and closing this dialog never revoke existing access.</p>
+    <header className="plugin-atyrode_code__section-heading"><h2 ref={heading} tabIndex={-1} id={`${id}-title`}>Review: {label}</h2><button type="button" onClick={onClose} aria-label="Close permission review">Close</button></header>
+    <p>Choices are requests, not grants. Native rights and OMP runtime configuration are separate approvals. Code’s shared catalog and account choices remain separate saves. Closing this dialog never revokes existing access.</p>
     {!shownPlan && <p role="status">{message ?? "Reading the headless permission plan…"}</p>}
     {shownPlan?.ownerApprovalRequired && <p role="status" className="plugin-atyrode_code__notice">Native installation and runtime policy require the instance owner’s approval. Workspace edit access cannot approve installations or impersonate the owner. Share these exact requests with the owner if native review refuses your current identity.</p>}
     {!flow && plan && <>
       <fieldset disabled={busy}><legend>Choose independently what to review</legend><div className="plugin-atyrode_code__permission-choices">
         {plan.features.map(feature => <section key={feature.id} data-code-capability={feature.id} className="plugin-atyrode_code__permission-choice">
           <label><input type="checkbox" checked={choices?.includes(feature.id) ?? feature.selected} onChange={event => changeChoice(feature.id, event.target.checked)} />{feature.title}</label>
-          <p>{feature.effect}</p><p className="plugin-atyrode_code__muted">Not now: {feature.deferredEffect}</p>
-          <p>Destination: {feature.destination?.label ?? "not available"}{feature.destination && ` · ${feature.destination.machineId}`}</p>
-          {feature.prerequisites.length > 0 && <p className="plugin-atyrode_code__muted">Prerequisites (already prepared access is kept): {feature.prerequisites.map(id => plan.features.find(row => row.id === id)?.title).join(", ")}. Unselected prerequisites are not approved by this request.</p>}
-          <button type="button" aria-pressed={!(choices?.includes(feature.id) ?? feature.selected)} onClick={() => changeChoice(feature.id, false)}>Not now</button>
+          <p>{feature.effect}</p>
+          <details className="plugin-atyrode_code__details"><summary>Scope and if deferred</summary>
+            <p>Destination: {feature.destination?.label ?? "not available"}{feature.destination && ` · ${feature.destination.machineId}`}</p>
+            <p className="plugin-atyrode_code__muted">{feature.deferredEffect}</p>
+            {feature.prerequisites.length > 0 && <p className="plugin-atyrode_code__muted">Prerequisites (already prepared access is kept): {feature.prerequisites.map(id => plan.features.find(row => row.id === id)?.title).join(", ")}. Unselected prerequisites are not approved by this request.</p>}
+          </details>
         </section>)}
       </div></fieldset>
       {plan.blockers.map(reason => <p key={reason} role="status">{reason}</p>)}

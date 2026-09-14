@@ -35,8 +35,6 @@ export function Onboarding({ host, target, available, visible, settings = false,
   const [accountsContinued, setAccountsContinued] = useState(settings);
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
   const [modelsVisited, setModelsVisited] = useState(false);
-  // Defer the automatic modal until this view is visible, then retain its draft.
-  const [permissionsVisited, setPermissionsVisited] = useState(visible);
   const pending = useRef(false);
   const mounted = useRef(false);
   const destination = useRef({ machineId: machineId, generation: 0 });
@@ -45,7 +43,6 @@ export function Onboarding({ host, target, available, visible, settings = false,
   function destinationCurrent() { return mounted.current && generation === destination.current.generation; }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setServiceReview(null); }, [machineId]);
-  useEffect(() => { if (visible) setPermissionsVisited(true); }, [visible]);
   const writable = canWriteCodeWorkspace(host);
   const serviceConfiguration = useCodeQuery(host, "readServiceConfiguration", record && writable && host.client.selfCaps().includes("*") ? target : null);
   const modelConnection = setup.data?.services.find(service => service.serviceId === "omp" && service.state === "ready");
@@ -81,7 +78,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
       {settings && <button type="button" disabled={busy} onClick={onDone}>Back to profile</button>}
     </header>
     <div className="plugin-atyrode_code__toolbar">
-      {(visible || permissionsVisited) && <PermissionReview key={target ? "destination" : "container"} host={host} target={target} intent="setup" label="Choose or reconsider capabilities" initiallyOpen={visible && !settings && !record} onReady={() => { setSelectedStep(null); refresh(); }} />}
+      {visible && <PermissionReview key={target ? "destination" : "container"} host={host} target={target} intent="setup" label="Choose or reconsider capabilities" onReady={() => { setSelectedStep(null); refresh(); }} />}
       {record && <button type="button" disabled={busy} onClick={() => setSelectedStep(5)}>Edit models without further runtime setup</button>}
     </div>
     {settings ? <nav className="plugin-atyrode_code__toolbar" aria-label="Runtime setup">{[2, 3, 4].map(index => <button key={index} type="button" aria-pressed={step === index} disabled={busy} onClick={() => { setSelectedStep(index); setMessage(null); }}>{steps[index]}</button>)}</nav> :
