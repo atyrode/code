@@ -684,6 +684,7 @@ async function run(): Promise<void> {
     await control(viewerBrowser, "viewer Initialize choices disabled despite real authoring handle", button("Initialize choices"), true);
 
     phase = "writer UI initialization and viewer convergence";
+    const configurationCommitAt = Date.now();
     await click(writerBrowser, button("Initialize choices"));
     await control(writerBrowser, "writer initialized profile enabled", element(profile), false);
     assert.equal(await writerBrowser.evaluate(`${element(profile)}.dataset.action`), "atyrode.code.changeAccounts",
@@ -691,6 +692,8 @@ async function run(): Promise<void> {
     assert.equal(await writerBrowser.evaluate(`${button("Save as preset…")}.dataset.action === undefined`), true,
       "Pure local draft controls do not claim an action door");
     await control(viewerBrowser, "viewer receives initialized read-only profile without reload", element(profile), true);
+    assert(Date.now() - configurationCommitAt < 1_500,
+      "A shared Code configuration event must converge before the fallback polling cadence");
     await until(viewerBrowser, "viewer leaves uninitialized state", `${button("Initialize choices")} === undefined`);
     const initialized = await readConfiguration(server, viewer, target);
     assert.equal(initialized.revision, empty.revision + 1, "Exactly one initialization must be committed");
