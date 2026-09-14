@@ -1,8 +1,8 @@
 {
   "id": "atyrode.code",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "code",
-  "description": "Shared catalogs, routing, account choices and reviewed session composition over the native OMP plugin.",
+  "description": "Shared catalogs, routing, account choices, reviewed session composition and job-shaped session runs over the native OMP plugin.",
   "capabilities": [
     "containers:read",
     "containers:write",
@@ -12,7 +12,7 @@
   ],
   "dataVersion": {
     "major": 2,
-    "minor": 0
+    "minor": 1
   },
   "purges": [
     "storage"
@@ -30,8 +30,8 @@
     ]
   },
   "dependencies": {
-    "atyrode.omp": { "type": "required", "reason": "OMP owns destination readiness, workspace preparation, probing and reviewed session execution." },
-    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns the shared account broker, usage observations and sign-in authority." },
+    "atyrode.omp": { "type": "required", "reason": "OMP owns destination readiness, workspace preparation, probing and reviewed session execution; Code's session doors call its own doors in process." },
+    "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns the shared account broker, usage observations and sign-in authority; Code's session doors read its observation in process." },
     "atyrode.omp.gateway": { "type": "required", "reason": "OMP owns the governed per-destination model gateway." }
   },
   "entry": {

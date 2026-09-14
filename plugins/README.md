@@ -31,6 +31,12 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
   React-free ordinary-client workflow used by both headless callers and the web.
+- `atyrode.code/session.ts`: `listProfiles`, `runSession` and `readSession` —
+  the same composition, posted as an OMP job for a plugin that depends on Code.
+  A Code profile is a configured workspace; there is no second profile concept.
+- `atyrode.code/manifold-next.ts`, `omp-next.ts`: the two declarations ahead of
+  the pins — Manifold's in-process dependency call (manifold#575) and OMP's job
+  session doors (manifold-omp#24). Each file names the pin move that deletes it.
 - `service-setup.ts` and `service-policies.ts`: only Code's optional external
   `suggest` classifier policy. They do not configure OMP runtime services.
 - `pack.ts`: four policy/presentation bundles. There are no Code machine
@@ -43,6 +49,13 @@ exact OMP job receipts and native terminal descriptors rather than parsing
 output or spawning a Code process. `createCodeClient`, `ActionInput`,
 `ActionResult`, the schemas and `actionDoor` in `contract.ts` are the smaller
 policy-only boundary.
+
+A dependent plugin's server reaches those three doors through
+`ctx.actions.call`, under the principal of the request it is answering; Code
+reads the account observation and OMP's defaults itself, so a caller supplies
+only a profile, a destination and a prompt. The profile's `revision` is the
+handle: a composition the operator changed in the generator after a caller read
+it refuses rather than posting quietly.
 
 ## Shared state and review boundaries
 

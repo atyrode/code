@@ -6,16 +6,18 @@ import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
 import { catalogFromObservations, scaffoldInventory } from "../domain/probe.ts";
-import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
+import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
   readConfiguration, requireConfiguration } from "./state.ts";
+import { composeSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true, configureServices: true,
+  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
+  configureServices: true, runSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
 // Only Code's external suggestion policy needs native authority. Policy
@@ -84,27 +86,10 @@ const productHandlers: ProductHandlers = {
   },
   async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory); },
   async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark); },
-  async composeSession(ctx, args) {
-    const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
-    const record = requireConfiguration(previous);
-    if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-    if (args.accounts.observedAt !== null && args.accounts.observedAt > ctx.now()) throw new DomainError("invalid_accounts");
-    const accountPool = selectedAccountPool(args.accounts, record.accounts);
-    const catalog = compileCatalog(record.active.document);
-    const review = reviewCatalog(catalog, record.selection, ctx.now());
-    for (const route of review.routes) {
-      for (const choice of [route.lead, ...route.fallback]) {
-        if (!accountPool[catalog.model(choice.key).provider]?.length) throw new CodeRefusal("account_unavailable");
-      }
-    }
-    const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
-    const facts = { revision: record.revision, review, accountPool, overlay, prompt: args.prompt, planYolo: review.selection.planYolo };
-    const compositionDigest = digestOf({ containerId: record.containerId, revision: record.revision,
-      catalog: record.active.digest, selection: review.selection, routes: review.routes, accountPool,
-      overlay, prompt: args.prompt, planYolo: facts.planYolo });
-    if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return { ...facts, compositionDigest };
-  },
+  composeSession,
+  listProfiles,
+  runSession,
+  readSession,
   async suggest(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
