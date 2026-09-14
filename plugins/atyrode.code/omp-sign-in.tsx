@@ -88,7 +88,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
     {canManageRuntime && setup.error && <p role="status">Sign-in setup could not be read. Open setup details below.</p>}
     <div className="plugin-atyrode_code__account-toolbar">
-      {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
+      {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} data-action="atyrode.omp.accounts.prepareSignIn" disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
       {canManageRuntime && <PermissionReview host={host} intent="accounts" label={state?.canReview && !state.canSignIn ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />}
     </div>
     {message && <p role="status">{message}</p>}

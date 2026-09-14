@@ -42,7 +42,7 @@ export function LegacyWorkspaceAdoption({ host, target, onAdopt }: { host: HostS
   return <details className="plugin-atyrode_code__details">
     <summary>Recover choices from an older machine-scoped workspace</summary>
     <p>Read only this destination’s legacy record, then explicitly adopt its choices for the container. No other machine is searched or merged; the original remains recovery data.</p>
-    <button type="button" disabled={busy} onClick={() => void perform(async () => {
+    <button type="button" data-action="atyrode.code.readConfiguration" disabled={busy} onClick={() => void perform(async () => {
       const value = await callCodeAction(host, "readConfiguration", { containerId: host.containerId!, legacyMachineId: target.machineId });
       if (!mounted.current) return;
       setReview(value);
@@ -50,7 +50,7 @@ export function LegacyWorkspaceAdoption({ host, target, onAdopt }: { host: HostS
     })}>Read this destination’s legacy choices</button>
     {review && (review.legacyMachineId && review.configuration ? <>
       <pre>{JSON.stringify(review.configuration, null, 2)}</pre>
-      <button type="button" disabled={busy || !canWriteCodeWorkspace(host)} onClick={() => void perform(async () => {
+      <button type="button" data-action="atyrode.code.initializeConfiguration" disabled={busy || !canWriteCodeWorkspace(host)} onClick={() => void perform(async () => {
         await callCodeAction(host, "initializeConfiguration", { containerId: host.containerId!, legacyMachineId: review.legacyMachineId!, expectedRevision: review.revision });
         if (mounted.current) onAdopt();
       })}>Adopt these choices for the workspace</button>
@@ -193,7 +193,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       {rows.map(({ account, excluded }) => <article key={`${referenceKey(account.reference)}:${account.credentialId}`} className="plugin-atyrode_code__account-row" data-included={!excluded}>
         <label className="plugin-atyrode_code__account-identity">
           <input type="checkbox" checked={!excluded} aria-label={`Include ${account.reference.provider} ${accountLabel(account)} in ${poolName}${draft ? " draft" : ""}`}
-            disabled={!canEdit || observation?.status !== "fresh" || confirmation !== null || (!draft && selectedPreset !== undefined)}
+            data-action={!draft && !selectedPreset ? "atyrode.code.changeAccounts" : undefined} disabled={!canEdit || observation?.status !== "fresh" || confirmation !== null || (!draft && selectedPreset !== undefined)}
             onChange={event => changeInclusion(account, event.target.checked)} />
           <span className="plugin-atyrode_code__account-identity-text">
             <strong>{accountLabel(account)}</strong>
@@ -245,7 +245,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     <header className="plugin-atyrode_code__account-toolbar plugin-atyrode_code__account-heading">
       <div><h2 id={`${id}-title`}>Account pools</h2><p>Choose the accounts Code can use for your next launch.</p></div>
       <div className="plugin-atyrode_code__account-toolbar">
-        <button type="button" onClick={refresh}>Refresh</button>
+        <button type="button" data-action="atyrode.omp.accounts.accounts" onClick={refresh}>Refresh</button>
         {onDone && <button type="button" disabled={busy || draft !== null || confirmation !== null} onClick={onDone}>Done</button>}
       </div>
     </header>
@@ -258,7 +258,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     {observation === null && !accountFeed.error && <p role="status">Reading instance accounts…</p>}
     {configuration.data && current === null && <div className="plugin-atyrode_code__account-notice">
       <p>Set up account choices for this workspace. Existing credentials are not imported.</p>
-      <button type="button" disabled={!writable || busy} onClick={() => void initialize()}>Initialize choices</button>
+      <button type="button" data-action="atyrode.code.initializeConfiguration" disabled={!writable || busy} onClick={() => void initialize()}>Initialize choices</button>
       {target && <LegacyWorkspaceAdoption key={target.machineId} host={host} target={target} onAdopt={refresh} />}
     </div>}
     <p className="plugin-atyrode_code__account-feedback" role="status" aria-live="polite" data-pending={busy}>{busy ? confirmation ? "Applying native action…" : "Saving account choices…" : message}</p>
@@ -266,7 +266,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       <div className="plugin-atyrode_code__account-pool-heading">
         <div className="plugin-atyrode_code__account-pool-choice">
           <label htmlFor={`${id}-profile`}>Active pool</label>
-          <select ref={activePool} id={`${id}-profile`} value={choices.activePreset ?? ""} disabled={!canEdit || draft !== null || confirmation !== null} onChange={event => void saveChoice({ kind: "activate-preset", id: event.target.value || null })}>
+          <select ref={activePool} id={`${id}-profile`} data-action="atyrode.code.changeAccounts" value={choices.activePreset ?? ""} disabled={!canEdit || draft !== null || confirmation !== null} onChange={event => void saveChoice({ kind: "activate-preset", id: event.target.value || null })}>
             <option value="">Manual</option>
             {choices.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
           </select>
@@ -312,7 +312,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       <footer className="plugin-atyrode_code__account-editor-footer">
         <p>{draft.kind === "create-preset" ? "Saving creates a preset; your active pool stays unchanged." : choices?.activePreset === draft.preset.id ? "Saving updates the active pool for the next launch only." : "Saving updates this preset without switching your active pool."}</p>
         <div className="plugin-atyrode_code__account-toolbar">
-          <button type="submit" className="plugin-atyrode_code__primary-action" disabled={!canEdit || draftStale || draftMissing || confirmation !== null || duplicateName || !draft.preset.name.trim()}>Save preset</button>
+          <button type="submit" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.changeAccounts" disabled={!canEdit || draftStale || draftMissing || confirmation !== null || duplicateName || !draft.preset.name.trim()}>Save preset</button>
           {draftStale && !draftMissing && <button type="button" className="plugin-atyrode_code__account-outline-action" disabled={!canEdit || confirmation !== null} onClick={() => { if (current) setDraft({ ...draft, revision: current.revision }); }}>Keep draft with current choices</button>}
           {draftMissing && <button type="button" className="plugin-atyrode_code__account-outline-action" disabled={!canEdit || confirmation !== null} onClick={() => { if (current) setDraft({ ...draft, kind: "create-preset", preset: { ...draft.preset, id: crypto.randomUUID() }, revision: current.revision }); }}>Keep as new preset</button>}
           <button type="button" disabled={busy} onClick={() => setDraft(null)}>Discard draft</button>
@@ -333,12 +333,12 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
         {preset.disabled.length === 0 ? <p>No saved exclusions.</p> : <ul>{preset.disabled.map(reference => <li key={referenceKey(reference)}><code>{referenceLabel(reference)}</code></li>)}</ul>}
         <div className="plugin-atyrode_code__account-toolbar">
           <button type="button" className="plugin-atyrode_code__account-outline-action" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => setDraft({ kind: "update-preset", preset: { ...preset, disabled: [...preset.disabled] }, revision: current.revision })}>Edit {preset.name}</button>
-          <button type="button" disabled={!canEdit || choices.activePreset === preset.id || draft !== null || confirmation !== null} onClick={() => void saveChoice({ kind: "activate-preset", id: preset.id })}>Use this pool</button>
+          <button type="button" data-action="atyrode.code.changeAccounts" disabled={!canEdit || choices.activePreset === preset.id || draft !== null || confirmation !== null} onClick={() => void saveChoice({ kind: "activate-preset", id: preset.id })}>Use this pool</button>
         </div>
         <details className="plugin-atyrode_code__account-details">
           <summary>Delete preset…</summary>
           <p>Delete “{preset.name}”? If active, its exclusions are kept in Manual. Credentials and running sessions are not changed.</p>
-          <button type="button" className="plugin-atyrode_code__account-danger-action" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => void saveChoice({ kind: "delete-preset", id: preset.id })}>Delete {preset.name}</button>
+          <button type="button" className="plugin-atyrode_code__account-danger-action" data-action="atyrode.code.changeAccounts" disabled={!canEdit || draft !== null || confirmation !== null} onClick={() => void saveChoice({ kind: "delete-preset", id: preset.id })}>Delete {preset.name}</button>
         </details>
       </details>)}
     </details>}
@@ -350,7 +350,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       {!observedConfirmation && <p role="alert">This exact account is no longer observed. Cancel and refresh accounts.</p>}
       {!canConfirm && <p role="status">Current availability or authority is not confirmed. This action is disabled.</p>}
       <div className="plugin-atyrode_code__account-toolbar">
-        <button type="button" className={confirmation.action === "disableCredential" ? "plugin-atyrode_code__account-danger-action" : "plugin-atyrode_code__account-outline-action"} disabled={!canConfirm} onClick={() => void commit()}>Confirm {confirmation.action === "clearAccountBlocks" ? "reset" : "disable"}</button>
+        <button type="button" className={confirmation.action === "disableCredential" ? "plugin-atyrode_code__account-danger-action" : "plugin-atyrode_code__account-outline-action"} data-action={`atyrode.omp.accounts.${confirmation.action}`} disabled={!canConfirm} onClick={() => void commit()}>Confirm {confirmation.action === "clearAccountBlocks" ? "reset" : "disable"}</button>
         <button ref={confirmCancel} type="button" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</button>
       </div>
     </section>}

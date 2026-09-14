@@ -467,6 +467,8 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
       await click(browser, workspaceButton("Setup"));
       await control(browser, "selected folder action resumes without discovery or session readiness", workspaceButton(route.label), false);
       await control(browser, "unselected folder action still requires its own permission", workspaceButton(routes.find(option => option !== route)!.label), true);
+      assert.equal(await browser.evaluate(`${workspaceButton(route.label)}.dataset.action`), "atyrode.omp.prepareWorkspace",
+        "OMP preparation controls name their declared door");
       await click(browser, workspaceButton(route.label));
       await waitFor(() => requested.length === routes.indexOf(route) + 1, timeout, 50);
       await until(browser, "synthetic folder execution refusal is visible", `!!${onboarding}?.querySelector('.plugin-atyrode_code__warning')?.textContent`);
@@ -676,12 +678,18 @@ async function run(): Promise<void> {
     assert(!denied.ok, "Direct viewer initializeConfiguration must not succeed");
     assert.equal(denied.denial.rule, "forbidden", "A valid viewer mutation must fail on authority, not invalid input or readiness");
     assert.equal((await readConfiguration(server, viewer, target)).revision, empty.revision, "Denied initialization must not change shared state");
+    assert.equal(await writerBrowser.evaluate(`${button("Initialize choices")}.dataset.action`), "atyrode.code.initializeConfiguration",
+      "Code mutation controls name their declared door");
     await control(writerBrowser, "writer Initialize choices enabled", button("Initialize choices"), false);
     await control(viewerBrowser, "viewer Initialize choices disabled despite real authoring handle", button("Initialize choices"), true);
 
     phase = "writer UI initialization and viewer convergence";
     await click(writerBrowser, button("Initialize choices"));
     await control(writerBrowser, "writer initialized profile enabled", element(profile), false);
+    assert.equal(await writerBrowser.evaluate(`${element(profile)}.dataset.action`), "atyrode.code.changeAccounts",
+      "Code selection controls name their declared door");
+    assert.equal(await writerBrowser.evaluate(`${button("Save as preset…")}.dataset.action === undefined`), true,
+      "Pure local draft controls do not claim an action door");
     await control(viewerBrowser, "viewer receives initialized read-only profile without reload", element(profile), true);
     await until(viewerBrowser, "viewer leaves uninitialized state", `${button("Initialize choices")} === undefined`);
     const initialized = await readConfiguration(server, viewer, target);
@@ -805,6 +813,8 @@ async function run(): Promise<void> {
     await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${permissionDialog} [data-code-capability] input[type="checkbox"]').length === 7`);
     assert.equal(await writerBrowser.evaluate(`document.querySelectorAll('${permissionDialog} input[type="checkbox"]:checked').length`), 0,
       "Initial setup must not pre-accept permissions");
+    assert.equal(await writerBrowser.evaluate(`${element(permissionDialog)}?.querySelector('button[data-action="engine.jobs.reviewDeployment"]')?.dataset.action`), "engine.jobs.reviewDeployment",
+      "Native review controls name their declared door");
     await click(writerBrowser, capability("workspace-existing"));
     await until(writerBrowser, "workspace-only request keeps its exact operation", `(() => {
       const text = ${displayedPlan}?.textContent;
