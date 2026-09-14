@@ -40,6 +40,9 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   in its life — the receipt is there only once it exited 0 with a sealed
   transcript — and `cancelSession` ends one; both speak only for a job Code's own
   retained provenance names.
+  `runSession`'s optional `inputs` binds sealed outputs of earlier jobs on the
+  same machine to the run's declared inputs (ADR 0044); Code passes them to OMP
+  verbatim, retains them, and refuses a job whose echo names other material.
 - `service-setup.ts` and `service-policies.ts`: only Code's optional external
   `suggest` classifier policy. They do not configure OMP runtime services.
 - `pack.ts`: four policy/presentation bundles. There are no Code machine

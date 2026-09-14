@@ -1,7 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
-  OverlaySchema, RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds,
-  identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
+  JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema,
+  epochMilliseconds, identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
@@ -81,7 +81,13 @@ export const ProfileSchema = z.strictObject({
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchema).max(4096) });
-export const SessionRunInputSchema = RevisionTargetSchema.extend({ prompt: z.string().min(1).max(16384) });
+/** `inputs` binds sealed outputs of earlier jobs on the same machine to the run's declared
+ * inputs (ADR 0044). Code passes them to OMP verbatim and reads none of them: what the
+ * material is, and how the prompt refers to it, is the caller's own business. */
+export const SessionRunInputSchema = RevisionTargetSchema.extend({
+  prompt: z.string().min(1).max(16384),
+  inputs: z.array(JobInputBindingSchema).max(16).optional(),
+});
 export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SessionCancelInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SuggestionSchema = z.strictObject({ revision, serviceRevision: id, selection: SelectionSchema,

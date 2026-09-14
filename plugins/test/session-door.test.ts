@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, SESSION_GUEST_PATH, SESSION_OPERATION_ID,
   SessionInputSchema, actionDoor, actionSchemas as ompActionSchemas,
-  type AccountsObservation, type ActionResult as OmpResult, type SessionReceipt } from "@atyrode/manifold-omp";
+  type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
+  type JobInputBinding, type SessionReceipt } from "@atyrode/manifold-omp";
 import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
   type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { digestOf, type CodeContext } from "../atyrode.code/context.ts";
@@ -65,8 +66,9 @@ interface Fixture {
   calls: string[];
   omp: {
     accounts: AccountsObservation; defaults: OmpResult<"readDefaults">; job: PublicJob; session: SessionReceipt | null;
+    echo: "asked" | JobInputBinding[];
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
-    reviewed: unknown[]; posted: unknown[]; read: unknown[]; cancelled: unknown[];
+    reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
   };
 }
 function fixture(): Fixture {
@@ -76,7 +78,8 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
-    refuse: new Map(), reject: new Map(), during: new Map(), reviewed: [], posted: [], read: [], cancelled: [] };
+    echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
+    reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
     const door = `${plugin}.${action}`;
     calls.push(door);
@@ -100,7 +103,11 @@ function fixture(): Fixture {
         accountPool: value.accountPool } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
-      omp.posted.push(ompActionSchemas.runSession.input.parse(input));
+      const value = ompActionSchemas.runSession.input.parse(input);
+      omp.posted.push(value);
+      // The hub echoes the bindings it admitted on the job it answers.
+      const bindings = omp.echo === "asked" ? value.inputs : omp.echo;
+      omp.job = { ...omp.job, ...(bindings === undefined ? {} : { inputs: bindings }) };
       return omp.job;
     }
     if (door === `${OMP_PLUGIN_ID}.readSession`) {
@@ -231,8 +238,38 @@ describe("the session a dependent plugin posts through Code", () => {
     expect(provenance).toEqual({ door: "runSession", containerId: target.containerId, machineId: target.machineId,
       jobId: f.omp.job.jobId, operationId: SESSION_OPERATION_ID, revision: record.revision,
       compositionDigest: composition.compositionDigest, reviewDigest, defaultsRevision: f.omp.defaults.revision,
-      requester: "writer", postedAt: now });
+      requester: "writer", postedAt: now, inputs: [] });
     expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
+  });
+
+  test("a bound material input crosses Code verbatim, is retained, and is fenced against the job's echo", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Read the material" };
+    const inputs: JobInputBinding[] = [{ name: "material", from: { jobId: "job-earlier", output: "session" } }];
+    const posted = await accepted(f, "runSession", { ...input, inputs });
+    // Verbatim: OMP is handed the caller's own bindings, and the job echoes them back.
+    expect(f.omp.posted[0]?.inputs).toEqual(inputs);
+    expect(JSON.parse(f.store.get(`sessions/${digestOf(workspace)}/${posted.jobId}`)!))
+      .toMatchObject({ inputs });
+    // A run with no material asks for none rather than for an empty list of them.
+    const bare = fixture();
+    const saved = await configured(bare);
+    const without = await accepted(bare, "runSession", { ...input, expectedRevision: saved.revision });
+    expect(bare.omp.posted[0]).not.toHaveProperty("inputs");
+    expect(without.inputs).toBeUndefined();
+    expect(JSON.parse(bare.store.get(`sessions/${digestOf(workspace)}/${without.jobId}`)!))
+      .toMatchObject({ inputs: [] });
+    // A job handed different material is not the job Code asked for, and is not vouched for.
+    const fenced = fixture();
+    const current = await configured(fenced);
+    fenced.omp.echo = [{ name: "material", from: { jobId: "job-somebody-elses", output: "session" } }];
+    expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
+      .toEqual({ refused: "code_omp_review_changed" });
+    expect(fenced.store.has(`sessions/${digestOf(workspace)}/${fenced.omp.job.jobId}`)).toBe(false);
+    fenced.omp.echo = [];
+    expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
+      .toEqual({ refused: "code_omp_review_changed" });
   });
 
   test("a stale revision, an empty prompt, and choices or defaults that move mid-post never reach OMP's job door", async () => {

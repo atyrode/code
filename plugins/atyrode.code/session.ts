@@ -6,9 +6,10 @@
  * defaults, the composition the generator's dials describe. The caller never composes a
  * session, never chooses an account and never reaches OMP itself.
  */
-import { OMP_PLUGIN_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal, actionDoor as ompDoor,
-  actionSchemas as ompActionSchemas, epochMilliseconds, type AccountsObservation,
-  type ActionInput as OmpInput, type ActionResult as OmpResult, type OmpAction } from "@atyrode/manifold-omp";
+import { JobInputBindingSchema, OMP_PLUGIN_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal,
+  actionDoor as ompDoor, actionSchemas as ompActionSchemas, epochMilliseconds,
+  type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
+  type OmpAction } from "@atyrode/manifold-omp";
 import type { ActionCallRefusal } from "@manifold/protocol";
 import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
@@ -29,6 +30,8 @@ const SessionProvenanceSchema = z.strictObject({
   containerId: id, machineId: id, jobId: id, operationId: id,
   revision: revision.positive(), compositionDigest: digest, reviewDigest: digest,
   defaultsRevision: revision, requester: id, postedAt: epochMilliseconds,
+  // A session retained before bound inputs existed has none, which is what an absent key is.
+  inputs: z.array(JobInputBindingSchema).max(16).default([]),
 });
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
 
@@ -214,13 +217,19 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const latest = await observedSession(ctx, args);
   if (latest.composition.compositionDigest !== first.composition.compositionDigest ||
     latest.input.expectedDefaultsRevision !== first.input.expectedDefaultsRevision) throw new CodeRefusal("composition_changed");
-  const job = await ompCall(ctx, "runSession", { ...latest.input, reviewDigest: review.reviewDigest });
-  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== SESSION_OPERATION_ID)
+  // The bindings are the caller's and cross Code untouched: absent stays absent, so a run
+  // with no material asks for none rather than for an empty list of them.
+  const bound = args.inputs ?? [];
+  const job = await ompCall(ctx, "runSession", { ...latest.input, reviewDigest: review.reviewDigest,
+    ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
+  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== SESSION_OPERATION_ID ||
+    digestOf(job.inputs ?? []) !== digestOf(bound))
     throw new CodeRefusal("omp_review_changed");
   const provenance = SessionProvenanceSchema.parse({ door: "runSession", containerId: args.containerId,
     machineId: args.machineId, jobId: job.jobId, operationId: job.operationId, revision: latest.composition.revision,
     compositionDigest: latest.composition.compositionDigest, reviewDigest: review.reviewDigest,
-    defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id, postedAt: ctx.now() });
+    defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id,
+    postedAt: ctx.now(), inputs: bound });
   // OMP mints the job id, so retention is the step between the post and the answer rather than
   // before it. A job whose provenance did not commit is one Code will not speak for; it is
   // still OMP's job, and OMP's own retained provenance still reads it.
