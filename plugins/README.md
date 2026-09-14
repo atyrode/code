@@ -32,11 +32,10 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
   React-free ordinary-client workflow used by both headless callers and the web.
 - `atyrode.code/session.ts`: `listProfiles`, `runSession` and `readSession` —
-  the same composition, posted as an OMP job for a plugin that depends on Code.
-  A Code profile is a configured workspace; there is no second profile concept.
-- `atyrode.code/manifold-next.ts`, `omp-next.ts`: the two declarations ahead of
-  the pins — Manifold's in-process dependency call (manifold#575) and OMP's job
-  session doors (manifold-omp#24). Each file names the pin move that deletes it.
+  the same composition, posted as an OMP job for a plugin that depends on Code
+  through `ctx.actions.call`. A Code profile is a configured workspace; there is
+  no second profile concept. The job runs on `atyrode.omp.session`, the one-shot
+  sibling of the interactive `atyrode.omp.launch` the review names.
 - `service-setup.ts` and `service-policies.ts`: only Code's optional external
   `suggest` classifier policy. They do not configure OMP runtime services.
 - `pack.ts`: four policy/presentation bundles. There are no Code machine

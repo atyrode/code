@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
-import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, SessionInputSchema, actionDoor,
-  type AccountsObservation, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { actionSchemas, sessionInput, type ActionInput, type ActionResult, type CodeAction,
-  type Target } from "../atyrode.code/contract.ts";
-import { CODE_PLUGIN_ID } from "../atyrode.code/contract.ts";
+import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, SESSION_GUEST_PATH, SESSION_OPERATION_ID,
+  SessionInputSchema, actionDoor, actionSchemas as ompActionSchemas,
+  type AccountsObservation, type ActionResult as OmpResult, type SessionReceipt } from "@atyrode/manifold-omp";
+import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
+  type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { digestOf, type CodeContext } from "../atyrode.code/context.ts";
-import { OmpReadSessionInputSchema, OmpRunSessionInputSchema, type SessionReceipt } from "../atyrode.code/omp-next.ts";
 import { handlers } from "../atyrode.code/server.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 
@@ -34,7 +33,7 @@ function observation(): AccountsObservation {
 }
 function job(jobId = "job-a"): PublicJob {
   return PublicJobSchema.parse({
-    jobId, machineId: target.machineId, operationId: LAUNCH_OPERATION_ID, pluginId: OMP_PLUGIN_ID,
+    jobId, machineId: target.machineId, operationId: SESSION_OPERATION_ID, pluginId: OMP_PLUGIN_ID,
     installationRevision: "native-installation", artifactSha256: "c".repeat(64), inputDigest: "e".repeat(64),
     resourceBindingDigest: "d".repeat(64), state: "started", nextInputSeq: null, result: null,
     authority: { origin: { kind: "action", traceId: "trace-1", door: `${CODE_PLUGIN_ID}.runSession` },
@@ -43,7 +42,7 @@ function job(jobId = "job-a"): PublicJob {
 }
 function receipt(): SessionReceipt {
   return { sessionId: "01a0a008-88ed-7186-b28f-6356df68f8ed", model: "anthropic/native-model-3",
-    sessionPath: "/home/job/omp-sessions/job-a/2026-09-14T13-08-29-037Z_01a0a008-88ed-7186-b28f-6356df68f8ed.jsonl",
+    sessionPath: `${SESSION_GUEST_PATH}/2026-09-14T13-08-29-037Z_01a0a008-88ed-7186-b28f-6356df68f8ed.jsonl`,
     finalMessage: "The change is in place.", usage: { input: 91, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.004 }, exitCode: 0 };
 }
 
@@ -58,7 +57,7 @@ interface Fixture {
     reviewed: unknown[]; posted: unknown[]; read: unknown[];
   };
 }
-function fixture(hub = true): Fixture {
+function fixture(): Fixture {
   const store = new Map<string, string>();
   const access = { readable: new Set(["container-a", "container-b", "container-c"]),
     writable: new Set(["container-a", "container-b", "container-c"]), containerScope: null as string | null };
@@ -89,11 +88,11 @@ function fixture(hub = true): Fixture {
         accountPool: value.accountPool } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
-      omp.posted.push(OmpRunSessionInputSchema.parse(input));
+      omp.posted.push(ompActionSchemas.runSession.input.parse(input));
       return omp.job;
     }
     if (door === `${OMP_PLUGIN_ID}.readSession`) {
-      omp.read.push(OmpReadSessionInputSchema.parse(input));
+      omp.read.push(ompActionSchemas.readSession.input.parse(input));
       return { job: omp.job, session: omp.session };
     }
     throw new Error(`unknown_action: ${CODE_PLUGIN_ID} -> ${door}`);
@@ -126,7 +125,7 @@ function fixture(hub = true): Fixture {
       describeInstance: unavailable, readInstance: unavailable, listInstances: unavailable,
       readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable,
     },
-    ...(hub ? { actions: { call } } : {}),
+    actions: { call },
   };
   return { ctx, access, store, calls, omp };
 }
@@ -189,7 +188,7 @@ describe("the session a dependent plugin posts through Code", () => {
     expect(f.omp.reviewed).toEqual([sessionInput(target, composition, f.omp.defaults.revision)]);
     const provenance: unknown = JSON.parse(f.store.get(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`)!);
     expect(provenance).toEqual({ door: "runSession", containerId: target.containerId, machineId: target.machineId,
-      jobId: f.omp.job.jobId, operationId: LAUNCH_OPERATION_ID, revision: record.revision,
+      jobId: f.omp.job.jobId, operationId: SESSION_OPERATION_ID, revision: record.revision,
       compositionDigest: composition.compositionDigest, reviewDigest, defaultsRevision: f.omp.defaults.revision,
       requester: "writer", postedAt: now });
     expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
@@ -213,7 +212,7 @@ describe("the session a dependent plugin posts through Code", () => {
     expect(f.omp.posted).toEqual([]);
   });
 
-  test("a review OMP no longer stands behind, and a job it re-identified, are never vouched for", async () => {
+  test("a review OMP no longer stands behind, an interactive placement and a re-identified job are never vouched for", async () => {
     const f = fixture();
     const record = await configured(f);
     const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
@@ -222,21 +221,20 @@ describe("the session a dependent plugin posts through Code", () => {
     f.omp.refuse.clear();
     f.omp.job = { ...job(), machineId: "machine-b" };
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    // The review names `atyrode.omp.launch` because a session's content is placement-agnostic;
+    // a job on that interactive operation is a terminal's, and Code does not speak for it.
+    f.omp.job = { ...job(), operationId: LAUNCH_OPERATION_ID };
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
     expect(f.store.has(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`)).toBe(false);
     f.omp.job = job();
     f.store.set(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`, "retained by an earlier run");
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_session_conflict" });
   });
 
-  test("only OMP's own word survives the edge: the hub's age, its classes and a broken door are named apart", async () => {
-    const f = fixture(false);
-    const record = await configured(f);
-    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
-    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_hub_too_old" });
-    expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_session_unknown" });
+  test("only OMP's own word survives the edge: the host's classes and a broken door are named apart", async () => {
     const live = fixture();
     const saved = await configured(live);
-    const posted = { ...input, expectedRevision: saved.revision };
+    const posted = { ...target, expectedRevision: saved.revision, prompt: "Implement the change" };
     const refusals: Readonly<Record<string, string>> = {
       [`dependency_unavailable: ${CODE_PLUGIN_ID} -> atyrode.omp.accounts`]: "code_omp_accounts_dependency_unavailable",
       [`caller_ceiling: ${CODE_PLUGIN_ID} -> ${accountsDoor} (services:read)`]: "code_omp_accounts_caller_ceiling",

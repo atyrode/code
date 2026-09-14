@@ -1,11 +1,11 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, OverlaySchema,
-  RuntimeAccountPoolSchema, ThinkingLevelSchema, epochMilliseconds, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
+  RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema, epochMilliseconds, modelId,
+  type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
 import { CatalogDraftSchema } from "../domain/probe.ts";
-import { OmpSessionSchema } from "./omp-next.ts";
 
 export const CODE_PLUGIN_ID = "atyrode.code";
 export const GENERATOR_PLUGIN_ID = "atyrode.code.generator";
@@ -117,7 +117,7 @@ export const rootActionSchemas = {
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: z.string().max(16384) }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
-  readSession: { input: SessionReadInputSchema, result: OmpSessionSchema },
+  readSession: { input: SessionReadInputSchema, result: z.strictObject({ job: PublicJobSchema, session: SessionReceiptSchema }) },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
   configureServices: { input: ServicesReviewInputSchema.extend({ reviewDigest: digest }), result: ServiceConfigurationSchema },

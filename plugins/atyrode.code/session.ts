@@ -6,9 +6,10 @@
  * defaults, the composition the generator's dials describe. The caller never composes a
  * session, never chooses an account and never reaches OMP itself.
  */
-import { ACCOUNTS_PLUGIN_ID, AccountsObservationSchema, DefaultsSchema, OMP_PLUGIN_ID,
-  RefusalSchema as OmpRefusalSchema, SessionReviewSchema, epochMilliseconds } from "@atyrode/manifold-omp";
-import { PublicJobSchema } from "@manifold/protocol";
+import { OMP_PLUGIN_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal, actionDoor as ompDoor,
+  actionSchemas as ompActionSchemas, epochMilliseconds, type ActionInput as OmpInput,
+  type ActionResult as OmpResult, type OmpAction } from "@atyrode/manifold-omp";
+import type { ActionCallRefusal } from "@manifold/protocol";
 import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
@@ -17,9 +18,6 @@ import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
 import { digest, id, revision, sessionInput, type ActionInput, type ActionResult,
   type Profile, type SessionComposition } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
-import { dependencyCall } from "./manifold-next.ts";
-import { OmpReadSessionInputSchema, OmpRunSessionInputSchema, OmpSessionSchema,
-  READ_SESSION_ACTION, RUN_SESSION_ACTION } from "./omp-next.ts";
 import { authorizeTarget, expectRevision, readConfiguration,
   readableConfigurations, requireConfiguration } from "./state.ts";
 
@@ -61,21 +59,52 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
   return { ...facts, compositionDigest };
 }
 
-/** One door of one OMP plugin. A refusal is thrown at the edge, never answered as a value, and
- * OMP's own grammar is what carries its word through: `omp_review_changed` reads
- * `code_omp_review_changed`, so a caller learns which side refused and why. */
-async function ompReply<T>(ctx: CodeContext, plugin: string, action: string, input: unknown, result: z.ZodType<T>): Promise<T> {
-  const reply = await dependencyCall(ctx, { plugin, action, input,
-    refusals: detail => OmpRefusalSchema.safeParse({ refused: detail }).success });
-  const parsed = result.safeParse(reply);
+/** The host's classes for a call onto a declared dependency (ADR 0041), in the order it walks
+ * them. A record over the published union, so a class Manifold adds or retires is a compile
+ * error here rather than a silent `refused`. */
+const callRefusals: Readonly<Record<ActionCallRefusal, true>> = {
+  dispatch_cycle: true, dispatch_depth: true, undeclared_dependency: true, dependency_unavailable: true,
+  unknown_action: true, caller_ceiling: true, capability: true, refused: true,
+};
+/**
+ * One door of one OMP plugin, under the principal of the request Code is answering. Which OMP
+ * plugin publishes the door is OMP's own mapping: `actionDoor` spells `${plugin}.${action}`,
+ * so Code never repeats which of the family owns what.
+ *
+ * A refusal is a REJECTION, never a value: the host settles a callee handler's own
+ * `{ refused }` as its `refused` class and throws `${class}: ${caller} -> ${door} (${detail})`
+ * at this edge. OMP's word survives because a `refused` detail that OMP's OWN published
+ * grammar admits is re-raised whole — `omp_review_changed` reads `code_omp_review_changed`.
+ * A door that threw (`failed`) or was called wrong (`invalid_args: …`) is the host's account
+ * of the edge and stays `code_omp_refused`; every other class keeps the callee and the class,
+ * so a withheld install grant reads `code_omp_caller_ceiling` rather than a bare refusal.
+ */
+async function ompCall<K extends OmpAction>(ctx: CodeContext, action: K, input: OmpInput<K>): Promise<OmpResult<K>> {
+  const schema = ompActionSchemas[action];
+  const door = ompDoor(action);
+  const plugin = door.slice(0, door.length - action.length - 1);
+  const args = schema.input.parse(input);
+  let reply: unknown;
+  try {
+    reply = await ctx.actions.call({ plugin, action, input: args });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const separator = message.indexOf(": ");
+    const named = separator === -1 ? message : message.slice(0, separator);
+    const refused = Object.hasOwn(callRefusals, named) ? named : "refused";
+    const detail = refused === "refused" ? /\(([^()]*)\)$/.exec(message)?.[1] : undefined;
+    if (detail !== undefined && ompRefusal.safeParse({ refused: detail }).success) throw new CodeRefusal(detail);
+    throw new CodeRefusal(`${plugin.replace(/^atyrode\./, "").replace(/\./g, "_")}_${refused}`);
+  }
+  const parsed = schema.result.safeParse(reply);
   if (!parsed.success) throw new CodeRefusal("invalid_omp_result");
-  return parsed.data;
+  return parsed.data as OmpResult<K>;
 }
 /** The composition and the OMP input it produces, both re-observed from scratch: the account
  * observation and OMP's defaults are facts of the moment, not of the caller's request. */
 async function observedSession(ctx: CodeContext, args: ActionInput<"runSession">) {
-  const accounts = await ompReply(ctx, ACCOUNTS_PLUGIN_ID, "accounts", {}, AccountsObservationSchema);
-  const defaults = await ompReply(ctx, OMP_PLUGIN_ID, "readDefaults", {}, DefaultsSchema);
+  const accounts = await ompCall(ctx, "accounts", {});
+  const defaults = await ompCall(ctx, "readDefaults", {});
   const composition = await composeSession(ctx, { containerId: args.containerId,
     expectedRevision: args.expectedRevision, accounts, prompt: args.prompt });
   return { composition, input: sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision) };
@@ -134,21 +163,25 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
  * compose, review at OMP, compose again, and refuse rather than post when the workspace, the
  * accounts or OMP's defaults moved between the two. The prompt is required because a job-shaped
  * session is one-shot — without one the run would never end.
+ *
+ * The review covers the session's CONTENT and names `atyrode.omp.launch`, the interactive
+ * operation, because content is placement-agnostic; the job runs on `atyrode.omp.session`, the
+ * one-shot sibling OMP's own door pins across both of its preparations. So the job Code
+ * vouches for is checked against that placement, never against the reviewed operation.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
   // job is retained under Code's own storage before its handle is answered.
   await authorizeTarget(ctx, args, true);
   const first = await observedSession(ctx, args);
-  const review = await ompReply(ctx, OMP_PLUGIN_ID, "reviewSession", first.input, SessionReviewSchema);
+  const review = await ompCall(ctx, "reviewSession", first.input);
   if (review.destination.containerId !== args.containerId || review.destination.machineId !== args.machineId ||
     review.defaultsRevision !== first.input.expectedDefaultsRevision) throw new CodeRefusal("omp_review_changed");
   const latest = await observedSession(ctx, args);
   if (latest.composition.compositionDigest !== first.composition.compositionDigest ||
     latest.input.expectedDefaultsRevision !== first.input.expectedDefaultsRevision) throw new CodeRefusal("composition_changed");
-  const job = await ompReply(ctx, OMP_PLUGIN_ID, RUN_SESSION_ACTION,
-    OmpRunSessionInputSchema.parse({ ...latest.input, reviewDigest: review.reviewDigest }), PublicJobSchema);
-  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== review.operationId)
+  const job = await ompCall(ctx, "runSession", { ...latest.input, reviewDigest: review.reviewDigest });
+  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== SESSION_OPERATION_ID)
     throw new CodeRefusal("omp_review_changed");
   const provenance = SessionProvenanceSchema.parse({ door: "runSession", containerId: args.containerId,
     machineId: args.machineId, jobId: job.jobId, operationId: job.operationId, revision: latest.composition.revision,
@@ -169,8 +202,8 @@ export async function readSession(ctx: CodeContext, args: ActionInput<"readSessi
   if (raw === null) throw new CodeRefusal("session_unknown");
   const provenance = SessionProvenanceSchema.parse(JSON.parse(raw));
   if (provenance.containerId !== args.containerId || provenance.jobId !== args.jobId) throw new CodeRefusal("session_unknown");
-  const reply = await ompReply(ctx, OMP_PLUGIN_ID, READ_SESSION_ACTION, OmpReadSessionInputSchema.parse({
-    containerId: provenance.containerId, machineId: provenance.machineId, jobId: provenance.jobId }), OmpSessionSchema);
+  const reply = await ompCall(ctx, "readSession", { containerId: provenance.containerId,
+    machineId: provenance.machineId, jobId: provenance.jobId });
   if (reply.job.jobId !== provenance.jobId || reply.job.machineId !== provenance.machineId ||
     reply.job.pluginId !== OMP_PLUGIN_ID || reply.job.operationId !== provenance.operationId)
     throw new CodeRefusal("omp_review_changed");

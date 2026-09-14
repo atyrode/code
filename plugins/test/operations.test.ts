@@ -84,6 +84,8 @@ function fixture(isRoot = false): Fixture {
       describeInstance: unavailable, readInstance: unavailable, listInstances: unavailable,
       readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable,
     },
+    // No configuration door reaches another plugin; one that tried would fail here by name.
+    actions: { call: unavailable },
   };
   return { ctx, access, store,
     holdTwoReads() {
