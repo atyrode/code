@@ -7,7 +7,7 @@ import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { familyPolicy, providerPolicy } from "../../domain/providers.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type Target } from "../contract.ts";
-import { LAUNCH_OPERATION_ID } from "@atyrode/manifold-omp";
+import { LAUNCH_OPERATION_ID, PROMPT_MAX_BYTES } from "@atyrode/manifold-omp";
 import type { SessionReview } from "../workflow.ts";
 import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery, useCodeTarget } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
@@ -200,7 +200,9 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
             <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ composition: preview.composition, native: preview.native }, null, 2)}</pre></details>
           </div>}
           <label htmlFor={`${id}-prompt`}>First prompt <span className="plugin-atyrode_code__dim">optional</span></label>
-          <textarea id={`${id}-prompt`} rows={2} maxLength={16384} value={prompt} placeholder="What should this session work on?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
+          {/* Characters, because a textarea counts characters: the door's rule is bytes and
+              refuses a multibyte prompt over it by name. */}
+          <textarea id={`${id}-prompt`} rows={2} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should this session work on?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
           {!launchReady && <PermissionReview host={host} target={target} intent="session" label="Review runtime setup" onReady={refresh} />}
           {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
         </section>

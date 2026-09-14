@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
-import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, SESSION_GUEST_PATH, SESSION_OPERATION_ID,
-  SessionInputSchema, actionDoor, actionSchemas as ompActionSchemas,
+import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PATH,
+  SESSION_OPERATION_ID, SessionInputSchema, actionDoor, actionSchemas as ompActionSchemas,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type JobInputBinding, type SessionReceipt } from "@atyrode/manifold-omp";
 import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
@@ -270,6 +270,28 @@ describe("the session a dependent plugin posts through Code", () => {
     fenced.omp.echo = [];
     expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
       .toEqual({ refused: "code_omp_review_changed" });
+  });
+
+  test("the prompt a run carries is bounded by OMP's bytes, at Code's door", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision };
+    // Exactly the bound in ASCII is one byte per character, and it reaches OMP whole.
+    const full = "x".repeat(PROMPT_MAX_BYTES);
+    const posted = await accepted(f, "runSession", { ...input, prompt: full });
+    expect(posted).toEqual(f.omp.job);
+    expect(f.omp.posted[0]?.prompt).toBe(full);
+    // One byte over is refused here, before OMP is asked anything at all.
+    const over = fixture();
+    const saved = await configured(over);
+    expect(await invoke(over, "runSession", { ...input, expectedRevision: saved.revision, prompt: `${full}x` }))
+      .toEqual({ refused: "code_invalid_request" });
+    // Bytes, not characters: three-byte UTF-8 passes a character count three times over.
+    const wide = "あ".repeat(Math.ceil((PROMPT_MAX_BYTES + 1) / 3));
+    expect(wide.length).toBeLessThan(PROMPT_MAX_BYTES);
+    expect(await invoke(over, "runSession", { ...input, expectedRevision: saved.revision, prompt: wide }))
+      .toEqual({ refused: "code_invalid_request" });
+    expect(over.calls).toEqual([]);
   });
 
   test("a stale revision, an empty prompt, and choices or defaults that move mid-post never reach OMP's job door", async () => {

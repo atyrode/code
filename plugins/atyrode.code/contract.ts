@@ -1,7 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
-  JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionReceiptSchema, ThinkingLevelSchema,
-  epochMilliseconds, identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
+  JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
+  ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
@@ -38,9 +38,13 @@ export const CatalogReviewSchema = z.strictObject({
   revision, source: z.enum(["active", "draft"]), catalogDigest: digest, review: ReviewSchema, reviewDigest: digest,
 });
 export type CatalogReview = z.infer<typeof CatalogReviewSchema>;
+/** The prompt bound is OMP's, in bytes, because the prompt reaches the machine as one entry
+ * of the job input map the hub bounds (`PROMPT_MAX_BYTES`, 44 KiB). Code takes the schema
+ * itself rather than the number, so the two can never disagree. */
+const sessionPrompt = SessionInputSchema.shape.prompt;
 export const SessionCompositionSchema = z.strictObject({
   revision, review: ReviewSchema, accountPool: RuntimeAccountPoolSchema, overlay: OverlaySchema,
-  prompt: z.string().max(16384), planYolo: z.boolean(), compositionDigest: digest,
+  prompt: sessionPrompt, planYolo: z.boolean(), compositionDigest: digest,
 });
 export type SessionComposition = z.infer<typeof SessionCompositionSchema>;
 /** OMP's reviewed session input, composed from one Code composition and OMP's own defaults.
@@ -85,7 +89,8 @@ export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchem
  * inputs (ADR 0044). Code passes them to OMP verbatim and reads none of them: what the
  * material is, and how the prompt refers to it, is the caller's own business. */
 export const SessionRunInputSchema = RevisionTargetSchema.extend({
-  prompt: z.string().min(1).max(16384),
+  // A one-shot needs a prompt; how long it may be is OMP's rule, not a number restated here.
+  prompt: sessionPrompt.refine(value => value.length > 0, "a one-shot session needs a prompt"),
   inputs: z.array(JobInputBindingSchema).max(16).optional(),
 });
 export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
@@ -138,7 +143,7 @@ export const rootActionSchemas = {
     result: z.strictObject({ revision, accountPool: RuntimeAccountPoolSchema }) },
   draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema }), result: CatalogDraftSchema },
   deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema }), result: CatalogDocumentSchema },
-  composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: z.string().max(16384) }), result: SessionCompositionSchema },
+  composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: sessionPrompt }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
   // The receipt exists only once a run exited 0 and its transcript was sealed; a running,
