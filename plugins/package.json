@@ -6,7 +6,7 @@
     "check": "tsc -p .",
     "test": "bun test",
     "pack": "./pack.sh",
-    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts --hardened .integration/omp/plugins/dist/*.manifold-plugin.json && bun ../../manifold/packages/plugin-kit/src/verify.ts .integration/omp/plugins/dist/*.manifold-plugin.json dist/*.manifold-plugin.json && bun run verify:browser",
+    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts --hardened .integration/omp/plugins/dist/*.manifold-plugin.json dist/atyrode.code.manifold-plugin.json && bun ../../manifold/packages/plugin-kit/src/verify.ts .integration/omp/plugins/dist/*.manifold-plugin.json dist/*.manifold-plugin.json && bun run verify:browser",
     "verify:browser": "bun scripts/verify-browser.ts",
     "prepare:integration": "bun scripts/prepare-integration.ts",
     "dev": "bun dev.ts"

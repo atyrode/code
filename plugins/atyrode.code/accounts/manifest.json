@@ -1,7 +1,7 @@
 {
   "id": "atyrode.code.accounts",
-  "version": "0.3.0",
-  "title": "code accounts",
+  "version": "0.3.1",
+  "title": "Accounts",
   "description": "Shared account-pool choices and an ordinary client of OMP account observation and sign-in authority.",
   "capabilities": [],
   "contributes": {
