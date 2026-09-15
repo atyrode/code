@@ -1,7 +1,7 @@
 {
   "id": "atyrode.code.usage",
-  "version": "0.3.0",
-  "title": "code usage",
+  "version": "0.3.1",
+  "title": "Usage",
   "description": "Shared OMP usage observations projected through the workspace's Code account choices.",
   "capabilities": [],
   "contributes": {

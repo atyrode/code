@@ -1,7 +1,8 @@
-import { defineAction } from "@manifold/plugin";
-import type { Cap } from "@manifold/protocol";
+import { defineServerAction, defineServerPlugin } from "@manifold/plugin-kit/server";
+import { PluginManifestSchema, type Cap } from "@manifold/protocol";
 import { ProbeError } from "@atyrode/manifold-omp";
 import { z } from "zod";
+import manifestJson from "./manifest.json";
 import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
@@ -117,10 +118,17 @@ export const handlers = Object.fromEntries((Object.keys(rootActionSchemas) as Ro
     } catch (error) { return refusal(error); }
   },
 ]));
-export default { actions: (Object.keys(rootActionSchemas) as RootAction[]).map(name => defineAction({
-  name, title: name.replace(/([A-Z])/g, " $1"),
-  caps: pure[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
-  ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
-  scope: pure[name] ? "workspace" : "container", trace: "opaque",
-  input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
-})), handlers, migrations: [configurationMigration] };
+const plugin = {
+  manifest: PluginManifestSchema.parse(manifestJson),
+  actions: (Object.keys(rootActionSchemas) as RootAction[]).map(name => defineServerAction({
+    name, title: name.replace(/([A-Z])/g, " $1"),
+    caps: pure[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
+    ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
+    scope: pure[name] ? "workspace" : "container", trace: "opaque",
+    input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
+  })),
+  handlers,
+  migrations: [configurationMigration],
+};
+defineServerPlugin(plugin);
+export default plugin;
