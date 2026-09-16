@@ -5,7 +5,7 @@ import {
   type Estimates, type Lane, type ModelChoice, type Route, type Selection,
 } from "./contracts.ts";
 import type { CompiledCatalog } from "./catalog.ts";
-import { advisorFamilyOrder, familyPolicy, providerPolicy } from "./providers.ts";
+import { advisorFamilyOrder, familyPolicy, orderedFamilies, providerPolicy } from "./providers.ts";
 
 export const ReviewSchema = z.strictObject({
   selection: SelectionSchema,
@@ -44,7 +44,7 @@ function lanesFor(catalog: CompiledCatalog): Lane[] {
   const lanes: Lane[] = [];
   for (const family of catalog.families) {
     lanes.push({ kind: "provider", family, blend: "only" });
-    if (catalog.families.length > 1) lanes.push({ kind: "provider", family, blend: "led" });
+    if (catalog.families.length > 1 && familyPolicy(family).crossTo !== null) lanes.push({ kind: "provider", family, blend: "led" });
   }
   if (catalog.families.includes("openai") && catalog.families.includes("anthropic")) lanes.push({ kind: "mixed" });
   return lanes;
@@ -67,7 +67,7 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   const available = {
     lanes, capabilities,
     spark: special !== undefined && hosted.includes(catalog.family(special)),
-    priority: hosted.some(family => familyPolicy(family)!.priority !== undefined),
+    priority: hosted.some(family => familyPolicy(family).priority !== undefined),
   };
   if (!capabilities.includes(selection.capability) || (selection.spark && !available.spark) ||
       (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
@@ -93,8 +93,8 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
   const extreme = thinking === "minimal" || thinking === "max";
   const special = catalog.special("spark");
   const crossingFamily = (family: string): string | undefined => {
-    const preferred = familyPolicy(family)!.crossTo;
-    return catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
+    const preferred = familyPolicy(family).crossTo;
+    return preferred === null ? undefined : catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
   };
   const sibling = (key: string): string | undefined => {
     const model = catalog.model(key);
@@ -127,7 +127,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
     let fallbackLevels: ThinkingLevel[] | undefined;
     if (role === "advisor") {
       if (selection.advisor === "off") continue;
-      const family = pure ? primary : advisorFamilyOrder.find(candidate => candidate !== primary && catalog.families.includes(candidate));
+      const family = pure ? primary : orderedFamilies(catalog.families, advisorFamilyOrder).find(candidate => candidate !== primary);
       if (!family) throw new DomainError("invalid_selection");
       const tiers = selection.advisor === "glance" ? [1] : selection.advisor === "review" ? [2, 1] : [3, 2, 1];
       const levels: ThinkingLevel[] = selection.advisor === "glance" ? ["low"] : selection.advisor === "review" ? ["medium", "low"] : ["high", "high", "low"];
@@ -196,7 +196,7 @@ function estimate(catalog: CompiledCatalog, selection: Selection, routes: readon
     ? [selection.lane.family] : catalog.families;
   for (const route of routes) {
     const model = catalog.model(route.lead.key);
-    const policy = providerPolicy(model.provider)!;
+    const policy = providerPolicy(model.provider);
     const weight = weights[route.role as Role];
     const priority = selection.priority && hosted.includes(policy.family) ? policy.priority : undefined;
     const offPeak = policy.offPeak;
@@ -275,7 +275,7 @@ export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, ro
     const families = selection.lane.kind === "provider" && selection.lane.blend === "only" ? [selection.lane.family] : catalog.families;
     const tier: Record<string, string> = {};
     for (const family of families) {
-      const priority = familyPolicy(family)!.priority;
+      const priority = familyPolicy(family).priority;
       if (priority) tier[priority.key] = priority.value;
     }
     overlay.tier = tier;

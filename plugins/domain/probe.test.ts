@@ -57,6 +57,25 @@ describe("pure typed scaffolding", () => {
     expect(document.models.every(model => model.tokensPerSecond === 62 && model.timeToFirstTokenMs === 700)).toBe(true);
     expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
   });
+  test("generic zero-cost nonreasoning providers produce a reviewed exact route", () => {
+    const genericIdentity = { provider: "vendor-example", id: "free-model", api: "vendor-chat" };
+    const inv = parseInventoryObservation({ models: [{
+      ...row(genericIdentity.provider, genericIdentity.id), reasoning: false, thinking: null,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }] }, [genericIdentity], 100, "18.1.14");
+    const draft = scaffoldInventory(inv);
+    expect(draft.benchmark.candidates).toEqual([{ ...genericIdentity, key: "vendor-example.free-model" }]);
+    const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
+    const document = catalogFromObservations(inv, receipt);
+    expect(document.models).toEqual([expect.objectContaining({
+      key: "vendor-example.free-model", provider: "vendor-example", id: "free-model", api: "vendor-chat",
+      tier: 1, quotaBucket: null, inputCostPerMillion: 0, outputCostPerMillion: 0,
+      thinkingLevels: ["minimal"],
+    })]);
+    const catalog = compileCatalog(document), review = reviewCatalog(catalog, defaultSelection(catalog), 200);
+    expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default)
+      .toBe("vendor-example/free-model:minimal");
+  });
   test("distinct version evidence produces four reviewed and routable levels in both provider families", () => {
     const inv = fourLevelInventory(), draft = scaffoldInventory(inv);
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);

@@ -33,10 +33,20 @@ export const providerPolicies: readonly ProviderPolicy[] = Object.freeze([
 export const familyOrder: readonly string[] = Object.freeze(["openai", "anthropic", "deepseek"]);
 export const advisorFamilyOrder: readonly string[] = Object.freeze(["anthropic", "openai", "deepseek"]);
 
-export function providerPolicy(providerId: string): ProviderPolicy | undefined {
-  return providerPolicies.find(value => value.providers.includes(providerId));
+export function providerPolicy(providerId: string): ProviderPolicy {
+  return providerPolicies.find(value => value.providers.includes(providerId)) ?? policy({
+    family: providerId, providers: [providerId], label: providerId, accountLabel: providerId,
+    requiredLadder: false, meteredProviders: [], quotaBucketBase: providerId,
+    crossTo: null, special: [],
+  });
 }
 
-export function familyPolicy(family: string): ProviderPolicy | undefined {
-  return providerPolicies.find(value => value.family === family);
+export function familyPolicy(family: string): ProviderPolicy {
+  return providerPolicies.find(value => value.family === family) ?? providerPolicy(family);
+}
+
+export function orderedFamilies(families: Iterable<string>, order: readonly string[] = familyOrder): readonly string[] {
+  const remaining = new Set(families);
+  const ordered = order.filter(family => remaining.delete(family));
+  return Object.freeze([...ordered, ...[...remaining].sort()]);
 }
