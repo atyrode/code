@@ -38,13 +38,24 @@ function selection(changes: Partial<Selection> = {}): Selection {
 const daytime = Date.UTC(2026, 0, 1, 12);
 
 describe("catalog capabilities and identity", () => {
-  test("actual provider membership is explicit, including both OpenAI APIs", () => {
-    expect(providerPolicy("openai")?.family).toBe("openai");
-    expect(providerPolicy("openai-codex")?.family).toBe("openai");
-    expect(familyPolicy("openai")?.providers).toEqual(["openai-codex", "openai"]);
-    const unknown = document();
-    unknown.models[0] = model("looks-like-gpt", "unknown", 1, { id: "gpt-6" });
-    expect(() => compileCatalog(unknown)).toThrow("code_invalid_catalog");
+  test("explicit provider policies coexist with isolated generic provider families", () => {
+    expect(providerPolicy("openai").family).toBe("openai");
+    expect(providerPolicy("openai-codex").family).toBe("openai");
+    expect(familyPolicy("openai").providers).toEqual(["openai-codex", "openai"]);
+    expect(providerPolicy("vendor-example")).toMatchObject({
+      family: "vendor-example", providers: ["vendor-example"], requiredLadder: false, crossTo: null,
+    });
+    const generic = compileCatalog({ schemaVersion: 1, models: [
+      model("future", "vendor-example", 1, {
+        id: "free-model", inputCostPerMillion: 0, outputCostPerMillion: 0, thinkingLevels: ["minimal"],
+      }),
+    ] });
+    const review = reviewCatalog(generic, defaultSelection(generic), daytime);
+    expect(generic.families).toEqual(["vendor-example"]);
+    expect(review.available.lanes).toEqual([{ kind: "provider", family: "vendor-example", blend: "only" }]);
+    expect(review.routes.every(value => value.lead.key === "future" && value.lead.thinking === "minimal" && value.fallback.length === 0)).toBe(true);
+    expect(compileOmpOverlay(generic, review.selection, review.routes).modelRoles?.default)
+      .toBe("vendor-example/free-model:minimal");
   });
 
   test("absent required families do not block a complete single-family catalog", () => {

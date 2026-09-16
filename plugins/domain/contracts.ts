@@ -72,7 +72,7 @@ export interface ProviderPolicy {
   readonly requiredLadder: boolean;
   readonly meteredProviders: readonly string[];
   readonly quotaBucketBase: string;
-  readonly crossTo: string;
+  readonly crossTo: string | null;
   readonly special: readonly { readonly facet: "spark"; readonly tier: 0; readonly bucket: string }[];
   readonly priority?: { readonly key: string; readonly value: string; readonly costMultiplier: number; readonly speedMultiplier: number };
   readonly offPeak?: { readonly startMinutesUtc: number; readonly endMinutesUtc: number; readonly multiplier: number };

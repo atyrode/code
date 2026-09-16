@@ -62,6 +62,15 @@ capabilities are 1–4. `SelectionSchema` records lane, capability, thinking,
 advisor, spark, priority, prewalk, plan-yolo and fallback. Code never recovers
 these semantics from terminal output.
 
+Known providers may add named families, quota metadata, special tiers, priority
+or off-peak behavior. A provider without such a policy is still a complete
+provider family: its exact provider identifier is the family, its declared
+rungs may fill missing capability tiers, and Code adds no cross-provider lane,
+quota bucket, priority or special-tier assumption. A nonreasoning inventory
+model is represented by the single `minimal` routing level rather than excluded.
+Launch composition still requires a fresh selected account for every exact
+provider and leaves final model resolution to OMP.
+
 The pure composition doors consume caller-supplied values already parsed by the
 OMP client schemas. `composeProbe` turns a concrete current account observation
 into Code's selected runtime pool. `draftInventory` and `deriveCatalog` convert

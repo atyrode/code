@@ -4,7 +4,7 @@ import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, I
   type BenchmarkInput, type BenchmarkReceipt, type ProbeIdentity, type ProbeRefusal } from "@atyrode/manifold-omp";
 import { CatalogDocumentSchema, type CatalogDocument, type CatalogModel } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
-import { familyOrder, familyPolicy, providerPolicy } from "./providers.ts";
+import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
 export const ScaffoldOptionsSchema = z.strictObject({
@@ -38,7 +38,7 @@ function unique<T extends ProbeIdentity>(models: readonly T[]): Map<string, T> {
 
 
 function eligible(model: InventoryModel): boolean {
-  return Boolean(providerPolicy(model.provider)) && model.reasoning && model.thinkingLevels.length > 0 && model.inputCostPerMillion > 0 && !/-\d{6,8}$/.test(model.id) && !model.id.includes(":");
+  return (!model.reasoning || model.thinkingLevels.length > 0) && !/-\d{6,8}$/.test(model.id) && !model.id.includes(":");
 }
 function candidateKey(model: InventoryModel): string {
   // Full exact identities remain separate fields. A stable index-free safe key.
@@ -79,7 +79,7 @@ function supersede(models: InventoryModel[]): InventoryModel[] {
       order = (family.version[i] ?? -1) - (previous[i] ?? -1);
       if (order !== 0) break;
     }
-    const providers = providerPolicy(model.provider)!.providers;
+    const providers = providerPolicy(model.provider).providers;
     if (order > 0 || (order === 0 && (providers.indexOf(model.provider) < providers.indexOf(old.provider) ||
       (model.provider === old.provider && compare(model.id, old.id) < 0)))) latest.set(profile, model);
   }
@@ -177,10 +177,10 @@ function ladder(models: InventoryModel[]): InventoryModel[] {
 function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: Map<string, BenchmarkReceipt["results"][number]>): CatalogDocument {
   const models: CatalogModel[] = [];
   unique(options.specials);
-  for (const family of familyOrder) {
-    const policy = familyPolicy(family)!;
-    const candidates = supersede(allowed.filter(model => providerPolicy(model.provider)?.family === family));
-    const specialChoices = options.specials.filter(special => providerPolicy(special.provider)?.family === family);
+  for (const family of orderedFamilies(allowed.map(model => providerPolicy(model.provider).family))) {
+    const policy = familyPolicy(family);
+    const candidates = supersede(allowed.filter(model => providerPolicy(model.provider).family === family));
+    const specialChoices = options.specials.filter(special => providerPolicy(special.provider).family === family);
     if (specialChoices.length > 1) throw new ProbeError("ambiguous_identity");
     const requested = specialChoices[0];
     if (!candidates.length && !requested) continue;
@@ -192,7 +192,7 @@ function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: M
       const fact = facts?.get(probeAddress(model));
       models.push({ key: candidateKey(model), provider: model.provider, id: model.id, api: model.api, tier, quotaBucket,
         inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
-        contextWindow: model.contextWindow, thinkingLevels: model.thinkingLevels, images: model.images,
+        contextWindow: model.contextWindow, thinkingLevels: model.reasoning ? model.thinkingLevels : ["minimal"], images: model.images,
         tokensPerSecond: fact?.tokensPerSecond ?? null, timeToFirstTokenMs: fact?.timeToFirstTokenMs ?? null });
     };
     if (special) add(special, 0, policy.special.find(value => value.facet === requested!.facet)!.bucket);
