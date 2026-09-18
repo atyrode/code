@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PATH,
-  SESSION_OPERATION_ID, SessionInputSchema, actionDoor, actionSchemas as ompActionSchemas,
+  SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
-  type JobInputBinding, type SessionReceipt } from "@atyrode/manifold-omp";
+  type JobInputBinding, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
 import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
   type CodeAction, type Target } from "../atyrode.code/contract.ts";
 import { digestOf, type CodeContext } from "../atyrode.code/context.ts";
@@ -56,7 +56,8 @@ function job(jobId = "job-a"): PublicJob {
 function receipt(): SessionReceipt {
   return { sessionId: "01a0a008-88ed-7186-b28f-6356df68f8ed", model: "anthropic/native-model-3",
     sessionPath: `${SESSION_GUEST_PATH}/2026-09-14T13-08-29-037Z_01a0a008-88ed-7186-b28f-6356df68f8ed.jsonl`,
-    finalMessage: "The change is in place.", usage: { input: 91, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.004 }, exitCode: 0 };
+    finalMessage: "The change is in place.", usage: { input: 91, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.004 },
+    exitCode: 0, failure: null };
 }
 
 interface Fixture {
@@ -66,6 +67,8 @@ interface Fixture {
   calls: string[];
   omp: {
     accounts: AccountsObservation; defaults: OmpResult<"readDefaults">; job: PublicJob; session: SessionReceipt | null;
+    /** The word OMP answers beside an absent receipt; exactly one of the two is ever null. */
+    silence: SessionSilence | null;
     echo: "asked" | JobInputBinding[];
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
     reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
@@ -78,6 +81,7 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
+    silence: null,
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
     reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
@@ -112,7 +116,7 @@ function fixture(): Fixture {
     }
     if (door === `${OMP_PLUGIN_ID}.readSession`) {
       omp.read.push(ompActionSchemas.readSession.input.parse(input));
-      return { job: omp.job, session: omp.session };
+      return { job: omp.job, session: omp.session, silence: omp.silence };
     }
     if (door === `${OMP_PLUGIN_ID}.cancelSession`) {
       omp.cancelled.push(ompActionSchemas.cancelSession.input.parse(input));
@@ -360,7 +364,8 @@ describe("reading back and ending a session Code posted", () => {
     const record = await configured(f);
     await configured(f, "container-b");
     await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
-    expect(await accepted(f, "readSession", { ...workspace, jobId: f.omp.job.jobId })).toEqual({ job: f.omp.job, session: receipt() });
+    expect(await accepted(f, "readSession", { ...workspace, jobId: f.omp.job.jobId }))
+      .toEqual({ job: f.omp.job, session: receipt(), silence: null });
     expect(f.omp.read).toEqual([{ ...target, jobId: f.omp.job.jobId }]);
     expect(await invoke(f, "readSession", { ...workspace, jobId: "job-nobody-posted" })).toEqual({ refused: "code_session_unknown" });
     expect(await invoke(f, "readSession", { containerId: "container-b", jobId: f.omp.job.jobId })).toEqual({ refused: "code_session_unknown" });
@@ -371,15 +376,41 @@ describe("reading back and ending a session Code posted", () => {
     expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_omp_review_changed" });
   });
 
-  test("a session still running, and one that failed, are answered by their job with no receipt", async () => {
+  test("a session with no receipt reaches the caller with the word that stopped it", async () => {
     const f = fixture();
     const record = await configured(f);
     await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
     // A run OMP has not sealed a transcript for: the answer is the job's own state, not a
-    // refusal, so a caller can watch a session it started.
+    // refusal, so a caller can watch a session it started. WHICH fact stopped it travels with
+    // it — an absence answered five at once, and a caller settling a claim could not tell a run
+    // that is still going from one whose destination filled under it
+    // (atyrode/manifold-omp#43). Code carries the word and does not interpret it.
     f.omp.session = null;
+    f.omp.silence = "omp_session_running";
     expect(await accepted(f, "readSession", { ...workspace, jobId: "job-a" }))
-      .toEqual({ job: { ...job(), state: "started" }, session: null });
+      .toEqual({ job: { ...job(), state: "started" }, session: null, silence: "omp_session_running" });
+    // Every word OMP can answer reaches the caller as itself: no mapping, no collapsing, and no
+    // door in the middle deciding which silences are worth reporting.
+    for (const silence of SessionSilenceSchema.options) {
+      f.omp.silence = silence;
+      const read = await accepted(f, "readSession", { ...workspace, jobId: "job-a" });
+      expect(read.silence).toBe(silence);
+      expect(read.session).toBeNull();
+    }
+    // EXACTLY ONE OF THE TWO IS NULL, asserted here because Code is where a caller reads it: a
+    // reply carrying both, or neither, is refused rather than passed on as a shape no consumer
+    // can interpret.
+    f.omp.session = receipt();
+    f.omp.silence = "omp_session_failed";
+    expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({
+      refused: "code_invalid_omp_result",
+    });
+    f.omp.session = null;
+    f.omp.silence = null;
+    expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({
+      refused: "code_invalid_omp_result",
+    });
+    f.omp.silence = "omp_session_failed";
     const failed = { ...job(), state: "exited" as const, result: { jobId: "job-a", requestDigest: "f".repeat(64),
       ownerId: "owner", ownerGeneration: 1, state: "exited" as const, exitCode: 1, reason: null,
       startedAt: now, finishedAt: now + 1_000, usage: null, outputs: [],

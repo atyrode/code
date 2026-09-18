@@ -265,6 +265,12 @@ export async function readSession(ctx: CodeContext, args: ActionInput<"readSessi
   const reply = await ompCall(ctx, "readSession", { containerId: provenance.containerId,
     machineId: provenance.machineId, jobId: provenance.jobId });
   if (!sameJob(reply.job, provenance)) throw new CodeRefusal("omp_review_changed");
+  // EXACTLY ONE OF THE TWO IS NULL, and a reply that breaks it is named as OMP's, not the
+  // caller's. Code forwards the word it is given — it does not map, rename or collapse the
+  // silences — but a reply carrying both a receipt and a reason it has none, or neither, is not
+  // a shape any caller can read. Letting it through to the door's own result schema would refuse
+  // `code_invalid_request`, blaming the request for the peer's answer.
+  if ((reply.session === null) === (reply.silence === null)) throw new CodeRefusal("invalid_omp_result");
   return reply;
 }
 /**
