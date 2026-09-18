@@ -1,6 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
   JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
+  SessionSilenceSchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
@@ -146,9 +147,34 @@ export const rootActionSchemas = {
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: sessionPrompt }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
-  // The receipt exists only once a run exited 0 and its transcript was sealed; a running,
-  // cancelled or failed session is answered by its job with no receipt beside it.
-  readSession: { input: SessionReadInputSchema, result: z.strictObject({ job: PublicJobSchema, session: SessionReceiptSchema.nullable() }) },
+  /**
+   * EXACTLY ONE OF `session` AND `silence` IS NULL, and Code carries the word it is given.
+   *
+   * The receipt exists only once a run exited 0 and its transcript was sealed. What used to sit
+   * beside it was an absence answering five facts at once — still running, exited non-zero,
+   * destination filled, transcript unsealed, never started — so a caller settling a claim on it
+   * could not tell them apart (atyrode/manifold-omp#43). OMP now names which one, and this door
+   * ADMITS that word rather than interpreting it: no mapping, no renaming, no deciding which
+   * silences are interesting. Whether one means "wait" or "give up" is the caller's judgement,
+   * and a door in the middle that made it would be answering a question it cannot see the claim
+   * behind.
+   *
+   * Named explicitly rather than passed through: a strict result is what caught OMP's added
+   * field at all, and `z.object` here would trade a named refusal for silent drift.
+   */
+  readSession: {
+    input: SessionReadInputSchema,
+    result: z
+      .strictObject({
+        job: PublicJobSchema,
+        session: SessionReceiptSchema.nullable(),
+        silence: SessionSilenceSchema.nullable(),
+      })
+      .refine(
+        (read) => (read.session === null) !== (read.silence === null),
+        "a session read answers with a receipt or with the word that stopped it, never both or neither",
+      ),
+  },
   cancelSession: { input: SessionCancelInputSchema, result: z.strictObject({ job: PublicJobSchema }) },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
