@@ -148,6 +148,23 @@ installs no daemon, credentials, service policy or machine resource.
 Keep Code's `MANIFOLD_REV`, OMP's `MANIFOLD_REV` and both reusable-workflow refs
 synchronized.
 
+**Repin OMP with `bun add`, never by editing the lockfile.** `plugins/bun.lock` names the
+dependency in two places: the requested range and the resolved entry beside its integrity hash.
+Editing the first leaves the second pointing at the old commit, and `bun install` then resolves
+it from cache and installs the OLD code — a tree that looks repinned, passes review and builds
+what it replaced. From `plugins/`:
+
+```sh
+bun add "github:atyrode/manifold-omp#<commit>"
+```
+
+which moves both, then repeat the same commit in the publishable root `package.json`. Verify by
+reading the resolved entry rather than trusting that the install succeeded:
+`grep manifold-omp plugins/bun.lock` shows the requested commit in full and the resolved one
+ABBREVIATED, so a resolution still naming the old build is visible as a different short hash
+beside a new full one. A silent wrong-commit build is worse than a failed install, because
+nothing reports it.
+
 From the Code root:
 
 ```sh
