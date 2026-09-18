@@ -14,7 +14,7 @@ jobs:
     # plugins/ runs check, test, pack and verify - the last against a real spawned server - and
     # uploads dist/. The ref below and plugins/MANIFOLD_REV are bumped together: the workflow
     # and the kit it drives come from the same manifold commit.
-    uses: atyrode/manifold/.github/workflows/plugins.yml@518ebf6d688a844d7a8cdfee0c42eae7221f21c7
+    uses: atyrode/manifold/.github/workflows/plugins.yml@743ee75a92b64b75b4a97244ebd58297c1287164
     with:
       plugins-dir: plugins
       prepare-command: bun --no-env-file --no-install run prepare:integration
