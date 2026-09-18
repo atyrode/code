@@ -132,6 +132,10 @@ export function Dials({ selection, review, catalog, disabled, update }: {
     <Dial label="Capability" icon="model" value={String(selection.capability)} options={review.available.capabilities.map(value => ({ value: String(value), label: levels[value], description: capabilityDetails[value] }))} disabled={disabled} change={value => update({ ...selection, capability: SelectionSchema.shape.capability.parse(Number(value)) })} />
     <Dial label="Thinking" icon="thinking" value={selection.thinking} options={thinkingOptions} disabled={disabled} change={value => update({ ...selection, thinking: ThinkingLevelSchema.parse(value) })} />
     <Dial label="Advisor" icon="advisor" value={selection.advisor} options={advisorOptions} disabled={disabled} change={value => update({ ...selection, advisor: SelectionSchema.shape.advisor.parse(value) })} />
+    {review.available.budgets.includes("free") && <Dial label="Budget" icon="priority" value={selection.budget} options={[
+      { value: "any", label: "Any", description: "Admit every model in the catalog, whatever it costs." },
+      { value: "free", label: "Free only", description: "Admit only models that cost nothing, and refuse rather than resolve to a paid one. States the property, so a model becoming free or ceasing to be changes what runs without editing this profile." },
+    ]} disabled={disabled} change={value => update({ ...selection, budget: SelectionSchema.shape.budget.parse(value) })} />}
     {review.available.priority && <Dial label="Priority" icon="priority" value={String(selection.priority)} options={[
       { value: "false", label: "Standard", description: "Use standard provider service tiers." },
       { value: "true", label: "Priority", description: "Request OpenAI's priority service tier. Higher cost; not a latency guarantee." },

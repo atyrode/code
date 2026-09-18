@@ -3,7 +3,8 @@ import { AccountReferenceSchema, AccountsObservationSchema, ThinkingLevelSchema,
 
 export class DomainError extends Error {
   constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
-    "invalid_choices" | "account_unavailable" | "preset_exists" | "preset_missing" | "invalid_usage") {
+    "invalid_choices" | "account_unavailable" | "preset_exists" | "preset_missing" | "invalid_usage" |
+    "budget_unsatisfiable") {
     super(`code_${code}`);
   }
 }
@@ -23,6 +24,25 @@ export const SelectionSchema = z.strictObject({
   prewalk: z.boolean(),
   planYolo: z.boolean(),
   fallback: z.boolean(),
+  /**
+   * WHAT MAY BE SPENT, stated as a property rather than as the models that happen to satisfy it.
+   *
+   * `free` admits only models whose input AND output price per million are zero; `any` admits
+   * the catalog. It is a constraint and not a preference: a selection no admitted model can
+   * serve refuses `budget_unsatisfiable` rather than resolving to the cheapest paid model, which
+   * is the difference between "we are not spending" and "we thought we were not spending".
+   *
+   * `free` rather than a numeric ceiling because a single number would have to say WHICH number
+   * it bounds — input, output, or the 0.25/0.75 blend `estimate` scores with, before or after
+   * the thinking, priority and off-peak multipliers that only exist in that pass — and that
+   * choice would then live in code rather than in the selection. "Costs nothing" needs no such
+   * rule, and a free tier's real limit is a request rate rather than a price, so this is also
+   * where rate-aware routing would hang if it is ever needed.
+   *
+   * Defaulted, so a selection persisted before this existed parses as `any` and nothing has to
+   * be migrated to keep meaning what it meant.
+   */
+  budget: z.enum(["free", "any"]).default("any"),
 });
 export type Selection = z.infer<typeof SelectionSchema>;
 export type Lane = z.infer<typeof LaneSchema>;

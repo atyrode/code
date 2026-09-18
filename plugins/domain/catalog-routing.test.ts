@@ -31,7 +31,7 @@ function route(routes: readonly Route[], role: string): Route {
 function selection(changes: Partial<Selection> = {}): Selection {
   return {
     lane: { kind: "mixed" }, capability: 2, thinking: "medium", advisor: "off", spark: false,
-    priority: false, prewalk: false, planYolo: false, fallback: true, ...changes,
+    priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any", ...changes,
   };
 }
 
@@ -284,5 +284,80 @@ describe("review to OMP boundary", () => {
     expect(reviewCatalog(catalog, deepseek, end - 1).estimates.costScore).toBe(during);
     expect(reviewCatalog(catalog, deepseek, end).estimates.costScore).toBe(before);
     expect(() => reviewCatalog(catalog, deepseek, -1)).toThrow("code_invalid_selection");
+  });
+});
+
+/*
+  A selection that encodes today's answer expires when the catalog changes; a selection that
+  states a property does not. `budget` is the property, and these cases hold it to that: the
+  operator says "free", never a list of models that happen to be free today (#200).
+
+  A free catalog is built by zeroing prices on an otherwise identical document, so the ONLY
+  difference between the cases is a price the provider owns.
+*/
+describe("a cost constraint is a property, not a list of names", () => {
+  const freeDocument = (): CatalogDocument => ({
+    schemaVersion: 1,
+    models: document().models.map(entry => ({ ...entry, inputCostPerMillion: 0, outputCostPerMillion: 0 })),
+  });
+
+  test("a paid catalog refuses a free budget by its own name, rather than resolving to the cheapest paid model", () => {
+    const catalog = compileCatalog(document());
+    expect(() => reviewCatalog(catalog, selection({ budget: "free" }), daytime))
+      .toThrow("code_budget_unsatisfiable");
+    // The same selection without the constraint resolves, so the refusal is the constraint's and
+    // not a broken profile.
+    expect(reviewCatalog(catalog, selection(), daytime).routes.length).toBeGreaterThan(0);
+  });
+
+  test("the same selection resolves once the provider makes those models free, with no configuration edit", () => {
+    const asked = selection({ budget: "free" });
+    expect(() => reviewCatalog(compileCatalog(document()), asked, daytime)).toThrow("code_budget_unsatisfiable");
+    // Identical selection, identical catalog shape, one price changed by the provider.
+    const review = reviewCatalog(compileCatalog(freeDocument()), asked, daytime);
+    expect(review.selection.budget).toBe("free");
+    expect(review.routes.length).toBeGreaterThan(0);
+    expect(ReviewSchema.parse(review).available.budgets).toEqual(["free", "any"]);
+  });
+
+  test("no route under a free budget carries a paid model, lead or fallback", () => {
+    // One model stays paid in an otherwise free catalog: it must appear in no route at all,
+    // because a paid fallback is exactly the substitution the constraint exists to prevent.
+    const mixed: CatalogDocument = {
+      schemaVersion: 1,
+      models: freeDocument().models.map(entry =>
+        entry.key === "a2" ? { ...entry, inputCostPerMillion: 7, outputCostPerMillion: 21 } : entry),
+    };
+    const catalog = compileCatalog(mixed);
+    const review = reviewCatalog(catalog, selection({ capability: 3, budget: "free" }), daytime);
+    const keys = review.routes.flatMap(entry => [entry.lead.key, ...entry.fallback.map(item => item.key)]);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys).not.toContain("a2");
+    for (const key of keys) {
+      const model = catalog.model(key);
+      expect(model.inputCostPerMillion).toBe(0);
+      expect(model.outputCostPerMillion).toBe(0);
+    }
+  });
+
+  test("a budget the catalog cannot serve is not offered, and `any` always is", () => {
+    expect(reviewCatalog(compileCatalog(document()), selection(), daytime).available.budgets).toEqual(["any"]);
+    expect(reviewCatalog(compileCatalog(freeDocument()), selection(), daytime).available.budgets)
+      .toEqual(["free", "any"]);
+  });
+
+  test("a selection persisted before the constraint existed still means what it meant", () => {
+    const { budget: _budget, ...legacy } = selection();
+    const review = reviewCatalog(compileCatalog(document()), legacy as Selection, daytime);
+    expect(review.selection.budget).toBe("any");
+  });
+
+  test("the constraint composes with fallback rather than duplicating it", () => {
+    // `fallback` governs whether to substitute at all; the budget governs what is admissible.
+    const catalog = compileCatalog(freeDocument());
+    const withFallback = reviewCatalog(catalog, selection({ budget: "free", fallback: true }), daytime);
+    const without = reviewCatalog(catalog, selection({ budget: "free", fallback: false }), daytime);
+    expect(withFallback.routes.some(entry => entry.fallback.length > 0)).toBe(true);
+    expect(without.routes.every(entry => entry.fallback.length === 0)).toBe(true);
   });
 });
