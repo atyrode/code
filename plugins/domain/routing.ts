@@ -16,6 +16,12 @@ export const ReviewSchema = z.strictObject({
     capabilities: z.array(CapabilitySchema).min(1),
     spark: z.boolean(),
     priority: z.boolean(),
+    /**
+     * The budgets this catalog can actually serve for the rest of this selection, proved by
+     * resolving the routes rather than by looking for a free model somewhere in the catalog: a
+     * free tier-1 model does not make a capability-3 profile free. `any` is always present.
+     */
+    budgets: z.array(z.enum(["free", "any"])).min(1).max(2),
   }),
 });
 export type Review = z.infer<typeof ReviewSchema>;
@@ -64,10 +70,23 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   const hosted = lane.kind === "provider" && lane.blend === "only" ? [primary] : catalog.families;
   const special = catalog.special("spark");
   const capabilities: Review["available"]["capabilities"] = catalog.top(primary) === 4 ? [1, 2, 3, 4] : [1, 2, 3];
+  // Proved, not inferred: a free model somewhere in the catalog does not make THIS selection's
+  // profile free, so ask the resolver. The same trick `defaultSelection` uses to prove a
+  // complete default profile exists.
+  const budgets: Selection["budget"][] = [];
+  for (const budget of ["free", "any"] as const) {
+    try {
+      selectedRoutes(catalog, { ...selection, budget });
+      budgets.push(budget);
+    } catch {
+      /* This budget cannot serve the rest of this selection; it is simply not offered. */
+    }
+  }
   const available = {
     lanes, capabilities,
     spark: special !== undefined && hosted.includes(catalog.family(special)),
     priority: hosted.some(family => familyPolicy(family).priority !== undefined),
+    budgets: budgets.length === 0 ? (["any"] as Selection["budget"][]) : budgets,
   };
   if (!capabilities.includes(selection.capability) || (selection.spark && !available.spark) ||
       (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
@@ -79,7 +98,7 @@ export function defaultSelection(catalog: CompiledCatalog): Selection {
     ? { kind: "mixed" } : { kind: "provider", family: catalog.families[0]!, blend: "only" };
   const selection: Selection = {
     lane, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false,
-    prewalk: false, planYolo: false, fallback: true,
+    prewalk: false, planYolo: false, fallback: true, budget: "any",
   };
   // A catalog without any image-capable model has no complete default profile.
   selectedRoutes(catalog, selection);
@@ -119,6 +138,19 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
     return undefined;
   };
   const choice = (key: string, level: ThinkingLevel): ModelChoice => ({ key, thinking: catalog.clampThinking(key, level) });
+  /**
+   * ADMISSION, NOT RANKING. `estimate`'s `costScore` still ranks what is admitted; this decides
+   * what may be in a route at all. A lead no admitted model can serve refuses by name, and an
+   * inadmissible fallback is dropped rather than kept — keeping a paid model as a fallback under
+   * a free budget is precisely the substitution the constraint exists to prevent, which is how
+   * this composes with `fallback` instead of duplicating it: `fallback` governs whether to
+   * substitute at all, the budget governs what the admissible set is.
+   */
+  const admits = (key: string): boolean => {
+    if (selection.budget === "any") return true;
+    const model = catalog.model(key);
+    return model.inputCostPerMillion === 0 && model.outputCostPerMillion === 0;
+  };
   const routes: Route[] = [];
   for (const role of roles) {
     let lead: string;
@@ -174,12 +206,13 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
       if (!extreme && deliberative[role]) level = ThinkingLevelSchema.options[Math.min(4, ThinkingLevelSchema.options.indexOf(thinking) + 1)]!;
       fallbacks = chain(lead);
     }
+    if (!admits(lead)) throw new DomainError("budget_unsatisfiable");
     const seen = new Set([lead]);
     const fallback: ModelChoice[] = [];
     if (selection.fallback) {
       for (let index = 0; index < fallbacks.length; index++) {
         const key = fallbacks[index];
-        if (!key || seen.has(key)) continue;
+        if (!key || seen.has(key) || !admits(key)) continue;
         seen.add(key);
         fallback.push(choice(key, fallbackLevels?.[index] ?? level));
       }
