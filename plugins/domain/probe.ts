@@ -2,7 +2,7 @@ import { z } from "zod";
 import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, InventoryModelSchema,
   ProbeIdentitySchema, ProbeError, ThinkingLevelSchema, epochMilliseconds, identifier, parseBenchmarkInput, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type ProbeIdentity, type ProbeRefusal } from "@atyrode/manifold-omp";
-import { CatalogDocumentSchema, type CatalogDocument, type CatalogModel } from "./contracts.ts";
+import { CatalogDocumentSchema, SelectionSchema, admittedBy, type CatalogDocument, type CatalogModel } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
 import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
@@ -10,6 +10,21 @@ type InventoryModel = z.infer<typeof InventoryModelSchema>;
 export const ScaffoldOptionsSchema = z.strictObject({
   // A sanctioned quota observation may identify a special model. No usage IO here.
   specials: z.array(ProbeIdentitySchema.extend({ facet: z.literal("spark") })).max(3),
+  /**
+   * WHAT THE LADDER MAY BE BUILT FROM, because a budget applied afterwards can be unsatisfiable
+   * even when the observation could satisfy it.
+   *
+   * `reviewCatalog` admits models by price at selection time (#201), but the rungs are chosen
+   * before it looks: `ladder` sorts every eligible candidate by price and keeps the two-to-four
+   * that carry separating evidence. A free model therefore reaches the catalog only where it
+   * happens to win a rung, and on a real 256-model listing exactly one did — so `budget: "free"`
+   * refused `budget_unsatisfiable` at every capability while the same listing held 32 free
+   * models, four of which form a complete ladder. The budget has to reach derivation to be
+   * answerable there.
+   *
+   * Defaulted to `any` so an existing derivation keeps deriving what it derived.
+   */
+  budget: SelectionSchema.shape.budget,
 });
 export type ScaffoldOptions = z.infer<typeof ScaffoldOptionsSchema>;
 export const CatalogDraftSchema = z.strictObject({
@@ -37,19 +52,53 @@ function unique<T extends ProbeIdentity>(models: readonly T[]): Map<string, T> {
 }
 
 
+/**
+ * A DATED SNAPSHOT AND A MISSING THINKING LADDER ARE DISQUALIFYING. A VARIANT SUFFIX IS NOT.
+ *
+ * This test used to read `model.inputCostPerMillion > 0`, which excluded free models on purpose.
+ * #194 removed that clause and kept `!model.id.includes(":")`, which excludes the same models by
+ * spelling: every OpenRouter free model is addressed `vendor/model:free`, and the colon is how
+ * that provider spells a routing variant. So the exclusion survived its own retirement, no
+ * longer saying what it did — and #201's `budget: "free"` then became a dial no catalog could
+ * satisfy, because the only models that could satisfy it were filtered out before selection saw
+ * them. On a live listing of 256 models the clause discarded 77, including all 32 free ones.
+ *
+ * A variant is a distinct routable identity with its own price, which is precisely why it is
+ * worth carrying: `supersede` already keys on the observed price profile, so `model:free` and
+ * `model` survive as separate candidates rather than one erasing the other.
+ */
 function eligible(model: InventoryModel): boolean {
-  return (!model.reasoning || model.thinkingLevels.length > 0) && !/-\d{6,8}$/.test(model.id) && !model.id.includes(":");
+  return (!model.reasoning || model.thinkingLevels.length > 0) && !/-\d{6,8}$/.test(model.id);
 }
 function candidateKey(model: InventoryModel): string {
   // Full exact identities remain separate fields. A stable index-free safe key.
-  const key = `${model.provider}.${model.id.replace(/[^A-Za-z0-9._-]/g, "-")}`;
+  //
+  // Escaped rather than folded, because folding is not injective: the identifier alphabet
+  // excludes both `/` and `:`, so `vendor/model`, `vendor:model` and `vendor-model` all fold to
+  // one key. Two admitted models sharing a key are rejected by `compileCatalog` as a duplicate,
+  // which `scaffold` reports as `insufficient_ladder` — a refusal naming the wrong cause. Now
+  // that variant ids are admitted, that collision is reachable from a real listing.
+  const address = `${model.provider}.${model.id}`;
+  // Non-ASCII would make a fixed-width escape ambiguous, and no provider spells an id this way.
+  if (!/^[\x20-\x7E]*$/.test(address)) throw new ProbeError("invalid_observation");
+  const key = [...address].map(character => character === "_" ? "__"
+    : /[A-Za-z0-9._-]/.test(character) ? character
+    : `_${character.codePointAt(0)!.toString(16).toUpperCase().padStart(2, "0")}`).join("");
   return parse(identifier, key, "invalid_input");
 }
-export function benchmarkCandidates(inventoryValue: unknown): BenchmarkInput {
+/**
+ * The candidate set a benchmark would probe, which is also what a derived catalog may ladder.
+ *
+ * The budget narrows it here rather than after the ladder, so deriving for `free` also probes
+ * only what `free` can use: on the live listing that is 32 identities instead of 179, which is
+ * the difference between a benchmark worth pricing and one worth stopping.
+ */
+export function benchmarkCandidates(inventoryValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): BenchmarkInput {
   const inventory = parse(InventoryReceiptSchema, inventoryValue);
+  const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
   unique(inventory.models);
   return parseBenchmarkInput({ schemaVersion: 1, inventoryObservedAt: inventory.observedAt, ompVersion: inventory.ompVersion,
-    candidates: inventory.models.filter(eligible).sort((a, b) => compare(probeAddress(a), probeAddress(b)))
+    candidates: inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model)).sort((a, b) => compare(probeAddress(a), probeAddress(b)))
       .map(model => ({ provider: model.provider, id: model.id, api: model.api, key: candidateKey(model) })) });
 }
 function modelFamily(id: string): { name: string; version: number[] } {
@@ -203,17 +252,17 @@ function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: M
   return document;
 }
 /** Offline choices are a draft, never an inventory job and never a reachability claim. */
-export function scaffoldInventory(inventoryValue: unknown, optionsValue: unknown = { specials: [] }): CatalogDraft {
+export function scaffoldInventory(inventoryValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): CatalogDraft {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
-  const benchmark = benchmarkCandidates(inventory);
+  const benchmark = benchmarkCandidates(inventory, options);
   return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt,
-    document: scaffold(inventory.models.filter(eligible), options), benchmark };
+    document: scaffold(inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model)), options), benchmark };
 }
 /** Every eligible candidate must have an exact probe, before superseding older versions. */
-export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { specials: [] }): CatalogDocument {
+export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): CatalogDocument {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
-  const candidates = benchmarkCandidates(inventory).candidates;
+  const candidates = benchmarkCandidates(inventory, options).candidates;
   if (benchmark.inventoryObservedAt !== inventory.observedAt) throw new ProbeError("missing_probe");
   const facts = unique(benchmark.results);
   if (facts.size !== candidates.length) throw new ProbeError("missing_probe");
@@ -222,5 +271,5 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
     if (!fact || fact.api !== candidate.api || fact.key !== candidate.key) throw new ProbeError("missing_probe");
     if (fact.status === "unmatched" || fact.status === "unresolved") throw new ProbeError("inconclusive_probe");
   }
-  return scaffold(inventory.models.filter(model => eligible(model) && facts.get(probeAddress(model))?.status === "reachable"), options, facts);
+  return scaffold(inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model) && facts.get(probeAddress(model))?.status === "reachable"), options, facts);
 }

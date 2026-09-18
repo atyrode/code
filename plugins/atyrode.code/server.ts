@@ -85,8 +85,8 @@ const productHandlers: ProductHandlers = {
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return { revision: record.revision, accountPool };
   },
-  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory); },
-  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark); },
+  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory, { specials: [], budget: args.budget }); },
+  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { specials: [], budget: args.budget }); },
   composeSession,
   listProfiles,
   runSession,

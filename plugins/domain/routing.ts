@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ThinkingLevelSchema, epochMilliseconds, type Overlay, type ThinkingLevel } from "@atyrode/manifold-omp";
 import {
-  CapabilitySchema, DomainError, EstimatesSchema, LaneSchema, RouteSchema, SelectionSchema,
+  CapabilitySchema, DomainError, EstimatesSchema, LaneSchema, RouteSchema, SelectionSchema, admittedBy,
   type Estimates, type Lane, type ModelChoice, type Route, type Selection,
 } from "./contracts.ts";
 import type { CompiledCatalog } from "./catalog.ts";
@@ -146,11 +146,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
    * this composes with `fallback` instead of duplicating it: `fallback` governs whether to
    * substitute at all, the budget governs what the admissible set is.
    */
-  const admits = (key: string): boolean => {
-    if (selection.budget === "any") return true;
-    const model = catalog.model(key);
-    return model.inputCostPerMillion === 0 && model.outputCostPerMillion === 0;
-  };
+  const admits = (key: string): boolean => admittedBy(selection.budget, catalog.model(key));
   const routes: Route[] = [];
   for (const role of roles) {
     let lead: string;

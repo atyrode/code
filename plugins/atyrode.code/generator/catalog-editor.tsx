@@ -68,12 +68,15 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
   const [historyBenchmark, setHistoryBenchmark] = useState("");
   const inventoryJob = useOmpJob(host, target && inventoryId ? { kind: "job", machineId, operationId: INVENTORY_OPERATION_ID, jobId: inventoryId } : null);
   const benchmarkJob = useOmpJob(host, target && benchmarkId ? { kind: "job", machineId, operationId: BENCHMARK_OPERATION_ID, jobId: benchmarkId } : null);
-  const inventory = useWorkflowQuery(host, `inventory:${JSON.stringify([target, inventoryId])}`,
+  // Derive under the budget this workspace has already selected: a free selection wants a free
+  // ladder, and asking the operator the same question twice invites the two answers to differ.
+  const budget = record?.selection?.budget ?? "any";
+  const inventory = useWorkflowQuery(host, `inventory:${JSON.stringify([target, inventoryId, budget])}`,
     !!target && !!inventoryId && inventoryJob.job?.state === "exited" && inventoryJob.job.result?.exitCode === 0,
-    () => codeWorkflow(host).readInventory({ ...target!, jobId: inventoryId! }));
-  const benchmark = useWorkflowQuery(host, `benchmark:${JSON.stringify([target, inventoryId, benchmarkId])}`,
+    () => codeWorkflow(host).readInventory({ ...target!, jobId: inventoryId! }, budget));
+  const benchmark = useWorkflowQuery(host, `benchmark:${JSON.stringify([target, inventoryId, benchmarkId, budget])}`,
     !!target && !!inventoryId && !!benchmarkId && benchmarkJob.job?.state === "exited" && benchmarkJob.job.result?.exitCode === 0,
-    () => codeWorkflow(host).readBenchmark({ ...target!, inventoryJobId: inventoryId!, jobId: benchmarkId! }));
+    () => codeWorkflow(host).readBenchmark({ ...target!, inventoryJobId: inventoryId!, jobId: benchmarkId! }, budget));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const pending = useRef(false);
@@ -159,14 +162,14 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
     </section>}
     <details className="plugin-atyrode_code__details"><summary>Measure model performance</summary>
       <p>Benchmark requests contact the selected providers and may incur charges. Measurements are reviewed before they replace a catalog.</p>
-      <button type="button" data-action="atyrode.omp.startBenchmark" disabled={!writable || busy || !available || !benchmarkReady || !inventory.data || !inventoryId || benchmarkRunning} onClick={() => { if (record && target && inventoryId) void perform(async () => { const job = await codeWorkflow(host).startBenchmark(target, inventoryId); if (mounted.current) setBenchmarkId(job.jobId); }); }}>{benchmarkRunning ? "Measuring…" : "Run benchmark"}</button>
+      <button type="button" data-action="atyrode.omp.startBenchmark" disabled={!writable || busy || !available || !benchmarkReady || !inventory.data || !inventoryId || benchmarkRunning} onClick={() => { if (record && target && inventoryId) void perform(async () => { const job = await codeWorkflow(host).startBenchmark(target, inventoryId, budget); if (mounted.current) setBenchmarkId(job.jobId); }); }}>{benchmarkRunning ? "Measuring…" : "Run benchmark"}</button>
       {!inventory.data && <p>Discover models first.</p>}
       {!benchmarkReady && <p>Benchmark permission is not ready. Review its exact scope before running paid requests.</p>}
       <PermissionReview host={host} target={target} intent="benchmark" label="Review benchmark permissions" onReady={refresh} />
       {benchmarkJob.error && <p role="status">{benchmarkJob.error}</p>}
       {benchmarkId && benchmarkJob.job && <p role="status">Benchmark {benchmarkJob.job.state}{benchmarkJob.job.result?.exitCode !== undefined && benchmarkJob.job.result.exitCode !== 0 ? " · unsuccessful" : ""}</p>}
       {benchmark.error && <p role="status">{benchmark.error}</p>}
-      {benchmark.data && <button type="button" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || editor !== null} onClick={() => { if (record && target && inventoryId && benchmarkId) void perform(async () => { const staged = await codeWorkflow(host).stageBenchmark({ ...target, inventoryJobId: inventoryId, jobId: benchmarkId }, record.revision); await reviewStaged(staged); }); }}>Review measured catalog</button>}
+      {benchmark.data && <button type="button" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || editor !== null} onClick={() => { if (record && target && inventoryId && benchmarkId) void perform(async () => { const staged = await codeWorkflow(host).stageBenchmark({ ...target, inventoryJobId: inventoryId, jobId: benchmarkId }, record.revision, budget); await reviewStaged(staged); }); }}>Review measured catalog</button>}
     </details>
     <details className="plugin-atyrode_code__details"><summary>Recover a previous catalog job</summary>
       <label>inventory job<input value={historyInventory} maxLength={128} onChange={event => setHistoryInventory(event.target.value)} /></label>

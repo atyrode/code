@@ -356,15 +356,15 @@ describe("pure client-supplied policy composition", () => {
         inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
         contextWindow: model.tier * 200_000, maxTokens: 8192, reasoning: true,
         thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images })) };
-    const draft = await accepted(f, "draftInventory", { inventory });
+    const draft = await accepted(f, "draftInventory", { inventory, budget: "any" });
     expect(draft.document.models.map(model => [model.tokensPerSecond, model.timeToFirstTokenMs])).toEqual([[null, null], [null, null], [null, null]]);
     const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
       inventoryObservedAt: now, startedAt: now, completedAt: now + 1,
       results: draft.benchmark.candidates.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) };
-    const catalog = await accepted(f, "deriveCatalog", { inventory, benchmark });
+    const catalog = await accepted(f, "deriveCatalog", { inventory, benchmark, budget: "any" });
     expect(catalog.models.map(model => model.tokensPerSecond)).toEqual([42, 42, 42]);
     benchmark.results[0]!.api = "different-api";
-    expect(await invoke(f, "deriveCatalog", { inventory, benchmark })).toEqual({ refused: "code_probe_missing_probe" });
+    expect(await invoke(f, "deriveCatalog", { inventory, benchmark, budget: "any" })).toEqual({ refused: "code_probe_missing_probe" });
     expect(await configuration(f)).toBeNull();
   });
 

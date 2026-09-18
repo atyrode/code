@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createCodeClient, sessionInput, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { projectUsage } from "../domain/usage.ts";
-import type { AccountChoices } from "../domain/contracts.ts";
+import type { AccountChoices, Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
 export class WorkflowError extends Error {}
@@ -41,13 +41,17 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
-  async function readInventory(input: OmpInput<"readInventory">) {
+  // The budget is the one already selected, not a separate choice: deriving a catalog under a
+  // free budget while the selection asks for free is the same question asked once. Required
+  // rather than defaulted, because "which budget was this catalog derived under" is not a
+  // question a caller should be able to leave unanswered.
+  async function readInventory(input: OmpInput<"readInventory">, budget: Selection["budget"]) {
     const receipt = await omp("readInventory", input);
-    return { ...receipt, draft: await code("draftInventory", { inventory: receipt.inventory }) };
+    return { ...receipt, draft: await code("draftInventory", { inventory: receipt.inventory, budget }) };
   }
-  async function readBenchmark(input: OmpInput<"readBenchmark">) {
+  async function readBenchmark(input: OmpInput<"readBenchmark">, budget: Selection["budget"]) {
     const [inventory, receipt] = await Promise.all([omp("readInventory", { containerId: input.containerId, machineId: input.machineId, jobId: input.inventoryJobId }), omp("readBenchmark", input)]);
-    return { ...receipt, catalog: await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark }) };
+    return { ...receipt, catalog: await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark, budget }) };
   }
   async function composeSession(target: Target, expectedRevision: number, prompt: string) {
     const accounts = await omp("accounts", {});
@@ -138,12 +142,15 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       return omp("startInventory", { ...target, expectedDefaultsRevision: defaults.revision, accountPool: composition.accountPool });
     },
     readInventory, readBenchmark,
-    async startBenchmark(target: Target, inventoryJobId: string) {
-      const inventory = await readInventory({ ...target, jobId: inventoryJobId });
+    // The budget reaches the BENCHMARK too, because the candidate set is what gets probed: under
+    // `free` this posts 32 probes instead of 179, and under any budget it probes only models the
+    // resulting catalog could actually ladder.
+    async startBenchmark(target: Target, inventoryJobId: string, budget: Selection["budget"]) {
+      const inventory = await readInventory({ ...target, jobId: inventoryJobId }, budget);
       return omp("startBenchmark", { ...target, inventoryJobId, candidates: inventory.draft.benchmark });
     },
-    async stageBenchmark(input: OmpInput<"readBenchmark">, expectedRevision: number) {
-      const receipt = await readBenchmark(input);
+    async stageBenchmark(input: OmpInput<"readBenchmark">, expectedRevision: number, budget: Selection["budget"]) {
+      const receipt = await readBenchmark(input, budget);
       return code("stageCatalog", { containerId: input.containerId, expectedRevision, document: receipt.catalog });
     },
     async reviewSession(target: Target, expectedRevision: number, prompt: string): Promise<SessionReview> {
