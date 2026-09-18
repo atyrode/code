@@ -47,6 +47,20 @@ export const SelectionSchema = z.strictObject({
 export type Selection = z.infer<typeof SelectionSchema>;
 export type Lane = z.infer<typeof LaneSchema>;
 
+/**
+ * THE BUDGET'S ADMISSION TEST, in one place because two copies of "free" can disagree.
+ *
+ * Selection admits by this at routing time and derivation builds the ladder from it, so a
+ * catalog derived for a budget is a catalog that budget can actually serve. Priced per million
+ * on both sides: a model that charges for output is not free because its input is.
+ */
+export function admittedBy(
+  budget: Selection["budget"],
+  model: { readonly inputCostPerMillion: number; readonly outputCostPerMillion: number },
+): boolean {
+  return budget === "any" || (model.inputCostPerMillion === 0 && model.outputCostPerMillion === 0);
+}
+
 /** Provider identity is explicit; a model name or presentation label never selects it. */
 export const CatalogModelSchema = z.strictObject({
   key: identifier,

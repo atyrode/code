@@ -55,6 +55,9 @@ function job(jobId = "job-a"): PublicJob {
 }
 function receipt(): SessionReceipt {
   return { sessionId: "01a0a008-88ed-7186-b28f-6356df68f8ed", model: "anthropic/native-model-3",
+    // What the overlay asked for, which OMP now reports beside what served (manifold-omp#50).
+    // Equal here: a substitution is that repository's contract to refuse, not this one's to model.
+    configuredModel: "anthropic/native-model-3",
     sessionPath: `${SESSION_GUEST_PATH}/2026-09-14T13-08-29-037Z_01a0a008-88ed-7186-b28f-6356df68f8ed.jsonl`,
     finalMessage: "The change is in place.", usage: { input: 91, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.004 },
     exitCode: 0, failure: null };

@@ -264,4 +264,77 @@ describe("pure typed scaffolding", () => {
     expect(draft.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
     expect(() => scaffoldInventory(inv, { specials: [{ ...special, id: "gpt-missing-6" }] })).toThrow("probe_invalid_input");
   });
+
+  /**
+   * A provider addresses its free tier with a variant suffix (`vendor/model:free`), and the two
+   * facts this test pins are that such an address reaches a catalog at all, and that a budget
+   * decides WHAT IS LADDERED rather than filtering afterwards. Before the fix the same inventory
+   * derived a catalog whose free budget was unsatisfiable at every capability, while the
+   * inventory itself held a complete free ladder — the constraint was answerable and unanswered.
+   */
+  function mixedInventory(): InventoryReceipt {
+    // The live shape: one free model, which wins the cheapest rung and only that rung, while the
+    // tiers the routes actually need are paid. A free budget applied after this ladder is chosen
+    // has nothing to route to above tier 1, even though the listing could have laddered free.
+    const models = [
+      { id: "alpha-1:free", cost: 0, level: "low", context: 100_000 },
+      { id: "delta-2", cost: 1, level: "medium", context: 200_000 },
+      { id: "delta-3", cost: 2, level: "high", context: 300_000 },
+      { id: "delta-4", cost: 3, level: "max", context: 400_000 },
+    ];
+    return parseInventoryObservation(
+      { models: models.map(model => ({ ...row("openrouter", model.id), thinking: [model.level], contextWindow: model.context,
+        cost: { input: model.cost, output: model.cost * 5, cacheRead: 0, cacheWrite: 0 } })) },
+      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, "18.1.14");
+  }
+  function freeLadderInventory(): InventoryReceipt {
+    // The same listing's free tier, which does carry separating evidence of its own.
+    const models = [
+      { id: "alpha-1:free", level: "low", context: 100_000 },
+      { id: "beta-2:free", level: "high", context: 200_000 },
+      { id: "gamma-3:free", level: "max", context: 400_000 },
+    ];
+    return parseInventoryObservation(
+      { models: models.map(model => ({ ...row("openrouter", model.id), thinking: [model.level], contextWindow: model.context,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })) },
+      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, "18.1.14");
+  }
+
+  test("a free budget ladders only what costs nothing, and a variant address is not a disqualification", () => {
+    const mixed = mixedInventory();
+
+    // Derived under `any`, the free model is tier 1 and every tier above it is paid, so the
+    // constraint cannot be met by a catalog that was laddered without it.
+    const paid = compileCatalog(scaffoldInventory(mixed, { specials: [], budget: "any" }).document);
+    expect(paid.models.filter(model => model.inputCostPerMillion === 0).map(model => model.tier)).toEqual([1]);
+    expect(() => reviewCatalog(paid, { ...defaultSelection(paid), budget: "free" }, 101)).toThrow("budget_unsatisfiable");
+
+    // Derived under `free`, the same free tier ladders on its own evidence — variant addresses
+    // and all — and the constraint is met rather than refused.
+    const inv = freeLadderInventory();
+    const draft = scaffoldInventory(inv, { specials: [], budget: "free" });
+    expect(draft.document.models.map(model => [model.tier, model.id])).toEqual([[1, "alpha-1:free"], [2, "beta-2:free"], [3, "gamma-3:free"]]);
+    const free = compileCatalog(draft.document);
+    const review = reviewCatalog(free, { ...defaultSelection(free), budget: "free" }, 101);
+    expect(review.selection.budget).toBe("free");
+    // Nothing paid may appear anywhere in a route, lead or fallback: that is the whole constraint.
+    const routed = review.routes.flatMap(route => [route.lead, ...route.fallback]);
+    expect(routed.length).toBeGreaterThan(0);
+    expect(routed.every(choice => free.model(choice.key).inputCostPerMillion === 0 && free.model(choice.key).outputCostPerMillion === 0)).toBe(true);
+
+    // The budget also bounds what a benchmark would probe, which is what a probe run spends.
+    expect(benchmarkCandidates(mixed, { specials: [], budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
+    expect(benchmarkCandidates(mixed, { specials: [], budget: "any" }).candidates).toHaveLength(4);
+  });
+
+  test("addresses differing only by a character outside the key alphabet keep distinct keys", () => {
+    const inv = mixedInventory();
+    // `:` and `-` both fell outside the identifier alphabet and both folded to `-`, so these two
+    // distinct models produced one key. Folding made them indistinguishable; escaping does not.
+    inv.models.push({ ...inv.models[0]!, id: "alpha-1-free" });
+    const keys = benchmarkCandidates(inv, { specials: [], budget: "any" }).candidates.map(candidate => candidate.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain("openrouter.alpha-1_3Afree");
+    expect(keys).toContain("openrouter.alpha-1-free");
+  });
 });
