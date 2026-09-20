@@ -59,7 +59,7 @@ export {
   type SessionComposition,
   type Target,
   type Workspace,
-} from "../atyrode.code/contract.ts";
+} from "../code/contract.ts";
 /** The prompt's bound, in BYTES, owned by OMP because the prompt reaches the machine as one
  * entry of the job input map the hub bounds. Code's door takes OMP's schema itself, so a
  * caller that checks a prompt against this number is checking the rule Code enforces. */

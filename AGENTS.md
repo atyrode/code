@@ -142,15 +142,15 @@ comments, never another contributor's branch. Published tags are immutable.
 | Path | Role |
 | --- | --- |
 | `plugins/domain/` | Catalogs, four-level ladders, routing, estimates, exact account choices, usage projection, probe receipt policy and suggestions |
-| `plugins/atyrode.code/contract.ts` | Code action schemas and the policy-only typed client |
-| `plugins/atyrode.code/context.ts` | Minimal guest context, named refusals and canonical digests |
-| `plugins/atyrode.code/state.ts` | Container-scoped CAS state, explicit legacy adoption and the named schema-2-to-3 native migration |
-| `plugins/atyrode.code/server.ts` | Governed Code policy handlers; no OMP proxy |
-| `plugins/atyrode.code/workflow.ts` | React-free ordinary Code/OMP/native-deployment workflow used by web and headless clients |
-| `plugins/atyrode.code/service-{setup,policies}.ts` | Optional external suggestion classifier only |
-| `plugins/atyrode.code/{machine-web,permission-plan,permission-review}.ts(x)` | OMP observation, native review and browser authority boundaries |
-| `plugins/atyrode.code/generator/` | Workbench, catalog editor, four-level dials, onboarding and session launch presentation |
-| `plugins/atyrode.code/accounts/`, `usage/` | Shared account choices, OMP sign-in handoff and usage presentation |
+| `plugins/code/contract.ts` | Code action schemas and the policy-only typed client |
+| `plugins/code/context.ts` | Minimal guest context, named refusals and canonical digests |
+| `plugins/code/state.ts` | Container-scoped CAS state, explicit legacy adoption and the named schema-2-to-3 native migration |
+| `plugins/code/server.ts` | Governed Code policy handlers; no OMP proxy |
+| `plugins/code/workflow.ts` | React-free ordinary Code/OMP/native-deployment workflow used by web and headless clients |
+| `plugins/code/service-{setup,policies}.ts` | Optional external suggestion classifier only |
+| `plugins/code/{machine-web,permission-plan,permission-review}.ts(x)` | OMP observation, native review and browser authority boundaries |
+| `plugins/code/generator/` | Workbench, catalog editor, four-level dials, onboarding and session launch presentation |
+| `plugins/code/accounts/`, `usage/` | Shared account choices, OMP sign-in handoff and usage presentation |
 | `plugins/pack.ts` | In-memory compilation of four Code bundles; no source staging or runtime artifacts |
 | `plugins/scripts/prepare-integration.ts` | Exact OMP source/dependency preparation for the gate |
 | `plugins/scripts/verify-browser.ts` | Real disposable browser acceptance with real OMP bundles and synthetic unavailable native resources |

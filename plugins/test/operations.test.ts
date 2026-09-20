@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { ServiceConfigurationSchema, ServiceReplySchema, type ServiceConfiguration } from "@manifold/protocol";
 import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt } from "@atyrode/manifold-omp";
 import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
-  type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../atyrode.code/contract.ts";
-import { digestOf, type CodeContext } from "../atyrode.code/context.ts";
-import { handlers } from "../atyrode.code/server.ts";
-import { configurationMigration } from "../atyrode.code/state.ts";
+  type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
+import { digestOf, type CodeContext } from "../code/context.ts";
+import { handlers } from "../code/server.ts";
+import { configurationMigration } from "../code/state.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
-import { buildCodeServices } from "../atyrode.code/service-policies.ts";
+import { buildCodeServices } from "../code/service-policies.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
 const workspace = { containerId: target.containerId };

@@ -5,9 +5,9 @@ import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PAT
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type JobInputBinding, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
 import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
-  type CodeAction, type Target } from "../atyrode.code/contract.ts";
-import { digestOf, type CodeContext } from "../atyrode.code/context.ts";
-import { handlers } from "../atyrode.code/server.ts";
+  type CodeAction, type Target } from "../code/contract.ts";
+import { digestOf, type CodeContext } from "../code/context.ts";
+import { handlers } from "../code/server.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };

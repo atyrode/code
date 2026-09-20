@@ -11,9 +11,9 @@ import type * as CdpModule from "../../../manifold/scripts/cdp.ts";
 import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
-import type { ActionResult } from "../atyrode.code/contract.ts";
+import type { ActionResult } from "../code/contract.ts";
 import type { ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import type { PermissionPlan } from "../atyrode.code/permission-plan.ts";
+import type { PermissionPlan } from "../code/permission-plan.ts";
 
 const HELP = `Usage: bun plugins/scripts/verify-browser.ts [bundle-directory]
 Uses four prepacked Code bundles (default: plugins/dist) and three real upstream OMP bundles

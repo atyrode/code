@@ -39,7 +39,7 @@
   },
   "include": [
     "api/**/*",
-    "atyrode.code/**/*",
+    "code/**/*",
     "domain/**/*",
     "scripts/**/*",
     "test/**/*",
