@@ -5,9 +5,8 @@ import { join } from "node:path";
 
 let directory: string;
 const script = new URL("../../scripts/triage.ts", import.meta.url).pathname;
-const labels = await Bun.file(
-  new URL("../../.github/labels.json", import.meta.url),
-).json();
+const labels: { name: string; color: string; description: string }[] =
+  await Bun.file(new URL("../../.github/labels.json", import.meta.url)).json();
 
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "code-triage-test-"));
@@ -43,22 +42,29 @@ async function run(
   options: {
     comments?: Record<string, { body: string; user: { login: string } }[]>;
     pulls?: { number: number; body: string; draft: boolean }[];
+    labelColor?: string;
+    mode?: "--report" | "--next";
   } = {},
 ) {
-  const child = Bun.spawn([process.execPath, script, "--next"], {
-    env: {
-      ...process.env,
-      PATH: `${directory}:${process.env.PATH}`,
-      TRIAGE_FIXTURE: JSON.stringify({
-        issues,
-        labels,
-        comments: options.comments ?? {},
-        pulls: options.pulls ?? [],
-      }),
+  const child = Bun.spawn(
+    [process.execPath, script, options.mode ?? "--next"],
+    {
+      env: {
+        ...process.env,
+        PATH: `${directory}:${process.env.PATH}`,
+        TRIAGE_FIXTURE: JSON.stringify({
+          issues,
+          labels: options.labelColor
+            ? labels.map((label) => ({ ...label, color: options.labelColor }))
+            : labels,
+          comments: options.comments ?? {},
+          pulls: options.pulls ?? [],
+        }),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
     },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  );
   const [output, error, status] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -129,11 +135,7 @@ test("complete holds and named dependencies stay out of the priority ordered rea
       ["needs-operator"],
       "## Decision\nQuestion: Retain?\nOptions:\n- A — Yes\n- B — No\nRecommended: A\nUnblocks: ready work\n\n## Context\nOther details",
     ),
-    issue(
-      3,
-      ["blocked"],
-      "Depends on https://github.com/atyrode/manifold-omp/issues/1",
-    ),
+    issue(3, ["blocked"], "Depends on (#12)."),
     issue(4, ["agent-ready", "p1", "documentation"]),
   ]);
   expect(result.status).toBe(0);
@@ -141,4 +143,15 @@ test("complete holds and named dependencies stay out of the priority ordered rea
   expect(result.output.indexOf("p1 #4 Work 4")).toBeLessThan(
     result.output.indexOf("p3 #1 Work 1"),
   );
+});
+
+test("cosmetic label drift is reported without suppressing otherwise ready work", async () => {
+  const issues = [issue(1, ["agent-ready", "p2", "process"])];
+  const queue = await run(issues, { labelColor: "ffffff" });
+  expect(queue.status).toBe(0);
+  expect(queue.output).toContain("LABEL labels:");
+  expect(queue.output).toContain("p2 #1 Work 1");
+  const report = await run(issues, { labelColor: "ffffff", mode: "--report" });
+  expect(report.status).toBe(1);
+  expect(report.output).toContain("LABEL labels:");
 });

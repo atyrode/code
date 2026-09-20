@@ -79,19 +79,21 @@ const inventory = JSON.parse(
 ) as Label[];
 const states = ["needs-triage", "agent-ready", "needs-operator", "blocked"];
 const violations: string[] = [];
+const labelDrift: string[] = [];
 const counts = Object.fromEntries(states.map((state) => [state, 0]));
 const ready: Issue[] = [];
 const reference =
-  /(?:^|\s)(?:[\w.-]+\/[\w.-]+)?#\d+\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+\b/;
+  /(?:^|[^\w/])(?:[\w.-]+\/[\w.-]+)?#\d+\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+\b/;
 
 for (const wanted of inventory) {
   const actual = data.labels.find((label) => label.name === wanted.name);
-  if (
-    !actual ||
+  if (!actual) {
+    violations.push(`labels: ${wanted.name} is missing`);
+  } else if (
     actual.color.toLowerCase() !== wanted.color.toLowerCase() ||
     actual.description !== wanted.description
   ) {
-    violations.push(`labels: ${wanted.name} differs from .github/labels.json`);
+    labelDrift.push(`labels: ${wanted.name} differs from .github/labels.json`);
   }
 }
 for (const issue of data.issues) {
@@ -160,6 +162,7 @@ console.log(
     .join("; "),
 );
 for (const violation of violations) console.log(`FAIL ${violation}`);
+for (const drift of labelDrift) console.log(`LABEL ${drift}`);
 if (args[0] === "--next") {
   const pending = data.pulls.filter((pull) => !pull.draft);
   if (pending.length)
@@ -186,4 +189,5 @@ if (args[0] === "--next") {
   }
   if (pending.length) process.exitCode = 1;
 }
-if (violations.length) process.exitCode = 1;
+if (violations.length || (args[0] === "--report" && labelDrift.length))
+  process.exitCode = 1;

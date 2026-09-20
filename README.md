@@ -1,13 +1,13 @@
 # Code — `atyrode.code`
 
-**A TypeScript/React policy and presentation plugin inside
+**The opinionated OMP launcher inside
 [Manifold](https://github.com/atyrode/manifold), using the independent
 [`atyrode.omp`](https://github.com/atyrode/manifold-omp) plugin for governed
 agent execution.**
 
-Code supplies typed model catalogs, four-level capability ladders, routing and
-estimates, shared account choices, suggestions and the workbench. Its web panels
-and headless client use the same typed Code/OMP workflow. There is no standalone
+Code's TypeScript/React plugin supplies typed model catalogs, four-level capability
+ladders, routing and estimates, shared account choices, suggestions and the workbench.
+Its web panels and headless client use the same typed Code/OMP workflow. There is no standalone
 Code binary, machine runtime, broker, gateway, credential store or public
 process ABI.
 
@@ -21,6 +21,13 @@ Code depends on Manifold and the separately versioned `atyrode.omp` plugin and
 typed client package. **Babel is a downstream consumer of Code, not a Code
 dependency.** Its adoption is independent work; no old Code engine or runtime
 protocol is retained for it.
+
+Code owns custom launch and continuation choices; OMP supplies the runtime
+primitives that execute them. Moving the launcher into Manifold does not move
+its product policy into OMP. The workflows below describe what is implemented;
+session discovery and richer continuation remain tracked in
+[#5](https://github.com/atyrode/code/issues/5) and
+[#6](https://github.com/atyrode/code/issues/6).
 
 ## Native workflows
 

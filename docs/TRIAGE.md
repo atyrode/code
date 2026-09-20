@@ -34,6 +34,10 @@ Areas are `area:domain`, `area:plugins` and `area:tooling`. Preserve existing ty
 
 Run `bun scripts/triage.ts --report` for state/priority/hold violations, label drift and state counts, or `bun scripts/triage.ts --next` for the ordered ready queue. Both are read-only and use `gh`'s supported authentication. They do not determine authorization, prove acceptance or take over claims. Apply labels deliberately with `gh label create --force` using the inventory. No automatic issue closure, readiness decisions or stale-age deletion is authorized. Inactivity warrants inspection, never abandonment.
 
+Missing lifecycle labels and invalid issue states block dispatch. Cosmetic label
+color/description drift fails `--report` but is only a warning in `--next`; it
+does not hide otherwise eligible work.
+
 ## Holds and operator interviews
 
 A hold is for product direction, unresolved compatibility, security authority, spend, destructive data changes or live effects outside an existing grant. Technical failures, unavailable local tools and pending CI are work to diagnose, not decisions to outsource. Check recorded decisions before asking again.
