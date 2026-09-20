@@ -1,0 +1,23 @@
+name: Work item
+description: Report a problem with observable acceptance
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Current behavior, evidence and affected scope. Reports do not grant implementation authority.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Observable outcomes and verification boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Link any owning issues, pull requests or unresolved decisions.

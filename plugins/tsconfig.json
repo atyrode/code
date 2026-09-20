@@ -43,6 +43,7 @@
     "domain/**/*",
     "scripts/**/*",
     "test/**/*",
+    "../scripts/triage.ts",
     "../../manifold/packages/plugin/src/css-modules.d.ts"
   ]
 }
