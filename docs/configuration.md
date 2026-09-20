@@ -12,7 +12,7 @@ acceptance; the [plugin guide](../plugins/README.md) covers development.
 
 ## Shared configuration
 
-`plugins/atyrode.code/contract.ts` is authoritative. Shared state is addressed
+`plugins/code/contract.ts` is authoritative. Shared state is addressed
 by `{ containerId }`; a machine appears only in an execution target
 `{ containerId, machineId }`. `readConfiguration` returns
 `{ revision, configuration, legacyMachineId }`, with revision `0` when absent.

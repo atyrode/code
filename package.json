@@ -9,7 +9,7 @@
   },
   "files": [
     "plugins/api",
-    "plugins/atyrode.code/contract.ts",
+    "plugins/code/contract.ts",
     "plugins/domain"
   ],
   "dependencies": {

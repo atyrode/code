@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { actionDoor, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient } from "../atyrode.code/workflow.ts";
-import type { ActionResult } from "../atyrode.code/contract.ts";
+import { createCodeWorkflowClient } from "../code/workflow.ts";
+import type { ActionResult } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
 

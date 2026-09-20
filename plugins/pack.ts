@@ -6,10 +6,10 @@ import { PluginManifestSchema } from "@manifold/protocol";
 
 const pluginRoot = import.meta.dir;
 const family = [
-  ["atyrode.code", "atyrode.code"],
-  ["atyrode.code.accounts", "atyrode.code/accounts"],
-  ["atyrode.code.generator", "atyrode.code/generator"],
-  ["atyrode.code.usage", "atyrode.code/usage"],
+  ["atyrode.code", "code"],
+  ["atyrode.code.accounts", "code/accounts"],
+  ["atyrode.code.generator", "code/generator"],
+  ["atyrode.code.usage", "code/usage"],
 ] as const;
 
 /** Code only compiles its policy and presentation. Runtime artifacts and their

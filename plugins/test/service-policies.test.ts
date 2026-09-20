@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceInputSchema, type ServiceOperationPolicy } from "@manifold/protocol";
-import { buildCodeServices } from "../atyrode.code/service-policies.ts";
+import { buildCodeServices } from "../code/service-policies.ts";
 
 const classifier = { origin: "http://127.0.0.1:11434", model: "qwen3:8b" };
 
