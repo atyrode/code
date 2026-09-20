@@ -1,0 +1,72 @@
+[
+  {
+    "name": "needs-triage",
+    "color": "ededed",
+    "description": "Unclassified; not available for implementation"
+  },
+  {
+    "name": "agent-ready",
+    "color": "0e8a16",
+    "description": "Scoped, prioritized and settled within authorized work"
+  },
+  {
+    "name": "needs-operator",
+    "color": "d876e3",
+    "description": "Held for a concrete recorded operator decision"
+  },
+  {
+    "name": "blocked",
+    "color": "b60205",
+    "description": "Waiting on a named issue or pull request"
+  },
+  {
+    "name": "process",
+    "color": "c5def5",
+    "description": "Repository lifecycle and contributor process"
+  },
+  {
+    "name": "design",
+    "color": "d4c5f9",
+    "description": "Product or contract design"
+  },
+  {
+    "name": "tracking",
+    "color": "5319e7",
+    "description": "Umbrella; focused issues own acceptance"
+  },
+  {
+    "name": "area:plugins",
+    "color": "1d76db",
+    "description": "Plugin actions, workflows and React surfaces"
+  },
+  {
+    "name": "area:domain",
+    "color": "1d76db",
+    "description": "Catalog, routing and account policy"
+  },
+  {
+    "name": "area:tooling",
+    "color": "1d76db",
+    "description": "Build, verification and integration tooling"
+  },
+  {
+    "name": "p0",
+    "color": "b60205",
+    "description": "Confirmed deployed exposure, data loss, outage or release blocker"
+  },
+  {
+    "name": "p1",
+    "color": "d93f0b",
+    "description": "Documented contract violation or its prerequisite"
+  },
+  {
+    "name": "p2",
+    "color": "fbca04",
+    "description": "Accepted improvement or design work"
+  },
+  {
+    "name": "p3",
+    "color": "c2e0c6",
+    "description": "Hygiene and consistency"
+  }
+]
