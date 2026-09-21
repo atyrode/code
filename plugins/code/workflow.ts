@@ -1,6 +1,6 @@
 import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, type OmpSessionRef, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
-  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, canonicalJobJson } from "@manifold/protocol";
+  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type TerminalSummary, canonicalJobJson } from "@manifold/protocol";
 import { z } from "zod";
 import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
@@ -25,6 +25,13 @@ export type SessionReview = {
   native: OmpResult<"reviewSession">;
 };
 export type ResumeSessionOptions = SessionOptions & { profile?: { target: Target; expectedRevision: number } };
+export function runningSessionTerminals(ref: OmpSessionRef, terminals: readonly TerminalSummary[]): TerminalSummary[] {
+  return terminals.filter(terminal => terminal.status === "running" && terminal.machineId === ref.machineId &&
+    terminal.session?.harness === ref.harness && terminal.session.machineId === ref.machineId && terminal.session.sessionId === ref.sessionId);
+}
+export type ResumeSessionResult =
+  | { kind: "reopen"; terminals: TerminalSummary[] }
+  | { kind: "prepared"; prepared: OmpResult<"resumeSession"> };
 export type RuntimeConfigurationReview =
   | { kind: "account-runtime"; input: OmpInput<"reviewAccountRuntime">; result: OmpResult<"reviewAccountRuntime"> }
   | { kind: "gateway"; input: OmpInput<"reviewGateway">; result: OmpResult<"reviewGateway"> };
@@ -58,12 +65,31 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     const accounts = await omp("accounts", {});
     return code("composeSession", { containerId: target.containerId, expectedRevision, accounts, prompt });
   }
+  async function readMachines() {
+    return MachinesResponseSchema.parse(await dispatch("core.machines.list", {})).machines;
+  }
+  async function availableMachine(machineId: string) {
+    const machine = (await readMachines()).find(machine => machine.id === machineId);
+    if (!machine || !machine.online || machine.revoked) throw new WorkflowError("The selected machine is offline or inaccessible. Choose a destination explicitly; nothing was resumed.");
+    return machine;
+  }
+  async function listSessions(machineId: string) {
+    await availableMachine(machineId);
+    return omp("listSessions", { machineId });
+  }
+  async function runningSession(ref: OmpSessionRef) {
+    const session = OmpSessionRefSchema.parse(ref);
+    await availableMachine(session.machineId);
+    return runningSessionTerminals(session, TerminalsResponseSchema.parse(await dispatch("core.terminals.listAll", {})).terminals);
+  }
   return {
     code, omp, native,
     readSkillCatalog: (target: Target) => omp("readSkillCatalog", target),
-    listSessions: (machineId: string) => omp("listSessions", { machineId }),
-    async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}): Promise<OmpResult<"resumeSession">> {
+    listSessions, runningSession,
+    async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}, isCurrent: () => boolean = () => true): Promise<ResumeSessionResult> {
       const session = OmpSessionRefSchema.parse(ref);
+      const assertCurrent = () => { if (!isCurrent()) throw new WorkflowError("Destination or session choices changed. Nothing was placed."); };
+      assertCurrent();
       const { profile, ...policy } = options;
       const input: OmpInput<"resumeSession"> = { machineId: session.machineId, sessionId: session.sessionId, ...policy };
       if (profile) {
@@ -75,10 +101,22 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
         Object.assign(input, { containerId: profile.target.containerId, overlay: composition.overlay,
           accountPool: composition.accountPool, overrides: { model, thinking } });
       }
+      // Refresh native metadata and public terminal identity immediately before the resume
+      // effect. Missing correlation is unknown activity, not evidence that OMP stopped.
+      const sessions = await listSessions(session.machineId);
+      const terminals = await runningSession(session);
+      assertCurrent();
+      if (terminals.length) return { kind: "reopen", terminals };
+      if (!sessions.some(candidate => candidate.id === session.sessionId)) throw new WorkflowError("omp_session_unavailable");
       const prepared = await omp("resumeSession", input);
-      if (prepared.machineId !== session.machineId || prepared.sessionId !== session.sessionId)
+      if (prepared.machineId !== session.machineId || prepared.sessionId !== session.sessionId ||
+        prepared.runtime.machineId !== session.machineId || prepared.runtime.session?.harness !== session.harness ||
+        prepared.runtime.session.machineId !== session.machineId || prepared.runtime.session.sessionId !== session.sessionId)
         throw new WorkflowError("omp_session_binding_changed");
-      return prepared;
+      assertCurrent();
+      const appeared = await runningSession(session);
+      assertCurrent();
+      return appeared.length ? { kind: "reopen", terminals: appeared } : { kind: "prepared", prepared };
     },
     permissionPlan: (input: PermissionPlanInput) => observePermissionPlan(omp, input),
     async reviewPermissionStep(input: PermissionPlanInput, scopeDigest: string, index: number) {

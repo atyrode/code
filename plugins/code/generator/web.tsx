@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
-import type { MachineSummary } from "@manifold/protocol";
+import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { ControlIcon, ScrollRegion } from "@manifold/ui";
 import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
@@ -20,9 +20,10 @@ import { PermissionReview } from "../permission-review.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import { Automation, type AutomationChoice } from "./automation.tsx";
+import { FleetSessions } from "./fleet.tsx";
 
 type View = "profile" | "accounts" | "catalog" | "setup";
-function Workbench({ host, target, machine, available }: { host: HostServices; target: Target | null; machine: MachineSummary | null; available: boolean }) {
+function Workbench({ host, target, machine, machines, rosterError, available }: { host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; rosterError: string | null; available: boolean }) {
   const machineId = target?.machineId ?? "";
   const id = useId();
   const configuration = useCodeQuery(host, "readConfiguration", { containerId: host.containerId! });
@@ -42,11 +43,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const [preview, setPreview] = useState<SessionReview | null>(null);
   const [skillChoice, setSkillChoice] = useState<SkillChoice>(undefined);
   const [automation, setAutomation] = useState<AutomationChoice>(undefined);
-  const [sessionListMachine, setSessionListMachine] = useState<string | null>(null);
-  const showSessions = sessionListMachine === machineId;
   const [savedSessionId, setSavedSessionId] = useState("");
-  const savedSessions = useWorkflowQuery(host, `saved-sessions:${machineId}`, showSessions && target !== null,
-    () => codeWorkflow(host).listSessions(machineId));
   const [suggestion, setSuggestion] = useState<ActionResult<"suggest"> | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionPrompt, setSuggestionPrompt] = useState("");
@@ -68,7 +65,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       current.current.target?.machineId === machineId && current.current.available;
   }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useLayoutEffect(() => { setPreview(null); setSuggestion(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); setSessionListMachine(null); }, [machineId]);
+  useLayoutEffect(() => { setPreview(null); setSuggestion(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
   useEffect(() => {
     if (previousView.current === view) return;
     previousView.current = view;
@@ -93,7 +90,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   const stale = dials !== null && dials.revision !== record?.revision;
   const skillProblems = skillDraft(skillCatalog.data, skillChoice).problems;
   // A monotonic epoch also fences a policy/prompt round trip while native review is in flight.
-  const reviewKey = JSON.stringify([generation, target, record?.revision, defaults.data?.revision, skillCatalog.data?.revision, prompt, skillChoice, automation, dials]);
+  const reviewKey = JSON.stringify([generation, target, record?.revision, defaults.data?.revision, skillCatalog.data?.revision, prompt, skillChoice, automation, dials, savedSessionId]);
   const reviewScope = useRef({ key: reviewKey, epoch: 0 });
   if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
   const reviewedEpoch = useRef(-1);
@@ -129,14 +126,19 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     });
   }
   async function resume(withProfile: boolean) {
-    if (!target || !savedSessionId || !savedSessions.data?.some(session => session.id === savedSessionId) ||
+    if (!target || !savedSessionId || !available ||
       (withProfile && (!record || dials || !localReview))) return;
     await perform(async () => {
       setPreview(null);
-      const prepared = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
+      const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
         ...(withProfile ? { profile: { target, expectedRevision: record!.revision } } : {}),
         ...(skillChoice === undefined ? {} : { skills: skillChoice }), ...(automation === undefined ? {} : { automation }),
-      });
+      }, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+      if (result.kind === "reopen") {
+        if (destinationCurrent()) host.navigate(formatManifoldUri({ kind: "terminal", terminalId: result.terminals[0]!.id }));
+        return;
+      }
+      const prepared = result.prepared;
       const latest = current.current;
       if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || latest.host.principal.id !== host.principal.id ||
         prepared.machineId !== latest.target?.machineId || prepared.sessionId !== savedSessionId || latest.machine?.id !== prepared.machineId ||
@@ -148,27 +150,17 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       }
     });
   }
-  const savedSessionPanel = <section className="plugin-atyrode_code_generator__saved-sessions" aria-label="Saved sessions on selected machine">
-    <h2 className="plugin-atyrode_code__section-label">Saved sessions on this machine</h2>
-    <p>Native title and header metadata only. This is not a fleet archive or transcript import. Missing or incompatible sessions refuse; Code never creates a replacement.</p>
-    <button type="button" disabled={busy || !available} data-action="atyrode.omp.listSessions" onClick={() => { setSessionListMachine(machineId); savedSessions.refresh(); }}>List saved sessions</button>
-    {showSessions && <>
-      {savedSessions.error && <p role="status" className="plugin-atyrode_code__warning">{savedSessions.error}</p>}
-      {savedSessions.data ? <>
-        <label htmlFor={`${id}-saved-session`}>Saved session</label>
-        <select id={`${id}-saved-session`} disabled={busy || !available} value={savedSessionId} onChange={event => { setSavedSessionId(event.target.value); setPreview(null); }}>
-          <option value="">Choose a saved session</option>
-          {savedSessions.data.map(session => <option key={session.id} value={session.id}>{session.title ?? session.id} · {session.cwd} · {new Date(session.updatedAt).toLocaleString()}</option>)}
-        </select>
-        {!savedSessions.data.length && <p>No saved sessions reported for this machine.</p>}
-        <p>Resume saved state preserves persisted model and configured thinking, not historical tool or skill policy. Resume with this profile explicitly replaces model/thinking using the saved Code profile and its exact overlay and account pool. Current per-session skill and automation choices apply to either action. Omission uses ordinary automation and permitted ambient skills; choose restricted mode again when needed. Placement still requires native permission.</p>
-        <div className="plugin-atyrode_code__toolbar">
-          <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessions.data.some(session => session.id === savedSessionId) || skillProblems.length > 0} onClick={() => void resume(false)}>Resume saved state</button>
-          <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessions.data.some(session => session.id === savedSessionId) || !record || !!dials || !localReview || skillProblems.length > 0} onClick={() => void resume(true)}>Resume with this profile</button>
-        </div>
-      </> : !savedSessions.error && <p role="status">Reading native saved-session metadata…</p>}
+  const savedSessionPanel = <FleetSessions key={generation} host={host} machines={machines} rosterError={rosterError} machineId={machineId}
+    sessionId={savedSessionId} choose={setSavedSessionId} busy={busy}>
+    {running => <>
+      <p>Resume saved state preserves persisted model and configured thinking, not historical tool or skill policy. Resume with this profile explicitly replaces model/thinking using the saved Code profile and its exact overlay and account pool. Current per-session skill and automation choices apply to either action. Omission uses ordinary automation and permitted ambient skills; choose restricted mode again when needed. Placement still requires native permission.</p>
+      <p>Resume destination: {machine?.name ?? (machineId || "none")} · workspace {host.containerId}. A resume refreshes native inventory and public terminals first; any known running match is reopened instead.</p>
+      <div className="plugin-atyrode_code__toolbar">
+        <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || skillProblems.length > 0} onClick={() => void resume(false)}>Resume saved state</button>
+        <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || !record || !!dials || !localReview || skillProblems.length > 0} onClick={() => void resume(true)}>Resume with this profile</button>
+      </div>
     </>}
-  </section>;
+  </FleetSessions>;
   const profileState = stale ? "conflict" : dials ? "local" : "saved";
   const stateLabel = stale ? "Shared profile changed" : dials ? "Local changes" : "Saved profile";
   const navigation = <header className="plugin-atyrode_code_generator__workspace-nav">
@@ -287,12 +279,13 @@ function Launcher({ host }: PanelProps) {
           {machineId && !machine && <option value={machineId}>selected machine unavailable</option>}
           {machines?.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.revoked ? " · revoked" : entry.online ? "" : " · offline"}</option>)}
         </select>
+        <button type="button" onClick={refresh}>Refresh machines</button>
       </div>}
     </header>
     {error && <p role="status" className="plugin-atyrode_code__warning">{error} <button type="button" onClick={refresh}>refresh</button></p>}
     {!host.containerId && <p role="status">Open or create a workspace in Manifold to use Code here.</p>}
     {host.containerId && !target && <p role="status">{machines === null ? "Reading machines…" : machines.length ? "Choose an execution destination for this workspace." : "Enroll a machine in Manifold to get started."}</p>}
-    {host.containerId && <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} available={available} />}
+    {host.containerId && <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines} rosterError={error} available={available} />}
   </div></ScrollRegion>;
 }
 export default { id: GENERATOR_PLUGIN_ID, panels: { [LAUNCHER_PANEL]: Launcher } } satisfies { id: string; panels: Record<string, ComponentType<PanelProps>> };

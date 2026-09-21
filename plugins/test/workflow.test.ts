@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { actionDoor, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient } from "../code/workflow.ts";
+import type { TerminalSummary } from "@manifold/protocol";
 import type { ActionResult } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
@@ -31,9 +32,13 @@ function sessionFixture() {
   const resumeInputs: OmpInput<"resumeSession">[] = [];
   const sessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
   const resumed: OmpResult<"resumeSession"> = { machineId: target.machineId, sessionId,
-    runtime: { ...prepared.runtime, input: { sessionId } } };
+    runtime: { ...prepared.runtime, session: { harness: "atyrode.omp", machineId: target.machineId, sessionId }, input: { sessionId } } };
   let refusal: string | null = null;
+  const terminals: TerminalSummary[] = [];
+  const machines = [{ id: target.machineId, name: "Destination", online: true }];
   const workflow = createCodeWorkflowClient(async (door, raw) => {
+    if (door === "core.machines.list") return { machines };
+    if (door === "core.terminals.listAll") return { terminals };
     if (door === actionDoor("accounts")) return accounts;
     if (door === actionDoor("readDefaults")) return defaults;
     if (door === "atyrode.code.composeSession") return composition;
@@ -50,7 +55,7 @@ function sessionFixture() {
     if (door === actionDoor("listSessions")) return [{ id: sessionId, title: "Saved work", cwd: "/workspace", updatedAt: 1000 }];
     throw new Error(`Unexpected owner/action: ${door}`);
   });
-  return { workflow, composition, defaults, prepared, resumed, resumeInputs, sessionId, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
+  return { workflow, composition, defaults, prepared, resumed, resumeInputs, sessionId, terminals, machines, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
 }
 
 test("session composition changing at the same Code revision prevents native preparation", async () => {
@@ -88,7 +93,7 @@ test("saved-state resume omits replacement settings while explicit profile overr
   const f = sessionFixture();
   const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
   expect(await f.workflow.listSessions(target.machineId)).toEqual([{ id: f.sessionId, title: "Saved work", cwd: "/workspace", updatedAt: 1000 }]);
-  expect(await f.workflow.resumeSession(ref)).toEqual(f.resumed);
+  expect(await f.workflow.resumeSession(ref)).toEqual({ kind: "prepared", prepared: f.resumed });
   expect(f.resumeInputs[0]).toEqual({ machineId: target.machineId, sessionId: f.sessionId });
   await f.workflow.resumeSession(ref, { profile: { target, expectedRevision: 1 }, skills: { mode: "disabled" },
     automation: { mode: "restricted", toolNames: ["read"], delegation: "disabled" } });
@@ -108,6 +113,33 @@ test("resume rejects cross-machine profile or returned identity and preserves na
   await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_binding_changed");
   f.refuse("omp_session_unavailable");
   await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_unavailable");
+});
+
+test("fleet resume reopens only an exact running tuple and refuses offline destinations", async () => {
+  const f = sessionFixture();
+  const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
+  const terminal: TerminalSummary = { id: "terminal", machineId: target.machineId, name: "Saved work", createdAt: 1,
+    status: "running", exitCode: null, homeId: "actual-home", unplaced: false };
+  f.terminals.push(terminal, { ...terminal, id: "other-machine", machineId: "other", session: { ...ref, machineId: "other" } },
+    { ...terminal, id: "wrong-binding", machineId: "other", session: ref }, { ...terminal, id: "exited", status: "exited", session: ref });
+  expect(await f.workflow.runningSession(ref)).toEqual([]);
+  expect((await f.workflow.resumeSession(ref)).kind).toBe("prepared");
+  expect(f.resumeInputs).toHaveLength(1);
+  f.terminals.push({ ...terminal, id: "exact", session: ref });
+  const reopened = await f.workflow.resumeSession(ref);
+  expect(reopened).toEqual({ kind: "reopen", terminals: [{ ...terminal, id: "exact", session: ref }] });
+  expect(f.resumeInputs).toHaveLength(1);
+  f.machines[0]!.online = false;
+  await expect(f.workflow.resumeSession(ref)).rejects.toThrow("offline or inaccessible");
+  expect(f.resumeInputs).toHaveLength(1);
+});
+
+test("a stale destination guard refuses before native resume", async () => {
+  const f = sessionFixture();
+  const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
+  let observations = 0;
+  await expect(f.workflow.resumeSession(ref, {}, () => ++observations === 1)).rejects.toThrow("Destination or session choices changed");
+  expect(f.resumeInputs).toEqual([]);
 });
 
 test("a ready shared broker never requires another deployment receipt", async () => {
