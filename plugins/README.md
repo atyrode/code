@@ -158,12 +158,25 @@ what it replaced. From `plugins/`:
 bun add "github:atyrode/manifold-omp#<commit>"
 ```
 
-which moves both, then repeat the same commit in the publishable root `package.json`. Verify by
+Then repeat the same commit in the publishable root `package.json`. Verify by
 reading the resolved entry rather than trusting that the install succeeded:
 `grep manifold-omp plugins/bun.lock` shows the requested commit in full and the resolved one
 ABBREVIATED, so a resolution still naming the old build is visible as a different short hash
 beside a new full one. A silent wrong-commit build is worse than a failed install, because
 nothing reports it.
+
+If Bun reports the old resolved commit even after `bun add`, remove and re-add the dependency
+through Bun before continuing:
+
+```sh
+bun remove @atyrode/manifold-omp
+bun add "github:atyrode/manifold-omp#<commit>"
+```
+
+Bun 1.4.2 was observed retaining the old resolution and adding a duplicate requested key during
+the bounded-result SDK repin. This sequence regenerated one matching request and resolution;
+it did not copy or hand-edit the integrity entry. Recheck both manifests and the resolved
+lock entry, then run the frozen gate. Never treat a successful install as proof of the pin.
 
 From the Code root:
 
