@@ -10,6 +10,8 @@
   "files": [
     "plugins/api",
     "plugins/code/contract.ts",
+    "plugins/code/workflow.ts",
+    "plugins/code/permission-plan.ts",
     "plugins/domain"
   ],
   "dependencies": {

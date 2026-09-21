@@ -82,20 +82,35 @@ async function control(browser: BrowserInstance, description: string, expression
 // DOM evaluation only locates/scrolls the control. Activation is a real CDP pointer
 // gesture (not HTMLElement.click(), dispatched DOM events, or a React handler call).
 async function click(browser: BrowserInstance, expression: string): Promise<void> {
-  const point = await browser.evaluate<{ x: number; y: number }>(`(async () => {
-    const el = ${expression};
-    if (!(el instanceof HTMLElement) || el.matches(':disabled')) throw new Error('Control unavailable');
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-    const frame = Promise.withResolvers();
-    requestAnimationFrame(frame.resolve);
-    await frame.promise;
-    const rect = el.getBoundingClientRect();
-    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    if (rect.width <= 0 || rect.height <= 0 || !hit || !el.contains(hit)) throw new Error('Control occluded');
-    return { x, y };
-  })()`);
-  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  const point = await waitFor(async () => {
+    const candidate = await browser.evaluate<{ x: number; y: number } | null>(`(async () => {
+      const el = ${expression};
+      if (!(el instanceof HTMLElement) || el.matches(':disabled')) return null;
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const frame = Promise.withResolvers();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      if (!el.isConnected || el.matches(':disabled')) return null;
+      const rect = el.getBoundingClientRect();
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return rect.width > 0 && rect.height > 0 && hit && el.contains(hit) ? { x, y } : null;
+    })()`);
+    if (!candidate) return undefined;
+    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...candidate });
+    const stable = await browser.evaluate<boolean>(`(async () => {
+      const frame = Promise.withResolvers();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      const el = ${expression};
+      if (!(el instanceof HTMLElement) || el.matches(':disabled')) return false;
+      const rect = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(${candidate.x}, ${candidate.y});
+      return rect.x + rect.width / 2 === ${candidate.x} && rect.y + rect.height / 2 === ${candidate.y} &&
+        hit !== null && el.contains(hit);
+    })()`);
+    return stable ? candidate : undefined;
+  }, timeout, 50);
   await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount: 1 });
   await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount: 1 });
 }
@@ -714,6 +729,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "synthetic launch refusal is shown", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "A refused launch consumes its browser review");
     await click(browser, listMachine(first.machineId));
+    await until(browser, "first machine metadata settles before the next pointer target moves", `${element(`${fleetMachine(first.machineId)} [data-session-activity=\"unknown\"]`)} !== null`);
     await click(browser, listMachine(second.machineId));
     await until(browser, "both machines expose native metadata independently", `${element(`${fleetMachine(first.machineId)} [data-session-activity=\"unknown\"]`)} !== null && ${element(`${fleetMachine(second.machineId)} [data-session-activity=\"running\"]`)} !== null`);
     assert.equal(await browser.evaluate(`${element(`${fleetMachine(first.machineId)} [data-terminal-home]`)} === null`), true, "Legacy name/header similarity does not fabricate a current workspace");

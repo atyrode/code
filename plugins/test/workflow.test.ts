@@ -23,16 +23,18 @@ function sessionFixture() {
     credentialId: 7, identityKey: "identity", type: "oauth", email: null, disabled: false, blocks: [],
   }] };
   const defaults: OmpResult<"readDefaults"> = { revision: 3, overlay: {}, updatedAt: null, updatedBy: null };
+  const sessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
   const prepared: OmpResult<"prepareSession"> = { destination: target, reviewDigest: "b".repeat(64), runtime: {
     machineId: target.machineId,
     pluginId: "atyrode.omp", operationId: "atyrode.omp.launch", installationRevision: "native-installation",
-    artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64), input: { opaqueNativeInput: "preserved" },
+    artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64), input: { opaqueNativeInput: "preserved", sessionId },
+    session: { harness: "atyrode.omp", machineId: target.machineId, sessionId },
   } };
   let preparations = 0;
   const resumeInputs: OmpInput<"resumeSession">[] = [];
-  const sessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
   const resumed: OmpResult<"resumeSession"> = { machineId: target.machineId, sessionId,
-    runtime: { ...prepared.runtime, session: { harness: "atyrode.omp", machineId: target.machineId, sessionId }, input: { sessionId } } };
+    runtime: { ...prepared.runtime, operationId: "atyrode.omp.resume",
+      session: { harness: "atyrode.omp", machineId: target.machineId, sessionId }, input: { sessionId } } };
   let refusal: string | null = null;
   const terminals: TerminalSummary[] = [];
   const machines = [{ id: target.machineId, name: "Destination", online: true }];
@@ -89,6 +91,34 @@ test("a native session response for a different destination cannot be placed", a
   await expect(fixture.workflow.prepareSession(review)).rejects.toThrow();
 });
 
+test("terminal preparation rejects operation, artifact, skill and session bindings not covered by its review", async () => {
+  const mutations: ((runtime: OmpResult<"prepareSession">["runtime"]) => void)[] = [
+    runtime => { runtime.pluginId = "another.plugin"; },
+    runtime => { runtime.operationId = "atyrode.omp.resume"; },
+    runtime => { runtime.installationRevision = "another-installation"; },
+    runtime => { runtime.artifactSha256 = "e".repeat(64); },
+    runtime => { runtime.resourceBindingDigest = "f".repeat(64); },
+    runtime => { runtime.inputs = [{ name: "optionalSkill0", from: { jobId: "unreviewed-job", output: "skill" } }]; },
+    runtime => { delete runtime.session; },
+    runtime => { runtime.session!.harness = "another.plugin"; },
+    runtime => { runtime.session!.sessionId = "fca82ad4-8c9e-4166-8130-472c7cae1559"; },
+  ];
+  for (const mutate of mutations) {
+    const fixture = sessionFixture();
+    const review = await fixture.workflow.reviewSession(target, 1, fixture.composition.prompt);
+    mutate(fixture.prepared.runtime);
+    await expect(fixture.workflow.prepareSession(review)).rejects.toThrow();
+  }
+});
+
+test("a different native operation cannot be substituted into an interactive launch review", async () => {
+  const fixture = sessionFixture();
+  const review = await fixture.workflow.reviewSession(target, 1, fixture.composition.prompt);
+  review.native.operationId = "atyrode.omp.session";
+  await expect(fixture.workflow.prepareSession(review)).rejects.toThrow("omp_review_changed");
+  expect(fixture.preparations()).toBe(0);
+});
+
 test("saved-state resume omits replacement settings while explicit profile overrides the persisted selection", async () => {
   const f = sessionFixture();
   const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
@@ -110,9 +140,42 @@ test("resume rejects cross-machine profile or returned identity and preserves na
   expect(f.resumeInputs).toEqual([]);
   f.resumed.sessionId = "fca82ad4-8c9e-4166-8130-472c7cae1559";
   f.resumed.runtime.input.sessionId = f.resumed.sessionId;
+  f.resumed.runtime.session!.sessionId = f.resumed.sessionId;
   await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_binding_changed");
   f.refuse("omp_session_unavailable");
   await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_unavailable");
+});
+
+test("explicit profile resume refuses Plan YOLO instead of silently changing policy", async () => {
+  const fixture = sessionFixture();
+  fixture.composition.planYolo = true;
+  await expect(fixture.workflow.resumeSession(
+    { harness: "atyrode.omp", machineId: target.machineId, sessionId: fixture.sessionId },
+    { profile: { target, expectedRevision: 1 } },
+  )).rejects.toThrow("omp_resume_plan_unsupported");
+  expect(fixture.resumeInputs).toEqual([]);
+});
+
+test("resume cannot return a terminal for another plugin or operation", async () => {
+  for (const field of ["pluginId", "operationId"] as const) {
+    const fixture = sessionFixture();
+    Object.assign(fixture.resumed.runtime, { [field]: "another.native-operation" });
+    await expect(fixture.workflow.resumeSession(
+      { harness: "atyrode.omp", machineId: target.machineId, sessionId: fixture.sessionId },
+    )).rejects.toThrow();
+  }
+});
+
+test("an exact running terminal reopens before unsupported profile-resume policy is considered", async () => {
+  const fixture = sessionFixture();
+  fixture.composition.planYolo = true;
+  const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: fixture.sessionId };
+  const terminal: TerminalSummary = { id: "already-running", machineId: target.machineId, name: "Saved work",
+    createdAt: 1, status: "running", exitCode: null, homeId: "actual-home", unplaced: false, session: ref };
+  fixture.terminals.push(terminal);
+  expect(await fixture.workflow.resumeSession(ref, { profile: { target, expectedRevision: 1 } }))
+    .toEqual({ kind: "reopen", terminals: [terminal] });
+  expect(fixture.resumeInputs).toEqual([]);
 });
 
 test("fleet resume reopens only an exact running tuple and refuses offline destinations", async () => {

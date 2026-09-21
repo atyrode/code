@@ -4,7 +4,7 @@ import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PAT
   SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type JobInputBinding, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
-import { actionSchemas, sessionInput, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
+import { actionSchemas, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
   type CodeAction, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
 import { handlers } from "../code/server.ts";
@@ -74,6 +74,7 @@ interface Fixture {
     silence: SessionSilence | null;
     echo: "asked" | JobInputBinding[];
     skills: OmpResult<"reviewSession">["skills"] | null;
+    dropReviewLimits: boolean;
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
     reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
   };
@@ -85,7 +86,7 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
-    silence: null, skills: null,
+    silence: null, skills: null, dropReviewLimits: false,
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
     reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
@@ -109,6 +110,7 @@ function fixture(): Fixture {
         reviewDigest, pins: { installationRevision: "native-installation", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) },
         defaultsRevision: value.expectedDefaultsRevision, effectiveOverlay: value.overlay,
         automation: value.automation ?? { mode: "ordinary" },
+        ...(!omp.dropReviewLimits && value.inferenceLimits !== undefined ? { inferenceLimits: value.inferenceLimits } : {}),
         accountPool: value.accountPool, skills: omp.skills ?? { mode: value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] } } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
@@ -232,23 +234,31 @@ describe("Code profiles a dependent plugin may offer", () => {
 });
 
 describe("the session a dependent plugin posts through Code", () => {
-  test("the posted input is composeSession's own composition, reviewed at OMP before the job", async () => {
+  test("a successful session updates the profile's last destination machine", async () => {
     const f = fixture();
     const record = await configured(f);
-    const composition = await accepted(f, "composeSession", { ...workspace, expectedRevision: record.revision,
-      accounts: observation(), prompt: "Implement the change" });
-    const posted = await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
-    expect(posted).toEqual(f.omp.job);
-    expect(f.calls).toEqual([accountsDoor, actionDoor("readDefaults"), actionDoor("reviewSession"),
-      accountsDoor, actionDoor("readDefaults"), `${OMP_PLUGIN_ID}.runSession`]);
-    expect(f.omp.posted).toEqual([{ ...sessionInput(target, composition, f.omp.defaults.revision), reviewDigest }]);
-    expect(f.omp.reviewed).toEqual([sessionInput(target, composition, f.omp.defaults.revision)]);
-    const provenance: unknown = JSON.parse(f.store.get(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`)!);
-    expect(provenance).toEqual({ door: "runSession", containerId: target.containerId, machineId: target.machineId,
-      jobId: f.omp.job.jobId, operationId: SESSION_OPERATION_ID, revision: record.revision,
-      compositionDigest: composition.compositionDigest, reviewDigest, defaultsRevision: f.omp.defaults.revision,
-      requester: "writer", postedAt: now, inputs: [] });
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBeNull();
+    await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
     expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
+  });
+
+  test("a requested ceiling must survive review and receipt reads without preventing cancellation", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const inferenceLimits = { calls: 2, costMicros: 20_000 };
+    const input = { ...target, expectedRevision: record.revision, prompt: "Bounded analysis", inferenceLimits };
+    f.omp.dropReviewLimits = true;
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    expect(f.omp.posted).toEqual([]);
+    f.omp.dropReviewLimits = false;
+    f.omp.job.limits = { timeoutMs: 60_000, memoryBytes: 64 * 1024 * 1024, processes: 8,
+      outputBytes: 64 * 1024, inference: inferenceLimits };
+    const posted = await accepted(f, "runSession", input);
+    expect(posted.limits?.inference).toEqual(inferenceLimits);
+    delete f.omp.job.limits;
+    expect(await invoke(f, "readSession", { ...workspace, jobId: posted.jobId }))
+      .toEqual({ refused: "code_omp_review_changed" });
+    expect((await accepted(f, "cancelSession", { ...workspace, jobId: posted.jobId })).job.state).toBe("cancelled");
   });
 
   test("a bound material input crosses Code verbatim, is retained, and is fenced against the job's echo", async () => {

@@ -48,7 +48,7 @@ export const SessionCompositionSchema = z.strictObject({
   prompt: sessionPrompt, planYolo: z.boolean(), compositionDigest: digest,
 });
 export type SessionComposition = z.infer<typeof SessionCompositionSchema>;
-export type SessionOptions = Pick<OmpInput<"reviewSession">, "skills" | "automation">;
+export type SessionOptions = Pick<OmpInput<"reviewSession">, "skills" | "automation" | "inferenceLimits">;
 /** OMP's reviewed session input, composed from one Code composition and OMP's own defaults.
  * The web's review, the web's preparation and the `runSession` door all pass through here, so
  * a job-shaped session is reviewed against the very input a terminal one is. */
@@ -57,7 +57,8 @@ export function sessionInput(target: Target, composition: SessionComposition,
   return { ...target, expectedDefaultsRevision, accountPool: composition.accountPool,
     overlay: composition.overlay, prompt: composition.prompt, planYolo: composition.planYolo,
     ...(options.skills === undefined ? {} : { skills: options.skills }),
-    ...(options.automation === undefined ? {} : { automation: options.automation }) };
+    ...(options.automation === undefined ? {} : { automation: options.automation }),
+    ...(options.inferenceLimits === undefined ? {} : { inferenceLimits: options.inferenceLimits }) };
 }
 /** Prepare the effective native selection, not the caller's potentially overlapping sets. */
 export function reviewedSkillSelection(skills: OmpResult<"reviewSession">["skills"]): OmpInput<"reviewSession">["skills"] {
@@ -69,7 +70,8 @@ export function reviewedSkillSelection(skills: OmpResult<"reviewSession">["skill
 /** Policy is native-owned: carry the reviewed restricted object intact, never rebuild a tool list. */
 export function reviewedSessionOptions(review: OmpResult<"reviewSession">): SessionOptions {
   return { skills: reviewedSkillSelection(review.skills),
-    ...(review.automation.mode === "restricted" ? { automation: review.automation } : {}) };
+    ...(review.automation.mode === "restricted" ? { automation: review.automation } : {}),
+    ...(review.inferenceLimits === undefined ? {} : { inferenceLimits: review.inferenceLimits }) };
 }
 /** What the generator's dials show for a saved selection: the model leading the default role,
  * spelled as the OMP overlay spells it, and the depth that role thinks at. */
@@ -110,6 +112,7 @@ export const SessionRunInputSchema = RevisionTargetSchema.extend({
   inputs: z.array(JobInputBindingSchema).max(16).optional(),
   skills: SessionInputSchema.shape.skills,
   automation: SessionInputSchema.shape.automation,
+  inferenceLimits: SessionInputSchema.shape.inferenceLimits,
 });
 export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SessionCancelInputSchema = WorkspaceSchema.extend({ jobId: id });

@@ -87,18 +87,37 @@ files, service state, credentials or backups.
   Ordinary new sessions remain unchanged. Selected skills are instruction-only;
   restricted ambient discovery and OMP task/advisor suppression are not OS sandboxing;
   permitted bash retains subprocess authority.
-- Selected-machine saved-session source lists native title/header metadata and
-  separates preserve-state resume from explicit current-profile model/thinking
-  overrides with exact overlay/pool. It neither creates a replacement identity nor
-  bypasses native terminal placement. Code#5 fleet/archive/import and Code#6
-  generalized same-session settings-origin/readback remain outside this path.
-- The added browser scenarios use synthetic metadata/review responses and refused
-  prepare/resume responses: they exercise policy rendering, round-trip stale-review
-  fencing, explicit versus preserve input and native refusal presentation, not
-  successful SDK execution. These local candidate checks do not qualify a released
-  dependency pin. The shared published-SDK migration remains blocked by preserved
-  credential-ordering regressions in [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72);
-  these additions are not shipped and no transition-ledger row advances.
+- Native fleet source reads bounded title/header metadata separately on each
+  permitted machine, keeping not-requested, pending, failed, unavailable, empty
+  and ready states distinct. Only an exact harness/machine/session correlation
+  exposes a running terminal and its authoritative home. Legacy absence means
+  unknown activity, not a stopped session or an inferred workspace.
+- Preserve-state resume and explicit current-profile model/thinking choices are
+  separate. Both re-observe native metadata and public terminals; a newly observed
+  running match reopens through the public terminal URI instead of creating a
+  replacement. Profile choices describe the next resume, not live effective state.
+- Disposable real-browser scenarios exercise fleet metadata, authoritative
+  reopening, independent machine failure/offline state, stale-response fencing,
+  preserve-versus-explicit inputs and native refusals using synthetic RPC responses.
+  They do not establish provider execution, governed consent or a qualified native
+  dependency pin.
+- Separate packaged native proof covers 20 offline scenarios using the published
+  CLI/SDK programs: fresh selected/disabled skills, authoritative project filters,
+  sealed resource reads, restricted tools, native resume, explicit model/thinking
+  precedence, missing/changed-state refusal and cancellation. Synthetic inference
+  in isolated network namespaces is not paid-provider or live-fleet acceptance.
+- The credential runtime retains its 18.1.14 graph and existing patch; the SDK
+  host has an independent, unpatched 18.2.7 graph. Native lifecycle accounting
+  uses public SDK hooks and passes the retained deadline/quiescence regressions
+  without copying credential algorithms or changing that patch. This does not
+  qualify the separate unpatched credential migration in
+  [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
+  Source integration requires both plugin gates against the declared native pin
+  and current CI. These additions are not in a released Code/OMP bundle, and no
+  transition-ledger row advances.
+- Portable captures/archive recovery, general live settings-origin inspection,
+  live per-account quota preservation and Code-owned upstream fallback repair are
+  not planned. Bounded Babel acceptance remains separate and unproven.
 
 ## Domain and safety constraints
 
