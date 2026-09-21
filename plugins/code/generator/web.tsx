@@ -1,13 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
-import type { MachineSummary } from "@manifold/protocol";
+import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { ControlIcon, ScrollRegion } from "@manifold/ui";
 import { compileCatalog } from "../../domain/catalog.ts";
 import { reviewCatalog } from "../../domain/routing.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import { familyPolicy, providerPolicy } from "../../domain/providers.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type ActionResult, type Target } from "../contract.ts";
-import { LAUNCH_OPERATION_ID, PROMPT_MAX_BYTES } from "@atyrode/manifold-omp";
+import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES } from "@atyrode/manifold-omp";
 import type { SessionReview } from "../workflow.ts";
 import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery, useCodeTarget } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
@@ -17,15 +17,20 @@ import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { Dials, Estimates, Routing } from "./dials.tsx";
 import { Onboarding } from "./onboarding.tsx";
 import { PermissionReview } from "../permission-review.tsx";
+import { OptionalSkills } from "./skills.tsx";
+import { skillDraft, type SkillChoice } from "./skill-draft.ts";
+import { Automation, type AutomationChoice } from "./automation.tsx";
+import { FleetSessions } from "./fleet.tsx";
 
 type View = "profile" | "accounts" | "catalog" | "setup";
-function Workbench({ host, target, machine, available }: { host: HostServices; target: Target | null; machine: MachineSummary | null; available: boolean }) {
+function Workbench({ host, target, machine, machines, rosterError, available }: { host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; rosterError: string | null; available: boolean }) {
   const machineId = target?.machineId ?? "";
   const id = useId();
   const configuration = useCodeQuery(host, "readConfiguration", { containerId: host.containerId! });
   const setup = useOmpQuery(host, "describeDestination", target);
   const classifier = useWorkflowQuery(host, `classifier:${JSON.stringify(target)}`, target !== null, () => codeWorkflow(host).classifier(target!));
   const defaults = useOmpQuery(host, "readDefaults", {});
+  const skillCatalog = useWorkflowQuery(host, `skills:${JSON.stringify(target)}`, target !== null, () => codeWorkflow(host).readSkillCatalog(target!));
   const record = configuration.data?.configuration ?? null;
   const [navigationState, setNavigationState] = useState<{ view: View; visited: readonly View[] }>({ view: "profile", visited: ["profile"] });
   const { view, visited } = navigationState;
@@ -36,6 +41,9 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   }
   const [dials, setDials] = useState<{ selection: Selection; revision: number; baseSelection: Selection | null; catalogDigest: string | null } | null>(null);
   const [preview, setPreview] = useState<SessionReview | null>(null);
+  const [skillChoice, setSkillChoice] = useState<SkillChoice>(undefined);
+  const [automation, setAutomation] = useState<AutomationChoice>(undefined);
+  const [savedSessionId, setSavedSessionId] = useState("");
   const [suggestion, setSuggestion] = useState<ActionResult<"suggest"> | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionPrompt, setSuggestionPrompt] = useState("");
@@ -57,7 +65,7 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       current.current.target?.machineId === machineId && current.current.available;
   }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { setPreview(null); setSuggestion(null); }, [machineId]);
+  useLayoutEffect(() => { setPreview(null); setSuggestion(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
   useEffect(() => {
     if (previousView.current === view) return;
     previousView.current = view;
@@ -80,13 +88,21 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
     try { return reviewCatalog(compiled, selection, Date.now()); } catch { return null; }
   }, [compiled, selection]);
   const stale = dials !== null && dials.revision !== record?.revision;
-  const previewCurrent = preview !== null && preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
-    preview.composition.prompt === prompt && preview.native.defaultsRevision === defaults.data?.revision && dials === null;
+  const skillProblems = skillDraft(skillCatalog.data, skillChoice).problems;
+  // A monotonic epoch also fences a policy/prompt round trip while native review is in flight.
+  const reviewKey = JSON.stringify([generation, target, record?.revision, defaults.data?.revision, skillCatalog.data?.revision, prompt, skillChoice, automation, dials, savedSessionId]);
+  const reviewScope = useRef({ key: reviewKey, epoch: 0 });
+  if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
+  const reviewedEpoch = useRef(-1);
+  const reviewEpoch = reviewScope.current.epoch;
+  const previewCurrent = preview !== null && reviewedEpoch.current === reviewEpoch && preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
+    preview.composition.prompt === prompt && preview.native.defaultsRevision === defaults.data?.revision && dials === null &&
+    skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
   const shownReview = previewCurrent ? preview.composition.review : localReview;
   const writable = canWriteCodeWorkspace(host);
   const canSuggest = classifier.data !== null && classifier.data !== undefined;
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
-  function refresh() { configuration.refresh(); setup.refresh(); classifier.refresh(); defaults.refresh(); }
+  function refresh() { configuration.refresh(); setup.refresh(); classifier.refresh(); defaults.refresh(); skillCatalog.refresh(); }
   function back() { setView("profile"); refresh(); }
   async function perform(work: () => Promise<void>) {
     if (pending.current || !writable) return;
@@ -103,12 +119,48 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
       setPreview(null);
       const prepared = await codeWorkflow(host).prepareSession(preview);
       const latest = current.current;
-      if (!destinationCurrent() || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
+      if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
         latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
-      if (mounted.current) { setPreview(null); setMessage({ text: "Terminal opened. Follow the session in OMP.", failed: false }); }
+      if (destinationCurrent()) { setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); setMessage({ text: "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.", failed: false }); }
     });
   }
+  async function resume(withProfile: boolean) {
+    if (!target || !savedSessionId || !available ||
+      (withProfile && (!record || dials || !localReview))) return;
+    await perform(async () => {
+      setPreview(null);
+      const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
+        ...(withProfile ? { profile: { target, expectedRevision: record!.revision } } : {}),
+        ...(skillChoice === undefined ? {} : { skills: skillChoice }), ...(automation === undefined ? {} : { automation }),
+      }, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+      if (result.kind === "reopen") {
+        if (destinationCurrent()) host.navigate(formatManifoldUri({ kind: "terminal", terminalId: result.terminals[0]!.id }));
+        return;
+      }
+      const prepared = result.prepared;
+      const latest = current.current;
+      if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || latest.host.principal.id !== host.principal.id ||
+        prepared.machineId !== latest.target?.machineId || prepared.sessionId !== savedSessionId || latest.machine?.id !== prepared.machineId ||
+        !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination or session choices changed");
+      if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
+      if (destinationCurrent()) {
+        setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
+        setMessage({ text: "Saved session opened in OMP. Per-session choices were cleared.", failed: false });
+      }
+    });
+  }
+  const savedSessionPanel = <FleetSessions key={generation} host={host} machines={machines} rosterError={rosterError} machineId={machineId}
+    sessionId={savedSessionId} choose={setSavedSessionId} busy={busy}>
+    {running => <>
+      <p>Resume saved state preserves persisted model and configured thinking, not historical tool or skill policy. Resume with this profile explicitly replaces model/thinking using the saved Code profile and its exact overlay and account pool. Current per-session skill and automation choices apply to either action. Omission uses ordinary automation and permitted ambient skills; choose restricted mode again when needed. Placement still requires native permission.</p>
+      <p>Resume destination: {machine?.name ?? (machineId || "none")} · workspace {host.containerId}. A resume refreshes native inventory and public terminals first; any known running match is reopened instead.</p>
+      <div className="plugin-atyrode_code__toolbar">
+        <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || skillProblems.length > 0} onClick={() => void resume(false)}>Resume saved state</button>
+        <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || !record || !!dials || !localReview || skillProblems.length > 0} onClick={() => void resume(true)}>Resume with this profile</button>
+      </div>
+    </>}
+  </FleetSessions>;
   const profileState = stale ? "conflict" : dials ? "local" : "saved";
   const stateLabel = stale ? "Shared profile changed" : dials ? "Local changes" : "Saved profile";
   const navigation = <header className="plugin-atyrode_code_generator__workspace-nav">
@@ -129,7 +181,8 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
   function frame(profile: ReactNode) {
     return <div className="plugin-atyrode_code_generator__workbench">
       {navigation}
-      <div hidden={view !== "profile"} ref={view === "profile" ? viewContent : undefined} className="plugin-atyrode_code_generator__view">{profile}</div>
+      {message && <p role="status" className={`plugin-atyrode_code_generator__feedback ${message.failed ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}`} data-failed={message.failed}>{message.text}</p>}
+      <div hidden={view !== "profile"} ref={view === "profile" ? viewContent : undefined} className="plugin-atyrode_code_generator__view">{profile}{savedSessionPanel}</div>
       {visited.includes("accounts") && <div hidden={view !== "accounts"} ref={view === "accounts" ? viewContent : undefined} className="plugin-atyrode_code_generator__view">
         <AccountsView host={host} target={target} available={available} onDone={() => finish("accounts")} />
       </div>}
@@ -158,7 +211,6 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
           <p>{stale ? "Your local choices are safe. Discard them to use the shared profile." : dials ? "Changes stay local until you save. Routing updates as you adjust." : previewCurrent ? "Check the account pool below, then explicitly launch." : "Adjust the profile, review accounts and runtime, then open OMP."}</p>
         </div>
       </section>
-      {message && <p role="status" className={`plugin-atyrode_code_generator__feedback ${message.failed ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}`} data-failed={message.failed}>{message.text}</p>}
       {!writable && <p role="status" className="plugin-atyrode_code__notice">Read-only workspace. Profile changes and launch require edit access.</p>}
       {configuration.error && <p role="status" className="plugin-atyrode_code__warning">{configuration.error}</p>}
       <div className="plugin-atyrode_code_generator__profile-grid">
@@ -189,12 +241,12 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
         <section className="plugin-atyrode_code_generator__launch" aria-labelledby={`${id}-launch-heading`} data-reviewed={previewCurrent}>
           <div className="plugin-atyrode_code_generator__launch-bar">
             <div><h2 id={`${id}-launch-heading`} className="plugin-atyrode_code__section-label">Start a session</h2><p>{previewCurrent ? "2 / 2 · Confirm and open OMP" : "1 / 2 · Review before opening"}</p></div>
-            <button type="button" className="plugin-atyrode_code__primary-action" data-action={previewCurrent ? "atyrode.omp.prepareSession" : "atyrode.omp.reviewSession"} disabled={busy || !writable || !available || !launchReady || !!dials || !localReview} aria-describedby={`${id}-launch-status`} onClick={() => {
+            <button type="button" className="plugin-atyrode_code__primary-action" data-action={previewCurrent ? "atyrode.omp.prepareSession" : "atyrode.omp.reviewSession"} disabled={busy || !writable || !available || !launchReady || !!dials || !localReview || skillProblems.length > 0} aria-describedby={`${id}-launch-status`} onClick={() => {
               if (previewCurrent) { void launch(); return; }
-              if (record && target) void perform(async () => { const value = await codeWorkflow(host).reviewSession(target, record.revision, prompt); if (destinationCurrent() && value.destination.machineId === machineId) setPreview(value); });
+              if (record && target) void perform(async () => { const value = await codeWorkflow(host).reviewSession(target, record.revision, prompt, { skills: skillChoice, automation }); if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); } });
             }}>{busy ? "Working…" : previewCurrent ? "Launch OMP" : "Review launch"}<span aria-hidden="true">{previewCurrent ? "↗" : "→"}</span></button>
           </div>
-          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to review and launch." : dials ? "Save your profile first. Local changes are not launched." : !available ? "The execution destination is offline." : !launchReady ? "Runtime approval is needed before launch." : !localReview ? "Resolve the profile's model catalog before launch." : previewCurrent ? "Reviewed against this saved revision, prompt, OMP defaults and destination. Opens a terminal in this workspace." : "Checks the current account pool and OMP-owned runtime. No terminal opens yet."}</p>
+          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to review and launch." : dials ? "Save your profile first. Local changes are not launched." : !available ? "The execution destination is offline." : !launchReady ? "Runtime approval is needed before launch." : !localReview ? "Resolve the profile's model catalog before launch." : skillProblems.length ? "Resolve the optional skill choices before launch." : previewCurrent ? "Reviewed against this saved revision, prompt, OMP defaults, skill selection and destination. Opens a terminal in this workspace." : "Checks the current account pool and OMP-owned runtime. No terminal opens yet."}</p>
           {previewCurrent && <div className="plugin-atyrode_code_generator__launch-review" role="status"><h3>Reviewed account pool</h3>
             <ul>{Object.entries(preview.composition.accountPool).map(([provider, accounts]) => <li key={provider} data-family={providerPolicy(provider)?.family ?? provider}><span>{providerPolicy(provider)?.label ?? provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
             <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ composition: preview.composition, native: preview.native }, null, 2)}</pre></details>
@@ -203,6 +255,10 @@ function Workbench({ host, target, machine, available }: { host: HostServices; t
           {/* Characters, because a textarea counts characters: the door's rule is bytes and
               refuses a multibyte prompt over it by name. */}
           <textarea id={`${id}-prompt`} rows={2} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should this session work on?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
+          <Automation choice={automation} reviewed={previewCurrent ? preview.native.automation : null} disabled={busy || !writable || !available}
+            change={value => { setAutomation(value); setPreview(null); setMessage(null); }} />
+          <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={skillChoice} restricted={automation?.mode === "restricted"} reviewed={previewCurrent ? preview.native.skills : null}
+            disabled={busy || !writable || !available} refresh={skillCatalog.refresh} change={value => { setSkillChoice(value); setPreview(null); setMessage(null); }} />
           {!launchReady && <PermissionReview host={host} target={target} intent="session" label="Review runtime setup" onReady={refresh} />}
           {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
         </section>
@@ -223,12 +279,13 @@ function Launcher({ host }: PanelProps) {
           {machineId && !machine && <option value={machineId}>selected machine unavailable</option>}
           {machines?.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.revoked ? " · revoked" : entry.online ? "" : " · offline"}</option>)}
         </select>
+        <button type="button" onClick={refresh}>Refresh machines</button>
       </div>}
     </header>
     {error && <p role="status" className="plugin-atyrode_code__warning">{error} <button type="button" onClick={refresh}>refresh</button></p>}
     {!host.containerId && <p role="status">Open or create a workspace in Manifold to use Code here.</p>}
     {host.containerId && !target && <p role="status">{machines === null ? "Reading machines…" : machines.length ? "Choose an execution destination for this workspace." : "Enroll a machine in Manifold to get started."}</p>}
-    {host.containerId && <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} available={available} />}
+    {host.containerId && <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines} rosterError={error} available={available} />}
   </div></ScrollRegion>;
 }
 export default { id: GENERATOR_PLUGIN_ID, panels: { [LAUNCHER_PANEL]: Launcher } } satisfies { id: string; panels: Record<string, ComponentType<PanelProps>> };

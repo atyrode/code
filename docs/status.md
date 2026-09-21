@@ -73,6 +73,54 @@ files, service state, credentials or backups.
 - Code's headless client and web use the same ordinary dispatch workflow. Babel
   is a potential downstream consumer, not a Code dependency or acceptance
   shortcut; no old process ABI is retained.
+- Optional skills come only from OMP's authorized immutable catalog and native
+  review. Code's workbench and headless workflow pass an ephemeral launch choice;
+  they do not discover host paths, download third-party skills, grant source-job
+  access or claim invocation. The disposable browser fixture has no sealed skill
+  source jobs: its real catalog is empty. Real-browser scenarios cover clear/disable-all,
+  refresh/navigation retention and destination/review invalidation. Separate synthetic
+  metadata exercises set expansion, deduplication, conflicts and stale catalog revisions;
+  it does not establish governed source admission or selected-skill execution.
+- Restricted automation source consumes OMP's shared schemas and supported tool
+  subset, displays native effective review policy and carries it to preparation
+  and one-shot posting. OMP's SDK registry is the enforcer, not a Code-side filter.
+  Ordinary new sessions remain unchanged. Selected skills are instruction-only;
+  restricted ambient discovery and OMP task/advisor suppression are not OS sandboxing;
+  permitted bash retains subprocess authority.
+- Native fleet source reads bounded title/header metadata separately on each
+  permitted machine, keeping not-requested, pending, failed, unavailable, empty
+  and ready states distinct. Only an exact harness/machine/session correlation
+  exposes a running terminal and its authoritative home. Legacy absence means
+  unknown activity, not a stopped session or an inferred workspace.
+- Preserve-state resume and explicit current-profile model/thinking choices are
+  separate. Both re-observe native metadata and public terminals; a newly observed
+  running match reopens through the public terminal URI instead of creating a
+  replacement. Profile choices describe the next resume, not live effective state.
+- Disposable real-browser scenarios exercise fleet metadata, authoritative
+  reopening, independent machine failure/offline state, stale-response fencing,
+  preserve-versus-explicit inputs and native refusals using synthetic RPC responses.
+  They do not establish provider execution, governed consent or a qualified native
+  dependency pin.
+- Separate packaged native proof covers 20 offline scenarios using the published
+  CLI/SDK programs: fresh selected/disabled skills, authoritative project filters,
+  sealed resource reads, restricted tools, native resume, explicit model/thinking
+  precedence, missing/changed-state refusal and cancellation. Synthetic inference
+  in isolated network namespaces is not paid-provider or live-fleet acceptance.
+- The credential runtime retains its 18.1.14 graph and existing patch; the SDK
+  host has an independent, unpatched 18.2.7 graph. Native lifecycle accounting
+  uses public SDK hooks and passes the retained deadline/quiescence regressions
+  without copying credential algorithms or changing that patch. This does not
+  qualify the separate unpatched credential migration in
+  [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
+  Code pins the merged native source at
+  [`c4898f0`](https://github.com/atyrode/manifold-omp/commit/c4898f0ff057c0a94ab0109953872420b4d9051e)
+  ([manifold-omp#74](https://github.com/atyrode/manifold-omp/pull/74)).
+  Source integration requires both plugin gates against the declared native pin
+  and current CI. These additions are not in a released Code/OMP bundle, and no
+  transition-ledger row advances.
+- Portable captures/archive recovery, general live settings-origin inspection,
+  live per-account quota preservation and Code-owned upstream fallback repair are
+  not planned. Bounded Babel acceptance remains separate and unproven.
 
 ## Domain and safety constraints
 

@@ -157,6 +157,16 @@
 .plugin-atyrode_code_generator__launch-review li[data-family="anthropic"] > span:first-child { color: var(--code-amber); }
 .plugin-atyrode_code_generator__launch-review li[data-family="deepseek"] > span:first-child { color: var(--code-positive); }
 .plugin-atyrode_code_generator__launch-review li > span:last-child { color: var(--code-muted); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation, .plugin-atyrode_code_generator__saved-sessions) { display: grid; gap: 0.65rem; min-width: 0; padding-block-start: 0.8rem; border-block-start: 1px solid var(--code-rule); font-size: 0.8125rem; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) :is(fieldset, ul) { display: grid; gap: 0.75rem; min-width: 0; margin: 0; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) fieldset { padding: 0.65rem; border: 1px solid var(--code-rule); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) label { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) label > input { width: auto; }
+.plugin-atyrode_code_generator__skills label > span { color: var(--code-muted); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation, .plugin-atyrode_code_generator__saved-sessions) :is(p, dd, select) { overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+.plugin-atyrode_code_generator__skills dl { display: grid; gap: 0.2rem; }
+.plugin-atyrode_code_generator__skills dt { color: var(--code-muted); }
+.plugin-atyrode_code_generator__skills dd { margin: 0 0 0.4rem; }
 .plugin-atyrode_code_generator__footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--code-dim); font-size: 0.7rem; }
 .plugin-atyrode_code_generator__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .plugin-atyrode_code_generator__onboarding { display: grid; gap: 1.5rem; min-width: 0; }

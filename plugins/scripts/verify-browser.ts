@@ -12,8 +12,9 @@ import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
 import type { ActionResult } from "../code/contract.ts";
-import type { ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { ResumeSessionInputSchema, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import type { PermissionPlan } from "../code/permission-plan.ts";
+import { formatManifoldUri, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
 
 const HELP = `Usage: bun plugins/scripts/verify-browser.ts [bundle-directory]
 Uses four prepacked Code bundles (default: plugins/dist) and three real upstream OMP bundles
@@ -81,20 +82,35 @@ async function control(browser: BrowserInstance, description: string, expression
 // DOM evaluation only locates/scrolls the control. Activation is a real CDP pointer
 // gesture (not HTMLElement.click(), dispatched DOM events, or a React handler call).
 async function click(browser: BrowserInstance, expression: string): Promise<void> {
-  const point = await browser.evaluate<{ x: number; y: number }>(`(async () => {
-    const el = ${expression};
-    if (!(el instanceof HTMLElement) || el.matches(':disabled')) throw new Error('Control unavailable');
-    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-    const frame = Promise.withResolvers();
-    requestAnimationFrame(frame.resolve);
-    await frame.promise;
-    const rect = el.getBoundingClientRect();
-    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    if (rect.width <= 0 || rect.height <= 0 || !hit || !el.contains(hit)) throw new Error('Control occluded');
-    return { x, y };
-  })()`);
-  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  const point = await waitFor(async () => {
+    const candidate = await browser.evaluate<{ x: number; y: number } | null>(`(async () => {
+      const el = ${expression};
+      if (!(el instanceof HTMLElement) || el.matches(':disabled')) return null;
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const frame = Promise.withResolvers();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      if (!el.isConnected || el.matches(':disabled')) return null;
+      const rect = el.getBoundingClientRect();
+      const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return rect.width > 0 && rect.height > 0 && hit && el.contains(hit) ? { x, y } : null;
+    })()`);
+    if (!candidate) return undefined;
+    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...candidate });
+    const stable = await browser.evaluate<boolean>(`(async () => {
+      const frame = Promise.withResolvers();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      const el = ${expression};
+      if (!(el instanceof HTMLElement) || el.matches(':disabled')) return false;
+      const rect = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(${candidate.x}, ${candidate.y});
+      return rect.x + rect.width / 2 === ${candidate.x} && rect.y + rect.height / 2 === ${candidate.y} &&
+        hit !== null && el.contains(hit);
+    })()`);
+    return stable ? candidate : undefined;
+  }, timeout, 50);
   await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount: 1 });
   await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", buttons: 0, clickCount: 1 });
 }
@@ -208,6 +224,21 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await selectDestination(browser, generatorDestination, first.machineId);
   const promptField = element(`${generator} .plugin-atyrode_code_generator__launch textarea`);
   await control(browser, "shared active profile ready", promptField, false);
+  const skills = element(`${generator} [aria-label="Optional skills"]`);
+  const skillCatalog = await callAction(server, writer.token, "atyrode.omp.readSkillCatalog", first);
+  assert(skillCatalog.ok, "The real destination exposes its authorized empty optional catalog");
+  assert.deepEqual((skillCatalog.result as OmpResult<"readSkillCatalog">).skills, [],
+    "The offline fixture publishes no unreviewed skill source");
+  await until(browser, "ordinary loading starts with zero optional choices", `${skills}?.dataset.mode === 'preserve'`);
+  await click(browser, workspaceButton("Disable all skills"));
+  await until(browser, "disable-all is a distinct launch choice", `${skills}?.dataset.mode === 'disabled'`);
+  await click(browser, workspaceButton("Refresh skill catalog"));
+  await click(browser, workspaceButton("Accounts"));
+  await click(browser, workspaceButton("Profile"));
+  assert.equal(await browser.evaluate(`${skills}.dataset.mode`), "disabled", "Unrelated navigation and refresh preserve the ephemeral skill choice");
+  await click(browser, workspaceButton("Clear optional choices"));
+  assert.equal(await browser.evaluate(`${skills}.dataset.mode`), "preserve", "Clearing optional choices restores ordinary loading instead of disabling it");
+  await click(browser, workspaceButton("Disable all skills"));
   const prompt = "Retain this task while choosing where OMP will execute.";
   await click(browser, promptField);
   await browser.typeText(prompt);
@@ -251,6 +282,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await selectDestination(browser, generatorDestination, second.machineId);
   assert.equal(await browser.evaluate(`${workspaceButton("Models")}.getAttribute('aria-current')`), "page", "Visited catalog view survives the destination switch");
   assert.equal(await browser.evaluate(`${importField}.value`), importDraft, "Unparsed JSON import stays local across machines");
+  await until(browser, "a new destination clears ad-hoc skill choices before they can be reused", `${skills}.dataset.mode === 'preserve'`);
   assert.equal(await browser.evaluate(`${promptField}.value`), prompt, "Hidden prompt stays mounted across machines");
   assert.equal(await browser.evaluate(`${accountDraft}.value`), accountDraftName, "Visited account editor retains its unsaved preset across destinations");
   assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code__account-exclusions`)}.textContent.includes(${JSON.stringify(exclusion.scope)})`), true,
@@ -277,6 +309,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await until(browser, "responsive profile remains usable", `${promptField}.getBoundingClientRect().width > 0`);
+  await click(browser, workspaceButton("Disable all skills"));
+  await key(browser, "Tab", 9);
+  assert.equal(await browser.evaluate(`document.activeElement?.textContent === 'Refresh skill catalog'`), true, "Skill controls remain keyboard reachable at a narrow viewport");
+  await click(browser, workspaceButton("Clear optional choices"));
   await click(browser, promptField);
   await key(browser, "End", 35);
   assert.equal(await browser.evaluate(`document.activeElement === ${promptField}`), true, "The prompt remains pointer- and keyboard-accessible at the narrow viewport");
@@ -493,11 +529,11 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
     "Synthetic folder readiness is not native approval evidence and creates no deployments");
 }
 
-/** Synthetic OMP review responses exercise browser invalidation only. Code's real
- * policy composes synthetic account facts; OMP preparation always refuses.
- * This cannot create credentials, approve consent or open a terminal. */
+/** Synthetic OMP/terminal observations exercise browser decisions only. Native
+ * preparation refuses; public terminal navigation uses synthetic correlations.
+ * This cannot create credentials, approve consent or open a new terminal. */
 async function syntheticPreviewScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, first: Target, second: Target): Promise<void> {
-  const saved = await readConfiguration(server, writer, first);
+  let saved = await readConfiguration(server, writer, first);
   assert(saved.configuration?.active && saved.configuration.selection);
   const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
     manifest: { machine: { operations: Record<string, unknown> } };
@@ -509,8 +545,34 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   const defaults = await callAction(server, writer.token, "atyrode.omp.readDefaults", {});
   assert(defaults.ok);
   const defaultsRevision = (defaults.result as OmpResult<"readDefaults">).revision;
-  let previewRequests = 0, prepareRequests = 0, holdNextPreview = false, intercepting = true;
+  let prepareRequests = 0, holdNextPreview = false, intercepting = true;
   let reviewedInput: Record<string, unknown> | null = null;
+  let reviewedSkills: OmpResult<"reviewSession">["skills"] = { mode: "preserve", catalogRevision: null, selected: [] };
+  const skillEntry = (id: string, title: string, conflicts: string[] = []): OmpResult<"readSkillCatalog">["skills"][number] => ({
+    id, name: id, title, purpose: `Synthetic ${title} instructions`, revision: "source-v1",
+    source: { jobId: `synthetic-${id}`, output: "skill", sha256: "a".repeat(64) },
+    license: { spdx: "MIT" }, review: { reviewedBy: "synthetic-owner", reviewedAt: 1000, reference: "synthetic-review" }, conflicts,
+  });
+  const skillCatalog: OmpResult<"readSkillCatalog"> = { revision: 7,
+    skills: [skillEntry("alpha", "Alpha"), skillEntry("beta", "Beta", ["alpha"]), skillEntry("gamma", "Gamma")],
+    sets: [{ id: "pair", title: "Reviewed pair", skillIds: ["alpha", "gamma"] }],
+    updatedAt: 1000, updatedBy: "synthetic-owner" };
+  let sessionVisible = true;
+  const resumedInputs: Record<string, unknown>[] = [];
+  const savedSessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
+  const fleetMachines = (await ownerAction(server, "core.machines.list", {}) as { machines: MachineSummary[] }).machines;
+  const realTerminals = await ownerAction(server, "core.terminals.listAll", {});
+  const terminalBase: TerminalSummary = { id: "synthetic-legacy", machineId: first.machineId, name: "Synthetic saved work",
+    createdAt: 1000, status: "running", exitCode: null, homeId: first.containerId, unplaced: false };
+  let fleetTerminals: TerminalSummary[] = [terminalBase, { ...terminalBase, id: "synthetic-second", machineId: second.machineId,
+    session: { harness: "atyrode.omp", machineId: second.machineId, sessionId: savedSessionId } }];
+  let secondInventoryFailed = false, terminalInventoryFailed = false, holdNextInventory = false;
+  const inventoryHeld = { release: null as (() => void) | null };
+  const navigations: string[] = [];
+  browser.on("Page.navigatedWithinDocument", event => { navigations.push(event.url as string); });
+  const fleetMachine = (machineId: string) => `${generator} [data-fleet-machine=\"${machineId}\"]`;
+  const listMachine = (machineId: string) => element(`${fleetMachine(machineId)} [data-action=\"atyrode.omp.listSessions\"]`);
+  const sessionSelect = `${fleetMachine(first.machineId)} select`;
   const held = { release: null as (() => void) | null };
   let fixtureFailure: unknown;
   const pending = new Set<Promise<void>>();
@@ -522,7 +584,12 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       const name = decodeURIComponent(new URL(request.url).pathname.split("/").at(-1)!);
       const input = JSON.parse(request.postData ?? "{}") as Record<string, unknown>;
       let outcome: unknown;
-      if (name === "atyrode.omp.accounts.accounts") {
+      if (name === "core.machines.list") {
+        outcome = { ok: true, result: { machines: fleetMachines } };
+      } else if (name === "core.terminals.listAll") {
+        outcome = terminalInventoryFailed ? { ok: false, denial: { rule: "forbidden", message: "synthetic_terminal_inventory_failed" } }
+          : { ok: true, result: { terminals: fleetTerminals } };
+      } else if (name === "atyrode.omp.accounts.accounts") {
         const scope = "browser-fixture-account-scope";
         const result: OmpResult<"accounts"> = { scope, status: "fresh", observedAt: Date.now(), accounts: [1, 7].map(credentialId => ({
           reference: { kind: "credential", scope, provider: "anthropic", credentialId }, credentialId,
@@ -537,19 +604,47 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
           state: ready ? "ready" : "missing", reason: ready ? null : "synthetic_unprepared_destination", deployment: null, services: [],
           operations: [{ operationId, pins, nativeReady: ready, callerRefusal: null, state: ready ? "ready" : "missing", reason: ready ? null : "native_resources_missing" }] };
         outcome = { ok: true, result };
+      } else if (name === "atyrode.omp.readSkillCatalog") {
+        outcome = { ok: true, result: input.machineId === first.machineId ? skillCatalog
+          : { revision: 0, skills: [], sets: [], updatedAt: null, updatedBy: null } };
       } else if (name === "atyrode.omp.reviewSession") {
-        previewRequests++;
         assert.equal(input.containerId, first.containerId);
         assert.equal(input.machineId, first.machineId, "An unprepared destination cannot request a session review");
         assert.equal(input.expectedDefaultsRevision, defaultsRevision);
         reviewedInput = input;
+        const choice = input.skills as OmpInput<"reviewSession">["skills"];
+        if (choice?.mode === "select") {
+          assert.equal(choice.expectedCatalogRevision, skillCatalog.revision);
+          const ids = new Set([...choice.skillIds, ...choice.setIds.flatMap(id => skillCatalog.sets.find(set => set.id === id)!.skillIds)]);
+          reviewedSkills = { mode: "selected", catalogRevision: skillCatalog.revision,
+            selected: skillCatalog.skills.filter(skill => ids.has(skill.id)) };
+        } else reviewedSkills = { mode: choice?.mode === "disabled" || input.automation ? "disabled" : "preserve", catalogRevision: null, selected: [] };
         if (holdNextPreview) { holdNextPreview = false; await new Promise<void>(resolve => { held.release = resolve; }); held.release = null; }
         outcome = { ok: true, result: { destination: first, operationId, pins, reviewDigest, defaultsRevision,
-          effectiveOverlay: input.overlay, accountPool: input.accountPool } };
+          effectiveOverlay: input.overlay, accountPool: input.accountPool,
+          automation: input.automation ?? { mode: "ordinary" },
+          skills: reviewedSkills } };
       } else if (name === "atyrode.omp.prepareSession") {
         prepareRequests++;
-        assert.deepEqual(input, { ...reviewedInput, reviewDigest }, "Prepare preserves the exact native target/defaults/overlay/prompt/account pool and review");
+        const { skills: _draftSkills, ...reviewed } = reviewedInput!;
+        const skills = reviewedSkills.mode === "selected" ? { mode: "select",
+          expectedCatalogRevision: reviewedSkills.catalogRevision, skillIds: reviewedSkills.selected.map(skill => skill.id), setIds: [] }
+          : reviewedSkills.mode === "disabled" ? { mode: "disabled" } : undefined;
+        assert.deepEqual(input, { ...reviewed, ...(skills ? { skills } : {}), reviewDigest },
+          "Prepare consumes native-reviewed effective selection, including canonical set expansion");
         outcome = { ok: false, denial: { rule: "forbidden", message: "omp_review_changed" } };
+      } else if (name === "atyrode.omp.listSessions") {
+        assert(input.machineId === first.machineId || input.machineId === second.machineId);
+        if (holdNextInventory && input.machineId === first.machineId) {
+          holdNextInventory = false;
+          await new Promise<void>(resolve => { inventoryHeld.release = resolve; }); inventoryHeld.release = null;
+        }
+        outcome = input.machineId === second.machineId && secondInventoryFailed
+          ? { ok: false, denial: { rule: "forbidden", message: "synthetic_inventory_failed" } }
+          : { ok: true, result: sessionVisible ? [{ id: savedSessionId, title: "Synthetic saved work", cwd: "/workspace", updatedAt: 1000 }] : [] };
+      } else if (name === "atyrode.omp.resumeSession") {
+        resumedInputs.push(input);
+        outcome = { ok: false, denial: { rule: "forbidden", message: "omp_session_unavailable" } };
       } else {
         await browser.send("Fetch.continueRequest", { requestId }); return;
       }
@@ -566,10 +661,47 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await control(browser, "synthetic first destination review enabled", launchControl, false);
     await click(browser, launchControl);
     await until(browser, "synthetic first destination review displayed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
+    const skillControl = (label: string) => `[...document.querySelectorAll('${generator} [aria-label="Optional skills"] label')].find(el => el.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('input')`;
+    await click(browser, skillControl("Reviewed pair"));
+    await click(browser, skillControl("Alpha"));
+    await click(browser, launchControl);
+    await until(browser, "overlapping skill selection is native-reviewed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li strong')].map(el => el.textContent)`),
+      ["Alpha", "Gamma"], "A set and individual choice render one effective selection without duplicates");
+    await click(browser, launchControl);
+    await until(browser, "selected-skill preparation refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
+    await click(browser, skillControl("Beta"));
+    await control(browser, "declared skill conflict prevents review", launchControl, true);
+    await until(browser, "declared conflict is explained", `${element(`${generator} [aria-label="Optional skills"]`)}.textContent.includes('conflicts with')`);
+    await click(browser, skillControl("Beta"));
+    skillCatalog.revision++;
+    await click(browser, workspaceButton("Refresh skill catalog"));
+    await until(browser, "changed catalog remains a stale draft", `${element(`${generator} [aria-label="Optional skills"]`)}.textContent.includes('changed from revision 7 to 8')`);
+    await control(browser, "stale catalog cannot silently rebase selection", launchControl, true);
+    await click(browser, workspaceButton("Clear optional choices"));
+    await control(browser, "cleared draft can be reviewed independently", launchControl, false);
+    await click(browser, workspaceButton("Disable all skills"));
+    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Changing skill mode invalidates an existing native review");
+    await click(browser, launchControl);
+    await until(browser, "disable-all review is displayed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
+    assert.deepEqual((reviewedInput as Record<string, unknown> | null)?.skills, { mode: "disabled" }, "The actual browser sends disable-all through the ordinary workflow");
+    const automationControl = (label: string) => `[...document.querySelectorAll('${generator} .plugin-atyrode_code_generator__automation label')].find(el => el.textContent.trim() === ${JSON.stringify(label)})?.querySelector('input')`;
+    await click(browser, automationControl("Restricted automation"));
+    await click(browser, automationControl("read"));
+    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false");
+    await click(browser, launchControl);
+    await until(browser, "native restricted policy is rendered", `${element(`${generator} [data-effective-automation]`)}?.dataset.effectiveAutomation === 'restricted'`);
+    assert.deepEqual((reviewedInput as Record<string, unknown> | null)?.automation, { mode: "restricted", toolNames: ["read"], delegation: "disabled" });
+    await click(browser, launchControl);
+    await until(browser, "restricted preparation refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
+    await click(browser, automationControl("read"));
+    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Tool changes consume native review");
+    await click(browser, automationControl("Ordinary session"));
+    const preparationsBeforeDestinationChange = prepareRequests;
     await selectDestination(browser, generatorDestination, second.machineId);
     await control(browser, "second destination cannot reuse first destination review", launchControl, true);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Changing destination invalidates the existing review");
-    assert.equal(prepareRequests, 0, "Destination selection never prepares a launch");
+    assert.equal(prepareRequests, preparationsBeforeDestinationChange, "Destination selection never prepares a launch");
     await selectDestination(browser, generatorDestination, first.machineId);
     await control(browser, "returning destination requires another review", launchControl, false);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "Returning to a machine cannot resurrect its earlier review");
@@ -582,16 +714,132 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     held.release!();
     await control(browser, "late first-machine review remains invalid", launchControl, false);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "In-flight reviews are fenced across a round-trip destination change");
+    holdNextPreview = true;
+    await click(browser, launchControl);
+    await waitFor(() => held.release !== null, timeout, 50);
+    await click(browser, element(`${generator} .plugin-atyrode_code_generator__launch textarea`));
+    await browser.send("Input.insertText", { text: "x" });
+    await key(browser, "Backspace", 8);
+    held.release!();
+    await control(browser, "round-trip prompt change fences late review", launchControl, false);
+    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false");
     await click(browser, launchControl);
     await until(browser, "current synthetic review displayed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
     await click(browser, launchControl);
     await until(browser, "synthetic launch refusal is shown", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "A refused launch consumes its browser review");
-    assert.equal(previewRequests, 3);
-    assert.equal(prepareRequests, 1);
+    await click(browser, listMachine(first.machineId));
+    await until(browser, "first machine metadata settles before the next pointer target moves", `${element(`${fleetMachine(first.machineId)} [data-session-activity=\"unknown\"]`)} !== null`);
+    await click(browser, listMachine(second.machineId));
+    await until(browser, "both machines expose native metadata independently", `${element(`${fleetMachine(first.machineId)} [data-session-activity=\"unknown\"]`)} !== null && ${element(`${fleetMachine(second.machineId)} [data-session-activity=\"running\"]`)} !== null`);
+    assert.equal(await browser.evaluate(`${element(`${fleetMachine(first.machineId)} [data-terminal-home]`)} === null`), true, "Legacy name/header similarity does not fabricate a current workspace");
+    assert.equal(await browser.evaluate(`${element(`${fleetMachine(second.machineId)} [data-terminal-home]`)}.textContent`), first.containerId, "Only exact terminal correlation exposes its authoritative current home");
+    await selectDestination(browser, sessionSelect, savedSessionId);
+    await click(browser, workspaceButton("Resume saved state"));
+    await until(browser, "saved-state refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
+    assert.deepEqual(resumedInputs[0], { machineId: first.machineId, sessionId: savedSessionId }, "Preserve resume must not silently inject a profile");
+    await click(browser, automationControl("Restricted automation"));
+    await click(browser, automationControl("read"));
+    await click(browser, workspaceButton("Resume with this profile"));
+    await until(browser, "Plan-YOLO profile refuses before native resume",
+      `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.textContent.includes('omp_resume_plan_unsupported') === true`);
+    assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
+    assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
+    await click(browser, workspaceButton("Profile"));
+    const extraDials = element(`${generator} .plugin-atyrode_code_generator__extra-dials`);
+    if (!await browser.evaluate(`${extraDials}.open`)) await click(browser, `${extraDials}.querySelector('summary')`);
+    const plans = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Plans')`;
+    await click(browser, `${plans}.querySelector('[data-value="false"]')`);
+    await click(browser, workspaceButton("Save profile"));
+    await until(browser, "supported resume profile is saved", `${element(`${generator} .plugin-atyrode_code_generator__draft`)} === null`);
+    const supported = await readConfiguration(server, writer, first);
+    assert(supported.configuration);
+    assert.deepEqual(supported, { ...saved, revision: saved.revision + 1, configuration: {
+      ...saved.configuration, revision: saved.configuration!.revision + 1,
+      updatedAt: supported.configuration.updatedAt, updatedBy: supported.configuration.updatedBy,
+      selection: { ...saved.configuration!.selection, planYolo: false },
+    } }, "The explicit profile save changes only its chosen policy and revision metadata");
+    saved = supported;
+    await selectDestination(browser, sessionSelect, savedSessionId);
+    await click(browser, workspaceButton("Resume with this profile"));
+    await until(browser, "explicit profile resume refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
+    assert.equal(resumedInputs.length, 2);
+    const explicit = ResumeSessionInputSchema.parse(resumedInputs[1]);
+    assert.equal(explicit.machineId, first.machineId);
+    assert.equal(explicit.sessionId, savedSessionId);
+    assert.deepEqual(explicit.overlay, (reviewedInput as Record<string, unknown> | null)?.overlay);
+    assert.deepEqual(explicit.accountPool, (reviewedInput as Record<string, unknown> | null)?.accountPool);
+    assert.deepEqual(explicit.automation, { mode: "restricted", toolNames: ["read"], delegation: "disabled" });
+    assert(explicit.overrides?.model && explicit.overrides.thinking && explicit.overlay?.modelRoles?.default);
+    assert.equal(explicit.overrides.model, explicit.overlay.modelRoles.default);
+    assert.equal(explicit.overrides.thinking, explicit.overrides.model.split(":").at(-1));
+    secondInventoryFailed = true;
+    await click(browser, listMachine(second.machineId));
+    await until(browser, "per-machine inventory failure is not empty", `${element(fleetMachine(second.machineId))}.dataset.inventoryState === 'failed'`);
+    fleetMachines.find(machine => machine.id === second.machineId)!.online = false;
+    await click(browser, workspaceButton("Refresh machines"));
+    await until(browser, "offline inventory remains unavailable", `${element(fleetMachine(second.machineId))}.dataset.inventoryState === 'unavailable'`);
+    await selectDestination(browser, generatorDestination, second.machineId);
+    assert.equal(await browser.evaluate(`${element(generatorDestination)}.value`), second.machineId, "An offline destination is preserved, not replaced");
+    await control(browser, "offline saved resume is refused", workspaceButton("Resume saved state"), true);
+    await selectDestination(browser, generatorDestination, first.machineId);
+    holdNextInventory = true;
+    await click(browser, listMachine(first.machineId));
+    await waitFor(() => inventoryHeld.release !== null, timeout, 50);
+    await selectDestination(browser, generatorDestination, second.machineId);
+    await selectDestination(browser, generatorDestination, first.machineId);
+    inventoryHeld.release!();
+    await until(browser, "late inventory cannot repopulate a round-trip destination", `${element(fleetMachine(first.machineId))}.dataset.inventoryState === 'not-requested'`);
+    assert.equal(await browser.evaluate(`${element(sessionSelect)} === null`), true);
+    await click(browser, listMachine(first.machineId));
+    await selectDestination(browser, sessionSelect, savedSessionId);
+    holdNextInventory = true;
+    await click(browser, workspaceButton("Resume saved state"));
+    await waitFor(() => inventoryHeld.release !== null, timeout, 50);
+    await selectDestination(browser, generatorDestination, second.machineId);
+    await selectDestination(browser, generatorDestination, first.machineId);
+    inventoryHeld.release!();
+    await control(browser, "late resume preflight releases without native preparation", listMachine(first.machineId), false);
+    assert.equal(resumedInputs.length, 2, "A destination round trip fences the pending resume effect");
+    await click(browser, listMachine(first.machineId));
+    await selectDestination(browser, sessionSelect, savedSessionId);
+    terminalInventoryFailed = true;
+    await click(browser, workspaceButton("Resume saved state"));
+    await until(browser, "failed terminal refresh refuses resume", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
+    assert.equal(resumedInputs.length, 2, "Unknown terminal inventory failure cannot authorize resume");
+    terminalInventoryFailed = false;
+    sessionVisible = false;
+    await click(browser, listMachine(first.machineId));
+    await until(browser, "removed saved session becomes empty", `${element(fleetMachine(first.machineId))}.dataset.inventoryState === 'empty'`);
+    await control(browser, "disappeared saved state cannot be resumed", workspaceButton("Resume saved state"), true);
+    await control(browser, "disappeared session cannot receive profile overrides", workspaceButton("Resume with this profile"), true);
+    sessionVisible = true;
+    await click(browser, listMachine(first.machineId));
+    await selectDestination(browser, sessionSelect, savedSessionId);
+    // The terminal appears after the user's selection. The fresh pre-resume read must
+    // navigate to that exact public terminal without invoking OMP preparation.
+    holdNextInventory = true;
+    await click(browser, workspaceButton("Resume saved state"));
+    await waitFor(() => inventoryHeld.release !== null, timeout, 50);
+    fleetTerminals = [{ ...terminalBase, id: "synthetic-exact",
+      session: { harness: "atyrode.omp", machineId: first.machineId, sessionId: savedSessionId } }];
+    inventoryHeld.release!();
+    const terminalRoute = `/uri/${encodeURIComponent(formatManifoldUri({ kind: "terminal", terminalId: "synthetic-exact" }))}`;
+    await waitFor(() => navigations.some(url => new URL(url).pathname === terminalRoute), timeout, 50);
+    assert.equal(resumedInputs.length, 2, "A newly correlated running session reopens instead of preparing a replacement");
+    await until(browser, "public terminal URI resolves back to the authoritative home", `location.pathname === ${JSON.stringify(`/p/${first.containerId}`)} && ${element(fleetMachine(first.machineId))} !== null`);
+    await click(browser, listMachine(first.machineId));
+    const reopenButton = element(`${fleetMachine(first.machineId)} [data-action="reopen-session"]`);
+    await control(browser, "exact running terminal exposes native reopen", reopenButton, false);
+    const navigationCount = navigations.filter(url => new URL(url).pathname === terminalRoute).length;
+    await click(browser, reopenButton);
+    await waitFor(() => navigations.filter(url => new URL(url).pathname === terminalRoute).length > navigationCount, timeout, 50);
+    assert.equal(resumedInputs.length, 2, "Explicit reopen never prepares a replacement");
+    assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), realTerminals, "Fleet actions never create a terminal");
     if (fixtureFailure) throw fixtureFailure;
   } finally {
     held.release?.();
+    inventoryHeld.release?.();
     await Promise.allSettled([...pending]);
     await browser.send("Fetch.disable", {});
     intercepting = false;

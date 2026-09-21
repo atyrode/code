@@ -1,8 +1,8 @@
-import { createOmpClient, OMP_PLUGIN_ID, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, type OmpSessionRef, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
-  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, canonicalJobJson } from "@manifold/protocol";
+  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type TerminalSummary, canonicalJobJson } from "@manifold/protocol";
 import { z } from "zod";
-import { createCodeClient, sessionInput, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
+import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { projectUsage } from "../domain/usage.ts";
 import type { AccountChoices, Selection } from "../domain/contracts.ts";
@@ -24,6 +24,14 @@ export type SessionReview = {
   composition: ActionResult<"composeSession">;
   native: OmpResult<"reviewSession">;
 };
+export type ResumeSessionOptions = Pick<OmpInput<"resumeSession">, "skills" | "automation"> & { profile?: { target: Target; expectedRevision: number } };
+export function runningSessionTerminals(ref: OmpSessionRef, terminals: readonly TerminalSummary[]): TerminalSummary[] {
+  return terminals.filter(terminal => terminal.status === "running" && terminal.machineId === ref.machineId &&
+    terminal.session?.harness === ref.harness && terminal.session.machineId === ref.machineId && terminal.session.sessionId === ref.sessionId);
+}
+export type ResumeSessionResult =
+  | { kind: "reopen"; terminals: TerminalSummary[] }
+  | { kind: "prepared"; prepared: OmpResult<"resumeSession"> };
 export type RuntimeConfigurationReview =
   | { kind: "account-runtime"; input: OmpInput<"reviewAccountRuntime">; result: OmpResult<"reviewAccountRuntime"> }
   | { kind: "gateway"; input: OmpInput<"reviewGateway">; result: OmpResult<"reviewGateway"> };
@@ -57,8 +65,64 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     const accounts = await omp("accounts", {});
     return code("composeSession", { containerId: target.containerId, expectedRevision, accounts, prompt });
   }
+  async function readMachines() {
+    return MachinesResponseSchema.parse(await dispatch("core.machines.list", {})).machines;
+  }
+  async function availableMachine(machineId: string) {
+    const machine = (await readMachines()).find(machine => machine.id === machineId);
+    if (!machine || !machine.online || machine.revoked) throw new WorkflowError("The selected machine is offline or inaccessible. Choose a destination explicitly; nothing was resumed.");
+    return machine;
+  }
+  async function listSessions(machineId: string) {
+    await availableMachine(machineId);
+    return omp("listSessions", { machineId });
+  }
+  async function runningSession(ref: OmpSessionRef) {
+    const session = OmpSessionRefSchema.parse(ref);
+    await availableMachine(session.machineId);
+    return runningSessionTerminals(session, TerminalsResponseSchema.parse(await dispatch("core.terminals.listAll", {})).terminals);
+  }
   return {
     code, omp, native,
+    readSkillCatalog: (target: Target) => omp("readSkillCatalog", target),
+    listSessions, runningSession,
+    async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}, isCurrent: () => boolean = () => true): Promise<ResumeSessionResult> {
+      const session = OmpSessionRefSchema.parse(ref);
+      const assertCurrent = () => { if (!isCurrent()) throw new WorkflowError("Destination or session choices changed. Nothing was placed."); };
+      assertCurrent();
+      const { profile, ...policy } = options;
+      const input: OmpInput<"resumeSession"> = { machineId: session.machineId, sessionId: session.sessionId, ...policy };
+      // Existing terminals take precedence over options that only apply to a new resume.
+      // Missing correlation remains unknown activity, not evidence that OMP stopped.
+      const sessions = await listSessions(session.machineId);
+      const terminals = await runningSession(session);
+      assertCurrent();
+      if (terminals.length) return { kind: "reopen", terminals };
+      if (!sessions.some(candidate => candidate.id === session.sessionId)) throw new WorkflowError("omp_session_unavailable");
+      if (profile) {
+        if (profile.target.machineId !== session.machineId) throw new WorkflowError("omp_session_binding_changed");
+        const composition = await composeSession(profile.target, profile.expectedRevision, "");
+        const appeared = await runningSession(session);
+        assertCurrent();
+        if (appeared.length) return { kind: "reopen", terminals: appeared };
+        if (composition.planYolo) throw new WorkflowError("omp_resume_plan_unsupported");
+        const model = composition.overlay.modelRoles?.default;
+        const thinking = composition.review.routes.find(route => route.role === "default")?.lead.thinking;
+        if (!model || !thinking) throw new WorkflowError("code_composition_changed");
+        Object.assign(input, { containerId: profile.target.containerId, overlay: composition.overlay,
+          accountPool: composition.accountPool, overrides: { model, thinking } });
+      }
+      const prepared = await omp("resumeSession", input);
+      if (prepared.machineId !== session.machineId || prepared.sessionId !== session.sessionId ||
+        prepared.runtime.pluginId !== OMP_PLUGIN_ID || prepared.runtime.operationId !== RESUME_OPERATION_ID ||
+        prepared.runtime.machineId !== session.machineId || prepared.runtime.session?.harness !== session.harness ||
+        prepared.runtime.session.machineId !== session.machineId || prepared.runtime.session.sessionId !== session.sessionId)
+        throw new WorkflowError("omp_session_binding_changed");
+      assertCurrent();
+      const appeared = await runningSession(session);
+      assertCurrent();
+      return appeared.length ? { kind: "reopen", terminals: appeared } : { kind: "prepared", prepared };
+    },
     permissionPlan: (input: PermissionPlanInput) => observePermissionPlan(omp, input),
     async reviewPermissionStep(input: PermissionPlanInput, scopeDigest: string, index: number) {
       const plan = await observePermissionPlan(omp, input);
@@ -153,21 +217,30 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       const receipt = await readBenchmark(input, budget);
       return code("stageCatalog", { containerId: input.containerId, expectedRevision, document: receipt.catalog });
     },
-    async reviewSession(target: Target, expectedRevision: number, prompt: string): Promise<SessionReview> {
+    async reviewSession(target: Target, expectedRevision: number, prompt: string, options: SessionOptions = {}): Promise<SessionReview> {
       const [composition, defaults] = await Promise.all([composeSession(target, expectedRevision, prompt), omp("readDefaults", {})]);
-      const native = await omp("reviewSession", sessionInput(target, composition, defaults.revision));
-      if (native.destination.containerId !== target.containerId || native.destination.machineId !== target.machineId || native.defaultsRevision !== defaults.revision)
+      const native = await omp("reviewSession", sessionInput(target, composition, defaults.revision, options));
+      if (native.operationId !== LAUNCH_OPERATION_ID || native.destination.containerId !== target.containerId || native.destination.machineId !== target.machineId || native.defaultsRevision !== defaults.revision)
         throw new WorkflowError("omp_review_changed");
       return { destination: { ...target }, composition, native };
     },
     async prepareSession(review: SessionReview): Promise<OmpResult<"prepareSession">> {
+      if (review.native.operationId !== LAUNCH_OPERATION_ID) throw new WorkflowError("omp_review_changed");
       const [composition, defaults] = await Promise.all([
         composeSession(review.destination, review.composition.revision, review.composition.prompt), omp("readDefaults", {}),
       ]);
       if (composition.compositionDigest !== review.composition.compositionDigest || defaults.revision !== review.native.defaultsRevision)
         throw new WorkflowError("code_composition_changed");
-      const prepared = await omp("prepareSession", { ...sessionInput(review.destination, composition, defaults.revision), reviewDigest: review.native.reviewDigest });
-      if (prepared.destination.containerId !== review.destination.containerId || prepared.destination.machineId !== review.destination.machineId || prepared.reviewDigest !== review.native.reviewDigest)
+      const prepared = await omp("prepareSession", { ...sessionInput(review.destination, composition, defaults.revision, reviewedSessionOptions(review.native)), reviewDigest: review.native.reviewDigest });
+      const runtime = prepared.runtime;
+      if (prepared.destination.containerId !== review.destination.containerId || prepared.destination.machineId !== review.destination.machineId || prepared.reviewDigest !== review.native.reviewDigest ||
+        runtime.pluginId !== OMP_PLUGIN_ID || runtime.operationId !== review.native.operationId ||
+        runtime.installationRevision !== review.native.pins.installationRevision ||
+        runtime.artifactSha256 !== review.native.pins.artifactSha256 ||
+        runtime.resourceBindingDigest !== review.native.pins.resourceBindingDigest ||
+        canonicalJobJson(runtime.inputs ?? []) !== canonicalJobJson(skillInputBindings(review.native.skills)) ||
+        !OmpSessionRefSchema.safeParse(runtime.session).success ||
+        runtime.session?.machineId !== review.destination.machineId || runtime.session.sessionId !== runtime.input.sessionId)
         throw new WorkflowError("omp_review_changed");
       return prepared;
     },

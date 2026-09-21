@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
-import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary } from "@manifold/protocol";
+import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
 import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
@@ -28,6 +28,8 @@ export function codeOperationFailure(reason: unknown): string {
 }
 export function codeWorkflow(host: HostServices) {
   return createCodeWorkflowClient(async (door, input) => {
+    if (door === "core.machines.list") return { machines: await host.client.machines() };
+    if (door === "core.terminals.listAll") return { terminals: await host.client.allTerminals() };
     const outcome = await host.client.action(door, input);
     if (!outcome.ok) throw new WorkflowError(`${door}: ${outcome.denial.message}. No approval or readiness is assumed.`);
     return outcome.result;
@@ -49,6 +51,18 @@ export function useCodeMachines(host: HostServices) {
       onSuccess: () => setError(null),
     });
   return { machines, error, refresh };
+}
+
+/** Use the public inventory and its host lifecycle; correlation never grants authority. */
+export function useCodeTerminals(host: HostServices) {
+  const feed = usePolledResource<{ terminals: readonly TerminalSummary[]; error: string | null } | null>(async () => {
+    try { return { terminals: await host.client.allTerminals(), error: null }; }
+    catch { return { terminals: [], error: "Public terminal inventory could not be read. Session activity is unknown." }; }
+  }, FALLBACK_POLL_MS, {
+    key: `${CODE_PLUGIN_ID}.terminals:${host.containerId}`, restartKey: host.principal.id,
+    initial: null, topics: host.topics.terminals, events: host.client,
+  });
+  return { terminals: feed.value?.terminals ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 
 /** Destinations are a browser-local choice, never inferred from saved workspace data. */

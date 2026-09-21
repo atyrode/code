@@ -24,10 +24,12 @@ protocol is retained for it.
 
 Code owns custom launch and continuation choices; OMP supplies the runtime
 primitives that execute them. Moving the launcher into Manifold does not move
-its product policy into OMP. The workflows below describe what is implemented;
-session discovery and richer continuation remain tracked in
-[#5](https://github.com/atyrode/code/issues/5) and
-[#6](https://github.com/atyrode/code/issues/6).
+its product policy into OMP. The retained continuation scope is native fleet
+metadata, exact terminal reopening, native resume and explicit next-resume
+choices. The skill, automation and continuation additions are source-only,
+not included in a published release; see [availability boundaries](docs/status.md#explicit-availability-boundaries).
+Portable archives, general live settings-origin inspection, live per-account
+quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
@@ -43,6 +45,26 @@ session discovery and richer continuation remain tracked in
   OMP native reviews, re-observes current revisions before preparation, and
   returns OMP's retained job receipts or terminal descriptor. Explicit
   inventory and benchmark jobs may contact providers and incur cost.
+- **Optional skills:** inspect OMP's authorized immutable skill catalog and
+  deliberately select entries or sets for one launch. Review purpose, source,
+  license and review provenance; resolve stale or conflicting choices before
+  launch. Clearing optional choices preserves ordinary loading; disable-all
+  suppresses it. Choices are ephemeral, never shared profile defaults, and a
+  selected skill is not evidence that OMP invoked it.
+- **Restricted automation:** deliberately choose a native-supported tool subset
+  for one launch or resume. OMP enforces its effective reviewed policy, disables
+  OMP task/advisor spawning and ambient skill discovery, and loads only selected
+  sealed skills. Ordinary launches remain the default. Skills grant no authority;
+  permitted bash retains subprocess authority, so tool limits are not an OS sandbox.
+- **Native fleet sessions:** explicitly read bounded header/title metadata from
+  each permitted machine. An exact harness/machine/session correlation can reopen
+  its existing terminal at its authoritative current home; similar names or
+  directories never imply a match. Otherwise choose **Resume saved state** or
+  **Resume with this profile** on the selected destination. The latter sends
+  explicit next-resume model/thinking choices and the exact composed overlay/account
+  pool, not a claim about live effective settings. Resume rechecks native inventory
+  and running terminals before preparing anything; native refusals and placement
+  permissions remain authoritative.
 - **Suggestions:** Code reviews and invokes only its optional external
   classifier service. This policy is separate from OMP account and gateway
   configuration.

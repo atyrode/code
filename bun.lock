@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@atyrode/manifold-code",
+      "dependencies": {
+        "@atyrode/manifold-omp": "github:atyrode/manifold-omp#c4898f0ff057c0a94ab0109953872420b4d9051e",
+        "zod": "4.4.3",
+      },
+    },
+  },
+  "packages": {
+    "@atyrode/manifold-omp": ["@atyrode/manifold-omp@github:atyrode/manifold-omp#c4898f0", { "dependencies": { "zod": "4.4.3" } }, "atyrode-manifold-omp-c4898f0", "sha512-uY0PIHBu01JQRBm5oJKrPhICFFHAVUeJ9SoyT0THSK5eW6DJJkvplDKmsVWU0rKha/aTMdeBN34ziC8hU1ms7Q=="],
+
+    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+  }
+}
