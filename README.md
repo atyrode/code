@@ -25,7 +25,7 @@ protocol is retained for it.
 Code owns custom launch and continuation choices; OMP supplies the runtime
 primitives that execute them. Moving the launcher into Manifold does not move
 its product policy into OMP. The workflows below describe what is implemented;
-session discovery and richer continuation remain tracked in
+fleet/archive/import discovery and richer continuation remain tracked in
 [#5](https://github.com/atyrode/code/issues/5) and
 [#6](https://github.com/atyrode/code/issues/6).
 
@@ -43,6 +43,23 @@ session discovery and richer continuation remain tracked in
   OMP native reviews, re-observes current revisions before preparation, and
   returns OMP's retained job receipts or terminal descriptor. Explicit
   inventory and benchmark jobs may contact providers and incur cost.
+- **Optional skills:** inspect OMP's authorized immutable skill catalog and
+  deliberately select entries or sets for one launch. Review purpose, source,
+  license and review provenance; resolve stale or conflicting choices before
+  launch. Clearing optional choices preserves ordinary loading; disable-all
+  suppresses it. Choices are ephemeral, never shared profile defaults, and a
+  selected skill is not evidence that OMP invoked it.
+- **Restricted automation:** deliberately choose a native-supported tool subset
+  for one launch or resume. OMP enforces its effective reviewed policy, disables
+  OMP task/advisor spawning and ambient skill discovery, and loads only selected
+  sealed skills. Ordinary launches remain the default. Skills grant no authority;
+  permitted bash retains subprocess authority, so tool limits are not an OS sandbox.
+- **Saved sessions:** explicitly list header/title metadata on the selected
+  machine, then choose **Resume saved state** or **Resume with this profile**.
+  The latter sends explicit default model/thinking overrides and the exact
+  composed overlay/account pool. Native refusals and placement permissions remain
+  authoritative; this does not claim fleet/archive/import or settings-origin
+  readback.
 - **Suggestions:** Code reviews and invokes only its optional external
   classifier service. This policy is separate from OMP account and gateway
   configuration.

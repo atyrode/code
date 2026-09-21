@@ -7,7 +7,7 @@
  * session, never chooses an account and never reaches OMP itself.
  */
 import { JobInputBindingSchema, OMP_PLUGIN_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal,
-  actionDoor as ompDoor, actionSchemas as ompActionSchemas, epochMilliseconds,
+  actionDoor as ompDoor, actionSchemas as ompActionSchemas, epochMilliseconds, skillInputBindings,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type OmpAction } from "@atyrode/manifold-omp";
 import type { ActionCallRefusal } from "@manifold/protocol";
@@ -16,7 +16,7 @@ import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError, type AccountChoices, type CatalogDocument, type Selection } from "../domain/contracts.ts";
 import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
-import { digest, id, revision, sessionInput, type ActionInput, type ActionResult,
+import { digest, id, revision, reviewedSessionOptions, sessionInput, type ActionInput, type ActionResult,
   type Profile, type SessionComposition } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { authorizeTarget, expectRevision, readConfiguration,
@@ -110,7 +110,7 @@ async function observedSession(ctx: CodeContext, args: ActionInput<"runSession">
   const defaults = await ompCall(ctx, "readDefaults", {});
   const composition = await composeSession(ctx, { containerId: args.containerId,
     expectedRevision: args.expectedRevision, accounts, prompt: args.prompt });
-  return { composition, input: sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision) };
+  return { composition, input: sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision, { skills: args.skills, automation: args.automation }) };
 }
 
 /**
@@ -217,11 +217,11 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const latest = await observedSession(ctx, args);
   if (latest.composition.compositionDigest !== first.composition.compositionDigest ||
     latest.input.expectedDefaultsRevision !== first.input.expectedDefaultsRevision) throw new CodeRefusal("composition_changed");
-  // The bindings are the caller's and cross Code untouched: absent stays absent, so a run
-  // with no material asks for none rather than for an empty list of them.
-  const bound = args.inputs ?? [];
-  const job = await ompCall(ctx, "runSession", { ...latest.input, reviewDigest: review.reviewDigest,
-    ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
+  // Material remains the caller's binding; optional slots come only from OMP's reviewed union.
+  const bound = [...(args.inputs ?? []), ...skillInputBindings(review.skills)];
+  const job = await ompCall(ctx, "runSession", {
+    ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
+    reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
   if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== SESSION_OPERATION_ID ||
     digestOf(job.inputs ?? []) !== digestOf(bound))
     throw new CodeRefusal("omp_review_changed");

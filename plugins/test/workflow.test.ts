@@ -28,6 +28,10 @@ function sessionFixture() {
     artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64), input: { opaqueNativeInput: "preserved" },
   } };
   let preparations = 0;
+  const resumeInputs: OmpInput<"resumeSession">[] = [];
+  const sessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
+  const resumed: OmpResult<"resumeSession"> = { machineId: target.machineId, sessionId,
+    runtime: { ...prepared.runtime, input: { sessionId } } };
   let refusal: string | null = null;
   const workflow = createCodeWorkflowClient(async (door, raw) => {
     if (door === actionDoor("accounts")) return accounts;
@@ -37,12 +41,16 @@ function sessionFixture() {
       const input = raw as OmpInput<"reviewSession">;
       return { destination: target, operationId: "atyrode.omp.launch", reviewDigest: prepared.reviewDigest,
         pins: { installationRevision: prepared.runtime.installationRevision, artifactSha256: prepared.runtime.artifactSha256, resourceBindingDigest: prepared.runtime.resourceBindingDigest },
-        defaultsRevision: input.expectedDefaultsRevision, effectiveOverlay: input.overlay, accountPool: input.accountPool } satisfies OmpResult<"reviewSession">;
+        defaultsRevision: input.expectedDefaultsRevision, effectiveOverlay: input.overlay, accountPool: input.accountPool,
+        automation: input.automation ?? { mode: "ordinary" },
+        skills: { mode: input.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] } } satisfies OmpResult<"reviewSession">;
     }
     if (door === actionDoor("prepareSession")) { preparations++; return refusal ? { refused: refusal } : prepared; }
+    if (door === actionDoor("resumeSession")) { resumeInputs.push(raw as OmpInput<"resumeSession">); return refusal ? { refused: refusal } : resumed; }
+    if (door === actionDoor("listSessions")) return [{ id: sessionId, title: "Saved work", cwd: "/workspace", updatedAt: 1000 }];
     throw new Error(`Unexpected owner/action: ${door}`);
   });
-  return { workflow, composition, defaults, prepared, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
+  return { workflow, composition, defaults, prepared, resumed, resumeInputs, sessionId, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
 }
 
 test("session composition changing at the same Code revision prevents native preparation", async () => {
@@ -74,6 +82,32 @@ test("a native session response for a different destination cannot be placed", a
   const review = await fixture.workflow.reviewSession(target, 1, fixture.composition.prompt);
   fixture.prepared.destination = { ...target, machineId: "different-machine" };
   await expect(fixture.workflow.prepareSession(review)).rejects.toThrow();
+});
+
+test("saved-state resume omits replacement settings while explicit profile overrides the persisted selection", async () => {
+  const f = sessionFixture();
+  const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
+  expect(await f.workflow.listSessions(target.machineId)).toEqual([{ id: f.sessionId, title: "Saved work", cwd: "/workspace", updatedAt: 1000 }]);
+  expect(await f.workflow.resumeSession(ref)).toEqual(f.resumed);
+  expect(f.resumeInputs[0]).toEqual({ machineId: target.machineId, sessionId: f.sessionId });
+  await f.workflow.resumeSession(ref, { profile: { target, expectedRevision: 1 }, skills: { mode: "disabled" },
+    automation: { mode: "restricted", toolNames: ["read"], delegation: "disabled" } });
+  expect(f.resumeInputs[1]).toEqual({ machineId: target.machineId, sessionId: f.sessionId, containerId: target.containerId,
+    overlay: f.composition.overlay, accountPool: f.composition.accountPool,
+    overrides: { model: f.composition.overlay.modelRoles!.default, thinking: f.composition.review.routes.find(route => route.role === "default")!.lead.thinking },
+    skills: { mode: "disabled" }, automation: { mode: "restricted", toolNames: ["read"], delegation: "disabled" } });
+});
+
+test("resume rejects cross-machine profile or returned identity and preserves native refusal", async () => {
+  const f = sessionFixture();
+  const ref = { harness: "atyrode.omp" as const, machineId: target.machineId, sessionId: f.sessionId };
+  await expect(f.workflow.resumeSession(ref, { profile: { target: { ...target, machineId: "another-machine" }, expectedRevision: 1 } })).rejects.toThrow("omp_session_binding_changed");
+  expect(f.resumeInputs).toEqual([]);
+  f.resumed.sessionId = "fca82ad4-8c9e-4166-8130-472c7cae1559";
+  f.resumed.runtime.input.sessionId = f.resumed.sessionId;
+  await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_binding_changed");
+  f.refuse("omp_session_unavailable");
+  await expect(f.workflow.resumeSession(ref)).rejects.toThrow("omp_session_unavailable");
 });
 
 test("a ready shared broker never requires another deployment receipt", async () => {

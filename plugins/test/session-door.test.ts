@@ -73,6 +73,7 @@ interface Fixture {
     /** The word OMP answers beside an absent receipt; exactly one of the two is ever null. */
     silence: SessionSilence | null;
     echo: "asked" | JobInputBinding[];
+    skills: OmpResult<"reviewSession">["skills"] | null;
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
     reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
   };
@@ -84,7 +85,7 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
-    silence: null,
+    silence: null, skills: null,
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
     reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
@@ -107,7 +108,8 @@ function fixture(): Fixture {
       return { destination: { containerId: value.containerId, machineId: value.machineId }, operationId: LAUNCH_OPERATION_ID,
         reviewDigest, pins: { installationRevision: "native-installation", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) },
         defaultsRevision: value.expectedDefaultsRevision, effectiveOverlay: value.overlay,
-        accountPool: value.accountPool } satisfies OmpResult<"reviewSession">;
+        automation: value.automation ?? { mode: "ordinary" },
+        accountPool: value.accountPool, skills: omp.skills ?? { mode: value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] } } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
       const value = ompActionSchemas.runSession.input.parse(input);
@@ -277,6 +279,39 @@ describe("the session a dependent plugin posts through Code", () => {
     fenced.omp.echo = [];
     expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
       .toEqual({ refused: "code_omp_review_changed" });
+  });
+
+  test("Code accepts reviewed optional bindings beside material but refuses a substituted skill source", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const source = { jobId: "job-reviewed-skill", output: "skill", sha256: "a".repeat(64) };
+    f.omp.skills = { mode: "selected", catalogRevision: 4, selected: [{ id: "review", name: "review", title: "Review",
+      purpose: "Review changes", revision: "source-v1", source, license: { spdx: "MIT" },
+      review: { reviewedBy: "owner", reviewedAt: now, reference: "review-1" }, conflicts: [] }] };
+    const material: JobInputBinding = { name: "material", from: { jobId: "job-material", output: "session" } };
+    const input = { ...target, expectedRevision: record.revision, prompt: "Review this material", inputs: [material],
+      skills: { mode: "select" as const, expectedCatalogRevision: 4, skillIds: [], setIds: ["review-set"] } };
+    f.omp.echo = [material, { name: "optionalSkill0", from: { jobId: "job-unreviewed-skill", output: source.output } }];
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    expect(f.store.has(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`)).toBe(false);
+    f.omp.echo = [material, { name: "optionalSkill0", from: { jobId: source.jobId, output: source.output } }];
+    const posted = await accepted(f, "runSession", input);
+    expect(posted.inputs).toEqual(f.omp.echo);
+    expect((await accepted(f, "readSession", { ...workspace, jobId: posted.jobId })).job.jobId).toBe(posted.jobId);
+  });
+
+  test("unsupported tools and delegation refuse before native review or posting", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Read only" };
+    for (const automation of [
+      { mode: "restricted", toolNames: ["task"], delegation: "disabled" },
+      { mode: "restricted", toolNames: ["read", "read"], delegation: "disabled" },
+      { mode: "restricted", toolNames: ["read"], delegation: "enabled" },
+      { mode: "ordinary", toolNames: [], delegation: "disabled" },
+    ]) expect(await handlers.runSession!(f.ctx, { ...input, automation })).toEqual({ refused: "code_invalid_request" });
+    expect(f.omp.reviewed).toEqual([]);
+    expect(f.omp.posted).toEqual([]);
   });
 
   test("the prompt a run carries is bounded by OMP's bytes, at Code's door", async () => {

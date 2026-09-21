@@ -73,6 +73,32 @@ files, service state, credentials or backups.
 - Code's headless client and web use the same ordinary dispatch workflow. Babel
   is a potential downstream consumer, not a Code dependency or acceptance
   shortcut; no old process ABI is retained.
+- Optional skills come only from OMP's authorized immutable catalog and native
+  review. Code's workbench and headless workflow pass an ephemeral launch choice;
+  they do not discover host paths, download third-party skills, grant source-job
+  access or claim invocation. The disposable browser fixture has no sealed skill
+  source jobs: its real catalog is empty. Real-browser scenarios cover clear/disable-all,
+  refresh/navigation retention and destination/review invalidation. Separate synthetic
+  metadata exercises set expansion, deduplication, conflicts and stale catalog revisions;
+  it does not establish governed source admission or selected-skill execution.
+- Restricted automation source consumes OMP's shared schemas and supported tool
+  subset, displays native effective review policy and carries it to preparation
+  and one-shot posting. OMP's SDK registry is the enforcer, not a Code-side filter.
+  Ordinary new sessions remain unchanged. Selected skills are instruction-only;
+  restricted ambient discovery and OMP task/advisor suppression are not OS sandboxing;
+  permitted bash retains subprocess authority.
+- Selected-machine saved-session source lists native title/header metadata and
+  separates preserve-state resume from explicit current-profile model/thinking
+  overrides with exact overlay/pool. It neither creates a replacement identity nor
+  bypasses native terminal placement. Code#5 fleet/archive/import and Code#6
+  generalized same-session settings-origin/readback remain outside this path.
+- The added browser scenarios use synthetic metadata/review responses and refused
+  prepare/resume responses: they exercise policy rendering, round-trip stale-review
+  fencing, explicit versus preserve input and native refusal presentation, not
+  successful SDK execution. These local candidate checks do not qualify a released
+  dependency pin. The shared published-SDK migration remains blocked by preserved
+  credential-ordering regressions in [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72);
+  these additions are not shipped and no transition-ledger row advances.
 
 ## Domain and safety constraints
 

@@ -127,6 +127,109 @@ Code accepts only exact OMP plugin/operation/machine/job identities when reading
 retained status. It never lists jobs through its own server context or treats
 admission as successful execution.
 
+### Optional skills for one launch
+
+`workflow.readSkillCatalog({ containerId, machineId })` calls OMP's native
+`readSkillCatalog` action as the caller. This is a separate, machine-scoped OMP
+catalog, not Code's model catalog or shared profile state. Its owner publishes
+reviewed metadata with native `writeSkillCatalog` compare-and-set. Code neither
+downloads skills nor accepts host paths or skill bodies. Each entry identifies
+one immutable sealed job output and its SHA-256, native name, purpose, content
+revision, license, review provenance and declared conflicts. Metadata reads authorize
+the target and remain available to repair stale entries. Native catalog writes and
+selection recheck source-job read/export authority, machine identity and sealed digest;
+reading catalog metadata does not grant access to its sources.
+
+`workflow.reviewSession(target, expectedRevision, prompt, { skills?, automation? })`
+accepts one optional options object. Its `skills` field is OMP's own schema:
+
+- Omitted: select no optional entries; ordinary launches preserve permitted
+  core/project loading. Restricted launches suppress ambient discovery.
+- `{ mode: "select", expectedCatalogRevision, skillIds, setIds }`: select the
+  deterministic union of entries and deliberate sets at that exact revision.
+- `{ mode: "disabled" }`: disable every skill source and skill advertisement.
+
+The returned native review includes `skills` with `mode`, `catalogRevision`
+and `selected` metadata. `workflow.prepareSession(review)` uses that effective
+native selection, not a fresh expansion of the original sets. Native review
+binds the revision and immutable sources. Stale catalogs, unavailable or changed
+source jobs, lost authority, conflicting names, declared conflicts and more than
+15 optional entries refuse; Code does not substitute another source. Only OMP's
+native loader loads approved paths. Ordinary project skill filters remain authoritative
+and can suppress a selected source. Selection is not evidence of loading or invocation.
+
+The ordinary `atyrode.code.runSession` one-shot door accepts the same `skills`
+field alongside its existing prompt, profile revision and material input. It
+re-observes Code composition and OMP defaults, consumes the native-reviewed
+selection, and fences the returned job against both material and native-derived
+optional input bindings. Optional source bindings never replace the caller's
+material. Independent headless calls have no inherited skill choice.
+
+The workbench presents available and selected metadata, deliberate sets and
+conflict reasons. Choices are local to the pending launch: unrelated navigation
+and refresh retain them; destination changes, a successful terminal placement
+and a fresh workbench clear them. “Clear optional choices” preserves ordinary
+loading only in ordinary mode; restricted mode still suppresses ambient loading.
+“Disable all skills” suppresses every source. A changed catalog revision leaves a
+visible stale draft, invalidates its review and requires clearing/reselecting
+against current metadata. No skill choice is saved in Code preferences, routing
+facets or OMP defaults. Code does not guess resume selections from transcripts;
+explicit per-session choices can also be supplied to the resume workflow below.
+
+### Restricted automation for one launch
+
+The optional `automation` field on workflow review and `atyrode.code.runSession`
+uses OMP's exported `RestrictedAutomationSchema`:
+`{ mode: "restricted", toolNames: ["read"], delegation: "disabled" }`.
+OMP owns and exports `RESTRICTED_TOOL_NAMES`: `read`, `grep`, `glob`, `bash`,
+`edit`, `write`. The exact, unique subset may be empty. Unknown tools, duplicate
+entries, unsupported modes and enabled OMP task/advisor delegation refuse; Code does not silently
+filter a request. Omission leaves ordinary new-session behavior unchanged.
+
+The native review always reports effective `automation`, either ordinary or the
+restricted object. Both terminal preparation and one-shot posting carry that
+reviewed policy, not a client-reconstructed allowlist. OMP's SDK registry restriction
+is the enforcer; the browser chooser is not one. Restricted sessions suppress
+ambient core/project/discovery loading and OMP task/advisor spawning, loading only
+deliberately selected sealed skills through OMP's loader. Disable-all loads none.
+Skills are instructions, not authority. Tool limits are not an OS/network sandbox:
+permitted bash can launch subprocesses, including another OMP process.
+
+Policy, tool, skill, prompt, profile, defaults and destination changes invalidate
+launch reviews. In-flight results are fenced even after a round-trip change.
+Choices reset after successful placement or a destination change; no restricted
+default is stored in a shared profile.
+
+### Selected-machine saved-session resume
+
+`workflow.listSessions(machineId)` returns OMP's bounded header/title metadata
+only (`id`, `title`, `cwd`, `updatedAt`), never message bodies or transcript paths.
+`workflow.resumeSession(ref, { profile?, skills?, automation? } = {})` accepts
+OMP's `{ harness: "atyrode.omp", machineId, sessionId }` reference.
+
+- Omit `profile` to resume saved state without injecting model, thinking, overlay
+  or account-pool replacements. OMP preserves persisted model and configured
+  thinking, not historical tool restrictions or selected skills.
+- Supply `profile: { target, expectedRevision }` to compose that exact current
+  Code profile. Code sends the default role's exact model and thinking as explicit
+  native `overrides`, plus the composed overlay and exact account pool. A
+  cross-machine target or stale Code revision refuses, not a fallback to defaults.
+- Optional skills/automation are deliberate per-resume choices. Omitted automation
+  uses ordinary behavior; omitted skills preserve ordinary permitted ambient
+  loading, not a historical selection. Choose restricted mode explicitly again
+  when needed; with no deliberate skill selection, restricted resume loads none.
+  Native missing, incompatible or unavailable model/thinking state refuses before
+  a replacement session or inference can be created.
+
+The workbench offers separate **Resume saved state** and **Resume with this
+profile** actions after explicitly listing the selected machine. Local unsaved
+profile edits cannot be resumed as a profile. Code checks the returned machine
+and session identity, carries native refusals and uses the existing native
+terminal placement seam; preparation does not grant placement permission.
+There is no fleet inventory, archive/import flow or generalized same-session
+settings-origin/readback claim. Those remaining #5/#6 concerns are separate
+from this strict preserve-versus-explicit continuation path.
+
 ## Accounts and custody
 
 Account references distinguish OAuth identity from concrete credential slot and
