@@ -533,7 +533,7 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
  * preparation refuses; public terminal navigation uses synthetic correlations.
  * This cannot create credentials, approve consent or open a new terminal. */
 async function syntheticPreviewScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, first: Target, second: Target): Promise<void> {
-  const saved = await readConfiguration(server, writer, first);
+  let saved = await readConfiguration(server, writer, first);
   assert(saved.configuration?.active && saved.configuration.selection);
   const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
     manifest: { machine: { operations: Record<string, unknown> } };
@@ -740,6 +740,27 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.deepEqual(resumedInputs[0], { machineId: first.machineId, sessionId: savedSessionId }, "Preserve resume must not silently inject a profile");
     await click(browser, automationControl("Restricted automation"));
     await click(browser, automationControl("read"));
+    await click(browser, workspaceButton("Resume with this profile"));
+    await until(browser, "Plan-YOLO profile refuses before native resume",
+      `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.textContent.includes('omp_resume_plan_unsupported') === true`);
+    assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
+    assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
+    await click(browser, workspaceButton("Profile"));
+    const extraDials = element(`${generator} .plugin-atyrode_code_generator__extra-dials`);
+    if (!await browser.evaluate(`${extraDials}.open`)) await click(browser, `${extraDials}.querySelector('summary')`);
+    const plans = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Plans')`;
+    await click(browser, `${plans}.querySelector('[data-value="false"]')`);
+    await click(browser, workspaceButton("Save profile"));
+    await until(browser, "supported resume profile is saved", `${element(`${generator} .plugin-atyrode_code_generator__draft`)} === null`);
+    const supported = await readConfiguration(server, writer, first);
+    assert(supported.configuration);
+    assert.deepEqual(supported, { ...saved, revision: saved.revision + 1, configuration: {
+      ...saved.configuration, revision: saved.configuration!.revision + 1,
+      updatedAt: supported.configuration.updatedAt, updatedBy: supported.configuration.updatedBy,
+      selection: { ...saved.configuration!.selection, planYolo: false },
+    } }, "The explicit profile save changes only its chosen policy and revision metadata");
+    saved = supported;
+    await selectDestination(browser, sessionSelect, savedSessionId);
     await click(browser, workspaceButton("Resume with this profile"));
     await until(browser, "explicit profile resume refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     assert.equal(resumedInputs.length, 2);
