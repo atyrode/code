@@ -33,7 +33,7 @@ function sessionFixture() {
   let preparations = 0;
   const resumeInputs: OmpInput<"resumeSession">[] = [];
   const resumed: OmpResult<"resumeSession"> = { machineId: target.machineId, sessionId,
-    runtime: { ...prepared.runtime, operationId: "atyrode.omp.resume",
+    runtime: { ...prepared.runtime, pluginId: "atyrode.omp", operationId: "atyrode.omp.resume",
       session: { harness: "atyrode.omp", machineId: target.machineId, sessionId }, input: { sessionId } } };
   let refusal: string | null = null;
   const terminals: TerminalSummary[] = [];

@@ -112,6 +112,9 @@ files, service state, credentials or backups.
   without copying credential algorithms or changing that patch. This does not
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
+  Code pins the merged native source at
+  [`c4898f0`](https://github.com/atyrode/manifold-omp/commit/c4898f0ff057c0a94ab0109953872420b4d9051e)
+  ([manifold-omp#74](https://github.com/atyrode/manifold-omp/pull/74)).
   Source integration requires both plugin gates against the declared native pin
   and current CI. These additions are not in a released Code/OMP bundle, and no
   transition-ledger row advances.
