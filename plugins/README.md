@@ -42,6 +42,8 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   cumulative inference usage, retained progress and bounded call metadata,
   with journal gaps explicit and output bytes excluded. Every session reader
   speaks only for a job Code's own retained provenance names.
+  One-shot model progress comes from the actual assistant stream. Dispatch,
+  time waiting for the stream, and cumulative usage do not imply a model phase.
   `runSession`'s optional `inputs` binds sealed outputs of earlier jobs on the
   same machine to the run's declared inputs (ADR 0044); Code passes them to OMP
   verbatim, retains them, and refuses a job whose echo names other material.

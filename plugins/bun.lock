@@ -5,7 +5,7 @@
     "": {
       "name": "code-manifold-plugins",
       "dependencies": {
-        "@atyrode/manifold-omp": "github:atyrode/manifold-omp#d334555ff09cd681263dc9de3fa573d66e49c2fb",
+        "@atyrode/manifold-omp": "github:atyrode/manifold-omp#83cd7dc5f817db326f20e695e68f2b9e37d00128",
         "zod": "4.4.3",
       },
       "devDependencies": {
@@ -17,7 +17,7 @@
     },
   },
   "packages": {
-    "@atyrode/manifold-omp": ["@atyrode/manifold-omp@github:atyrode/manifold-omp#d334555", { "dependencies": { "zod": "4.4.3" } }, "atyrode-manifold-omp-d334555", "sha512-8I8mygDzEUpHMrCUZxFjD379daw+0YuuNERFlPkc8lmH2263QnzsIeC6D7UWRWRD9Gc7hQ2orGsX6wkKxA5GxQ=="],
+    "@atyrode/manifold-omp": ["@atyrode/manifold-omp@github:atyrode/manifold-omp#83cd7dc", { "dependencies": { "zod": "4.4.3" } }, "atyrode-manifold-omp-83cd7dc", "sha512-e/xucBgSy77fH+jfFrQ9hHx4VpUE33FU4jTU5G14QeVaI9GPSi+xupB5NcOe8uocaJ4DqACUPAaaVE7UWjF3ig=="],
 
     "@types/bun": ["@types/bun@1.4.1", "", { "dependencies": { "bun-types": "1.4.1" } }, "sha512-0AVGiTXGajf1rgKom3N+c5L7CBxuoyyv1i44M0nX4UDK0G/fnRAMiri93nHuVPIb429KKtAgj7HatVmmOjeQLA=="],
 
