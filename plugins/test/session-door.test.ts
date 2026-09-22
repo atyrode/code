@@ -125,6 +125,13 @@ function fixture(): Fixture {
       omp.read.push(ompActionSchemas.readSession.input.parse(input));
       return { job: omp.job, session: omp.session, silence: omp.silence };
     }
+    if (door === `${OMP_PLUGIN_ID}.followSession`) {
+      ompActionSchemas.followSession.input.parse(input);
+      return { job: omp.job, inferenceUsage: { calls: 3, inputTokens: 100,
+        outputTokens: 20, cachedInputTokens: 0, costMicros: 900, lastModel: "anthropic/native-model-3" },
+        progress: { stage: "at the model", at: now }, inferenceCalls: [],
+        seq: 9, firstSeq: null, unavailable: { fromSeq: 1, toSeq: 9 } };
+    }
     if (door === `${OMP_PLUGIN_ID}.cancelSession`) {
       omp.cancelled.push(ompActionSchemas.cancelSession.input.parse(input));
       // OMP cancels its own job and answers it; a settled one answers itself unchanged.
@@ -422,6 +429,27 @@ describe("reading back and ending a session Code posted", () => {
     f.access.readable.add(target.containerId);
     f.omp.job = job("job-another-door-placed");
     expect(await invoke(f, "readSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_omp_review_changed" });
+  });
+
+  test("live activity is readable only through its retained workspace and exact native job", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    await configured(f, "container-b");
+    await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Read the material" });
+    const observed = await accepted(f, "followSession", { ...workspace, jobId: "job-a" });
+    expect(observed.inferenceUsage?.calls).toBe(3);
+    expect(observed.unavailable).toEqual({ fromSeq: 1, toSeq: 9 });
+    expect(await invoke(f, "followSession", { containerId: "container-b", jobId: "job-a" }))
+      .toEqual({ refused: "code_session_unknown" });
+    expect(await invoke(f, "followSession", { ...workspace, jobId: "unretained-job" }))
+      .toEqual({ refused: "code_session_unknown" });
+    f.access.readable.delete(target.containerId);
+    expect(await invoke(f, "followSession", { ...workspace, jobId: "job-a" }))
+      .toEqual({ refused: "code_scope_refused" });
+    f.access.readable.add(target.containerId);
+    f.omp.job = { ...job(), machineId: "another-machine" };
+    expect(await invoke(f, "followSession", { ...workspace, jobId: "job-a" }))
+      .toEqual({ refused: "code_omp_review_changed" });
   });
 
   test("a session with no receipt reaches the caller with the word that stopped it", async () => {
