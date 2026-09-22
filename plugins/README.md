@@ -31,15 +31,19 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
   React-free ordinary-client workflow used by both headless callers and the web.
-- `atyrode.code/session.ts`: `listProfiles`, `runSession`, `readSession` and
-  `cancelSession` — the same composition, posted as an OMP job for a plugin that
+- `atyrode.code/session.ts`: `listProfiles`, `runSession`, `readSession`,
+  `followSession` and `cancelSession` — the same composition, posted as an OMP job for a plugin that
   depends on Code through `ctx.actions.call`. A Code profile is a configured
   workspace; there is no second profile concept. The job runs on
   `atyrode.omp.session`, the one-shot sibling of the interactive
   `atyrode.omp.launch` the review names. `readSession` answers a run at any point
   in its life — the receipt is there only once it exited 0 with a sealed
-  transcript — and `cancelSession` ends one; both speak only for a job Code's own
-  retained provenance names.
+  transcript — and `cancelSession` ends one. `followSession` returns native
+  cumulative inference usage, retained progress and bounded call metadata,
+  with journal gaps explicit and output bytes excluded. Every session reader
+  speaks only for a job Code's own retained provenance names.
+  One-shot model progress comes from the actual assistant stream. Dispatch,
+  time waiting for the stream, and cumulative usage do not imply a model phase.
   `runSession`'s optional `inputs` binds sealed outputs of earlier jobs on the
   same machine to the run's declared inputs (ADR 0044); Code passes them to OMP
   verbatim, retains them, and refuses a job whose echo names other material.
@@ -56,7 +60,7 @@ output or spawning a Code process. `createCodeClient`, `ActionInput`,
 `ActionResult`, the schemas and `actionDoor` in `contract.ts` are the smaller
 policy-only boundary.
 
-A dependent plugin's server reaches those four doors through
+A dependent plugin's server reaches those five doors through
 `ctx.actions.call`, under the principal of the request it is answering; Code
 reads the account observation and OMP's defaults itself, so a caller supplies
 only a profile, a destination and a prompt. The profile's `revision` is the

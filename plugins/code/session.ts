@@ -289,6 +289,16 @@ export async function readSession(ctx: CodeContext, args: ActionInput<"readSessi
   if ((reply.session === null) === (reply.silence === null)) throw new CodeRefusal("invalid_omp_result");
   return reply;
 }
+
+/** Native meter/progress for the exact session retained under this Code workspace. */
+export async function followSession(ctx: CodeContext, args: ActionInput<"followSession">): Promise<ActionResult<"followSession">> {
+  await authorizeTarget(ctx, args);
+  const provenance = await retainedSession(ctx, args);
+  const reply = await ompCall(ctx, "followSession", { containerId: provenance.containerId,
+    machineId: provenance.machineId, jobId: provenance.jobId });
+  if (!sameJob(reply.job, provenance)) throw new CodeRefusal("omp_review_changed");
+  return reply;
+}
 /**
  * End the run Code posted. OMP cancels its own job, so a settled one answers itself rather
  * than failing: cancelling twice, or cancelling a run that already exited, is the same answer

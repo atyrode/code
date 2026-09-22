@@ -140,6 +140,13 @@ thresholds. These are not zero-overshoot spending caps. Native metering does not
 establish a cumulative spending ledger or a worst-case provider retry/token
 envelope; a bounded live rehearsal still requires both.
 
+`atyrode.code.followSession({ containerId, jobId })` uses the retained session's
+exact native target. It returns cumulative inference usage, latest retained
+progress and bounded inference-call metadata, with sequence gaps explicit.
+It reads settled activity from OMP's durable journal and excludes output bytes,
+prompts and transcript bodies. Missing progress is not evidence that a model
+has started; an evicted call list is not a substitute for cumulative usage.
+
 ### Optional skills for one launch
 
 `workflow.readSkillCatalog({ containerId, machineId })` calls OMP's native

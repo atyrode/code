@@ -1,7 +1,7 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
   JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
-  SessionSilenceSchema,
+  SessionSilenceSchema, SessionActivitySchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
@@ -201,6 +201,7 @@ export const rootActionSchemas = {
         "a session read answers with a receipt or with the word that stopped it, never both or neither",
       ),
   },
+  followSession: { input: SessionReadInputSchema, result: SessionActivitySchema },
   cancelSession: { input: SessionCancelInputSchema, result: z.strictObject({ job: PublicJobSchema }) },
   readServiceConfiguration: { input: TargetSchema, result: ServiceConfigurationReadSchema },
   reviewServices: { input: ServicesReviewInputSchema, result: ServicesReviewSchema },
