@@ -13,7 +13,7 @@ import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
   readConfiguration, requireConfiguration } from "./state.ts";
-import { cancelSession, composeSession, listProfiles, readSession, runSession } from "./session.ts";
+import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
@@ -91,6 +91,7 @@ const productHandlers: ProductHandlers = {
   listProfiles,
   runSession,
   readSession,
+  followSession,
   cancelSession,
   async suggest(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
