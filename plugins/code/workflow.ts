@@ -1,4 +1,4 @@
-import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, type OmpSessionRef, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, type OmpSessionRef, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
   JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type TerminalSummary, canonicalJobJson } from "@manifold/protocol";
 import { z } from "zod";
@@ -220,7 +220,10 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     async reviewSession(target: Target, expectedRevision: number, prompt: string, options: SessionOptions = {}): Promise<SessionReview> {
       const [composition, defaults] = await Promise.all([composeSession(target, expectedRevision, prompt), omp("readDefaults", {})]);
       const native = await omp("reviewSession", sessionInput(target, composition, defaults.revision, options));
-      if (native.operationId !== LAUNCH_OPERATION_ID || native.destination.containerId !== target.containerId || native.destination.machineId !== target.machineId || native.defaultsRevision !== defaults.revision)
+      const operationId = options.isolation === undefined ? LAUNCH_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
+      if (native.operationId !== operationId || native.destination.containerId !== target.containerId ||
+        native.destination.machineId !== target.machineId || native.defaultsRevision !== defaults.revision ||
+        canonicalJobJson(native.isolation ?? null) !== canonicalJobJson(options.isolation ?? null))
         throw new WorkflowError("omp_review_changed");
       return { destination: { ...target }, composition, native };
     },
