@@ -12,7 +12,7 @@
     "dev": "bun dev.ts"
   },
   "dependencies": {
-    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#3d85bf0ef50b4f25d173e158d6ac1d1d21841a77",
+    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#44704757d3b80e546509f591636834007a26f926",
     "zod": "4.4.3"
   },
   "devDependencies": {
