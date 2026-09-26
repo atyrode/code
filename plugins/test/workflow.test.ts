@@ -36,6 +36,7 @@ function sessionFixture() {
     runtime: { ...prepared.runtime, pluginId: "atyrode.omp", operationId: "atyrode.omp.resume",
       session: { harness: "atyrode.omp", machineId: target.machineId, sessionId }, input: { sessionId } } };
   let refusal: string | null = null;
+  const reviewOverride: Partial<OmpResult<"reviewSession">> = {};
   const terminals: TerminalSummary[] = [];
   const machines = [{ id: target.machineId, name: "Destination", online: true }];
   const workflow = createCodeWorkflowClient(async (door, raw) => {
@@ -50,14 +51,15 @@ function sessionFixture() {
         pins: { installationRevision: prepared.runtime.installationRevision, artifactSha256: prepared.runtime.artifactSha256, resourceBindingDigest: prepared.runtime.resourceBindingDigest },
         defaultsRevision: input.expectedDefaultsRevision, effectiveOverlay: input.overlay, accountPool: input.accountPool,
         automation: input.automation ?? { mode: "ordinary" },
-        skills: { mode: input.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] } } satisfies OmpResult<"reviewSession">;
+        skills: { mode: input.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] },
+        ...reviewOverride } satisfies OmpResult<"reviewSession">;
     }
     if (door === actionDoor("prepareSession")) { preparations++; return refusal ? { refused: refusal } : prepared; }
     if (door === actionDoor("resumeSession")) { resumeInputs.push(raw as OmpInput<"resumeSession">); return refusal ? { refused: refusal } : resumed; }
     if (door === actionDoor("listSessions")) return [{ id: sessionId, title: "Saved work", cwd: "/workspace", updatedAt: 1000 }];
     throw new Error(`Unexpected owner/action: ${door}`);
   });
-  return { workflow, composition, defaults, prepared, resumed, resumeInputs, sessionId, terminals, machines, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
+  return { workflow, composition, defaults, prepared, resumed, resumeInputs, sessionId, terminals, machines, reviewOverride, preparations: () => preparations, refuse: (reason: string) => { refusal = reason; } };
 }
 
 test("session composition changing at the same Code revision prevents native preparation", async () => {
@@ -111,11 +113,21 @@ test("terminal preparation rejects operation, artifact, skill and session bindin
   }
 });
 
-test("a different native operation cannot be substituted into an interactive launch review", async () => {
+test("a different operation or existing-Run selection cannot be substituted into an interactive launch review", async () => {
   const fixture = sessionFixture();
   const review = await fixture.workflow.reviewSession(target, 1, fixture.composition.prompt);
   review.native.operationId = "atyrode.omp.session";
   await expect(fixture.workflow.prepareSession(review)).rejects.toThrow("omp_review_changed");
+  review.native.operationId = "atyrode.omp.launch";
+  review.native.agentTools = { runId: "run-authorized" };
+  await expect(fixture.workflow.prepareSession(review)).rejects.toThrow("omp_review_changed");
+  expect(fixture.preparations()).toBe(0);
+});
+
+test("terminal review refuses an unsolicited existing-Run selection", async () => {
+  const fixture = sessionFixture();
+  fixture.reviewOverride.agentTools = { runId: "run-unrequested" };
+  await expect(fixture.workflow.reviewSession(target, 1, fixture.composition.prompt)).rejects.toThrow("omp_review_changed");
   expect(fixture.preparations()).toBe(0);
 });
 

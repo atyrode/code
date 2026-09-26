@@ -49,7 +49,7 @@ function job(jobId = "job-a"): PublicJob {
     jobId, machineId: target.machineId, operationId: SESSION_OPERATION_ID, pluginId: OMP_PLUGIN_ID,
     installationRevision: "native-installation", artifactSha256: "c".repeat(64), inputDigest: "e".repeat(64),
     resourceBindingDigest: "d".repeat(64), state: "started", nextInputSeq: null, result: null,
-    authority: { origin: { kind: "action", traceId: "trace-1", door: `${CODE_PLUGIN_ID}.runSession` },
+    authority: { origin: { kind: "action", traceId: "trace-1", door: `${OMP_PLUGIN_ID}.runSession` },
       requester: "writer", executor: null, decision: null },
   });
 }
@@ -75,6 +75,7 @@ interface Fixture {
     echo: "asked" | JobInputBinding[];
     skills: OmpResult<"reviewSession">["skills"] | null;
     dropReviewLimits: boolean;
+    reviewOverride: Partial<OmpResult<"reviewSession">>;
     refuse: Map<string, string>; reject: Map<string, string>; during: Map<string, () => Promise<void>>;
     reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
   };
@@ -86,7 +87,7 @@ function fixture(): Fixture {
   const calls: string[] = [];
   const omp: Fixture["omp"] = { accounts: observation(),
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
-    silence: null, skills: null, dropReviewLimits: false,
+    silence: null, skills: null, dropReviewLimits: false, reviewOverride: {},
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
     reviewed: [], posted: [], read: [], cancelled: [] };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
@@ -106,12 +107,15 @@ function fixture(): Fixture {
     if (door === actionDoor("reviewSession")) {
       const value = SessionInputSchema.parse(input);
       omp.reviewed.push(value);
-      return { destination: { containerId: value.containerId, machineId: value.machineId }, operationId: LAUNCH_OPERATION_ID,
+      return { destination: { containerId: value.containerId, machineId: value.machineId },
+        operationId: value.agentTools === undefined ? LAUNCH_OPERATION_ID : SESSION_OPERATION_ID,
         reviewDigest, pins: { installationRevision: "native-installation", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) },
         defaultsRevision: value.expectedDefaultsRevision, effectiveOverlay: value.overlay,
         automation: value.automation ?? { mode: "ordinary" },
         ...(!omp.dropReviewLimits && value.inferenceLimits !== undefined ? { inferenceLimits: value.inferenceLimits } : {}),
-        accountPool: value.accountPool, skills: omp.skills ?? { mode: value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] } } satisfies OmpResult<"reviewSession">;
+        ...(value.agentTools === undefined ? {} : { agentTools: value.agentTools }),
+        accountPool: value.accountPool, skills: omp.skills ?? { mode: value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] },
+        ...omp.reviewOverride } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
       const value = ompActionSchemas.runSession.input.parse(input);
@@ -241,12 +245,71 @@ describe("Code profiles a dependent plugin may offer", () => {
 });
 
 describe("the session a dependent plugin posts through Code", () => {
-  test("a successful session updates the profile's last destination machine", async () => {
+  test("fresh native observations newer than dispatch launch and retain the destination", async () => {
     const f = fixture();
+    // Hardened actions carry their dispatch timestamp across asynchronous native reads.
+    f.ctx.now = () => 1;
     const record = await configured(f);
+    f.omp.accounts.observedAt = 2;
+    expect(await invoke(f, "composeSession", { ...workspace, expectedRevision: record.revision,
+      accounts: f.omp.accounts, prompt: "Caller-supplied future observation" })).toEqual({ refused: "code_invalid_accounts" });
     expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBeNull();
     await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
     expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
+    f.omp.accounts.observedAt = Number.MAX_SAFE_INTEGER;
+    expect(await invoke(f, "runSession", { ...target, expectedRevision: record.revision,
+      prompt: "Impossible future native observation" })).toEqual({ refused: "code_invalid_accounts" });
+  });
+
+  test("a selected Run cannot be dropped, substituted or reviewed as an interactive launch", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Use the authorized Run",
+      agentTools: { runId: "run-authorized" } };
+    for (const reviewOverride of [
+      { agentTools: undefined },
+      { agentTools: { runId: "run-other" } },
+      { operationId: LAUNCH_OPERATION_ID },
+    ]) {
+      f.omp.reviewOverride = reviewOverride;
+      expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    }
+    expect(f.omp.posted).toEqual([]);
+    f.omp.reviewOverride = {};
+    // Neither a missing admitted correlation nor another Run is the selected job.
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    f.omp.job.agentRunId = "run-other";
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    expect(await invoke(f, "readSession", { ...workspace, jobId: f.omp.job.jobId }))
+      .toEqual({ refused: "code_session_unknown" });
+  });
+
+  test("omitted selection stays unbound in review, admission and retained history", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Ordinary session" };
+    f.omp.reviewOverride = { agentTools: { runId: "run-unrequested" } };
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    expect(f.omp.posted).toEqual([]);
+    f.omp.reviewOverride = {};
+    f.omp.job.agentRunId = "run-unrequested";
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    delete f.omp.job.agentRunId;
+    const posted = await accepted(f, "runSession", input);
+    expect((await accepted(f, "readSession", { ...workspace, jobId: posted.jobId })).job.agentRunId).toBeUndefined();
+    // Existing records have no selector. Later history cannot attach authority to them.
+    f.omp.job.agentRunId = "run-unrequested";
+    for (const action of ["readSession", "followSession", "cancelSession"] as const)
+      expect(await invoke(f, action, { ...workspace, jobId: posted.jobId })).toEqual({ refused: "code_omp_review_changed" });
+  });
+
+  test("Run selection is not a grant or a caller-defined native tool contract", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Use the authorized Run" };
+    expect(await handlers.runSession!(f.ctx, { ...input,
+      agentTools: { runId: "run-authorized", toolNames: ["write"] } })).toEqual({ refused: "code_invalid_request" });
+    expect(f.calls).toEqual([]);
   });
 
   test("a requested ceiling must survive review and receipt reads without preventing cancellation", async () => {
@@ -268,24 +331,13 @@ describe("the session a dependent plugin posts through Code", () => {
     expect((await accepted(f, "cancelSession", { ...workspace, jobId: posted.jobId })).job.state).toBe("cancelled");
   });
 
-  test("a bound material input crosses Code verbatim, is retained, and is fenced against the job's echo", async () => {
+  test("a bound material input is returned only when the admitted job names that material", async () => {
     const f = fixture();
     const record = await configured(f);
     const input = { ...target, expectedRevision: record.revision, prompt: "Read the material" };
     const inputs: JobInputBinding[] = [{ name: "material", from: { jobId: "job-earlier", output: "session" } }];
     const posted = await accepted(f, "runSession", { ...input, inputs });
-    // Verbatim: OMP is handed the caller's own bindings, and the job echoes them back.
-    expect(f.omp.posted[0]?.inputs).toEqual(inputs);
-    expect(JSON.parse(f.store.get(`sessions/${digestOf(workspace)}/${posted.jobId}`)!))
-      .toMatchObject({ inputs });
-    // A run with no material asks for none rather than for an empty list of them.
-    const bare = fixture();
-    const saved = await configured(bare);
-    const without = await accepted(bare, "runSession", { ...input, expectedRevision: saved.revision });
-    expect(bare.omp.posted[0]).not.toHaveProperty("inputs");
-    expect(without.inputs).toBeUndefined();
-    expect(JSON.parse(bare.store.get(`sessions/${digestOf(workspace)}/${without.jobId}`)!))
-      .toMatchObject({ inputs: [] });
+    expect(posted.inputs).toEqual(inputs);
     // A job handed different material is not the job Code asked for, and is not vouched for.
     const fenced = fixture();
     const current = await configured(fenced);
@@ -356,7 +408,8 @@ describe("the session a dependent plugin posts through Code", () => {
   test("a stale revision, an empty prompt, and choices or defaults that move mid-post never reach OMP's job door", async () => {
     const f = fixture();
     const record = await configured(f);
-    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change",
+      agentTools: { runId: "run-authorized" } };
     expect(await invoke(f, "runSession", { ...input, expectedRevision: record.revision + 1 })).toEqual({ refused: "code_stale_preferences" });
     expect(await invoke(f, "runSession", { ...input, prompt: "" })).toEqual({ refused: "code_invalid_request" });
     f.omp.during.set(actionDoor("reviewSession"), async () => {
@@ -365,6 +418,8 @@ describe("the session a dependent plugin posts through Code", () => {
     });
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_stale_preferences" });
     f.omp.during.clear();
+    const changed = await accepted(f, "readConfiguration", workspace);
+    await accepted(f, "select", { ...workspace, expectedRevision: changed.revision, selection: record.selection! });
     const current = await accepted(f, "readConfiguration", workspace);
     f.omp.during.set(actionDoor("reviewSession"), async () => { f.omp.defaults = { ...f.omp.defaults, revision: 4 }; });
     expect(await invoke(f, "runSession", { ...input, expectedRevision: current.revision })).toEqual({ refused: "code_composition_changed" });
@@ -380,8 +435,7 @@ describe("the session a dependent plugin posts through Code", () => {
     f.omp.refuse.clear();
     f.omp.job = { ...job(), machineId: "machine-b" };
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
-    // The review names `atyrode.omp.launch` because a session's content is placement-agnostic;
-    // a job on that interactive operation is a terminal's, and Code does not speak for it.
+    // An unselected review names launch, but its job must still use the one-shot operation.
     f.omp.job = { ...job(), operationId: LAUNCH_OPERATION_ID };
     expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
     expect(f.store.has(`sessions/${digestOf(workspace)}/${f.omp.job.jobId}`)).toBe(false);
@@ -414,6 +468,26 @@ describe("the session a dependent plugin posts through Code", () => {
 });
 
 describe("reading back and ending a session Code posted", () => {
+  test("a selected Run remains bound across receipt, activity and cancellation answers", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const agentTools = { runId: "run-authorized" };
+    f.omp.job.agentRunId = agentTools.runId;
+    const posted = await accepted(f, "runSession", { ...target, expectedRevision: record.revision,
+      prompt: "Use the authorized Run", agentTools });
+    const input = { ...workspace, jobId: posted.jobId };
+    expect((await accepted(f, "readSession", input)).job.agentRunId).toBe(agentTools.runId);
+    expect((await accepted(f, "followSession", input)).inferenceUsage?.calls).toBe(3);
+    delete f.omp.job.agentRunId;
+    for (const action of ["readSession", "followSession", "cancelSession"] as const)
+      expect(await invoke(f, action, input)).toEqual({ refused: "code_omp_review_changed" });
+    f.omp.job.agentRunId = "run-other";
+    for (const action of ["readSession", "followSession", "cancelSession"] as const)
+      expect(await invoke(f, action, input)).toEqual({ refused: "code_omp_review_changed" });
+    f.omp.job.agentRunId = agentTools.runId;
+    expect((await accepted(f, "cancelSession", input)).job.state).toBe("cancelled");
+  });
+
   test("OMP's receipt passes through unchanged for the job Code retained, and for no other", async () => {
     const f = fixture();
     const record = await configured(f);

@@ -15,7 +15,7 @@
     "plugins/domain"
   ],
   "dependencies": {
-    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#91a2bfd42db72a45d4aabd2dbb54b0a693732a72",
+    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#bcb7d25f910bfb4179227c372f93e690441e38de",
     "zod": "4.4.3"
   }
 }

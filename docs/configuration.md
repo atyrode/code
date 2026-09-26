@@ -147,6 +147,33 @@ It reads settled activity from OMP's durable journal and excludes output bytes,
 prompts and transcript bodies. Missing progress is not evidence that a model
 has started; an evicted call list is not a substitute for cumulative usage.
 
+### Existing-Run tools for one shot
+
+`atyrode.code.runSession` optionally accepts `agentTools: { runId }`, using
+OMP's exported `AgentToolsSelectionSchema` through its session input schema.
+The Run must already be authorized by Manifold. This is an explicit selection,
+not a grant, policy acknowledgment, credential, actor choice or caller-defined
+tool schema. Code cannot create or broaden that authority; native review,
+admission and tool execution remain OMP/Manifold-owned.
+
+Omission keeps native tools off. The selector is ephemeral and one-shot-only:
+it is not a Code profile/default, terminal workflow option, resume option or
+interactive/harness preparation setting. Native review refuses combinations
+with restricted automation or plan-yolo. Selecting a Run does not disable
+ordinary skill/project discovery; skills and retained history never grant
+tool authority.
+
+Code re-observes composition, account choices and defaults before posting.
+The selected native review must name `atyrode.omp.session` and retain the
+exact selector; an unselected review still names `atyrode.omp.launch`.
+The admitted job must carry the selected Run as `agentRunId`. Code retains
+the selector with its session provenance and refuses dropped, changed or
+unsolicited correlation on posting, receipt reads, activity reads and
+cancellation answers. `agentRunId` is correlation, not a credential.
+Existing records without a selector remain unbound; they do not inherit
+authority from later history. The existing material, skill, limit and
+workspace fences still apply.
+
 ### Optional skills for one launch
 
 `workflow.readSkillCatalog({ containerId, machineId })` calls OMP's native
