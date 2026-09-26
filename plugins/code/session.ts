@@ -34,6 +34,7 @@ const SessionProvenanceSchema = z.strictObject({
   inputs: z.array(JobInputBindingSchema).max(16).default([]),
   inferenceLimits: SessionInputSchema.shape.inferenceLimits,
   isolation: SessionInputSchema.shape.isolation,
+  agentTools: SessionInputSchema.shape.agentTools,
 });
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
 
@@ -42,14 +43,15 @@ type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
  * observation. The `composeSession` door and the `runSession` door call exactly this, so a
  * posted job carries the composition the generator previewed and nothing else.
  */
-export async function composeSession(ctx: CodeContext, args: ActionInput<"composeSession">): Promise<SessionComposition> {
+export async function composeSession(ctx: CodeContext, args: ActionInput<"composeSession">,
+  receivedAt = ctx.now()): Promise<SessionComposition> {
   const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
   const record = requireConfiguration(previous);
   if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
-  if (args.accounts.observedAt !== null && args.accounts.observedAt > ctx.now()) throw new DomainError("invalid_accounts");
+  if (args.accounts.observedAt !== null && args.accounts.observedAt > receivedAt) throw new DomainError("invalid_accounts");
   const accountPool = selectedAccountPool(args.accounts, record.accounts);
   const catalog = compileCatalog(record.active.document);
-  const review = reviewCatalog(catalog, record.selection, ctx.now());
+  const review = reviewCatalog(catalog, record.selection, receivedAt);
   for (const route of review.routes) {
     for (const choice of [route.lead, ...route.fallback]) {
       if (!accountPool[catalog.model(choice.key).provider]?.length) throw new CodeRefusal("account_unavailable");
@@ -110,10 +112,13 @@ async function ompCall<K extends OmpAction>(ctx: CodeContext, action: K, input: 
 async function observedSession(ctx: CodeContext, args: ActionInput<"runSession">) {
   const accounts = await ompCall(ctx, "accounts", {});
   const defaults = await ompCall(ctx, "readDefaults", {});
+  // Hardened ctx.now() is the outer dispatch timestamp. OMP stamps this new
+  // observation after its broker read, so validate it at receipt, like OMP itself.
   const composition = await composeSession(ctx, { containerId: args.containerId,
-    expectedRevision: args.expectedRevision, accounts, prompt: args.prompt });
-  return { composition, input: sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision,
-    { skills: args.skills, automation: args.automation, inferenceLimits: args.inferenceLimits, isolation: args.isolation }) };
+    expectedRevision: args.expectedRevision, accounts, prompt: args.prompt }, Date.now());
+  return { composition, input: { ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision,
+    { skills: args.skills, automation: args.automation, inferenceLimits: args.inferenceLimits, isolation: args.isolation }),
+    ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }) } };
 }
 
 /**
@@ -204,9 +209,11 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
  * accounts or OMP's defaults moved between the two. The prompt is required because a job-shaped
  * session is one-shot — without one the run would never end.
  *
- * Ordinary reviews name the interactive content operation; their jobs use its one-shot
- * sibling. Material-only reviews and jobs both name the isolated operation. Neither
- * placement may silently substitute for the other.
+ * Ordinary reviews name the placement-agnostic launch operation; their jobs use its one-shot
+ * sibling. An explicit existing-Run selector instead requires the native one-shot review.
+ * Material-only reviews and jobs both name the isolated operation. Neither placement may
+ * silently substitute for another. Code carries the exact selection through review and
+ * retention; it neither establishes nor changes Run authority.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
@@ -215,7 +222,9 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const first = await observedSession(ctx, args);
   const review = await ompCall(ctx, "reviewSession", first.input);
   if (review.destination.containerId !== args.containerId || review.destination.machineId !== args.machineId ||
-    review.operationId !== (args.isolation === undefined ? LAUNCH_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID) ||
+    review.operationId !== (args.isolation !== undefined ? MATERIAL_SESSION_OPERATION_ID
+      : args.agentTools !== undefined ? SESSION_OPERATION_ID : LAUNCH_OPERATION_ID) ||
+    digestOf(review.agentTools ?? null) !== digestOf(args.agentTools ?? null) ||
     review.defaultsRevision !== first.input.expectedDefaultsRevision ||
     digestOf(review.inferenceLimits ?? null) !== digestOf(args.inferenceLimits ?? null) ||
     digestOf(review.isolation ?? null) !== digestOf(args.isolation ?? null))
@@ -227,9 +236,11 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const bound = [...(args.inputs ?? []), ...skillInputBindings(review.skills)];
   const job = await ompCall(ctx, "runSession", {
     ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
+    ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
     reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
   const operationId = args.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
   if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
+    job.agentRunId !== args.agentTools?.runId ||
     digestOf(job.inputs ?? []) !== digestOf(bound) ||
     Object.entries(args.inferenceLimits ?? {}).some(([key, value]) =>
       job.limits?.inference?.[key as keyof NonNullable<typeof args.inferenceLimits>] !== value))
@@ -239,6 +250,7 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     compositionDigest: latest.composition.compositionDigest, reviewDigest: review.reviewDigest,
     defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id,
     postedAt: ctx.now(), inputs: bound,
+    ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }),
     ...(args.inferenceLimits === undefined ? {} : { inferenceLimits: args.inferenceLimits }),
     ...(args.isolation === undefined ? {} : { isolation: args.isolation }) });
   // OMP mints the job id, so retention is the step between the post and the answer rather than
@@ -264,6 +276,7 @@ async function retainedSession(ctx: CodeContext, args: { containerId: string; jo
 function sameJob(job: ActionResult<"cancelSession">["job"], provenance: SessionProvenance, requireLimits = true): boolean {
   return job.jobId === provenance.jobId && job.machineId === provenance.machineId &&
     job.pluginId === OMP_PLUGIN_ID && job.operationId === provenance.operationId &&
+    job.agentRunId === provenance.agentTools?.runId &&
     (!requireLimits || (digestOf(job.inputs ?? []) === digestOf(provenance.inputs) &&
       Object.entries(provenance.inferenceLimits ?? {}).every(([key, value]) =>
         job.limits?.inference?.[key as keyof NonNullable<SessionProvenance["inferenceLimits"]>] === value)));

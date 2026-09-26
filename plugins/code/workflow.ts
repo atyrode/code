@@ -221,14 +221,14 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       const [composition, defaults] = await Promise.all([composeSession(target, expectedRevision, prompt), omp("readDefaults", {})]);
       const native = await omp("reviewSession", sessionInput(target, composition, defaults.revision, options));
       const operationId = options.isolation === undefined ? LAUNCH_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
-      if (native.operationId !== operationId || native.destination.containerId !== target.containerId ||
+      if (native.agentTools !== undefined || native.operationId !== operationId || native.destination.containerId !== target.containerId ||
         native.destination.machineId !== target.machineId || native.defaultsRevision !== defaults.revision ||
         canonicalJobJson(native.isolation ?? null) !== canonicalJobJson(options.isolation ?? null))
         throw new WorkflowError("omp_review_changed");
       return { destination: { ...target }, composition, native };
     },
     async prepareSession(review: SessionReview): Promise<OmpResult<"prepareSession">> {
-      if (review.native.operationId !== LAUNCH_OPERATION_ID) throw new WorkflowError("omp_review_changed");
+      if (review.native.agentTools !== undefined || review.native.operationId !== LAUNCH_OPERATION_ID) throw new WorkflowError("omp_review_changed");
       const [composition, defaults] = await Promise.all([
         composeSession(review.destination, review.composition.revision, review.composition.prompt), omp("readDefaults", {}),
       ]);

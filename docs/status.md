@@ -112,12 +112,17 @@ files, service state, credentials or backups.
   without copying credential algorithms or changing that patch. This does not
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
-  Code pins the merged native source at
-  [`c4898f0`](https://github.com/atyrode/manifold-omp/commit/c4898f0ff057c0a94ab0109953872420b4d9051e)
-  ([manifold-omp#74](https://github.com/atyrode/manifold-omp/pull/74)).
-  Source integration requires both plugin gates against the declared native pin
-  and current CI. These additions are not in a released Code/OMP bundle, and no
-  transition-ledger row advances.
+  Code's existing-Run tools pin native source
+  [`bcb7d25`](https://github.com/atyrode/manifold-omp/commit/bcb7d25f910bfb4179227c372f93e690441e38de)
+  ([manifold-omp#79](https://github.com/atyrode/manifold-omp/pull/79), merged) and
+  Manifold `b00c1fa350dbe28b247ae4261d7eef817e00b2c8`
+  ([manifold#818](https://github.com/atyrode/manifold/pull/818), merged: protocol 43,
+  native owner RPC 41, hardened contract 7). Both are integrated source; neither is yet a
+  released Code/OMP bundle or a deployed production capability, and no transition-ledger
+  row advances. The Code gate runs the real Code-to-native tool proof against these pins.
+  The one-shot-only `agentTools: { runId }` selector carries existing native
+  authority; it does not grant, infer or acknowledge it. Omission stays unbound.
+  Read, follow and cancel preserve the exact retained Run correlation.
 - Portable captures/archive recovery, general live settings-origin inspection,
   live per-account quota preservation and Code-owned upstream fallback repair are
   not planned. Bounded Babel acceptance remains separate and unproven.
