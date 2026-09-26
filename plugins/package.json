@@ -6,13 +6,15 @@
     "check": "tsc -p .",
     "test": "bun test",
     "pack": "./pack.sh",
-    "verify": "bun ../../manifold/packages/plugin-kit/src/verify.ts --hardened .integration/omp/plugins/dist/*.manifold-plugin.json dist/atyrode.code.manifold-plugin.json && bun ../../manifold/packages/plugin-kit/src/verify.ts .integration/omp/plugins/dist/*.manifold-plugin.json dist/*.manifold-plugin.json && bun run verify:browser",
+    "verify": "bun run verify:consumer && bun ../../manifold/packages/plugin-kit/src/verify.ts --hardened .integration/omp/plugins/dist/*.manifold-plugin.json dist/atyrode.code.manifold-plugin.json && bun ../../manifold/packages/plugin-kit/src/verify.ts .integration/omp/plugins/dist/*.manifold-plugin.json dist/*.manifold-plugin.json && bun run verify:browser && bun run verify:native",
     "verify:browser": "bun scripts/verify-browser.ts",
+    "verify:consumer": "bun --no-env-file --no-install scripts/verify-consumer.ts",
+    "verify:native": "bun --no-env-file --no-install scripts/verify-native.ts",
     "prepare:integration": "bun scripts/prepare-integration.ts",
     "dev": "bun dev.ts"
   },
   "dependencies": {
-    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#91a2bfd42db72a45d4aabd2dbb54b0a693732a72",
+    "@atyrode/manifold-omp": "github:atyrode/manifold-omp#bcb7d25f910bfb4179227c372f93e690441e38de",
     "zod": "4.4.3"
   },
   "devDependencies": {

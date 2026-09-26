@@ -34,6 +34,28 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.2"
+      - name: Read the pinned native fixture revision
+        id: omp
+        working-directory: code
+        run: |
+          bun --no-env-file --no-install -e '
+            const manifest = await Bun.file("plugins/package.json").json();
+            const match = /^github:atyrode\/manifold-omp#([a-f0-9]{40})$/.exec(manifest.dependencies["@atyrode/manifold-omp"]);
+            if (!match) throw new Error("OMP must name one immutable revision");
+            console.log("rev=" + match[1]);
+          ' >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: atyrode/manifold-omp
+          ref: ${{ steps.omp.outputs.rev }}
+          path: omp
+          persist-credentials: false
+      - name: Install Linux containment fixtures
+        working-directory: manifold
+        run: bash scripts/install-runtime-ci.sh
+      - name: Prepare pinned native verification resources
+        working-directory: omp/plugins
+        run: bun --no-env-file --no-install scripts/prepare-ci.ts
       - name: Check, test, pack and verify the native plugin family
         working-directory: code
         run: bash scripts/gate.sh

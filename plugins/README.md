@@ -35,9 +35,10 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   `followSession` and `cancelSession` — the same composition, posted as an OMP job for a plugin that
   depends on Code through `ctx.actions.call`. A Code profile is a configured
   workspace; there is no second profile concept. The job runs on
-  `atyrode.omp.session`, the one-shot sibling of the interactive
-  `atyrode.omp.launch` the review names. `readSession` answers a run at any point
-  in its life — the receipt is there only once it exited 0 with a sealed
+  `atyrode.omp.session`. Without tool selection, native review names its
+  interactive sibling `atyrode.omp.launch`; with an explicit existing-Run
+  selection, review names the one-shot operation itself. `readSession` answers
+  a run at any point in its life — the receipt is there only once it exited 0 with a sealed
   transcript — and `cancelSession` ends one. `followSession` returns native
   cumulative inference usage, retained progress and bounded call metadata,
   with journal gaps explicit and output bytes excluded. Every session reader
@@ -47,6 +48,15 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   `runSession`'s optional `inputs` binds sealed outputs of earlier jobs on the
   same machine to the run's declared inputs (ADR 0044); Code passes them to OMP
   verbatim, retains them, and refuses a job whose echo names other material.
+  Optional `agentTools: { runId }` uses OMP's native schema to select an already
+  authorized Run for an ordinary one-shot only. Code cannot grant tools,
+  acknowledge policy or manufacture authority. Omission keeps tools off;
+  profiles, terminal preparation and resume cannot inherit this selection.
+  Native review refuses restricted/plan-yolo combinations. Ordinary discovery
+  is unchanged, and skills/history never confer authority. Code retains the
+  exact selector and rejects missing, changed or unsolicited `agentRunId`
+  correlation on returned jobs and subsequent read/follow/cancel answers.
+  Retained records without a selector stay unbound.
 - `service-setup.ts` and `service-policies.ts`: only Code's optional external
   `suggest` classifier policy. They do not configure OMP runtime services.
 - `pack.ts`: four policy/presentation bundles. There are no Code machine
@@ -188,8 +198,9 @@ From the Code root:
 scripts/gate.sh
 ```
 
-The gate checks the Bun and SDK revisions, frozen-installs both workspaces,
-prepares the real pinned OMP dependency, then runs:
+The gate checks Bun, the SDK revision and matching immutable OMP pins in both Code packages.
+It frozen-installs the SDK and both Code packages, prepares the real pinned OMP dependency,
+then runs:
 
 ```sh
 bun run check
@@ -200,19 +211,34 @@ bun run verify
 
 `pack` compiles the complete Code family in memory before replacing `dist/`.
 Output is the four `dist/<id>.manifold-plugin.json` files and `SHA256SUMS`;
-runtime artifact declarations belong only to OMP. `verify` gives the generic kit
-the three real pinned OMP bundles followed by Code's four bundles. Dependency
-ordering installs OMP before its Code clients and uninstalls in reverse. The
+runtime artifact declarations belong only to OMP. `verify:consumer` first installs the packed
+public Code package into an isolated consumer, with no source-checkout Code or OMP resolution,
+and proves selected, default-off and self-grant-refused session inputs through its exported API.
+This catches a stale publishable dependency even when the plugin workspace builds correctly.
+Then `verify` gives the generic kit the three real pinned OMP bundles followed by Code's four
+bundles. Dependency ordering installs OMP before its Code clients and uninstalls in reverse. The
 browser verifier installs those same real bundles into a disposable server and
 drives two ordinary identities and two permitted destinations through shared
 drafts, four-level routing, permission denial and stale-review behavior. Its
 native resources remain deliberately unconfigured, so it claims no provider
 request, consent success or account-backed session.
 
-The standalone OMP repository separately proves packaged workers under its
-explicit native containment fixture. Code retains only consumer policy tests and
-headless workflow regressions; broker shutdown/reconnect, secret redaction,
-concrete-slot fallback and gateway boundaries live with their OMP owner.
+`verify:native` then reuses the exact prepared OMP source's disposable native
+launcher and synthetic unpaid model gateway. It installs Code's real bundles,
+configures the profile through public Code doors and exercises Code-to-OMP
+run/read/cancel, selected/refused tool effects, policy acknowledgement, durable
+correlation, uncertain cancellation without replay and omitted-selection behavior.
+This separate native proof requires Linux x64, Bun 1.4.2, delegated systemd,
+`unshare`, `OMP_VERIFY_SYSTEM`, `OMP_VERIFY_BWRAP` and
+`MANIFOLD_TEST_STATIC_BUSYBOX`; `OMP_VERIFY_SYSTEMD_MODE=user` selects a local
+user manager. The system declaration lists reviewed individual runtime files,
+not ambient directories. Every full-gate CI and release workflow installs Linux containment
+fixtures and runs the exact pinned OMP preparation before verification.
+Missing prerequisites fail the gate rather than skip this proof.
+
+Broker shutdown/reconnect, secret redaction, concrete-slot fallback and gateway
+boundaries remain with their OMP owner. No real provider, persistent instance,
+fleet credential or deployment is part of either Code verifier.
 
 ## Native resources and suggestions
 

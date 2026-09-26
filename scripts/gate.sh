@@ -30,6 +30,16 @@ if [ -z "$revision" ] || [ "$(git -C "$manifold" rev-parse HEAD)" != "$revision"
   exit 1
 fi
 
+cd -- "$here"
+bun --no-env-file --no-install -e '
+  const root = await Bun.file("package.json").json();
+  const plugins = await Bun.file("plugins/package.json").json();
+  const pin = root.dependencies["@atyrode/manifold-omp"];
+  if (!/^github:atyrode\/manifold-omp#[a-f0-9]{40}$/.test(pin) ||
+      pin !== plugins.dependencies["@atyrode/manifold-omp"])
+    throw new Error("gate.sh: public and plugin OMP pins must match one immutable revision");
+'
+bun install --frozen-lockfile
 (cd -- "$manifold" && bun install --frozen-lockfile)
 cd -- "$here/plugins"
 bun install --frozen-lockfile
