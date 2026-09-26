@@ -140,6 +140,20 @@ thresholds. These are not zero-overshoot spending caps. Native metering does not
 establish a cumulative spending ledger or a worst-case provider retry/token
 envelope; a bounded live rehearsal still requires both.
 
+The same door also accepts OMP's exported `isolation` option,
+`{ mode: "material-only", file, sha256, bytes }`. Code carries it through
+native review and requires that review to name OMP's `atyrode.omp.material-session`
+operation with the identical isolation. It also requires the posted job to run
+that operation with exactly the caller's bound inputs. Retained receipts keep
+the isolation. Read and follow refuse a retained session whose operation or
+bound inputs no longer match it, and cancel still requires the retained
+operation and job identity. Requests without isolation keep
+the launch review and `atyrode.omp.session` job, and neither placement
+substitutes for the other. Code never opens or checks the material itself: the
+single sealed `material` binding, its size, digest and encoding, the empty tool
+registry and the output-only session lease are OMP's native boundary. OMP also
+refuses terminal or harness preparation from an isolated review.
+
 `atyrode.code.followSession({ containerId, jobId })` uses the retained session's
 exact native target. It returns cumulative inference usage, latest retained
 progress and bounded inference-call metadata, with sequence gaps explicit.
@@ -160,7 +174,7 @@ the target and remain available to repair stale entries. Native catalog writes a
 selection recheck source-job read/export authority, machine identity and sealed digest;
 reading catalog metadata does not grant access to its sources.
 
-`workflow.reviewSession(target, expectedRevision, prompt, { skills?, automation?, inferenceLimits? })`
+`workflow.reviewSession(target, expectedRevision, prompt, { skills?, automation?, inferenceLimits?, isolation? })`
 accepts one optional options object. Its `skills` field is OMP's own schema:
 
 - Omitted: select no optional entries; ordinary launches preserve permitted
