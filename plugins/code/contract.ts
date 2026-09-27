@@ -1,6 +1,6 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
 import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
-  JobInputBindingSchema, OverlaySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
+  JobInputBindingSchema, OverlaySchema, PostingKeySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
   SessionSilenceSchema, SessionActivitySchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { z } from "zod";
@@ -108,7 +108,12 @@ export type Profile = z.infer<typeof ProfileSchema>;
 export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchema).max(4096) });
 /** `inputs` binds sealed outputs of earlier jobs on the same machine to the run's declared
  * inputs (ADR 0044). Code passes them to OMP verbatim and reads none of them: what the
- * material is, and how the prompt refers to it, is the caller's own business. */
+ * material is, and how the prompt refers to it, is the caller's own business.
+ *
+ * `postingKey` is OMP's retryable-posting key: it names at most one posted session for this
+ * caller and target, and a keyed call first returns the session the key already posted.
+ * `adoptOnly` returns that session and never composes, reviews or posts: it retires the key, so
+ * a key that posted nothing refuses `code_omp_posting_unknown` and never posts afterwards. */
 export const SessionRunInputSchema = RevisionTargetSchema.extend({
   // A one-shot needs a prompt; how long it may be is OMP's rule, not a number restated here.
   prompt: sessionPrompt.refine(value => value.length > 0, "a one-shot session needs a prompt"),
@@ -118,6 +123,8 @@ export const SessionRunInputSchema = RevisionTargetSchema.extend({
   isolation: SessionInputSchema.shape.isolation,
   inferenceLimits: SessionInputSchema.shape.inferenceLimits,
   agentTools: SessionInputSchema.shape.agentTools,
+  postingKey: PostingKeySchema.optional(),
+  adoptOnly: z.boolean().optional(),
 });
 export const SessionReadInputSchema = WorkspaceSchema.extend({ jobId: id });
 export const SessionCancelInputSchema = WorkspaceSchema.extend({ jobId: id });

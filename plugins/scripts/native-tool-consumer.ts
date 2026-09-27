@@ -74,6 +74,15 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
     ? unknown.denial.message.replaceAll("_", "-") : unknown.denial.rule.replaceAll("_", "-");
   check(!unknown.ok && unknown.denial.rule === "refused" && unknown.denial.message.includes("code_omp_"),
     `unknown-run-${unknownReason}`);
+  // An adoption of a key that posted nothing refuses by OMP's own name through Code and retires
+  // the key at OMP: a later keyed create refuses by Code's own word, and neither posts anything.
+  const adoption = await dispatch(hub, hub.ownerKey, actionDoor("runSession"), { ...request,
+    postingKey: "code-native-unposted", adoptOnly: true });
+  check(!adoption.ok && adoption.denial.rule === "refused" && adoption.denial.message === "code_omp_posting_unknown",
+    "unposted-adoption-not-refused");
+  const retired = await dispatch(hub, hub.ownerKey, actionDoor("runSession"), { ...request, postingKey: "code-native-unposted" });
+  check(!retired.ok && retired.denial.rule === "refused" && retired.denial.message === "code_posting_retired",
+    "retired-key-posted");
   const after = ListJobRunsResultSchema.parse(await ownerAction(hub, "engine.jobs.listRuns", {
     machineId: target.machineId, pluginId: "atyrode.omp", operationId: "atyrode.omp.session",
   }));
@@ -89,7 +98,17 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
         && native.prompt === input.prompt && native.expectedDefaultsRevision === input.expectedDefaultsRevision
         && canonicalJobJson(native.overlay) === canonicalJobJson(input.overlay)
         && canonicalJobJson(native.accountPool) === canonicalJobJson(input.accountPool), "native-input-changed");
-      return call("runSession", { ...request, ...(native.agentTools === undefined ? {} : { agentTools: native.agentTools }) });
+      if (native.agentTools !== undefined) return call("runSession", { ...request, agentTools: native.agentTools });
+      // An ordinary session is posted under a key. After the profile moves, a retry and an
+      // adoption with the posting's own stale revision still answer with that job.
+      const keyed = { ...request, postingKey: "code-native-default-off" };
+      const job = await call("runSession", keyed);
+      configuration = await call("select", { ...workspace, expectedRevision: configuration.revision,
+        selection: { ...configuration.selection!, thinking: "medium" } });
+      check(configuration.revision > keyed.expectedRevision, "profile-revision-not-moved");
+      check((await call("runSession", keyed)).jobId === job.jobId
+        && (await call("runSession", { ...keyed, adoptOnly: true })).jobId === job.jobId, "keyed-posting-not-idempotent");
+      return job;
     },
     async readSession(native) {
       check(native.containerId === target.containerId && native.machineId === target.machineId, "read-target-changed");

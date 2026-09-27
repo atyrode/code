@@ -154,6 +154,44 @@ single sealed `material` binding, its size, digest and encoding, the empty tool
 registry and the output-only session lease are OMP's native boundary. OMP also
 refuses terminal or harness preparation from an isolated review.
 
+A caller that must be able to retry a posting passes OMP's `postingKey`
+(`PostingKeySchema`: one to 128 of `A–Z a–z 0–9 . _ : -`, starting with a letter
+or digit), such as its own run id. OMP derives the job id from the key, the
+caller and the target, so a key names at most one posted session.
+
+A keyed call is answered first, from the target and the key alone, through
+OMP's `adoptSession`. Code composes nothing, observes no accounts, reads no
+defaults and asks for no review, so a retry or an adoption still finds a posted
+session after the profile revision, account choices, defaults or review
+changed. Code returns the job only when its own record for that job is this
+caller's and matches it; a record for another caller or another job refuses
+`code_session_conflict`, and a job Code never composed refuses
+`code_session_unknown`. Only a key that has posted nothing composes, reviews and
+posts as any call does, under the key.
+
+Before that post, Code retains what it composed as the key's intent, and only
+the first intent retained for a key is ever posted under it: a later caller
+never replaces it. A caller whose composition, review and inputs equal that
+intent continues it, so a call interrupted after Code retained its intent but
+before OMP received anything is finished by the next identical keyed call, and
+two identical racing calls are one posting at OMP. A caller that composed
+something else returns what the key posted, or refuses `code_session_conflict`;
+`adoptOnly` then settles the key. A posting whose record after the post never
+landed is completed from the intent on the next keyed call.
+
+`adoptOnly: true` never composes, reviews or posts: it retires the key at OMP
+(`adoptSession` with `retire: true`) and returns the key's session, or refuses:
+
+- `code_omp_posting_unknown` when the key has posted nothing. The answer is
+  final: the key can never post afterwards, and a later keyed call refuses
+  `code_posting_retired`, as does a create whose post a retire overtook.
+- `code_omp_posting_pending` when OMP retained the posting but the hub has not
+  received it. The retire executes nothing; ask again.
+
+`adoptOnly` without a key refuses `code_posting_key_required`. Other OMP
+refusals keep their names: `code_omp_posting_key_conflict`, and
+`code_omp_posting_key_agent_tools_unsupported` for a key with `agentTools`.
+
 `atyrode.code.followSession({ containerId, jobId })` uses the retained session's
 exact native target. It returns cumulative inference usage, latest retained
 progress and bounded inference-call metadata, with sequence gaps explicit.

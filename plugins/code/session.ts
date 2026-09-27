@@ -37,6 +37,8 @@ const SessionProvenanceSchema = z.strictObject({
   agentTools: SessionInputSchema.shape.agentTools,
 });
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
+/** What Code composed for a posting key, retained before it posts; the record without its job. */
+const IntentSchema = SessionProvenanceSchema.omit({ jobId: true });
 
 /**
  * One workspace's saved catalog, selection and account choices against one caller-supplied
@@ -203,6 +205,51 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
   return newest?.machineId ?? null;
 }
 
+/** Whether a retained record speaks for `job` as this caller's session in this workspace. */
+function vouches(ctx: CodeContext, containerId: string, job: OmpResult<"adoptSession">, raw: string | null): boolean {
+  const retained = raw === null ? undefined : SessionProvenanceSchema.safeParse(JSON.parse(raw));
+  return retained?.success === true && retained.data.containerId === containerId &&
+    retained.data.requester === ctx.auth.principal.id && sameJob(job, retained.data);
+}
+/**
+ * The session a posting key already posted, found from the target and the key alone: no
+ * composition, account observation, defaults or review, so a profile or review that changed
+ * since cannot hide a live paid session from the caller that must find or stop it. Null when
+ * the key has posted nothing and the caller is not retiring it.
+ *
+ * `retire` settles the key at OMP: a key that posted nothing can then never post, and its
+ * `omp_posting_unknown` is final; a posting OMP retained but has not dispatched answers the
+ * retryable `omp_posting_pending`. Neither form ever posts or executes.
+ *
+ * OMP answers for the job; Code answers only for a job it composed. A posting whose record
+ * after the post never landed is completed from the intent Code retained before posting, and
+ * a posting Code never composed is not Code's to vouch for.
+ */
+async function adoptPosting(ctx: CodeContext, args: ActionInput<"runSession">, postingKey: string,
+  intentKey: string, retire: boolean): Promise<OmpResult<"adoptSession"> | null> {
+  let job: OmpResult<"adoptSession">;
+  try {
+    job = await ompCall(ctx, "adoptSession", { containerId: args.containerId, machineId: args.machineId, postingKey,
+      ...(retire ? { retire: true } : {}) });
+  } catch (error) {
+    if (!retire && error instanceof CodeRefusal && error.code === "omp_posting_unknown") return null;
+    // A retire settled this key at OMP: nothing was posted under it and nothing ever will be.
+    if (error instanceof CodeRefusal && error.code === "omp_posting_retired") throw new CodeRefusal("posting_retired");
+    throw error;
+  }
+  const key = `sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`;
+  let raw = await ctx.storage.get(key);
+  if (raw === null) {
+    const intent = await ctx.storage.get(intentKey);
+    if (intent === null) throw new CodeRefusal("session_unknown");
+    const record = JSON.stringify(SessionProvenanceSchema.parse({ ...JSON.parse(intent), jobId: job.jobId }));
+    // A rebuilt record is written only when it describes this very job.
+    if (!vouches(ctx, args.containerId, job, record)) throw new CodeRefusal("session_conflict");
+    raw = await ctx.storage.compareAndSet(key, null, record) ? record : await ctx.storage.get(key);
+  }
+  if (!vouches(ctx, args.containerId, job, raw)) throw new CodeRefusal("session_conflict");
+  return job;
+}
 /**
  * The reviewed session, posted as an OMP job. The double preparation is `prepareSession`'s:
  * compose, review at OMP, compose again, and refuse rather than post when the workspace, the
@@ -214,11 +261,30 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
  * Material-only reviews and jobs both name the isolated operation. Neither placement may
  * silently substitute for another. Code carries the exact selection through review and
  * retention; it neither establishes nor changes Run authority.
+ *
+ * A `postingKey` is answered first, from the target and the key alone: a retry or an
+ * `adoptOnly` call returns the session the key already posted whatever changed since, and only
+ * a key that posted nothing composes and posts, under the key, so OMP never buys it twice.
+ * `adoptOnly` never posts: it retires the key at OMP, so its `code_omp_posting_unknown` is final.
+ *
+ * Before posting under a key, Code retains what it composed as the key's intent, create-only:
+ * the first composition retained for a key is the only one it ever posts. A later caller whose
+ * composition equals that intent continues it (the same posting, answered once by OMP);
+ * another adopts what the key posted, or refuses `code_session_conflict` and settles the key
+ * through an `adoptOnly` retire. A posting whose record after the post never landed is
+ * completed from that intent, so it is still Code's to answer for.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
   // job is retained under Code's own storage before its handle is answered.
   await authorizeTarget(ctx, args, true);
+  if (args.adoptOnly === true && args.postingKey === undefined) throw new CodeRefusal("posting_key_required");
+  const intentKey = args.postingKey === undefined ? undefined : `postings/${digestOf({ containerId: args.containerId,
+    machineId: args.machineId, requester: ctx.auth.principal.id, postingKey: args.postingKey })}`;
+  if (args.postingKey !== undefined && intentKey !== undefined) {
+    const adopted = await adoptPosting(ctx, args, args.postingKey, intentKey, args.adoptOnly === true);
+    if (adopted !== null) return adopted;
+  }
   const first = await observedSession(ctx, args);
   const review = await ompCall(ctx, "reviewSession", first.input);
   if (review.destination.containerId !== args.containerId || review.destination.machineId !== args.machineId ||
@@ -234,29 +300,52 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     latest.input.expectedDefaultsRevision !== first.input.expectedDefaultsRevision) throw new CodeRefusal("composition_changed");
   // Material remains the caller's binding; optional slots come only from OMP's reviewed union.
   const bound = [...(args.inputs ?? []), ...skillInputBindings(review.skills)];
-  const job = await ompCall(ctx, "runSession", {
-    ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
-    ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
-    reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
   const operationId = args.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
-  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
-    job.agentRunId !== args.agentTools?.runId ||
-    digestOf(job.inputs ?? []) !== digestOf(bound) ||
-    Object.entries(args.inferenceLimits ?? {}).some(([key, value]) =>
-      job.limits?.inference?.[key as keyof NonNullable<typeof args.inferenceLimits>] !== value))
-    throw new CodeRefusal("omp_review_changed");
-  const provenance = SessionProvenanceSchema.parse({ door: "runSession", containerId: args.containerId,
-    machineId: args.machineId, jobId: job.jobId, operationId: job.operationId, revision: latest.composition.revision,
+  const provenance = IntentSchema.parse({ door: "runSession",
+    containerId: args.containerId, machineId: args.machineId, operationId, revision: latest.composition.revision,
     compositionDigest: latest.composition.compositionDigest, reviewDigest: review.reviewDigest,
     defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id,
     postedAt: ctx.now(), inputs: bound,
     ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }),
     ...(args.inferenceLimits === undefined ? {} : { inferenceLimits: args.inferenceLimits }),
     ...(args.isolation === undefined ? {} : { isolation: args.isolation }) });
-  // OMP mints the job id, so retention is the step between the post and the answer rather than
-  // before it. A job whose provenance did not commit is one Code will not speak for; it is
-  // still OMP's job, and OMP's own retained provenance still reads it.
-  if (!(await ctx.storage.compareAndSet(`sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`, null, JSON.stringify(provenance))))
+  // The first intent retained for a key wins, and is never replaced: "posted nothing" is not
+  // final while that intent's posting may still reach OMP. A caller whose composition differs
+  // adopts what the key posted, or conflicts.
+  if (args.postingKey !== undefined && intentKey !== undefined &&
+    !(await ctx.storage.compareAndSet(intentKey, null, JSON.stringify(provenance)))) {
+    const winner = IntentSchema.safeParse(JSON.parse((await ctx.storage.get(intentKey)) ?? "null"));
+    if (!winner.success || digestOf({ ...winner.data, postedAt: 0 }) !== digestOf({ ...provenance, postedAt: 0 })) {
+      const adopted = await adoptPosting(ctx, args, args.postingKey, intentKey, false);
+      if (adopted !== null) return adopted;
+      throw new CodeRefusal("session_conflict");
+    }
+  }
+  let job: OmpResult<"runSession">;
+  try {
+    job = await ompCall(ctx, "runSession", {
+      ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
+      ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
+      ...(args.postingKey === undefined ? {} : { postingKey: args.postingKey }),
+      reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
+  } catch (error) {
+    // A retire that took the key between Code's adoption and this post.
+    if (error instanceof CodeRefusal && error.code === "omp_posting_retired") throw new CodeRefusal("posting_retired");
+    throw error;
+  }
+  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
+    job.agentRunId !== args.agentTools?.runId ||
+    digestOf(job.inputs ?? []) !== digestOf(bound) ||
+    Object.entries(args.inferenceLimits ?? {}).some(([key, value]) =>
+      job.limits?.inference?.[key as keyof NonNullable<typeof args.inferenceLimits>] !== value))
+    throw new CodeRefusal("omp_review_changed");
+  // OMP mints or derives the job id, so retention is the step between the post and the answer
+  // rather than before it. A job whose provenance did not commit is one Code will not speak for;
+  // it is still OMP's job, and OMP's own retained provenance still reads it. A keyed call that
+  // raced another with the same key keeps the first record when it is this caller's same job.
+  const retainedKey = `sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`;
+  if (!(await ctx.storage.compareAndSet(retainedKey, null, JSON.stringify({ ...provenance, jobId: job.jobId }))) &&
+    (intentKey === undefined || !vouches(ctx, args.containerId, job, await ctx.storage.get(retainedKey))))
     throw new CodeRefusal("session_conflict");
   return job;
 }
