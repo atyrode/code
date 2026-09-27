@@ -154,6 +154,25 @@ single sealed `material` binding, its size, digest and encoding, the empty tool
 registry and the output-only session lease are OMP's native boundary. OMP also
 refuses terminal or harness preparation from an isolated review.
 
+A caller that must be able to retry a posting passes OMP's `postingKey`
+(`PostingKeySchema`: one to 128 of `A–Z a–z 0–9 . _ : -`, starting with a letter
+or digit), such as its own run id. Code passes the key and the optional
+`adoptOnly` flag to OMP's `runSession` exactly. OMP derives the job id from the
+key, the caller and the target, so a repeated call returns the session the key
+already posted and never buys a second. `adoptOnly: true` returns that session
+and never posts one. Every step Code takes before OMP's run door only reads:
+the account observation, OMP's defaults, the composition and OMP's review.
+Code still composes and reviews a keyed call, so a composition, account or
+review refusal answers it as it would any call. It then requires the returned
+job to match the request, and retains it once: a keyed retry of a session Code
+already retained keeps the first record and answers with the job, while a
+record under that job id for another caller or another job still refuses
+`code_session_conflict`. OMP's own refusals keep their names:
+`code_omp_posting_unknown` when the key has posted nothing (an adoption),
+`code_omp_posting_key_conflict`, `code_omp_posting_key_required` for
+`adoptOnly` without a key, and `code_omp_posting_key_agent_tools_unsupported`
+for a key with `agentTools`.
+
 `atyrode.code.followSession({ containerId, jobId })` uses the retained session's
 exact native target. It returns cumulative inference usage, latest retained
 progress and bounded inference-call metadata, with sequence gaps explicit.

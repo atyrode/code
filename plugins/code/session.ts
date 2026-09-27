@@ -214,6 +214,11 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
  * Material-only reviews and jobs both name the isolated operation. Neither placement may
  * silently substitute for another. Code carries the exact selection through review and
  * retention; it neither establishes nor changes Run authority.
+ *
+ * `postingKey` and `adoptOnly` pass to OMP exactly. With a key, OMP answers a repeated call with
+ * the session the key already posted, and `adoptOnly` never posts at all, so neither spends a
+ * second session. Every step before OMP's run door only reads: accounts, defaults, the
+ * composition and OMP's review.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
@@ -237,6 +242,8 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const job = await ompCall(ctx, "runSession", {
     ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
     ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
+    ...(args.postingKey === undefined ? {} : { postingKey: args.postingKey }),
+    ...(args.adoptOnly === undefined ? {} : { adoptOnly: args.adoptOnly }),
     reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
   const operationId = args.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
   if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
@@ -256,8 +263,17 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   // OMP mints the job id, so retention is the step between the post and the answer rather than
   // before it. A job whose provenance did not commit is one Code will not speak for; it is
   // still OMP's job, and OMP's own retained provenance still reads it.
-  if (!(await ctx.storage.compareAndSet(`sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`, null, JSON.stringify(provenance))))
-    throw new CodeRefusal("session_conflict");
+  const retainedKey = `sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`;
+  if (!(await ctx.storage.compareAndSet(retainedKey, null, JSON.stringify(provenance)))) {
+    // A keyed retry of a posting Code already retained answers with that posting, keeping the
+    // first record. OMP derives a keyed job id from the key, caller and target, so a record
+    // under it that names another caller or another job is a conflict, not a retry.
+    const raw = args.postingKey === undefined ? null : await ctx.storage.get(retainedKey);
+    const retained = raw === null ? undefined : SessionProvenanceSchema.safeParse(JSON.parse(raw));
+    if (!retained?.success || retained.data.containerId !== args.containerId ||
+      retained.data.requester !== ctx.auth.principal.id || !sameJob(job, retained.data))
+      throw new CodeRefusal("session_conflict");
+  }
   return job;
 }
 /** The session Code retained under this workspace. Both job doors start here: a job id alone

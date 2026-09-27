@@ -619,3 +619,57 @@ describe("reading back and ending a session Code posted", () => {
     expect(await invoke(f, "cancelSession", { ...workspace, jobId: "job-a" })).toEqual({ refused: "code_omp_review_changed" });
   });
 });
+
+describe("a keyed posting Code passes to OMP", () => {
+  test("the posting key and adoption reach OMP exactly, under OMP's own bounds, and only when given", async () => {
+    const plain = fixture();
+    const saved = await configured(plain);
+    const input = { ...target, expectedRevision: saved.revision, prompt: "Map the transcript" };
+    await accepted(plain, "runSession", input);
+    expect(plain.omp.posted[0]).not.toHaveProperty("postingKey");
+    expect(plain.omp.posted[0]).not.toHaveProperty("adoptOnly");
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...input, expectedRevision: record.revision, postingKey: "babel-run:7.a_b-c" };
+    await accepted(f, "runSession", { ...keyed, adoptOnly: true });
+    await accepted(f, "runSession", { ...keyed, adoptOnly: false });
+    expect(f.omp.posted.map(posted => [posted.postingKey, posted.adoptOnly]))
+      .toEqual([["babel-run:7.a_b-c", true], ["babel-run:7.a_b-c", false]]);
+    const calls = f.calls.length;
+    for (const postingKey of ["-leading", "a".repeat(129), "has space"])
+      expect(await invoke(f, "runSession", { ...keyed, postingKey })).toEqual({ refused: "code_invalid_request" });
+    expect(f.calls).toHaveLength(calls);
+  });
+
+  test("OMP's posting refusals reach the caller as their own codes and retain nothing", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7" };
+    for (const refused of ["omp_posting_unknown", "omp_posting_key_conflict", "omp_posting_key_required",
+      "omp_posting_key_agent_tools_unsupported"]) {
+      f.omp.refuse.set(`${OMP_PLUGIN_ID}.runSession`, refused);
+      expect(await invoke(f, "runSession", { ...keyed, adoptOnly: true })).toEqual({ refused: `code_${refused}` });
+    }
+    expect([...f.store.keys()].filter(key => key.startsWith("sessions/"))).toEqual([]);
+  });
+
+  test("a keyed retry answers with the posting Code already retained, and any other record under that job conflicts", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7" };
+    const first = await accepted(f, "runSession", keyed);
+    const key = `sessions/${digestOf(workspace)}/${first.jobId}`;
+    const retained = f.store.get(key);
+    // OMP answers a key's retry with the job it already posted.
+    expect(await accepted(f, "runSession", keyed)).toEqual(first);
+    expect(await accepted(f, "runSession", { ...keyed, adoptOnly: true })).toEqual(first);
+    expect(f.store.get(key)).toBe(retained);
+    // Without a key the same job id is a conflict, as it always was.
+    const { postingKey: _postingKey, ...unkeyed } = keyed;
+    expect(await invoke(f, "runSession", unkeyed)).toEqual({ refused: "code_session_conflict" });
+    // A keyed answer that is not the retained posting is not adopted.
+    const material: JobInputBinding[] = [{ name: "material", from: { jobId: "job-material", output: "material" } }];
+    expect(await invoke(f, "runSession", { ...keyed, inputs: material })).toEqual({ refused: "code_session_conflict" });
+    expect(f.store.get(key)).toBe(retained);
+  });
+});
