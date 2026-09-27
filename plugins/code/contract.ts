@@ -112,7 +112,8 @@ export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchem
  *
  * `postingKey` is OMP's retryable-posting key: it names at most one posted session for this
  * caller and target, and a keyed call first returns the session the key already posted.
- * `adoptOnly` returns that session and never composes, reviews or posts. */
+ * `adoptOnly` returns that session and never composes, reviews or posts: it retires the key, so
+ * a key that posted nothing refuses `code_omp_posting_unknown` and never posts afterwards. */
 export const SessionRunInputSchema = RevisionTargetSchema.extend({
   // A one-shot needs a prompt; how long it may be is OMP's rule, not a number restated here.
   prompt: sessionPrompt.refine(value => value.length > 0, "a one-shot session needs a prompt"),

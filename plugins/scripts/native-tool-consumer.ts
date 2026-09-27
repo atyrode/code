@@ -74,11 +74,15 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
     ? unknown.denial.message.replaceAll("_", "-") : unknown.denial.rule.replaceAll("_", "-");
   check(!unknown.ok && unknown.denial.rule === "refused" && unknown.denial.message.includes("code_omp_"),
     `unknown-run-${unknownReason}`);
-  // An adoption of a key that posted nothing refuses by OMP's own name through Code, and posts nothing.
+  // An adoption of a key that posted nothing refuses by OMP's own name through Code and retires
+  // the key at OMP: a later keyed create refuses by Code's own word, and neither posts anything.
   const adoption = await dispatch(hub, hub.ownerKey, actionDoor("runSession"), { ...request,
     postingKey: "code-native-unposted", adoptOnly: true });
   check(!adoption.ok && adoption.denial.rule === "refused" && adoption.denial.message === "code_omp_posting_unknown",
     "unposted-adoption-not-refused");
+  const retired = await dispatch(hub, hub.ownerKey, actionDoor("runSession"), { ...request, postingKey: "code-native-unposted" });
+  check(!retired.ok && retired.denial.rule === "refused" && retired.denial.message === "code_posting_retired",
+    "retired-key-posted");
   const after = ListJobRunsResultSchema.parse(await ownerAction(hub, "engine.jobs.listRuns", {
     machineId: target.machineId, pluginId: "atyrode.omp", operationId: "atyrode.omp.session",
   }));

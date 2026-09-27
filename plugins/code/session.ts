@@ -37,6 +37,8 @@ const SessionProvenanceSchema = z.strictObject({
   agentTools: SessionInputSchema.shape.agentTools,
 });
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
+/** What Code composed for a posting key, retained before it posts; the record without its job. */
+const IntentSchema = SessionProvenanceSchema.omit({ jobId: true });
 
 /**
  * One workspace's saved catalog, selection and account choices against one caller-supplied
@@ -213,19 +215,26 @@ function vouches(ctx: CodeContext, containerId: string, job: OmpResult<"adoptSes
  * The session a posting key already posted, found from the target and the key alone: no
  * composition, account observation, defaults or review, so a profile or review that changed
  * since cannot hide a live paid session from the caller that must find or stop it. Null when
- * the key has posted nothing and the caller asked to post.
+ * the key has posted nothing and the caller is not retiring it.
+ *
+ * `retire` settles the key at OMP: a key that posted nothing can then never post, and its
+ * `omp_posting_unknown` is final; a posting OMP retained but has not dispatched answers the
+ * retryable `omp_posting_pending`. Neither form ever posts or executes.
  *
  * OMP answers for the job; Code answers only for a job it composed. A posting whose record
  * after the post never landed is completed from the intent Code retained before posting, and
  * a posting Code never composed is not Code's to vouch for.
  */
 async function adoptPosting(ctx: CodeContext, args: ActionInput<"runSession">, postingKey: string,
-  intentKey: string): Promise<OmpResult<"adoptSession"> | null> {
+  intentKey: string, retire: boolean): Promise<OmpResult<"adoptSession"> | null> {
   let job: OmpResult<"adoptSession">;
   try {
-    job = await ompCall(ctx, "adoptSession", { containerId: args.containerId, machineId: args.machineId, postingKey });
+    job = await ompCall(ctx, "adoptSession", { containerId: args.containerId, machineId: args.machineId, postingKey,
+      ...(retire ? { retire: true } : {}) });
   } catch (error) {
-    if (args.adoptOnly !== true && error instanceof CodeRefusal && error.code === "omp_posting_unknown") return null;
+    if (!retire && error instanceof CodeRefusal && error.code === "omp_posting_unknown") return null;
+    // A retire settled this key at OMP: nothing was posted under it and nothing ever will be.
+    if (error instanceof CodeRefusal && error.code === "omp_posting_retired") throw new CodeRefusal("posting_retired");
     throw error;
   }
   const key = `sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`;
@@ -234,6 +243,8 @@ async function adoptPosting(ctx: CodeContext, args: ActionInput<"runSession">, p
     const intent = await ctx.storage.get(intentKey);
     if (intent === null) throw new CodeRefusal("session_unknown");
     const record = JSON.stringify(SessionProvenanceSchema.parse({ ...JSON.parse(intent), jobId: job.jobId }));
+    // A rebuilt record is written only when it describes this very job.
+    if (!vouches(ctx, args.containerId, job, record)) throw new CodeRefusal("session_conflict");
     raw = await ctx.storage.compareAndSet(key, null, record) ? record : await ctx.storage.get(key);
   }
   if (!vouches(ctx, args.containerId, job, raw)) throw new CodeRefusal("session_conflict");
@@ -254,8 +265,14 @@ async function adoptPosting(ctx: CodeContext, args: ActionInput<"runSession">, p
  * A `postingKey` is answered first, from the target and the key alone: a retry or an
  * `adoptOnly` call returns the session the key already posted whatever changed since, and only
  * a key that posted nothing composes and posts, under the key, so OMP never buys it twice.
- * `adoptOnly` never posts. Before posting under a key, Code retains what it composed, so a
- * posting whose record after the post never landed is still Code's to answer for.
+ * `adoptOnly` never posts: it retires the key at OMP, so its `code_omp_posting_unknown` is final.
+ *
+ * Before posting under a key, Code retains what it composed as the key's intent, create-only:
+ * the first composition retained for a key is the only one it ever posts. A later caller whose
+ * composition equals that intent continues it (the same posting, answered once by OMP);
+ * another adopts what the key posted, or refuses `code_session_conflict` and settles the key
+ * through an `adoptOnly` retire. A posting whose record after the post never landed is
+ * completed from that intent, so it is still Code's to answer for.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
@@ -265,7 +282,7 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const intentKey = args.postingKey === undefined ? undefined : `postings/${digestOf({ containerId: args.containerId,
     machineId: args.machineId, requester: ctx.auth.principal.id, postingKey: args.postingKey })}`;
   if (args.postingKey !== undefined && intentKey !== undefined) {
-    const adopted = await adoptPosting(ctx, args, args.postingKey, intentKey);
+    const adopted = await adoptPosting(ctx, args, args.postingKey, intentKey, args.adoptOnly === true);
     if (adopted !== null) return adopted;
   }
   const first = await observedSession(ctx, args);
@@ -284,7 +301,7 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   // Material remains the caller's binding; optional slots come only from OMP's reviewed union.
   const bound = [...(args.inputs ?? []), ...skillInputBindings(review.skills)];
   const operationId = args.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
-  const provenance = SessionProvenanceSchema.omit({ jobId: true }).parse({ door: "runSession",
+  const provenance = IntentSchema.parse({ door: "runSession",
     containerId: args.containerId, machineId: args.machineId, operationId, revision: latest.composition.revision,
     compositionDigest: latest.composition.compositionDigest, reviewDigest: review.reviewDigest,
     defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id,
@@ -292,16 +309,30 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }),
     ...(args.inferenceLimits === undefined ? {} : { inferenceLimits: args.inferenceLimits }),
     ...(args.isolation === undefined ? {} : { isolation: args.isolation }) });
-  // The key has posted nothing (OMP said so above), so an earlier intent under it composed a
-  // posting that never happened and is replaced.
-  if (intentKey !== undefined &&
-    !(await ctx.storage.compareAndSet(intentKey, await ctx.storage.get(intentKey), JSON.stringify(provenance))))
-    throw new CodeRefusal("session_conflict");
-  const job = await ompCall(ctx, "runSession", {
-    ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
-    ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
-    ...(args.postingKey === undefined ? {} : { postingKey: args.postingKey }),
-    reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
+  // The first intent retained for a key wins, and is never replaced: "posted nothing" is not
+  // final while that intent's posting may still reach OMP. A caller whose composition differs
+  // adopts what the key posted, or conflicts.
+  if (args.postingKey !== undefined && intentKey !== undefined &&
+    !(await ctx.storage.compareAndSet(intentKey, null, JSON.stringify(provenance)))) {
+    const winner = IntentSchema.safeParse(JSON.parse((await ctx.storage.get(intentKey)) ?? "null"));
+    if (!winner.success || digestOf({ ...winner.data, postedAt: 0 }) !== digestOf({ ...provenance, postedAt: 0 })) {
+      const adopted = await adoptPosting(ctx, args, args.postingKey, intentKey, false);
+      if (adopted !== null) return adopted;
+      throw new CodeRefusal("session_conflict");
+    }
+  }
+  let job: OmpResult<"runSession">;
+  try {
+    job = await ompCall(ctx, "runSession", {
+      ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
+      ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
+      ...(args.postingKey === undefined ? {} : { postingKey: args.postingKey }),
+      reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
+  } catch (error) {
+    // A retire that took the key between Code's adoption and this post.
+    if (error instanceof CodeRefusal && error.code === "omp_posting_retired") throw new CodeRefusal("posting_retired");
+    throw error;
+  }
   if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
     job.agentRunId !== args.agentTools?.runId ||
     digestOf(job.inputs ?? []) !== digestOf(bound) ||

@@ -80,6 +80,8 @@ interface Fixture {
     reviewed: unknown[]; posted: OmpInput<"runSession">[]; read: unknown[]; cancelled: unknown[];
     /** What each posting key posted, as OMP answers a retry or an adoption of it. */
     keyed: Map<string, PublicJob>; adopted: OmpInput<"adoptSession">[];
+    /** Keys a retire settled with nothing posted, and keys OMP retained but has not dispatched. */
+    retired: Set<string>; pending: Set<string>;
   };
 }
 /** The plugin kit's own storage key rule: a key it would refuse fails here, not only in a real host. */
@@ -96,7 +98,7 @@ function fixture(): Fixture {
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
     silence: null, skills: null, dropReviewLimits: false, reviewOverride: {},
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
-    reviewed: [], posted: [], read: [], cancelled: [], keyed: new Map(), adopted: [] };
+    reviewed: [], posted: [], read: [], cancelled: [], keyed: new Map(), adopted: [], retired: new Set(), pending: new Set() };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
     const door = `${plugin}.${action}`;
     calls.push(door);
@@ -129,13 +131,22 @@ function fixture(): Fixture {
       const value = ompActionSchemas.adoptSession.input.parse(input);
       omp.adopted.push(value);
       const posted = omp.keyed.get(value.postingKey);
-      if (posted === undefined) throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (omp_posting_unknown)`);
-      return posted;
+      if (posted !== undefined) return posted;
+      // Like OMP, a retire never executes: a retained posting stays pending, and a key with
+      // nothing retained is settled for good.
+      if (value.retire && omp.pending.has(value.postingKey))
+        throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (omp_posting_pending)`);
+      if (omp.retired.has(value.postingKey) && !value.retire)
+        throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (omp_posting_retired)`);
+      if (value.retire) omp.retired.add(value.postingKey);
+      throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (omp_posting_unknown)`);
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
       const value = ompActionSchemas.runSession.input.parse(input);
       omp.posted.push(value);
       // OMP answers a key's retry with the job the key already posted.
+      if (value.postingKey !== undefined && omp.retired.has(value.postingKey))
+        throw new Error(`refused: ${CODE_PLUGIN_ID} -> ${door} (omp_posting_retired)`);
       const retried = value.postingKey === undefined ? undefined : omp.keyed.get(value.postingKey);
       if (retried !== undefined) return retried;
       // The hub echoes the bindings it admitted on the job it answers.
@@ -661,13 +672,38 @@ describe("a keyed posting Code passes to OMP", () => {
     expect(keyed.calls).toHaveLength(calls);
   });
 
-  test("an adoption of a key that posted nothing refuses by OMP's name and spends nothing", async () => {
+  test("an adoption retires the key: unknown then final, pending retried, and a later create refuses retired", async () => {
     const f = fixture();
     const record = await configured(f);
     const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7", adoptOnly: true };
+    // A posting OMP retained but has not dispatched is pending, not unknown, and executes nothing.
+    f.omp.pending.add("babel-run-7");
+    expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_omp_posting_pending" });
+    f.omp.pending.clear();
     const calls = f.calls.length;
     expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_omp_posting_unknown" });
     expect(f.calls.slice(calls)).toEqual([`${OMP_PLUGIN_ID}.adoptSession`]);
+    expect(f.omp.adopted.at(-1)).toEqual({ ...target, postingKey: "babel-run-7", retire: true });
+    // Final: the key never posts afterwards, and a keyed create refuses by Code's own word
+    // without composing or reviewing.
+    expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_omp_posting_unknown" });
+    const before = f.calls.length;
+    expect(await invoke(f, "runSession", { ...keyed, adoptOnly: false })).toEqual({ refused: "code_posting_retired" });
+    expect(f.calls.slice(before)).toEqual([`${OMP_PLUGIN_ID}.adoptSession`]);
+    // A retire that lands between a create's adoption and its post is refused by the same word.
+    f.omp.during.set(`${OMP_PLUGIN_ID}.reviewSession`, async () => {
+      f.omp.during.clear();
+      expect(await invoke(f, "runSession", { ...keyed, postingKey: "babel-run-8" })).toEqual({ refused: "code_omp_posting_unknown" });
+    });
+    expect(await invoke(f, "runSession", { ...keyed, postingKey: "babel-run-8", adoptOnly: false })).toEqual({ refused: "code_posting_retired" });
+    expect(f.omp.keyed.size).toBe(0);
+    expect([...f.store.keys()].filter(key => key.startsWith("sessions/"))).toEqual([]);
+  });
+
+  test("OMP's other posting refusals keep their names and retain nothing", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7", adoptOnly: true };
     f.omp.refuse.set(`${OMP_PLUGIN_ID}.adoptSession`, "omp_posting_key_conflict");
     expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_omp_posting_key_conflict" });
     f.omp.refuse.clear();
@@ -738,5 +774,70 @@ describe("a keyed posting Code passes to OMP", () => {
     f.omp.keyed.set("babel-run-7", { ...job, operationId: LAUNCH_OPERATION_ID });
     expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_session_conflict" });
     expect(f.omp.posted).toHaveLength(1);
+  });
+
+  test("the first intent retained for a key wins: a racing caller with another composition never replaces it", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7" };
+    let raced: unknown;
+    let same: unknown;
+    f.omp.during.set(`${OMP_PLUGIN_ID}.runSession`, async () => {
+      f.omp.during.clear();
+      // While A's post is in flight, B with another prompt conflicts rather than replacing A's
+      // intent, and C with A's very composition continues it.
+      raced = await invoke(f, "runSession", { ...keyed, prompt: "Map another transcript" });
+      same = await invoke(f, "runSession", keyed);
+    });
+    const first = await accepted(f, "runSession", keyed);
+    expect(raced).toEqual({ refused: "code_session_conflict" });
+    expect(same).toEqual(first);
+    expect(f.omp.posted.map(posted => posted.prompt)).toEqual(["Map the transcript", "Map the transcript"]);
+    expect(f.omp.keyed.size).toBe(1);
+    // A's record is lost after the post; recovery rebuilds exactly that record from A's intent.
+    const key = `sessions/${digestOf(workspace)}/${first.jobId}`;
+    const retained = f.store.get(key)!;
+    f.store.delete(key);
+    expect(await accepted(f, "runSession", { ...keyed, adoptOnly: true })).toEqual(first);
+    expect(JSON.parse(f.store.get(key)!)).toEqual(JSON.parse(retained));
+  });
+
+  test("an interruption after Code's intent but before OMP received anything is continued or settled", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7" };
+    f.omp.reject.set(`${OMP_PLUGIN_ID}.runSession`, "the call never reached OMP");
+    expect(await invoke(f, "runSession", keyed)).toEqual({ refused: "code_omp_refused" });
+    f.omp.reject.clear();
+    expect(f.omp.keyed.size).toBe(0);
+    // A later create with the same composition continues the retained intent and posts once.
+    const job = await accepted(f, "runSession", keyed);
+    expect(f.omp.keyed.get("babel-run-7")).toEqual(job);
+    expect(await accepted(f, "runSession", keyed)).toEqual(job);
+    // With a moved profile, the same interruption conflicts instead, and a retire settles it for good.
+    const moved = fixture();
+    const saved = await configured(moved);
+    const request = { ...keyed, expectedRevision: saved.revision };
+    moved.omp.reject.set(`${OMP_PLUGIN_ID}.runSession`, "the call never reached OMP");
+    await invoke(moved, "runSession", request);
+    moved.omp.reject.clear();
+    const changed = await accepted(moved, "select", { ...workspace, expectedRevision: saved.revision,
+      selection: { ...saved.selection!, thinking: saved.selection!.thinking === "low" ? "high" : "low" } });
+    expect(await invoke(moved, "runSession", { ...request, expectedRevision: changed.revision })).toEqual({ refused: "code_session_conflict" });
+    expect(await invoke(moved, "runSession", { ...request, adoptOnly: true })).toEqual({ refused: "code_omp_posting_unknown" });
+    expect(await invoke(moved, "runSession", { ...request, expectedRevision: changed.revision })).toEqual({ refused: "code_posting_retired" });
+    expect(moved.omp.keyed.size).toBe(0);
+  });
+
+  test("a rebuilt record that would not describe the job is never written", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Map the transcript", postingKey: "babel-run-7" };
+    const job = await accepted(f, "runSession", keyed);
+    const key = `sessions/${digestOf(workspace)}/${job.jobId}`;
+    f.store.delete(key);
+    f.omp.keyed.set("babel-run-7", { ...job, inputs: [{ name: "material", from: { jobId: "job-other", output: "material" } }] });
+    expect(await invoke(f, "runSession", { ...keyed, adoptOnly: true })).toEqual({ refused: "code_session_conflict" });
+    expect(f.store.has(key)).toBe(false);
   });
 });

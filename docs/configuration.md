@@ -167,15 +167,29 @@ changed. Code returns the job only when its own record for that job is this
 caller's and matches it; a record for another caller or another job refuses
 `code_session_conflict`, and a job Code never composed refuses
 `code_session_unknown`. Only a key that has posted nothing composes, reviews and
-posts as any call does, under the key. Before that post, Code retains what it
-composed for the key, so a posting whose record after the post never landed is
-completed from it on the next keyed call.
+posts as any call does, under the key.
 
-`adoptOnly: true` never composes, reviews or posts: it returns the key's session
-or refuses `code_omp_posting_unknown` when the key has posted nothing (including
-a posting OMP retained but the hub never received). `adoptOnly` without a key
-refuses `code_posting_key_required`. Other OMP refusals keep their names:
-`code_omp_posting_key_conflict`, and
+Before that post, Code retains what it composed as the key's intent, and only
+the first intent retained for a key is ever posted under it: a later caller
+never replaces it. A caller whose composition, review and inputs equal that
+intent continues it, so a call interrupted after Code retained its intent but
+before OMP received anything is finished by the next identical keyed call, and
+two identical racing calls are one posting at OMP. A caller that composed
+something else returns what the key posted, or refuses `code_session_conflict`;
+`adoptOnly` then settles the key. A posting whose record after the post never
+landed is completed from the intent on the next keyed call.
+
+`adoptOnly: true` never composes, reviews or posts: it retires the key at OMP
+(`adoptSession` with `retire: true`) and returns the key's session, or refuses:
+
+- `code_omp_posting_unknown` when the key has posted nothing. The answer is
+  final: the key can never post afterwards, and a later keyed call refuses
+  `code_posting_retired`, as does a create whose post a retire overtook.
+- `code_omp_posting_pending` when OMP retained the posting but the hub has not
+  received it. The retire executes nothing; ask again.
+
+`adoptOnly` without a key refuses `code_posting_key_required`. Other OMP
+refusals keep their names: `code_omp_posting_key_conflict`, and
 `code_omp_posting_key_agent_tools_unsupported` for a key with `agentTools`.
 
 `atyrode.code.followSession({ containerId, jobId })` uses the retained session's
