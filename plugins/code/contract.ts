@@ -110,9 +110,9 @@ export const ProfileListSchema = z.strictObject({ profiles: z.array(ProfileSchem
  * inputs (ADR 0044). Code passes them to OMP verbatim and reads none of them: what the
  * material is, and how the prompt refers to it, is the caller's own business.
  *
- * `postingKey` and `adoptOnly` are OMP's retryable-posting contract, passed through exactly: a
- * key names at most one posted session for this caller and target, and `adoptOnly` returns that
- * session without ever posting one. */
+ * `postingKey` is OMP's retryable-posting key: it names at most one posted session for this
+ * caller and target, and a keyed call first returns the session the key already posted.
+ * `adoptOnly` returns that session and never composes, reviews or posts. */
 export const SessionRunInputSchema = RevisionTargetSchema.extend({
   // A one-shot needs a prompt; how long it may be is OMP's rule, not a number restated here.
   prompt: sessionPrompt.refine(value => value.length > 0, "a one-shot session needs a prompt"),

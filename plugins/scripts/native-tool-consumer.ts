@@ -95,9 +95,13 @@ export async function createNativeToolConsumer(context: NativeToolConsumerContex
         && canonicalJobJson(native.overlay) === canonicalJobJson(input.overlay)
         && canonicalJobJson(native.accountPool) === canonicalJobJson(input.accountPool), "native-input-changed");
       if (native.agentTools !== undefined) return call("runSession", { ...request, agentTools: native.agentTools });
-      // An ordinary session is posted under a key: a retry and an adoption answer with that job.
+      // An ordinary session is posted under a key. After the profile moves, a retry and an
+      // adoption with the posting's own stale revision still answer with that job.
       const keyed = { ...request, postingKey: "code-native-default-off" };
       const job = await call("runSession", keyed);
+      configuration = await call("select", { ...workspace, expectedRevision: configuration.revision,
+        selection: { ...configuration.selection!, thinking: "medium" } });
+      check(configuration.revision > keyed.expectedRevision, "profile-revision-not-moved");
       check((await call("runSession", keyed)).jobId === job.jobId
         && (await call("runSession", { ...keyed, adoptOnly: true })).jobId === job.jobId, "keyed-posting-not-idempotent");
       return job;

@@ -156,22 +156,27 @@ refuses terminal or harness preparation from an isolated review.
 
 A caller that must be able to retry a posting passes OMP's `postingKey`
 (`PostingKeySchema`: one to 128 of `A–Z a–z 0–9 . _ : -`, starting with a letter
-or digit), such as its own run id. Code passes the key and the optional
-`adoptOnly` flag to OMP's `runSession` exactly. OMP derives the job id from the
-key, the caller and the target, so a repeated call returns the session the key
-already posted and never buys a second. `adoptOnly: true` returns that session
-and never posts one. Every step Code takes before OMP's run door only reads:
-the account observation, OMP's defaults, the composition and OMP's review.
-Code still composes and reviews a keyed call, so a composition, account or
-review refusal answers it as it would any call. It then requires the returned
-job to match the request, and retains it once: a keyed retry of a session Code
-already retained keeps the first record and answers with the job, while a
-record under that job id for another caller or another job still refuses
-`code_session_conflict`. OMP's own refusals keep their names:
-`code_omp_posting_unknown` when the key has posted nothing (an adoption),
-`code_omp_posting_key_conflict`, `code_omp_posting_key_required` for
-`adoptOnly` without a key, and `code_omp_posting_key_agent_tools_unsupported`
-for a key with `agentTools`.
+or digit), such as its own run id. OMP derives the job id from the key, the
+caller and the target, so a key names at most one posted session.
+
+A keyed call is answered first, from the target and the key alone, through
+OMP's `adoptSession`. Code composes nothing, observes no accounts, reads no
+defaults and asks for no review, so a retry or an adoption still finds a posted
+session after the profile revision, account choices, defaults or review
+changed. Code returns the job only when its own record for that job is this
+caller's and matches it; a record for another caller or another job refuses
+`code_session_conflict`, and a job Code never composed refuses
+`code_session_unknown`. Only a key that has posted nothing composes, reviews and
+posts as any call does, under the key. Before that post, Code retains what it
+composed for the key, so a posting whose record after the post never landed is
+completed from it on the next keyed call.
+
+`adoptOnly: true` never composes, reviews or posts: it returns the key's session
+or refuses `code_omp_posting_unknown` when the key has posted nothing (including
+a posting OMP retained but the hub never received). `adoptOnly` without a key
+refuses `code_posting_key_required`. Other OMP refusals keep their names:
+`code_omp_posting_key_conflict`, and
+`code_omp_posting_key_agent_tools_unsupported` for a key with `agentTools`.
 
 `atyrode.code.followSession({ containerId, jobId })` uses the retained session's
 exact native target. It returns cumulative inference usage, latest retained
