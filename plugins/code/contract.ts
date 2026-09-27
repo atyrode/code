@@ -49,7 +49,7 @@ export const SessionCompositionSchema = z.strictObject({
 });
 export type SessionComposition = z.infer<typeof SessionCompositionSchema>;
 /** Options shared with terminal review; existing-Run tools belong only to the one-shot door. */
-export type SessionOptions = Pick<OmpInput<"prepareSession">, "skills" | "automation" | "inferenceLimits">;
+export type SessionOptions = Pick<OmpInput<"prepareSession">, "skills" | "automation" | "inferenceLimits" | "isolation">;
 /** OMP's reviewed session input, composed from one Code composition and OMP's own defaults.
  * The web's review, the web's preparation and the `runSession` door all pass through here, so
  * a job-shaped session is reviewed against the very input a terminal one is. */
@@ -59,6 +59,7 @@ export function sessionInput(target: Target, composition: SessionComposition,
     overlay: composition.overlay, prompt: composition.prompt, planYolo: composition.planYolo,
     ...(options.skills === undefined ? {} : { skills: options.skills }),
     ...(options.automation === undefined ? {} : { automation: options.automation }),
+    ...(options.isolation === undefined ? {} : { isolation: options.isolation }),
     ...(options.inferenceLimits === undefined ? {} : { inferenceLimits: options.inferenceLimits }) };
 }
 /** Prepare the effective native selection, not the caller's potentially overlapping sets. */
@@ -72,6 +73,7 @@ export function reviewedSkillSelection(skills: OmpResult<"reviewSession">["skill
 export function reviewedSessionOptions(review: OmpResult<"reviewSession">): SessionOptions {
   return { skills: reviewedSkillSelection(review.skills),
     ...(review.automation.mode === "restricted" ? { automation: review.automation } : {}),
+    ...(review.isolation === undefined ? {} : { isolation: review.isolation }),
     ...(review.inferenceLimits === undefined ? {} : { inferenceLimits: review.inferenceLimits }) };
 }
 /** What the generator's dials show for a saved selection: the model leading the default role,
@@ -113,6 +115,7 @@ export const SessionRunInputSchema = RevisionTargetSchema.extend({
   inputs: z.array(JobInputBindingSchema).max(16).optional(),
   skills: SessionInputSchema.shape.skills,
   automation: SessionInputSchema.shape.automation,
+  isolation: SessionInputSchema.shape.isolation,
   inferenceLimits: SessionInputSchema.shape.inferenceLimits,
   agentTools: SessionInputSchema.shape.agentTools,
 });

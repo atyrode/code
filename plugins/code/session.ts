@@ -6,7 +6,7 @@
  * defaults, the composition the generator's dials describe. The caller never composes a
  * session, never chooses an account and never reaches OMP itself.
  */
-import { JobInputBindingSchema, SessionInputSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, SESSION_OPERATION_ID, RefusalSchema as ompRefusal,
+import { JobInputBindingSchema, SessionInputSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, SESSION_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RefusalSchema as ompRefusal,
   actionDoor as ompDoor, actionSchemas as ompActionSchemas, epochMilliseconds, skillInputBindings,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type OmpAction } from "@atyrode/manifold-omp";
@@ -33,6 +33,7 @@ const SessionProvenanceSchema = z.strictObject({
   // A session retained before bound inputs existed has none, which is what an absent key is.
   inputs: z.array(JobInputBindingSchema).max(16).default([]),
   inferenceLimits: SessionInputSchema.shape.inferenceLimits,
+  isolation: SessionInputSchema.shape.isolation,
   agentTools: SessionInputSchema.shape.agentTools,
 });
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
@@ -116,7 +117,7 @@ async function observedSession(ctx: CodeContext, args: ActionInput<"runSession">
   const composition = await composeSession(ctx, { containerId: args.containerId,
     expectedRevision: args.expectedRevision, accounts, prompt: args.prompt }, Date.now());
   return { composition, input: { ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, composition, defaults.revision,
-    { skills: args.skills, automation: args.automation, inferenceLimits: args.inferenceLimits }),
+    { skills: args.skills, automation: args.automation, inferenceLimits: args.inferenceLimits, isolation: args.isolation }),
     ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }) } };
 }
 
@@ -208,9 +209,11 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
  * accounts or OMP's defaults moved between the two. The prompt is required because a job-shaped
  * session is one-shot — without one the run would never end.
  *
- * Without tools, native review names the placement-agnostic launch operation. An explicit
- * existing-Run selector instead requires the native one-shot review. Code carries the exact
- * selection through review and retention; it neither establishes nor changes Run authority.
+ * Ordinary reviews name the placement-agnostic launch operation; their jobs use its one-shot
+ * sibling. An explicit existing-Run selector instead requires the native one-shot review.
+ * Material-only reviews and jobs both name the isolated operation. Neither placement may
+ * silently substitute for another. Code carries the exact selection through review and
+ * retention; it neither establishes nor changes Run authority.
  */
 export async function runSession(ctx: CodeContext, args: ActionInput<"runSession">): Promise<ActionResult<"runSession">> {
   // The workspace is authorized as `composeSession` authorizes it, and for writing: a posted
@@ -219,10 +222,12 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   const first = await observedSession(ctx, args);
   const review = await ompCall(ctx, "reviewSession", first.input);
   if (review.destination.containerId !== args.containerId || review.destination.machineId !== args.machineId ||
-    review.operationId !== (args.agentTools === undefined ? LAUNCH_OPERATION_ID : SESSION_OPERATION_ID) ||
+    review.operationId !== (args.isolation !== undefined ? MATERIAL_SESSION_OPERATION_ID
+      : args.agentTools !== undefined ? SESSION_OPERATION_ID : LAUNCH_OPERATION_ID) ||
     digestOf(review.agentTools ?? null) !== digestOf(args.agentTools ?? null) ||
     review.defaultsRevision !== first.input.expectedDefaultsRevision ||
-    digestOf(review.inferenceLimits ?? null) !== digestOf(args.inferenceLimits ?? null))
+    digestOf(review.inferenceLimits ?? null) !== digestOf(args.inferenceLimits ?? null) ||
+    digestOf(review.isolation ?? null) !== digestOf(args.isolation ?? null))
     throw new CodeRefusal("omp_review_changed");
   const latest = await observedSession(ctx, args);
   if (latest.composition.compositionDigest !== first.composition.compositionDigest ||
@@ -233,7 +238,8 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     ...sessionInput({ containerId: args.containerId, machineId: args.machineId }, latest.composition, latest.input.expectedDefaultsRevision, reviewedSessionOptions(review)),
     ...(review.agentTools === undefined ? {} : { agentTools: review.agentTools }),
     reviewDigest: review.reviewDigest, ...(args.inputs === undefined ? {} : { inputs: args.inputs }) });
-  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== SESSION_OPERATION_ID ||
+  const operationId = args.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
+  if (job.machineId !== args.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== operationId ||
     job.agentRunId !== args.agentTools?.runId ||
     digestOf(job.inputs ?? []) !== digestOf(bound) ||
     Object.entries(args.inferenceLimits ?? {}).some(([key, value]) =>
@@ -245,7 +251,8 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
     defaultsRevision: latest.input.expectedDefaultsRevision, requester: ctx.auth.principal.id,
     postedAt: ctx.now(), inputs: bound,
     ...(args.agentTools === undefined ? {} : { agentTools: args.agentTools }),
-    ...(args.inferenceLimits === undefined ? {} : { inferenceLimits: args.inferenceLimits }) });
+    ...(args.inferenceLimits === undefined ? {} : { inferenceLimits: args.inferenceLimits }),
+    ...(args.isolation === undefined ? {} : { isolation: args.isolation }) });
   // OMP mints the job id, so retention is the step between the post and the answer rather than
   // before it. A job whose provenance did not commit is one Code will not speak for; it is
   // still OMP's job, and OMP's own retained provenance still reads it.
@@ -260,7 +267,9 @@ async function retainedSession(ctx: CodeContext, args: { containerId: string; jo
   const raw = await ctx.storage.get(`sessions/${digestOf({ containerId: args.containerId })}/${args.jobId}`);
   if (raw === null) throw new CodeRefusal("session_unknown");
   const provenance = SessionProvenanceSchema.parse(JSON.parse(raw));
-  if (provenance.containerId !== args.containerId || provenance.jobId !== args.jobId) throw new CodeRefusal("session_unknown");
+  const operationId = provenance.isolation === undefined ? SESSION_OPERATION_ID : MATERIAL_SESSION_OPERATION_ID;
+  if (provenance.containerId !== args.containerId || provenance.jobId !== args.jobId ||
+    provenance.operationId !== operationId) throw new CodeRefusal("session_unknown");
   return provenance;
 }
 /** The job OMP answered for the session Code retained, whatever its state. */
@@ -268,8 +277,9 @@ function sameJob(job: ActionResult<"cancelSession">["job"], provenance: SessionP
   return job.jobId === provenance.jobId && job.machineId === provenance.machineId &&
     job.pluginId === OMP_PLUGIN_ID && job.operationId === provenance.operationId &&
     job.agentRunId === provenance.agentTools?.runId &&
-    (!requireLimits || Object.entries(provenance.inferenceLimits ?? {}).every(([key, value]) =>
-      job.limits?.inference?.[key as keyof NonNullable<SessionProvenance["inferenceLimits"]>] === value));
+    (!requireLimits || (digestOf(job.inputs ?? []) === digestOf(provenance.inputs) &&
+      Object.entries(provenance.inferenceLimits ?? {}).every(([key, value]) =>
+        job.limits?.inference?.[key as keyof NonNullable<SessionProvenance["inferenceLimits"]>] === value)));
 }
 /**
  * The run Code posted, read back through OMP at any point in its life. `job` is the job's own

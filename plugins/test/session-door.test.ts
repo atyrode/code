@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PATH,
-  SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
+  SESSION_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
   type JobInputBinding, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
 import { actionSchemas, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
@@ -108,13 +108,14 @@ function fixture(): Fixture {
       const value = SessionInputSchema.parse(input);
       omp.reviewed.push(value);
       return { destination: { containerId: value.containerId, machineId: value.machineId },
-        operationId: value.agentTools === undefined ? LAUNCH_OPERATION_ID : SESSION_OPERATION_ID,
+        operationId: value.isolation ? MATERIAL_SESSION_OPERATION_ID : value.agentTools === undefined ? LAUNCH_OPERATION_ID : SESSION_OPERATION_ID,
         reviewDigest, pins: { installationRevision: "native-installation", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) },
         defaultsRevision: value.expectedDefaultsRevision, effectiveOverlay: value.overlay,
-        automation: value.automation ?? { mode: "ordinary" },
+        automation: value.isolation ? { mode: "restricted", toolNames: [], delegation: "disabled" } : value.automation ?? { mode: "ordinary" },
+        ...(value.isolation ? { isolation: value.isolation } : {}),
         ...(!omp.dropReviewLimits && value.inferenceLimits !== undefined ? { inferenceLimits: value.inferenceLimits } : {}),
         ...(value.agentTools === undefined ? {} : { agentTools: value.agentTools }),
-        accountPool: value.accountPool, skills: omp.skills ?? { mode: value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] },
+        accountPool: value.accountPool, skills: omp.skills ?? { mode: value.isolation || value.skills?.mode === "disabled" ? "disabled" : "preserve", catalogRevision: null, selected: [] },
         ...omp.reviewOverride } satisfies OmpResult<"reviewSession">;
     }
     if (door === `${OMP_PLUGIN_ID}.runSession`) {
@@ -331,23 +332,49 @@ describe("the session a dependent plugin posts through Code", () => {
     expect((await accepted(f, "cancelSession", { ...workspace, jobId: posted.jobId })).job.state).toBe("cancelled");
   });
 
-  test("a bound material input is returned only when the admitted job names that material", async () => {
+  test("substituted material cannot be vouched for during posting or a retained read", async () => {
     const f = fixture();
     const record = await configured(f);
-    const input = { ...target, expectedRevision: record.revision, prompt: "Read the material" };
     const inputs: JobInputBinding[] = [{ name: "material", from: { jobId: "job-earlier", output: "session" } }];
-    const posted = await accepted(f, "runSession", { ...input, inputs });
+    const input = { ...target, expectedRevision: record.revision, prompt: "Read the material", inputs };
+    const substituted = [{ name: "material", from: { jobId: "job-somebody-elses", output: "session" } }];
+    for (const echo of [substituted, []]) {
+      f.omp.echo = echo;
+      expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+      expect(await invoke(f, "readSession", { ...workspace, jobId: f.omp.job.jobId }))
+        .toEqual({ refused: "code_session_unknown" });
+    }
+    f.omp.echo = "asked";
+    const posted = await accepted(f, "runSession", input);
     expect(posted.inputs).toEqual(inputs);
-    // A job handed different material is not the job Code asked for, and is not vouched for.
-    const fenced = fixture();
-    const current = await configured(fenced);
-    fenced.omp.echo = [{ name: "material", from: { jobId: "job-somebody-elses", output: "session" } }];
-    expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
+    f.omp.job.inputs = substituted;
+    expect(await invoke(f, "readSession", { ...workspace, jobId: posted.jobId }))
       .toEqual({ refused: "code_omp_review_changed" });
-    expect(fenced.store.has(`sessions/${digestOf(workspace)}/${fenced.omp.job.jobId}`)).toBe(false);
-    fenced.omp.echo = [];
-    expect(await invoke(fenced, "runSession", { ...input, expectedRevision: current.revision, inputs }))
+    expect((await accepted(f, "cancelSession", { ...workspace, jobId: posted.jobId })).job.state).toBe("cancelled");
+  });
+
+  test("material-only isolation cannot be dropped in review or replaced by an ordinary operation", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Summarize the sealed material",
+      inputs: [{ name: "material", from: { jobId: "job-material", output: "material" } }],
+      isolation: { mode: "material-only" as const, file: "transcript-map.json", sha256: "a".repeat(64), bytes: 128 } };
+    for (const reviewOverride of [{ isolation: undefined }, { operationId: LAUNCH_OPERATION_ID }]) {
+      f.omp.reviewOverride = reviewOverride;
+      expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    }
+    expect(f.omp.posted).toEqual([]);
+    f.omp.reviewOverride = {};
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_omp_review_changed" });
+    expect(await invoke(f, "readSession", { ...workspace, jobId: f.omp.job.jobId }))
+      .toEqual({ refused: "code_session_unknown" });
+    f.omp.job.operationId = MATERIAL_SESSION_OPERATION_ID;
+    const posted = await accepted(f, "runSession", input);
+    f.omp.job.operationId = SESSION_OPERATION_ID;
+    expect(await invoke(f, "readSession", { ...workspace, jobId: posted.jobId }))
       .toEqual({ refused: "code_omp_review_changed" });
+    f.omp.job.operationId = MATERIAL_SESSION_OPERATION_ID;
+    expect((await accepted(f, "cancelSession", { ...workspace, jobId: posted.jobId })).job.state).toBe("cancelled");
   });
 
   test("Code accepts reviewed optional bindings beside material but refuses a substituted skill source", async () => {
