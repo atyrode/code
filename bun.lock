@@ -5,13 +5,13 @@
     "": {
       "name": "@atyrode/manifold-code",
       "dependencies": {
-        "@atyrode/manifold-omp": "github:atyrode/manifold-omp#1ce18ee15468349710ceaeb5db25734db9104381",
+        "@atyrode/manifold-omp": "github:atyrode/manifold-omp#4ec5799d71527d8fbe3168f34aaf3b5304aa83ad",
         "zod": "4.4.3",
       },
     },
   },
   "packages": {
-    "@atyrode/manifold-omp": ["@atyrode/manifold-omp@github:atyrode/manifold-omp#1ce18ee", { "dependencies": { "zod": "4.4.3" } }, "atyrode-manifold-omp-1ce18ee", "sha512-eYXZgM93OfdHROtxKuKFLbl8xFi99WPSeRHg2Wvby7XTkkIYWdE9zArWwwJqSwUzya1mqKV78akfGcuzPI/WPA=="],
+    "@atyrode/manifold-omp": ["@atyrode/manifold-omp@github:atyrode/manifold-omp#4ec5799", { "dependencies": { "zod": "4.4.3" } }, "atyrode-manifold-omp-4ec5799", "sha512-3rmrkAnklfyOfKzAMcEUSm89J6Lc6qgboJqkCiMMsmn81f603XV7o5yG/Vm6zbodhjVC/pOEzIttFbg+hL4/gg=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
   }
