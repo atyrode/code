@@ -112,14 +112,18 @@ files, service state, credentials or backups.
   without copying credential algorithms or changing that patch. This does not
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
-  Code's existing-Run tools pin native source
-  [`bcb7d25`](https://github.com/atyrode/manifold-omp/commit/bcb7d25f910bfb4179227c372f93e690441e38de)
-  ([manifold-omp#79](https://github.com/atyrode/manifold-omp/pull/79), merged) and
-  Manifold `b00c1fa350dbe28b247ae4261d7eef817e00b2c8`
-  ([manifold#818](https://github.com/atyrode/manifold/pull/818), merged: protocol 43,
-  native owner RPC 41, hardened contract 7). Both are integrated source; neither is yet a
-  released Code/OMP bundle or a deployed production capability, and no transition-ledger
-  row advances. The Code gate runs the real Code-to-native tool proof against these pins.
+  Code's existing-Run tools and one-shot sessions consume OMP
+  [`fad06a7`](https://github.com/atyrode/manifold-omp/commit/fad06a7d6e5e1a4f570a1084f21aee329cfa3889)
+  ([manifold-omp#92](https://github.com/atyrode/manifold-omp/pull/92), merged) and
+  Manifold [`47407b5`](https://github.com/atyrode/manifold/commit/47407b58f00b1fefcde1d86f6dd6d9b06e9c1216).
+  OMP's [one-shot run location](https://github.com/atyrode/manifold-omp/blob/fad06a7d6e5e1a4f570a1084f21aee329cfa3889/plugins/atyrode.omp/manifest.json#L1528-L1537)
+  uses temporary raw output directories; sealed transcripts remain readable, while
+  workspace/session state and legacy directories are unchanged. Code retains its
+  panel-free baseline web registration for the shared stylesheet and declares the
+  portable Worker entry that the pinned SDK requires for hardened installation.
+  The gate runs real Code-to-native tool and bounded-material proof against these
+  pins. Source and disposable verification do not establish a released Code bundle
+  or deployed production capability, and no transition-ledger row advances.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.
   Read, follow and cancel preserve the exact retained Run correlation.
