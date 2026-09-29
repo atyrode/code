@@ -37,6 +37,7 @@
   "entry": {
     "server": true,
     "web": "web.js",
+    "worker": true,
     "styles": true
   }
 }
