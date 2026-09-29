@@ -113,10 +113,15 @@ files, service state, credentials or backups.
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
   Code's existing-Run tools and one-shot sessions consume OMP
-  [`fad06a7`](https://github.com/atyrode/manifold-omp/commit/fad06a7d6e5e1a4f570a1084f21aee329cfa3889)
-  ([manifold-omp#92](https://github.com/atyrode/manifold-omp/pull/92), merged) and
+  [`f5b9d09`](https://github.com/atyrode/manifold-omp/commit/f5b9d09c5929943dea246e415875f18e0a68bddb)
+  ([manifold-omp#95](https://github.com/atyrode/manifold-omp/pull/95), merged) and
   Manifold [`47407b5`](https://github.com/atyrode/manifold/commit/47407b58f00b1fefcde1d86f6dd6d9b06e9c1216).
-  OMP's [one-shot run location](https://github.com/atyrode/manifold-omp/blob/fad06a7d6e5e1a4f570a1084f21aee329cfa3889/plugins/atyrode.omp/manifest.json#L1528-L1537)
+  The pinned [worker build](https://github.com/atyrode/manifold-omp/blob/f5b9d09c5929943dea246e415875f18e0a68bddb/plugins/workers/build.ts#L497-L508)
+  retains syntax and whitespace optimization without Bun 1.4.2's unstable
+  identifier renaming. This makes reproducible dependency bytes a source-build
+  property, not permission to replace an enabled native declaration; downstream
+  release verification and deployment review remain separate boundaries.
+  OMP's [one-shot run location](https://github.com/atyrode/manifold-omp/blob/f5b9d09c5929943dea246e415875f18e0a68bddb/plugins/atyrode.omp/manifest.json#L1528-L1537)
   uses temporary raw output directories; sealed transcripts remain readable, while
   workspace/session state and legacy directories are unchanged. Code retains its
   panel-free baseline web registration for the shared stylesheet and declares the
