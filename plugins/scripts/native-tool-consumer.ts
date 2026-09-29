@@ -6,7 +6,7 @@ import { actionDoor as ompActionDoor } from "@atyrode/manifold-omp";
 import { installBundle } from "../../../manifold/packages/plugin-kit/src/install.ts";
 import { dispatch, ownerAction, roster } from "../../../manifold/packages/plugin-kit/src/hub.ts";
 import type { NativeToolConsumer, NativeToolConsumerContext } from "../.integration/omp/plugins/scripts/verify-consumer-types.ts";
-import { actionDoor, actionSchemas, sessionInput, type ActionInput, type ActionResult, type CodeAction } from "../code/contract.ts";
+import { actionDoor, actionSchemas, CODE_PLUGIN_ID, sessionInput, type ActionInput, type ActionResult, type CodeAction } from "../code/contract.ts";
 
 class ConsumerProofFailure extends Error {
   constructor(readonly code: string) { super(`Code native proof: ${code}`); }
@@ -18,12 +18,13 @@ function check(value: unknown, code: string): asserts value {
 /** Runs only inside OMP's private verifier process. Code owns no runtime bootstrap. */
 export async function createNativeToolConsumer(context: NativeToolConsumerContext): Promise<NativeToolConsumer> {
   const { hub, target, installed, accounts } = context;
-  const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
+  const family = [CODE_PLUGIN_ID, "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
+  // The proof hardens Code's server boundary; its presentation parts retain their in-realm runner.
   for (const id of family) {
     const file = resolve(import.meta.dir, "../dist", `${id}.manifold-plugin.json`);
     const bytes = await readFile(file);
     installed.push(id);
-    await installBundle({ source: file, sha256: createHash("sha256").update(bytes).digest("hex"), hub, hardened: true });
+    await installBundle({ source: file, sha256: createHash("sha256").update(bytes).digest("hex"), hub, hardened: id === CODE_PLUGIN_ID });
   }
   const loaded = await roster(hub);
   check(family.every(id => loaded.some(row => row.manifest.id === id && row.enabled)), "family-not-installed");
