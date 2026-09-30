@@ -113,15 +113,18 @@ files, service state, credentials or backups.
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
   Code's existing-Run tools and one-shot sessions consume OMP
-  [`f5b9d09`](https://github.com/atyrode/manifold-omp/commit/f5b9d09c5929943dea246e415875f18e0a68bddb)
-  ([manifold-omp#95](https://github.com/atyrode/manifold-omp/pull/95), merged) and
-  Manifold [`47407b5`](https://github.com/atyrode/manifold/commit/47407b58f00b1fefcde1d86f6dd6d9b06e9c1216).
-  The pinned [worker build](https://github.com/atyrode/manifold-omp/blob/f5b9d09c5929943dea246e415875f18e0a68bddb/plugins/workers/build.ts#L497-L508)
-  retains syntax and whitespace optimization without Bun 1.4.2's unstable
-  identifier renaming. This makes reproducible dependency bytes a source-build
-  property, not permission to replace an enabled native declaration; downstream
-  release verification and deployment review remain separate boundaries.
-  OMP's [one-shot run location](https://github.com/atyrode/manifold-omp/blob/f5b9d09c5929943dea246e415875f18e0a68bddb/plugins/atyrode.omp/manifest.json#L1528-L1537)
+  [`f67e4f1`](https://github.com/atyrode/manifold-omp/commit/f67e4f14fd0835d51ce0c5d54adeb8c43ec369f9)
+  ([manifold-omp#98](https://github.com/atyrode/manifold-omp/pull/98), merged) and
+  Manifold [`0701320`](https://github.com/atyrode/manifold/commit/070132088e30f10266e43a52074bc58f16c051fe).
+  The pinned [worker build](https://github.com/atyrode/manifold-omp/blob/f67e4f14fd0835d51ce0c5d54adeb8c43ec369f9/plugins/workers/build.ts#L497-L508)
+  retains whitespace compaction without syntax or identifier minification.
+  Its [native gate](https://github.com/atyrode/manifold-omp/actions/runs/36666167090)
+  passed with complete-family fingerprints matching local builds. This conservative
+  configuration does not identify the original compiler cause;
+  [manifold-omp#94](https://github.com/atyrode/manifold-omp/issues/94) retains that
+  investigation. Matching bytes do not authorize replacing an enabled native
+  declaration; downstream release verification and deployment review remain separate.
+  OMP's [one-shot run location](https://github.com/atyrode/manifold-omp/blob/f67e4f14fd0835d51ce0c5d54adeb8c43ec369f9/plugins/atyrode.omp/manifest.json#L1528-L1537)
   uses temporary raw output directories; sealed transcripts remain readable, while
   workspace/session state and legacy directories are unchanged. Code retains its
   panel-free baseline web registration for the shared stylesheet and declares the
