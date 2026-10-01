@@ -89,6 +89,30 @@ configuration requires its digest and preserves unrelated service policies.
 and returns an unsaved selection plus changed fields. None of these actions
 configures the OMP gateway or broker.
 
+## Workbench presentation
+
+Profile keeps the selected model, provider/capability/thinking/advisor controls,
+task prompt and explicit review/launch path visible. The `?` controls explain
+choices without changing them; Escape dismisses help and restores its trigger.
+Session behavior reveals budget, priority, Spark, prewalk, plans and fallbacks.
+Its summary retains selected non-default policy, including plan auto-approval.
+Priority's higher-cost warning remains visible when selected.
+
+Session options reveal automation and optional skills. Their closed summary
+retains restricted tool counts, skill selections or explicit disable-all.
+Restrictions are not an OS or network sandbox. Routing, usage, saved-session
+inventory and exact configuration/runtime observations open separately; opening
+a disclosure grants no permission and starts no inventory, benchmark or session.
+Blocked, offline, read-only, stale/conflict and failed-observation status remains
+visible, with full error detail reachable deliberately.
+
+Setup shows its current task and contextual next action. Models leads with
+catalog authoring/discovery; the editor reveals pricing, performance, limits and
+thinking metadata independently. Charge-bearing measurement keeps its warning
+beside the action. Visited views and disclosed controls remain mounted, preserving
+profile, task, catalog, account and per-session drafts. Destination changes still
+invalidate native reviews and clear destination-specific session choices.
+
 ## Ordinary Code/OMP workflow
 
 `createCodeWorkflowClient(dispatch)` is React-free and uses the same ordinary

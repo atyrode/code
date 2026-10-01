@@ -34,9 +34,11 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 ## Native workflows
 
 - **Code workbench:** initialize container-scoped configuration; edit, stage,
-  review and promote a structured catalog; save shared dials; inspect routes and
-  estimates. Changing the execution destination preserves shared choices,
-  prompts and drafts.
+  review and promote a structured catalog; save shared dials. The default Profile
+  prioritizes model, core controls, task and explicit launch review. Contextual help,
+  routing, session policy, skills, usage and saved sessions open on demand without
+  discarding drafts. Changing the execution destination preserves shared choices,
+  prompts and catalog/account edits.
 - **Accounts / Usage:** choose exact OMP-observed identities or credential
   slots, manage shared presets and inspect selected capacity with source age and
   refresh status. OMP owns the shared broker, sign-in terminal, observations,

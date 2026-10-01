@@ -19,9 +19,12 @@ export function Automation({ choice, reviewed, disabled, change }: {
       {RESTRICTED_TOOL_NAMES.map(name => <label key={name}><input type="checkbox" checked={choice.toolNames.includes(name)} onChange={event => change({ ...choice,
         toolNames: event.target.checked ? [...choice.toolNames, name] : choice.toolNames.filter(tool => tool !== name) })} />{name}</label>)}
     </fieldset>}
-    <p>{choice ? "Restricted mode disables OMP task delegation and ambient core, project and discovered skills. Only deliberately selected sealed skills can load." : "Ordinary behavior is unchanged. Resume does not infer historical tool restrictions: choose restricted automation explicitly again when needed."}</p>
-    {choice && <p>Before reviewing a restricted launch or resuming with this profile, set Advisor to Off. Under Session behavior, set Prewalk to Off, Fallbacks to Off and Plans to Ask first, then save the profile. Resume saved state instead uses OMP defaults and refuses while those defaults enable advisor, prewalk or fallback. Choosing restricted mode does not change either profile automatically.</p>}
-    <p>Tool limits are not an OS or network sandbox. Allowed bash can execute programs, including another OMP process, under the separately granted native authority; disabling OMP task delegation does not prohibit shell subprocesses. File tools retain their native authority. Skills are instructions only and grant no tool, filesystem, network or delegation authority.</p>
+    {choice && <p>Task delegation and ambient skills are off. Only deliberately selected sealed skills can load.</p>}
+    {choice && <p>Set Advisor, Prewalk and Fallbacks to Off, and Plans to Ask first; save the profile before reviewing.</p>}
+    <details className="plugin-atyrode_code__details"><summary>Policy boundaries and resume</summary>
+      <p>Tool limits are not an OS or network sandbox. Allowed bash can execute programs, including another OMP process, under the separately granted native authority. Disabling OMP task delegation does not prohibit shell subprocesses. File tools retain their native authority; skills grant none.</p>
+      <p>Resume does not restore historical restrictions. Choose restricted mode again when needed. Saved-state resume uses OMP defaults and refuses if advisor, prewalk or fallback remains enabled. Choosing restricted mode changes neither profile nor defaults.</p>
+    </details>
     {reviewed && <div role="status" data-effective-automation={reviewed.mode}>
       <h4>Native-reviewed effective policy</h4>
       {reviewed.mode === "restricted" ? <p>Restricted · tools: {reviewed.toolNames.join(", ") || "none"} · OMP task delegation: {reviewed.delegation} · ambient discovery suppressed</p> : <p>Ordinary session · native defaults apply</p>}

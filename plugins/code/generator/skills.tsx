@@ -33,7 +33,7 @@ export function OptionalSkills({ catalog, error, choice, reviewed, restricted = 
   const stale = choice?.mode === "select" && choice.expectedCatalogRevision !== catalog?.revision;
   return <section className="plugin-atyrode_code_generator__skills" aria-label="Optional skills" data-mode={choice?.mode ?? "preserve"}>
     <h3>Optional skills</h3>
-    <p>For this launch only. Available does not mean selected; selected does not mean invoked. OMP alone loads the reviewed sources.</p>
+    <details className="plugin-atyrode_code__details"><summary>About skills</summary><p>For this launch only. Availability does not select or invoke a skill. OMP alone loads its reviewed source; a skill grants no authority.</p></details>
     <div className="plugin-atyrode_code__toolbar">
       <button type="button" disabled={disabled} onClick={() => change(undefined)}>Clear optional choices</button>
       <button type="button" disabled={disabled || choice?.mode === "disabled"} onClick={() => change({ mode: "disabled" })}>Disable all skills</button>
@@ -42,12 +42,13 @@ export function OptionalSkills({ catalog, error, choice, reviewed, restricted = 
     <p role="status">{mode === "disabled" ? "All skill sources and skill advertisements will be disabled for this launch." : restricted ? `${selected.length} deliberately selected sealed skills. Ambient core/project/discovery loading is suppressed; skills grant no authority.` : mode !== "preserve" ? `${selected.length} optional skill${selected.length === 1 ? "" : "s"} selected. Ordinary permitted core/project loading is preserved.` : "No optional skills selected. Ordinary permitted core/project loading is preserved."}</p>
     {error && <p role="status" className="plugin-atyrode_code__warning">{error}</p>}
     {draft.problems.map(problem => <p role="status" className="plugin-atyrode_code__warning" key={problem}>{problem}</p>)}
-    {choice?.mode === "select" && <p>Draft catalog revision {choice.expectedCatalogRevision} · skill IDs: {choice.skillIds.join(", ") || "none"} · set IDs: {choice.setIds.join(", ") || "none"}</p>}
-    <h4>{reviewed ? "Native-reviewed selection" : "Draft selection"} · invocation unknown</h4>
-    {selected.length ? <ul aria-label="Selected optional skills">{selected.map(entry => <li key={entry.id}><strong>{entry.title}</strong><p>{entry.purpose}</p><Provenance entry={entry} /></li>)}</ul> : <p>No optional entries selected.</p>}
+    {choice?.mode === "select" && <details className="plugin-atyrode_code__details"><summary>Selection details</summary><p>Catalog revision {choice.expectedCatalogRevision} · skill IDs: {choice.skillIds.join(", ") || "none"} · set IDs: {choice.setIds.join(", ") || "none"}</p></details>}
+    {!!selected.length && <><h4>{reviewed ? "Reviewed skills" : "Selected skills"} · invocation unknown</h4>
+      <ul aria-label="Selected optional skills">{selected.map(entry => <li key={entry.id}><strong>{entry.title}</strong><p>{entry.purpose}</p><Provenance entry={entry} /></li>)}</ul></>}
     {catalog ? <>
-      <h4>Available · catalog revision {catalog.revision}</h4>
+      {!!(catalog.sets.length || catalog.skills.length) && <h4>Available skills</h4>}
       {!catalog.skills.length && <p>No optional skills are published for this destination.</p>}
+      {!!(catalog.sets.length || catalog.skills.length) && <>
       <fieldset disabled={disabled || stale || choice?.mode === "disabled"}>
         <legend>Deliberate sets</legend>
         {catalog.sets.length ? catalog.sets.map(set => <label key={set.id}><input type="checkbox" checked={choice?.mode === "select" && choice.setIds.includes(set.id)} onChange={() => toggle("setIds", set.id)} />{set.title}<span>{set.skillIds.map(id => catalog.skills.find(entry => entry.id === id)?.title ?? id).join(", ")}</span></label>) : <p>No sets published.</p>}
@@ -59,6 +60,7 @@ export function OptionalSkills({ catalog, error, choice, reviewed, restricted = 
           <p>{entry.purpose}</p><Provenance entry={entry} />
         </div>)}
       </fieldset>
+      </>}
     </> : !error && <p role="status">Reading authorized skill metadata…</p>}
   </section>;
 }
