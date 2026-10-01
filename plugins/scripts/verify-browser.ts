@@ -279,7 +279,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate(`${inputPrice}.getClientRects().length`), 0, "Advanced model fields start undisclosed");
   await click(browser, pricingSummary);
   await click(browser, inputPrice);
-  await key(browser, "a", 65, 2);
+  await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
   await browser.typeText("12.5");
   await click(browser, pricingSummary);
   assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Closing metadata preserves the catalog edit");
