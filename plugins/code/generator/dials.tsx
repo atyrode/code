@@ -71,7 +71,7 @@ function Dial({ label, icon, value, options, disabled, change }: {
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={() => { dragging.current = null; }} onLostPointerCapture={() => { dragging.current = null; }}>
-        {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} aria-describedby={`${id}-detail`} disabled={disabled}
+        {options.map((option, index) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} aria-describedby={`${id}-choice-${index}`} disabled={disabled}
           tabIndex={value === option.value ? 0 : -1} data-choice={index} data-value={option.value} data-family={option.family} title={option.description}
           onClick={event => { if (event.detail === 0 && value !== option.value) change(option.value); }}
           onKeyDown={event => {
@@ -82,8 +82,13 @@ function Dial({ label, icon, value, options, disabled, change }: {
             event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`button[data-choice="${next}"]`)?.focus();
           }}>{option.label}</button>)}
       </div>
-      <p id={`${id}-detail`} className="plugin-atyrode_code_generator__dial-detail">{selected?.description}</p>
+      <p id={`${id}-detail`} className="plugin-atyrode_code_generator__sr-only">{selected?.description}</p>
     </div>
+    <details className="plugin-atyrode_code_generator__dial-help" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }}
+      onKeyDown={event => { if (event.key === "Escape" && event.currentTarget.open) { event.preventDefault(); event.stopPropagation(); event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
+      <summary aria-label={`About ${label.toLowerCase()}`}><span aria-hidden="true">?</span></summary>
+      <dl tabIndex={0} aria-label={`${label} choices`}>{options.map((option, index) => <div key={option.value}><dt>{option.label}</dt><dd id={`${id}-choice-${index}`}>{option.description}</dd></div>)}</dl>
+    </details>
   </div>;
 }
 
@@ -102,12 +107,12 @@ const capabilityDetails = {
   4: "The highest available model tier; utility roles remain right-sized.",
 } as const;
 const thinkingOptions = [
-  { value: "minimal", label: "Minimal", description: "Request the least thinking available across roles." },
-  { value: "low", label: "Light", description: "Keep reasoning light; planning and review get extra room." },
-  { value: "medium", label: "Balanced", description: "Balance reasoning effort, with more for reviews and less for utility roles." },
-  { value: "high", label: "Deep", description: "Give difficult work more reasoning effort; utility roles stay lighter." },
-  { value: "xhigh", label: "Deeper", description: "Request extra-high reasoning where supported by the routed model." },
-  { value: "max", label: "Maximum", description: "Request maximum thinking across roles, capped by each model's support." },
+  { value: "minimal", label: "Min", description: "Request the least thinking available across roles." },
+  { value: "low", label: "Low", description: "Keep reasoning light; planning and review get extra room." },
+  { value: "medium", label: "Medium", description: "Balance reasoning effort, with more for reviews and less for utility roles." },
+  { value: "high", label: "High", description: "Give difficult work more reasoning effort; utility roles stay lighter." },
+  { value: "xhigh", label: "X-high", description: "Request extra-high reasoning where supported by the routed model." },
+  { value: "max", label: "Max", description: "Request maximum thinking across roles, capped by each model's support." },
 ] as const;
 const advisorOptions = [
   { value: "off", label: "Off", description: "No advisor model is added to the session." },
@@ -132,6 +137,7 @@ export function Dials({ selection, review, catalog, disabled, update }: {
     <Dial label="Capability" icon="model" value={String(selection.capability)} options={review.available.capabilities.map(value => ({ value: String(value), label: levels[value], description: capabilityDetails[value] }))} disabled={disabled} change={value => update({ ...selection, capability: SelectionSchema.shape.capability.parse(Number(value)) })} />
     <Dial label="Thinking" icon="thinking" value={selection.thinking} options={thinkingOptions} disabled={disabled} change={value => update({ ...selection, thinking: ThinkingLevelSchema.parse(value) })} />
     <Dial label="Advisor" icon="advisor" value={selection.advisor} options={advisorOptions} disabled={disabled} change={value => update({ ...selection, advisor: SelectionSchema.shape.advisor.parse(value) })} />
+    <details className="plugin-atyrode_code_generator__extra-dials" data-profile-options><summary>Session behavior <span>{[selection.budget === "free" ? "free only" : null, selection.priority ? "priority" : null, selection.spark ? "spark" : null, selection.prewalk ? "prewalk" : null, selection.planYolo ? "auto-approve plans" : null, selection.fallback ? "fallbacks on" : "fallbacks off"].filter(Boolean).join(" · ")}</span></summary>
     {review.available.budgets.includes("free") && <Dial label="Budget" icon="priority" value={selection.budget} options={[
       { value: "any", label: "Any", description: "Admit every model in the catalog, whatever it costs." },
       { value: "free", label: "Free only", description: "Admit only models that cost nothing, and refuse rather than resolve to a paid one. States the property, so a model becoming free or ceasing to be changes what runs without editing this profile." },
@@ -144,7 +150,6 @@ export function Dials({ selection, review, catalog, disabled, update }: {
       { value: "false", label: "Off", description: "Use the regular model ladder for small utility work." },
       { value: "true", label: "On", description: "Route tiny and commit work to Spark; also Sonic at the Fast capability tier." },
     ]} disabled={disabled} change={value => update({ ...selection, spark: value === "true" })} />}
-    <details className="plugin-atyrode_code_generator__extra-dials"><summary>Session behavior <span>{[selection.prewalk ? "prewalk on" : null, selection.planYolo ? "auto-approve plans" : null, selection.fallback ? "fallbacks on" : "fallbacks off"].filter(Boolean).join(" · ")}</span></summary>
       <Dial label="Prewalk" icon="prewalk" value={String(selection.prewalk)} options={[
         { value: "false", label: "Off", description: "Leave automatic repository prewalk disabled." },
         { value: "true", label: "On", description: "Enable OMP's repository prewalk for the session and delegated tasks." },
@@ -158,6 +163,7 @@ export function Dials({ selection, review, catalog, disabled, update }: {
         { value: "true", label: "On", description: "Allow the ordered fallback chains shown in routing when a lead model cannot serve the request." },
       ]} disabled={disabled} change={value => update({ ...selection, fallback: value === "true" })} />
     </details>
+    {selection.priority && <p className="plugin-atyrode_code__warning">Priority service costs more; latency is not guaranteed.</p>}
   </div>;
 }
 
@@ -171,7 +177,7 @@ export function Estimates({ value }: { value: Review["estimates"] }) {
         <span className="plugin-atyrode_code_generator__estimate-meter" aria-hidden="true">{[1, 2, 3, 4, 5].map(step => <span key={step} data-filled={step <= score} />)}</span>
       </dd></div>;
     })}</dl>
-    <p>Catalog-based estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p>
+    <details className="plugin-atyrode_code__details"><summary>How estimates work</summary><p>Catalog estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p></details>
   </div>;
 }
 

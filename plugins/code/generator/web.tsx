@@ -14,7 +14,7 @@ import { operationReady } from "../permission-plan.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { UsageOverview } from "../usage-view.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
-import { Dials, Estimates, Routing } from "./dials.tsx";
+import { DialIcon, Dials, Estimates, Routing } from "./dials.tsx";
 import { Onboarding } from "./onboarding.tsx";
 import { PermissionReview } from "../permission-review.tsx";
 import { OptionalSkills } from "./skills.tsx";
@@ -88,7 +88,8 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
     try { return reviewCatalog(compiled, selection, Date.now()); } catch { return null; }
   }, [compiled, selection]);
   const stale = dials !== null && dials.revision !== record?.revision;
-  const skillProblems = skillDraft(skillCatalog.data, skillChoice).problems;
+  const draftSkills = skillDraft(skillCatalog.data, skillChoice);
+  const skillProblems = draftSkills.problems;
   // A monotonic epoch also fences a policy/prompt round trip while native review is in flight.
   const reviewKey = JSON.stringify([generation, target, record?.revision, defaults.data?.revision, skillCatalog.data?.revision, prompt, skillChoice, automation, dials, savedSessionId]);
   const reviewScope = useRef({ key: reviewKey, epoch: 0 });
@@ -150,24 +151,27 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
       }
     });
   }
-  const savedSessionPanel = <FleetSessions key={generation} host={host} machines={machines} rosterError={rosterError} machineId={machineId}
+  const savedSessionPanel = <details className="plugin-atyrode_code_generator__disclosure" data-saved-sessions><summary>Saved sessions <span>{savedSessionId ? "Session selected" : "Resume or reopen"}</span></summary><FleetSessions key={generation} host={host} machines={machines} rosterError={rosterError} machineId={machineId}
     sessionId={savedSessionId} choose={setSavedSessionId} busy={busy}>
     {running => <>
-      <p>Resume saved state preserves persisted model and configured thinking, not historical tool or skill policy. Resume with this profile explicitly replaces model/thinking using the saved Code profile and its exact overlay and account pool. Current per-session skill and automation choices apply to either action. Omission uses ordinary automation and permitted ambient skills; choose restricted mode again when needed. Placement still requires native permission.</p>
-      <p>Resume destination: {machine?.name ?? (machineId || "none")} · workspace {host.containerId}. A resume refreshes native inventory and public terminals first; any known running match is reopened instead.</p>
+      <p>Resume on {machine?.name ?? (machineId || "no selected destination")} in this workspace.</p>
+      <details className="plugin-atyrode_code__details"><summary>How resuming works</summary>
+        <p>Saved state preserves its model and thinking. This profile replaces them with the saved Code choices and exact account pool. Neither action restores historical tool or skill restrictions: current session options apply, with ordinary automation and ambient skills when omitted.</p>
+        <p>Native permission is still required. Code refreshes inventory and reopens a known running terminal instead of starting a replacement. Workspace: {host.containerId}.</p>
+      </details>
       <div className="plugin-atyrode_code__toolbar">
         <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || skillProblems.length > 0} onClick={() => void resume(false)}>Resume saved state</button>
         <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !writable || !available || !savedSessionId || running || !record || !!dials || !localReview || skillProblems.length > 0} onClick={() => void resume(true)}>Resume with this profile</button>
       </div>
     </>}
-  </FleetSessions>;
+  </FleetSessions></details>;
   const profileState = stale ? "conflict" : dials ? "local" : "saved";
   const stateLabel = stale ? "Shared profile changed" : dials ? "Local changes" : "Saved profile";
   const navigation = <header className="plugin-atyrode_code_generator__workspace-nav">
     <nav aria-label="Code workspace">
-      <button type="button" aria-current={view === "profile" ? "page" : undefined} disabled={busy} onClick={back}>Profile</button>
-      <button type="button" aria-current={view === "accounts" ? "page" : undefined} disabled={busy} onClick={() => { setView("accounts"); refresh(); }}>Accounts</button>
-      <button type="button" aria-current={view === "catalog" ? "page" : undefined} disabled={busy} onClick={() => { setView("catalog"); refresh(); }}>Models</button>
+      <button type="button" aria-current={view === "profile" ? "page" : undefined} disabled={busy} onClick={back}><DialIcon kind="model" />Profile</button>
+      <button type="button" aria-current={view === "accounts" ? "page" : undefined} disabled={busy} onClick={() => { setView("accounts"); refresh(); }}><DialIcon kind="advisor" />Accounts</button>
+      <button type="button" aria-current={view === "catalog" ? "page" : undefined} disabled={busy} onClick={() => { setView("catalog"); refresh(); }}><DialIcon kind="lane" />Models</button>
       <button type="button" aria-current={view === "setup" ? "page" : undefined} disabled={busy} onClick={() => { setView("setup"); refresh(); }}><ControlIcon kind="settings" size={14} />Setup</button>
     </nav>
     {record?.active && <span className="plugin-atyrode_code_generator__profile-state" data-state={profileState} role="status"><span aria-hidden="true" />{stateLabel}</span>}
@@ -204,18 +208,14 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
         <div className="plugin-atyrode_code_generator__session-identity">
           <h2 className="plugin-atyrode_code__section-label">Next session</h2>
           <p className="plugin-atyrode_code_generator__session-model">{leadModel?.key ?? "Review your model catalog"}{lead && <span>{lead.lead.thinking} thinking</span>}</p>
-          <p className="plugin-atyrode_code_generator__session-context">{laneLabel && <span>{laneLabel}</span>}<span>{record.active.document.models.length} catalog models</span><span>Revision {record.revision}</span></p>
-        </div>
-        <div className="plugin-atyrode_code_generator__session-readiness" data-reviewed={previewCurrent}>
-          <span>{stale ? "Draft preserved" : dials ? "Previewing your changes" : previewCurrent ? "Launch reviewed" : "Review before launch"}</span>
-          <p>{stale ? "Your local choices are safe. Discard them to use the shared profile." : dials ? "Changes stay local until you save. Routing updates as you adjust." : previewCurrent ? "Check the account pool below, then explicitly launch." : "Adjust the profile, review accounts and runtime, then open OMP."}</p>
+          <p className="plugin-atyrode_code_generator__session-context">{laneLabel && <span>{laneLabel}</span>}</p>
         </div>
       </section>
       {!writable && <p role="status" className="plugin-atyrode_code__notice">Read-only workspace. Profile changes and launch require edit access.</p>}
       {configuration.error && <p role="status" className="plugin-atyrode_code__warning">{configuration.error}</p>}
       <div className="plugin-atyrode_code_generator__profile-grid">
         <section className="plugin-atyrode_code_generator__controls" aria-labelledby={`${id}-profile`}>
-          <header className="plugin-atyrode_code_generator__profile-header"><h2 id={`${id}-profile`} className="plugin-atyrode_code__section-label">Shape the session</h2><span>Choose, drag, or use arrow keys</span></header>
+          <header className="plugin-atyrode_code_generator__profile-header"><h2 id={`${id}-profile`} className="plugin-atyrode_code__section-label">Profile</h2></header>
           {compiled && selection && localReview ? <Dials selection={selection} review={localReview} catalog={compiled} disabled={busy || !writable} update={value => { if (record) { setDials({ selection: value, revision: dials?.revision ?? record.revision,
             baseSelection: dials ? dials.baseSelection : record.selection, catalogDigest: dials ? dials.catalogDigest : record.active?.digest ?? null }); setPreview(null); setSuggestion(null); setMessage(null); } }} /> : <p role="status" className="plugin-atyrode_code__warning">This profile no longer fits its catalog. Open Models to review its catalog.</p>}
           {dials && <div className="plugin-atyrode_code_generator__draft" data-stale={stale}>
@@ -239,33 +239,38 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
           {shownReview && <Estimates value={shownReview.estimates} />}
         </section>
         <section className="plugin-atyrode_code_generator__launch" aria-labelledby={`${id}-launch-heading`} data-reviewed={previewCurrent}>
+          <h2 id={`${id}-launch-heading`} className="plugin-atyrode_code__section-label">{previewCurrent ? "Confirm launch" : "Start a session"}</h2>
+          <label htmlFor={`${id}-prompt`}>Task <span className="plugin-atyrode_code__dim">optional</span></label>
+          {/* Characters, because a textarea counts characters: the door's rule is bytes and
+              refuses a multibyte prompt over it by name. */}
+          <textarea id={`${id}-prompt`} rows={3} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should we tackle?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
           <div className="plugin-atyrode_code_generator__launch-bar">
-            <div><h2 id={`${id}-launch-heading`} className="plugin-atyrode_code__section-label">Start a session</h2><p>{previewCurrent ? "2 / 2 · Confirm and open OMP" : "1 / 2 · Review before opening"}</p></div>
             <button type="button" className="plugin-atyrode_code__primary-action" data-action={previewCurrent ? "atyrode.omp.prepareSession" : "atyrode.omp.reviewSession"} disabled={busy || !writable || !available || !launchReady || !!dials || !localReview || skillProblems.length > 0} aria-describedby={`${id}-launch-status`} onClick={() => {
               if (previewCurrent) { void launch(); return; }
               if (record && target) void perform(async () => { const value = await codeWorkflow(host).reviewSession(target, record.revision, prompt, { skills: skillChoice, automation }); if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); } });
             }}>{busy ? "Working…" : previewCurrent ? "Launch OMP" : "Review launch"}<span aria-hidden="true">{previewCurrent ? "↗" : "→"}</span></button>
           </div>
-          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to review and launch." : dials ? "Save your profile first. Local changes are not launched." : !available ? "The execution destination is offline." : !launchReady ? "Runtime approval is needed before launch." : !localReview ? "Resolve the profile's model catalog before launch." : skillProblems.length ? "Resolve the optional skill choices before launch." : previewCurrent ? "Reviewed against this saved revision, prompt, OMP defaults, skill selection and destination. Opens a terminal in this workspace." : "Checks the current account pool and OMP-owned runtime. No terminal opens yet."}</p>
+          <p id={`${id}-launch-status`} className="plugin-atyrode_code_generator__launch-status">{!writable ? "Edit access is required to launch." : dials ? "Save your profile before launch." : !available ? "The execution destination is offline." : setup.error ? "Runtime status is unavailable." : !launchReady ? "Review runtime setup to enable launch." : !localReview ? "Review this profile's model catalog." : skillProblems.length ? "Resolve the optional skill choices." : previewCurrent ? "Reviewed. Launch opens a terminal in this workspace." : "Review checks accounts and runtime; nothing opens yet."}</p>
           {previewCurrent && <div className="plugin-atyrode_code_generator__launch-review" role="status"><h3>Reviewed account pool</h3>
             <ul>{Object.entries(preview.composition.accountPool).map(([provider, accounts]) => <li key={provider} data-family={providerPolicy(provider)?.family ?? provider}><span>{providerPolicy(provider)?.label ?? provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
             <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ composition: preview.composition, native: preview.native }, null, 2)}</pre></details>
           </div>}
-          <label htmlFor={`${id}-prompt`}>First prompt <span className="plugin-atyrode_code__dim">optional</span></label>
-          {/* Characters, because a textarea counts characters: the door's rule is bytes and
-              refuses a multibyte prompt over it by name. */}
-          <textarea id={`${id}-prompt`} rows={2} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should this session work on?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
+          <details className="plugin-atyrode_code_generator__disclosure" data-session-options><summary>Session options <span>{automation ? `Restricted · ${automation.toolNames.length} tools` : "Ordinary"} · {skillChoice?.mode === "disabled" ? "Skills off" : skillChoice?.mode === "select" ? `${draftSkills.selected.length} selected skills` : "Default skills"}</span></summary>
           <Automation choice={automation} reviewed={previewCurrent ? preview.native.automation : null} disabled={busy || !writable || !available}
             change={value => { setAutomation(value); setPreview(null); setMessage(null); }} />
           <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={skillChoice} restricted={automation?.mode === "restricted"} reviewed={previewCurrent ? preview.native.skills : null}
             disabled={busy || !writable || !available} refresh={skillCatalog.refresh} change={value => { setSkillChoice(value); setPreview(null); setMessage(null); }} />
+          </details>
+          {automation && <p className="plugin-atyrode_code__warning">Restricted OMP tools; not an OS or network sandbox.</p>}
+          {skillCatalog.error && <p role="status" className="plugin-atyrode_code__warning">Skill catalog unavailable. Open session options for details.</p>}
+          {!!skillProblems.length && <p role="status" className="plugin-atyrode_code__warning">Optional skill choices need attention. Open session options to resolve them.</p>}
           {!launchReady && <PermissionReview host={host} target={target} intent="session" label="Review runtime setup" onReady={refresh} />}
-          {setup.error && <p role="status" className="plugin-atyrode_code__warning">{setup.error}</p>}
+          {setup.error && <details className="plugin-atyrode_code__details"><summary>Runtime error details</summary><pre>{setup.error}</pre></details>}
         </section>
-        {compiled && shownReview && <div className="plugin-atyrode_code_generator__route-preview"><Routing value={shownReview} catalog={compiled} local={dials !== null} /></div>}
+        {compiled && shownReview && <details className="plugin-atyrode_code_generator__disclosure plugin-atyrode_code_generator__route-preview"><summary><DialIcon kind="lane" />Routing <span>{shownReview.routes.length} roles{dials ? " · local preview" : ""}</span></summary><Routing value={shownReview} catalog={compiled} local={dials !== null} /></details>}
       </div>
-      <div className="plugin-atyrode_code_generator__insights"><UsageOverview host={host} /></div>
-      <footer className="plugin-atyrode_code_generator__footer"><span>Shared workspace profile · revision {record.revision}</span><span>{machine?.name ?? "No execution destination"} · {available ? "connected" : "unavailable"}</span></footer>
+      <details className="plugin-atyrode_code_generator__disclosure"><summary>Usage <span>Accounts and limits</span></summary><UsageOverview host={host} /></details>
+      <footer className="plugin-atyrode_code_generator__footer"><details className="plugin-atyrode_code__details"><summary>Profile details</summary><dl className="plugin-atyrode_code_generator__setup-facts"><dt>Shared revision</dt><dd>{record.revision}</dd><dt>Catalog models</dt><dd>{record.active.document.models.length}</dd><dt>Workspace</dt><dd>{host.containerId}</dd><dt>Destination</dt><dd>{machine?.name ?? "None"} · {machineId || "not selected"} · {available ? "connected" : "unavailable"}</dd></dl></details></footer>
   </>);
 }
 
@@ -275,11 +280,11 @@ function Launcher({ host }: PanelProps) {
   return <ScrollRegion className="plugin-atyrode_code plugin-atyrode_code_generator" aria-label="Code workspace"><div className="plugin-atyrode_code_generator__body">
     <header className="plugin-atyrode_code_generator__masthead"><h1>code<span aria-hidden="true">_</span></h1>
       {host.containerId && <div className="plugin-atyrode_code_generator__machine"><span className="plugin-atyrode_code_generator__connection" data-online={available} aria-hidden="true" />
-        <label htmlFor={`${id}-machine`}>execution destination</label><select id={`${id}-machine`} value={machineId ?? ""} onChange={event => { if (event.target.value) select(event.target.value); }}><option value="" disabled>choose a machine</option>
+        <label htmlFor={`${id}-machine`}>Run on</label><select id={`${id}-machine`} value={machineId ?? ""} onChange={event => { if (event.target.value) select(event.target.value); }}><option value="" disabled>choose a machine</option>
           {machineId && !machine && <option value={machineId}>selected machine unavailable</option>}
           {machines?.map(entry => <option key={entry.id} value={entry.id}>{entry.name}{entry.revoked ? " · revoked" : entry.online ? "" : " · offline"}</option>)}
         </select>
-        <button type="button" onClick={refresh}>Refresh machines</button>
+        <button type="button" aria-label="Refresh machines" title="Refresh machines" onClick={refresh}><DialIcon kind="fallback" /><span className="plugin-atyrode_code_generator__sr-only">Refresh machines</span></button>
       </div>}
     </header>
     {error && <p role="status" className="plugin-atyrode_code__warning">{error} <button type="button" onClick={refresh}>refresh</button></p>}

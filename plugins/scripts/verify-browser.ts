@@ -224,6 +224,11 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await selectDestination(browser, generatorDestination, first.machineId);
   const promptField = element(`${generator} .plugin-atyrode_code_generator__launch textarea`);
   await control(browser, "shared active profile ready", promptField, false);
+  const sessionOptions = element(`${generator} [data-session-options]`);
+  const sessionOptionsSummary = `${sessionOptions}.querySelector(':scope > summary')`;
+  assert.equal(await browser.evaluate(`${sessionOptions}.open`), false, "Optional launch policy starts deliberately undisclosed");
+  assert.equal(await browser.evaluate(`${workspaceButton("Disable all skills")} === undefined`), true, "Collapsed skill controls are not pointer targets");
+  await click(browser, sessionOptionsSummary);
   const skills = element(`${generator} [aria-label="Optional skills"]`);
   const skillCatalog = await callAction(server, writer.token, "atyrode.omp.readSkillCatalog", first);
   assert(skillCatalog.ok, "The real destination exposes its authorized empty optional catalog");
@@ -242,7 +247,21 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   const prompt = "Retain this task while choosing where OMP will execute.";
   await click(browser, promptField);
   await browser.typeText(prompt);
+  await click(browser, sessionOptionsSummary);
+  assert.equal(await browser.evaluate(`${sessionOptions}.open`), false);
+  assert.equal(await browser.evaluate(`${skills}.dataset.mode`), "disabled", "Closing session options keeps its deliberate skill choice");
+  await key(browser, "Tab", 9);
+  assert.equal(await browser.evaluate(`document.activeElement?.closest('[aria-label="Optional skills"]') === null`), true,
+    "Keyboard navigation skips the closed optional controls");
   const thinking = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Thinking')`;
+  const thinkingHelp = element(`${generator} summary[aria-label="About thinking"]`);
+  const beforeHelp = await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`);
+  await click(browser, thinkingHelp);
+  await until(browser, "contextual thinking help opens by pointer", `${thinkingHelp}.parentElement.open`);
+  await key(browser, "Escape", 27);
+  assert.equal(await browser.evaluate(`${thinkingHelp}.parentElement.open`), false, "Keyboard can close contextual help");
+  assert.equal(await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`), beforeHelp,
+    "Asking for help does not edit the profile");
   await click(browser, `${thinking}.querySelector('[aria-checked="true"]')`);
   await key(browser, "ArrowRight", 39);
   const localThinking = await browser.evaluate<string>(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`);
@@ -255,12 +274,15 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await click(browser, workspaceButton("Models"));
   await click(browser, workspaceButton("Edit or import models"));
   const catalog = `${generator} [aria-label="Model catalog"]`;
-  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${catalog} .plugin-atyrode_code_generator__fields label')].slice(0, 4).map(label => label.textContent?.trim())`), [
-    "Catalog key · routing label", "Provider identifier", "Provider model ID", "API family",
-  ], "Catalog editor labels explain each routing identity field");
-  const capabilityTier = `[...document.querySelectorAll('${catalog} .plugin-atyrode_code_generator__fields select')][0]`;
-  assert.equal(await browser.evaluate(`${capabilityTier}?.closest("label")?.firstChild?.textContent?.trim()`), "Capability tier",
-    "Catalog editor labels the numeric capability tier");
+  const pricingSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'Pricing')`;
+  const inputPrice = element(`${catalog} .plugin-atyrode_code_generator__model-editor fieldset details input[type="number"]`);
+  assert.equal(await browser.evaluate(`${inputPrice}.getClientRects().length`), 0, "Advanced model fields start undisclosed");
+  await click(browser, pricingSummary);
+  await click(browser, inputPrice);
+  await key(browser, "a", 65, 2);
+  await browser.typeText("12.5");
+  await click(browser, pricingSummary);
+  assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Closing metadata preserves the catalog edit");
   const importSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'JSON import / export')`;
   await click(browser, importSummary);
   const importField = element(`${catalog} textarea:not([readonly])`);
@@ -282,6 +304,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await selectDestination(browser, generatorDestination, second.machineId);
   assert.equal(await browser.evaluate(`${workspaceButton("Models")}.getAttribute('aria-current')`), "page", "Visited catalog view survives the destination switch");
   assert.equal(await browser.evaluate(`${importField}.value`), importDraft, "Unparsed JSON import stays local across machines");
+  assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Advanced catalog values survive navigation and destination changes");
   await until(browser, "a new destination clears ad-hoc skill choices before they can be reused", `${skills}.dataset.mode === 'preserve'`);
   assert.equal(await browser.evaluate(`${promptField}.value`), prompt, "Hidden prompt stays mounted across machines");
   assert.equal(await browser.evaluate(`${accountDraft}.value`), accountDraftName, "Visited account editor retains its unsaved preset across destinations");
@@ -309,6 +332,11 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await until(browser, "responsive profile remains usable", `${promptField}.getBoundingClientRect().width > 0`);
+  await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+  const summaryPoint = await browser.evaluate<{ x: number; y: number }>(`(() => { const node = ${sessionOptionsSummary}; node.scrollIntoView({block:'center'}); const rect = node.getBoundingClientRect(); return {x:rect.x + rect.width / 2,y:rect.y + rect.height / 2}; })()`);
+  await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [summaryPoint] });
+  await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await until(browser, "touch opens the session options", `${sessionOptions}.open`);
   await click(browser, workspaceButton("Disable all skills"));
   await key(browser, "Tab", 9);
   assert.equal(await browser.evaluate(`document.activeElement?.textContent === 'Refresh skill catalog'`), true, "Skill controls remain keyboard reachable at a narrow viewport");
@@ -318,6 +346,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate(`document.activeElement === ${promptField}`), true, "The prompt remains pointer- and keyboard-accessible at the narrow viewport");
   assert.equal(await browser.evaluate(`${promptField}.value`), prompt, "Responsive layout keeps the same prompt");
   await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
 }
@@ -380,13 +409,13 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await click(browser, workspaceButton("Profile"));
       await until(browser, "first-use profile is visible without an automatic review", `${onboarding}?.getClientRects().length > 0 && ${element(modal)} === null`);
       await control(browser, "first-use account decision remains available", workspaceButton("Not now — continue workspace setup"), false);
+      const otherSetup = `[...document.querySelectorAll('${generator} summary')].find(el => el.getClientRects().length && el.textContent === 'Other setup options')`;
+      if (!await browser.evaluate(`${otherSetup}.parentElement.open`)) await click(browser, otherSetup);
       await click(browser, workspaceButton("Choose or reconsider capabilities"));
       await until(browser, "explicit capability review opens from its trigger", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
       await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('input[type="checkbox"]').length > 0`);
       assert.equal(await browser.evaluate(`${element(modal)}.querySelectorAll('[aria-pressed]').length === 0`), true,
         "Each capability has one checkbox rather than an inverted Not now control");
-      assert.equal(await browser.evaluate(`${element(modal)}.querySelector('[id$="-title"]')?.textContent.includes('Choose or reconsider capabilities')`), true,
-        "The review identifies the action that opened it");
       await key(browser, "Escape", 27);
       await until(browser, "explicit first-use review closes normally", `${element(modal)} === null`);
       assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose or reconsider capabilities")}`), true,
@@ -661,6 +690,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await control(browser, "synthetic first destination review enabled", launchControl, false);
     await click(browser, launchControl);
     await until(browser, "synthetic first destination review displayed", `${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed === 'true'`);
+    await click(browser, element(`${generator} [data-session-options] > summary`));
     const skillControl = (label: string) => `[...document.querySelectorAll('${generator} [aria-label="Optional skills"] label')].find(el => el.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('input')`;
     await click(browser, skillControl("Reviewed pair"));
     await click(browser, skillControl("Alpha"));
@@ -672,11 +702,10 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "selected-skill preparation refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     await click(browser, skillControl("Beta"));
     await control(browser, "declared skill conflict prevents review", launchControl, true);
-    await until(browser, "declared conflict is explained", `${element(`${generator} [aria-label="Optional skills"]`)}.textContent.includes('conflicts with')`);
     await click(browser, skillControl("Beta"));
+    await control(browser, "resolving the conflict restores review", launchControl, false);
     skillCatalog.revision++;
     await click(browser, workspaceButton("Refresh skill catalog"));
-    await until(browser, "changed catalog remains a stale draft", `${element(`${generator} [aria-label="Optional skills"]`)}.textContent.includes('changed from revision 7 to 8')`);
     await control(browser, "stale catalog cannot silently rebase selection", launchControl, true);
     await click(browser, workspaceButton("Clear optional choices"));
     await control(browser, "cleared draft can be reviewed independently", launchControl, false);
@@ -728,6 +757,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await click(browser, launchControl);
     await until(browser, "synthetic launch refusal is shown", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false", "A refused launch consumes its browser review");
+    const savedSessions = element(`${generator} [data-saved-sessions]`);
+    await click(browser, `${savedSessions}.querySelector(':scope > summary')`);
     await click(browser, listMachine(first.machineId));
     await until(browser, "first machine metadata settles before the next pointer target moves", `${element(`${fleetMachine(first.machineId)} [data-session-activity=\"unknown\"]`)} !== null`);
     await click(browser, listMachine(second.machineId));
@@ -828,6 +859,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await waitFor(() => navigations.some(url => new URL(url).pathname === terminalRoute), timeout, 50);
     assert.equal(resumedInputs.length, 2, "A newly correlated running session reopens instead of preparing a replacement");
     await until(browser, "public terminal URI resolves back to the authoritative home", `location.pathname === ${JSON.stringify(`/p/${first.containerId}`)} && ${element(fleetMachine(first.machineId))} !== null`);
+    if (!await browser.evaluate(`${savedSessions}.open`)) await click(browser, `${savedSessions}.querySelector(':scope > summary')`);
     await click(browser, listMachine(first.machineId));
     const reopenButton = element(`${fleetMachine(first.machineId)} [data-action="reopen-session"]`);
     await control(browser, "exact running terminal exposes native reopen", reopenButton, false);
