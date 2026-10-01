@@ -115,6 +115,12 @@ bun run dev -- --hub http://127.0.0.1:7912 --deliver docker:manifold-dev-manifol
 
 The gate's browser verifier installs the real pinned OMP root/accounts/gateway bundles and Code's root/generator/accounts/usage bundles on a disposable server. It drives actual Chromium identities and UI. Native resources and credentials are deliberately unconfigured there: successful composition, refusal and rendering are not provider or consent evidence.
 
+For live frontend/server authoring, read
+[`plugins/README.md` → Live workshop](plugins/README.md#live-workshop) and Manifold's
+`dev --workshop --describe`. Inspect the explicitly selected source worktree before editing.
+The workshop tool is separate from Code's pinned SDK; frontend refresh, backend replacement,
+native sessions and release publication have different lifetimes and authority.
+
 ## Issues and pull requests
 
 [`docs/TRIAGE.md`](docs/TRIAGE.md) owns intake, states, priority, operator holds,

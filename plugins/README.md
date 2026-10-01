@@ -284,6 +284,53 @@ browser after a successful cycle; plugin Update checks published bundles, not
 working source. Restart the command after changing the development driver or
 build scripts; ordinary Code source edits are picked up by the running loop.
 
+## Live workshop
+
+For a persistent frontend-and-server development loop, use Manifold's
+[development workshop](https://github.com/atyrode/manifold/blob/main/docs/PLUGINS.md#development-workshops)
+and [preview lifecycle](https://github.com/atyrode/manifold/blob/main/infra/previews/README.md).
+The workshop tool and browser frontend use a separately verified Manifold
+checkout that contains this capability. Code retains its exact `MANIFOLD_REV`,
+OMP dependency and sibling SDK layout; do not repin them merely to start the tool.
+The launcher imports Code's existing `plugins/pack.ts` compiler and builds the
+same four bundles without staging source.
+
+The integrated workshop uses **https://preview.manifold.tyrode.dev**, the existing
+hub, data and normal sign-in. It is the live authoring workspace, so browsers
+opening that preview see the selected Code worktree's in-progress frontend.
+It is not a second hub, production promotion or published Code release.
+
+```sh
+# From the verified Manifold workshop tooling checkout:
+bun run --cwd packages/plugin-kit dev --workshop --describe
+bash infra/previews/workshop.sh start /absolute/path/to/workshop.json
+bash infra/previews/workshop.sh status
+journalctl --user -u manifold-code-workshop.service
+bash infra/previews/workshop.sh stop
+```
+
+The non-secret configuration explicitly selects `sourceRoot` and `buildModule`.
+Use an owned isolated Code worktree with its pinned sibling SDK and dependencies.
+Read the selected paths before editing; a watcher does not follow an arbitrary
+new checkout. To select another owned worktree, update those paths in the
+configuration and restart the workshop explicitly. Do not modify another active
+agent's worktree, copy source into a temporary tree or run the ordinary all-save
+`dev` watcher beside the workshop.
+
+CSS and compatible React/frontend-logic saves refresh the mounted panel without
+reinstalling bundles and normally retain local drafts. A transitive server input
+change compiles the entire family, then reloads changed backend bundles; backend
+memory and frontend component state can reset. Failed compilation leaves the
+working backend installed. Manifest, authority, dependency and native-resource
+changes require explicit installation/review. Running OMP sessions and native
+services are not restarted by Code backend reloads.
+
+Stopping the source listener returns the same preview URL to the installed
+frontend through its configured fallback. Development source is not a release:
+run the ordinary Code gate and publish/install reviewed artifacts through their
+existing workflows before treating edits as delivered.
+
+
 Report Code, OMP and Manifold revisions, bundle hashes and the exercised surface
 separately from merge, publication and operational acceptance. This guide grants
 no release, live deployment, credential relocation, broker transfer or
