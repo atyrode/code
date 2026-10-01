@@ -99,6 +99,8 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
   const previewCurrent = preview !== null && reviewedEpoch.current === reviewEpoch && preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
     preview.composition.prompt === prompt && preview.native.defaultsRevision === defaults.data?.revision && dials === null &&
     skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
+  const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
+  const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
   const shownReview = previewCurrent ? preview.composition.review : localReview;
   const writable = canWriteCodeWorkspace(host);
   const canSuggest = classifier.data !== null && classifier.data !== undefined;
@@ -255,7 +257,7 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
             <ul>{Object.entries(preview.composition.accountPool).map(([provider, accounts]) => <li key={provider} data-family={providerPolicy(provider)?.family ?? provider}><span>{providerPolicy(provider)?.label ?? provider}</span><span>{accounts.length} account{accounts.length === 1 ? "" : "s"}</span></li>)}</ul>
             <details className="plugin-atyrode_code__details"><summary>Exact accounts and runtime review</summary><pre>{JSON.stringify({ composition: preview.composition, native: preview.native }, null, 2)}</pre></details>
           </div>}
-          <details className="plugin-atyrode_code_generator__disclosure" data-session-options><summary>Session options <span>{automation ? `Restricted · ${automation.toolNames.length} tools` : "Ordinary"} · {skillChoice?.mode === "disabled" ? "Skills off" : skillChoice?.mode === "select" ? `${draftSkills.selected.length} selected skills` : "Default skills"}</span></summary>
+          <details className="plugin-atyrode_code_generator__disclosure" data-session-options><summary>Session options <span>{automation ? `Restricted · ${automation.toolNames.length} tools` : "Ordinary"} · {effectiveSkillMode === "disabled" ? "Skills off" : effectiveSkillMode === "preserve" ? "Default skills" : `${effectiveSkillCount} ${automation ? "sealed" : "selected"} skills`}</span></summary>
           <Automation choice={automation} reviewed={previewCurrent ? preview.native.automation : null} disabled={busy || !writable || !available}
             change={value => { setAutomation(value); setPreview(null); setMessage(null); }} />
           <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={skillChoice} restricted={automation?.mode === "restricted"} reviewed={previewCurrent ? preview.native.skills : null}

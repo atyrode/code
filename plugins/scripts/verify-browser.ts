@@ -227,7 +227,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   const sessionOptions = element(`${generator} [data-session-options]`);
   const sessionOptionsSummary = `${sessionOptions}.querySelector(':scope > summary')`;
   assert.equal(await browser.evaluate(`${sessionOptions}.open`), false, "Optional launch policy starts deliberately undisclosed");
-  assert.equal(await browser.evaluate(`${workspaceButton("Disable all skills")} === undefined`), true, "Collapsed skill controls are not pointer targets");
+  assert.equal(await browser.evaluate(`(() => { const el = ${workspaceButton("Disable all skills")}; if (!el) return true; const rect = el.getBoundingClientRect(); return !el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`), true, "Collapsed skill controls are not pointer targets");
   await click(browser, sessionOptionsSummary);
   const skills = element(`${generator} [aria-label="Optional skills"]`);
   const skillCatalog = await callAction(server, writer.token, "atyrode.omp.readSkillCatalog", first);
@@ -276,7 +276,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   const catalog = `${generator} [aria-label="Model catalog"]`;
   const pricingSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'Pricing')`;
   const inputPrice = element(`${catalog} .plugin-atyrode_code_generator__model-editor fieldset details input[type="number"]`);
-  assert.equal(await browser.evaluate(`${inputPrice}.getClientRects().length`), 0, "Advanced model fields start undisclosed");
+  assert.equal(await browser.evaluate(`(() => { const el = ${inputPrice}; const rect = el.getBoundingClientRect(); return !el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`), true, "Undisclosed pricing is not a pointer target");
   await click(browser, pricingSummary);
   await click(browser, inputPrice);
   await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
@@ -718,10 +718,12 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     const automationControl = (label: string) => `[...document.querySelectorAll('${generator} .plugin-atyrode_code_generator__automation label')].find(el => el.textContent.trim() === ${JSON.stringify(label)})?.querySelector('input')`;
     await click(browser, automationControl("Restricted automation"));
     await click(browser, automationControl("read"));
+    await click(browser, workspaceButton("Clear optional choices"));
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code_generator__launch`)}.dataset.reviewed`), "false");
     await click(browser, launchControl);
     await until(browser, "native restricted policy is rendered", `${element(`${generator} [data-effective-automation]`)}?.dataset.effectiveAutomation === 'restricted'`);
     assert.deepEqual((reviewedInput as Record<string, unknown> | null)?.automation, { mode: "restricted", toolNames: ["read"], delegation: "disabled" });
+    assert.equal((reviewedInput as Record<string, unknown> | null)?.skills, undefined, "Restricted review suppresses ambient defaults even without an explicit skill choice");
     await click(browser, launchControl);
     await until(browser, "restricted preparation refusal is visible", `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.dataset.failed === 'true'`);
     await click(browser, automationControl("read"));
@@ -1097,6 +1099,9 @@ async function run(): Promise<void> {
     } });
     assert(arranged.ok, "Writer can open the ordinary Code workspace surface");
     await writerBrowser.goto(`${server.httpUrl}/p/${firstUse.id}`);
+    const firstUseOptions = `[...document.querySelectorAll('${generator} summary')].find(el => el.textContent === 'Other setup options')`;
+    await until(writerBrowser, "first-use options are available without automatic review", `${firstUseOptions} !== undefined && ${element(permissionDialog)} === null`);
+    await click(writerBrowser, firstUseOptions);
     const firstUseReview = workspaceButton("Choose or reconsider capabilities");
     await until(writerBrowser, "first-use review remains an explicit choice", `${firstUseReview}?.getClientRects().length > 0 && ${element(permissionDialog)} === null`);
     await click(writerBrowser, firstUseReview);
