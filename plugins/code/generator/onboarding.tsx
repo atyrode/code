@@ -10,13 +10,20 @@ import { PermissionReview } from "../permission-review.tsx";
 import { LegacyWorkspaceAdoption } from "../accounts-view.tsx";
 
 const steps = ["Accounts", "Workspace", "Machine", "Resources", "Folders", "Models"] as const;
-const titles = ["Connect your accounts", "Set up this workspace", "One-time machine setup", "Review runtime resources", "Choose your workspace folders", "Choose your models"] as const;
+const titles = ["Connect your accounts", "Set up this workspace", "Prepare this machine", "Check runtime readiness", "Choose your workspace folders", "Choose your models"] as const;
 const runningStates = new Set(["queued", "admitted", "start-committed", "started"]);
 const requiredOperations = [INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID] as const;
 const workspaceRoutes = [
   { mode: "create", operation: PREPARE_WORKSPACE_OPERATION_ID, label: "Create new folders", description: "Create new workspace and session folders. Existing folders are never overwritten." },
   { mode: "existing", operation: VALIDATE_WORKSPACE_OPERATION_ID, label: "Check existing folders", description: "Check your existing workspace and session folders without changing their contents." },
 ] as const;
+function SetupError({ label, detail }: { label: string; detail: string }) {
+  return <div>
+    <p role="status" className="plugin-atyrode_code__warning">{label}</p>
+    <details className="plugin-atyrode_code__details"><summary>Error details</summary><pre>{detail}</pre></details>
+  </div>;
+}
+
 export function Onboarding({ host, target, available, visible, settings = false, onDone }: {
   host: HostServices; target: Target | null; available: boolean; visible: boolean; settings?: boolean; onDone: () => void;
 }) {
@@ -72,44 +79,57 @@ export function Onboarding({ host, target, available, visible, settings = false,
     catch (reason) { if (mounted.current) setMessage(codeOperationFailure(reason)); }
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
-  if (!configuration.data) return <p role="status">{configuration.error ?? "Reading workspace setup…"}</p>;
+  if (!configuration.data) return configuration.error
+    ? <SetupError label="Workspace setup could not be read." detail={configuration.error} />
+    : <p role="status">Reading workspace setup…</p>;
   return <section className="plugin-atyrode_code_generator__onboarding" aria-label={settings ? "Code setup" : "First-use setup"}>
     <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">{settings ? "setup" : "welcome to code"}</h2>
       {settings && <button type="button" disabled={busy} onClick={onDone}>Back to profile</button>}
     </header>
-    <div className="plugin-atyrode_code__toolbar">
-      {visible && <PermissionReview key={target ? "destination" : "container"} host={host} target={target} intent="setup" label="Choose or reconsider capabilities" onReady={() => { setSelectedStep(null); refresh(); }} />}
-      {record && <button type="button" disabled={busy} onClick={() => setSelectedStep(5)}>Edit models without further runtime setup</button>}
-    </div>
     {settings ? <nav className="plugin-atyrode_code__toolbar" aria-label="Runtime setup">{[2, 3, 4].map(index => <button key={index} type="button" aria-pressed={step === index} disabled={busy} onClick={() => { setSelectedStep(index); setMessage(null); }}>{steps[index]}</button>)}</nav> :
       <ol className="plugin-atyrode_code_generator__steps" aria-label="Setup progress">{steps.map((label, index) => <li key={label} aria-current={step === index ? "step" : undefined} data-complete={index < nextStep}>
         <button type="button" disabled={busy || (index >= 2 && record === null) || (index === 1 && record !== null)} onClick={() => { setSelectedStep(index); setMessage(null); }}><span aria-hidden="true">{index + 1}</span><span>{label}</span></button>
       </li>)}</ol>}
     <div className="plugin-atyrode_code_generator__setup-step">
       {step !== 0 && <h3>{titles[step]}</h3>}
-      {step !== 0 && !writable && <p role="status">This workspace is read-only. Its owner can complete runtime setup; account discovery remains available.</p>}
-      {step !== 0 && !available && <p role="status">The selected workspace machine is unavailable. Restore its native connection to prepare or run Code. Instance account sign-in is independent.</p>}
-      {step !== 0 && configuration.error && <p role="status">{configuration.error}</p>}
-      {step !== 0 && setup.error && <p role="status">{setup.error}</p>}
+      {step !== 0 && !writable && <p role="status">Read-only workspace. Its owner can complete runtime setup; accounts remain viewable.</p>}
+      {step !== 0 && !available && <p role="status">Workspace machine unavailable. Reconnect it to prepare or run Code; account sign-in is independent.</p>}
+      {step !== 0 && configuration.error && <SetupError label="Workspace setup could not be refreshed." detail={configuration.error} />}
+      {step !== 0 && setup.error && <SetupError label="Machine readiness could not be read." detail={setup.error} />}
       {(!settings || step === 0) && <div hidden={step !== 0}>
         <OmpSignIn host={host} active={step === 0} onContinue={() => { setAccountsContinued(true); setSelectedStep(null); refresh(); }} />
         <button type="button" disabled={busy} onClick={() => { setAccountsContinued(true); setSelectedStep(1); }}>Not now — continue workspace setup</button>
       </div>}
       {step === 1 && <>
-        <p>Save this workspace’s profile, model catalog and account choices. Completed setup is remembered here.</p>
+        <p>Create a profile to save this workspace’s models and account choices.</p>
         <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.initializeConfiguration" disabled={busy || !writable || !configuration.data || record !== null} onClick={() => { if (configuration.data && !record) void perform(async () => { await callCodeAction(host, "initializeConfiguration", { containerId: host.containerId!, expectedRevision: configuration.data!.revision }); if (mounted.current) setSelectedStep(null); }); }}>{busy ? "Creating…" : "Create workspace profile"}</button>
         {!record && target && <LegacyWorkspaceAdoption key={machineId} host={host} target={target} onAdopt={refresh} />}
       </>}
       {step === 2 && <>
-        <p>Account sign-in and machine setup are separate. This step lets Code use your shared accounts and run OMP on the selected machine. It does not move your credentials or start a model request.</p>
-        <details className="plugin-atyrode_code__details" open={!modelConnection}>
-          <summary>{modelConnection ? "Model connection · ready" : "Next: connect this machine to your accounts"}</summary>
-          <p>The model gateway connects OMP to your instance’s account broker. Its owner reviews native rights and gateway configuration independently of Code’s classifier.</p>
+        <p>{resourcesCurrent ? "This machine is ready for the folder setup step." : !modelConnection ? "Connect this machine to your accounts, then review the capabilities you need." : "Review the capabilities you need on this machine."}</p>
+        <ul className="plugin-atyrode_code_generator__requirements" aria-label="Machine readiness">
+          <li data-ready={!!modelConnection}><span>Model connection</span><span>{modelConnection ? "ready" : setup.data ? "review needed" : "not confirmed"}</span></li>
+          <li data-ready={workspaceReady}><span>Use workspace and session folders</span><span>{workspaceReady ? "ready" : setup.data ? "review needed" : "not confirmed"}</span></li>
+          {requiredOperations.map(operation => <li key={operation} data-ready={operationReady(setup.data, operation)}><span>{operation === INVENTORY_OPERATION_ID ? "Discover available models" : "Open OMP sessions"}</span><span>{operationReady(setup.data, operation) ? "ready" : setup.data ? "review needed" : "not confirmed"}</span></li>)}
+        </ul>
+        <div className="plugin-atyrode_code__toolbar">
           <PermissionReview host={host} target={target} intent="gateway" label="Review model connection prerequisites" onReady={refresh} />
+          <PermissionReview host={host} target={target} intent="setup" label="Review machine capabilities" onReady={refresh} />
+          {resourcesCurrent && <button type="button" disabled={busy} onClick={() => setSelectedStep(4)}>Continue to folders</button>}
+        </div>
+        <details className="plugin-atyrode_code__details">
+          <summary>Connection, permissions and troubleshooting</summary>
+          <p>Account sign-in and machine setup are separate. The model gateway connects OMP to your instance’s account broker; this does not move credentials or start a model request. Its native owner reviews gateway rights and configuration independently of Code’s classifier.</p>
+          <p>Choose either new folders or an existing-folder check; you do not need both. Capabilities can be reviewed independently. Closing a review does not revoke approved access. Paid benchmarks and account changes are separate choices.</p>
+          <div className="plugin-atyrode_code__toolbar">
+            <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>Refresh setup</button>
+          </div>
+          <details className="plugin-atyrode_code__details"><summary>Current native destination observation</summary><pre>{JSON.stringify(setup.data, null, 2)}</pre></details>
         </details>
-        {settings && <details className="plugin-atyrode_code__details"><summary>External suggestion classifier</summary>
-          {serviceConfiguration.error && <p role="status">{serviceConfiguration.error}</p>}
-          <p>Code may send task descriptions to this explicitly configured external classifier. This policy does not configure OMP, its broker or its gateway.</p>
+        {settings && serviceConfiguration.error && <SetupError label="Classifier configuration could not be read." detail={serviceConfiguration.error} />}
+        {settings && serviceReview && !serviceReviewCurrent && <p role="status" className="plugin-atyrode_code__warning">Classifier configuration changed. Open the classifier settings to review again.</p>}
+        {settings && <details className="plugin-atyrode_code__details"><summary>External suggestion classifier{serviceReview ? serviceReviewCurrent ? " · review ready" : " · review outdated" : " · optional"}</summary>
+          <p>Configuring this classifier allows Code to send task descriptions to it. OMP, its account broker and model gateway are unchanged.</p>
           <div className="plugin-atyrode_code_generator__fields">
             <label>Suggestions<select value={classifierMode} disabled={busy} onChange={event => { setClassifierMode(event.target.value as typeof classifierMode); setServiceReview(null); }}>
               <option value="keep">Keep current configuration</option><option value="set">Configure a classifier</option><option value="remove">Disable suggestions</option>
@@ -137,28 +157,22 @@ export function Onboarding({ host, target, available, visible, settings = false,
             })}>{busy ? "Configuring…" : "Use classifier policy"}</button><button type="button" disabled={busy} onClick={() => setServiceReview(null)}>back</button></div>
           </>}
         </details>}
-        {modelConnection ? <>
-          <p>Next, review what Code may do on this machine. Choose either new folders or an existing-folder check; you do not need both. Paid benchmarks and account changes are separate.</p>
-          <ul className="plugin-atyrode_code_generator__requirements">
-            <li data-ready={workspaceReady}><span>Use workspace and session folders</span><span>{workspaceReady ? "ready" : "review needed"}</span></li>
-            {requiredOperations.map(operation => <li key={operation} data-ready={operationReady(setup.data, operation)}><span>{operation === INVENTORY_OPERATION_ID ? "Discover available models" : "Open OMP sessions"}</span><span>{operationReady(setup.data, operation) ? "ready" : "review needed"}</span></li>)}
-          </ul>
-          <PermissionReview host={host} target={target} intent="setup" label="Review machine capabilities" onReady={refresh} />
-        </> : <p>Unprepared capabilities can be reconsidered independently. Closing a review does not revoke previously approved access.</p>}
-        <details className="plugin-atyrode_code__details">
-          <summary>Advanced permissions and troubleshooting</summary>
-          <p>Code’s permission review remains available if access is missing before the model connection can be prepared.</p>
-          <div className="plugin-atyrode_code__toolbar">
-            <PermissionReview host={host} target={target} intent="setup" label="Review Code capabilities" onReady={refresh} />
-            <button type="button" disabled={busy} onClick={() => { setSelectedStep(null); refresh(); }}>Refresh setup</button>
-          </div>
-        </details>
       </>}
       {step === 3 && <>
-        <p>OMP owns native resource revisions and execution authority. Code does not promote or store runtime pins after preparation.</p>
-        <details open className="plugin-atyrode_code__details"><summary>Current native destination observation</summary><pre>{JSON.stringify(setup.data, null, 2)}</pre></details>
-        <PermissionReview host={host} target={target} intent="setup" label="Review native resources and capabilities" onReady={refresh} />
-        <button type="button" disabled={busy} onClick={() => { refresh(); setSelectedStep(4); }}>Continue to folders</button>
+        <p role="status">{!setup.data ? "Machine readiness is not yet confirmed." : resourcesCurrent ? "Model connection and required capabilities are ready." : "Runtime setup needs attention before you can run Code."}</p>
+        <ul className="plugin-atyrode_code_generator__requirements" aria-label="Runtime readiness">
+          <li data-ready={!!modelConnection}><span>Model connection</span><span>{modelConnection ? "ready" : setup.data ? "review needed" : "not confirmed"}</span></li>
+          <li data-ready={installed}><span>Required machine capabilities</span><span>{installed ? "ready" : setup.data ? "review needed" : "not confirmed"}</span></li>
+        </ul>
+        <div className="plugin-atyrode_code__toolbar">
+          <PermissionReview host={host} target={target} intent="setup" label="Review native resources and capabilities" onReady={refresh} />
+          <button type="button" className={resourcesCurrent ? "plugin-atyrode_code__primary-action" : undefined} disabled={busy} onClick={() => { refresh(); setSelectedStep(4); }}>Continue to folders</button>
+        </div>
+        <details className="plugin-atyrode_code__details">
+          <summary>Current native destination observation</summary>
+          <p>OMP owns native resource revisions and execution authority. Code does not store runtime pins after preparation. Readiness is not a model-provider availability check.</p>
+          <pre>{JSON.stringify(setup.data, null, 2)}</pre>
+        </details>
       </>}
       {step === 4 && <>
         <p>{prepared ? "Workspace ready. Setup is saved for this runtime." : "Create new workspace folders or check folders you already use."}</p>
@@ -170,7 +184,7 @@ export function Onboarding({ host, target, available, visible, settings = false,
           return <div key={route.mode}>
             <p>{route.description}</p>
             {!routeReady && <><p role="status">This option needs permission. Review its exact scope, or choose the other option if it matches your folders.</p><PermissionReview host={host} target={target} intent={route.mode === "create" ? "workspace-create" : "workspace-existing"} label={`Review permission: ${route.label}`} onReady={refresh} /></>}
-            {history.error && <p role="status">{history.error}</p>}
+            {history.error && <SetupError label={`${route.label}: job history could not be read.`} detail={history.error} />}
             <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.omp.prepareWorkspace" disabled={busy || !writable || !available || !routeReady || history.runs === null || history.error !== null || !!preparing} onClick={() => { if (record && target) void perform(async () => { await codeWorkflow(host).prepareWorkspace(target, route.mode); if (destinationCurrent()) setSelectedStep(null); }); }}>{route.label}</button>
           </div>;
         })}
@@ -179,6 +193,14 @@ export function Onboarding({ host, target, available, visible, settings = false,
       {(step === 5 || modelsVisited) && <div hidden={step !== 5}><CatalogWorkbench host={host} target={target} available={available} onDone={() => { refresh(); onDone(); }} /></div>}
     </div>
     {!settings && selectedStep !== null && selectedStep > 0 && selectedStep < nextStep && <button type="button" onClick={() => setSelectedStep(null)}>Continue setup</button>}
-    {message && <p role="status" className="plugin-atyrode_code__warning">{message}</p>}
+    <details className="plugin-atyrode_code__details">
+      <summary>Other setup options</summary>
+      <p>Review independent capabilities or work on models before completing runtime setup. Nothing is approved or started by opening this section.</p>
+      <div className="plugin-atyrode_code__toolbar">
+        {visible && <PermissionReview key={target ? "destination" : "container"} host={host} target={target} intent="setup" label="Choose or reconsider capabilities" onReady={() => { setSelectedStep(null); refresh(); }} />}
+        {record && <button type="button" disabled={busy} onClick={() => setSelectedStep(5)}>Edit models without further runtime setup</button>}
+      </div>
+    </details>
+    {message && <SetupError label="Setup action failed. Review the details before trying again." detail={message} />}
   </section>;
 }
