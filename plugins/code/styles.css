@@ -969,7 +969,8 @@
   .plugin-atyrode_code .plugin-atyrode_code__sheet-status { display: none; }
 }
 
-@keyframes plugin-atyrode_code__cell { from { opacity: 0; } to { opacity: 1; } }
+/* Starts dim, never invisible: a paused animation (a background tab) must still leave readable cells. */
+@keyframes plugin-atyrode_code__cell { from { opacity: .45; } to { opacity: 1; } }
 @keyframes plugin-atyrode_code__pop { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .plugin-atyrode_code .plugin-atyrode_code__bar > i,

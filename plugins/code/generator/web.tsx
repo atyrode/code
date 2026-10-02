@@ -20,7 +20,8 @@ import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { FleetSessions } from "./fleet.tsx";
 import { displayAliases, GeneratorPlaceholder, GeneratorZone, missingFamily, RoutingZone, useDialModel, type DialId, type LedgerView, type MapTarget } from "./dials.tsx";
-import { nextLaunchStep, useWorkbench, type LaunchBlocker } from "./workbench-model.ts";
+import { useWorkbench } from "./workbench-model.ts";
+import { nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -29,6 +30,11 @@ const SHEETS: readonly Sheet[] = ["accounts", "models", "setup", "sessions"];
 type Action = "save" | "review" | "launch" | "resume";
 /** Why the primary cannot act, in a few words, with the one action that fixes it when there is one. */
 type Blocked = { text: string; action?: { label: string; run: () => void } };
+/** Exclusion reasons in plain words, for the verification details. */
+const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
+  superseded: "superseded by a newer model", unstable_id: "unstable id", not_found: "not found through your accounts",
+  client_blocked: "blocked for this client", regression: "worse than a cheaper tier",
+};
 
 /** The nearest scrolling ancestor: the ScrollRegion viewport, whose scroll position the main view keeps across sheets. */
 function scrollParent(element: HTMLElement | null): HTMLElement | null {
@@ -50,9 +56,10 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     review, localReview, controlsReview, launchReview, configurationCurrent, stale, writable, launchReady, busy, message, exportedDraft,
     canSave, canResume, canResumeWithProfile, canSuggest, canRequestSuggestion, canApplySuggestion, suggestionPromptTooLong, suggestionStale,
     prompt, setPrompt, skillChoice, setSkillChoice, automation, setAutomation, savedSessionId, setSavedSessionId, setAccountObservation,
-    suggestion, unsaved, actions,
+    suggestion, unsaved, actions, verification,
   } = model;
   const [sheet, setSheet] = useState<Sheet | null>(null);
+  const [verifyDetails, setVerifyDetails] = useState(false);
   const [visited, setVisited] = useState<readonly Sheet[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
   const [ledger, setLedger] = useState<LedgerView>({ fallbacks: false, ids: false, pinned: new Set(), all: false });
@@ -96,7 +103,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
   function primary() {
     if (busy || blocked !== null) return;
-    if (step.step === "save") { setPendingReview(true); void run("save", actions.saveProfile); }
+    // Verification spends only on an explicit confirm of the charge it showed; the first press only prepares it.
+    if (step.step === "verify") { if (verification.canConfirm) void verification.confirm(); else if (verification.canPrepare) void verification.prepare(); }
+    else if (step.step === "save") { setPendingReview(true); void run("save", actions.saveProfile); }
     else if (step.step === "review") void run("review", actions.review);
     else void run("launch", actions.launch);
   }
@@ -228,7 +237,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       case "read-only": return { text: "read-only workspace" };
       case "conflict": return { text: "profile changed elsewhere", action: { label: "use current", run: actions.discardChanges } };
       case "models": return { text: "choices need a model review", action: { label: "models", run: () => openSheet("models") } };
-      case "source": return { text: "model list unavailable", action: { label: "retry", run: actions.refresh } };
+      case "verifying": return { text: "verifying models" };
+      case "verify-status": return { text: "verification readiness unknown", action: { label: "retry", run: actions.refresh } };
+      case "verify-permissions": return { text: "discovery not enabled", action: { label: "enable", run: () => openSheet("setup") } };
       case "sessions": return { text: "sessions unavailable here", action: { label: "setup", run: () => openSheet("setup") } };
       case "permissions": return { text: "sessions not enabled", action: { label: "enable", run: () => openSheet("setup") } };
       case "skills": return { text: "skill choices need attention", action: { label: "options", run: optionsMenu.toggle } };
@@ -243,11 +254,16 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   // While the first observation is pending there is nothing to retry yet; say what is happening instead.
   const blocked: Blocked | null = step.step === "blocked" ? (loading ? { text: "reading profile" } : blocker(step.reason))
     : uncovered ? { text: `no ${accountWord(uncovered)} account included`, action: { label: "accounts", run: () => openSheet("accounts") } } : null;
-  const nextLabel = busy && inFlight ? { save: "saving…", review: "reviewing…", launch: "launching…", resume: "resuming…" }[inFlight]
+  const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
+  const nextLabel = verifyRunning ? (verification.phase === "inventory" ? "checking models…" : "verifying…")
+    : busy && inFlight ? { save: "saving…", review: "reviewing…", launch: "launching…", resume: "resuming…" }[inFlight]
     : busy ? "working…" : pendingReview ? "reviewing…"
+    : step.step === "verify" ? (verification.canConfirm ? "confirm" : "verify models")
     : step.step === "save" ? "save & review" : step.step === "launch" ? "launch" : step.step === "review" ? "review"
-    : model.previewCurrent ? "launch" : unsaved && localDraft ? "save & review" : "review";
+    : verification.status !== "current" ? "verify models" : model.previewCurrent ? "launch" : unsaved && localDraft ? "save & review" : "review";
   const nextReadout = blocked ? `${blocked.text}${blocked.action ? ` · ${blocked.action.label}` : ""}`
+    : step.step === "verify" ? (verification.canConfirm ? "spends the tiny requests shown above, then saves the verified models and this profile"
+      : "checks which models your accounts can reach; nothing is spent until you confirm the charge")
     : step.step === "launch" ? `opens a terminal on ${machineName ?? "the machine"} with this reviewed profile`
     : step.step === "save" ? "saves the profile, then checks accounts, models and machine"
     : "checks accounts, models and machine before anything runs";
@@ -262,6 +278,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       <span className={`${G}ma`}><Sep /><QuietButton onClick={() => void keepCopy()}>{copied === "copied" ? "copied" : "keep a copy"}</QuietButton><Sep /><QuietButton onClick={actions.discardChanges}>use current</QuietButton></span></>;
     if (configuration.error) return <><span className={`${G}warn`}>!</span><span className={`${G}strong`}>profile not current</span><Sep /><QuietButton onClick={configuration.refresh}>retry</QuietButton></>;
     if (busy && inFlight === "save") return <span className={`${G}strong`}>saving…</span>;
+    if (verification.status === "verifying" || verifyRunning) return <span className={`${G}strong`}>verifying…</span>;
+    if (verification.status !== "current") {
+      const word = verification.status === "accounts-changed" ? "accounts changed" : verification.status === "omp-changed" ? "omp updated" : "unverified";
+      return <><span className={`${G}strong`}>{word}</span>{verification.canPrepare && <span className={`${G}ma`}><Sep /><QuietButton onClick={() => void verification.prepare()}>verify</QuietButton></span>}
+        {!writable && <><Sep /><span>read-only</span></>}</>;
+    }
     if (!writable) return <><span className={`${G}strong`}>read-only</span>
       {localDraft ? <><Sep /><span>local preview</span></> : (profile?.source === "draft" || record?.draft) && <><Sep /><span>staged catalog</span>
         <span className={`${G}ma`}><Sep /><QuietButton onClick={() => openSheet("models")}>review in models</QuietButton></span></>}</>;
@@ -347,10 +369,37 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       {generator}
       <div className={`${G}vrule`} aria-hidden="true" />
       <RoutingZone review={review} catalog={compiled} aliases={aliases} preview={previewReview} view={ledger} onToggle={toggleLedger} onPin={pin}
-        onShowAll={() => setLedger(previous => ({ ...previous, all: true }))} status={loading ? "reading…" : review ? undefined : configuration.error && !profile ? null : undefined} />
+        onShowAll={() => setLedger(previous => ({ ...previous, all: true }))} status={loading ? "reading…" : review ? undefined : configuration.error && !profile ? null : undefined}
+        line={verification.phase === "benchmark" || verification.phase === "inventory" ? <div className={`${G}vline`} role="status">
+          <span className={`${G}vt`}>{verification.phase === "inventory" ? "checking models…" : "verifying…"}</span>
+          {(verification.progress?.providers ?? []).map(entry => <span key={entry.provider} className={`${G}prog`} data-fam={hueOf(providerPolicy(entry.provider).family)}>
+            <Sep /><span className={`${G}pn`}>{accountWord(providerPolicy(entry.provider).family, entry.provider)}</span> {entry.done}/{entry.total}</span>)}
+          <Sep /><QuietButton onClick={verification.cancel}>cancel</QuietButton>
+        </div> : verification.status === "current" && verification.exclusions ? <>
+          <div className={`${G}vline`} role="status">
+            <span className={`${G}vt`}>verified</span><Sep /><span>{compiled?.models.length ?? 0} models</span><Sep /><span>{verification.exclusions.length} excluded</span>
+            {verification.exclusions.length > 0 && <><Sep /><QuietButton aria-expanded={verifyDetails} onClick={() => setVerifyDetails(!verifyDetails)}>{verifyDetails ? "hide details" : "details"}</QuietButton></>}
+          </div>
+          {verifyDetails && <div className={`${G}vdetails`}>{verification.exclusions.map(exclusion => <div key={`${exclusion.provider}/${exclusion.id}`} className={`${G}vx`}>
+            <span className={`${G}vid`}>{exclusion.provider}/{exclusion.id}</span><span className={`${G}vwhy`}>{EXCLUSION_WORDS[exclusion.reason]}</span></div>)}</div>}
+        </> : undefined} />
     </div>
     <UsageZone host={host} className={`${G}zone ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onFamilies={setFamilies} refresher={usageRefresh} />
     <div className={`${G}dock`} data-zone="composer">
+      {verification.phase === "charge" && verification.charge && <div className={`${G}strip`} role="status">
+        <span className={`${G}facts`}><span className={`${G}ready`}>verify</span>{verification.charge.providers.map(entry => <span key={entry.provider} data-fam={hueOf(providerPolicy(entry.provider).family)}>
+          <Sep /> <span className={`${G}pn`}>{accountWord(providerPolicy(entry.provider).family, entry.provider)}</span> {entry.requests}</span>)}
+          <span><Sep /> {verification.charge.requests} tiny {verification.charge.requests === 1 ? "request" : "requests"} through your accounts</span></span>
+        <span className={`${G}strip-acts`}>
+          <QuietButton data-action="atyrode.code.verifyModels" onClick={() => void verification.confirm()}>confirm</QuietButton>
+          <QuietButton onClick={verification.cancel}>cancel</QuietButton>
+        </span>
+      </div>}
+      {verification.failure && !verifyRunning && verification.phase !== "charge" && <Notice kind={verification.failure.cancelled ? "info" : "error"} className={`${G}dock-note`}
+        details={verification.failure.evidence ? JSON.stringify(verification.failure.evidence, null, 2) : null}
+        actions={verification.canPrepare ? [<QuietButton key="r" onClick={() => void verification.prepare()}>retry</QuietButton>] : undefined}>
+        {verification.failure.cancelled ? "verification cancelled" : `verification stopped at ${verification.failure.step} · ${verification.failure.reason}`}
+      </Notice>}
       {launchReview && <>
         <div className={`${G}strip`} role="status">
           <span className={`${G}facts`}><span className={`${G}ready`}>ready</span>{[...poolCounts].map(([word, { family, count }]) => <span key={word}><Sep /> <span className={`${G}pn`} data-fam={hueOf(family)}>{word}</span> {count}</span>)}</span>
@@ -388,7 +437,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           </QuietButton>
           {canSuggest && <QuietButton buttonRef={suggestMenu.anchor} aria-haspopup="dialog" aria-expanded={suggestMenu.open} onClick={suggestMenu.toggle}
             data-readout-label="suggest" data-readout="ask the configured classifier for a profile that fits this task">suggest</QuietButton>}
-          <PrimaryButton className={`${G}primary`} disabled={blocked !== null && !busy} busy={busy || pendingReview} onClick={primary}
+          <PrimaryButton className={`${G}primary`} disabled={blocked !== null && !busy && !verifyRunning} busy={busy || pendingReview || verifyRunning} onClick={primary}
             data-action={step.step === "launch" ? "atyrode.omp.prepareSession" : step.step === "save" ? "atyrode.code.select" : "atyrode.omp.reviewSession"}
             data-readout={nextReadout} data-readout-prose="">{nextLabel}</PrimaryButton>
         </div>

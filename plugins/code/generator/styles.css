@@ -272,6 +272,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__probe { position: absolute; visibility: hidden; white-space: pre; font: 12px var(--code-mono); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__routing { padding: 12px var(--code-inset, 16px); font: 400 13px/20px var(--code-mono); --bleed-l: var(--code-inset, 16px); --bleed-r: var(--code-inset, 16px); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__routing-note { margin-top: 8px; padding-left: 2ch; color: var(--code-ghost); font-size: 12px; }
+/* Model verification: progress and result share one line under the routing chip, so nothing below jumps when it changes. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vline { display: flex; align-items: baseline; gap: 1ch; height: var(--code-dense); margin: -4px 0 4px; padding-left: 2ch; overflow: hidden; color: var(--code-ghost); font-size: 12px; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vt { color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__prog { display: inline-flex; align-items: baseline; gap: 1ch; color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vdetails { padding: 0 0 6px 4ch; font-size: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vx { display: grid; grid-template-columns: minmax(0, 32ch) auto; column-gap: 2ch; min-height: var(--code-dense); align-items: center; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vid { overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__vwhy { color: var(--code-ghost); }
 
 /* ---------------------------------------------------------------- dock: strip, composer, hint bar */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__dock {

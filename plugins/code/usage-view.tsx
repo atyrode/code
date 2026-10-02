@@ -406,7 +406,8 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
               data-readout={`prepaid balance${historical ? ` as of ${ago(now - entry.balance.observedAt)}` : ""} · billed per token`}>
               <span className="plugin-atyrode_code__wl">balance</span><span className="plugin-atyrode_code__amt">{balanceText(entry.balance)}</span>
             </div>}
-            {windows.map(({ window, state, label }) => {
+            {/* A prepaid balance with only unknown windows says just the balance: unknown windows add noise, not facts. */}
+            {windows.filter(({ state }) => !entry.balance || state.level !== "unknown").map(({ window, state, label }) => {
               const reset = window.resetsAt !== null && window.resetsAt > now ? window.resetsAt : null;
               const facts = [state.percent === null ? "usage unknown" : `${Math.round(state.percent)}% used`, state.word === "blocked" ? `blocked until ${hhmm(state.until!)}` : state.word,
                 reset !== null ? `resets ${clock(reset)} local, in ${countdown(reset - now)}` : "reset unknown", historical && window.observedAt !== null ? `as of ${ago(now - window.observedAt)}` : ""].filter(Boolean).join(" · ");
@@ -427,7 +428,7 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
             </div>}
             {otherBlocks.map(block => <div key={block.scope} className="plugin-atyrode_code__win" data-level="error" data-kind="block"
               data-readout-label={`${word} ${who}`} data-readout={`the provider blocks ${block.scope ? `${block.scope} requests` : "this account"} until ${clock(block.until)} local`}>
-              <span className="plugin-atyrode_code__blk">{block.scope && `${block.scope} `}<span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(block.until)}</span>
+              <span className="plugin-atyrode_code__blk"><span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(block.until)}</span>
             </div>)}
           </div>;
         })}

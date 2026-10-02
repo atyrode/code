@@ -638,13 +638,16 @@ export function Ledger({ review, catalog, aliases, preview, view, onPin, onShowA
 }
 
 /** The routing zone: its chip line and the ledger, or ghost rows while nothing can be routed. */
-export function RoutingZone({ review, catalog, aliases, preview, view, onToggle, onPin, onShowAll, status }: {
+export function RoutingZone({ review, catalog, aliases, preview, view, onToggle, onPin, onShowAll, status, line }: {
   review: Review | null; catalog: CompiledCatalog | null; aliases: ReadonlyMap<string, string>; preview: Review | null; view: LedgerView;
   onToggle: (toggle: "fallbacks" | "ids") => void; onPin: (role: string) => void; onShowAll: () => void; status?: ReactNode;
+  /** A status line under the chip (model verification progress or result). */
+  line?: ReactNode;
 }) {
   if (!review || !catalog) {
     return <section className={`${G}zone ${G}route`} data-zone="routing" aria-label="routing">
       <ZoneHead chip="routing" status={status} />
+      {line}
       {status === undefined && <Notice kind="info">no complete profile for these choices · review in models</Notice>}
       {/* The roster's role names are stable product vocabulary, so the ghost ledger names its rows while routes are unknown. */}
       <ol className={`${G}ledger`} aria-hidden="true">{PLACEHOLDER_ROLES.map(role => <li key={role} className={`${G}lrow`} data-off="">
@@ -659,6 +662,7 @@ export function RoutingZone({ review, catalog, aliases, preview, view, onToggle,
       <Hint key="f" k="f" label="fallbacks" pressed={view.fallbacks} onClick={() => onToggle("fallbacks")} readout="show each role's ordered fallback chain" />,
       <Hint key="i" k="i" label="ids" pressed={view.ids} onClick={() => onToggle("ids")} readout="show full provider model ids" />,
     ]} />
+    {line}
     <Ledger review={review} catalog={catalog} aliases={aliases} preview={preview} view={view} onPin={onPin} onShowAll={onShowAll} />
   </section>;
 }
