@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { HostServices } from "@manifold/plugin";
 import type { AccountsObservation } from "@atyrode/manifold-omp";
-import type { AccountChoices } from "../domain/contracts.ts";
+import type { AccountChoiceChange, AccountChoices } from "../domain/contracts.ts";
+import { accountSelectionDisabled } from "../domain/accounts.ts";
+import { providerPolicy } from "../domain/providers.ts";
 import type { UsageView } from "../domain/usage.ts";
 import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
-import { ACCOUNT_REFRESH_MS, codeWorkflow, useCodeQuery, useOmpQuery, useWorkflowQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useCodeQuery, useOmpQuery, useWorkflowQuery } from "./machine-web.ts";
+import {
+  accountWord, ago, CellBar, clock, countdown, Hint, hhmm, hueOf, Menu, MenuHeader, MenuItem, MenuRule, middle, Notice, QuietButton,
+  useMenu, useMinuteTick, ZoneHead,
+} from "./ui.tsx";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const percentFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
@@ -207,3 +213,246 @@ function WorkspaceUsageOverview({ host, compact = false, onAccounts, onObservati
 export function UsageOverview(props: UsageOverviewProps) {
   return <WorkspaceUsageOverview key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
+
+// ---------------------------------------------------------------- compact usage zone ("Ledger, alive")
+
+type WindowState = { level: "ok" | "warn" | "error" | "unknown"; word: "" | "tight" | "maxed" | "blocked"; until: number | null; percent: number | null };
+const FAMILY_ORDER = ["openai", "anthropic", "deepseek"];
+
+/** Whether a provider block covers this window's quota bucket, by the same scope rules the pool assessment uses. */
+function covers(block: { scope: string }, window: UsageWindow, provider: string): boolean {
+  const policy = providerPolicy(provider);
+  return block.scope === "" || (window.bucket === policy.quotaBucketBase ? block.scope === "chat" :
+    policy.special.some(special => window.bucket === `${policy.quotaBucketBase}-${special.bucket}` && (block.scope === special.bucket || block.scope === `tier:${special.bucket}`)));
+}
+/** The latest end of a provider block covering this window. High usage alone never reads as blocked. */
+function windowBlock(entry: UsageAccount, window: UsageWindow, provider: string): number | null {
+  const until = entry.account.blocks.filter(block => covers(block, window, provider)).map(block => block.until);
+  return until.length ? Math.max(...until) : null;
+}
+/** Quota words: `tight` from 80% (red from 95%), `maxed` when exhausted, `blocked` only for a provider block. */
+function windowState(entry: UsageAccount, window: UsageWindow, provider: string): WindowState {
+  const percent = window.usedFraction === null || window.status === "unknown" ? null : window.usedFraction * 100;
+  const until = windowBlock(entry, window, provider);
+  if (until !== null) return { level: "error", word: "blocked", until, percent };
+  if (percent === null) return { level: "unknown", word: "", until: null, percent };
+  // OMP can report 100% as a warning while the provider still serves; only a verdict-less meter falls back to its fraction.
+  if (window.quotaStatus === "exhausted" || (window.quotaStatus === null && percent >= 100)) return { level: "error", word: "maxed", until: null, percent };
+  if (percent >= 95) return { level: "error", word: "tight", until: null, percent };
+  if (percent >= 80 || window.quotaStatus === "warning") return { level: "warn", word: "tight", until: null, percent };
+  return { level: "ok", word: "", until: null, percent };
+}
+/** `5h`, `7d`, or the special bucket a window meters (`spark`). */
+function windowLabel(window: UsageWindow, provider: string): string {
+  const duration = window.durationMs;
+  const span = duration === null ? ({ "5-hour": "5h", weekly: "7d", daily: "1d" } as Readonly<Record<string, string>>)[window.windowId] ?? window.windowId
+    : duration % 86_400_000 === 0 ? `${duration / 86_400_000}d` : duration % 3_600_000 === 0 ? `${duration / 3_600_000}h` : `${Math.round(duration / 60_000)}m`;
+  if (window.tier !== null && providerPolicy(provider).special.some(special => special.bucket === window.tier)) return window.tier.toLowerCase();
+  // A plan tier (`Max`) is a fact about the account, not the window; it belongs in the readout, not the 6ch label.
+  return span;
+}
+function identityOf(entry: UsageAccount): string {
+  const { account } = entry;
+  return account.email ?? (account.type === "api_key" ? `api key ${account.credentialId}` : account.identityKey ?? `oauth ${account.credentialId}`);
+}
+function balanceText(balance: NonNullable<UsageAccount["balance"]>): string {
+  return balance.currency === "USD" ? `$${balance.total}` : `${balance.total} ${balance.currency}`;
+}
+
+export type UsageZoneProps = {
+  host: HostServices;
+  className?: string | undefined;
+  /** Opens the accounts surface; the generator shows it as a sheet. */
+  onAccounts: () => void;
+  /** Any change to the account observation revokes a reviewed launch (workbench `setAccountObservation`). */
+  onObservation?: ((signature: string) => void) | undefined;
+  /** Families with at least one included account, from a fresh reading; null whenever that is not known. Must be stable. */
+  onFamilies?: ((families: ReadonlySet<string> | null) => void) | undefined;
+  /** Receives this zone's refresh so a panel-level `r` key reaches it. */
+  refresher?: RefObject<(() => void) | null> | undefined;
+};
+
+/** The main view's usage zone: provider groups, account rows and quota windows on the same data as `UsageOverview`. */
+export function UsageZone(props: UsageZoneProps) {
+  return <WorkspaceUsageZone key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
+}
+
+function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFamilies, refresher }: UsageZoneProps) {
+  const now = Date.now();
+  useMinuteTick();
+  const workspace = host.containerId ? { containerId: host.containerId } : null;
+  const configuration = useCodeQuery(host, "readConfiguration", workspace);
+  const lastConfiguration = useRef(configuration.data);
+  if (configuration.data) lastConfiguration.current = configuration.data;
+  const current = (configuration.data ?? lastConfiguration.current)?.configuration ?? null;
+  const accounts = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
+  const usage = useAccountUsage(host, current?.accounts ?? null, accounts.data);
+  const { value } = usage;
+  const historicalChoices = configuration.data === null && current !== null;
+  const cached = usage.cached || historicalChoices || configuration.error !== null || accounts.error !== null;
+  const error = configuration.error ?? accounts.error ?? usage.error;
+  const historicalAccounts = historicalChoices || accounts.data === null || accounts.data.status !== "fresh" || configuration.error !== null || accounts.error !== null;
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [tab, setTab] = useState<string | null>(null);
+  const busy = useRef(false);
+  const mounted = useRef(false);
+  const poolMenu = useMenu();
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const observationKey = useMemo(() => JSON.stringify([configuration.error !== null, accounts.error !== null, usage.error !== null,
+    accounts.data?.status, accounts.data?.scope, accounts.data?.accounts]), [configuration.error, accounts.error, usage.error, accounts.data]);
+  useEffect(() => { onObservation?.(observationKey); }, [onObservation, observationKey]);
+  const familiesKey = useMemo(() => {
+    if (!value || cached || !value.providers.some(provider => provider.accounts.length)) return null;
+    return JSON.stringify(value.providers.filter(provider => provider.family !== null && provider.accounts.some(entry =>
+      entry.selected && !entry.account.disabled && entry.status !== "credential_disabled")).map(provider => provider.family).sort());
+  }, [value, cached]);
+  useEffect(() => { onFamilies?.(familiesKey === null ? null : new Set(JSON.parse(familiesKey) as string[])); }, [onFamilies, familiesKey]);
+  function refresh() { configuration.refresh(); accounts.refresh(); usage.refresh(); }
+  useEffect(() => {
+    if (!refresher) return;
+    refresher.current = refresh;
+    return () => { refresher.current = null; };
+  });
+  const writable = canWriteCodeWorkspace(host);
+  const canEdit = writable && workspace !== null && current !== null && configuration.data !== null && !pending;
+  const manual = current?.accounts.activePreset === null;
+  /** The same guarded `changeAccounts` edit the accounts view makes: exact revision, no retry, never on historical inventory. */
+  async function change(edit: AccountChoiceChange) {
+    if (!workspace || !canEdit || !current || busy.current || (edit.kind === "set-account" && historicalAccounts)) return;
+    busy.current = true; setPending(true); setFailure(null);
+    try {
+      await callCodeAction(host, "changeAccounts", { ...workspace, expectedRevision: current.revision, change: edit });
+    } catch (reason) {
+      if (mounted.current) setFailure(`${codeOperationFailure(reason)} Nothing was retried.`);
+    } finally { busy.current = false; if (mounted.current) { setPending(false); refresh(); } }
+  }
+  const presets = current?.accounts.presets ?? [];
+  const poolName = !current ? null : manual ? "manual" : presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "unavailable preset";
+  const observed = accounts.data?.accounts ?? [];
+  const included = (disabled: AccountChoices["manualDisabled"]) => `${observed.filter(account => !accountSelectionDisabled(account, disabled)).length} of ${observed.length}`;
+  const providers = [...value?.providers ?? []].sort((left, right) =>
+    (FAMILY_ORDER.indexOf(left.family ?? "") + 1 || 99) - (FAMILY_ORDER.indexOf(right.family ?? "") + 1 || 99));
+  const idents = providers.flatMap(provider => provider.accounts.map(entry => accountKey(entry)));
+  const tabKey = tab && idents.includes(tab) ? tab : idents[0];
+  // An unavailable observation is not an empty one: zero accounts is only said when the broker freshly reports zero.
+  const unavailable = accounts.data?.status === "unavailable" || value?.accountsStatus === "unavailable";
+  const status = unavailable ? null : error && value ? "last check failed" : value?.observedAt ? (now - value.observedAt < 60_000 ? "just now" : `as of ${ago(now - value.observedAt)}`) : null;
+  function keys(event: KeyboardEvent<HTMLDivElement>) {
+    const element = event.target as HTMLElement;
+    const line = element.closest<HTMLElement>("[data-acct]");
+    if (!line) return;
+    const ident = line.querySelector<HTMLElement>("[data-ident]"), toggle = line.querySelector<HTMLElement>("[data-incl]");
+    const all = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-ident]")];
+    const index = all.indexOf(ident!);
+    const next = event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index - 1 : event.key === "Home" ? 0 : event.key === "End" ? all.length - 1 : null;
+    if (next !== null) {
+      event.preventDefault();
+      const target = all[Math.max(0, Math.min(all.length - 1, next))];
+      if (target) { setTab(target.closest<HTMLElement>("[data-acct]")!.dataset.acct!); target.focus(); }
+    } else if (event.key === "ArrowRight" && element === ident && toggle) { event.preventDefault(); toggle.focus(); }
+    else if (event.key === "ArrowLeft" && element === toggle) { event.preventDefault(); ident?.focus(); }
+    else if (event.key === " " && element === ident && toggle) { event.preventDefault(); toggle.click(); }
+  }
+  let body;
+  if (!workspace) body = <Notice>open a workspace to see usage</Notice>;
+  else if (configuration.data?.configuration === null) body = <Notice actions={[<QuietButton key="a" onClick={onAccounts}>accounts</QuietButton>]}>account choices not initialized</Notice>;
+  else if (!value && error) {
+    body = <Notice kind="error" details={error} actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>accounts unavailable</Notice>;
+  } else if (!value) {
+    body = <div className="plugin-atyrode_code__checking" role="status"><CellBar percent={0} cells={10} /><span>checking accounts…</span></div>;
+  } else if (!providers.some(provider => provider.accounts.length)) {
+    body = unavailable ? <Notice kind="error" details={error ?? "The account broker reported no current observation; current capacity is unknown, not zero."}
+      actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>accounts unavailable</Notice>
+      : <Notice actions={[<QuietButton key="s" onClick={onAccounts}>sign in</QuietButton>]}>no accounts</Notice>;
+  } else {
+    body = <div className="plugin-atyrode_code__ugroups" onKeyDown={keys}>{providers.filter(provider => provider.accounts.length).map(provider => {
+      const rows = provider.accounts;
+      const historicalOf = (entry: UsageAccount) => cached || entry.freshness === "stale";
+      const groupHistorical = rows.every(historicalOf);
+      const oldest = Math.min(...rows.map(entry => entry.observedAt ?? value.observedAt ?? now));
+      const count = rows.filter(entry => entry.selected).length;
+      const limit = rows.length > 5 && !expanded.has(provider.provider) ? 4 : rows.length;
+      const word = accountWord(provider.family, provider.provider);
+      return <div key={provider.provider} className="plugin-atyrode_code__ugroup" data-fam={hueOf(provider.family)} data-hist={groupHistorical || undefined}>
+        <div className="plugin-atyrode_code__ghead">
+          <span className="plugin-atyrode_code__pname">{word}</span><span className="plugin-atyrode_code__count">{count === rows.length ? count : `${count} of ${rows.length}`}</span>
+          {groupHistorical && <span className="plugin-atyrode_code__asof">as of {ago(now - oldest)}</span>}
+        </div>
+        {rows.slice(0, limit).map(entry => {
+          const key = accountKey(entry);
+          const who = identityOf(entry);
+          const historical = historicalOf(entry);
+          const disabled = entry.account.disabled || entry.status === "credential_disabled";
+          const windows = entry.windows.map(window => ({ window, state: windowState(entry, window, provider.provider), label: windowLabel(window, provider.provider) }));
+          // A block on a scope no shown window meters still stops work there; it gets its own line rather than vanishing.
+          const otherBlocks = entry.account.blocks.filter(block => !entry.windows.some(window => covers(block, window, provider.provider)));
+          return <div key={key} className="plugin-atyrode_code__acct" data-acct={key} data-excluded={!entry.selected || undefined} data-hist={historical || undefined}>
+            <div className="plugin-atyrode_code__idline" title={manual ? undefined : `set by the ${poolName} preset`}>
+              <button type="button" className="plugin-atyrode_code__ident" data-ident="" tabIndex={key === tabKey ? 0 : -1} title={who} onClick={onAccounts}
+                data-readout-label={who} data-readout={`${word} ${entry.account.type === "api_key" ? "api key" : "oauth"}${entry.selected ? "" : " · excluded"}${disabled ? " · credential disabled" : ""} · open in accounts`}>
+                {middle(who, 24)}{!entry.selected && <span className="plugin-atyrode_code__sr">, excluded</span>}
+              </button>
+              {!entry.selected && <span className="plugin-atyrode_code__exw" aria-hidden="true">excluded</span>}
+              {disabled && <span className="plugin-atyrode_code__exw">disabled</span>}
+              {manual && canEdit && !historicalAccounts && <QuietButton className="plugin-atyrode_code__incl" data-incl="" tabIndex={-1} data-action="atyrode.code.changeAccounts"
+                aria-label={`${entry.selected ? "exclude" : "include"} ${who}`} data-readout-label={`${entry.selected ? "exclude" : "include"} ${who}`}
+                data-readout={entry.selected ? "the next launch will not use it; it stays signed in" : "the next launch may use it again"}
+                onClick={() => void change({ kind: "set-account", reference: entry.account.reference, enabled: !entry.selected })}>{entry.selected ? "exclude" : "include"}</QuietButton>}
+              {historical && !groupHistorical && <span className="plugin-atyrode_code__asof">as of {entry.observedAt === null ? "—" : ago(now - entry.observedAt)}</span>}
+            </div>
+            {entry.balance && <div className="plugin-atyrode_code__win" data-kind="balance" data-readout-label={`${word} ${who}`}
+              data-readout={`prepaid balance${historical ? ` as of ${ago(now - entry.balance.observedAt)}` : ""} · billed per token`}>
+              <span className="plugin-atyrode_code__wl">balance</span><span className="plugin-atyrode_code__amt">{balanceText(entry.balance)}</span>
+            </div>}
+            {windows.map(({ window, state, label }) => {
+              const reset = window.resetsAt !== null && window.resetsAt > now ? window.resetsAt : null;
+              const facts = [state.percent === null ? "usage unknown" : `${Math.round(state.percent)}% used`, state.word === "blocked" ? `blocked until ${hhmm(state.until!)}` : state.word,
+                reset !== null ? `resets ${clock(reset)} local, in ${countdown(reset - now)}` : "reset unknown", historical && window.observedAt !== null ? `as of ${ago(now - window.observedAt)}` : ""].filter(Boolean).join(" · ");
+              return <div key={JSON.stringify([window.windowId, window.tier])} className="plugin-atyrode_code__win" data-level={state.level}
+                data-readout-label={`${word} ${who} · ${label} window${window.tier && window.tier.toLowerCase() !== label ? ` (${window.tier})` : ""}`} data-readout={facts} title={reset !== null ? `resets ${clock(reset)} local` : undefined}>
+                <span className="plugin-atyrode_code__wl">{label}</span>
+                {state.percent === null ? <span className="plugin-atyrode_code__nobar" /> : <><CellBar percent={state.percent} cells={10} /><CellBar percent={state.percent} cells={5} /></>}
+                <span className="plugin-atyrode_code__pct">{state.percent === null ? "—" : `${Math.round(state.percent)}%`}</span>
+                {state.word === "blocked" ? <span className="plugin-atyrode_code__blk"><span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(state.until!)}</span> : <>
+                  <span className="plugin-atyrode_code__rs" aria-hidden="true">{reset !== null ? "↻" : ""}</span>
+                  <span className="plugin-atyrode_code__cdc">{reset !== null && <><span className="plugin-atyrode_code__cd">{countdown(reset - now)}</span><span className="plugin-atyrode_code__abs">{clock(reset)}</span></>}</span>
+                  <span className="plugin-atyrode_code__wword">{state.word}</span>
+                </>}
+              </div>;
+            })}
+            {!entry.balance && entry.windows.length === 0 && <div className="plugin-atyrode_code__win" data-level="unknown" data-readout-label={`${word} ${who}`} data-readout="the provider reported no quota windows; capacity is unknown, not zero">
+              <span className="plugin-atyrode_code__wl">quota</span><span className="plugin-atyrode_code__nobar" /><span className="plugin-atyrode_code__pct">—</span>
+            </div>}
+            {otherBlocks.map(block => <div key={block.scope} className="plugin-atyrode_code__win" data-level="error" data-kind="block"
+              data-readout-label={`${word} ${who}`} data-readout={`the provider blocks ${block.scope ? `${block.scope} requests` : "this account"} until ${clock(block.until)} local`}>
+              <span className="plugin-atyrode_code__blk">{block.scope && `${block.scope} `}<span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(block.until)}</span>
+            </div>)}
+          </div>;
+        })}
+        {limit < rows.length && <QuietButton className="plugin-atyrode_code__manymore" onClick={() => setExpanded(new Set([...expanded, provider.provider]))}>+{rows.length - limit} more</QuietButton>}
+      </div>;
+    })}</div>;
+  }
+  return <section className={className} data-zone="usage" aria-label="usage" aria-busy={configuration.refreshing || usage.refreshing || undefined}>
+    <ZoneHead chip="usage" hints={[status, <Hint key="r" k="r" label={error || unavailable ? "retry" : "refresh"} onClick={refresh} readout="check the account broker again; provider readings may be up to five minutes old" />]}>
+      {poolName !== null && <>
+        <button ref={poolMenu.anchor} type="button" className="plugin-atyrode_code__pool" aria-haspopup="menu" aria-expanded={poolMenu.open} onClick={poolMenu.toggle}
+          data-readout-label={poolName} data-readout="which accounts the next launch may use">{poolName} <span className="plugin-atyrode_code__tri" aria-hidden="true">▾</span></button>
+        <Menu menu={poolMenu} label="account pool">
+          <MenuHeader>account pool</MenuHeader>
+          <MenuItem current={manual} aside={included(current!.accounts.manualDisabled)} disabled={!canEdit} onSelect={() => void change({ kind: "activate-preset", id: null })}>manual</MenuItem>
+          {presets.map(preset => <MenuItem key={preset.id} current={current!.accounts.activePreset === preset.id} aside={included(preset.disabled)} disabled={!canEdit}
+            onSelect={() => void change({ kind: "activate-preset", id: preset.id })}>{preset.name}</MenuItem>)}
+          <MenuRule />
+          <MenuItem onSelect={onAccounts}>manage accounts…</MenuItem>
+        </Menu>
+      </>}
+    </ZoneHead>
+    {failure && <Notice kind="error">{failure}</Notice>}
+    {error && value && <Notice kind="warn" details={error} actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>last check failed · showing retained readings</Notice>}
+    {body}
+  </section>;
+}
+
