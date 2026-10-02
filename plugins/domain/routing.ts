@@ -267,10 +267,58 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
   return { selection, routes, estimates: estimate(catalog, selection, routes, nowMs), available };
 }
 
-/** Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. */
-export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[]): Overlay {
+/**
+ * A SELECTION MADE AGAINST ANOTHER CATALOG, narrowed to what this one hosts: the operator chose
+ * dials over the bundled preview, and the verified catalog may lack a lane, a fourth rung, Spark
+ * or priority that the preview offered. Each structural choice it cannot host moves to the
+ * nearest one it can — the same family's other blend, then the default lane; the highest
+ * capability not above the one chosen — and every other choice is kept as made.
+ *
+ * The budget is never narrowed. It is a constraint rather than a preference, so a free selection
+ * this catalog cannot serve refuses `budget_unsatisfiable` here instead of becoming a paid one.
+ * Without a selection to keep, the catalog's own default is the answer.
+ */
+export function clampSelection(catalog: CompiledCatalog, wanted: Selection | null): Selection {
+  const fallback = defaultSelection(catalog);
+  if (wanted === null) return fallback;
+  const parsed = SelectionSchema.safeParse(wanted);
+  if (!parsed.success) throw new DomainError("invalid_selection");
+  const lanes = lanesFor(catalog);
+  const want = parsed.data.lane;
+  const lane = lanes.find(candidate => candidate.kind === "mixed" ? want.kind === "mixed"
+      : want.kind === "provider" && candidate.family === want.family && candidate.blend === want.blend)
+    ?? lanes.find(candidate => candidate.kind === "provider" && want.kind === "provider" && candidate.family === want.family)
+    ?? fallback.lane;
+  const { available } = selectionFacts(catalog, { ...parsed.data, lane, capability: 1, spark: false, priority: false });
+  const capability = available.capabilities.filter(value => value <= parsed.data.capability).at(-1) ?? available.capabilities[0]!;
+  const selection: Selection = { ...parsed.data, lane, capability,
+    spark: parsed.data.spark && available.spark, priority: parsed.data.priority && available.priority };
+  selectedRoutes(catalog, selectionFacts(catalog, selection).selection);
+  return selection;
+}
+
+/**
+ * OLD CODE'S `filterRows` (`0035b4f:routing.go:447-477`): a fallback rung whose provider no
+ * included account serves is dropped, so neither the reviewed routes nor the launched overlay
+ * name a model OMP cannot route. A lead is never dropped: a lead nobody can serve is a role
+ * that cannot run, and that refuses `account_unavailable` rather than silently promoting a
+ * fallback into the lead.
+ */
+export function servedRoutes(catalog: CompiledCatalog, routes: readonly Route[], serves: (provider: string) => boolean): Route[] {
+  return routes.map(route => {
+    if (!serves(catalog.model(route.lead.key).provider)) throw new DomainError("account_unavailable");
+    return { ...route, fallback: route.fallback.filter(choice => serves(catalog.model(choice.key).provider)) };
+  });
+}
+
+/**
+ * Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. The
+ * routes must be exactly the selection's, less precisely the fallbacks `serves` rules out.
+ */
+export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[],
+  serves: (provider: string) => boolean = () => true): Overlay {
   const { selection } = selectionFacts(catalog, input);
-  const expected = selectedRoutes(catalog, selection);
+  const expected = servedRoutes(catalog, selectedRoutes(catalog, selection), serves);
   const parsed = z.array(RouteSchema).max(32).safeParse(routes);
   if (!parsed.success || parsed.data.length !== expected.length) throw new DomainError("invalid_selection");
   const supplied = new Map(parsed.data.map(route => [route.role, route]));

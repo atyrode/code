@@ -3,7 +3,7 @@ import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PATH,
   SESSION_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
   type AccountsObservation, type ActionInput as OmpInput, type ActionResult as OmpResult,
-  type JobInputBinding, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
+  type JobInputBinding, type ModelCatalogSnapshot, type SessionReceipt, type SessionSilence } from "@atyrode/manifold-omp";
 import { actionSchemas, CODE_PLUGIN_ID, type ActionInput, type ActionResult,
   type CodeAction, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
@@ -82,6 +82,8 @@ interface Fixture {
     keyed: Map<string, PublicJob>; adopted: OmpInput<"adoptSession">[];
     /** Keys a retire settled with nothing posted, and keys OMP retained but has not dispatched. */
     retired: Set<string>; pending: Set<string>;
+    /** OMP's bundled model list: what the gateway publishes for a launch to route to. */
+    published: ModelCatalogSnapshot;
   };
 }
 /** The plugin kit's own storage key rule: a key it would refuse fails here, not only in a real host. */
@@ -98,7 +100,11 @@ function fixture(): Fixture {
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null }, job: job(), session: receipt(),
     silence: null, skills: null, dropReviewLimits: false, reviewOverride: {},
     echo: "asked", refuse: new Map(), reject: new Map(), during: new Map(),
-    reviewed: [], posted: [], read: [], cancelled: [], keyed: new Map(), adopted: [], retired: new Set(), pending: new Set() };
+    reviewed: [], posted: [], read: [], cancelled: [], keyed: new Map(), adopted: [], retired: new Set(), pending: new Set(),
+    published: { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+      models: document().models.map(model => ({ provider: model.provider, id: model.id, api: model.api, quotaTier: null,
+        inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion, contextWindow: model.contextWindow,
+        maxTokens: 64000, reasoning: true, thinkingLevels: model.thinkingLevels, images: model.images })) } };
   const call = async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }): Promise<unknown> => {
     const door = `${plugin}.${action}`;
     calls.push(door);
@@ -113,6 +119,10 @@ function fixture(): Fixture {
     // something OMP would reject fails here rather than in a claim about it.
     if (door === accountsDoor) return omp.accounts;
     if (door === actionDoor("readDefaults")) return omp.defaults;
+    if (door === actionDoor("readModelCatalog")) {
+      const { providers } = ompActionSchemas.readModelCatalog.input.parse(input);
+      return { ...omp.published, models: omp.published.models.filter(model => providers.includes(model.provider)) };
+    }
     if (door === actionDoor("reviewSession")) {
       const value = SessionInputSchema.parse(input);
       omp.reviewed.push(value);
@@ -248,7 +258,7 @@ describe("Code profiles a dependent plugin may offer", () => {
     const narrowed = document();
     narrowed.models = [{ ...narrowed.models[0]!, thinkingLevels: ["minimal"] }];
     f.store.set(`configuration/${digestOf(workspace)}`, JSON.stringify({ ...record,
-      active: { document: narrowed, digest: digestOf(narrowed) } }));
+      active: { document: narrowed, digest: digestOf(narrowed), provenance: null } }));
     expect((await accepted(f, "listProfiles", {})).profiles).toEqual([
       { containerId: target.containerId, revision: record.revision, machineId: null, selected: null,
         accounts: everyAccount, resolved: true },
@@ -479,6 +489,21 @@ describe("the session a dependent plugin posts through Code", () => {
     const current = await accepted(f, "readConfiguration", workspace);
     f.omp.during.set(actionDoor("reviewSession"), async () => { f.omp.defaults = { ...f.omp.defaults, revision: 4 }; });
     expect(await invoke(f, "runSession", { ...input, expectedRevision: current.revision })).toEqual({ refused: "code_composition_changed" });
+    expect(f.omp.posted).toEqual([]);
+  });
+
+  test("a routed model OMP no longer publishes refuses by name before review, and an OMP change mid-post refuses the post", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    const listed = f.omp.published;
+    f.omp.published = { ...listed, models: listed.models.filter(model => model.id !== "native-model-3") };
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model-3" });
+    expect(f.calls).not.toContain(actionDoor("reviewSession"));
+    // A pin bump between review and post publishes another list: the composition is not the one reviewed.
+    f.omp.published = listed;
+    f.omp.during.set(actionDoor("reviewSession"), async () => { f.omp.published = { ...listed, revision: "b".repeat(64) }; });
+    expect(await invoke(f, "runSession", input)).toEqual({ refused: "code_composition_changed" });
     expect(f.omp.posted).toEqual([]);
   });
 

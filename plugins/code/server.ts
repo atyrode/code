@@ -6,18 +6,18 @@ import manifestJson from "./manifest.json";
 import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
-import { catalogFromObservations, quotaSpecials, scaffoldInventory } from "../domain/probe.ts";
+import { catalogFromObservations, inventoryDraft, quotaSpecials } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
-import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
+import { RefusalSchema, rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
-import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
-  readConfiguration, requireConfiguration, starterProfileReview, adoptStarterProfile } from "./state.ts";
+import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration, poolIdentity,
+  provenanceMigration, readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, adoptStarterProfile: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
+  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
   configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
@@ -30,8 +30,11 @@ const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
   suggest: ["services:invoke"],
 };
 function refusal(error: unknown) {
-  if (error instanceof CodeRefusal || error instanceof SuggestionError) return { refused: error.message };
-  if (error instanceof DomainError) return { refused: `code_${error.code}` };
+  if (error instanceof SuggestionError) return { refused: error.message };
+  // The detail travels when the published grammar can carry it; a detail it cannot carry is
+  // dropped rather than letting the refusal itself become unreadable.
+  if (error instanceof CodeRefusal || error instanceof DomainError)
+    return RefusalSchema.safeParse({ refused: error.message }).success ? { refused: error.message } : { refused: `code_${error.code}` };
   if (error instanceof ProbeError) return { refused: `code_probe_${error.code}` };
   if (error instanceof z.ZodError) return { refused: "code_invalid_request" };
   return { refused: "code_operation_unavailable" };
@@ -46,15 +49,12 @@ const productHandlers: ProductHandlers = {
     return { revision: record?.revision ?? 0, configuration: record, legacyMachineId };
   },
   initializeConfiguration: (ctx, args) => initializeConfiguration(ctx, args, args.expectedRevision),
-  async reviewStarterProfile(ctx, args) {
-    return starterProfileReview(ctx, await readConfiguration(ctx, args), args);
-  },
-  adoptStarterProfile,
   async stageCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
     compileCatalog(args.document);
-    return commitConfiguration(ctx, previous, { ...record, draft: { document: args.document, digest: digestOf(args.document) } });
+    const provenance = args.verification === undefined ? null : verificationProvenance(ctx, record, args.document, args.verification);
+    return commitConfiguration(ctx, previous, { ...record, draft: { document: args.document, digest: digestOf(args.document), provenance } });
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
@@ -87,9 +87,9 @@ const productHandlers: ProductHandlers = {
     const accountPool = selectedAccountPool(args.accounts, record.accounts);
     if (!Object.values(accountPool).some(accounts => accounts.length > 0)) throw new CodeRefusal("account_unavailable");
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
-    return { revision: record.revision, accountPool };
+    return { revision: record.revision, accountPool, poolIdentityDigest: poolIdentity(accountPool).poolIdentityDigest };
   },
-  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory, { specials: quotaSpecials(args.inventory, args.metadata), budget: args.budget }); },
+  async draftInventory(_ctx, args) { return inventoryDraft(args.inventory, args.budget); },
   async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { specials: quotaSpecials(args.inventory, args.metadata), budget: args.budget }); },
   composeSession,
   listProfiles,
@@ -133,7 +133,7 @@ const plugin = {
     input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
   })),
   handlers,
-  migrations: [configurationMigration],
+  migrations: [configurationMigration, provenanceMigration],
 };
 defineServerPlugin(plugin);
 export default plugin;

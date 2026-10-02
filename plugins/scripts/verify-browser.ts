@@ -11,9 +11,12 @@ import type * as CdpModule from "../../../manifold/scripts/cdp.ts";
 import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
-import type { ActionInput, ActionResult } from "../code/contract.ts";
-import type { CatalogDocument } from "../domain/contracts.ts";
-import { ModelCatalogSnapshotSchema, ResumeSessionInputSchema, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import type { ActionResult } from "../code/contract.ts";
+import type { CatalogDocument, Selection } from "../domain/contracts.ts";
+import { compileCatalog } from "../domain/catalog.ts";
+import { catalogFromMetadata } from "../domain/probe.ts";
+import { reviewCatalog } from "../domain/routing.ts";
+import { ModelCatalogSnapshotSchema, ResumeSessionInputSchema, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import type { PermissionPlan } from "../code/permission-plan.ts";
 import { formatManifoldUri, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
 
@@ -207,7 +210,7 @@ async function selectDestination(browser: BrowserInstance, selector: string, mac
 }
 
 async function usableStarter(browser: BrowserInstance): Promise<void> {
-  await control(browser, "bundled starter can be explicitly saved without runtime setup", starterSave, false);
+  assert.equal(await browser.evaluate(`${starterSave} === null`), true, "The bundled preview offers no save; only a verification persists it");
   for (const label of ["Provider", "Capability", "Thinking", "Advisor"]) {
     await control(browser, `${label} is editable before shared policy exists`, `${dial(label)}?.querySelector('[aria-checked="true"]')`, false);
   }
@@ -228,10 +231,8 @@ async function assertRoles(browser: BrowserInstance, advisor: boolean): Promise<
   "Every generated role exposes its model and supported effort, not an empty card");
 }
 
-type StarterDraft = Pick<ActionInput<"reviewStarterProfile">, "metadata" | "selection"> & {
-  baseRevision: number;
-  document: ActionResult<"reviewStarterProfile">["document"];
-};
+/** What the workbench exports for its render-only bundled preview. */
+type StarterDraft = { baseRevision: number; metadata: ModelCatalogSnapshot; selection: Selection; document: CatalogDocument };
 async function readStarterDraft(browser: BrowserInstance): Promise<StarterDraft> {
   await until(browser, "local starter material remains exportable", `${starterExport} instanceof HTMLTextAreaElement && !!${starterExport}.value`);
   return JSON.parse(await browser.evaluate<string>(`${starterExport}.value`)) as StarterDraft;
@@ -429,49 +430,27 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert.deepEqual(await readConfiguration(server, writer, target), base,
         "Mount, typing, dials, focus, help, resizing and navigation never initialize or mutate policy");
       assert.deepEqual(trace.requests.slice(start).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|select|adoptStarterProfile)$/.test(request.name)), []);
-      const input: ActionInput<"reviewStarterProfile"> = { ...target, expectedRevision: base.revision, metadata, selection: chosen.selection };
-      const reviewed = await callAction(server, writer.token, "atyrode.code.reviewStarterProfile", input);
-      assert(reviewed.ok, "The real Code owner derives and reviews policy without native runtime");
-      const review = reviewed.result as ActionResult<"reviewStarterProfile">;
-      assert.deepEqual(chosen.document, review.document, "The displayed/exported starter is the owner-derived catalog");
-      assert.deepEqual(review.review.selection, chosen.selection, "Review preserves the exact chosen selection");
-      assert.equal(review.metadataRevision, metadata.revision);
+      // The preview is render-only: the exact OMP response's policy derivation, with no save.
+      const document = catalogFromMetadata(metadata, chosen.selection.budget);
+      assert.deepEqual(chosen.document, document, "The displayed/exported preview is the policy derivation of the real response");
+      const review = reviewCatalog(compileCatalog(document), chosen.selection, Date.now());
       const rendered = await browser.evaluate<{ role: string; key: string; thinking: string }[]>(`[...document.querySelectorAll('${routes} > div')].map(row => ({
         role: [...row.querySelector('dt').childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join('').trim(),
         key: row.querySelector('dd > .plugin-atyrode_code_generator__model .plugin-atyrode_code_generator__model-name').textContent.trim(),
         thinking: row.querySelector('dd > .plugin-atyrode_code_generator__model .plugin-atyrode_code_generator__thinking').dataset.level,
       }))`);
-      assert.deepEqual(rendered, review.review.routes.map(route => ({ role: route.role, key: route.lead.key, thinking: route.lead.thinking })),
-        "The visible role models and supported effort exactly match the genuine owner's compiled selection");
-      for (const model of review.document.models) {
+      assert.deepEqual(rendered, review.routes.map(route => ({ role: route.role, key: route.lead.key, thinking: route.lead.thinking })),
+        "The visible role models and supported effort exactly match the policy derivation of the chosen selection");
+      for (const model of document.models) {
         const source = metadata.models.find(row => row.provider === model.provider && row.id === model.id);
-        assert(source, "Every generated catalog row comes from the actual pinned OMP response");
+        assert(source, "Every previewed catalog row comes from the actual pinned OMP response");
         assert(source.quotaTier === null || source.quotaTier === "chat" || (source.quotaTier === "spark" && model.tier === 0),
-          "Special and unknown quota tiers cannot become ordinary starter rungs; Spark is only the off-ladder tier 0");
+          "Special and unknown quota tiers cannot become ordinary preview rungs; Spark is only the off-ladder tier 0");
         assert.equal(model.tokensPerSecond, null, "Bundled metadata does not invent measured speed");
         assert.equal(model.timeToFirstTokenMs, null, "Bundled metadata does not invent measured latency");
       }
-      const saving = trace.requests.length;
-      await click(browser, starterSave);
-      await until(browser, "the explicit starter transaction completes", `${starterSave} === null && ${element(routes)}?.getClientRects().length > 0`);
-      const saved = await readConfiguration(server, writer, target);
-      assert.equal(saved.revision, initialized ? base.revision + 1 : 1, "Starter catalog and exact selection persist in one CAS, including revision one from absence");
-      assert.equal(saved.configuration?.draft, null, "Starter adoption never leaves an intermediate staged record");
-      assert.deepEqual(saved.configuration?.active, { document: review.document, digest: review.catalogDigest });
-      assert.deepEqual(saved.configuration?.selection, chosen.selection);
-      if (initialized) assert.deepEqual(saved.configuration?.accounts, base.configuration?.accounts, "Positive-revision adoption preserves every existing account choice");
-      assert.equal(await browser.evaluate(`${taskField}.value`), prompt);
-      const adoption = trace.requests.slice(saving);
-      const reviews = adoption.filter(request => request.name === "atyrode.code.reviewStarterProfile");
-      const effects = adoption.filter(request => request.name === "atyrode.code.adoptStarterProfile");
-      assert.deepEqual(reviews.map(request => request.input), [input], "The browser requests one exact owner policy review");
-      assert.deepEqual(effects.map(request => request.input), [{ ...input, reviewDigest: review.reviewDigest }],
-        "The browser adopts exactly the reviewed metadata, selection, revision and digest once");
-      const reviewAt = adoption.findIndex(request => request.name === "atyrode.code.reviewStarterProfile");
-      const effectAt = adoption.findIndex(request => request.name === "atyrode.code.adoptStarterProfile");
-      assert(adoption.slice(reviewAt + 1, effectAt).some(request => request.name === "atyrode.omp.readModelCatalog"),
-        "The browser rereads the genuine OMP source after review and before the one policy effect");
-      assert.deepEqual(adoption.filter(request => request.name === "atyrode.code.initializeConfiguration" || request.name === "atyrode.code.stageCatalog"), []);
+      assert.equal(await browser.evaluate(`${starterSave} === null`), true, "The bundled preview offers no save");
+      assert.deepEqual(await readConfiguration(server, writer, target), base, "Nothing but a verification persists the preview");
       await control(browser, "saved policy is not native launch readiness", launchControl, true);
       const native = await callAction(server, writer.token, "atyrode.omp.describeDestination", { ...target, machineId: destination.machineId });
       assert(native.ok);
@@ -501,13 +480,13 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   const routeText = await browser.evaluate<string>(`${element(routes)}.textContent`);
   const competing = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(competing.ok);
-  await control(browser, "a revision-zero draft cannot attach to a competing initializer", starterSave, true);
+  assert.equal(await browser.evaluate(`${starterSave} === null`), true, "A revision-zero preview has nothing to attach to a competing initializer");
   for (const view of ["Models", "Accounts", "Workbench"]) await click(browser, workspaceButton(view));
   assert.deepEqual(await readStarterDraft(browser), frozen, "The exact document, metadata, choices and original revision remain inspectable/exportable");
   assert.equal(await browser.evaluate(`${element(routes)}.textContent`), routeText, "A conflict does not replace the displayed route document");
   assert.equal(await browser.evaluate(`${taskField}.value`), "Keep the competing first-save task and chosen profile.");
   assert.equal((await readConfiguration(server, writer, target)).revision, 1, "Navigation cannot auto-rebase or replay a rejected first adoption");
-  await control(browser, "conflicted starter remains unsavable after observation recovery", starterSave, true);
+  assert.equal(await browser.evaluate(`${starterSave} === null`), true, "A conflicted preview stays unsavable after observation recovery");
 }
 
 async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, viewer: TokenGrant, first: Target, second: Target): Promise<void> {
@@ -708,12 +687,8 @@ async function unresolvedStagedCatalogScenario(browser: BrowserInstance, server:
   const target = { containerId: workspace.id };
   const metadata = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
   assert(metadata.ok);
-  const reviewInput: ActionInput<"reviewStarterProfile"> = { ...target, expectedRevision: 0,
-    metadata: ModelCatalogSnapshotSchema.parse(metadata.result),
-    selection: { lane: { kind: "mixed" }, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" } };
-  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewStarterProfile", reviewInput);
-  assert(reviewed.ok, reviewed.ok ? "" : reviewed.denial.message);
-  const document = (reviewed.result as { document: CatalogDocument }).document;
+  const selection: Selection = { lane: { kind: "mixed" }, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" };
+  const document = catalogFromMetadata(ModelCatalogSnapshotSchema.parse(metadata.result), selection.budget);
   const textOnly = { ...document, models: document.models.map(model => ({ ...model, images: false })) };
   const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(initialized.ok);
