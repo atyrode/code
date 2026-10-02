@@ -15,7 +15,7 @@ import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError, type AccountChoices, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { compileOmpOverlay, reviewCatalog } from "../domain/routing.ts";
+import { compileOmpOverlay, reviewCatalog, servedRoutes } from "../domain/routing.ts";
 import { digest, id, revision, reviewedSessionOptions, sessionInput, type ActionInput, type ActionResult,
   type Profile, type SessionComposition } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
@@ -44,6 +44,12 @@ const IntentSchema = SessionProvenanceSchema.omit({ jobId: true });
  * One workspace's saved catalog, selection and account choices against one caller-supplied
  * observation. The `composeSession` door and the `runSession` door call exactly this, so a
  * posted job carries the composition the generator previewed and nothing else.
+ *
+ * Accounts decide what a route may name, as old Code's `filterRows` did: a fallback on a provider
+ * no included account serves is pruned, while a lead on one refuses `account_unavailable`. What
+ * is left must be published by the OMP that will serve it: a routed model missing from OMP's
+ * current model list — a catalog verified under another OMP version, an id the pin bump retired —
+ * refuses `model_unpublished` naming it, instead of reaching the gateway's runtime 404.
  */
 export async function composeSession(ctx: CodeContext, args: ActionInput<"composeSession">,
   receivedAt = ctx.now()): Promise<SessionComposition> {
@@ -52,18 +58,24 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
   if (!record.active || !record.selection) throw new CodeRefusal("catalog_missing");
   if (args.accounts.observedAt !== null && args.accounts.observedAt > receivedAt) throw new DomainError("invalid_accounts");
   const accountPool = selectedAccountPool(args.accounts, record.accounts);
+  const serves = (provider: string): boolean => (accountPool[provider]?.length ?? 0) > 0;
   const catalog = compileCatalog(record.active.document);
-  const review = reviewCatalog(catalog, record.selection, receivedAt);
-  for (const route of review.routes) {
-    for (const choice of [route.lead, ...route.fallback]) {
-      if (!accountPool[catalog.model(choice.key).provider]?.length) throw new CodeRefusal("account_unavailable");
-    }
-  }
-  const overlay = compileOmpOverlay(catalog, review.selection, review.routes);
+  const reviewed = reviewCatalog(catalog, record.selection, receivedAt);
+  const review = { ...reviewed, routes: servedRoutes(catalog, reviewed.routes, serves) };
+  const routed = [...new Set(review.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => choice.key))]
+    .map(key => catalog.model(key));
+  const published = await ompCall(ctx, "readModelCatalog", { providers: [...new Set(routed.map(model => model.provider))].sort() });
+  const listed = new Set(published.models.map(model => `${model.provider}/${model.id}`));
+  const missing = routed.map(model => `${model.provider}/${model.id}`).filter(address => !listed.has(address)).sort();
+  if (missing.length > 0)
+    throw new CodeRefusal("model_unpublished", missing.slice(0, 8).join(", ") + (missing.length > 8 ? ` and ${missing.length - 8} more` : ""));
+  const overlay = compileOmpOverlay(catalog, review.selection, review.routes, serves);
   const facts = { revision: record.revision, review, accountPool, overlay, prompt: args.prompt, planYolo: review.selection.planYolo };
+  // The published list's revision is bound too, so an OMP change between review and preparation
+  // is a changed composition even when every routed model survived it.
   const compositionDigest = digestOf({ containerId: record.containerId, revision: record.revision,
     catalog: record.active.digest, selection: review.selection, routes: review.routes, accountPool,
-    overlay, prompt: args.prompt, planYolo: facts.planYolo });
+    overlay, prompt: args.prompt, planYolo: facts.planYolo, published: published.revision });
   if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
   return { ...facts, compositionDigest };
 }

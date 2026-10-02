@@ -1,16 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceConfigurationSchema, ServiceReplySchema, type ServiceConfiguration } from "@manifold/protocol";
+import { planDataMigration, type DataPlan } from "@manifold/plugin";
 import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt, ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
-import { handlers } from "../code/server.ts";
-import { configurationMigration } from "../code/state.ts";
+import plugin, { handlers } from "../code/server.ts";
+import { configurationMigration, provenanceMigration } from "../code/state.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import { buildCodeServices } from "../code/service-policies.ts";
-import { catalogFromMetadata } from "../domain/probe.ts";
-import { compileCatalog } from "../domain/catalog.ts";
-import { defaultSelection } from "../domain/routing.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
 const workspace = { containerId: target.containerId };
@@ -42,8 +40,17 @@ interface Fixture {
   ctx: CodeContext;
   access: { isRoot: boolean; containerScope: string | null; readable: Set<string>; writable: Set<string> };
   store: Map<string, string>;
+  /** OMP's current bundled model list, the only OMP door a configuration action reaches. */
+  published: ModelCatalogSnapshot;
   holdTwoReads(): void;
   afterNextRead(hook: () => Promise<void>): void;
+}
+/** The bundled list OMP publishes for these models: what a launch may route to. */
+function published(models: CatalogDocument["models"] = document().models): ModelCatalogSnapshot {
+  return { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+    models: models.map(model => ({ provider: model.provider, id: model.id, api: model.api, quotaTier: null,
+      inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion, contextWindow: model.contextWindow,
+      maxTokens: 64000, reasoning: true, thinkingLevels: model.thinkingLevels, images: model.images })) };
 }
 function fixture(isRoot = false): Fixture {
   const store = new Map<string, string>();
@@ -89,10 +96,15 @@ function fixture(isRoot = false): Fixture {
       describeInstance: unavailable, readInstance: unavailable, listInstances: unavailable,
       readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable,
     },
-    // No configuration door reaches another plugin; one that tried would fail here by name.
-    actions: { call: unavailable },
+    // Session composition reads OMP's published model list and nothing else; any other door
+    // a configuration action tried to reach would fail here by name.
+    actions: { call: async ({ plugin, action, input }: { plugin: string; action: string; input: unknown }) => {
+      if (plugin !== "atyrode.omp" || action !== "readModelCatalog") return unavailable();
+      const { providers } = input as { providers: string[] };
+      return { ...fixtureState.published, models: fixtureState.published.models.filter(model => providers.includes(model.provider)) };
+    } },
   };
-  return { ctx, access, store,
+  const fixtureState: Fixture = { ctx, access, store, published: published(),
     holdTwoReads() {
       let release!: () => void;
       const ready = new Promise<void>(resolve => { release = resolve; });
@@ -100,6 +112,7 @@ function fixture(isRoot = false): Fixture {
     },
     afterNextRead(hook: () => Promise<void>) { afterRead = hook; },
   };
+  return fixtureState;
 }
 async function invoke<K extends CodeAction>(f: Fixture, name: K, input: ActionInput<K>): Promise<unknown> {
   return handlers[name]!(f.ctx, input);
@@ -122,162 +135,17 @@ async function active(f: Fixture) {
 async function configuration(f: Fixture, containerId = target.containerId) {
   return (await accepted(f, "readConfiguration", { containerId })).configuration;
 }
+/** A record as schema 3 stored it, before catalogs carried verification provenance. */
+function version3(record: Configuration) {
+  const unprovenanced = (catalog: Configuration["active"]) => catalog && { document: catalog.document, digest: catalog.digest };
+  return { ...record, schemaVersion: 3, active: unprovenanced(record.active), draft: unprovenanced(record.draft) };
+}
 function seedLegacy(f: Fixture, scope: Target, record: Configuration) {
   const key = `configuration/${digestOf(scope)}`;
-  const raw = JSON.stringify({ ...record, ...scope, schemaVersion: 1, resources: { obsolete: "never authority" } });
+  const raw = JSON.stringify({ ...version3(record), ...scope, schemaVersion: 1, resources: { obsolete: "never authority" } });
   f.store.set(key, raw);
   return { key, raw };
 }
-
-function starterInput(): ActionInput<"reviewStarterProfile"> {
-  const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
-    models: document().models.map(model => ({
-      provider: model.provider, id: model.id, api: model.api, quotaTier: null,
-      inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
-      contextWindow: model.contextWindow, maxTokens: 64000, reasoning: true, thinkingLevels: model.thinkingLevels, images: model.images,
-    })) };
-  const selection = { ...defaultSelection(compileCatalog(catalogFromMetadata(metadata, "any"))),
-    capability: 3 as const, thinking: "high" as const, advisor: "audit" as const, fallback: false, prewalk: true, planYolo: true };
-  return { ...workspace, expectedRevision: 0, metadata, selection };
-}
-
-describe("atomic starter policy adoption", () => {
-  test("read-only review and one CAS preserve the exact nondefault profile without native operations", async () => {
-    const f = fixture(), input = starterInput();
-    let commits = 0;
-    const cas = f.ctx.storage.compareAndSet;
-    f.ctx.storage.compareAndSet = async (...args) => { commits++; return cas(...args); };
-    f.access.writable.clear();
-    const review = await accepted(f, "reviewStarterProfile", input);
-    expect(review.review.selection).toEqual(input.selection);
-    expect(review.review.routes.find(route => route.role === "advisor")?.lead.key).toBe("anthropic.native-model3");
-    expect(review.review.routes.every(route => route.fallback.length === 0)).toBe(true);
-    expect(f.store.size).toBe(0);
-    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_scope_refused" });
-    f.access.writable.add(workspace.containerId);
-    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest });
-    expect(saved).toMatchObject({ revision: 1, selection: input.selection,
-      active: { document: review.document, digest: review.catalogDigest }, draft: null });
-    expect(saved.active!.document.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
-    expect(await configuration(f)).toEqual(saved);
-    expect(commits).toBe(1);
-  });
-
-  test("initialized empty records retain exact account exclusions and presets in their next revision", async () => {
-    const f = fixture();
-    await initialize(f);
-    const chosen = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: 1,
-      change: { kind: "create-preset", preset: { id: "focus", name: "Manual", disabled: [accounts().accounts[0]!.reference] } } });
-    const previous = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: chosen.revision,
-      change: { kind: "activate-preset", id: "focus" } });
-    const input = { ...starterInput(), expectedRevision: previous.revision };
-    const review = await accepted(f, "reviewStarterProfile", input);
-    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest });
-    expect(saved.revision).toBe(previous.revision + 1);
-    expect(saved.accounts).toEqual(previous.accounts);
-    expect(saved.selection).toEqual(input.selection);
-  });
-
-  test("saved draft and active policy refuse replacement at their exact current revisions", async () => {
-    for (const prepare of [staged, active]) {
-      const f = fixture(), previous = await prepare(f);
-      const input = { ...starterInput(), expectedRevision: previous.revision };
-      expect(await invoke(f, "reviewStarterProfile", input)).toEqual({ refused: "code_starter_unavailable" });
-      expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: "a".repeat(64) }))
-        .toEqual({ refused: "code_starter_unavailable" });
-      expect(await configuration(f)).toEqual(previous);
-    }
-  });
-
-  test("review digests bind nonrouted metadata, exact choices, workspace and revision", async () => {
-    const f = fixture(), input = starterInput();
-    const review = await accepted(f, "reviewStarterProfile", input);
-    const metadata = structuredClone(input.metadata);
-    metadata.models[0]!.maxTokens = 63000;
-    const changed = await accepted(f, "reviewStarterProfile", { ...input, metadata });
-    expect(changed.document).toEqual(review.document);
-    expect(changed.review.routes).toEqual(review.review.routes);
-    expect(changed.reviewDigest).not.toBe(review.reviewDigest);
-    for (const amendment of [
-      { metadata }, { metadata: { ...input.metadata, revision: "b".repeat(64) } },
-      { metadata: { ...input.metadata, models: [...input.metadata.models, { ...input.metadata.models[0]!, id: "excluded", quotaTier: "spark" }] } },
-      { selection: { ...input.selection, prewalk: false } }, { containerId: "container-b" }, { reviewDigest: "f".repeat(64) },
-    ]) {
-      expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest, ...amendment }))
-        .toEqual({ refused: "code_preview_changed" });
-    }
-    expect(await invoke(f, "adoptStarterProfile", { ...input, expectedRevision: 1, reviewDigest: review.reviewDigest }))
-      .toEqual({ refused: "code_stale_preferences" });
-    expect(f.store.size).toBe(0);
-  });
-
-  test("two revision-zero adopters have one winner and never overwrite or rebase onto an initializer", async () => {
-    const f = fixture(), first = starterInput(), second = { ...first, selection: { ...first.selection, prewalk: false } };
-    const inputs = [first, second];
-    const reviews = await Promise.all(inputs.map(input => accepted(f, "reviewStarterProfile", input)));
-    f.holdTwoReads();
-    const results = await Promise.all(inputs.map((input, index) => invoke(f, "adoptStarterProfile", { ...input, reviewDigest: reviews[index]!.reviewDigest })));
-    const winner = results.findIndex(result => actionSchemas.adoptStarterProfile.result.safeParse(result).success);
-    expect(winner).not.toBe(-1);
-    expect(results[1 - winner]).toEqual({ refused: "code_stale_preferences" });
-    const saved = await configuration(f);
-    expect(saved).toMatchObject({ revision: 1, selection: inputs[winner]!.selection,
-      active: { document: reviews[winner]!.document, digest: reviews[winner]!.catalogDigest } });
-    expect(await invoke(f, "adoptStarterProfile", { ...inputs[1 - winner]!, reviewDigest: reviews[1 - winner]!.reviewDigest }))
-      .toEqual({ refused: "code_stale_preferences" });
-    expect(await configuration(f)).toEqual(saved);
-    const other = fixture(), review = await accepted(other, "reviewStarterProfile", first);
-    const initialized = await initialize(other);
-    expect(await invoke(other, "adoptStarterProfile", { ...first, reviewDigest: review.reviewDigest })).toEqual({ refused: "code_stale_preferences" });
-    expect(await configuration(other)).toEqual(initialized);
-  });
-
-  test("starter adoption does not import legacy accounts and rechecks write authority before its CAS", async () => {
-    const f = fixture(), input = starterInput(), legacy = await active(fixture());
-    legacy.accounts.manualDisabled = [accounts().accounts[0]!.reference];
-    const seeded = seedLegacy(f, target, legacy);
-    const reviewed = await accepted(f, "reviewStarterProfile", input);
-    f.afterNextRead(async () => { f.access.writable.clear(); });
-    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: reviewed.reviewDigest }))
-      .toEqual({ refused: "code_scope_refused" });
-    expect(await configuration(f)).toBeNull();
-    f.access.writable.add(workspace.containerId);
-    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: reviewed.reviewDigest });
-    expect(saved.revision).toBe(1);
-    expect(saved.selection).toEqual(input.selection);
-    expect(saved.accounts).toEqual({ activePreset: null, manualDisabled: [], presets: [] });
-    expect(f.store.get(seeded.key)).toBe(seeded.raw);
-    f.access.readable.clear();
-    expect(await invoke(f, "reviewStarterProfile", { ...input, containerId: "container-b" }))
-      .toEqual({ refused: "code_scope_refused" });
-  });
-
-  test("failed canonical observation and a missing explicit derivation budget never become an absent record", async () => {
-    const f = fixture(), input = starterInput();
-    const { budget: _budget, ...selection } = input.selection;
-    expect(await handlers.reviewStarterProfile!(f.ctx, { ...input, selection })).toEqual({ refused: "code_invalid_request" });
-    f.ctx.storage.get = unavailable;
-    expect(await invoke(f, "reviewStarterProfile", input)).toEqual({ refused: "code_operation_unavailable" });
-    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: "a".repeat(64) }))
-      .toEqual({ refused: "code_operation_unavailable" });
-    expect(f.store.size).toBe(0);
-  });
-
-  test("crossing an off-peak estimate window does not invalidate an unchanged starter policy review", async () => {
-    const f = fixture(), input = starterInput();
-    input.metadata.models = [{ ...input.metadata.models[0]!, provider: "deepseek", api: "openai-completions",
-      inputCostPerMillion: 40, outputCostPerMillion: 40, thinkingLevels: ["medium"] }];
-    input.selection = defaultSelection(compileCatalog(catalogFromMetadata(input.metadata, "any")));
-    const peak = await accepted(f, "reviewStarterProfile", input);
-    f.ctx.now = () => Date.UTC(2026, 0, 1, 20);
-    const offPeak = await accepted(f, "reviewStarterProfile", input);
-    expect(offPeak.review.estimates.costScore).not.toBe(peak.review.estimates.costScore);
-    expect(offPeak.reviewDigest).toBe(peak.reviewDigest);
-    expect((await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: peak.reviewDigest })).selection)
-      .toEqual(input.selection);
-  });
-});
 
 describe("container-owned policy configuration", () => {
   test("competing same-revision writers commit once and a stale retry cannot overwrite the winner", async () => {
@@ -321,7 +189,7 @@ describe("container-owned policy configuration", () => {
     const saved = await accepted(source, "changeAccounts", { ...workspace, expectedRevision: chosen.revision,
       change: { kind: "activate-preset", id: "focus" } });
     const f = fixture(), key = `configuration/${digestOf(workspace)}`;
-    const raw = JSON.stringify({ ...saved, schemaVersion: 2, resourcesByMachine: { "machine-a": { retired: true }, "machine-b": null } });
+    const raw = JSON.stringify({ ...version3(saved), schemaVersion: 2, resourcesByMachine: { "machine-a": { retired: true }, "machine-b": null } });
     f.store.set(key, raw);
     expect(await configuration(f)).toEqual(saved);
     expect(f.store.get(key)).toBe(raw);
@@ -334,24 +202,26 @@ describe("container-owned policy configuration", () => {
     expect((await configuration(f))?.accounts).toEqual(saved.accounts);
   });
 
-  test("native major migration transforms canonical schema2 records without changing policy revision or adopting schema1", async () => {
+  test("native major migrations take schema2 records through schema 3 to 4 without changing policy revision or adopting schema1", async () => {
     const source = fixture(), original = await active(source);
     const saved = await accepted(source, "changeAccounts", { ...workspace, expectedRevision: original.revision,
       change: { kind: "set-account", reference: accounts().accounts[0]!.reference, enabled: false } });
     const f = fixture(), key = `configuration/${digestOf(workspace)}`;
     const current = await initialize(f, "container-b");
-    f.store.set(key, JSON.stringify({ ...saved, schemaVersion: 2, resourcesByMachine: { "machine-a": { oldPin: true } } }));
+    f.store.set(key, JSON.stringify({ ...version3(saved), schemaVersion: 2, resourcesByMachine: { "machine-a": { oldPin: true } } }));
     const legacy = seedLegacy(f, { containerId: "container-c", machineId: target.machineId }, { ...saved, containerId: "container-c" });
     f.store.set("other-data", "untouched");
     f.ctx.storage.keys = async prefix => [...f.store.keys()].filter(key => key.startsWith(prefix ?? ""));
     await configurationMigration.migrate(f.ctx.storage);
+    expect(JSON.parse(f.store.get(key)!)).toEqual(version3(saved));
+    await provenanceMigration.migrate(f.ctx.storage);
     expect(JSON.parse(f.store.get(key)!)).toEqual(saved);
     expect(await configuration(f, "container-b")).toEqual(current);
     expect(f.store.get(legacy.key)).toBe(legacy.raw);
     expect(f.store.has(`configuration/${digestOf({ containerId: "container-c" })}`)).toBe(false);
     expect(f.store.get("other-data")).toBe("untouched");
     const migrated = f.store.get(key);
-    await configurationMigration.migrate(f.ctx.storage);
+    for (const migration of [configurationMigration, provenanceMigration]) await migration.migrate(f.ctx.storage);
     expect(f.store.get(key)).toBe(migrated);
     const next = await accepted(f, "select", { ...workspace, expectedRevision: saved.revision,
       selection: { ...saved.selection!, planYolo: true } });
@@ -359,18 +229,54 @@ describe("container-owned policy configuration", () => {
     expect(next.accounts).toEqual(saved.accounts);
   });
 
-  test("native migration refuses misbound container keys and cannot replace a concurrent CAS winner", async () => {
-    const saved = await active(fixture()), f = fixture();
-    const key = `configuration/${digestOf(workspace)}`;
-    const raw = JSON.stringify({ ...saved, schemaVersion: 2, resourcesByMachine: {} });
+  test("schema3 catalogs become schema 4 unverified, read and migrated alike, with nothing else moving", async () => {
+    const source = fixture(), promoted = await active(source);
+    const changed = document(); changed.models[0]!.contextWindow = 199_999;
+    const saved = await accepted(source, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: changed });
+    expect([saved.active?.provenance, saved.draft?.provenance]).toEqual([null, null]);
+    const f = fixture(), key = `configuration/${digestOf(workspace)}`, raw = JSON.stringify(version3(saved));
     f.store.set(key, raw);
-    f.ctx.storage.keys = async () => [key];
-    const winner = { ...saved, revision: saved.revision + 1 };
-    f.ctx.storage.compareAndSet = async () => { f.store.set(key, JSON.stringify(winner)); return false; };
-    await expect(configurationMigration.migrate(f.ctx.storage)).rejects.toThrow("code_stale_preferences");
-    expect(await configuration(f)).toEqual(winner);
-    f.store.set(key, JSON.stringify({ ...saved, containerId: "container-b", schemaVersion: 2, resourcesByMachine: {} }));
-    await expect(configurationMigration.migrate(f.ctx.storage)).rejects.toThrow("code_invalid_configuration");
+    // Before the migration runs, a read already answers schema 4, and writes nothing.
+    expect(await configuration(f)).toEqual(saved);
+    expect(f.store.get(key)).toBe(raw);
+    f.ctx.storage.keys = async prefix => [...f.store.keys()].filter(key => key.startsWith(prefix ?? ""));
+    await provenanceMigration.migrate(f.ctx.storage);
+    expect(JSON.parse(f.store.get(key)!)).toEqual(saved);
+    const migrated = f.store.get(key);
+    await provenanceMigration.migrate(f.ctx.storage);
+    expect(f.store.get(key)).toBe(migrated);
+    // The review of a migrated catalog says it is unverified, and promoting it carries that along.
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "draft" });
+    expect(review.provenance).toBeNull();
+    expect((await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: saved.revision, source: "draft", reviewDigest: review.reviewDigest })).active)
+      .toEqual({ document: changed, digest: digestOf(changed), provenance: null });
+  });
+
+  test("the host plans the provenance migration from either earlier data version and never past this one", () => {
+    // Planning reads only names and targets, which is all that crosses the guest handshake.
+    const migrations = plugin.migrations.map(({ name, to }) => ({ name, to, migrate() {} }));
+    const plan = (stored: { major: number; minor: number }): DataPlan => planDataMigration({ pluginId: CODE_PLUGIN_ID,
+      declared: plugin.manifest.dataVersion, stored, applied: new Set(), migrations });
+    const names = (value: DataPlan) => value.kind === "migrate" ? value.run.map(migration => migration.name) : value.kind;
+    expect(names(plan({ major: 2, minor: 1 }))).toEqual(["canonical-configuration-v4"]);
+    expect(names(plan({ major: 1, minor: 0 }))).toEqual(["canonical-configuration-v3", "canonical-configuration-v4"]);
+    expect(names(plan({ major: 3, minor: 0 }))).toBe("ok");
+  });
+
+  test("native migration refuses misbound container keys and cannot replace a concurrent CAS winner", async () => {
+    for (const [migration, seeded] of [[configurationMigration, 2], [provenanceMigration, 3]] as const) {
+      const saved = await active(fixture()), f = fixture();
+      const key = `configuration/${digestOf(workspace)}`;
+      const older = (record: Configuration) => seeded === 2 ? { ...version3(record), schemaVersion: 2, resourcesByMachine: {} } : version3(record);
+      f.store.set(key, JSON.stringify(older(saved)));
+      f.ctx.storage.keys = async () => [key];
+      const winner = { ...saved, revision: saved.revision + 1 };
+      f.ctx.storage.compareAndSet = async () => { f.store.set(key, JSON.stringify(winner)); return false; };
+      await expect(migration.migrate(f.ctx.storage)).rejects.toThrow("code_stale_preferences");
+      expect(await configuration(f)).toEqual(winner);
+      f.store.set(key, JSON.stringify(older({ ...saved, containerId: "container-b" })));
+      await expect(migration.migrate(f.ctx.storage)).rejects.toThrow("code_invalid_configuration");
+    }
   });
 
   test("legacy adoption is explicit and leaves every machine recovery record untouched", async () => {
@@ -454,10 +360,13 @@ describe("pure client-supplied policy composition", () => {
     const observation = accounts();
     const record = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: 1,
       change: { kind: "set-account", reference: observation.accounts[1]!.reference, enabled: false } });
-    expect(await accepted(f, "composeProbe", { ...workspace, expectedRevision: record.revision, accounts: observation }))
-      .toEqual({ revision: record.revision, accountPool: { anthropic: [
-        { scope: observation.scope, credentialId: 1, identityKey: observation.accounts[0]!.identityKey }, { scope: observation.scope, credentialId: 3, identityKey: null },
-      ] } });
+    const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: record.revision, accounts: observation });
+    expect(probe).toEqual({ revision: record.revision, poolIdentityDigest: expect.stringMatching(/^[a-f0-9]{64}$/), accountPool: { anthropic: [
+      { scope: observation.scope, credentialId: 1, identityKey: observation.accounts[0]!.identityKey }, { scope: observation.scope, credentialId: 3, identityKey: null },
+    ] } });
+    // The pool's identity is which slots serve it, not the order OMP happened to list them in.
+    expect((await accepted(f, "composeProbe", { ...workspace, expectedRevision: record.revision,
+      accounts: { ...observation, accounts: [...observation.accounts].reverse() } })).poolIdentityDigest).toBe(probe.poolIdentityDigest);
     observation.accounts[1]!.credentialId = 9;
     observation.accounts[1]!.reference = { kind: "credential", scope: observation.scope, provider: "anthropic", credentialId: 9 };
     expect(await invoke(f, "composeProbe", { ...workspace, expectedRevision: record.revision, accounts: observation }))
@@ -512,7 +421,9 @@ describe("pure client-supplied policy composition", () => {
         contextWindow: model.tier * 200_000, maxTokens: 8192, reasoning: true,
         thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images })) };
     const draft = await accepted(f, "draftInventory", { inventory, budget: "any" });
-    expect(draft.document.models.map(model => [model.tokensPerSecond, model.timeToFirstTokenMs])).toEqual([[null, null], [null, null], [null, null]]);
+    // The charge, and nothing a caller could stage before a single model was probed.
+    expect("document" in draft).toBe(false);
+    expect(draft.benchmark.candidates.map(candidate => candidate.id)).toEqual(["native-model1", "native-model2", "native-model3"]);
     const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
       inventoryObservedAt: now, startedAt: now, completedAt: now + 1,
       results: draft.benchmark.candidates.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) };
@@ -521,6 +432,15 @@ describe("pure client-supplied policy composition", () => {
     benchmark.results[0]!.api = "different-api";
     expect(await invoke(f, "deriveCatalog", { inventory, benchmark, budget: "any" })).toEqual({ refused: "code_probe_missing_probe" });
     expect(await configuration(f)).toBeNull();
+    // A refusal that names its subject keeps the name across the door.
+    const regressing: InventoryReceipt = { ...inventory, models: [
+      { ...inventory.models[0]!, id: "wide-entry", contextWindow: 1_000_000, thinkingLevels: ["low"] },
+      { ...inventory.models[2]!, id: "narrow-top", contextWindow: 100_000, thinkingLevels: ["high"] },
+    ] };
+    const probed = (await accepted(f, "draftInventory", { inventory: regressing, budget: "any" })).benchmark.candidates;
+    expect(await invoke(f, "deriveCatalog", { inventory: regressing, budget: "any", benchmark: { ...benchmark,
+      results: probed.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) } }))
+      .toEqual({ refused: "code_ladder_regression: anthropic: anthropic/narrow-top regresses on anthropic/wide-entry" });
   });
 
   test("ordinary Code client rejects invalid requests and results while returning typed refusals", async () => {
@@ -534,6 +454,88 @@ describe("pure client-supplied policy composition", () => {
     await expect(client.call("initializeConfiguration", { ...workspace, expectedRevision: -1 })).rejects.toThrow();
     expect(await configuration(f)).toBeNull();
     await expect(createCodeClient(async () => ({ revision: 0 })).call("readConfiguration", workspace)).rejects.toThrow();
+  });
+});
+
+describe("verified catalogs and launch-time honesty", () => {
+  async function verification(f: Fixture, revision: number, observation = accounts()) {
+    const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: revision, accounts: observation });
+    return { ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, accounts: observation,
+      poolIdentityDigest: probe.poolIdentityDigest };
+  }
+
+  test("a verification records the pool Code reads itself, and review and promotion carry exactly that provenance", async () => {
+    const f = fixture(), record = await initialize(f);
+    const verified = await verification(f, record.revision);
+    const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: record.revision, document: document(), verification: verified });
+    expect(staged.draft?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000,
+      providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
+    expect(review.provenance).toEqual(staged.draft!.provenance);
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
+    expect(promoted.active).toEqual(staged.draft);
+    // Manual authorship stays exactly that: the same document staged without a verification is unverified.
+    expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
+  });
+
+  test("a verification whose pool moved, or that claims what its pool and receipts cannot, stages nothing", async () => {
+    const f = fixture(), record = await initialize(f);
+    const verified = await verification(f, record.revision);
+    const narrowed = { ...verified.accounts, accounts: verified.accounts.accounts.slice(1) };
+    const input = { ...workspace, expectedRevision: record.revision, document: document() };
+    expect(await invoke(f, "stageCatalog", { ...input, verification: { ...verified, accounts: narrowed } })).toEqual({ refused: "code_accounts_changed" });
+    const elsewhere = document();
+    elsewhere.models.push({ ...elsewhere.models[0]!, key: "elsewhere", provider: "deepseek", id: "native-elsewhere", api: "openai-completions" });
+    expect(await invoke(f, "stageCatalog", { ...input, document: elsewhere, verification: verified })).toEqual({ refused: "code_invalid_provenance" });
+    expect(await invoke(f, "stageCatalog", { ...input, verification: { ...verified, benchmarkCompletedAt: verified.inventoryObservedAt - 1 } }))
+      .toEqual({ refused: "code_invalid_provenance" });
+    expect(await invoke(f, "stageCatalog", { ...input, verification: { ...verified, accounts: { ...verified.accounts, observedAt: now + 1 } } }))
+      .toEqual({ refused: "code_invalid_accounts" });
+    expect(await configuration(f)).toEqual(record);
+  });
+
+  test("a launch prunes the fallbacks no included account serves and still refuses a lead nobody serves", async () => {
+    // Spark leads `tiny` and `commit`, so the tier-1 rung, alone on `openai`, is only ever a fallback.
+    const rung = (key: string, provider: string, tier: 0 | 1 | 2 | 3, inputCostPerMillion: number) => ({ ...document().models[0]!,
+      key, provider, id: `native-${key}`, api: "openai-codex-responses", tier, inputCostPerMillion, images: tier !== 0 });
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [rung("o1", "openai", 1, 1), rung("o2", "openai-codex", 2, 2),
+      rung("o3", "openai-codex", 3, 3), rung("spark", "openai-codex", 0, 0.5)] };
+    const f = fixture();
+    f.published = published(catalog.models);
+    const record = await staged(f, catalog);
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
+    const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision,
+      selection: { ...promoted.selection!, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true, fallback: true,
+        // A glance advisor would lead on the tier-1 rung itself.
+        advisor: "off" } });
+    const scope = accounts().scope;
+    const slot = (provider: string, credentialId: number) => ({ reference: { kind: "credential" as const, scope, provider, credentialId },
+      credentialId, identityKey: null, type: "api_key" as const, email: null, disabled: false, blocks: [] });
+    const input = { ...workspace, expectedRevision: saved.revision, prompt: "" };
+    const composed = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1)] } });
+    expect(composed.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o1")).toBe(false);
+    expect(composed.review.routes.some(entry => entry.fallback.length > 0)).toBe(true);
+    expect(Object.values(composed.overlay.retry?.fallbackChains ?? {}).flat().some(reference => reference.startsWith("openai/"))).toBe(false);
+    // With both providers served, the same fallbacks are routed rather than pruned.
+    const both = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1), slot("openai", 2)] } });
+    expect(both.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o1")).toBe(true);
+    expect(await invoke(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai", 2)] } }))
+      .toEqual({ refused: "code_account_unavailable" });
+  });
+
+  test("a launch refuses, naming them, routed models the current OMP no longer publishes", async () => {
+    const f = fixture(), record = await active(f);
+    const input = { ...workspace, expectedRevision: record.revision, accounts: accounts(), prompt: "" };
+    const composed = await accepted(f, "composeSession", input);
+    f.published = published(document().models.filter(model => model.tier !== 3));
+    expect(await invoke(f, "composeSession", input)).toEqual({ refused: "code_model_unpublished: anthropic/native-model3" });
+    f.published = published([]);
+    expect(await invoke(f, "composeSession", input))
+      .toEqual({ refused: "code_model_unpublished: anthropic/native-model1, anthropic/native-model2, anthropic/native-model3" });
+    // Another OMP list that still publishes every routed model composes, as a different composition.
+    f.published = { ...published(), revision: "b".repeat(64) };
+    expect((await accepted(f, "composeSession", input)).compositionDigest).not.toBe(composed.compositionDigest);
   });
 });
 
