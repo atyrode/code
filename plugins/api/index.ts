@@ -42,6 +42,9 @@ export {
   SessionReadInputSchema,
   SessionCancelInputSchema,
   SessionCompositionSchema,
+  StarterProfileInputSchema,
+  StarterProfileReviewSchema,
+  type StarterProfileReview,
   /** A workspace, and a workspace plus the destination a caller chose for it. */
   WorkspaceSchema,
   TargetSchema,
@@ -67,3 +70,5 @@ export {
 export { PROMPT_MAX_BYTES, RESTRICTED_TOOL_NAMES, RestrictedAutomationSchema } from "@atyrode/manifold-omp";
 /** React-free owner-to-owner review, preparation and strict saved-session resume. */
 export { createCodeWorkflowClient, WorkflowError, type Dispatch, type SessionReview, type ResumeSessionOptions, type RuntimeConfigurationReview } from "../code/workflow.ts";
+/** Pure policy derivation from passive metadata, without inventory or native effects. */
+export { catalogFromMetadata } from "../domain/probe.ts";

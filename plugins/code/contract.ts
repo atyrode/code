@@ -1,5 +1,5 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
-import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
+import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, ModelCatalogSnapshotSchema,
   JobInputBindingSchema, OverlaySchema, PostingKeySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
   SessionSilenceSchema, SessionActivitySchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
@@ -39,6 +39,16 @@ export const CatalogReviewSchema = z.strictObject({
   revision, source: z.enum(["active", "draft"]), catalogDigest: digest, review: ReviewSchema, reviewDigest: digest,
 });
 export type CatalogReview = z.infer<typeof CatalogReviewSchema>;
+/** Caller-supplied bundled metadata is an authorized policy import, not authenticated
+ * native provenance. The selected budget also defines the starter's candidate set. */
+export const StarterProfileInputSchema = RevisionWorkspaceSchema.extend({
+  metadata: ModelCatalogSnapshotSchema, selection: SelectionSchema.extend({ budget: SelectionSchema.shape.budget.removeDefault() }),
+});
+export const StarterProfileReviewSchema = z.strictObject({
+  revision, metadataRevision: ModelCatalogSnapshotSchema.shape.revision,
+  catalogDigest: digest, document: CatalogDocumentSchema, review: ReviewSchema, reviewDigest: digest,
+});
+export type StarterProfileReview = z.infer<typeof StarterProfileReviewSchema>;
 /** The prompt bound is OMP's, in bytes, because the prompt reaches the machine as one entry
  * of the job input map the hub bounds (`PROMPT_MAX_BYTES`, 44 KiB). Code takes the schema
  * itself rather than the number, so the two can never disagree. */
@@ -167,6 +177,8 @@ export const PermissionPlanSchema = z.strictObject({
 export const rootActionSchemas = {
   readConfiguration: { input: ConfigurationLookupSchema, result: ConfigurationReadSchema },
   initializeConfiguration: { input: ConfigurationLookupSchema.extend({ expectedRevision: revision }), result: ConfigurationSchema },
+  reviewStarterProfile: { input: StarterProfileInputSchema, result: StarterProfileReviewSchema },
+  adoptStarterProfile: { input: StarterProfileInputSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
   stageCatalog: { input: RevisionWorkspaceSchema.extend({ document: CatalogDocumentSchema }), result: ConfigurationSchema },
   reviewCatalog: { input: CatalogReviewInputSchema, result: CatalogReviewSchema },
   promoteCatalog: { input: CatalogReviewInputSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },

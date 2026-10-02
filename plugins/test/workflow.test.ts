@@ -1,10 +1,142 @@
 import { expect, test } from "bun:test";
-import { actionDoor, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { actionDoor, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient } from "../code/workflow.ts";
 import type { TerminalSummary } from "@manifold/protocol";
-import type { ActionResult } from "../code/contract.ts";
+import { actionSchemas, type ActionInput, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { catalogFromMetadata } from "../domain/probe.ts";
+import { handlers } from "../code/server.ts";
+import type { CodeContext } from "../code/context.ts";
+
+function starterFixture() {
+  const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+    models: [1, 2, 3].map(tier => ({
+      provider: "anthropic", id: `model-${tier}`, api: "anthropic-messages", quotaTier: null,
+      inputCostPerMillion: tier, outputCostPerMillion: tier * 3, contextWindow: 200_000, maxTokens: 64000,
+      reasoning: true, thinkingLevels: ["medium"], images: true,
+    })) };
+  const input: ActionInput<"reviewStarterProfile"> = { containerId: "workspace", expectedRevision: 0, metadata,
+    selection: { ...defaultSelection(compileCatalog(catalogFromMetadata(metadata, "any"))), capability: 3, prewalk: true } };
+  const store = new Map<string, string>(), calls: string[] = [];
+  const hooks: Partial<Record<"review" | "metadata" | "adopt", () => void | Promise<void>>> = {};
+  const source = { metadata: structuredClone(metadata) };
+  const unavailable = async (): Promise<never> => { throw new Error("Unexpected native operation"); };
+  const ctx: CodeContext = {
+    now: () => 1000, emit() {}, outsideScope: async () => null,
+    auth: { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" },
+      caps: ["containers:read", "containers:write"], containerScope: null, isRoot: false,
+      allows: async (cap, node) => node?.kind === "container" && node.containerId === input.containerId &&
+        (cap === "containers:read" || cap === "containers:write") },
+    storage: { pluginId: "atyrode.code", get: async key => store.get(key) ?? null,
+      set: unavailable, delete: unavailable, keys: unavailable,
+      compareAndSet: async (key, expected, value) => {
+        if ((store.get(key) ?? null) !== expected) return false;
+        store.set(key, value); return true;
+      } },
+    services: { describe: unavailable, read: unavailable, invoke: unavailable,
+      readConfiguration: unavailable, configureConfiguration: unavailable,
+      describeInstance: unavailable, readInstance: unavailable, listInstances: unavailable,
+      readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable },
+    actions: { call: unavailable },
+  };
+  const workflow = createCodeWorkflowClient(async (door, raw) => {
+    calls.push(door);
+    if (door === actionDoor("readModelCatalog")) {
+      const providers = (raw as OmpInput<"readModelCatalog">).providers;
+      if (JSON.stringify(providers) !== JSON.stringify(["anthropic", "deepseek", "openai-codex"]))
+        throw new Error("Starter source scope changed");
+      await hooks.metadata?.();
+      return source.metadata;
+    }
+    const name = door === "atyrode.code.reviewStarterProfile" ? "reviewStarterProfile"
+      : door === "atyrode.code.adoptStarterProfile" ? "adoptStarterProfile" : null;
+    if (!name) throw new Error(`Unexpected owner/action: ${door}`);
+    const result = await handlers[name]!(ctx, raw);
+    await hooks[name === "reviewStarterProfile" ? "review" : "adopt"]?.();
+    return result;
+  });
+  return { input, source, workflow, store, calls, hooks, ctx };
+}
+
+test("passive source review adopts exact selected policy without runtime readiness", async () => {
+  const f = starterFixture();
+  const metadata = await f.workflow.readStarterCatalog();
+  const saved = await f.workflow.adoptStarterProfile({ ...f.input, metadata });
+  expect(saved).toMatchObject({ revision: 1, containerId: f.input.containerId, selection: f.input.selection,
+    active: { document: catalogFromMetadata(metadata, f.input.selection.budget) }, draft: null });
+  expect(JSON.parse([...f.store.values()][0]!)).toEqual(saved);
+});
+
+test("a complete metadata change refuses adoption even when its opaque revision or derived document is unchanged", async () => {
+  for (const mutate of [
+    (metadata: ModelCatalogSnapshot) => { metadata.models[0]!.maxTokens = 63000; },
+    (metadata: ModelCatalogSnapshot) => { metadata.revision = "b".repeat(64); },
+    (metadata: ModelCatalogSnapshot) => { metadata.models.push({ ...metadata.models[0]!, id: "excluded", quotaTier: "spark" }); },
+  ]) {
+    const f = starterFixture();
+    f.hooks.review = () => { mutate(f.source.metadata); };
+    await expect(f.workflow.adoptStarterProfile(f.input)).rejects.toThrow("code_starter_metadata_changed");
+    expect(f.store.size).toBe(0);
+    expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
+  }
+});
+
+test("caller mutations at either observation boundary cannot replace reviewed metadata, selection or workspace", async () => {
+  for (const phase of ["review", "metadata"] as const) {
+    for (const mutate of [
+      (input: ActionInput<"reviewStarterProfile">) => { input.selection.prewalk = false; },
+      (input: ActionInput<"reviewStarterProfile">) => { input.containerId = "other"; },
+      (input: ActionInput<"reviewStarterProfile">) => { input.metadata.models[0]!.maxTokens = 63000; },
+    ]) {
+      const f = starterFixture();
+      f.hooks[phase] = () => { mutate(f.input); };
+      await expect(f.workflow.adoptStarterProfile(f.input)).rejects.toThrow("code_starter_changed");
+      expect(f.store.size).toBe(0);
+      expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
+    }
+  }
+});
+
+test("monotonic caller generations revoke reviews even after authority or observations recover", async () => {
+  for (const phase of ["review", "metadata"] as const) {
+    const f = starterFixture();
+    let generation = 0, available = true;
+    const started = generation;
+    f.hooks[phase] = () => { available = false; generation++; available = true; };
+    await expect(f.workflow.adoptStarterProfile(f.input, () => available && generation === started)).rejects.toThrow("code_starter_changed");
+    expect(f.store.size).toBe(0);
+    expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
+  }
+  const f = starterFixture();
+  await expect(f.workflow.adoptStarterProfile(f.input, () => false)).rejects.toThrow("code_starter_changed");
+  expect(f.calls).toEqual([]);
+});
+
+test("source observation failure stops adoption and uncertain committed responses are never replayed", async () => {
+  const unavailable = starterFixture();
+  unavailable.hooks.metadata = () => { throw new Error("Metadata unavailable"); };
+  await expect(unavailable.workflow.adoptStarterProfile(unavailable.input)).rejects.toThrow("Metadata unavailable");
+  expect(unavailable.store.size).toBe(0);
+  expect(unavailable.calls).not.toContain("atyrode.code.adoptStarterProfile");
+  const uncertain = starterFixture();
+  uncertain.hooks.adopt = () => { throw new Error("Response lost"); };
+  await expect(uncertain.workflow.adoptStarterProfile(uncertain.input)).rejects.toThrow("Response lost");
+  expect(uncertain.calls.filter(door => door === "atyrode.code.adoptStarterProfile")).toHaveLength(1);
+  const saved = actionSchemas.adoptStarterProfile.result.parse(JSON.parse([...uncertain.store.values()][0]!));
+  expect(saved).toMatchObject({ revision: 1, selection: uncertain.input.selection });
+});
+
+test("a revoked adoption completion requires observation rather than reporting or replaying success", async () => {
+  const f = starterFixture();
+  let current = true;
+  f.hooks.adopt = () => { current = false; };
+  await expect(f.workflow.adoptStarterProfile(f.input, () => current)).rejects.toThrow("code_starter_changed");
+  expect(f.calls.filter(door => door === "atyrode.code.adoptStarterProfile")).toHaveLength(1);
+  const saved: Configuration = actionSchemas.adoptStarterProfile.result.parse(JSON.parse([...f.store.values()][0]!));
+  expect(saved.revision).toBe(1);
+  expect(saved.selection).toEqual(f.input.selection);
+});
 
 const target = { containerId: "workspace", machineId: "destination" };
 function sessionFixture() {

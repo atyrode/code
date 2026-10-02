@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceConfigurationSchema, ServiceReplySchema, type ServiceConfiguration } from "@manifold/protocol";
-import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt } from "@atyrode/manifold-omp";
+import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt, ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
@@ -8,6 +8,9 @@ import { handlers } from "../code/server.ts";
 import { configurationMigration } from "../code/state.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import { buildCodeServices } from "../code/service-policies.ts";
+import { catalogFromMetadata } from "../domain/probe.ts";
+import { compileCatalog } from "../domain/catalog.ts";
+import { defaultSelection } from "../domain/routing.ts";
 
 const target: Target = { containerId: "container-a", machineId: "machine-a" };
 const workspace = { containerId: target.containerId };
@@ -123,6 +126,158 @@ function seedLegacy(f: Fixture, scope: Target, record: Configuration) {
   f.store.set(key, raw);
   return { key, raw };
 }
+
+function starterInput(): ActionInput<"reviewStarterProfile"> {
+  const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+    models: document().models.map(model => ({
+      provider: model.provider, id: model.id, api: model.api, quotaTier: null,
+      inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
+      contextWindow: model.contextWindow, maxTokens: 64000, reasoning: true, thinkingLevels: model.thinkingLevels, images: model.images,
+    })) };
+  const selection = { ...defaultSelection(compileCatalog(catalogFromMetadata(metadata, "any"))),
+    capability: 3 as const, thinking: "high" as const, advisor: "audit" as const, fallback: false, prewalk: true, planYolo: true };
+  return { ...workspace, expectedRevision: 0, metadata, selection };
+}
+
+describe("atomic starter policy adoption", () => {
+  test("read-only review and one CAS preserve the exact nondefault profile without native operations", async () => {
+    const f = fixture(), input = starterInput();
+    let commits = 0, events = 0;
+    const cas = f.ctx.storage.compareAndSet;
+    f.ctx.storage.compareAndSet = async (...args) => { commits++; return cas(...args); };
+    f.ctx.emit = () => { events++; };
+    f.access.writable.clear();
+    const review = await accepted(f, "reviewStarterProfile", input);
+    expect(review.review.selection).toEqual(input.selection);
+    expect(review.review.routes.find(route => route.role === "advisor")?.lead.key).toBe("anthropic.native-model-3");
+    expect(review.review.routes.every(route => route.fallback.length === 0)).toBe(true);
+    expect(f.store.size).toBe(0);
+    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(workspace.containerId);
+    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest });
+    expect(saved).toMatchObject({ revision: 1, selection: input.selection,
+      active: { document: review.document, digest: review.catalogDigest }, draft: null });
+    expect(saved.active!.document.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+    expect(await configuration(f)).toEqual(saved);
+    expect(commits).toBe(1);
+    expect(events).toBe(1);
+  });
+
+  test("initialized empty records retain exact account exclusions and presets in their next revision", async () => {
+    const f = fixture();
+    await initialize(f);
+    const chosen = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: 1,
+      change: { kind: "create-preset", preset: { id: "focus", name: "Manual", disabled: [accounts().accounts[0]!.reference] } } });
+    const previous = await accepted(f, "changeAccounts", { ...workspace, expectedRevision: chosen.revision,
+      change: { kind: "activate-preset", id: "focus" } });
+    const input = { ...starterInput(), expectedRevision: previous.revision };
+    const review = await accepted(f, "reviewStarterProfile", input);
+    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest });
+    expect(saved.revision).toBe(previous.revision + 1);
+    expect(saved.accounts).toEqual(previous.accounts);
+    expect(saved.selection).toEqual(input.selection);
+  });
+
+  test("saved draft and active policy refuse replacement at their exact current revisions", async () => {
+    for (const prepare of [staged, active]) {
+      const f = fixture(), previous = await prepare(f);
+      const input = { ...starterInput(), expectedRevision: previous.revision };
+      expect(await invoke(f, "reviewStarterProfile", input)).toEqual({ refused: "code_starter_unavailable" });
+      expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: "a".repeat(64) }))
+        .toEqual({ refused: "code_starter_unavailable" });
+      expect(await configuration(f)).toEqual(previous);
+    }
+  });
+
+  test("review digests bind nonrouted metadata, exact choices, workspace and revision", async () => {
+    const f = fixture(), input = starterInput();
+    const review = await accepted(f, "reviewStarterProfile", input);
+    const metadata = structuredClone(input.metadata);
+    metadata.models[0]!.maxTokens = 63000;
+    const changed = await accepted(f, "reviewStarterProfile", { ...input, metadata });
+    expect(changed.document).toEqual(review.document);
+    expect(changed.review.routes).toEqual(review.review.routes);
+    expect(changed.reviewDigest).not.toBe(review.reviewDigest);
+    for (const amendment of [
+      { metadata }, { metadata: { ...input.metadata, revision: "b".repeat(64) } },
+      { metadata: { ...input.metadata, models: [...input.metadata.models, { ...input.metadata.models[0]!, id: "excluded", quotaTier: "spark" }] } },
+      { selection: { ...input.selection, prewalk: false } }, { containerId: "container-b" }, { reviewDigest: "f".repeat(64) },
+    ]) {
+      expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest, ...amendment }))
+        .toEqual({ refused: "code_preview_changed" });
+    }
+    expect(await invoke(f, "adoptStarterProfile", { ...input, expectedRevision: 1, reviewDigest: review.reviewDigest }))
+      .toEqual({ refused: "code_stale_preferences" });
+    expect(f.store.size).toBe(0);
+  });
+
+  test("two revision-zero adopters have one winner and never overwrite or rebase onto an initializer", async () => {
+    const f = fixture(), first = starterInput(), second = { ...first, selection: { ...first.selection, prewalk: false } };
+    const inputs = [first, second];
+    const reviews = await Promise.all(inputs.map(input => accepted(f, "reviewStarterProfile", input)));
+    f.holdTwoReads();
+    const results = await Promise.all(inputs.map((input, index) => invoke(f, "adoptStarterProfile", { ...input, reviewDigest: reviews[index]!.reviewDigest })));
+    const winner = results.findIndex(result => actionSchemas.adoptStarterProfile.result.safeParse(result).success);
+    expect(winner).not.toBe(-1);
+    expect(results[1 - winner]).toEqual({ refused: "code_stale_preferences" });
+    const saved = await configuration(f);
+    expect(saved).toMatchObject({ revision: 1, selection: inputs[winner]!.selection,
+      active: { document: reviews[winner]!.document, digest: reviews[winner]!.catalogDigest } });
+    expect(await invoke(f, "adoptStarterProfile", { ...inputs[1 - winner]!, reviewDigest: reviews[1 - winner]!.reviewDigest }))
+      .toEqual({ refused: "code_stale_preferences" });
+    expect(await configuration(f)).toEqual(saved);
+    const other = fixture(), review = await accepted(other, "reviewStarterProfile", first);
+    const initialized = await initialize(other);
+    expect(await invoke(other, "adoptStarterProfile", { ...first, reviewDigest: review.reviewDigest })).toEqual({ refused: "code_stale_preferences" });
+    expect(await configuration(other)).toEqual(initialized);
+  });
+
+  test("starter adoption does not import legacy accounts and rechecks write authority before its CAS", async () => {
+    const f = fixture(), input = starterInput(), legacy = await active(fixture());
+    legacy.accounts.manualDisabled = [accounts().accounts[0]!.reference];
+    const seeded = seedLegacy(f, target, legacy);
+    const reviewed = await accepted(f, "reviewStarterProfile", input);
+    f.afterNextRead(async () => { f.access.writable.clear(); });
+    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: reviewed.reviewDigest }))
+      .toEqual({ refused: "code_scope_refused" });
+    expect(await configuration(f)).toBeNull();
+    f.access.writable.add(workspace.containerId);
+    const saved = await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: reviewed.reviewDigest });
+    expect(saved.revision).toBe(1);
+    expect(saved.selection).toEqual(input.selection);
+    expect(saved.accounts).toEqual({ activePreset: null, manualDisabled: [], presets: [] });
+    expect(f.store.get(seeded.key)).toBe(seeded.raw);
+    f.access.readable.clear();
+    expect(await invoke(f, "reviewStarterProfile", { ...input, containerId: "container-b" }))
+      .toEqual({ refused: "code_scope_refused" });
+  });
+
+  test("failed canonical observation and a missing explicit derivation budget never become an absent record", async () => {
+    const f = fixture(), input = starterInput();
+    const { budget: _budget, ...selection } = input.selection;
+    expect(await handlers.reviewStarterProfile!(f.ctx, { ...input, selection })).toEqual({ refused: "code_invalid_request" });
+    f.ctx.storage.get = unavailable;
+    expect(await invoke(f, "reviewStarterProfile", input)).toEqual({ refused: "code_operation_unavailable" });
+    expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: "a".repeat(64) }))
+      .toEqual({ refused: "code_operation_unavailable" });
+    expect(f.store.size).toBe(0);
+  });
+
+  test("crossing an off-peak estimate window does not invalidate an unchanged starter policy review", async () => {
+    const f = fixture(), input = starterInput();
+    input.metadata.models = [{ ...input.metadata.models[0]!, provider: "deepseek", api: "openai-completions",
+      inputCostPerMillion: 40, outputCostPerMillion: 40, thinkingLevels: ["medium"] }];
+    input.selection = defaultSelection(compileCatalog(catalogFromMetadata(input.metadata, "any")));
+    const peak = await accepted(f, "reviewStarterProfile", input);
+    f.ctx.now = () => Date.UTC(2026, 0, 1, 20);
+    const offPeak = await accepted(f, "reviewStarterProfile", input);
+    expect(offPeak.review.estimates.costScore).not.toBe(peak.review.estimates.costScore);
+    expect(offPeak.reviewDigest).toBe(peak.reviewDigest);
+    expect((await accepted(f, "adoptStarterProfile", { ...input, reviewDigest: peak.reviewDigest })).selection)
+      .toEqual(input.selection);
+  });
+});
 
 describe("container-owned policy configuration", () => {
   test("competing same-revision writers commit once and a stale retry cannot overwrite the winner", async () => {

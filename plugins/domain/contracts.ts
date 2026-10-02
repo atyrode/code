@@ -4,7 +4,7 @@ import { AccountReferenceSchema, AccountsObservationSchema, ThinkingLevelSchema,
 export class DomainError extends Error {
   constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
     "invalid_choices" | "account_unavailable" | "preset_exists" | "preset_missing" | "invalid_usage" |
-    "budget_unsatisfiable") {
+    "budget_unsatisfiable" | "starter_candidate_limit") {
     super(`code_${code}`);
   }
 }

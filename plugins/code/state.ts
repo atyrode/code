@@ -2,9 +2,10 @@ import { z } from "zod";
 import type { ServerMigration } from "@manifold/plugin-kit/server";
 import { initialAccountChoices } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
+import { catalogFromMetadata } from "../domain/probe.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { CODE_PREFERENCES_EVENT, ConfigurationSchema,
-  ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview } from "./contract.ts";
+  ConfigurationLookupSchema, TargetSchema, type Configuration, type Workspace, type CatalogReview, type ActionInput, type StarterProfileReview } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 
 /** Whether this principal reaches the workspace at all. `authorizeTarget` is the refusing
@@ -130,4 +131,31 @@ export function catalogReview(ctx: CodeContext, record: Configuration, source: "
   // Time-dependent estimates do not change the reviewed route and selection.
   return { ...facts, reviewDigest: digestOf({ containerId: record.containerId,
     revision: facts.revision, source, catalogDigest: catalog.digest, selection: review.selection, routes: review.routes }) };
+}
+
+/** Both starter doors derive the exact same policy; neither stages nor replaces a catalog. */
+export function starterProfileReview(ctx: CodeContext, previous: StoredConfiguration,
+  input: ActionInput<"reviewStarterProfile">): StarterProfileReview {
+  expectRevision(previous, input.expectedRevision);
+  if (previous.record?.active || previous.record?.draft) throw new CodeRefusal("starter_unavailable");
+  const document = catalogFromMetadata(input.metadata, input.selection.budget);
+  const review = reviewCatalog(compileCatalog(document), input.selection, ctx.now());
+  const catalogDigest = digestOf(document);
+  return { revision: input.expectedRevision, metadataRevision: input.metadata.revision, catalogDigest, document, review,
+    // Exclude only time-dependent display estimates. Bind even metadata not selected
+    // into the ladder, since the caller reviewed that complete submitted response.
+    reviewDigest: digestOf({ containerId: input.containerId, expectedRevision: input.expectedRevision,
+      metadata: input.metadata, document, selection: review.selection, routes: review.routes }) };
+}
+
+export async function adoptStarterProfile(ctx: CodeContext, input: ActionInput<"adoptStarterProfile">): Promise<Configuration> {
+  const previous = await readConfiguration(ctx, input, true);
+  const reviewed = starterProfileReview(ctx, previous, input);
+  if (reviewed.reviewDigest !== input.reviewDigest) throw new CodeRefusal("preview_changed");
+  return commitConfiguration(ctx, previous, {
+    ...previous.workspace, schemaVersion: 3, revision: input.expectedRevision,
+    accounts: previous.record?.accounts ?? initialAccountChoices(),
+    active: { document: reviewed.document, digest: reviewed.catalogDigest }, draft: null,
+    selection: reviewed.review.selection, updatedBy: ctx.auth.principal.id, updatedAt: ctx.now(),
+  });
 }

@@ -12,12 +12,12 @@ import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from
 import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration,
-  readConfiguration, requireConfiguration } from "./state.ts";
+  readConfiguration, requireConfiguration, starterProfileReview, adoptStarterProfile } from "./state.ts";
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
+  initializeConfiguration: true, adoptStarterProfile: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
   configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
@@ -46,6 +46,10 @@ const productHandlers: ProductHandlers = {
     return { revision: record?.revision ?? 0, configuration: record, legacyMachineId };
   },
   initializeConfiguration: (ctx, args) => initializeConfiguration(ctx, args, args.expectedRevision),
+  async reviewStarterProfile(ctx, args) {
+    return starterProfileReview(ctx, await readConfiguration(ctx, args), args);
+  },
+  adoptStarterProfile,
   async stageCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);

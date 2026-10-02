@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { PROBE_MODEL_LIMIT, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt } from "@atyrode/manifold-omp";
-import { benchmarkCandidates, catalogFromObservations, scaffoldInventory } from "./probe.ts";
+import { PROBE_MODEL_LIMIT, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
+import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, scaffoldInventory } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
 
@@ -336,5 +336,62 @@ describe("pure typed scaffolding", () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain("openrouter.alpha-1_3Afree");
     expect(keys).toContain("openrouter.alpha-1-free");
+  });
+});
+
+describe("passive starter metadata", () => {
+  function metadata(): ModelCatalogSnapshot {
+    return { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+      models: fullInventory().models.map(model => ({ ...model, quotaTier: model.provider === "openai-codex" ? "chat" : null })) };
+  }
+
+  test("unmeasured exact metadata derives complete routes without inventory evidence", () => {
+    const snapshot = metadata(), document = catalogFromMetadata(snapshot, "any");
+    const compiled = compileCatalog(document), selection = defaultSelection(compiled);
+    const review = reviewCatalog(compiled, selection, 1000);
+    expect(review.routes.map(route => route.role)).toEqual([
+      "default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit",
+    ]);
+    for (const model of document.models) {
+      const source = snapshot.models.find(row => row.provider === model.provider && row.id === model.id)!;
+      expect(model).toMatchObject({ provider: source.provider, id: source.id, api: source.api,
+        inputCostPerMillion: source.inputCostPerMillion, outputCostPerMillion: source.outputCostPerMillion,
+        tokensPerSecond: null, timeToFirstTokenMs: null });
+    }
+    expect(catalogFromMetadata({ ...snapshot, models: [...snapshot.models].reverse() }, "any")).toEqual(document);
+  });
+
+  test("special and unknown quota classifications cannot enter ordinary rungs", () => {
+    const snapshot = metadata(), ordinary = catalogFromMetadata(snapshot, "any");
+    const base = snapshot.models.find(model => model.provider === "openai-codex")!;
+    snapshot.models.push(...["spark", "future-resource"].map((quotaTier, index) => ({
+      ...base, id: `cheap-special-${index}`, inputCostPerMillion: 0, outputCostPerMillion: 0, quotaTier,
+    })));
+    expect(catalogFromMetadata(snapshot, "any")).toEqual(ordinary);
+    expect(() => reviewCatalog(compileCatalog(ordinary), { ...defaultSelection(compileCatalog(ordinary)), spark: true }, 1000))
+      .toThrow("code_invalid_selection");
+  });
+
+  test("candidate 257 refuses before supersession, while budget and resource exclusions precede the bound", () => {
+    const snapshot = metadata(), base = { ...snapshot.models[0]!, provider: "vendor", api: "vendor-chat" };
+    snapshot.models = Array.from({ length: 256 }, (_, index) => ({ ...base, id: `series-${index + 1}` }));
+    expect(catalogFromMetadata(snapshot, "any").models.map(model => model.id)).toEqual(["series-256"]);
+    snapshot.models.push({ ...base, id: "series-257" });
+    expect(() => catalogFromMetadata(snapshot, "any")).toThrow("code_starter_candidate_limit");
+    snapshot.models.push({ ...base, id: "free", inputCostPerMillion: 0, outputCostPerMillion: 0 });
+    expect(catalogFromMetadata(snapshot, "free").models.map(model => model.id)).toEqual(["free"]);
+    snapshot.models = snapshot.models.map(model => ({ ...model, quotaTier: model.id === "free" ? null : "unrecognized" }));
+    expect(catalogFromMetadata(snapshot, "any").models.map(model => model.id)).toEqual(["free"]);
+  });
+
+  test("duplicate, case-folded and API aliases refuse even when excluded by quota", () => {
+    for (const change of [{}, { id: "CLAUDE-HAIKU-5" }, { api: "other-api" }]) {
+      const snapshot = metadata();
+      snapshot.models.push({ ...snapshot.models[0]!, ...change, quotaTier: "spark" });
+      expect(() => catalogFromMetadata(snapshot, "any")).toThrow("probe_ambiguous_identity");
+    }
+    const snapshot = metadata(), base = snapshot.models[0]!;
+    snapshot.models = [{ ...base, provider: "vendor.part", id: "model" }, { ...base, provider: "vendor", id: "part.model" }];
+    expect(() => catalogFromMetadata(snapshot, "any")).toThrow("probe_ambiguous_identity");
   });
 });

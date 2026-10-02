@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, InventoryModelSchema,
+import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, InventoryModelSchema, ModelCatalogSnapshotSchema,
   ProbeIdentitySchema, ProbeError, ThinkingLevelSchema, epochMilliseconds, identifier, parseBenchmarkInput, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type ProbeIdentity, type ProbeRefusal } from "@atyrode/manifold-omp";
-import { CatalogDocumentSchema, SelectionSchema, admittedBy, type CatalogDocument, type CatalogModel } from "./contracts.ts";
+import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
 import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
@@ -250,6 +250,28 @@ function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, facts?: M
   const document = parse(CatalogDocumentSchema, { schemaVersion: 1, models });
   try { compileCatalog(document); } catch { throw new ProbeError("insufficient_ladder"); }
   return document;
+}
+
+/** Passive metadata is policy input, never inventory, reachability or measured performance.
+ * Check the whole submitted identity set before narrowing it; silently choosing between
+ * aliases would make the same response mean different policies to different callers. */
+export function catalogFromMetadata(snapshotValue: unknown, budget: Selection["budget"]): CatalogDocument {
+  const snapshot = parse(ModelCatalogSnapshotSchema, snapshotValue);
+  if (budget === undefined) throw new ProbeError("invalid_input");
+  const options = parse(ScaffoldOptionsSchema, { specials: [], budget }, "invalid_input");
+  unique(snapshot.models);
+  const allowed = snapshot.models.filter(model => (model.quotaTier === null || model.quotaTier === "chat") &&
+    eligible(model) && admittedBy(options.budget, model));
+  // The transport bound is not the policy bound. Refuse before supersession and
+  // the ladder's quadratic allocations, without truncating the candidate set.
+  if (allowed.length > 256) throw new DomainError("starter_candidate_limit");
+  const keys = new Set<string>();
+  for (const model of allowed) {
+    const key = candidateKey(model);
+    if (keys.has(key)) throw new ProbeError("ambiguous_identity");
+    keys.add(key);
+  }
+  return scaffold(allowed, options);
 }
 /** Offline choices are a draft, never an inventory job and never a reachability claim. */
 export function scaffoldInventory(inventoryValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): CatalogDraft {

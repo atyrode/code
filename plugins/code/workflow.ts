@@ -2,7 +2,7 @@ import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_I
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
   JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type TerminalSummary, canonicalJobJson } from "@manifold/protocol";
 import { z } from "zod";
-import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
+import { createCodeClient, StarterProfileInputSchema, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { projectUsage } from "../domain/usage.ts";
 import type { AccountChoices, Selection } from "../domain/contracts.ts";
@@ -49,6 +49,37 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
+  // Keep the filter fixed across the initial preview and the post-review reread.
+  // This asserts where the workflow obtained its input, not signed native provenance.
+  const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
+  async function adoptStarterProfile(input: ActionInput<"reviewStarterProfile">,
+    isCurrent: () => boolean = () => true): Promise<ActionResult<"adoptStarterProfile">> {
+    const frozen = StarterProfileInputSchema.parse(input);
+    const inputKey = canonicalJobJson(input);
+    let revoked = false;
+    const assertCurrent = () => {
+      revoked = revoked || !isCurrent() || canonicalJobJson(input) !== inputKey;
+      if (revoked) throw new WorkflowError("code_starter_changed");
+    };
+    assertCurrent();
+    const reviewed = await code("reviewStarterProfile", frozen);
+    assertCurrent();
+    if (reviewed.revision !== frozen.expectedRevision || reviewed.metadataRevision !== frozen.metadata.revision ||
+      canonicalJobJson(reviewed.review.selection) !== canonicalJobJson(frozen.selection))
+      throw new WorkflowError("code_preview_changed");
+    const current = await readStarterCatalog();
+    assertCurrent();
+    // Revision covers the unfiltered registry, so neither the revision alone nor
+    // the derived document proves this complete filtered response stayed the same.
+    if (current.revision !== frozen.metadata.revision || canonicalJobJson(current) !== canonicalJobJson(frozen.metadata))
+      throw new WorkflowError("code_starter_metadata_changed");
+    assertCurrent();
+    // Exactly one effect. A transport failure or revoked completion is uncertain:
+    // callers must observe canonical configuration, never replay this adoption.
+    const saved = await code("adoptStarterProfile", { ...frozen, reviewDigest: reviewed.reviewDigest });
+    assertCurrent();
+    return saved;
+  }
   // The budget is the one already selected, not a separate choice: deriving a catalog under a
   // free budget while the selection asks for free is the same question asked once. Required
   // rather than defaulted, because "which budget was this catalog derived under" is not a
@@ -84,6 +115,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   }
   return {
     code, omp, native,
+    readStarterCatalog, adoptStarterProfile,
     readSkillCatalog: (target: Target) => omp("readSkillCatalog", target),
     listSessions, runningSession,
     async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}, isCurrent: () => boolean = () => true): Promise<ResumeSessionResult> {
