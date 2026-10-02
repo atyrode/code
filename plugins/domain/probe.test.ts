@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt, type ModelCatalogSnapshot,
   type ThinkingLevel } from "@atyrode/manifold-omp";
-import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, quotaSpecials, scaffoldInventory } from "./probe.ts";
+import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, quotaSpecials, type ScaffoldOptions } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
 
@@ -58,10 +58,15 @@ function receiptOf(models: Row[]): InventoryReceipt {
   return { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: 100, models };
 }
 /** A benchmark of every candidate: reachable, except the ids given another verdict. */
-function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {}) {
-  const input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
+function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {},
+  options: ScaffoldOptions = { specials: [], budget: "any" }) {
+  const input = benchmarkCandidates(inv, options), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
   return { ...receipt, results: receipt.results.map(result => verdicts[result.id]
     ? { ...result, status: verdicts[result.id], tokensPerSecond: null, timeToFirstTokenMs: null } : result) };
+}
+/** The catalog an inventory derives when every candidate answers: the ladder rules alone. */
+function derived(inv: InventoryReceipt, options: ScaffoldOptions = { specials: [], budget: "any" }) {
+  return catalogFromObservations(inv, observed(inv, {}, options), options);
 }
 /** OMP 18.1.14's bundled OpenAI chat rows: what the starter and today's pinned inventory list. */
 function openai1814(): Row[] {
@@ -91,10 +96,14 @@ const tiers = (document: { models: readonly { provider: string; tier: number; id
 
 
 describe("pure typed scaffolding", () => {
-  test("drafts are unmeasured; certified documents preserve family tiers and registry quota buckets", () => {
-    const inv = fullInventory(), draft = scaffoldInventory(inv);
-    expect(draft.kind).toBe("draft");
-    expect(draft.document.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
+  test("a draft is the charge and never a catalog, even where no ladder exists yet; certified documents keep family tiers and quota buckets", () => {
+    const inv = fullInventory(), draft = inventoryDraft(inv, "any");
+    expect(draft).toEqual({ schemaVersion: 1, kind: "draft", inventoryObservedAt: 100, benchmark: benchmarkCandidates(inv), exclusions: [] });
+    expect(inventoryDraft({ ...inv, models: [...inv.models].reverse() }, "any")).toEqual(draft);
+    // One Anthropic row cannot form a required ladder, yet what probing it costs is still stated.
+    const single = { ...inv, models: inv.models.filter(model => model.id === "claude-haiku-5") };
+    expect(inventoryDraft(single, "any").benchmark.candidates.map(candidate => candidate.id)).toEqual(["claude-haiku-5"]);
+    expect(() => derived(single)).toThrow("probe_insufficient_ladder");
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
     const { document } = catalogFromObservations(inv, receipt);
     expect(document.models.filter(model => model.provider === "anthropic").map(model => [model.tier, model.id, model.quotaBucket])).toEqual([
@@ -102,7 +111,6 @@ describe("pure typed scaffolding", () => {
     ]);
     expect(document.models.filter(model => model.provider === "openai-codex").map(model => model.quotaBucket)).toEqual(["codex", "codex", "codex"]);
     expect(document.models.every(model => model.tokensPerSecond === 62 && model.timeToFirstTokenMs === 700)).toBe(true);
-    expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
   });
   test("generic zero-cost nonreasoning providers produce a reviewed exact route", () => {
     const genericIdentity = { provider: "vendor-example", id: "free-model", api: "vendor-chat" };
@@ -110,7 +118,7 @@ describe("pure typed scaffolding", () => {
       ...row(genericIdentity.provider, genericIdentity.id), reasoning: false, thinking: null,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }] }, [genericIdentity], 100, "18.1.14");
-    const draft = scaffoldInventory(inv);
+    const draft = inventoryDraft(inv, "any");
     expect(draft.benchmark.candidates).toEqual([{ ...genericIdentity, key: "vendor-example.free-model" }]);
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
     const { document } = catalogFromObservations(inv, receipt);
@@ -124,13 +132,13 @@ describe("pure typed scaffolding", () => {
       .toBe("vendor-example/free-model:minimal");
   });
   test("four distinct families produce four reviewed and routable levels in both provider families", () => {
-    const inv = fourLevelInventory(), draft = scaffoldInventory(inv);
+    const inv = fourLevelInventory(), draft = inventoryDraft(inv, "any");
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
-    const derived = catalogFromObservations(inv, receipt), catalog = compileCatalog(derived.document);
+    const result = catalogFromObservations(inv, receipt), catalog = compileCatalog(result.document);
     for (const [family, provider] of [["openai", "openai-codex"], ["anthropic", "anthropic"]] as const) {
       expect(draft.benchmark.candidates.filter(model => model.provider === provider).map(model => model.id))
         .toEqual(["series1", "series2", "series3", "series4"]);
-      expect(draft.document.models.filter(model => model.provider === provider).map(model => [model.tier, model.id]))
+      expect(result.document.models.filter(model => model.provider === provider).map(model => [model.tier, model.id]))
         .toEqual([[1, "series1"], [2, "series2"], [3, "series3"], [4, "series4"]]);
       for (const capability of [1, 2, 3, 4] as const) {
         const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability, thinking: "max",
@@ -147,14 +155,14 @@ describe("pure typed scaffolding", () => {
         }
       }
     }
-    expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
+    expect(inventoryDraft({ ...inv, models: [...inv.models].reverse() }, "any")).toEqual(draft);
     expect(catalogFromObservations({ ...inv, models: [...inv.models].reverse() },
-      { ...receipt, results: [...receipt.results].reverse() })).toEqual(derived);
+      { ...receipt, results: [...receipt.results].reverse() })).toEqual(result);
   });
   test("equal prices do not reverse observed capability progression", () => {
     const inv = fourLevelInventory();
     inv.models = inv.models.filter(model => model.provider === "anthropic").map(model => ({ ...model, inputCostPerMillion: 1 }));
-    const catalog = compileCatalog(scaffoldInventory(inv).document);
+    const catalog = compileCatalog(derived(inv).document);
     expect([1, 2, 3, 4].map(tier => catalog.model(catalog.rung("anthropic", tier)).id)).toEqual(["series1", "series2", "series3", "series4"]);
     const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability: 4 }, 200);
     expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default).toBe("anthropic/series4:max");
@@ -167,9 +175,9 @@ describe("pure typed scaffolding", () => {
       { ...base, id: "narrow", inputCostPerMillion: 3, contextWindow: 50000, thinkingLevels: ["high"] },
       { ...base, id: "top", inputCostPerMillion: 4, contextWindow: 500000, thinkingLevels: ["max"] },
     ];
-    const draft = scaffoldInventory(inv);
-    expect(draft.document.models.map(model => [model.tier, model.id])).toEqual([[1, "entry"], [2, "bridge"], [3, "top"]]);
-    expect(draft.exclusions).toEqual([{ provider: "openai-codex", id: "narrow", reason: "regression" }]);
+    const result = derived(inv);
+    expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "entry"], [2, "bridge"], [3, "top"]]);
+    expect(result.exclusions).toEqual([{ provider: "openai-codex", id: "narrow", reason: "regression" }]);
   });
   test("the maximum inventory of three antichains retains the preferred real fallback independent of order", () => {
     const inv = fourLevelInventory(), base = inv.models[0]!;
@@ -181,11 +189,11 @@ describe("pure typed scaffolding", () => {
       return { ...base, id: `adversary${index + 1}`, inputCostPerMillion: index + 1,
         contextWindow: (group + 1) * 100000 - index, thinkingLevels: [levels[group]!] };
     });
-    const draft = scaffoldInventory(inv);
-    expect(draft.document.models.map(model => [model.tier, model.id]))
+    const result = derived(inv);
+    expect(result.document.models.map(model => [model.tier, model.id]))
       .toEqual([[1, "adversary1"], [2, "adversary86"], [3, "adversary172"]]);
-    expect(draft.benchmark.candidates.map(model => model.id)).toEqual(inv.models.map(model => model.id).sort());
-    expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
+    expect(inventoryDraft(inv, "any").benchmark.candidates.map(model => model.id)).toEqual(inv.models.map(model => model.id).sort());
+    expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
   test("an unavailable fourth model preserves three-level selections and clamps cross-provider routes", () => {
     const inv = fourLevelInventory(), input = benchmarkCandidates(inv);
@@ -215,11 +223,10 @@ describe("pure typed scaffolding", () => {
   test("one configured provider can form a ladder without inventing a missing provider", () => {
     const inv = fullInventory();
     inv.models = inv.models.filter(model => model.provider === "anthropic");
-    const draft = scaffoldInventory(inv);
-    expect(draft.document.models.map(model => [model.provider, model.tier])).toEqual([
+    expect(derived(inv).document.models.map(model => [model.provider, model.tier])).toEqual([
       ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
     ]);
-    expect(() => scaffoldInventory({ ...inv, models: inv.models.slice(1) })).toThrow("probe_insufficient_ladder");
+    expect(() => derived({ ...inv, models: inv.models.slice(1) })).toThrow("probe_insufficient_ladder");
   });
   test("a shorter valid ladder beats extra rungs that lose context or thinking", () => {
     const inv = fullInventory(), model = inv.models.find(value => value.provider === "openai-codex")!;
@@ -231,7 +238,7 @@ describe("pure typed scaffolding", () => {
       { ...model, id: "gpt-powerful", inputCostPerMillion: 4, contextWindow: 1000000, thinkingLevels: ["max"] },
       { ...model, id: "gpt-pricey", inputCostPerMillion: 10, contextWindow: 922000, thinkingLevels: ["max"] },
     ];
-    expect(scaffoldInventory(inv).document.models.map(value => [value.tier, value.id])).toEqual([
+    expect(derived(inv).document.models.map(value => [value.tier, value.id])).toEqual([
       [1, "gpt-efficient"], [2, "gpt-standard"], [3, "gpt-powerful"],
     ]);
   });
@@ -258,11 +265,11 @@ describe("pure typed scaffolding", () => {
     const inv = fullInventory();
     inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.5 });
     inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
-    const special = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", facet: "spark" };
-    const draft = scaffoldInventory(inv, { specials: [special] });
-    expect(draft.document.models.find(model => model.id === special.id)).toMatchObject({ tier: 0, quotaBucket: "spark" });
-    expect(draft.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
-    expect(() => scaffoldInventory(inv, { specials: [{ ...special, id: "gpt-missing-6" }] })).toThrow("probe_invalid_input");
+    const special = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", facet: "spark" as const };
+    const result = derived(inv, { specials: [special], budget: "any" });
+    expect(result.document.models.find(model => model.id === special.id)).toMatchObject({ tier: 0, quotaBucket: "spark" });
+    expect(result.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
+    expect(() => derived(inv, { specials: [{ ...special, id: "gpt-missing-6" }], budget: "any" })).toThrow("probe_invalid_input");
   });
 
   /**
@@ -305,16 +312,16 @@ describe("pure typed scaffolding", () => {
 
     // Derived under `any`, the free model is tier 1 and every tier above it is paid, so the
     // constraint cannot be met by a catalog that was laddered without it.
-    const paid = compileCatalog(scaffoldInventory(mixed, { specials: [], budget: "any" }).document);
+    const paid = compileCatalog(derived(mixed, { specials: [], budget: "any" }).document);
     expect(paid.models.filter(model => model.inputCostPerMillion === 0).map(model => model.tier)).toEqual([1]);
     expect(() => reviewCatalog(paid, { ...defaultSelection(paid), budget: "free" }, 101)).toThrow("budget_unsatisfiable");
 
     // Derived under `free`, the same free tier ladders on its own evidence — variant addresses
     // and all — and the constraint is met rather than refused.
     const inv = freeLadderInventory();
-    const draft = scaffoldInventory(inv, { specials: [], budget: "free" });
-    expect(draft.document.models.map(model => [model.tier, model.id])).toEqual([[1, "alpha-1:free"], [2, "beta-2:free"], [3, "gamma-3:free"]]);
-    const free = compileCatalog(draft.document);
+    const result = derived(inv, { specials: [], budget: "free" });
+    expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "alpha-1:free"], [2, "beta-2:free"], [3, "gamma-3:free"]]);
+    const free = compileCatalog(result.document);
     const review = reviewCatalog(free, { ...defaultSelection(free), budget: "free" }, 101);
     expect(review.selection.budget).toBe("free");
     // Nothing paid may appear anywhere in a route, lead or fallback: that is the whole constraint.
@@ -348,10 +355,10 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
   test("only the newest version of a family is laddered, whatever its price or thinking profile", () => {
     // `claude-opus-4-6` lacks `xhigh` and costs what `claude-opus-5` costs; profile-keyed
     // supersession kept it, and it took tier 2 from `claude-sonnet-5`.
-    const draft = scaffoldInventory(receiptOf(anthropic1814()));
-    expect(tiers(draft.document, "anthropic"))
+    const result = derived(receiptOf(anthropic1814()));
+    expect(tiers(result.document, "anthropic"))
       .toEqual([[1, "claude-haiku-4-5"], [2, "claude-sonnet-5"], [3, "claude-opus-5"], [4, "claude-fable-5-1"]]);
-    expect(draft.exclusions).toEqual([{ provider: "anthropic", id: "claude-opus-4-6", reason: "superseded" }]);
+    expect(result.exclusions).toEqual([{ provider: "anthropic", id: "claude-opus-4-6", reason: "superseded" }]);
   });
   test("a client-blocked newest falls back to its callable predecessor, and is named as blocked", () => {
     const inv = receiptOf([...anthropic1814(), listed("anthropic", "claude-fable-5", 10, 1_000_000, "low", "max")]);
@@ -364,10 +371,10 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     ]);
   });
   test("version tokens decide the newest GPT, including a major version spelled before the name", () => {
-    const gpt = scaffoldInventory(receiptOf(openai1814().filter(model => ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-6-astra"].includes(model.id))));
+    const gpt = derived(receiptOf(openai1814().filter(model => ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-6-astra"].includes(model.id))));
     expect(tiers(gpt.document, "openai-codex")).toEqual([[1, "gpt-5.4-mini"], [2, "gpt-5.5"], [3, "gpt-6-astra"]]);
     expect(gpt.exclusions).toEqual([{ provider: "openai-codex", id: "gpt-5.4", reason: "superseded" }]);
-    const luna = scaffoldInventory(receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 1_000_000, "low", "max"),
+    const luna = derived(receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 1_000_000, "low", "max"),
       ...openai1814().filter(model => ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"].includes(model.id))]));
     expect(tiers(luna.document, "openai-codex")).toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
     expect(luna.exclusions).toEqual([{ provider: "openai-codex", id: "gpt-5.6-luna", reason: "superseded" }]);
@@ -382,24 +389,27 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       deepseek("deepseek-v4-flash", 1_000_000, false), deepseek("deepseek-v4-pro", 1_000_000, false),
       deepseek("deepseek-v4-flash-vision-exp", 2_000_000, true),
     ]);
-    const draft = scaffoldInventory(inv);
+    const draft = inventoryDraft(inv, "any"), result = derived(inv);
     expect(draft.benchmark.candidates.map(model => model.id))
       .toEqual(["deepseek-v4-flash", "deepseek-v4-pro", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
-    expect(tiers(draft.document, "openai-codex")).toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
-    expect(tiers(draft.document, "deepseek")).toEqual([[1, "deepseek-v4-flash"], [2, "deepseek-v4-pro"]]);
-    expect(draft.exclusions).toEqual([
-      { provider: "deepseek", id: "deepseek-v4-flash-vision-exp", reason: "unstable_id" },
-      { provider: "openai-codex", id: "gpt-daybreak-blue-latest", reason: "unstable_id" },
-    ]);
+    expect(tiers(result.document, "openai-codex")).toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
+    expect(tiers(result.document, "deepseek")).toEqual([[1, "deepseek-v4-flash"], [2, "deepseek-v4-pro"]]);
+    // The draft already names them, so the charge an operator confirms never includes them.
+    for (const exclusions of [draft.exclusions, result.exclusions]) {
+      expect(exclusions).toEqual([
+        { provider: "deepseek", id: "deepseek-v4-flash-vision-exp", reason: "unstable_id" },
+        { provider: "openai-codex", id: "gpt-daybreak-blue-latest", reason: "unstable_id" },
+      ]);
+    }
     // DeepSeek is then text-only, so its vision role crosses to an image-capable family as intended.
-    const catalog = compileCatalog(draft.document);
+    const catalog = compileCatalog(result.document);
     const review = reviewCatalog(catalog, { ...defaultSelection(catalog), lane: { kind: "provider", family: "deepseek", blend: "only" } }, 200);
     expect(catalog.family(review.routes.find(route => route.role === "vision")!.lead.key)).toBe("openai");
   });
   test("OpenAI's 18.1.14 rows ladder the GPT-5.6 family rather than the longest 272k-context chain", () => {
-    const draft = scaffoldInventory(receiptOf(openai1814()));
-    expect(tiers(draft.document, "openai-codex")).toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
-    expect(draft.exclusions).toEqual([
+    const result = derived(receiptOf(openai1814()));
+    expect(tiers(result.document, "openai-codex")).toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
+    expect(result.exclusions).toEqual([
       { provider: "openai-codex", id: "gpt-5.4", reason: "superseded" },
       { provider: "openai-codex", id: "gpt-5.4-mini", reason: "regression" },
       { provider: "openai-codex", id: "gpt-daybreak-blue-latest", reason: "unstable_id" },
@@ -413,10 +423,10 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       listed("openai-codex", "gpt-6.1-sol", 2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6-astra", 10, 1_000_000, "low", "max"),
     ];
     const inv = receiptOf([...current, ...openai1814().filter(model => !current.some(value => value.id === model.id))]);
-    const draft = scaffoldInventory(inv);
-    expect(tiers(draft.document, "openai-codex"))
+    const result = derived(inv);
+    expect(tiers(result.document, "openai-codex"))
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
-    expect(scaffoldInventory({ ...inv, models: [...inv.models].reverse() })).toEqual(draft);
+    expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
   test("a required family whose most capable model regresses on its cheapest refuses, naming both", () => {
     // Only luna and the 272k-context rows answer. Their most capable, gpt-5.5, would sit a smaller

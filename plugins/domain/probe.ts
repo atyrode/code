@@ -47,11 +47,16 @@ export const ExclusionSchema = z.strictObject({
 });
 export type Exclusion = z.infer<typeof ExclusionSchema>;
 const ExclusionsSchema = z.array(ExclusionSchema).max(PROBE_MODEL_LIMIT);
+/**
+ * WHAT AN INVENTORY OFFERS, BEFORE ANYTHING IS PAID FOR: the exact candidates one benchmark
+ * request each would probe, and the ids excluded as unstable without being probed. There is no
+ * catalog document here, because a ladder built from an unprobed inventory names models no
+ * benchmark has shown this operator can call — the same gap the bundled starter had — and a
+ * draft that carried one was a draft somebody could stage.
+ */
 export const CatalogDraftSchema = z.strictObject({
   schemaVersion: z.literal(1), kind: z.literal("draft"), inventoryObservedAt: epochMilliseconds,
-  document: CatalogDocumentSchema, benchmark: BenchmarkInputSchema,
-  // Optional, so the field is additive for every existing producer and reader of a draft.
-  exclusions: ExclusionsSchema.optional(),
+  benchmark: BenchmarkInputSchema, exclusions: ExclusionsSchema,
 });
 export type CatalogDraft = z.infer<typeof CatalogDraftSchema>;
 /** A benchmark-verified catalog, and the named reason each other offered model is absent from it. */
@@ -345,14 +350,22 @@ export function catalogFromMetadata(snapshotValue: unknown, budget: Selection["b
   });
   return scaffold(allowed, { ...options, specials }, []).document;
 }
-/** Offline choices are a draft, never an inventory job and never a reachability claim. */
-export function scaffoldInventory(inventoryValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): CatalogDraft {
-  const inventory = parse(InventoryReceiptSchema, inventoryValue), options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
-  const benchmark = benchmarkCandidates(inventory, options);
-  requireListed(options.specials, inventory.models);
-  const derived = scaffold(inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model)), options,
-    inventory.models.filter(model => admittedBy(options.budget, model) && unstable.test(model.id)).map(model => exclusion(model, "unstable_id")));
-  return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt, document: derived.document, benchmark, exclusions: derived.exclusions };
+/** Ids a budget admits that are never probed or laddered because they name no fixed model. */
+function unstableExclusions(inventory: InventoryReceipt, budget: Selection["budget"]): Exclusion[] {
+  return inventory.models.filter(model => admittedBy(budget, model) && unstable.test(model.id)).map(model => exclusion(model, "unstable_id"));
+}
+/**
+ * The charge an inventory implies, never a catalog: the candidates a benchmark would probe under
+ * this budget and the unstable ids it would not. No ladder is attempted, so an inventory whose
+ * every-model-reachable ladder would regress still states what probing it costs; only the probed
+ * answers decide whether a catalog exists.
+ */
+export function inventoryDraft(inventoryValue: unknown, budget: Selection["budget"]): CatalogDraft {
+  const inventory = parse(InventoryReceiptSchema, inventoryValue);
+  const options = parse(ScaffoldOptionsSchema, { specials: [], budget }, "invalid_input");
+  return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt,
+    benchmark: benchmarkCandidates(inventory, options),
+    exclusions: unstableExclusions(inventory, options.budget).sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
 /** Every eligible candidate must have an exact probe, before superseding older versions. */
 export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { specials: [], budget: "any" }): DerivedCatalog {
@@ -375,5 +388,5 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
     if (status === "not_found" || status === "client_blocked") refused.push(exclusion(model, status));
   }
   return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"), options,
-    [...inventory.models.filter(model => admittedBy(options.budget, model) && unstable.test(model.id)).map(model => exclusion(model, "unstable_id")), ...refused], facts);
+    [...unstableExclusions(inventory, options.budget), ...refused], facts);
 }

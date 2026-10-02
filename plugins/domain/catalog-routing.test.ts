@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, servedRoutes } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -382,5 +382,47 @@ describe("a cost constraint is a property, not a list of names", () => {
     const without = reviewCatalog(catalog, selection({ budget: "free", fallback: false }), daytime);
     expect(withFallback.routes.some(entry => entry.fallback.length > 0)).toBe(true);
     expect(without.routes.every(entry => entry.fallback.length === 0)).toBe(true);
+  });
+});
+
+describe("a verified catalog and the accounts a launch meets", () => {
+  test("a preview selection keeps every choice the verified catalog hosts and narrows only the ones it lacks", () => {
+    const openaiOnly = compileCatalog({ schemaVersion: 1, models: document().models.filter(entry => providerPolicy(entry.provider).family === "openai") });
+    const wanted = selection({ lane: { kind: "provider", family: "anthropic", blend: "led" }, capability: 4, thinking: "high",
+      advisor: "review", spark: true, priority: true, prewalk: true, planYolo: true, fallback: false });
+    // No Anthropic and no fourth rung: the default lane and the highest capability below 4.
+    expect(clampSelection(openaiOnly, wanted)).toEqual({ ...wanted, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    // A family that survived keeps its lane in the blend the catalog still offers.
+    expect(clampSelection(openaiOnly, { ...wanted, lane: { kind: "provider", family: "openai", blend: "led" } }).lane)
+      .toEqual({ kind: "provider", family: "openai", blend: "only" });
+    const full = compileCatalog(document());
+    expect(clampSelection(full, wanted)).toEqual(wanted);
+    const withoutSpark = compileCatalog({ schemaVersion: 1, models: document().models.filter(entry => entry.tier !== 0) });
+    expect(clampSelection(withoutSpark, selection({ spark: true })).spark).toBe(false);
+    expect(clampSelection(full, null)).toEqual(defaultSelection(full));
+    // The budget is a constraint: a free preview this paid catalog cannot serve refuses rather than spends.
+    expect(() => clampSelection(full, selection({ budget: "free" }))).toThrow("code_budget_unsatisfiable");
+  });
+
+  test("a fallback no included account serves is pruned exactly, while an unserved lead refuses", () => {
+    // Spark leads `tiny` and `commit`, so the tier-1 rung on `openai` appears only as a fallback.
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("o1", "openai", 1, { inputCostPerMillion: 1 }), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3, { inputCostPerMillion: 8 }),
+      model("spark", "openai-codex", 0, { images: false, inputCostPerMillion: 0.5 }),
+    ] });
+    const chosen = selection({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true });
+    const review = reviewCatalog(catalog, chosen, daytime);
+    expect(review.routes.some(entry => entry.fallback.some(choice => choice.key === "o1"))).toBe(true);
+    expect(review.routes.some(entry => entry.lead.key === "o1")).toBe(false);
+    const serves = (provider: string) => provider !== "openai";
+    const pruned = servedRoutes(catalog, review.routes, serves);
+    expect(pruned.map(entry => entry.lead)).toEqual(review.routes.map(entry => entry.lead));
+    expect(pruned.map(entry => entry.fallback)).toEqual(review.routes.map(entry => entry.fallback.filter(choice => choice.key !== "o1")));
+    const overlay = compileOmpOverlay(catalog, chosen, pruned, serves);
+    expect(Object.values(overlay.retry?.fallbackChains ?? {}).flat().some(reference => reference.startsWith("openai/"))).toBe(false);
+    // Exactly the served routes: neither the unpruned ones nor pruned ones without the rule that pruned them.
+    expect(() => compileOmpOverlay(catalog, chosen, review.routes, serves)).toThrow("code_invalid_selection");
+    expect(() => compileOmpOverlay(catalog, chosen, pruned)).toThrow("code_invalid_selection");
+    expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
   });
 });
