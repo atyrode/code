@@ -193,7 +193,7 @@ function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOver
   const error = configuration.error ?? feed.error;
   return <section className="plugin-atyrode_code plugin-atyrode_code__usage" data-compact={compact || undefined} aria-label="Code usage" aria-busy={configuration.refreshing || feed.refreshing}>
     <header className="plugin-atyrode_code__section-heading">
-      <h2 className="plugin-atyrode_code__section-label">usage</h2>
+      {!compact && <h2 className="plugin-atyrode_code__section-label">usage</h2>}
       {activeProfile !== null && <span className="plugin-atyrode_code__muted" title="Saved account pool">{activeProfile === "Manual" ? "Manual account pool" : activeProfile}</span>}
       <div className="plugin-atyrode_code__toolbar">
         <button type="button" onClick={onAccounts ?? (() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`))}>Accounts</button>
@@ -205,7 +205,7 @@ function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOver
       <details className="plugin-atyrode_code__details"><summary>Error details</summary><pre>{error}</pre></details>
     </div>}
     {!workspace ? <p className="plugin-atyrode_code__muted" role="status">Open a workspace to view shared usage.</p> :
-      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">Choose an account pool in Accounts to view usage.</p> :
+      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">{compact ? "No accounts selected" : "Choose an account pool in Accounts to view usage."}</p> :
       value ? compact ? <CompactUsageSnapshot value={value} refreshFailed={error !== null} /> : <UsageSnapshot value={value} refreshFailed={error !== null} /> :
       !error && <p className="plugin-atyrode_code__muted" role="status">Reading usage…</p>}
   </section>;

@@ -223,7 +223,7 @@ export function Estimates({ value }: { value: Review["estimates"] }) {
         <span className="plugin-atyrode_code_generator__estimate-meter" aria-hidden="true">{[1, 2, 3, 4, 5].map(step => <span key={step} data-filled={step <= score} />)}</span>
       </dd></div>;
     })}</dl>
-    <details className="plugin-atyrode_code__details"><summary>How estimates work</summary><p>Catalog estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p></details>
+    <ContextHelp label="estimates"><p>Catalog estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p></ContextHelp>
   </div>;
 }
 

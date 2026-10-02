@@ -211,13 +211,12 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
       <div className="plugin-atyrode_code_generator__dashboard" data-focused={focus ?? "none"}>
       <section className="plugin-atyrode_code_generator__pane plugin-atyrode_code_generator__generator-pane" aria-label="Generator" hidden={focus !== null && focus !== "generator"}>
       <header className="plugin-atyrode_code_generator__pane-heading"><h2><DialIcon kind="model" />Generator</h2><ContextHelp label="generator"><p>Choose the profile for your next session. Add models first; accounts and runtime can be connected when you need them.</p></ContextHelp>{focusButton("generator")}</header>
-      <section className="plugin-atyrode_code_generator__session-summary" aria-label="Session profile summary">
+      {leadModel && <section className="plugin-atyrode_code_generator__session-summary" aria-label="Session profile summary">
         <div className="plugin-atyrode_code_generator__session-identity">
-          <h3 className="plugin-atyrode_code__section-label">Next session</h3>
-          <p className="plugin-atyrode_code_generator__session-model">{leadModel?.key ?? "Your next session"}{lead && <span>{lead.lead.thinking} thinking</span>}</p>
-          <p className="plugin-atyrode_code_generator__session-context">{laneLabel && <span>{laneLabel}</span>}</p>
+          <p className="plugin-atyrode_code_generator__session-model">{leadModel.key}{lead && <span>{lead.lead.thinking} thinking</span>}</p>
+          {laneLabel && <p className="plugin-atyrode_code_generator__session-context">{laneLabel}</p>}
         </div>
-      </section>
+      </section>}
       {!writable && <p role="status" className="plugin-atyrode_code__notice">Read-only workspace. Profile changes and launch require edit access.</p>}
       {configuration.error && <div className="plugin-atyrode_code__notice" role="status"><p>Workspace choices unavailable.</p><button type="button" onClick={configuration.refresh}>Try again</button><details className="plugin-atyrode_code__details"><summary>Details</summary><pre>{configuration.error}</pre></details></div>}
       <div className="plugin-atyrode_code_generator__profile-grid">
@@ -250,7 +249,7 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
           <label htmlFor={`${id}-prompt`} className="plugin-atyrode_code_generator__sr-only">Task · optional</label>
           {/* Characters, because a textarea counts characters: the door's rule is bytes and
               refuses a multibyte prompt over it by name. */}
-          <textarea id={`${id}-prompt`} rows={3} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should we tackle?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
+          <textarea id={`${id}-prompt`} rows={2} maxLength={PROMPT_MAX_BYTES} value={prompt} placeholder="What should we tackle?" onChange={event => { setPrompt(event.target.value); setPreview(null); }} />
           <div className="plugin-atyrode_code_generator__launch-bar">
             <button type="button" className="plugin-atyrode_code__primary-action" data-action={previewCurrent ? "atyrode.omp.prepareSession" : "atyrode.omp.reviewSession"} disabled={busy || !writable || !available || !launchReady || !!dials || !localReview || skillProblems.length > 0} aria-describedby={`${id}-launch-status`} onClick={() => {
               if (previewCurrent) { void launch(); return; }
@@ -278,7 +277,7 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
       </section>
       <section className="plugin-atyrode_code_generator__pane plugin-atyrode_code_generator__profiles-pane" aria-label="Generated profiles" hidden={focus !== null && focus !== "profiles"}>
         <header className="plugin-atyrode_code_generator__pane-heading"><h2><DialIcon kind="lane" />Profiles <span>{shownReview ? `${shownReview.routes.length} roles` : "per agent"}</span></h2>{focusButton("profiles")}</header>
-        {compiled && shownReview ? <Routing value={shownReview} catalog={compiled} local={dials !== null} compact={focus !== "profiles"} /> : <div className="plugin-atyrode_code_generator__empty"><DialIcon kind="thinking" /><span>Models for each agent will appear here.</span></div>}
+        {compiled && shownReview ? <Routing value={shownReview} catalog={compiled} local={dials !== null} compact={focus !== "profiles"} /> : <div className="plugin-atyrode_code_generator__empty"><DialIcon kind="thinking" /><span>No profiles yet</span></div>}
       </section>
       <section className="plugin-atyrode_code_generator__pane plugin-atyrode_code_generator__usage-pane" aria-label="Usage overview" hidden={focus !== null && focus !== "usage"}>
         <header className="plugin-atyrode_code_generator__pane-heading"><h2><DialIcon kind="usage" />Usage</h2>{focusButton("usage")}</header>
