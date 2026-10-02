@@ -11,8 +11,8 @@
     "services:configure"
   ],
   "dataVersion": {
-    "major": 3,
-    "minor": 0
+    "major": 2,
+    "minor": 1
   },
   "purges": [
     "storage"

@@ -41,9 +41,15 @@ const LegacyConfigurationSchema = Version3ConfigurationSchema.extend({
 const Version2To3Schema = Version2ConfigurationSchema.transform(({ resourcesByMachine: _pins, ...record }) =>
   Version3ConfigurationSchema.parse({ ...record, schemaVersion: 3 }));
 /**
- * Schema 3 to 4. A catalog promoted before verification existed was derived from bundled
- * metadata, an unprobed inventory or an operator's hand, and nothing recorded which, so it is
- * unverified: `provenance: null`, never a provenance presumed current.
+ * Schema 3 to 4 happens on read, never in a bulk pass. A catalog promoted before verification
+ * existed was derived from bundled metadata, an unprobed inventory or an operator's hand, and
+ * nothing recorded which, so it reads as unverified: `provenance: null`, never a provenance
+ * presumed current. The next CAS write persists schema 4.
+ *
+ * A native migration stages the plugin's whole store, and retained session receipts already
+ * exceed the host's migration staging bound, so the data version does not move. The host
+ * therefore cannot refuse a rollback to code older than schema 4; that code fails to parse a
+ * rewritten record and refuses, rather than overwriting it.
  */
 function unverified(record: Omit<z.infer<typeof Version3ConfigurationSchema>, "schemaVersion">): Configuration {
   return ConfigurationSchema.parse({ ...record, schemaVersion: 4,
@@ -74,13 +80,6 @@ async function upgradeConfigurations(storage: GuestStorage, target: number, upgr
 export const configurationMigration: ServerMigration = {
   name: "canonical-configuration-v3", to: { major: 2, minor: 0 },
   migrate: storage => upgradeConfigurations(storage, 3, value => Version2To3Schema.parse(value)),
-};
-/** Schema 3 to 4, the same way: every catalog gains `provenance: null`, and nothing else moves —
- * not the policy revision, not the selection, not a legacy machine record. A store still at
- * schema 2 reaches here after `canonical-configuration-v3`, in the host's planned order. */
-export const provenanceMigration: ServerMigration = {
-  name: "canonical-configuration-v4", to: { major: 3, minor: 0 },
-  migrate: storage => upgradeConfigurations(storage, 4, value => StoredConfigurationSchema.parse(value)),
 };
 
 export async function readConfiguration(ctx: CodeContext, input: z.infer<typeof ConfigurationLookupSchema>, write = false): Promise<StoredConfiguration> {

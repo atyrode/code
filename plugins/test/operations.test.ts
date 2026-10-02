@@ -6,7 +6,7 @@ import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
 import plugin, { handlers } from "../code/server.ts";
-import { configurationMigration, provenanceMigration } from "../code/state.ts";
+import { configurationMigration } from "../code/state.ts";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import { buildCodeServices } from "../code/service-policies.ts";
 
@@ -202,7 +202,7 @@ describe("container-owned policy configuration", () => {
     expect((await configuration(f))?.accounts).toEqual(saved.accounts);
   });
 
-  test("native major migrations take schema2 records through schema 3 to 4 without changing policy revision or adopting schema1", async () => {
+  test("the native v3 migration takes schema2 records to schema 3; reads answer schema 4 and the next CAS persists it", async () => {
     const source = fixture(), original = await active(source);
     const saved = await accepted(source, "changeAccounts", { ...workspace, expectedRevision: original.revision,
       change: { kind: "set-account", reference: accounts().accounts[0]!.reference, enabled: false } });
@@ -214,69 +214,63 @@ describe("container-owned policy configuration", () => {
     f.ctx.storage.keys = async prefix => [...f.store.keys()].filter(key => key.startsWith(prefix ?? ""));
     await configurationMigration.migrate(f.ctx.storage);
     expect(JSON.parse(f.store.get(key)!)).toEqual(version3(saved));
-    await provenanceMigration.migrate(f.ctx.storage);
-    expect(JSON.parse(f.store.get(key)!)).toEqual(saved);
+    // No bulk schema-4 pass exists: the read already answers schema 4, unverified.
+    expect(await configuration(f)).toEqual(saved);
     expect(await configuration(f, "container-b")).toEqual(current);
     expect(f.store.get(legacy.key)).toBe(legacy.raw);
     expect(f.store.has(`configuration/${digestOf({ containerId: "container-c" })}`)).toBe(false);
     expect(f.store.get("other-data")).toBe("untouched");
     const migrated = f.store.get(key);
-    for (const migration of [configurationMigration, provenanceMigration]) await migration.migrate(f.ctx.storage);
+    await configurationMigration.migrate(f.ctx.storage);
     expect(f.store.get(key)).toBe(migrated);
     const next = await accepted(f, "select", { ...workspace, expectedRevision: saved.revision,
       selection: { ...saved.selection!, planYolo: true } });
     expect(next.revision).toBe(saved.revision + 1);
     expect(next.accounts).toEqual(saved.accounts);
+    expect(JSON.parse(f.store.get(key)!)).toEqual(next);
+    expect(next.schemaVersion).toBe(4);
   });
 
-  test("schema3 catalogs become schema 4 unverified, read and migrated alike, with nothing else moving", async () => {
+  test("schema3 catalogs read as schema 4 unverified without a migration, and the next write persists schema 4", async () => {
     const source = fixture(), promoted = await active(source);
     const changed = document(); changed.models[0]!.contextWindow = 199_999;
     const saved = await accepted(source, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: changed });
     expect([saved.active?.provenance, saved.draft?.provenance]).toEqual([null, null]);
     const f = fixture(), key = `configuration/${digestOf(workspace)}`, raw = JSON.stringify(version3(saved));
     f.store.set(key, raw);
-    // Before the migration runs, a read already answers schema 4, and writes nothing.
+    // A read answers schema 4 and writes nothing; the stored bytes stay schema 3 until a CAS.
     expect(await configuration(f)).toEqual(saved);
     expect(f.store.get(key)).toBe(raw);
-    f.ctx.storage.keys = async prefix => [...f.store.keys()].filter(key => key.startsWith(prefix ?? ""));
-    await provenanceMigration.migrate(f.ctx.storage);
-    expect(JSON.parse(f.store.get(key)!)).toEqual(saved);
-    const migrated = f.store.get(key);
-    await provenanceMigration.migrate(f.ctx.storage);
-    expect(f.store.get(key)).toBe(migrated);
-    // The review of a migrated catalog says it is unverified, and promoting it carries that along.
+    // The review of an unverified catalog says so, and promoting it persists schema 4 carrying that along.
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: saved.revision, source: "draft" });
     expect(review.provenance).toBeNull();
-    expect((await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: saved.revision, source: "draft", reviewDigest: review.reviewDigest })).active)
-      .toEqual({ document: changed, digest: digestOf(changed), provenance: null });
+    const promotedNext = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: saved.revision, source: "draft", reviewDigest: review.reviewDigest });
+    expect(promotedNext.active).toEqual({ document: changed, digest: digestOf(changed), provenance: null });
+    expect(JSON.parse(f.store.get(key)!).schemaVersion).toBe(4);
   });
 
-  test("the host plans the provenance migration from either earlier data version and never past this one", () => {
+  test("the host plans only the v3 migration, and nothing from the current data version", () => {
     // Planning reads only names and targets, which is all that crosses the guest handshake.
     const migrations = plugin.migrations.map(({ name, to }) => ({ name, to, migrate() {} }));
     const plan = (stored: { major: number; minor: number }): DataPlan => planDataMigration({ pluginId: CODE_PLUGIN_ID,
       declared: plugin.manifest.dataVersion, stored, applied: new Set(), migrations });
     const names = (value: DataPlan) => value.kind === "migrate" ? value.run.map(migration => migration.name) : value.kind;
-    expect(names(plan({ major: 2, minor: 1 }))).toEqual(["canonical-configuration-v4"]);
-    expect(names(plan({ major: 1, minor: 0 }))).toEqual(["canonical-configuration-v3", "canonical-configuration-v4"]);
-    expect(names(plan({ major: 3, minor: 0 }))).toBe("ok");
+    expect(names(plan({ major: 2, minor: 1 }))).toBe("ok");
+    expect(names(plan({ major: 1, minor: 0 }))).toEqual(["canonical-configuration-v3"]);
   });
 
   test("native migration refuses misbound container keys and cannot replace a concurrent CAS winner", async () => {
-    for (const [migration, seeded] of [[configurationMigration, 2], [provenanceMigration, 3]] as const) {
-      const saved = await active(fixture()), f = fixture();
-      const key = `configuration/${digestOf(workspace)}`;
-      const older = (record: Configuration) => seeded === 2 ? { ...version3(record), schemaVersion: 2, resourcesByMachine: {} } : version3(record);
-      f.store.set(key, JSON.stringify(older(saved)));
-      f.ctx.storage.keys = async () => [key];
-      const winner = { ...saved, revision: saved.revision + 1 };
-      f.ctx.storage.compareAndSet = async () => { f.store.set(key, JSON.stringify(winner)); return false; };
-      await expect(migration.migrate(f.ctx.storage)).rejects.toThrow("code_stale_preferences");
-      expect(await configuration(f)).toEqual(winner);
-      f.store.set(key, JSON.stringify(older({ ...saved, containerId: "container-b" })));
-      await expect(migration.migrate(f.ctx.storage)).rejects.toThrow("code_invalid_configuration");
-    }
+    const saved = await active(fixture()), f = fixture();
+    const key = `configuration/${digestOf(workspace)}`;
+    const older = (record: Configuration) => ({ ...version3(record), schemaVersion: 2, resourcesByMachine: {} });
+    f.store.set(key, JSON.stringify(older(saved)));
+    f.ctx.storage.keys = async () => [key];
+    const winner = { ...saved, revision: saved.revision + 1 };
+    f.ctx.storage.compareAndSet = async () => { f.store.set(key, JSON.stringify(winner)); return false; };
+    await expect(configurationMigration.migrate(f.ctx.storage)).rejects.toThrow("code_stale_preferences");
+    expect(await configuration(f)).toEqual(winner);
+    f.store.set(key, JSON.stringify(older({ ...saved, containerId: "container-b" })));
+    await expect(configurationMigration.migrate(f.ctx.storage)).rejects.toThrow("code_invalid_configuration");
   });
 
   test("legacy adoption is explicit and leaves every machine recovery record untouched", async () => {

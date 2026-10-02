@@ -12,7 +12,7 @@ import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from
 import { RefusalSchema, rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
 import { catalogReview, commitConfiguration, configurationMigration, expectRevision, initializeConfiguration, poolIdentity,
-  provenanceMigration, readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
+  readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
@@ -133,7 +133,7 @@ const plugin = {
     input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
   })),
   handlers,
-  migrations: [configurationMigration, provenanceMigration],
+  migrations: [configurationMigration],
 };
 defineServerPlugin(plugin);
 export default plugin;
