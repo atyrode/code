@@ -1,22 +1,27 @@
 import { useRef } from "react";
 import type { HostServices } from "@manifold/plugin";
+import type { AccountsObservation } from "@atyrode/manifold-omp";
+import type { AccountChoices } from "../domain/contracts.ts";
 import type { UsageView } from "../domain/usage.ts";
 import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
-import { codeWorkflow, useCodeQuery, useWorkflowQuery } from "./machine-web.ts";
+import { ACCOUNT_REFRESH_MS, codeWorkflow, useCodeQuery, useOmpQuery, useWorkflowQuery } from "./machine-web.ts";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const percentFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const relativeTimeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 const usageRefreshMs = 60_000;
 const statuses: Readonly<Record<string, string>> = {
-  fresh: "Current usage", stale: "Cached usage", unknown: "Unknown", unavailable: "Unavailable",
-  reported: "Reported", no_usage: "Unreported", blocked: "Blocked", credential_disabled: "Credential disabled",
-  selection_disabled: "Selection disabled", available: "Available at observation", maxed: "Exhausted", disabled: "Selection disabled",
+  fresh: "Fresh at observation", stale: "Cached reading", unknown: "Unknown", unavailable: "Unavailable",
+  reported: "Reported", no_usage: "Unreported", blocked: "Blocked at observation", credential_disabled: "Credential disabled at observation",
+  selection_disabled: "Excluded", available: "Allowed at observation", maxed: "Exhausted at observation", disabled: "No included enabled credentials",
 };
-function status(value: string): string { return statuses[value] ?? "Unknown"; }
+function status(value: string): string { return statuses[value] ?? value; }
+function historicalStatus(value: string, cached: boolean): string {
+  return cached || value === "stale" ? `Historical · source status: ${status(value).toLowerCase()}` : status(value);
+}
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
 function observedAgo(value: number | null, now: number): string {
-  if (value === null) return "not yet checked";
+  if (value === null) return "not reported";
   const seconds = Math.max(0, Math.floor((now - value) / 1000));
   if (seconds < 60) return "just now";
   if (seconds < 3600) return relativeTimeFormat.format(-Math.floor(seconds / 60), "minute");
@@ -26,7 +31,7 @@ function observedAgo(value: number | null, now: number): string {
 function resetTime(value: number | null, now: number): string {
   if (value === null) return "reset unknown";
   const remaining = value - now;
-  if (remaining <= 0) return "reset time passed · awaiting provider update";
+  if (remaining <= 0) return "reset deadline passed · not confirmed";
   const minutes = Math.ceil(remaining / 60_000);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
@@ -34,145 +39,128 @@ function resetTime(value: number | null, now: number): string {
 }
 
 type UsageAccount = UsageView["providers"][number]["accounts"][number];
-type UsageProvider = UsageView["providers"][number];
 type UsageWindow = UsageAccount["windows"][number];
+function accountKey(entry: UsageAccount): string {
+  const { reference, credentialId } = entry.account;
+  return JSON.stringify([reference.scope, reference.provider, reference.kind,
+    reference.kind === "identity" ? reference.identityKey : reference.credentialId, credentialId]);
+}
+
+/** Retention never crosses an observed scope or exact saved choice set. Account
+ * metadata changes invalidate current usage, even before the next quota read. */
+export function useAccountUsage(host: HostServices, choices: AccountChoices | null, observation: AccountsObservation | null) {
+  const choiceKey = choices === null ? null : JSON.stringify(choices);
+  const scope = useRef<string | null>(null);
+  if (observation) scope.current = observation.scope;
+  const accountsKey = observation ? JSON.stringify(observation.accounts) : null;
+  const feed = useWorkflowQuery(host, `usage:${JSON.stringify([host.containerId, choiceKey, scope.current, accountsKey])}`, choices !== null,
+    async () => ({ choices: choiceKey!, accounts: accountsKey, value: await codeWorkflow(host).usage(choices!) }), usageRefreshMs);
+  const retained = useRef<{ choices: string; accounts: string | null; value: UsageView } | null>(null);
+  if (retained.current && (retained.current.choices !== choiceKey || (scope.current !== null && retained.current.value.scope !== scope.current))) retained.current = null;
+  if (feed.data?.choices === choiceKey && (scope.current === null || feed.data.value.scope === scope.current)) retained.current = feed.data;
+  const value = retained.current?.value ?? null;
+  const cached = feed.error !== null || feed.data?.value !== value || observation?.status !== "fresh" ||
+    retained.current?.accounts !== accountsKey || value?.status !== "fresh" || value?.accountsStatus !== "fresh";
+  return { ...feed, value, cached };
+}
 
 function QuotaWindow({ window, inactive, now, cached }: { window: UsageWindow; inactive: boolean; now: number; cached: boolean }) {
   const percent = window.usedFraction === null || window.status === "unknown" ? null : window.usedFraction * 100;
-  const label = `${window.windowId}${window.tier ? ` ${window.tier}` : ""}`;
-  const readingStatus = cached && window.status !== "unknown" ? "stale" : window.status;
-  const state = inactive ? "inactive" : readingStatus;
-  return <li className="plugin-atyrode_code__usage-window" data-state={state} data-level={percent === null ? "unknown" : percent >= 100 ? "exhausted" : percent >= 90 ? "high" : "normal"}>
+  const label = `${window.windowId}${window.tier ? ` · ${window.tier}` : ""}`;
+  const historical = cached || window.status === "stale";
+  const exhausted = window.quotaStatus === "exhausted" || (window.quotaStatus === null && percent !== null && percent >= 100);
+  return <li className="plugin-atyrode_code__usage-window" data-state={inactive ? "inactive" : historical ? "stale" : window.status}
+    data-level={percent === null ? "unknown" : exhausted ? "exhausted" : window.quotaStatus === "warning" || percent >= 90 ? "high" : "normal"}>
     <span className="plugin-atyrode_code__usage-window-label">{label}</span>
-    {percent === null ? <span className="plugin-atyrode_code__usage-meter-unknown" aria-hidden="true" /> :
-      <meter className="plugin-atyrode_code__usage-meter" min={0} max={100} value={Math.min(100, percent)}
-        aria-label={`${label}: ${percentFormat.format(percent)}% used, ${inactive ? "disabled or blocked account, " : ""}${status(readingStatus).toLowerCase()}`} />}
-    <span className="plugin-atyrode_code__usage-percent">{percent === null ? "Unknown" : `${percentFormat.format(percent)}% used`}</span>
-    <span className="plugin-atyrode_code__usage-reset" title={`Reset: ${time(window.resetsAt)}`}>
-      {window.status === "stale" && !cached && window.resetsAt !== null && window.resetsAt > now && <span className="plugin-atyrode_code__warning">Cached reading · </span>}{resetTime(window.resetsAt, now)}
+    <span className="plugin-atyrode_code__usage-amount">
+      {percent !== null && <meter className="plugin-atyrode_code__usage-meter" min={0} max={100} value={Math.min(100, percent)}
+        aria-label={`${label}: ${percentFormat.format(percent)}% used${historical ? ", historical reading" : " at observation"}${inactive ? ", excluded, disabled or blocked account" : ""}`} />}
+      <span className="plugin-atyrode_code__usage-percent">{percent === null ? "Usage unknown" : `${percentFormat.format(percent)}% used`}</span>
+    </span>
+    <span className="plugin-atyrode_code__usage-reset" title={`Observed: ${time(window.observedAt)} · Reset: ${time(window.resetsAt)}`}>
+      {historical ? `Historical reset: ${time(window.resetsAt)}` : resetTime(window.resetsAt, now)}
+      <span className="plugin-atyrode_code__usage-source">{historical ? "Historical" : "Observed"} · {observedAgo(window.observedAt, now)}{window.quotaStatus !== null ? ` · provider: ${window.quotaStatus}` : ""}</span>
     </span>
   </li>;
 }
 
-function AccountUsage({ entry, now, refreshFailed }: { entry: UsageAccount; now: number; refreshFailed: boolean }) {
+/** Shared by the account editor and the read-only usage ledger. */
+export function AccountUsageReadings({ entry, now, cached, details = true }: { entry: UsageAccount; now: number; cached: boolean; details?: boolean }) {
   const { account } = entry;
+  const historical = cached || entry.freshness === "stale";
   const inactive = !entry.selected || account.disabled || entry.status === "credential_disabled" || entry.status === "blocked";
-  const identity = account.email ?? (account.type === "api_key" ? `API key · slot ${account.credentialId}` : account.identityKey ?? "Identity unavailable");
-  const cached = refreshFailed || entry.freshness === "stale";
-  return <article className="plugin-atyrode_code__usage-account">
-    <div className="plugin-atyrode_code__usage-identity">
-      <h4>{identity}</h4>
-      <span className={cached ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"} title={`Last successful provider reading: ${time(entry.observedAt)}`}>
-        {entry.observedAt === null ? "Usage not reported" : `${cached ? "Cached usage" : "Updated"} · ${observedAgo(entry.observedAt, now)}`}
-      </span>
-      {entry.status !== "reported" && entry.status !== "stale" && entry.status !== "unknown" && <span className={entry.status === "blocked" ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{status(entry.status)}</span>}
-    </div>
-    {entry.windows.length === 0 ? <p className="plugin-atyrode_code__muted">Quota unreported</p> :
-      <ul className="plugin-atyrode_code__usage-windows">{entry.windows.map((window, index) =>
-        <QuotaWindow key={`${window.windowId}:${window.tier}:${index}`} window={window} inactive={inactive} now={now} cached={cached} />)}</ul>}
-    <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-account-details">
-      <summary>Details{entry.resetCredits !== null ? ` · ${entry.resetCredits.available.toLocaleString()} reset credits (${status(entry.resetCredits.status).toLowerCase()})` : ""}{entry.balance !== null ? ` · ${entry.balance.total} ${entry.balance.currency} (${status(entry.balance.status).toLowerCase()})` : ""}</summary>
+  const creditsHistorical = historical || entry.resetCredits?.status === "stale";
+  const balanceHistorical = historical || entry.balance?.status === "stale";
+  return <div className="plugin-atyrode_code__usage-readings">
+    {entry.windows.length === 0 ? <p className="plugin-atyrode_code__muted">{historical ? "Historical · quota unreported" : "Quota unreported · no capacity estimate"}</p> :
+      <ul className="plugin-atyrode_code__usage-windows">{entry.windows.map(window =>
+        <QuotaWindow key={JSON.stringify([window.windowId, window.tier])} window={window} inactive={inactive} now={now} cached={historical} />)}</ul>}
+    {details && <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-account-details">
+      <summary>{historical ? "Historical account & usage facts" : "Account & usage facts"}
+        {entry.resetCredits !== null ? ` · ${creditsHistorical ? "historical " : ""}${entry.resetCredits.available.toLocaleString()} reset credits` : ""}
+        {entry.balance !== null ? ` · ${balanceHistorical ? "historical " : ""}${entry.balance.total} ${entry.balance.currency}` : ""}</summary>
       <dl className="plugin-atyrode_code__usage-facts">
         <dt>Identity</dt><dd>{account.type === "api_key" ? "API key" : "OAuth"} · slot {account.credentialId}{account.identityKey !== null ? ` · ${account.identityKey}` : ""}</dd>
         <dt>Scope</dt><dd><code>{account.reference.scope}</code></dd>
-        <dt>Selection</dt><dd>{entry.selected ? "Enabled" : "Disabled"} · credential {account.disabled ? "disabled" : "not disabled"} at observation</dd>
-        <dt>Observation</dt><dd>{status(entry.freshness)} · {time(entry.observedAt)}</dd>
-        {entry.disabledAt !== null && <><dt>Disabled at</dt><dd>{time(entry.disabledAt)}</dd></>}
-        <dt>Blocks</dt><dd>{account.blocks.length === 0 ? "None reported" : account.blocks.map((block, index) => <div key={index}>{block.scope || "All"} · until {time(block.until)}</div>)}</dd>
-        <dt>Reset credits</dt><dd>{entry.resetCredits === null ? "Unreported" : <>{entry.resetCredits.available.toLocaleString()} · {status(entry.resetCredits.status)} · observed {time(entry.resetCredits.observedAt)}<br />Expiry: {entry.resetCredits.expiresAt.length === 0 ? "Unreported" : entry.resetCredits.expiresAt.map(time).join("; ")}</>}</dd>
-        <dt>Balance</dt><dd>{entry.balance === null ? "Unreported" : <>{entry.balance.total} {entry.balance.currency} · {status(entry.balance.status)} · observed {time(entry.balance.observedAt)}</>}</dd>
+        <dt>Saved inclusion</dt><dd>{historical ? "Historical · " : ""}{entry.selected ? "Included" : "Excluded"} · not launch approval</dd>
+        <dt>Credential</dt><dd>{historical ? "Historical · " : ""}{account.disabled ? "Disabled" : "Not disabled"} at observation</dd>
+        <dt>Account status</dt><dd>{historicalStatus(entry.status, historical)}</dd>
+        <dt>Provider reading</dt><dd>{historicalStatus(entry.freshness, historical)} · {time(entry.observedAt)}</dd>
+        {entry.disabledAt !== null && <><dt>Disabled at</dt><dd>{historical ? "Historical · " : ""}{time(entry.disabledAt)}</dd></>}
+        <dt>Native blocks</dt><dd>{historical ? "Historical · " : ""}{account.blocks.length === 0 ? "None reported at observation" : account.blocks.map(block => <div key={block.scope}>{block.scope || "All"} · until {time(block.until)}</div>)}</dd>
+        <dt>Reset credits</dt><dd>{entry.resetCredits === null ? `${historical ? "Historical · " : ""}Unreported` : <>{entry.resetCredits.available.toLocaleString()} · {historicalStatus(entry.resetCredits.status, historical)} · observed {time(entry.resetCredits.observedAt)}<br />{creditsHistorical ? "Historical expiry" : "Reported expiry"}: {entry.resetCredits.expiresAt.length === 0 ? "Unreported" : entry.resetCredits.expiresAt.map(time).join("; ")}</>}</dd>
+        <dt>Balance</dt><dd>{entry.balance === null ? `${historical ? "Historical · " : ""}Unreported` : <>{entry.balance.total} {entry.balance.currency} · {historicalStatus(entry.balance.status, historical)} · observed {time(entry.balance.observedAt)}</>}</dd>
       </dl>
-      {entry.windows.map((window, index) => <div className="plugin-atyrode_code__usage-window-detail" key={`${window.windowId}:${window.tier}:${index}`}>
+      {entry.windows.map(window => <div className="plugin-atyrode_code__usage-window-detail" key={JSON.stringify([window.windowId, window.tier])}>
         <strong>{window.windowId}{window.tier ? ` · ${window.tier}` : ""}</strong>
-        <p>Bucket: {window.bucket ?? "Unreported"} · {status(window.status)}</p>
-        <p>Observed: {time(window.observedAt)} · Reset: {time(window.resetsAt)}</p>
-        <p>Duration: {window.durationMs === null ? "Unknown" : `${(window.durationMs / 1000).toLocaleString()} seconds`}</p>
+        <p>{historical || window.status === "stale" ? "Historical bucket" : "Bucket"}: {window.bucket ?? "Unreported"} · {historicalStatus(window.status, historical)}</p>
+        <p>{historical || window.status === "stale" ? "Historical provider verdict" : "Provider verdict"}: {window.quotaStatus ?? "Unreported"}</p>
+        <p>{historical || window.status === "stale" ? "Historical observation" : "Observed"}: {time(window.observedAt)} · Reported reset: {time(window.resetsAt)}</p>
+        <p>{historical || window.status === "stale" ? "Historical duration" : "Duration"}: {window.durationMs === null ? "Unknown" : `${(window.durationMs / 1000).toLocaleString()} seconds`}</p>
       </div>)}
-    </details>
+    </details>}
+  </div>;
+}
+
+function AccountUsage({ entry, now, cached, compact }: { entry: UsageAccount; now: number; cached: boolean; compact: boolean }) {
+  const { account } = entry;
+  const historical = cached || entry.freshness === "stale";
+  return <article className="plugin-atyrode_code__usage-account" data-compact={compact || undefined}>
+    <div className="plugin-atyrode_code__usage-identity">
+      <h4>{account.email ?? (account.type === "api_key" ? "API key" : "OAuth account")}</h4>
+      <span className="plugin-atyrode_code__usage-exact-identity">{account.identityKey ?? "API key"} · slot {account.credentialId}</span>
+      <span>{historical ? "Historical · " : ""}{entry.selected ? "Included" : "Excluded"} · {account.disabled || entry.status === "credential_disabled" ? "credential disabled at observation" : account.blocks.length > 0 ? "native blocks at observation" : "no native blocks at observation"}</span>
+      <span title={`Provider reading: ${time(entry.observedAt)}`}>{historical ? "Cached" : "Provider reading"} · {observedAgo(entry.observedAt, now)}</span>
+    </div>
+    <AccountUsageReadings entry={entry} now={now} cached={cached} details={!compact} />
   </article>;
 }
 
-function UsageSnapshot({ value, refreshFailed }: { value: UsageView; refreshFailed: boolean }) {
+function UsageSnapshot({ value, cached, compact = false }: { value: UsageView; cached: boolean; compact?: boolean }) {
   const now = Date.now();
-  const cached = refreshFailed || value.status !== "fresh" || value.providers.some(provider => provider.accounts.some(entry => entry.freshness === "stale"));
   return <>
     <div className="plugin-atyrode_code__usage-observation">
-      <span className={refreshFailed ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"} title={`Last broker response: ${time(value.observedAt)}`}>
-        {refreshFailed ? "Last known usage" : "Checked"} {observedAgo(value.observedAt, now)} · checks every minute
-      </span>
-      {value.accountsStatus !== "fresh" && <span className="plugin-atyrode_code__warning">Accounts {status(value.accountsStatus).toLowerCase()}</span>}
+      <span title={`Broker response: ${time(value.observedAt)}`}>{cached ? "Historical broker response" : "Broker checked"} · {observedAgo(value.observedAt, now)}</span>
+      <span>{cached ? "Current availability unknown" : "Included does not mean ready · launch review required"}</span>
     </div>
-    {cached && <p className="plugin-atyrode_code__notice">Cached usage is the last successful quota reading, not a sign-in problem. Refresh to check for an update; the broker may reuse provider readings for up to five minutes.</p>}
-    {value.providers.length === 0 && <p className="plugin-atyrode_code__muted">No provider observations · quota unknown</p>}
+    {value.providers.length === 0 && <p className="plugin-atyrode_code__muted">{cached ? "Historical · " : ""}No account observations · quota unknown.</p>}
     <div className="plugin-atyrode_code__usage-providers">{value.providers.map(provider =>
       <section key={provider.provider} className="plugin-atyrode_code__usage-provider" aria-label={`${provider.provider} usage`}>
-        <h3 className={provider.family === "openai" ? "plugin-atyrode_code__provider-blue" : provider.family === "anthropic" ? "plugin-atyrode_code__provider-amber" : ""}>{provider.provider === "openai-codex" ? "Codex" : provider.provider === "anthropic" ? "Claude" : provider.provider}</h3>
-        {provider.accounts.length === 0 && <p className="plugin-atyrode_code__muted">No account observations · quota unknown</p>}
-        {provider.accounts.map(entry => <AccountUsage key={JSON.stringify([entry.account.reference.scope, entry.account.reference.provider, entry.account.credentialId])} entry={entry} now={now} refreshFailed={refreshFailed} />)}
-        {provider.buckets.filter(bucket => bucket.status === "maxed" || bucket.status === "blocked").map(bucket => <p key={bucket.name} className="plugin-atyrode_code__warning">{bucket.name} · selected pool {status(bucket.status).toLowerCase()}</p>)}
-        {provider.buckets.length > 0 && <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-pool">
-          <summary>Selected pool · limits &amp; status</summary>
-          <ul>{provider.buckets.map(bucket => <li key={bucket.name}><strong>{bucket.name}</strong> · {status(bucket.status)} · Reset: {time(bucket.resetsAt)}</li>)}</ul>
+        <h3 className={provider.family === "openai" ? "plugin-atyrode_code__provider-blue" : provider.family === "anthropic" ? "plugin-atyrode_code__provider-amber" : ""}>{provider.provider}</h3>
+        {provider.accounts.map(entry => <AccountUsage key={accountKey(entry)} entry={entry} now={now} cached={cached} compact={compact} />)}
+        {!compact && provider.buckets.length > 0 && <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-pool">
+          <summary>{cached ? "Historical pool assessment" : "Pool assessment at observation"} · not an aggregate quota</summary>
+          <ul>{provider.buckets.map(bucket => <li key={bucket.name}><strong>{bucket.name}</strong> · {historicalStatus(bucket.status, cached)} · {cached || bucket.status === "stale" ? "Historical reset" : "Reported reset"}: {time(bucket.resetsAt)}</li>)}</ul>
         </details>}
       </section>)}</div>
-    <details className="plugin-atyrode_code__details">
-      <summary>Observation details</summary>
-      <p>Scope: <code>{value.scope}</code></p>
-      <p>Usage: {status(value.status)} · {time(value.observedAt)}. Accounts: {status(value.accountsStatus)}.</p>
-      <p>Point-in-time observations, not a live quota guarantee. Profile choices and usage are separate observations. Reset deadlines do not confirm a reset; unknown and unreported values are not zero.</p>
-    </details>
-  </>;
-}
-
-function CompactProviderUsage({ provider, cached, now }: { provider: UsageProvider; cached: boolean; now: number }) {
-  let selected = 0;
-  const counts: Record<string, number> = {};
-  for (const entry of provider.accounts) {
-    if (entry.selected) selected++;
-    if (entry.status !== "reported") counts[entry.status] = (counts[entry.status] ?? 0) + 1;
-  }
-  return <section className="plugin-atyrode_code__usage-provider" aria-label={`${provider.provider} usage`}>
-    <div className="plugin-atyrode_code__section-heading">
-      <h3 className={provider.family === "openai" ? "plugin-atyrode_code__provider-blue" : provider.family === "anthropic" ? "plugin-atyrode_code__provider-amber" : ""}>{provider.provider === "openai-codex" ? "Codex" : provider.provider === "anthropic" ? "Claude" : provider.provider}</h3>
-      <span className="plugin-atyrode_code__muted">{selected} of {provider.accounts.length} accounts selected</span>
-    </div>
-    {provider.accounts.length === 0 ? <p className="plugin-atyrode_code__muted">No account observations · quota unknown</p> :
-      provider.buckets.length === 0 ? <p className="plugin-atyrode_code__muted">Pool capacity unreported</p> :
-      <ul className="plugin-atyrode_code__usage-pool-statuses" aria-label="Selected pool capacity">
-        {provider.buckets.map(bucket => {
-          const retained = cached && bucket.status !== "unknown" && bucket.status !== "stale";
-          const state = cached && bucket.status === "available" ? "stale" : bucket.status;
-          return <li key={bucket.name} data-state={state}>
-            <strong>{bucket.name}</strong>
-            <span className={state === "available" || state === "disabled" ? "plugin-atyrode_code__muted" : "plugin-atyrode_code__warning"}>
-              {retained ? "Cached · " : ""}{status(bucket.status)}
-            </span>
-            {bucket.resetsAt !== null && <span className="plugin-atyrode_code__usage-reset" title={`Reset: ${time(bucket.resetsAt)}`}>{resetTime(bucket.resetsAt, now)}</span>}
-          </li>;
-        })}
-      </ul>}
-    {Object.keys(counts).length > 0 && <div className="plugin-atyrode_code__usage-observation" aria-label="Account observation status">
-      {Object.entries(counts).map(([state, count]) => <span key={state} className={state === "blocked" || state === "stale" || state === "unknown" ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{count} {status(state).toLowerCase()}</span>)}
-    </div>}
-  </section>;
-}
-
-function CompactUsageSnapshot({ value, refreshFailed }: { value: UsageView; refreshFailed: boolean }) {
-  const now = Date.now();
-  const cached = refreshFailed || value.status !== "fresh" || value.accountsStatus !== "fresh";
-  return <>
-    <div className="plugin-atyrode_code__usage-observation">
-      <span className={cached ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"} title={`Last broker response: ${time(value.observedAt)}`}>
-        {value.observedAt === null ? "Usage unreported" : `${cached ? "Last known usage" : "Checked"} · ${observedAgo(value.observedAt, now)}`}
-      </span>
-      {value.accountsStatus !== "fresh" && <span className="plugin-atyrode_code__warning">Accounts {status(value.accountsStatus).toLowerCase()}</span>}
-    </div>
-    {value.providers.length === 0 && <p className="plugin-atyrode_code__muted">No account observations · quota unknown. View Accounts to choose a pool.</p>}
-    <div className="plugin-atyrode_code__usage-providers">{value.providers.map(provider =>
-      <CompactProviderUsage key={provider.provider} provider={provider} cached={cached} now={now} />)}</div>
-    <details className="plugin-atyrode_code__details">
-      <summary>Usage details · accounts, windows &amp; observations</summary>
-      <UsageSnapshot value={value} refreshFailed={refreshFailed} />
+    <details className="plugin-atyrode_code__details plugin-atyrode_code__usage-observation-details">
+      <summary>{compact ? "All account facts & pool assessments" : "Observation details"}{cached ? " · historical" : ""}</summary>
+      {compact ? <UsageSnapshot value={value} cached={cached} /> : <>
+        <p>{cached ? "Historical scope" : "Scope"}: <code>{value.scope}</code></p>
+        <p>Usage: {historicalStatus(value.status, cached)} · {time(value.observedAt)}. Accounts: {historicalStatus(value.accountsStatus, cached)}.</p>
+        <p>Checks every minute. The broker may reuse provider readings for up to five minutes. Each account and window keeps its own source time. Cached facts do not confirm current availability.</p>
+        <p>Windows are separate limits, never averaged. Reset deadlines do not confirm restored quota; unknown and unreported are not zero. Code inclusion does not enable a disabled native credential.</p>
+      </>}
     </details>
   </>;
 }
@@ -182,32 +170,34 @@ type UsageOverviewProps = { host: HostServices; compact?: boolean; onAccounts?: 
 function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOverviewProps) {
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
-  const current = configuration.data?.configuration;
-  const feed = useWorkflowQuery(host, `usage:${JSON.stringify([workspace, current?.accounts])}`, !!current,
-    () => codeWorkflow(host).usage(current!.accounts), usageRefreshMs);
-  const retained = useRef<{ choices: string; value: UsageView } | null>(null);
-  const choices = current ? JSON.stringify(current.accounts) : "";
-  if (feed.data && (retained.current?.value !== feed.data || retained.current.choices !== choices)) retained.current = { choices, value: feed.data };
-  const value = feed.data ?? (retained.current?.choices === choices ? retained.current.value : null);
-  const activeProfile = current ? current.accounts.activePreset === null ? "Manual" : current.accounts.presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "Unavailable profile" : null;
-  const error = configuration.error ?? feed.error;
-  return <section className="plugin-atyrode_code plugin-atyrode_code__usage" data-compact={compact || undefined} aria-label="Code usage" aria-busy={configuration.refreshing || feed.refreshing}>
+  const lastConfiguration = useRef(configuration.data);
+  if (configuration.data) lastConfiguration.current = configuration.data;
+  const current = (configuration.data ?? lastConfiguration.current)?.configuration ?? null;
+  const accounts = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
+  const usage = useAccountUsage(host, current?.accounts ?? null, accounts.data);
+  const { value } = usage;
+  const historicalChoices = configuration.data === null && current !== null;
+  const cached = usage.cached || historicalChoices || configuration.error !== null || accounts.error !== null;
+  const manual = current?.accounts.activePreset === null;
+  const activeProfile = current ? manual ? "Manual · immediate edits" : `Saved preset: ${current.accounts.presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "Unavailable"}` : null;
+  const error = configuration.error ?? accounts.error ?? usage.error;
+  return <section className="plugin-atyrode_code plugin-atyrode_code__usage" data-compact={compact || undefined} aria-label="Account and quota ledger" aria-busy={configuration.refreshing || usage.refreshing}>
     <header className="plugin-atyrode_code__section-heading">
-      {!compact && <h2 className="plugin-atyrode_code__section-label">usage</h2>}
-      {activeProfile !== null && <span className="plugin-atyrode_code__muted" title="Saved account pool">{activeProfile === "Manual" ? "Manual account pool" : activeProfile}</span>}
+      <h2 className="plugin-atyrode_code__section-label">{compact ? "accounts / usage" : "usage"}</h2>
+      {activeProfile !== null && <span className="plugin-atyrode_code__muted" data-account-pool={historicalChoices ? "historical" : "saved"}>{historicalChoices ? "Last saved · " : ""}{activeProfile}</span>}
       <div className="plugin-atyrode_code__toolbar">
-        <button type="button" onClick={onAccounts ?? (() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`))}>Accounts</button>
-        <button type="button" data-action="atyrode.omp.accounts.usage" disabled={!workspace || configuration.refreshing || feed.refreshing} onClick={() => { configuration.refresh(); feed.refresh(); }} title="Check the broker for updated provider quota readings">{configuration.refreshing || feed.refreshing ? "Checking usage…" : error ? "Retry usage" : "Refresh usage"}</button>
+        <button type="button" onClick={onAccounts ?? (() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`))}>Manage accounts</button>
+        <button type="button" data-action="atyrode.omp.accounts.usage" disabled={!workspace || configuration.refreshing || usage.refreshing} onClick={() => { configuration.refresh(); accounts.refresh(); usage.refresh(); }} title="Check the broker; provider readings may be reused for up to five minutes">{configuration.refreshing || usage.refreshing ? "Checking…" : error ? "Retry check" : "Check usage"}</button>
       </div>
     </header>
     {error && <div className="plugin-atyrode_code__notice plugin-atyrode_code__warning" role="status">
-      <p>Usage refresh failed{value ? " · showing last known readings" : ""}.</p>
+      <p>Observation failed{value ? " · all retained facts are historical; current availability is unknown" : " · current availability is unknown"}.</p>
       <details className="plugin-atyrode_code__details"><summary>Error details</summary><pre>{error}</pre></details>
     </div>}
     {!workspace ? <p className="plugin-atyrode_code__muted" role="status">Open a workspace to view shared usage.</p> :
-      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">{compact ? "No accounts selected" : "Choose an account pool in Accounts to view usage."}</p> :
-      value ? compact ? <CompactUsageSnapshot value={value} refreshFailed={error !== null} /> : <UsageSnapshot value={value} refreshFailed={error !== null} /> :
-      !error && <p className="plugin-atyrode_code__muted" role="status">Reading usage…</p>}
+      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">Account choices not initialized. Native accounts are managed separately in Accounts.</p> :
+      value ? <UsageSnapshot value={value} cached={cached} compact={compact} /> :
+      !error && <p className="plugin-atyrode_code__muted" role="status">Reading account choices and usage…</p>}
   </section>;
 }
 
