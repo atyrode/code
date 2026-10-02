@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { HostServices } from "@manifold/plugin";
 import type { UsageView } from "../domain/usage.ts";
+import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 import { codeWorkflow, useCodeQuery, useWorkflowQuery } from "./machine-web.ts";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -33,6 +34,7 @@ function resetTime(value: number | null, now: number): string {
 }
 
 type UsageAccount = UsageView["providers"][number]["accounts"][number];
+type UsageProvider = UsageView["providers"][number];
 type UsageWindow = UsageAccount["windows"][number];
 
 function QuotaWindow({ window, inactive, now, cached }: { window: UsageWindow; inactive: boolean; now: number; cached: boolean }) {
@@ -122,7 +124,62 @@ function UsageSnapshot({ value, refreshFailed }: { value: UsageView; refreshFail
   </>;
 }
 
-function WorkspaceUsageOverview({ host }: { host: HostServices }) {
+function CompactProviderUsage({ provider, cached, now }: { provider: UsageProvider; cached: boolean; now: number }) {
+  let selected = 0;
+  const counts: Record<string, number> = {};
+  for (const entry of provider.accounts) {
+    if (entry.selected) selected++;
+    if (entry.status !== "reported") counts[entry.status] = (counts[entry.status] ?? 0) + 1;
+  }
+  return <section className="plugin-atyrode_code__usage-provider" aria-label={`${provider.provider} usage`}>
+    <div className="plugin-atyrode_code__section-heading">
+      <h3 className={provider.family === "openai" ? "plugin-atyrode_code__provider-blue" : provider.family === "anthropic" ? "plugin-atyrode_code__provider-amber" : ""}>{provider.provider === "openai-codex" ? "Codex" : provider.provider === "anthropic" ? "Claude" : provider.provider}</h3>
+      <span className="plugin-atyrode_code__muted">{selected} of {provider.accounts.length} accounts selected</span>
+    </div>
+    {provider.accounts.length === 0 ? <p className="plugin-atyrode_code__muted">No account observations · quota unknown</p> :
+      provider.buckets.length === 0 ? <p className="plugin-atyrode_code__muted">Pool capacity unreported</p> :
+      <ul className="plugin-atyrode_code__usage-pool-statuses" aria-label="Selected pool capacity">
+        {provider.buckets.map(bucket => {
+          const retained = cached && bucket.status !== "unknown" && bucket.status !== "stale";
+          const state = cached && bucket.status === "available" ? "stale" : bucket.status;
+          return <li key={bucket.name} data-state={state}>
+            <strong>{bucket.name}</strong>
+            <span className={state === "available" || state === "disabled" ? "plugin-atyrode_code__muted" : "plugin-atyrode_code__warning"}>
+              {retained ? "Cached · " : ""}{status(bucket.status)}
+            </span>
+            {bucket.resetsAt !== null && <span className="plugin-atyrode_code__usage-reset" title={`Reset: ${time(bucket.resetsAt)}`}>{resetTime(bucket.resetsAt, now)}</span>}
+          </li>;
+        })}
+      </ul>}
+    {Object.keys(counts).length > 0 && <div className="plugin-atyrode_code__usage-observation" aria-label="Account observation status">
+      {Object.entries(counts).map(([state, count]) => <span key={state} className={state === "blocked" || state === "stale" || state === "unknown" ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"}>{count} {status(state).toLowerCase()}</span>)}
+    </div>}
+  </section>;
+}
+
+function CompactUsageSnapshot({ value, refreshFailed }: { value: UsageView; refreshFailed: boolean }) {
+  const now = Date.now();
+  const cached = refreshFailed || value.status !== "fresh" || value.accountsStatus !== "fresh";
+  return <>
+    <div className="plugin-atyrode_code__usage-observation">
+      <span className={cached ? "plugin-atyrode_code__warning" : "plugin-atyrode_code__muted"} title={`Last broker response: ${time(value.observedAt)}`}>
+        {value.observedAt === null ? "Usage unreported" : `${cached ? "Last known usage" : "Checked"} · ${observedAgo(value.observedAt, now)}`}
+      </span>
+      {value.accountsStatus !== "fresh" && <span className="plugin-atyrode_code__warning">Accounts {status(value.accountsStatus).toLowerCase()}</span>}
+    </div>
+    {value.providers.length === 0 && <p className="plugin-atyrode_code__muted">No account observations · quota unknown. View Accounts to choose a pool.</p>}
+    <div className="plugin-atyrode_code__usage-providers">{value.providers.map(provider =>
+      <CompactProviderUsage key={provider.provider} provider={provider} cached={cached} now={now} />)}</div>
+    <details className="plugin-atyrode_code__details">
+      <summary>Usage details · accounts, windows &amp; observations</summary>
+      <UsageSnapshot value={value} refreshFailed={refreshFailed} />
+    </details>
+  </>;
+}
+
+type UsageOverviewProps = { host: HostServices; compact?: boolean; onAccounts?: () => void };
+
+function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOverviewProps) {
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
   const current = configuration.data?.configuration;
@@ -134,22 +191,26 @@ function WorkspaceUsageOverview({ host }: { host: HostServices }) {
   const value = feed.data ?? (retained.current?.choices === choices ? retained.current.value : null);
   const activeProfile = current ? current.accounts.activePreset === null ? "Manual" : current.accounts.presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "Unavailable profile" : null;
   const error = configuration.error ?? feed.error;
-  return <section className="plugin-atyrode_code plugin-atyrode_code__usage" aria-label="Code usage" aria-busy={feed.refreshing}>
+  return <section className="plugin-atyrode_code plugin-atyrode_code__usage" data-compact={compact || undefined} aria-label="Code usage" aria-busy={configuration.refreshing || feed.refreshing}>
     <header className="plugin-atyrode_code__section-heading">
       <h2 className="plugin-atyrode_code__section-label">usage</h2>
       {activeProfile !== null && <span className="plugin-atyrode_code__muted" title="Saved account pool">{activeProfile === "Manual" ? "Manual account pool" : activeProfile}</span>}
       <div className="plugin-atyrode_code__toolbar">
+        <button type="button" onClick={onAccounts ?? (() => host.navigate(`manifold://plugin/${ACCOUNTS_PLUGIN_ID}`))}>Accounts</button>
         <button type="button" data-action="atyrode.omp.accounts.usage" disabled={!workspace || configuration.refreshing || feed.refreshing} onClick={() => { configuration.refresh(); feed.refresh(); }} title="Check the broker for updated provider quota readings">{configuration.refreshing || feed.refreshing ? "Checking usage…" : error ? "Retry usage" : "Refresh usage"}</button>
       </div>
     </header>
-    {error && <div className="plugin-atyrode_code__notice plugin-atyrode_code__warning" role="status"><p>Usage could not be refreshed{value ? " · showing the last known readings" : ""}.</p><p>{error}</p></div>}
-    {!workspace ? <p className="plugin-atyrode_code__muted" role="status">Open a workspace to read usage for its shared account choices.</p> :
-      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">Usage appears after Code setup.</p> :
-      value ? <UsageSnapshot value={value} refreshFailed={error !== null} /> :
+    {error && <div className="plugin-atyrode_code__notice plugin-atyrode_code__warning" role="status">
+      <p>Usage refresh failed{value ? " · showing last known readings" : ""}.</p>
+      <details className="plugin-atyrode_code__details"><summary>Error details</summary><pre>{error}</pre></details>
+    </div>}
+    {!workspace ? <p className="plugin-atyrode_code__muted" role="status">Open a workspace to view shared usage.</p> :
+      configuration.data?.configuration === null ? <p className="plugin-atyrode_code__muted" role="status">Choose an account pool in Accounts to view usage.</p> :
+      value ? compact ? <CompactUsageSnapshot value={value} refreshFailed={error !== null} /> : <UsageSnapshot value={value} refreshFailed={error !== null} /> :
       !error && <p className="plugin-atyrode_code__muted" role="status">Reading usage…</p>}
   </section>;
 }
 
-export function UsageOverview({ host }: { host: HostServices }) {
-  return <WorkspaceUsageOverview key={JSON.stringify([host.principal.id, host.containerId])} host={host} />;
+export function UsageOverview(props: UsageOverviewProps) {
+  return <WorkspaceUsageOverview key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
