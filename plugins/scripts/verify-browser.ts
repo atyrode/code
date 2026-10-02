@@ -211,7 +211,8 @@ async function usableStarter(browser: BrowserInstance): Promise<void> {
   for (const label of ["Provider", "Capability", "Thinking", "Advisor"]) {
     await control(browser, `${label} is editable before shared policy exists`, `${dial(label)}?.querySelector('[aria-checked="true"]')`, false);
   }
-  await assertRoles(browser, false);
+  // The default profile keeps the old Code advisor default (glance), so the advisor role is routed.
+  await assertRoles(browser, true);
   await control(browser, "an unsaved starter cannot launch", launchControl, true);
 }
 
@@ -445,7 +446,8 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       for (const model of review.document.models) {
         const source = metadata.models.find(row => row.provider === model.provider && row.id === model.id);
         assert(source, "Every generated catalog row comes from the actual pinned OMP response");
-        assert(source.quotaTier === null || source.quotaTier === "chat", "Special and unknown quota tiers cannot become ordinary starter rungs");
+        assert(source.quotaTier === null || source.quotaTier === "chat" || (source.quotaTier === "spark" && model.tier === 0),
+          "Special and unknown quota tiers cannot become ordinary starter rungs; Spark is only the off-ladder tier 0");
         assert.equal(model.tokensPerSecond, null, "Bundled metadata does not invent measured speed");
         assert.equal(model.timeToFirstTokenMs, null, "Bundled metadata does not invent measured latency");
       }
@@ -551,7 +553,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await selectDestination(browser, generatorDestination, first.machineId);
   const promptField = taskField;
   await control(browser, "shared active profile ready", promptField, false);
-  await assertRoles(browser, false);
+  await assertRoles(browser, initial.selection?.advisor !== "off");
   assert.equal(await browser.evaluate(`${starterSave} === null`), true, "A saved active catalog wins over bundled starter metadata");
   const activeModels = await browser.evaluate<string[]>(`[...document.querySelectorAll('${routes} .plugin-atyrode_code_generator__model-name')].map(el => el.textContent.trim())`);
   assert(activeModels.every(key => document.models.some(model => model.key === key)), "Configured role output continues to use the saved catalog");
@@ -1045,7 +1047,8 @@ async function manualCatalogScenario(browser: BrowserInstance, server: TestServe
     assert.deepEqual(await readConfiguration(server, writer, target), staged, "Returning to Workbench never replaces a successfully staged manual catalog");
     // Reopen against the canonical saved draft, with no earlier local starter attached.
     await browser.goto(`${server.httpUrl}/p/${workspace.id}`);
-    await assertRoles(browser, false);
+    // No selection is saved yet, so the preview uses the default profile, whose glance advisor is routed.
+    await assertRoles(browser, true);
     assert.equal(await browser.evaluate(`${starterSave} === null`), true, "A saved staged record is not eligible for bundled adoption");
     const stagedModels = await browser.evaluate<string[]>(`[...document.querySelectorAll('${routes} .plugin-atyrode_code_generator__model-name')].map(el => el.textContent.trim())`);
     assert(stagedModels.every(key => document.models.some(model => model.key === key)), "The saved draft's own models lead its preview, not regenerated bundled choices");

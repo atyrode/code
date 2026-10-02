@@ -229,7 +229,7 @@ describe("Code profiles a dependent plugin may offer", () => {
     f.access.readable.delete("container-b");
     const listed = await accepted(f, "listProfiles", {});
     expect(listed.profiles).toEqual([{ containerId: target.containerId, revision: record.revision, machineId: null,
-      selected: { model: "anthropic/native-model-2", thinking: record.selection!.thinking,
+      selected: { model: "anthropic/native-model-3", thinking: record.selection!.thinking,
         capability: record.selection!.capability, advisor: record.selection!.advisor },
       accounts: everyAccount, resolved: true }]);
     f.access.readable.add("container-b");

@@ -93,13 +93,22 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   return { selection, available };
 }
 
+/**
+ * OLD CODE'S DEFAULT (`keys.go:47-53`), the profile its screenshot shows: Capable, medium
+ * thinking, a glance advisor, and Spark on wherever the lane can host it.
+ *
+ * Availability is read first, from a selection every lane admits, because `selectionFacts`
+ * refuses a Spark the lane cannot host and a capability the lead family lacks.
+ */
 export function defaultSelection(catalog: CompiledCatalog): Selection {
   const lane: Lane = catalog.families.includes("openai") && catalog.families.includes("anthropic")
     ? { kind: "mixed" } : { kind: "provider", family: catalog.families[0]!, blend: "only" };
-  const selection: Selection = {
-    lane, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false,
+  const admitted: Selection = {
+    lane, capability: 1, thinking: "medium", advisor: "glance", spark: false, priority: false,
     prewalk: false, planYolo: false, fallback: true, budget: "any",
   };
+  const { available } = selectionFacts(catalog, admitted);
+  const selection: Selection = { ...admitted, capability: available.capabilities.filter(value => value <= 3).at(-1)!, spark: available.spark };
   // A catalog without any image-capable model has no complete default profile.
   selectedRoutes(catalog, selection);
   return selection;

@@ -6,7 +6,7 @@ import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema,
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
-import { CatalogDraftSchema } from "../domain/probe.ts";
+import { CatalogDraftSchema, DerivedCatalogSchema } from "../domain/probe.ts";
 
 export const CODE_PLUGIN_ID = "atyrode.code";
 export const GENERATOR_PLUGIN_ID = "atyrode.code.generator";
@@ -189,8 +189,10 @@ export const rootActionSchemas = {
   // The budget DERIVES the catalog: `free` ladders the free models rather than hoping one of them
   // wins a rung against paid ones. Stated on every call, because a catalog's admissible set is
   // part of what it is, and a default would let two derivations differ without saying so.
-  draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema, budget: SelectionSchema.shape.budget }), result: CatalogDraftSchema },
-  deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema, budget: SelectionSchema.shape.budget }), result: CatalogDocumentSchema },
+  // `metadata` is OMP's bundled snapshot, read only for the quota class inventory rows do not carry
+  // yet (Spark); it is joined by exact identity and only at the inventory's own OMP version.
+  draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema, budget: SelectionSchema.shape.budget, metadata: ModelCatalogSnapshotSchema.optional() }), result: CatalogDraftSchema },
+  deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema, budget: SelectionSchema.shape.budget, metadata: ModelCatalogSnapshotSchema.optional() }), result: DerivedCatalogSchema },
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: sessionPrompt }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },

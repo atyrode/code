@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { AccountReferenceSchema, AccountsObservationSchema, ThinkingLevelSchema, identifier } from "@atyrode/manifold-omp";
 
+/** `detail` names what a refusal is about when its code alone cannot, e.g. the exact pair of
+ * models a `ladder_regression` refuses; the code stays the machine-readable part. */
 export class DomainError extends Error {
   constructor(readonly code: "invalid_catalog" | "invalid_selection" | "invalid_accounts" |
     "invalid_choices" | "account_unavailable" | "preset_exists" | "preset_missing" | "invalid_usage" |
-    "budget_unsatisfiable" | "starter_candidate_limit") {
-    super(`code_${code}`);
+    "budget_unsatisfiable" | "starter_candidate_limit" | "ladder_regression", readonly detail?: string) {
+    super(detail === undefined ? `code_${code}` : `code_${code}: ${detail}`);
   }
 }
 

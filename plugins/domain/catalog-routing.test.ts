@@ -112,6 +112,29 @@ describe("catalog capabilities and identity", () => {
   });
 });
 
+describe("default selection", () => {
+  test("is old Code's Capable, glance profile, with Spark exactly where the catalog can host it", () => {
+    const pair = document();
+    pair.models = pair.models.filter(value => value.provider !== "deepseek");
+    const catalog = compileCatalog(pair);
+    const chosen = defaultSelection(catalog);
+    expect(chosen).toEqual({ lane: { kind: "mixed" }, capability: 3, thinking: "medium", advisor: "glance", spark: true,
+      priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" });
+    const review = reviewCatalog(catalog, chosen, daytime);
+    expect(route(review.routes, "advisor").lead).toEqual({ key: "a1", thinking: "low" });
+    expect(route(review.routes, "tiny").lead.key).toBe("spark");
+    expect(defaultSelection(compileCatalog({ ...pair, models: pair.models.filter(value => value.tier !== 0) }))).toEqual({ ...chosen, spark: false });
+  });
+
+  test("a single-family catalog gets its own pure lane at Capable", () => {
+    const single = document();
+    single.models = single.models.filter(value => value.provider === "anthropic");
+    expect(defaultSelection(compileCatalog(single))).toMatchObject({
+      lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, advisor: "glance", spark: false,
+    });
+  });
+});
+
 describe("structured route selection", () => {
   test("elite depends on the lead family, deliberative roles bump, and utilities remain capped", () => {
     const catalog = compileCatalog(document());

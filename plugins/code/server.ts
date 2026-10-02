@@ -6,7 +6,7 @@ import manifestJson from "./manifest.json";
 import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
-import { catalogFromObservations, scaffoldInventory } from "../domain/probe.ts";
+import { catalogFromObservations, quotaSpecials, scaffoldInventory } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
@@ -89,8 +89,8 @@ const productHandlers: ProductHandlers = {
     if ((await readConfiguration(ctx, args)).raw !== previous.raw) throw new CodeRefusal("stale_preferences");
     return { revision: record.revision, accountPool };
   },
-  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory, { specials: [], budget: args.budget }); },
-  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { specials: [], budget: args.budget }); },
+  async draftInventory(_ctx, args) { return scaffoldInventory(args.inventory, { specials: quotaSpecials(args.inventory, args.metadata), budget: args.budget }); },
+  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { specials: quotaSpecials(args.inventory, args.metadata), budget: args.budget }); },
   composeSession,
   listProfiles,
   runSession,

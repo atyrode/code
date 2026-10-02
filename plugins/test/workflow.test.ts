@@ -11,8 +11,9 @@ import type { CodeContext } from "../code/context.ts";
 
 function starterFixture() {
   const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
+    // Three families, not three versions of one, which derivation would collapse to the newest.
     models: [1, 2, 3].map(tier => ({
-      provider: "anthropic", id: `model-${tier}`, api: "anthropic-messages", quotaTier: null,
+      provider: "anthropic", id: `model${tier}`, api: "anthropic-messages", quotaTier: null,
       inputCostPerMillion: tier, outputCostPerMillion: tier * 3, contextWindow: 200_000, maxTokens: 64000,
       reasoning: true, thinkingLevels: ["medium"], images: true,
     })) };

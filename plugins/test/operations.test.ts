@@ -18,9 +18,11 @@ const now = Date.UTC(2026, 0, 1, 12);
 const unavailable = async (): Promise<never> => { throw new Error("Unexpected native operation"); };
 const classifier = { origin: "http://127.0.0.1:11434", model: "qwen3:8b" };
 
+// Three model families, not three versions: `native-model-1`..`-3` would be versions of one
+// family, and derivation keeps only the newest version of a family.
 function document(): CatalogDocument {
   return { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
-    key: `model-${tier}`, provider: "anthropic", id: `native-model-${tier}`, api: "anthropic-messages", tier,
+    key: `model-${tier}`, provider: "anthropic", id: `native-model${tier}`, api: "anthropic-messages", tier,
     quotaBucket: null, inputCostPerMillion: tier, outputCostPerMillion: tier * 3,
     tokensPerSecond: 30, timeToFirstTokenMs: 100, contextWindow: 200_000,
     thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"], images: true,
@@ -148,7 +150,7 @@ describe("atomic starter policy adoption", () => {
     f.access.writable.clear();
     const review = await accepted(f, "reviewStarterProfile", input);
     expect(review.review.selection).toEqual(input.selection);
-    expect(review.review.routes.find(route => route.role === "advisor")?.lead.key).toBe("anthropic.native-model-3");
+    expect(review.review.routes.find(route => route.role === "advisor")?.lead.key).toBe("anthropic.native-model3");
     expect(review.review.routes.every(route => route.fallback.length === 0)).toBe(true);
     expect(f.store.size).toBe(0);
     expect(await invoke(f, "adoptStarterProfile", { ...input, reviewDigest: review.reviewDigest }))
@@ -467,7 +469,7 @@ describe("pure client-supplied policy composition", () => {
     const input = { ...workspace, expectedRevision: record.revision, accounts: observation, prompt: "Implement the change" };
     const composed = await accepted(f, "composeSession", input);
     expect(composed.review.selection).toEqual(record.selection!);
-    expect(composed.overlay.modelRoles?.default).toContain("anthropic/native-model-");
+    expect(composed.overlay.modelRoles?.default).toContain("anthropic/native-model");
     expect(Object.keys(composed).sort()).toEqual(["accountPool", "compositionDigest", "overlay", "planYolo", "prompt", "review", "revision"]);
     expect(await accepted(f, "composeSession", input)).toEqual(composed);
     expect((await accepted(f, "composeSession", { ...input, prompt: "A different change" })).compositionDigest).not.toBe(composed.compositionDigest);
@@ -514,8 +516,8 @@ describe("pure client-supplied policy composition", () => {
     const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
       inventoryObservedAt: now, startedAt: now, completedAt: now + 1,
       results: draft.benchmark.candidates.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) };
-    const catalog = await accepted(f, "deriveCatalog", { inventory, benchmark, budget: "any" });
-    expect(catalog.models.map(model => model.tokensPerSecond)).toEqual([42, 42, 42]);
+    const derived = await accepted(f, "deriveCatalog", { inventory, benchmark, budget: "any" });
+    expect(derived.document.models.map(model => model.tokensPerSecond)).toEqual([42, 42, 42]);
     benchmark.results[0]!.api = "different-api";
     expect(await invoke(f, "deriveCatalog", { inventory, benchmark, budget: "any" })).toEqual({ refused: "code_probe_missing_probe" });
     expect(await configuration(f)).toBeNull();

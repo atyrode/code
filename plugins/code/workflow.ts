@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createCodeClient, StarterProfileInputSchema, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Target } from "./contract.ts";
 import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { projectUsage } from "../domain/usage.ts";
+import { quotaProviders } from "../domain/probe.ts";
 import type { AccountChoices, Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -80,17 +81,25 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     assertCurrent();
     return saved;
   }
+  // Inventory rows carry no quota class yet, so Spark is read from OMP's bundled metadata for the
+  // providers that can host a special; the derivation joins it only at the inventory's OMP version.
+  async function quotaMetadata(inventory: OmpResult<"readInventory">["inventory"]): Promise<{ metadata?: OmpResult<"readModelCatalog"> }> {
+    const providers = quotaProviders(inventory);
+    return providers.length === 0 ? {} : { metadata: await omp("readModelCatalog", { providers }) };
+  }
   // The budget is the one already selected, not a separate choice: deriving a catalog under a
   // free budget while the selection asks for free is the same question asked once. Required
   // rather than defaulted, because "which budget was this catalog derived under" is not a
   // question a caller should be able to leave unanswered.
   async function readInventory(input: OmpInput<"readInventory">, budget: Selection["budget"]) {
     const receipt = await omp("readInventory", input);
-    return { ...receipt, draft: await code("draftInventory", { inventory: receipt.inventory, budget }) };
+    return { ...receipt, draft: await code("draftInventory", { inventory: receipt.inventory, budget, ...await quotaMetadata(receipt.inventory) }) };
   }
   async function readBenchmark(input: OmpInput<"readBenchmark">, budget: Selection["budget"]) {
     const [inventory, receipt] = await Promise.all([omp("readInventory", { containerId: input.containerId, machineId: input.machineId, jobId: input.inventoryJobId }), omp("readBenchmark", input)]);
-    return { ...receipt, catalog: await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark, budget }) };
+    const derived = await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark, budget, ...await quotaMetadata(inventory.inventory) });
+    // The bare document is what gets staged; the exclusions say why each other offered model is absent.
+    return { ...receipt, catalog: derived.document, exclusions: derived.exclusions };
   }
   async function composeSession(target: Target, expectedRevision: number, prompt: string) {
     const accounts = await omp("accounts", {});
