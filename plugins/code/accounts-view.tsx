@@ -71,17 +71,25 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
   const accountFeed = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
   const lastConfiguration = useRef(configuration.data);
   const lastObservation = useRef(accountFeed.data);
+  const lastFreshObservation = useRef<AccountsObservation | null>(accountFeed.data?.status === "fresh" ? accountFeed.data : null);
   const previousScope = useRef<AccountsObservation | null>(null);
   if (configuration.data) lastConfiguration.current = configuration.data;
-  if (accountFeed.data && accountFeed.data !== lastObservation.current) {
-    if (lastObservation.current?.status === "fresh" && accountFeed.data.scope !== lastObservation.current.scope) previousScope.current = lastObservation.current;
-    lastObservation.current = accountFeed.data;
-  }
   const current = (configuration.data ?? lastConfiguration.current)?.configuration ?? null;
+  const choices = current?.accounts ?? null;
+  if (accountFeed.data?.status === "fresh" && accountFeed.data !== lastFreshObservation.current) {
+    if (lastFreshObservation.current && accountFeed.data.scope !== lastFreshObservation.current.scope) {
+      const retainedScope = previousScope.current?.scope;
+      const stillReferenced = retainedScope !== undefined && (choices === null ||
+        choices.manualDisabled.some(reference => reference.scope === retainedScope) ||
+        choices.presets.some(preset => preset.disabled.some(reference => reference.scope === retainedScope)));
+      if (!stillReferenced || retainedScope === lastFreshObservation.current.scope) previousScope.current = lastFreshObservation.current;
+    }
+    lastFreshObservation.current = accountFeed.data;
+  }
+  if (accountFeed.data) lastObservation.current = accountFeed.data;
   const observation = accountFeed.data ?? lastObservation.current;
   const historicalChoices = configuration.data === null && current !== null;
   const historical = historicalChoices || accountFeed.data === null || observation?.status !== "fresh" || configuration.error !== null || accountFeed.error !== null;
-  const choices = current?.accounts ?? null;
   const usage = useAccountUsage(host, choices, accountFeed.data);
   const disabled = choices ? disabledAccountReferences(choices) : [];
   const [draft, setDraft] = useState<PresetDraft | null>(null);

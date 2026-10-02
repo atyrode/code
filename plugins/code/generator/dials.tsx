@@ -183,7 +183,7 @@ export function Dials({ selection, review, catalog, disabled, update }: {
     <Dial label="Capability" icon="model" value={String(selection.capability)} options={review.available.capabilities.map(value => ({ value: String(value), label: levels[value], description: capabilityDetails[value] }))} disabled={disabled} change={value => update({ ...selection, capability: SelectionSchema.shape.capability.parse(Number(value)) })} />
     <Dial label="Thinking" icon="thinking" value={selection.thinking} options={thinkingOptions} disabled={disabled} change={value => update({ ...selection, thinking: ThinkingLevelSchema.parse(value) })} />
     <Dial label="Advisor" icon="advisor" value={selection.advisor} options={advisorOptions} disabled={disabled} change={value => update({ ...selection, advisor: SelectionSchema.shape.advisor.parse(value) })} />
-    <details className="plugin-atyrode_code_generator__extra-dials" data-profile-options><summary>Session behavior <span>{[selection.budget === "free" ? "free only" : null, selection.priority ? "priority" : null, selection.spark ? "spark" : null, selection.prewalk ? "prewalk" : null, selection.planYolo ? "auto-approve plans" : null, selection.fallback ? "fallbacks on" : "fallbacks off"].filter(Boolean).join(" · ")}</span></summary>
+    <details className="plugin-atyrode_code_generator__extra-dials" data-profile-options><summary>Shared profile options <span>{[selection.budget === "free" ? "free only" : null, selection.priority ? "priority" : null, selection.spark ? "spark" : null, selection.prewalk ? "prewalk" : null, selection.planYolo ? "auto-approve plans" : null, selection.fallback ? "fallbacks on" : "fallbacks off"].filter(Boolean).join(" · ")}</span></summary>
     {review.available.budgets.includes("free") && <Dial label="Budget" icon="priority" value={selection.budget} options={[
       { value: "any", label: "Any", description: "Admit every model in the catalog, whatever it costs." },
       { value: "free", label: "Free only", description: "Admit only models that cost nothing, and refuse rather than resolve to a paid one. States the property, so a model becoming free or ceasing to be changes what runs without editing this profile." },
@@ -213,17 +213,18 @@ export function Dials({ selection, review, catalog, disabled, update }: {
   </div>;
 }
 
-export function Estimates({ value }: { value: Review["estimates"] }) {
+export function Estimates({ value, measured }: { value: Review["estimates"]; measured: boolean }) {
   return <div className="plugin-atyrode_code_generator__estimate-panel">
     <dl className="plugin-atyrode_code_generator__estimates">{(["cost", "speed"] as const).map(label => {
       const score = value[label === "cost" ? "costScore" : "speedScore"];
-      const description = (label === "cost" ? ["Lowest", "Lower", "Moderate", "Higher", "Highest"] : ["Most deliberate", "Deliberate", "Balanced", "Faster", "Fastest"])[score - 1];
+      const unknown = label === "speed" && !measured;
+      const description = unknown ? "Unmeasured" : (label === "cost" ? ["Lowest", "Lower", "Moderate", "Higher", "Highest"] : ["Most deliberate", "Deliberate", "Balanced", "Faster", "Fastest"])[score - 1];
       return <div key={label} data-estimate={label}><dt>Relative {label}</dt><dd>
-        <span className="plugin-atyrode_code_generator__estimate-value" key={score}>{description} <small>{score}/5</small></span>
-        <span className="plugin-atyrode_code_generator__estimate-meter" aria-hidden="true">{[1, 2, 3, 4, 5].map(step => <span key={step} data-filled={step <= score} />)}</span>
+        <span className="plugin-atyrode_code_generator__estimate-value" key={unknown ? "unmeasured" : score}>{description}{!unknown && <small>{score}/5</small>}</span>
+        {!unknown && <span className="plugin-atyrode_code_generator__estimate-meter" aria-hidden="true">{[1, 2, 3, 4, 5].map(step => <span key={step} data-filled={step <= score} />)}</span>}
       </dd></div>;
     })}</dl>
-    <ContextHelp label="estimates"><p>Catalog estimates, not live spend or measured performance. Speed may use a default when catalog data is missing.</p></ContextHelp>
+    <ContextHelp label="estimates"><p>Relative catalog signals, not live spend or a performance guarantee. Without actual catalog speed measurements, speed is unmeasured; the policy's neutral default is not evidence.</p></ContextHelp>
   </div>;
 }
 

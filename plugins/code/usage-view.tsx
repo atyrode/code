@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { HostServices } from "@manifold/plugin";
 import type { AccountsObservation } from "@atyrode/manifold-omp";
 import type { AccountChoices } from "../domain/contracts.ts";
@@ -165,9 +165,9 @@ function UsageSnapshot({ value, cached, compact = false }: { value: UsageView; c
   </>;
 }
 
-type UsageOverviewProps = { host: HostServices; compact?: boolean; onAccounts?: () => void };
+type UsageOverviewProps = { host: HostServices; compact?: boolean; onAccounts?: () => void; onObservation?: (signature: string) => void };
 
-function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOverviewProps) {
+function WorkspaceUsageOverview({ host, compact = false, onAccounts, onObservation }: UsageOverviewProps) {
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
   const lastConfiguration = useRef(configuration.data);
@@ -181,6 +181,9 @@ function WorkspaceUsageOverview({ host, compact = false, onAccounts }: UsageOver
   const manual = current?.accounts.activePreset === null;
   const activeProfile = current ? manual ? "Manual · immediate edits" : `Saved preset: ${current.accounts.presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "Unavailable"}` : null;
   const error = configuration.error ?? accounts.error ?? usage.error;
+  const observationKey = useMemo(() => JSON.stringify([configuration.error !== null, accounts.error !== null, usage.error !== null,
+    accounts.data?.status, accounts.data?.scope, accounts.data?.accounts]), [configuration.error, accounts.error, usage.error, accounts.data]);
+  useEffect(() => { onObservation?.(observationKey); }, [onObservation, observationKey]);
   return <section className="plugin-atyrode_code plugin-atyrode_code__usage" data-compact={compact || undefined} aria-label="Account and quota ledger" aria-busy={configuration.refreshing || usage.refreshing}>
     <header className="plugin-atyrode_code__section-heading">
       <h2 className="plugin-atyrode_code__section-label">{compact ? "accounts / usage" : "usage"}</h2>
