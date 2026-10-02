@@ -1,33 +1,54 @@
 import { expect, test } from "bun:test";
-import { actionDoor, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient } from "../code/workflow.ts";
-import type { TerminalSummary } from "@manifold/protocol";
-import { actionSchemas, type ActionInput, type ActionResult, type Configuration } from "../code/contract.ts";
+import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID,
+  type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { createCodeWorkflowClient, VerificationError, type VerificationProgress } from "../code/workflow.ts";
+import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
+import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
+import type { Selection } from "../domain/contracts.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
-import { catalogFromMetadata } from "../domain/probe.ts";
 import { handlers } from "../code/server.ts";
 import type { CodeContext } from "../code/context.ts";
+import { z } from "zod";
 
-function starterFixture() {
-  const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
-    // Three families, not three versions of one, which derivation would collapse to the newest.
-    models: [1, 2, 3].map(tier => ({
-      provider: "anthropic", id: `model${tier}`, api: "anthropic-messages", quotaTier: null,
-      inputCostPerMillion: tier, outputCostPerMillion: tier * 3, contextWindow: 200_000, maxTokens: 64000,
-      reasoning: true, thinkingLevels: ["medium"], images: true,
-    })) };
-  const input: ActionInput<"reviewStarterProfile"> = { containerId: "workspace", expectedRevision: 0, metadata,
-    selection: { ...defaultSelection(compileCatalog(catalogFromMetadata(metadata, "any"))), capability: 3, prewalk: true } };
-  const store = new Map<string, string>(), calls: string[] = [];
-  const hooks: Partial<Record<"review" | "metadata" | "adopt", () => void | Promise<void>>> = {};
-  const source = { metadata: structuredClone(metadata) };
-  const unavailable = async (): Promise<never> => { throw new Error("Unexpected native operation"); };
+const target = { containerId: "workspace", machineId: "destination" };
+const unavailable = async (): Promise<never> => { throw new Error("Unexpected native operation"); };
+const JobNodeInput = z.strictObject({ node: z.strictObject({ kind: z.literal("job"), machineId: z.string(), operationId: z.string(), jobId: z.string() }) });
+/** The verification error a run stopped with; any other outcome fails the test. */
+async function stopOf(run: Promise<unknown>): Promise<VerificationError> {
+  const outcome = await run.then(() => null, (error: unknown) => error);
+  if (!(outcome instanceof VerificationError)) throw new Error(`expected a verification stop, got ${String(outcome)}`);
+  return outcome;
+}
+
+function probeJob(jobId: string, operationId: string, state: PublicJob["state"]): PublicJob {
+  return PublicJobSchema.parse({ jobId, machineId: target.machineId, operationId, pluginId: OMP_PLUGIN_ID,
+    installationRevision: "native-installation", artifactSha256: "c".repeat(64), inputDigest: "e".repeat(64),
+    resourceBindingDigest: "d".repeat(64), state, nextInputSeq: null,
+    result: state === "exited" ? { jobId, requestDigest: "f".repeat(64), ownerId: "owner", ownerGeneration: 1, state, exitCode: 0, reason: null,
+      startedAt: 1, finishedAt: 2, usage: null, outputs: [], limits: { timeoutMs: 600_000, memoryBytes: 1 << 30, processes: 64, outputBytes: 1 << 20 } } : null,
+    authority: { origin: { kind: "action", traceId: "trace-1", door: `${OMP_PLUGIN_ID}.startInventory` }, requester: "writer", executor: null, decision: null } });
+}
+function row(provider: string, id: string, input: number, context: number, levels: readonly ("low" | "medium" | "high" | "xhigh" | "max")[], images: boolean) {
+  return { provider, id, api: provider === "anthropic" ? "anthropic-messages" : "openai-completions", inputCostPerMillion: input,
+    outputCostPerMillion: input * 5, contextWindow: context, maxTokens: 64_000, reasoning: true, thinkingLevels: [...levels], images };
+}
+/**
+ * Real Code doors over an in-memory container, and an OMP that answers inventory and benchmark
+ * jobs from fixed facts. `states` scripts what `engine.jobs.status` answers for a job, and
+ * `hooks` run when a door answers, which is where the world moves under a verification.
+ */
+function verificationFixture() {
+  const store = new Map<string, string>(), calls: string[] = [], cancelled: string[] = [], benchmarked: BenchmarkInput[] = [];
+  const hooks: Partial<Record<string, () => void | Promise<void>>> = {};
+  const states = new Map<string, PublicJob["state"][]>();
+  const exitCodes = new Map<string, number>();
+  const verdicts: Record<string, "not_found" | "client_blocked"> = {};
   const ctx: CodeContext = {
-    now: () => 1000, emit() {}, outsideScope: async () => null,
+    now: () => 10_000, emit() {}, outsideScope: async () => null,
     auth: { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" },
       caps: ["containers:read", "containers:write"], containerScope: null, isRoot: false,
-      allows: async (cap, node) => node?.kind === "container" && node.containerId === input.containerId &&
+      allows: async (cap, node) => node?.kind === "container" && node.containerId === target.containerId &&
         (cap === "containers:read" || cap === "containers:write") },
     storage: { pluginId: "atyrode.code", get: async key => store.get(key) ?? null,
       set: unavailable, delete: unavailable, keys: unavailable,
@@ -41,105 +62,200 @@ function starterFixture() {
       readInstanceConfiguration: unavailable, configureInstance: unavailable, invokeInstance: unavailable },
     actions: { call: unavailable },
   };
+  const scope = "shared-instance";
+  const slot = (provider: string, credentialId: number): AccountsObservation["accounts"][number] => ({
+    reference: { kind: "credential", scope, provider, credentialId }, credentialId, identityKey: null, type: "api_key", email: null, disabled: false, blocks: [] });
+  const omp = {
+    accounts: { scope, observedAt: 5_000, status: "fresh", accounts: [slot("anthropic", 1), slot("deepseek", 2)] } as AccountsObservation,
+    defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null } as OmpResult<"readDefaults">,
+    inventory: { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: 6_000, models: [
+      row("anthropic", "claude-haiku-5", 1, 200_000, ["low", "medium", "high"], true),
+      row("anthropic", "claude-sonnet-5", 3, 200_000, ["low", "medium", "high", "xhigh"], true),
+      row("anthropic", "claude-opus-5", 5, 200_000, ["low", "medium", "high", "xhigh", "max"], true),
+      row("deepseek", "deepseek-flash", 0.14, 128_000, ["low", "high"], false),
+      row("deepseek", "deepseek-pro", 0.5, 128_000, ["low", "high", "max"], false),
+      row("deepseek", "deepseek-vision-exp", 0.2, 128_000, ["low", "high"], true),
+    ] } as InventoryReceipt,
+  };
+  let benchmarks = 0;
+  const job = (jobId: string, operationId: string) => {
+    const scripted = states.get(jobId);
+    const state = scripted && scripted.length > 0 ? scripted.shift()! : "exited";
+    const value = probeJob(jobId, operationId, state);
+    const exitCode = exitCodes.get(jobId);
+    return exitCode === undefined || value.result === null ? value : { ...value, result: { ...value.result, exitCode } };
+  };
+  async function answer(door: string, raw: unknown): Promise<unknown> {
+    if (door === actionDoor("accounts")) return structuredClone(omp.accounts);
+    if (door === actionDoor("readDefaults")) return omp.defaults;
+    if (door === actionDoor("startInventory")) return job("inventory-1", INVENTORY_OPERATION_ID);
+    if (door === actionDoor("readInventory")) return { job: probeJob("inventory-1", INVENTORY_OPERATION_ID, "exited"), inventory: omp.inventory };
+    if (door === actionDoor("startBenchmark")) {
+      benchmarked.push(ompActionSchemas.startBenchmark.input.parse(raw).candidates);
+      return job(`benchmark-${++benchmarks}`, BENCHMARK_OPERATION_ID);
+    }
+    if (door === actionDoor("readBenchmark")) {
+      const { jobId } = ompActionSchemas.readBenchmark.input.parse(raw);
+      const candidates = benchmarked[Number(jobId.slice("benchmark-".length)) - 1]!.candidates;
+      return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
+        inventoryObservedAt: omp.inventory.observedAt, startedAt: 7_000 + benchmarks, completedAt: 8_000 + benchmarks,
+        results: candidates.map(candidate => verdicts[candidate.id]
+          ? { ...candidate, status: verdicts[candidate.id], tokensPerSecond: null, timeToFirstTokenMs: null }
+          : { ...candidate, status: "reachable", tokensPerSecond: 50, timeToFirstTokenMs: 300 }) } };
+    }
+    if (door === "engine.jobs.status") {
+      const { node } = JobNodeInput.parse(raw);
+      return job(node.jobId, node.operationId);
+    }
+    if (door === "engine.jobs.cancel") { cancelled.push(JobNodeInput.parse(raw).node.jobId); return { accepted: true }; }
+    const name = door.startsWith("atyrode.code.") ? door.slice("atyrode.code.".length) as keyof typeof handlers : null;
+    if (!name || !handlers[name]) throw new Error(`Unexpected owner/action: ${door}`);
+    return handlers[name]!(ctx, raw);
+  }
   const workflow = createCodeWorkflowClient(async (door, raw) => {
     calls.push(door);
-    if (door === actionDoor("readModelCatalog")) {
-      const providers = (raw as OmpInput<"readModelCatalog">).providers;
-      if (JSON.stringify(providers) !== JSON.stringify(["anthropic", "deepseek", "openai-codex"]))
-        throw new Error("Starter source scope changed");
-      await hooks.metadata?.();
-      return source.metadata;
-    }
-    const name = door === "atyrode.code.reviewStarterProfile" ? "reviewStarterProfile"
-      : door === "atyrode.code.adoptStarterProfile" ? "adoptStarterProfile" : null;
-    if (!name) throw new Error(`Unexpected owner/action: ${door}`);
-    const result = await handlers[name]!(ctx, raw);
-    await hooks[name === "reviewStarterProfile" ? "review" : "adopt"]?.();
+    const result = await answer(door, raw);
+    await hooks[door]?.();
     return result;
   });
-  return { input, source, workflow, store, calls, hooks, ctx };
+  const configuration = async () => actionSchemas.readConfiguration.result.parse(await handlers.readConfiguration!(ctx, { containerId: target.containerId }));
+  return { workflow, store, calls, cancelled, benchmarked, hooks, states, exitCodes, verdicts, omp, ctx, configuration, slot };
 }
+/** The operator's preview, made against a catalog with OpenAI and a fourth rung. */
+const preview: Selection = { lane: { kind: "mixed" }, capability: 4, thinking: "high", advisor: "review", spark: true,
+  priority: false, prewalk: true, planYolo: false, fallback: true, budget: "any" };
+const effects = ["atyrode.code.initializeConfiguration", actionDoor("startInventory"), actionDoor("startBenchmark"),
+  "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog", "atyrode.code.select", "atyrode.code.changeAccounts", "engine.jobs.cancel"];
 
-test("passive source review adopts exact selected policy without runtime readiness", async () => {
-  const f = starterFixture();
-  const metadata = await f.workflow.readStarterCatalog();
-  const saved = await f.workflow.adoptStarterProfile({ ...f.input, metadata });
-  expect(saved).toMatchObject({ revision: 1, containerId: f.input.containerId, selection: f.input.selection,
-    active: { document: catalogFromMetadata(metadata, f.input.selection.budget) }, draft: null });
-  expect(JSON.parse([...f.store.values()][0]!)).toEqual(saved);
+test("verification prepares a charge without spending, and one confirmation saves a verified catalog and the narrowed preview", async () => {
+  const f = verificationFixture(), progress: VerificationProgress[] = [];
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { onProgress: value => progress.push(value) });
+  expect(pending.charge).toMatchObject({ target, revision: 1, budget: "any", inventoryJobId: "inventory-1", requests: 5, replacesDraft: false,
+    defaultsRevision: 3, providers: [{ provider: "anthropic", requests: 3 }, { provider: "deepseek", requests: 2 }],
+    exclusions: [{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }],
+    pool: { providers: ["anthropic", "deepseek"] } });
+  // Preparing initialized the workspace and ran OMP's inventory; no benchmark request was made.
+  expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory")]);
+  expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
+  const verified = await pending.confirm(preview, { onProgress: value => progress.push(value) });
+  expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory"),
+    actionDoor("startBenchmark"), actionDoor("startBenchmark"), "atyrode.code.stageCatalog", "atyrode.code.promoteCatalog", "atyrode.code.select"]);
+  // One job per provider, each probing only that provider's candidates.
+  expect(f.benchmarked.map(input => [...new Set(input.candidates.map(candidate => candidate.provider))])).toEqual([["anthropic"], ["deepseek"]]);
+  const saved = verified.configuration;
+  expect((await f.configuration()).configuration).toEqual(saved);
+  expect(saved.active?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: 6_000, benchmarkCompletedAt: 8_002,
+    providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+  expect(saved.draft).toBeNull();
+  // No OpenAI so no mixed lane, no fourth Anthropic rung and no Spark: those narrow to the catalog's
+  // own default lane and highest capability; every other choice is the operator's.
+  expect(saved.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
+  expect(verified.exclusions).toEqual([{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }]);
+  expect([...new Set(progress.map(value => value.step))]).toEqual(["observe", "initialize", "inventory", "draft", "benchmark", "derive", "stage", "review", "promote", "select"]);
+  expect(progress.filter(value => value.step === "benchmark").map(value => value.providers.map(entry => `${entry.provider} ${entry.done}/${entry.total}`)))
+    .toEqual([[], ["anthropic 0/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 0/2"], ["anthropic 3/3", "deepseek 2/2"]]);
+  // A charge is spent once; a second confirmation never repeats it.
+  await expect(pending.confirm(preview)).rejects.toThrow("code_verification_confirmed");
+  expect(f.calls.filter(door => door === actionDoor("startBenchmark"))).toHaveLength(2);
 });
 
-test("a complete metadata change refuses adoption even when its opaque revision or derived document is unchanged", async () => {
-  for (const mutate of [
-    (metadata: ModelCatalogSnapshot) => { metadata.models[0]!.maxTokens = 63000; },
-    (metadata: ModelCatalogSnapshot) => { metadata.revision = "b".repeat(64); },
-    (metadata: ModelCatalogSnapshot) => { metadata.models.push({ ...metadata.models[0]!, id: "excluded", quotaTier: "spark" }); },
-  ]) {
-    const f = starterFixture();
-    f.hooks.review = () => { mutate(f.source.metadata); };
-    await expect(f.workflow.adoptStarterProfile(f.input)).rejects.toThrow("code_starter_metadata_changed");
-    expect(f.store.size).toBe(0);
-    expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
+test("a confirmation refuses to spend against a revision, pool or OMP defaults that moved since the charge", async () => {
+  for (const move of ["revision", "pool", "defaults"] as const) {
+    const f = verificationFixture();
+    const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+    if (move === "revision") await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: 1,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+    if (move === "pool") f.omp.accounts.accounts = [f.slot("anthropic", 1)];
+    if (move === "defaults") f.omp.defaults = { ...f.omp.defaults, revision: 4 };
+    const before = (await f.configuration()).configuration;
+    const stopped = await stopOf(pending.confirm(preview));
+    expect(stopped.step).toBe("benchmark");
+    expect(stopped.reason).toContain({ revision: "code_stale_preferences", pool: "code_accounts_changed", defaults: "omp_defaults_changed" }[move]);
+    expect(f.calls).not.toContain(actionDoor("startBenchmark"));
+    expect((await f.configuration()).configuration).toEqual(before);
   }
+  // Preparing from a revision the workspace has left spends nothing at all.
+  const f = verificationFixture();
+  await expect(f.workflow.verifyModels(target, { expectedRevision: 3, budget: "any" })).rejects.toThrow("observe: code_stale_preferences");
+  expect(f.calls.filter(door => effects.includes(door))).toEqual([]);
 });
 
-test("caller mutations at either observation boundary cannot replace reviewed metadata, selection or workspace", async () => {
-  for (const phase of ["review", "metadata"] as const) {
-    for (const mutate of [
-      (input: ActionInput<"reviewStarterProfile">) => { input.selection.prewalk = false; },
-      (input: ActionInput<"reviewStarterProfile">) => { input.containerId = "other"; },
-      (input: ActionInput<"reviewStarterProfile">) => { input.metadata.models[0]!.maxTokens = 63000; },
-    ]) {
-      const f = starterFixture();
-      f.hooks[phase] = () => { mutate(f.input); };
-      await expect(f.workflow.adoptStarterProfile(f.input)).rejects.toThrow("code_starter_changed");
-      expect(f.store.size).toBe(0);
-      expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
-    }
-  }
+test("a pool that moves while the benchmark runs is never recorded as the verified one", async () => {
+  const f = verificationFixture();
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  f.hooks[actionDoor("readBenchmark")] = () => { f.omp.accounts.accounts = [f.slot("anthropic", 1), f.slot("deepseek", 2), f.slot("deepseek", 3)]; };
+  const stopped = await stopOf(pending.confirm(preview));
+  expect([stopped.step, stopped.reason]).toEqual(["stage", "code_accounts_changed"]);
+  // The spent jobs are named for inspection; nothing was staged.
+  expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: ["benchmark-1", "benchmark-2"], revision: 1 });
+  expect(f.calls).not.toContain("atyrode.code.stageCatalog");
 });
 
-test("monotonic caller generations revoke reviews even after authority or observations recover", async () => {
-  for (const phase of ["review", "metadata"] as const) {
-    const f = starterFixture();
-    let generation = 0, available = true;
-    const started = generation;
-    f.hooks[phase] = () => { available = false; generation++; available = true; };
-    await expect(f.workflow.adoptStarterProfile(f.input, () => available && generation === started)).rejects.toThrow("code_starter_changed");
-    expect(f.store.size).toBe(0);
-    expect(f.calls).not.toContain("atyrode.code.adoptStarterProfile");
-  }
-  const f = starterFixture();
-  await expect(f.workflow.adoptStarterProfile(f.input, () => false)).rejects.toThrow("code_starter_changed");
-  expect(f.calls).toEqual([]);
-});
-
-test("source observation failure stops adoption and uncertain committed responses are never replayed", async () => {
-  const unavailable = starterFixture();
-  unavailable.hooks.metadata = () => { throw new Error("Metadata unavailable"); };
-  await expect(unavailable.workflow.adoptStarterProfile(unavailable.input)).rejects.toThrow("Metadata unavailable");
-  expect(unavailable.store.size).toBe(0);
-  expect(unavailable.calls).not.toContain("atyrode.code.adoptStarterProfile");
-  const uncertain = starterFixture();
-  uncertain.hooks.adopt = () => { throw new Error("Response lost"); };
-  await expect(uncertain.workflow.adoptStarterProfile(uncertain.input)).rejects.toThrow("Response lost");
-  expect(uncertain.calls.filter(door => door === "atyrode.code.adoptStarterProfile")).toHaveLength(1);
-  const saved = actionSchemas.adoptStarterProfile.result.parse(JSON.parse([...uncertain.store.values()][0]!));
-  expect(saved).toMatchObject({ revision: 1, selection: uncertain.input.selection });
-});
-
-test("a revoked adoption completion requires observation rather than reporting or replaying success", async () => {
-  const f = starterFixture();
+test("a stop cancels the probe job in flight, and a failed one names its step and leaves its work inspectable", async () => {
+  const cancelling = verificationFixture(), controller = new AbortController();
+  cancelling.states.set("inventory-1", ["started", "started"]);
+  cancelling.hooks[actionDoor("startInventory")] = () => { controller.abort(); };
+  await expect(cancelling.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { signal: controller.signal }))
+    .rejects.toThrow("inventory: code_verification_cancelled");
+  expect(cancelling.cancelled).toEqual(["inventory-1"]);
+  expect(cancelling.calls).not.toContain(actionDoor("readInventory"));
+  // Revocation is a stop like cancellation: the running benchmark is cancelled, not abandoned.
+  const revoked = verificationFixture();
   let current = true;
-  f.hooks.adopt = () => { current = false; };
-  await expect(f.workflow.adoptStarterProfile(f.input, () => current)).rejects.toThrow("code_starter_changed");
-  expect(f.calls.filter(door => door === "atyrode.code.adoptStarterProfile")).toHaveLength(1);
-  const saved: Configuration = actionSchemas.adoptStarterProfile.result.parse(JSON.parse([...f.store.values()][0]!));
-  expect(saved.revision).toBe(1);
-  expect(saved.selection).toEqual(f.input.selection);
+  const pending = await revoked.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { isCurrent: () => current });
+  revoked.states.set("benchmark-1", ["started"]);
+  revoked.hooks[actionDoor("startBenchmark")] = () => { current = false; };
+  await expect(pending.confirm(preview)).rejects.toThrow("benchmark: code_verification_changed");
+  expect(revoked.cancelled).toEqual(["benchmark-1"]);
+  expect(revoked.benchmarked).toHaveLength(1);
+  // A probe job that fails stops the run at its step, with the job named.
+  const failing = verificationFixture();
+  failing.exitCodes.set("benchmark-2", 1);
+  const failed = await stopOf((await failing.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  expect([failed.step, failed.reason]).toEqual(["benchmark", "job benchmark-2 exited with exit code 1"]);
+  expect(failed.evidence.benchmarkJobIds).toEqual(["benchmark-1", "benchmark-2"]);
+  expect((await failing.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
 });
 
-const target = { containerId: "workspace", machineId: "destination" };
+test("a derivation or selection the verified catalog cannot serve stops before anything is staged", async () => {
+  const blocked = verificationFixture();
+  blocked.verdicts["claude-sonnet-5"] = "not_found"; blocked.verdicts["claude-opus-5"] = "client_blocked";
+  const refused = await stopOf((await blocked.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  expect([refused.step, refused.reason]).toEqual(["derive", "code_probe_insufficient_ladder"]);
+  expect(blocked.calls).not.toContain("atyrode.code.stageCatalog");
+  // A free preview against a catalog derived under `any` with nothing free: the budget is never widened.
+  const paid = verificationFixture();
+  const unsatisfiable = await stopOf((await paid.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm({ ...preview, budget: "free" }));
+  expect([unsatisfiable.step, unsatisfiable.reason]).toEqual(["derive", "code_budget_unsatisfiable"]);
+  expect(paid.calls).not.toContain("atyrode.code.stageCatalog");
+});
+
+test("a write that loses its race after staging stops at its step and keeps the verified draft for review", async () => {
+  const f = verificationFixture();
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  f.hooks["atyrode.code.reviewCatalog"] = async () => {
+    const current = (await f.configuration()).revision;
+    await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: current,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+  };
+  const stopped = await stopOf(pending.confirm(preview));
+  expect([stopped.step, stopped.reason]).toEqual(["promote", "code_stale_preferences"]);
+  const kept = (await f.configuration()).configuration!;
+  expect(stopped.evidence.revision).toBe(2);
+  expect(kept.active).toBeNull();
+  expect(kept.draft?.provenance).toMatchObject({ providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+});
+
+test("the verification observation names the pool a verification would record, and an empty one as none", async () => {
+  const f = verificationFixture();
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const record: Configuration = (await f.configuration()).configuration!;
+  expect(await f.workflow.observeVerification(target.containerId, record.revision, record.accounts))
+    .toEqual({ providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+  f.omp.accounts.accounts = [];
+  expect(await f.workflow.observeVerification(target.containerId, record.revision, record.accounts)).toBeNull();
+});
+
 function sessionFixture() {
   const catalog = compileCatalog({ schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
     key: `model-${tier}`, provider: "anthropic", id: `model-${tier}`, api: "anthropic-messages", tier,
