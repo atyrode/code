@@ -18,6 +18,7 @@ const messages: Readonly<Record<string, string>> = {
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
   code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
   code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
+  code_destination_changed: "The destination changed. Review the current machine before continuing.",
 };
 /** An authoring handle exposes operations; the native cap set grants write access. */
 export function canWriteCodeWorkspace(host: HostServices): boolean {
@@ -26,8 +27,9 @@ export function canWriteCodeWorkspace(host: HostServices): boolean {
 export function codeOperationFailure(reason: unknown): string {
   return reason instanceof WorkflowError ? messages[reason.message] ?? reason.message : "The Code action could not be completed.";
 }
-export function codeWorkflow(host: HostServices) {
+export function codeWorkflow(host: HostServices, current?: () => boolean) {
   return createCodeWorkflowClient(async (door, input) => {
+    if (current && !current()) throw new WorkflowError("code_destination_changed");
     if (door === "core.machines.list") return { machines: await host.client.machines() };
     if (door === "core.terminals.listAll") return { terminals: await host.client.allTerminals() };
     const outcome = await host.client.action(door, input);

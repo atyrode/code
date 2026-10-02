@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import { SelectionSchema, type Lane, type Selection } from "../../domain/contracts.ts";
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
@@ -15,10 +15,32 @@ const icons = {
   prewalk: "M4 5h5l2 3h9v12H4zM8 13h8m-3-3 3 3-3 3",
   planYolo: "M7 3h10v18H7zM10 8h4m-4 4h4m-4 4h4",
   fallback: "M7 6H3v4m0-4 5 5a7 7 0 1 1-1 7",
+  add: "M12 5v14M5 12h14",
+  usage: "M4 20V11m6 9V5m6 15v-7m6 7V2",
+  expand: "M9 3H3v6m12-6h6v6M3 15v6h6m6 0h6v-6",
+  collapse: "M3 9h6V3m12 6h-6V3M9 21v-6H3m12 6v-6h6",
 } as const;
 
 export function DialIcon({ kind }: { kind: keyof typeof icons }) {
   return <svg className="plugin-atyrode_code_generator__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[kind]} /></svg>;
+}
+
+export function ContextHelp({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const pinned = useRef(false);
+  const dismissed = useRef(false);
+  const [open, setOpen] = useState(false);
+  return <div className="plugin-atyrode_code_generator__dial-help"
+    onPointerEnter={event => { if (event.pointerType === "mouse" && !dismissed.current) setOpen(true); }}
+    onPointerLeave={event => { dismissed.current = false; if (!pinned.current && !event.currentTarget.contains(document.activeElement)) setOpen(false); }}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { pinned.current = false; dismissed.current = false; setOpen(false); } }}
+    onKeyDown={event => { if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); pinned.current = false; dismissed.current = true; setOpen(false); trigger.current?.focus(); } }}>
+    <button ref={trigger} type="button" aria-label={`About ${label}`} aria-expanded={open} aria-controls={id}
+      onFocus={event => { if (event.currentTarget.matches(":focus-visible") && !dismissed.current) setOpen(true); }}
+      onClick={() => { pinned.current = !pinned.current; dismissed.current = !pinned.current; setOpen(pinned.current); }}><span aria-hidden="true">?</span></button>
+    <div id={id} className="plugin-atyrode_code_generator__help-content" hidden={!open} role="note">{children}</div>
+  </div>;
 }
 
 type Option = { value: string; label: string; description: string; family?: string };
@@ -84,11 +106,9 @@ function Dial({ label, icon, value, options, disabled, change }: {
       </div>
       <p id={`${id}-detail`} className="plugin-atyrode_code_generator__sr-only">{selected?.description}</p>
     </div>
-    <details className="plugin-atyrode_code_generator__dial-help" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }}
-      onKeyDown={event => { if (event.key === "Escape" && event.currentTarget.open) { event.preventDefault(); event.stopPropagation(); event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}>
-      <summary aria-label={`About ${label.toLowerCase()}`}><span aria-hidden="true">?</span></summary>
+    <ContextHelp label={label.toLowerCase()}>
       <dl tabIndex={0} aria-label={`${label} choices`}>{options.map((option, index) => <div key={option.value}><dt>{option.label}</dt><dd id={`${id}-choice-${index}`}>{option.description}</dd></div>)}</dl>
-    </details>
+    </ContextHelp>
   </div>;
 }
 
@@ -181,7 +201,7 @@ export function Estimates({ value }: { value: Review["estimates"] }) {
   </div>;
 }
 
-export function Routing({ value, catalog, local = false }: { value: Review; catalog: CompiledCatalog; local?: boolean }) {
+export function Routing({ value, catalog, local = false, compact = false }: { value: Review; catalog: CompiledCatalog; local?: boolean; compact?: boolean }) {
   const id = useId();
   const [fallbacks, setFallbacks] = useState(false);
   const [fullIds, setFullIds] = useState(false);
@@ -191,23 +211,26 @@ export function Routing({ value, catalog, local = false }: { value: Review; cata
     const family = catalog.family(key);
     return <span key={`${key}:${thinking}`} className="plugin-atyrode_code_generator__model" data-family={family}>
       <span className="plugin-atyrode_code_generator__model-name">{model.key}</span>
-      <span className="plugin-atyrode_code_generator__model-meta"><span className="plugin-atyrode_code_generator__provider">{familyPolicy(family)?.label ?? model.provider}</span><span className="plugin-atyrode_code_generator__thinking" data-level={thinking}>{thinking} thinking</span></span>
+      <span className="plugin-atyrode_code_generator__model-meta">{!compact && <span className="plugin-atyrode_code_generator__provider">{familyPolicy(family)?.label ?? model.provider}</span>}<span className="plugin-atyrode_code_generator__thinking" data-level={thinking}>{thinking}{!compact && " thinking"}</span></span>
       {fullIds && <code className="plugin-atyrode_code_generator__model-id">{model.provider}/{model.id}</code>}
     </span>;
   }
-  return <section className="plugin-atyrode_code_generator__routing" aria-label="Routing preview">
-    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">Routing</h2><span className="plugin-atyrode_code_generator__route-status" data-local={local} role="status">{local ? "Local preview" : "Profile preview"} · {value.routes.length} roles</span></header>
-    <div className="plugin-atyrode_code_generator__routing-tools">
-      <p>Lead models <span className="plugin-atyrode_code_generator__agent-legend"><span aria-hidden="true">●</span> delegated agent</span></p>
-      <div className="plugin-atyrode_code__toolbar">
-        <button type="button" aria-pressed={fullIds} aria-controls={`${id}-routes`} onClick={() => setFullIds(!fullIds)}>Full model IDs</button>
-        {fallbackCount > 0 && <button type="button" aria-expanded={fallbacks} aria-controls={`${id}-routes`} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "Hide" : "Show"} fallbacks <span className="plugin-atyrode_code_generator__count">{fallbackCount}</span></button>}
+  return <section className="plugin-atyrode_code_generator__routing" aria-label="Routing preview" data-compact={compact}>
+    {!compact && <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">Profiles</h2><span className="plugin-atyrode_code_generator__route-status" data-local={local} role="status">{local ? "Local preview" : "Profile preview"} · {value.routes.length} roles</span></header>}
+    <details className="plugin-atyrode_code__details">
+      <summary>Profile details{local ? " · unsaved" : ""}</summary>
+      <div className="plugin-atyrode_code_generator__routing-tools">
+        <p>Lead models <span className="plugin-atyrode_code_generator__agent-legend"><span aria-hidden="true">●</span> delegated agent</span></p>
+        <div className="plugin-atyrode_code__toolbar">
+          <button type="button" aria-pressed={fullIds} aria-controls={`${id}-routes`} onClick={() => setFullIds(!fullIds)}>Full model IDs</button>
+          {fallbackCount > 0 && <button type="button" aria-expanded={fallbacks} aria-controls={`${id}-routes`} onClick={() => setFallbacks(!fallbacks)}>{fallbacks ? "Hide" : "Show"} fallbacks <span className="plugin-atyrode_code_generator__count">{fallbackCount}</span></button>}
+        </div>
+        <p className="plugin-atyrode_code_generator__routing-note">{fallbackCount > 0 ? "Fallbacks are tried in order. Thinking is adjusted to each model's supported levels." : value.selection.fallback ? "No alternate models in this profile's fallback chains." : "Model fallback is off. Retries stay on the selected model."}</p>
       </div>
-    </div>
+    </details>
     <dl id={`${id}-routes`} className="plugin-atyrode_code_generator__routes">{value.routes.map(route => <div key={route.role}>
       <dt><span className="plugin-atyrode_code_generator__agent-marker" aria-hidden="true">{route.agentBacked ? "●" : ""}</span>{route.role}{route.agentBacked && <span className="plugin-atyrode_code_generator__sr-only">, delegated agent</span>}</dt>
       <dd>{choice(route.lead.key, route.lead.thinking)}{fallbacks && route.fallback.length > 0 && <ol className="plugin-atyrode_code_generator__fallbacks" aria-label={`${route.role} fallbacks in order`}>{route.fallback.map((fallback, index) => <li key={`${fallback.key}:${index}`} className="plugin-atyrode_code_generator__fallback"><span className="plugin-atyrode_code_generator__fallback-order" aria-hidden="true">{index + 1}</span>{choice(fallback.key, fallback.thinking)}</li>)}</ol>}</dd>
     </div>)}</dl>
-    <p className="plugin-atyrode_code_generator__routing-note">{fallbackCount > 0 ? "Fallbacks are tried in order. Thinking is adjusted to each model's supported levels." : value.selection.fallback ? "No alternate models in this profile's fallback chains." : "Model fallback is off. Retries stay on the selected model."}</p>
   </section>;
 }

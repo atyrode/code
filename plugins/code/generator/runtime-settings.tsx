@@ -19,7 +19,7 @@ function SetupError({ label, detail }: { label: string; detail: string }) {
   </div>;
 }
 
-export function Onboarding({ host, target, available, onDone }: {
+export function RuntimeSettings({ host, target, available, onDone }: {
   host: HostServices; target: Target | null; available: boolean; onDone: () => void;
 }) {
   const machineId = target?.machineId ?? "";
@@ -69,7 +69,7 @@ export function Onboarding({ host, target, available, onDone }: {
     finally { if (destinationCurrent()) { pending.current = false; setBusy(false); refresh(); } }
   }
   const historyKnown = creationHistory.runs !== null && validationHistory.runs !== null && !creationHistory.error && !validationHistory.error;
-  return <section className="plugin-atyrode_code_generator__onboarding" aria-label="Code setup">
+  return <section className="plugin-atyrode_code_generator__runtime-settings" aria-label="Code setup">
     <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">setup</h2>
       <button type="button" disabled={busy} onClick={onDone}>Back to workbench</button>
     </header>

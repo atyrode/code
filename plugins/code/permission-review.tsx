@@ -226,8 +226,9 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
       <fieldset disabled={busy}><legend>Choose independently what to review</legend><div className="plugin-atyrode_code__permission-choices">
         {plan.features.map(feature => <section key={feature.id} data-code-capability={feature.id} className="plugin-atyrode_code__permission-choice">
           <label><input type="checkbox" checked={choices?.includes(feature.id) ?? feature.selected} onChange={event => changeChoice(feature.id, event.target.checked)} />{feature.title}</label>
-          <p>{feature.effect}</p>
-          <details className="plugin-atyrode_code__details"><summary>Scope and if deferred</summary>
+          {feature.id === "benchmark" && <p className="plugin-atyrode_code__warning">Running benchmarks may incur provider charges.</p>}
+          <details className="plugin-atyrode_code__details"><summary>Effect and scope</summary>
+            <p>{feature.effect}</p>
             <p>Destination: {feature.destination?.label ?? "not available"}{feature.destination && ` · ${feature.destination.machineId}`}</p>
             <p className="plugin-atyrode_code__muted">{feature.deferredEffect}</p>
             {feature.prerequisites.length > 0 && <p className="plugin-atyrode_code__muted">Prerequisites (already prepared access is kept): {feature.prerequisites.map(id => plan.features.find(row => row.id === id)?.title).join(", ")}. Unselected prerequisites are not approved by this request.</p>}

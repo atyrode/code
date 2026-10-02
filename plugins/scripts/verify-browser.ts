@@ -239,7 +239,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   await until(browser, "disable-all is a distinct launch choice", `${skills}?.dataset.mode === 'disabled'`);
   await click(browser, workspaceButton("Refresh skill catalog"));
   await click(browser, workspaceButton("Accounts"));
-  await click(browser, workspaceButton("Profile"));
+  await click(browser, workspaceButton("Workbench"));
   assert.equal(await browser.evaluate(`${skills}.dataset.mode`), "disabled", "Unrelated navigation and refresh preserve the ephemeral skill choice");
   await click(browser, workspaceButton("Clear optional choices"));
   assert.equal(await browser.evaluate(`${skills}.dataset.mode`), "preserve", "Clearing optional choices restores ordinary loading instead of disabling it");
@@ -254,12 +254,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate(`document.activeElement?.closest('[aria-label="Optional skills"]') === null`), true,
     "Keyboard navigation skips the closed optional controls");
   const thinking = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Thinking')`;
-  const thinkingHelp = element(`${generator} summary[aria-label="About thinking"]`);
+  const thinkingHelp = element(`${generator} button[aria-label="About thinking"]`);
   const beforeHelp = await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`);
   await click(browser, thinkingHelp);
-  await until(browser, "contextual thinking help opens by pointer", `${thinkingHelp}.parentElement.open`);
+  await until(browser, "contextual thinking help opens by pointer", `${thinkingHelp}.getAttribute('aria-expanded') === 'true'`);
   await key(browser, "Escape", 27);
-  assert.equal(await browser.evaluate(`${thinkingHelp}.parentElement.open`), false, "Keyboard can close contextual help");
+  assert.equal(await browser.evaluate(`${thinkingHelp}.getAttribute('aria-expanded')`), "false", "Keyboard can close contextual help");
   assert.equal(await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`), beforeHelp,
     "Asking for help does not edit the profile");
   await click(browser, `${thinking}.querySelector('[aria-checked="true"]')`);
@@ -313,7 +313,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
     "The account draft keeps its nonempty unobserved exclusion instead of importing another machine’s pool");
   assert.equal(await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`), localThinking, "Local thinking dial survives the switch");
   assert.equal(await browser.evaluate(`${plans}.querySelector('[aria-checked="true"]').dataset.value`), "true", "planYolo remains a profile choice, not a native permission");
-  await click(browser, workspaceButton("Profile"));
+  await click(browser, workspaceButton("Workbench"));
   await click(browser, workspaceButton("Save profile"));
   await until(browser, "profile save completes", `${element(`${generator} .plugin-atyrode_code_generator__draft`)} === null`);
   const saved = await readConfiguration(server, viewer, second);
@@ -327,7 +327,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   assert.equal(await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`), localThinking, "Saved choices remain identical when returning to the first destination");
   await click(browser, workspaceButton("Models"));
   assert.equal(await browser.evaluate(`${importField}.value`), importDraft);
-  await click(browser, workspaceButton("Profile"));
+  await click(browser, workspaceButton("Workbench"));
   assert(reads.length > 0 && reads.every(input => input.containerId === first.containerId && Object.keys(input).length === 1),
     "Ordinary browser configuration reads use only the container, never per-machine fanout or implicit legacy fallback");
   assert.equal(await browser.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
@@ -387,7 +387,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
   });
   await browser.send("Fetch.enable", { patterns: [{ urlPattern: `${server.httpUrl}/api/actions/atyrode.code.readConfiguration`, requestStage: "Request" }] });
   try {
-    const onboarding = element(`${generator} [aria-label="First-use setup"]`);
+    const dashboard = element(`${generator} .plugin-atyrode_code_generator__dashboard`);
     const modal = "dialog.plugin-atyrode_code__permission-dialog:modal";
     for (const destinationView of ["Accounts", "Models"]) {
       holdConfiguration = true;
@@ -398,7 +398,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await until(browser, "navigation precedes the absent configuration", `${workspaceButton(destinationView)}.getAttribute('aria-current') === 'page'`);
       holdConfiguration = false;
       for (const release of [...held]) release();
-      await until(browser, "absent configuration mounts the hidden first-use editor", `${onboarding}?.closest('[hidden]') !== null && ${onboarding} !== null`);
+      await until(browser, "absent configuration leaves the ordinary workbench mounted", `${dashboard}?.closest('[hidden]') !== null && ${dashboard} !== null`);
       assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(modal)}) === null`), true,
         "A first-use review in a hidden frame must not make the visible document inert");
       await click(browser, workspaceButton("Accounts"));
@@ -407,22 +407,22 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
         "Keyboard navigation still reaches the visible workbench after the absent read");
       await key(browser, "Enter", 13);
       await until(browser, "keyboard navigation still activates Models", `${workspaceButton("Models")}.getAttribute('aria-current') === 'page'`);
-      await click(browser, workspaceButton("Profile"));
-      await until(browser, "first-use profile is visible without an automatic review", `${onboarding}?.getClientRects().length > 0 && ${element(modal)} === null`);
-      await control(browser, "first-use account decision remains available", workspaceButton("Not now — continue workspace setup"), false);
-      const otherSetup = `[...document.querySelectorAll('${generator} summary')].find(el => el.getClientRects().length && el.textContent === 'Other setup options')`;
-      if (!await browser.evaluate(`${otherSetup}.parentElement.open`)) await click(browser, otherSetup);
-      await click(browser, workspaceButton("Choose or reconsider capabilities"));
+      await click(browser, workspaceButton("Workbench"));
+      await until(browser, "first-use workbench appears without an automatic review", `${dashboard}?.getClientRects().length > 0 && ${element(modal)} === null`);
+      await control(browser, "model authoring is available without runtime setup", workspaceButton("Add models"), false);
+      await click(browser, workspaceButton("Setup"));
+      await click(browser, workspaceButton("Machine"));
+      await click(browser, workspaceButton("Choose capabilities to review"));
       await until(browser, "explicit capability review opens from its trigger", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
       await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('input[type="checkbox"]').length > 0`);
       assert.equal(await browser.evaluate(`${element(modal)}.querySelectorAll('[aria-pressed]').length === 0`), true,
         "Each capability has one checkbox rather than an inverted Not now control");
       await key(browser, "Escape", 27);
       await until(browser, "explicit first-use review closes normally", `${element(modal)} === null`);
-      assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose or reconsider capabilities")}`), true,
+      assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose capabilities to review")}`), true,
         "Escape returns focus to the visible permission trigger");
       await click(browser, workspaceButton("Models"));
-      await click(browser, workspaceButton("Profile"));
+      await click(browser, workspaceButton("Workbench"));
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true,
         "Revisiting does not repeat an automatic first-use modal");
     }
@@ -454,6 +454,62 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
     await browser.send("Fetch.disable", {});
     intercepting = false;
   }
+}
+
+async function freshWorkbenchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const document = { schemaVersion: 1, models: [1, 2, 3, 4].map(tier => ({
+    key: `entry-model-tier-${tier}`, provider: "anthropic", id: `entry-native-tier-${tier}`, api: "anthropic-messages",
+    tier, quotaBucket: null, inputCostPerMillion: tier, outputCostPerMillion: tier * 3,
+    tokensPerSecond: 30, timeToFirstTokenMs: 100, contextWindow: 200_000,
+    thinkingLevels: ["minimal", "low", "medium", "high"], images: true,
+  })) };
+  const promptField = element(`${generator} textarea[placeholder="What should we tackle?"]`);
+  const importField = element(`${generator} .plugin-atyrode_code_generator__model-editor textarea:not([readonly])`);
+  const exportField = element(`${generator} .plugin-atyrode_code_generator__model-editor textarea[readonly]`);
+  const importSummary = `[...document.querySelectorAll('${generator} summary')].find(node => node.getClientRects().length && node.textContent === 'JSON import / export')`;
+  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
+  for (const competing of [false, true]) {
+    const workspace = await createContainer(server, competing ? "Concurrent first catalog" : "Offline first catalog", "canvas");
+    const target = { containerId: workspace.id };
+    await browser.goto(`${server.httpUrl}/p/${workspace.id}`);
+    await control(browser, "fresh workbench accepts a task before setup", promptField, false);
+    await click(browser, promptField);
+    await browser.typeText("Keep this task while I add my models.");
+    await click(browser, workspaceButton("Add models"));
+    await click(browser, workspaceButton("Edit or import models"));
+    await click(browser, importSummary);
+    await click(browser, importField);
+    await browser.typeText(JSON.stringify(document));
+    await click(browser, workspaceButton("Import into draft"));
+    assert.deepEqual(await readConfiguration(server, writer, target), { configuration: null, legacyMachineId: null, revision: 0 },
+      "Typing a task and importing locally never initialize shared policy");
+    if (competing) {
+      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+      assert(initialized.ok);
+      await control(browser, "a competing initial save cannot rebase an absent-state draft", workspaceButton("Stage and review changes"), true);
+      assert.deepEqual(JSON.parse(await browser.evaluate<string>(`${exportField}.value`)), document, "The rejected first-save draft remains exportable");
+      assert.equal((await readConfiguration(server, writer, target)).revision, 1, "The stale first-save draft does not overwrite a competing initialization");
+      await click(browser, workspaceButton("Workbench"));
+      assert.equal(await browser.evaluate(`${promptField}.value`), "Keep this task while I add my models.");
+      continue;
+    }
+    await click(browser, workspaceButton("Stage and review changes"));
+    await control(browser, "first catalog is reviewed without native runtime setup", workspaceButton("Use this catalog"), false);
+    const staged = await readConfiguration(server, writer, target);
+    assert.equal(staged.revision, 2, "One explicit first save initializes once and stages once");
+    assert.equal(staged.configuration?.active, null, "Review does not promote a catalog");
+    assert.deepEqual(staged.configuration?.draft?.document, document);
+    await click(browser, workspaceButton("Use this catalog"));
+    await until(browser, "promoted models produce agent profiles in the ordinary workbench",
+      `${element(`${generator} [aria-label="Generated profiles"] .plugin-atyrode_code_generator__routes`)}?.getClientRects().length > 0`);
+    const promoted = await readConfiguration(server, writer, target);
+    assert.equal(promoted.revision, 3);
+    assert.deepEqual(promoted.configuration?.active?.document, document, "Promotion uses the exact reviewed catalog");
+    assert.equal(await browser.evaluate(`${promptField}.value`), "Keep this task while I add my models.", "First catalog promotion preserves the task");
+    await control(browser, "missing native runtime still prevents launch after local catalog authoring", launchControl, true);
+  }
+  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
+    "First catalog authoring and conflicts never approve native access");
 }
 
 /** Synthetic OMP observations exercise folder controls only. The real upstream
@@ -779,7 +835,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       `${element(`${generator} .plugin-atyrode_code_generator__feedback`)}?.textContent.includes('omp_resume_plan_unsupported') === true`);
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
-    await click(browser, workspaceButton("Profile"));
+    await click(browser, workspaceButton("Workbench"));
     const extraDials = element(`${generator} .plugin-atyrode_code_generator__extra-dials`);
     if (!await browser.evaluate(`${extraDials}.open`)) await click(browser, `${extraDials}.querySelector('summary')`);
     const plans = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Plans')`;
@@ -1099,10 +1155,10 @@ async function run(): Promise<void> {
     } });
     assert(arranged.ok, "Writer can open the ordinary Code workspace surface");
     await writerBrowser.goto(`${server.httpUrl}/p/${firstUse.id}`);
-    const firstUseOptions = `[...document.querySelectorAll('${generator} summary')].find(el => el.textContent === 'Other setup options')`;
-    await until(writerBrowser, "first-use options are available without automatic review", `${firstUseOptions} !== undefined && ${element(permissionDialog)} === null`);
-    await click(writerBrowser, firstUseOptions);
-    const firstUseReview = workspaceButton("Choose or reconsider capabilities");
+    await until(writerBrowser, "fresh generator and profiles and usage are visible", `['Generator', 'Generated profiles', 'Usage overview'].every(label => [...document.querySelectorAll('${generator} section')].some(node => node.getAttribute('aria-label') === label && node.getClientRects().length)) && ${element(permissionDialog)} === null`);
+    await click(writerBrowser, workspaceButton("Setup"));
+    await click(writerBrowser, workspaceButton("Machine"));
+    const firstUseReview = workspaceButton("Choose capabilities to review");
     await until(writerBrowser, "first-use review remains an explicit choice", `${firstUseReview}?.getClientRects().length > 0 && ${element(permissionDialog)} === null`);
     await click(writerBrowser, firstUseReview);
     await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${permissionDialog} [data-code-capability] input[type="checkbox"]').length === 7`);
@@ -1120,6 +1176,8 @@ async function run(): Promise<void> {
     assert.equal((await readConfiguration(server, writer, { containerId: firstUse.id })).configuration, null,
       "Initial choices and closing review do not initialize or promote a profile");
     assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), permissionsBefore);
+    phase = "fresh workbench authoring and concurrent first-save refusal";
+    await freshWorkbenchScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
     await configurationRecoveryScenario(writerBrowser, server, writer, { containerId: firstUse.id }, target);
     phase = "synthetic independent folder-only UI readiness";

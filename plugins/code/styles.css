@@ -50,11 +50,11 @@
   align-items: center;
   justify-content: center;
   gap: 0.4em;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--code-rule) 75%, transparent);
   border-radius: 4px;
   min-height: 2rem;
   padding: 0.3rem 0.55rem;
-  background: transparent;
+  background: color-mix(in srgb, var(--code-fg) 4%, var(--code-bg));
   color: var(--code-muted);
   line-height: 1.4;
   text-align: center;
@@ -64,6 +64,7 @@
 .plugin-atyrode_code button:hover:not(:disabled) {
   color: var(--code-accent);
   background: color-mix(in srgb, var(--code-accent) 9%, transparent);
+  border-color: var(--code-accent);
 }
 .plugin-atyrode_code button[aria-pressed="true"],
 .plugin-atyrode_code button[aria-selected="true"] {
@@ -148,6 +149,12 @@
   gap: 1rem 2rem;
   min-width: 0;
 }
+.plugin-atyrode_code .plugin-atyrode_code__usage[data-compact="true"] .plugin-atyrode_code__usage-providers { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 0.75rem 1.25rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool-statuses { list-style: none; padding: 0; display: grid; gap: 0.3rem; font-size: 0.75rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool-statuses li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 0.75rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool-statuses [data-state="available"] { color: var(--code-positive); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool-statuses :is([data-state="blocked"], [data-state="maxed"]) { color: var(--code-warning); }
+.plugin-atyrode_code .plugin-atyrode_code__usage-pool-statuses :is([data-state="unknown"], [data-state="stale"], [data-state="disabled"]) { color: var(--code-muted); }
 .plugin-atyrode_code .plugin-atyrode_code__usage-provider {
   display: grid;
   gap: 0.35rem;
