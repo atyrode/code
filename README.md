@@ -33,16 +33,19 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
-- **Code workbench:** Generator, generated per-role Profiles and Usage share the
-  responsive first screen, with a focused view for each. Empty sections invite
-  model authoring or account selection without a prerequisite wizard. Edit or
-  import models before runtime setup; the first explicit catalog save initializes
-  container policy with exact CAS. Hover, keyboard and touch help preserves the
-  instructions without persistent prose. Navigation keeps task and editor drafts.
-- **Accounts / Usage:** choose exact OMP-observed identities or credential
-  slots, manage shared presets and inspect selected capacity with source age and
-  refresh status. OMP owns the shared broker, sign-in terminal, observations,
-  credential mutation and gateway.
+- **Code workbench:** four visible generator dials beside the complete per-agent
+  profile ledger, then compact account/window facts and one Task/review path.
+  Empty workspaces derive sensible local defaults from OMP's passive bundled
+  model metadata; adding models, credentials or runtime setup is not a prerequisite.
+  The first explicit **Save profile** adopts the chosen catalog and selection in
+  one exact CAS, preserving account choices. Stored active policy always wins.
+  Wide views stay aligned; narrow views put each role above its model and effort.
+  Focus views and hover/keyboard/touch help preserve navigation and Task drafts.
+  Models still supports manual authoring, import/export, discovery and measurement.
+- **Accounts / Usage:** include exact OMP-observed identities or credential slots
+  with straightforward checkboxes and reusable presets. Read each reported quota
+  window separately; unknown and historical facts never imply free capacity.
+  OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and
   returns OMP's retained job receipts or terminal descriptor. Explicit

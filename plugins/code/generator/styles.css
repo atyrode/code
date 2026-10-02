@@ -63,8 +63,6 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__focus { min-width: 2.75rem; min-height: 2.75rem; padding: 0.4rem; color: var(--code-muted); background: transparent; border-color: transparent; }
 .plugin-atyrode_code_generator__section-number { margin-inline-end: 0.45rem; color: var(--code-dim); font-family: var(--code-mono); font-size: 0.75rem; font-weight: 400; }
 .plugin-atyrode_code_generator__empty { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; padding-block: 0.3rem; color: var(--code-muted); font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__empty > svg { flex: 0 0 auto; width: 1.2rem; height: 1.2rem; color: var(--code-accent); }
-.plugin-atyrode_code_generator__empty > span { flex: 1 1 8rem; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__next-action > button { color: var(--code-bg); border-color: var(--code-accent); background: var(--code-accent); font-weight: 650; }
 .plugin-atyrode_code_generator__profiles-pane .plugin-atyrode_code_generator__routing { gap: 0.3rem; }
 .plugin-atyrode_code_generator__routing[data-compact="true"] > details { order: 1; }

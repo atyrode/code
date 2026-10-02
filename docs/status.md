@@ -62,13 +62,14 @@ files, service state, credentials or backups.
 - The gateway owner alone reviews/configures the destination service. Code's
   service actions bind only the optional external suggestion classifier.
   Neither path grants account authority or supplies credentials.
-- The first workbench composes Generator, generated per-role Profiles and Usage,
-  including empty workspaces. Catalog edit/import needs no native runtime setup;
-  only an explicit first catalog save initializes shared configuration. Disposable
-  browser acceptance covers task retention across promotion, refusal of competing
-  initialization, hover-help dismissal without focus theft and independent folder
-  permission review. These are presentation/CAS proofs, not native consent,
-  configured accounts or provider execution.
+- The first workbench derives a frozen local starter from OMP's passive bundled
+  SDK model metadata after a successful absent or initialized-empty configuration
+  read. The complete role ledger and controls need no account or runtime setup.
+  Explicit Save profile adopts catalog and selection in one exact CAS, preserving
+  accounts; stored active policy wins and unrecorded historical provenance stays
+  unknown. Read-only native panels remain locally explorable, not writable.
+  Disposable presentation/CAS proof is not native consent, configured accounts,
+  provider execution, a release or authenticated preview acceptance.
 - Pure catalog/preferences actions need no machine process or selected account.
   `composeProbe` and `composeSession` consume typed caller-supplied OMP
   observations but do not attest them; OMP rechecks concrete account slots before
@@ -119,7 +120,7 @@ files, service state, credentials or backups.
   without copying credential algorithms or changing that patch. This does not
   qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
-  Code's existing-Run tools and one-shot sessions consume OMP
+  Code's existing-Run tools and one-shot sessions were qualified against OMP
   [`f67e4f1`](https://github.com/atyrode/manifold-omp/commit/f67e4f14fd0835d51ce0c5d54adeb8c43ec369f9)
   ([manifold-omp#98](https://github.com/atyrode/manifold-omp/pull/98), merged) and
   Manifold [`0701320`](https://github.com/atyrode/manifold/commit/070132088e30f10266e43a52074bc58f16c051fe).
@@ -139,6 +140,13 @@ files, service state, credentials or backups.
   The gate runs real Code-to-native tool and bounded-material proof against these
   pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
+  The current OMP client pin is
+  [`5545584`](https://github.com/atyrode/manifold-omp/commit/55455840b35ae993a0260ba1ff76f60cbf28f409),
+  adding the passive bundled model-catalog API from
+  [manifold-omp#105](https://github.com/atyrode/manifold-omp/pull/105).
+  Its [current-head gate](https://github.com/atyrode/manifold-omp/actions/runs/37010247724)
+  passed before merge. Manifold remains at `0701320`; this model-source addition
+  is not a runtime-closure repin, provider observation or live custody change.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.
   Read, follow and cancel preserve the exact retained Run correlation.

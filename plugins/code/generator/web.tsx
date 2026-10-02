@@ -108,7 +108,10 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
     if (!document) return null;
     try { return compileCatalog(document); } catch { return null; }
   }, [document]);
-  const initialSelection = useMemo(() => compiled ? defaultSelection(compiled) : null, [compiled]);
+  const initialSelection = useMemo(() => {
+    if (!compiled) return null;
+    try { return defaultSelection(compiled); } catch { return null; }
+  }, [compiled]);
   const selection = dials?.selection ?? record?.selection ?? initialSelection;
   const profile = useMemo<ProfileDraft | null>(() => dials ?? (document && selection ? {
     source: record?.active ? "active" : record?.draft ? "draft" : "starter",
@@ -342,10 +345,10 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
       {configuration.error && <div className="plugin-atyrode_code__notice" role="status"><p>Shared choices unavailable{profile ? " · local material retained" : " · absence has not been established"}.</p><button type="button" data-action="atyrode.code.readConfiguration" onClick={configuration.refresh}>Retry shared choices</button><details className="plugin-atyrode_code__details"><summary>Details</summary><pre>{configuration.error}</pre></details></div>}
       {(metadata.error || starter.error) && <div className="plugin-atyrode_code__notice" role="status"><p>Bundled model source unavailable{profile ? " · displayed material is retained, not a fresh source observation" : ""}.</p><button type="button" data-action="atyrode.omp.readModelCatalog" onClick={metadata.refresh}>Retry model source</button><details className="plugin-atyrode_code__details"><summary>Details</summary><pre>{metadata.error ?? starter.error}</pre></details></div>}
       <div className="plugin-atyrode_code_generator__controls" aria-label="Profile controls">
-        {!profile && !configuration.error && !starter.error && !metadata.error && <p role="status">{!configuration.data ? "Reading shared choices…" : "Reading bundled model facts…"}</p>}
+        {!profile && !document && !configuration.error && !starter.error && !metadata.error && <p role="status">{!configuration.data ? "Reading shared choices…" : "Reading bundled model facts…"}</p>}
         {compiled && selection && controlsReview ? <Dials selection={selection} review={controlsReview} catalog={compiled} disabled={busy} update={updateSelection} /> :
           document ? <p role="status" className="plugin-atyrode_code__warning">These choices need a model review. <button type="button" onClick={() => setView("catalog")}>Review in Models</button></p> : null}
-        {profile?.source === "draft" && <div className="plugin-atyrode_code__notice"><p>Previewing the saved staged catalog. It has not replaced the active workspace policy.</p><button type="button" onClick={() => setView("catalog")}>Review staged catalog in Models</button></div>}
+        {(profile?.source === "draft" || (!dials && !!record?.draft && !record.active)) && <div className="plugin-atyrode_code__notice"><p>Previewing the saved staged catalog. It has not replaced the active workspace policy.</p><button type="button" onClick={() => setView("catalog")}>Review staged catalog in Models</button></div>}
         {dials && <div className="plugin-atyrode_code_generator__draft" data-stale={stale}>
           {stale && <p role="status">Shared policy or model facts changed. This local draft is still based on revision {dials.revision}; it cannot overwrite revision {configuration.data?.revision}. Keep a copy, or explicitly discard and use the current source.</p>}
           <div className="plugin-atyrode_code__toolbar">
@@ -367,7 +370,7 @@ function Workbench({ host, target, machine, machines, rosterError, available }: 
       </section>
       <section className="plugin-atyrode_code_generator__pane plugin-atyrode_code_generator__profiles-pane" aria-label="Generated profiles" hidden={focus !== null && focus !== "profiles"}>
         <header className="plugin-atyrode_code_generator__pane-heading"><h2><span className="plugin-atyrode_code_generator__section-number">02</span>Agent profiles <span>{shownReview ? `${shownReview.routes.length} roles` : "per agent"}</span></h2>{focusButton("profiles")}</header>
-        {compiled && shownReview ? <Routing value={shownReview} catalog={compiled} local={unsaved} compact={focus !== "profiles"} /> : <p className="plugin-atyrode_code_generator__empty" role="status">{profile ? "These local choices do not resolve; choose an admitted profile or review Models." : "Profiles appear after shared choices and model facts are read."}</p>}
+        {compiled && shownReview ? <Routing value={shownReview} catalog={compiled} local={unsaved} compact={focus !== "profiles"} /> : <p className="plugin-atyrode_code_generator__empty" role="status">{document ? "This catalog cannot resolve a complete per-agent profile for these choices. Review Models; no default has been substituted." : "Profiles appear after shared choices and model facts are read."}</p>}
       </section>
       <section className="plugin-atyrode_code_generator__pane plugin-atyrode_code_generator__usage-pane" aria-label="Usage overview" hidden={focus !== null && focus !== "usage"}>
         <header className="plugin-atyrode_code_generator__pane-heading"><h2><span className="plugin-atyrode_code_generator__section-number">03</span>Accounts / usage</h2>{focusButton("usage")}</header>

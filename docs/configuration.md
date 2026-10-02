@@ -45,8 +45,9 @@ All Code actions are `atyrode.code.<name>`:
 | Purpose               | Actions                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
-| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                            |
-| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`          |
+| Bundled starter       | `reviewStarterProfile`, `adoptStarterProfile`                                |
+| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                             |
+| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`           |
 | External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
 `initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `select` and
@@ -89,17 +90,50 @@ configuration requires its digest and preserves unrelated service policies.
 and returns an unsaved selection plus changed fields. None of these actions
 configures the OMP gateway or broker.
 
+## Bundled starter and atomic adoption
+
+OMP's passive `readModelCatalog({ providers })` returns a versioned bundled SDK
+snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier`.
+It reads no credentials, provider endpoint, machine inventory or runtime resource.
+Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
+and `openai-codex` providers. Ordinary eligible models retain their declared costs,
+context, image support and thinking levels; special, Spark and unknown quota
+classes are excluded. Unmeasured performance stays null. Derivation admits at
+most 256 budget-eligible candidates before constructing ladders; it never truncates.
+
+Only a successful canonical configuration read establishes an absent revision 0
+or an initialized-empty positive revision. Loading and failure are not absence.
+The local starter freezes the full metadata snapshot, catalog, selection, base
+revision and account-independent configuration digests. Existing active policy
+wins, including historical catalogs without recorded registry provenance. A saved
+staged catalog is an explicit preview, not an active profile or a bundled fallback.
+An unresolved catalog retains Models repair and the independent Task.
+
+`reviewStarterProfile` takes `{ containerId, expectedRevision, metadata,
+selection }` and returns the exact document, metadata revision, catalog digest,
+route review and `reviewDigest`. `adoptStarterProfile` takes the same input plus
+that digest and commits the chosen document and selection with one native CAS,
+preserving all existing account choices. It neither stages nor implicitly adopts
+legacy state. These policy doors validate caller-supplied metadata; they do not
+attest its origin or grant OMP/provider authority.
+
+The ordinary workflow re-reads OMP's same filtered full response after review,
+compares the snapshot and revision, and checks the caller's monotonic currentness
+guard before effects. A stale or failed save is never retried or rebased. The local
+draft remains exportable until explicitly discarded. Task, skills and automation
+are independent ephemeral launch choices, never part of the saved profile.
+
 ## Workbench presentation
 
-The first screen composes Generator, generated per-role Profiles and Usage in a
-responsive workbench. Each section can be focused and returned to the shared
-view. Empty sections offer model authoring or account selection, not a prerequisite
-wizard. Generator keeps the profile controls, task and explicit review/launch path
-visible. The `?` controls reveal instructions by hover, keyboard focus or touch;
-Escape dismisses help without editing the profile or stealing unrelated focus.
-Session behavior reveals budget, priority, Spark, prewalk, plans and fallbacks.
-Its summary retains selected non-default policy, including plan auto-approval.
-Priority's higher-cost warning remains visible when selected.
+The first screen orders Generator controls, the complete generated role ledger,
+account/window facts and one Task/review area. Wide widgets align controls beside
+all roles; narrow widgets put each full role label above its model and effort.
+Advisor adds its real role only when selected. Each section can be focused and
+returned to the shared view. Help is available by hover, keyboard or touch without
+stealing focus; inner Escape dismisses help before leaving focus mode and restores
+the initiating control. Shared profile options reveal budget, priority, Spark,
+prewalk, plan auto-approval and ordered fallbacks. Their closed summary retains
+non-default choices; priority's higher-cost warning stays visible when selected.
 
 Session options reveal automation and optional skills. Their closed summary
 retains restricted tool counts, skill selections or explicit disable-all.
@@ -114,10 +148,10 @@ Setup is optional runtime management: connection status, independent machine
 capabilities, folder preparation and the external suggestion classifier. Models
 leads with authoring/discovery; the editor reveals pricing, performance, limits and
 thinking metadata independently. Editing/import needs no runtime or account setup.
-The first explicit catalog save initializes an absent configuration at its observed
-revision, stages and reviews the document through the existing doors, and requires
-separate exact-reviewed promotion. A competing initialization leaves the local
-draft exportable and refuses its stale first save rather than rebasing absence.
+Manual catalog authoring retains its explicit first-save initialization, staging,
+owner review and separate exact-reviewed promotion. It is an advanced alternative,
+not a prerequisite for the bundled starter. A competing initialization preserves
+the local draft and refuses a stale first save instead of rebasing absence.
 Charge-bearing measurement keeps its warning beside the action. Visited views and
 disclosed controls remain mounted, preserving profile, task, catalog, account and
 per-session drafts across empty-to-active transitions. Destination changes still
@@ -389,6 +423,20 @@ observation refuses rather than broadening to another account. Unknown,
 stale, blocked, disabled and exhausted remain different states; a fresh native
 quota verdict takes precedence over a rounded fraction.
 
+The account ledger uses inclusion checkboxes for exact full identities or API-key
+slots. Same-email OAuth organizations are distinct choices. Manual changes save
+immediately; Edit pool creates a local preset draft, and creating a preset does
+not activate it. A preset named “Manual” is still a saved preset. Excluding an
+account is not disabling its native credential; credential actions and sign-in
+remain explicit OMP handoffs.
+
+Usage lists reported windows per account, never an average across incompatible
+windows or providers. Missing capacity has no fabricated meter. Failed reads keep
+the last permitted facts visibly historical, including blocks, reset deadlines,
+balance and credits; none proves current availability. Detailed account and pool
+facts remain accessible from the compact ledger. Exact selections omit providers
+with no selected account and refuse unresolved saved exclusions.
+
 OMP's accounts action door owns `accounts`, `usage`, `clearAccountBlocks`,
 `disableCredential`, `readAccountSetup`, `reviewAccountRuntime`,
 `promoteAccountRuntime` and `prepareSignIn`. Gateway ownership similarly remains
@@ -413,6 +461,10 @@ manual and preset exclusion in one revision. Missing evidence or changed slots
 refuse without changing choices; no compatibility alias, email-only match or
 intermediate widened pool is created. Credential bytes and protected backups
 are not part of Code configuration.
+The editor retains the last fresh source observation while a saved manual or
+inactive-preset exclusion still references it, even across unavailable readings
+and multiple later scope changes. Recovery remains an explicit all-exclusions
+review, never an automatic credential or ownership transfer.
 
 ## Native installation and evidence
 

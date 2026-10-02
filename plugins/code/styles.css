@@ -129,7 +129,6 @@
   gap: 0.2rem 0.45rem;
 }
 .plugin-atyrode_code .plugin-atyrode_code__muted { color: var(--code-muted); }
-.plugin-atyrode_code .plugin-atyrode_code__dim { color: var(--code-dim); }
 .plugin-atyrode_code .plugin-atyrode_code__warning { color: var(--code-warning); }
 .plugin-atyrode_code .plugin-atyrode_code__provider-blue { color: var(--code-blue); }
 .plugin-atyrode_code .plugin-atyrode_code__provider-amber { color: var(--code-amber); }

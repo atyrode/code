@@ -12,6 +12,7 @@ import type * as GateDistModule from "../../../manifold/scripts/gate-dist.ts";
 import type * as TestkitModule from "../../../manifold/packages/testkit/src/index.ts";
 import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.ts";
 import type { ActionInput, ActionResult } from "../code/contract.ts";
+import type { CatalogDocument } from "../domain/contracts.ts";
 import { ModelCatalogSnapshotSchema, ResumeSessionInputSchema, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import type { PermissionPlan } from "../code/permission-plan.ts";
 import { formatManifoldUri, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
@@ -165,6 +166,17 @@ async function openWorkspace(
   })()`);
 }
 
+async function arrangeWorkbench(server: TestServer, grant: TokenGrant): Promise<void> {
+  // The native canvas supplies the authoring handle; a standalone policy panel
+  // is legitimately read-only even when its local controls can be explored.
+  const arranged = await callAction(server, grant.token, "core.space.setLayout", { layout: {
+    root: { id: "root", dir: "row", ratios: [1, 3], children: ["canvas", "workbench"], ref: null },
+    canvas: { id: "canvas", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "core.shell.container-view" } },
+    workbench: { id: "workbench", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "atyrode.code.generator.launcher" } },
+  } });
+  assert(arranged.ok);
+}
+
 const generator = ".plugin-atyrode_code_generator";
 const generatorDestination = `${generator} .plugin-atyrode_code_generator__machine select`;
 const launchControl = element(`${generator} .plugin-atyrode_code_generator__launch-bar button`);
@@ -256,8 +268,14 @@ async function starterLayoutScenario(browser: BrowserInstance): Promise<void> {
   await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   try {
     for (const width of [1280, 1024, 640, 390, 320]) {
-      await browser.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
-      await until(browser, "widget settles at its requested width", `${element(generator)}.getBoundingClientRect().width <= ${width}`);
+      let viewportWidth = Math.ceil((width + 64) * 4 / 3);
+      for (let correction = 0; correction < 3; correction++) {
+        await browser.send("Emulation.setDeviceMetricsOverride", { width: viewportWidth, height: 900, deviceScaleFactor: 1, mobile: false });
+        const actualWidth = await browser.evaluate<number>(`${element(generator)}.getBoundingClientRect().width`);
+        if (Math.abs(actualWidth - width) <= 1) break;
+        viewportWidth += Math.round((width - actualWidth) * 4 / 3);
+      }
+      await until(browser, "native embedding allocates the requested widget width", `Math.abs(${element(generator)}.getBoundingClientRect().width - ${width}) <= 2`);
       await assertRoles(browser, before.selection.advisor !== "off");
       const geometry = await browser.evaluate<{ wide: boolean; stacked: boolean; overflow: boolean; order: boolean; roleReflow: boolean }>(`(() => {
         const controls = ${element(controls)}, profiles = ${element(profiles)};
@@ -369,10 +387,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
     "The starter uses exact sanctioned providers, never an OpenAI alias for Codex");
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
-  const arranged = await callAction(server, writer.token, "core.space.setLayout", { layout: {
-    root: { id: "root", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "atyrode.code.generator.launcher" } },
-  } });
-  assert(arranged.ok);
+  await arrangeWorkbench(server, writer);
   const trace = await watchActions(browser, server);
   try {
     for (const initialized of [false, true]) {
@@ -685,6 +700,109 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
 }
 
+async function unresolvedStagedCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const workspace = await createContainer(server, "Text-only staged catalog recovery", "canvas");
+  await arrangeWorkbench(server, writer);
+  const target = { containerId: workspace.id };
+  const metadata = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
+  assert(metadata.ok);
+  const reviewInput: ActionInput<"reviewStarterProfile"> = { ...target, expectedRevision: 0,
+    metadata: ModelCatalogSnapshotSchema.parse(metadata.result),
+    selection: { lane: { kind: "mixed" }, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" } };
+  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewStarterProfile", reviewInput);
+  assert(reviewed.ok, reviewed.ok ? "" : reviewed.denial.message);
+  const document = (reviewed.result as { document: CatalogDocument }).document;
+  const textOnly = { ...document, models: document.models.map(model => ({ ...model, images: false })) };
+  const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(initialized.ok);
+  const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: textOnly });
+  assert(staged.ok, staged.ok ? "" : staged.denial.message);
+  await browser.goto(`${server.httpUrl}/p/${workspace.id}`);
+  await control(browser, "staged text-only catalog keeps the workbench and task operable", taskField, false);
+  assert.equal(await browser.evaluate("document.querySelectorAll('.plugin-atyrode_code_generator__routes > div').length"), 0, "An unresolved saved catalog is never silently replaced by bundled starter roles");
+  await control(browser, "stored document has an explicit repair path", workspaceButton("Review in Models"), false);
+  await click(browser, workspaceButton("Review in Models"));
+  assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.draft?.document, textOnly);
+}
+
+/** Fictional passive account metadata exercises recovery UI only. Native
+ * authority, credentials, quota and provider success remain unconfigured. */
+async function syntheticScopeRecoveryScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const workspace = await createContainer(server, "Synthetic account scope recovery", "canvas");
+  const target = { containerId: workspace.id };
+  const reference = { kind: "credential" as const, scope: "synthetic-scope-a", provider: "anthropic", credentialId: 7 };
+  const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(initialized.ok);
+  const manual = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target,
+    expectedRevision: (initialized.result as Configuration).revision, change: { kind: "set-account", reference, enabled: false } });
+  assert(manual.ok);
+  const preset = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target,
+    expectedRevision: (manual.result as Configuration).revision,
+    change: { kind: "create-preset", preset: { id: "synthetic-inactive", name: "Manual", disabled: [reference] } } });
+  assert(preset.ok);
+  const base = await readConfiguration(server, writer, target);
+  const arranged = await callAction(server, writer.token, "core.space.setLayout", { layout: {
+    root: { id: "root", dir: "row", ratios: [1, 3], children: ["canvas", "accounts"], ref: null },
+    canvas: { id: "canvas", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "core.shell.container-view" } },
+    accounts: { id: "accounts", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "atyrode.code.accounts.accounts" } },
+  } });
+  assert(arranged.ok);
+  let scope = reference.scope, status: OmpResult<"accounts">["status"] = "fresh", intercepting = true;
+  const pending = new Set<Promise<void>>();
+  let fixtureFailure: unknown;
+  browser.on("Fetch.requestPaused", event => {
+    if (!intercepting) return;
+    const work = (async () => {
+      const request = event.request as { url: string };
+      if (new URL(request.url).pathname !== "/api/actions/atyrode.omp.accounts.accounts") {
+        await browser.send("Fetch.continueRequest", { requestId: event.requestId as string });
+        return;
+      }
+      const result: OmpResult<"accounts"> = { scope, status, observedAt: status === "unavailable" ? null : Date.now(), accounts: status === "fresh" ? [{
+        reference: { ...reference, scope }, credentialId: reference.credentialId, type: "api_key", identityKey: null, email: null, disabled: false, blocks: [],
+      }] : [] };
+      await browser.send("Fetch.fulfillRequest", { requestId: event.requestId as string, responseCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "application/json" }],
+        body: Buffer.from(JSON.stringify({ ok: true, result })).toString("base64") });
+    })();
+    pending.add(work);
+    void work.catch(error => { fixtureFailure = error; }).finally(() => pending.delete(work));
+  });
+  await browser.send("Fetch.enable", { patterns: [{ urlPattern: `${server.httpUrl}/api/actions/atyrode.omp.accounts.accounts`, requestStage: "Request" }] });
+  const recover = button("Recover all exclusions to this scope");
+  try {
+    await browser.goto(`${server.httpUrl}/p/${workspace.id}`);
+    await until(browser, "exact excluded fixture slot is initially observed",
+      `${element(`${accounts} .plugin-atyrode_code__account-row[data-included="false"]`)} !== null`);
+    await click(browser, element(`${accounts} .plugin-atyrode_code__account-diagnostics > summary`));
+    status = "unavailable";
+    await click(browser, element(`${accounts} button[data-action="atyrode.omp.accounts.accounts"]`));
+    await until(browser, "unavailable account observation pauses native and inclusion changes",
+      `${element(`${accounts} .plugin-atyrode_code__account-observation`)}?.textContent.includes('Current availability unknown') === true`);
+    scope = "synthetic-scope-b"; status = "fresh";
+    await click(browser, element(`${accounts} button[data-action="atyrode.omp.accounts.accounts"]`));
+    await until(browser, "first ownership-scope change exposes explicit recovery", `${recover} instanceof HTMLButtonElement`);
+    await click(browser, `${recover}.parentElement.querySelector(':scope > summary')`);
+    await control(browser, "fresh source evidence survives an unavailable intermediate observation", recover, false);
+    scope = "synthetic-scope-c";
+    await click(browser, element(`${accounts} button[data-action="atyrode.omp.accounts.accounts"]`));
+    await until(browser, "later scope replaces the current observation, not the referenced recovery source",
+      `${recover}.parentElement.textContent.includes('synthetic-scope-c') && ${recover}.parentElement.textContent.includes('synthetic-scope-a')`);
+    await control(browser, "inactive and manual exclusions retain their original source proof", recover, false);
+    await click(browser, recover);
+    await waitFor(async () => (await readConfiguration(server, writer, target)).revision === base.revision + 1, timeout, 50);
+    const saved = await readConfiguration(server, writer, target);
+    assert.deepEqual(saved.configuration?.accounts.manualDisabled, [{ ...reference, scope }]);
+    assert.deepEqual(saved.configuration?.accounts.presets[0]?.disabled, [{ ...reference, scope }]);
+    assert.equal(saved.configuration?.accounts.activePreset, null, "A saved preset literally named Manual never changes manual mode");
+    if (fixtureFailure) throw fixtureFailure;
+  } finally {
+    intercepting = false;
+    await browser.send("Fetch.disable", {});
+    await Promise.all([...pending]);
+  }
+}
+
 /** Only transport failure/latency is injected. Every successful configuration and
  * metadata response, policy review and adoption still comes from the installed owners. */
 async function starterObservationScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
@@ -861,7 +979,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
     failConfiguration = true;
     await browser.goto(`${server.httpUrl}/p/${configured.containerId}`);
     const usage = ".plugin-atyrode_code_usage .plugin-atyrode_code__usage";
-    const retry = `[...document.querySelectorAll('${usage} button')].find(el => el.textContent.trim() === 'Retry usage')`;
+    const retry = element(`${usage} button[data-action="atyrode.omp.accounts.usage"]`);
     await control(browser, "standalone Usage can retry before any successful configuration", retry, false);
     assert(failures > 0, "The retry control follows an injected configuration failure");
     assert.equal(await browser.evaluate(`${element(`${usage} [data-account-pool]`)} === null`), true);
@@ -1412,7 +1530,15 @@ async function run(): Promise<void> {
     assert(["localhost", "127.0.0.1"].includes(new URL(server.httpUrl).hostname), "Fixture must stay on loopback");
     for (const bundle of bundles) {
       phase = `installing ${bundle.id}`;
-      await ownerAction(server, "engine.plugins.install", { source: bundle.file, sha256: bundle.sha256, hardened: ompFamily.includes(bundle.id) });
+      try {
+        const installed = await callAction(server, server.ownerKey, "engine.plugins.install", { source: bundle.file, sha256: bundle.sha256, hardened: ompFamily.includes(bundle.id) });
+        if (!installed.ok) throw new Error(`Native bundle install refused (${installed.denial.rule}): ${installed.denial.message}`);
+      } catch (reason) {
+        // Installation precedes identity minting. Redact the fixture owner and
+        // URLs, and keep this diagnostic separate from browser admission errors.
+        const detail = reason instanceof Error ? `${reason.name}: ${reason.message}` : "Unknown installation failure";
+        throw new ProofFailure(detail.replaceAll(server.ownerKey, "[redacted-owner]").replace(/https?:\/\/\S+/gi, "[redacted-url]"));
+      }
     }
     phase = "isolated fixture machine";
     const enrolled = await enrollMachine(server, machineName);
@@ -1555,14 +1681,15 @@ async function run(): Promise<void> {
     phase = "saving the preserved account draft";
     await control(writerBrowser, "writer Save preset enabled", button("Save preset"), false);
     await click(writerBrowser, button("Save preset"));
-    const hasPreset = `(() => { const select = ${element(profile)}; return select instanceof HTMLSelectElement && [...select.options].some(option => option.text === ${JSON.stringify(presetName)}); })()`;
-    await until(writerBrowser, "writer saved profile visible", hasPreset);
-    await until(viewerBrowser, "viewer receives saved profile without refresh", hasPreset);
+    await waitFor(async () => (await readConfiguration(server!, viewer, target)).configuration?.accounts.presets.some(row => row.name === presetName) === true, timeout, 50);
     const saved = await readConfiguration(server, viewer, target);
     assert.equal(saved.revision, initialized.revision + 1, "Exactly one preset creation must be committed");
     assert.equal(saved.configuration?.updatedBy, writer.principal.id);
     const preset = saved.configuration?.accounts.presets.find(row => row.name === presetName);
     assert(preset, "The UI-created profile must be readable as shared configuration");
+    const hasPreset = `(() => { const select = ${element(profile)}; return select instanceof HTMLSelectElement && [...select.options].some(option => option.value === ${JSON.stringify(preset.id)} && option.label.includes(${JSON.stringify(presetName)})); })()`;
+    await until(writerBrowser, "writer can identify the saved pool", hasPreset);
+    await until(viewerBrowser, "viewer receives the same saved pool without refresh", hasPreset);
 
     // Native select input through the keyboard, rather than setting DOM values.
     await control(writerBrowser, "writer profile selection enabled", element(profile), false);
@@ -1620,6 +1747,10 @@ async function run(): Promise<void> {
     await manualCatalogScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
     await configurationRecoveryScenario(writerBrowser, server, writer, { containerId: firstUse.id }, target);
+    phase = "unresolved staged catalogs preserve model repair and task entry";
+    await unresolvedStagedCatalogScenario(writerBrowser, server, writer);
+    phase = "synthetic account-scope recovery retains referenced fresh evidence";
+    await syntheticScopeRecoveryScenario(writerBrowser, server, writer);
     phase = "synthetic independent folder-only UI readiness";
     await syntheticFolderReadinessScenario(writerBrowser, server, writer, target);
     phase = "synthetic preview UI invalidation boundary";

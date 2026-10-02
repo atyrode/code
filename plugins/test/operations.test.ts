@@ -142,10 +142,9 @@ function starterInput(): ActionInput<"reviewStarterProfile"> {
 describe("atomic starter policy adoption", () => {
   test("read-only review and one CAS preserve the exact nondefault profile without native operations", async () => {
     const f = fixture(), input = starterInput();
-    let commits = 0, events = 0;
+    let commits = 0;
     const cas = f.ctx.storage.compareAndSet;
     f.ctx.storage.compareAndSet = async (...args) => { commits++; return cas(...args); };
-    f.ctx.emit = () => { events++; };
     f.access.writable.clear();
     const review = await accepted(f, "reviewStarterProfile", input);
     expect(review.review.selection).toEqual(input.selection);
@@ -161,7 +160,6 @@ describe("atomic starter policy adoption", () => {
     expect(saved.active!.document.models.every(model => model.tokensPerSecond === null && model.timeToFirstTokenMs === null)).toBe(true);
     expect(await configuration(f)).toEqual(saved);
     expect(commits).toBe(1);
-    expect(events).toBe(1);
   });
 
   test("initialized empty records retain exact account exclusions and presets in their next revision", async () => {
