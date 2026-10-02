@@ -1228,7 +1228,7 @@ async function run(): Promise<void> {
   }
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log("PASS: packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact; drafts and visited views survive destination switches; hidden first-use setup keeps navigation interactive; standalone Usage retries failed configuration and recovers the saved account pool. Choices never grant native permission. Separate synthetic RPC responses exercise independent folder-only readiness and refused execution, preview invalidation/refusal and cross-machine pin fences; no provider/native-runtime/consent proof claimed.");
+  console.log("PASS: packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact; drafts and visited views survive destination switches. Fresh Generator/Profiles/Usage compose without a prerequisite wizard; explicit first catalog saves preserve tasks and refuse competing initialization; hover help is readable and dismissible without stealing focus. Standalone Usage retries failed configuration and recovers the saved account pool. Choices never grant native permission. Separate synthetic RPC responses exercise independent folder-only readiness and refused execution, preview invalidation/refusal and cross-machine pin fences; no provider/native-runtime/consent proof claimed.");
 }
 
 await run();

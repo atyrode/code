@@ -14,8 +14,7 @@
   margin-inline: auto;
   padding: clamp(0.65rem, 1.8cqi, 1.25rem);
 }
-.plugin-atyrode_code_generator__masthead,
-.plugin-atyrode_code_generator__profile-header {
+.plugin-atyrode_code_generator__masthead {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -77,7 +76,6 @@
 .plugin-atyrode_code_generator__feedback[data-failed="true"] { border-color: var(--code-warning); background: color-mix(in srgb, var(--code-warning) 5%, transparent); }
 .plugin-atyrode_code_generator__profile-grid { display: grid; gap: 0.65rem; align-items: start; min-width: 0; }
 .plugin-atyrode_code_generator__controls { display: grid; gap: 0.65rem; min-width: 0; }
-.plugin-atyrode_code_generator__profile-header { justify-content: space-between; }
 .plugin-atyrode_code_generator__dials { display: grid; gap: 0.5rem; min-width: 0; }
 .plugin-atyrode_code_generator__dial { position: relative; display: grid; grid-template-columns: 6.1rem minmax(0, 1fr) 2.75rem; align-items: center; gap: 0.35rem 0.65rem; min-width: 0; }
 .plugin-atyrode_code_generator__dial-label { display: inline-flex; align-items: center; gap: 0.55rem; color: var(--code-muted); font-size: 0.8125rem; }
@@ -130,7 +128,6 @@
 .plugin-atyrode_code_generator__disclosure > summary > span { margin-inline-start: 0.5rem; color: var(--code-muted); font-size: 0.75rem; font-weight: 400; }
 .plugin-atyrode_code_generator__disclosure[open] > summary { color: var(--code-accent); }
 .plugin-atyrode_code_generator summary { min-block-size: 2.75rem; align-content: center; }
-.plugin-atyrode_code_generator__route-preview { min-width: 0; }
 .plugin-atyrode_code_generator__routing { display: grid; gap: 0.7rem; min-width: 0; container: code-routing / inline-size; }
 .plugin-atyrode_code_generator__route-status { margin-inline-start: auto; color: var(--code-dim); font-size: 0.7rem; }
 .plugin-atyrode_code_generator__route-status[data-local="true"] { color: var(--code-accent); }

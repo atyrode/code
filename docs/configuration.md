@@ -91,26 +91,36 @@ configures the OMP gateway or broker.
 
 ## Workbench presentation
 
-Profile keeps the selected model, provider/capability/thinking/advisor controls,
-task prompt and explicit review/launch path visible. The `?` controls explain
-choices without changing them; Escape dismisses help and restores its trigger.
+The first screen composes Generator, generated per-role Profiles and Usage in a
+responsive workbench. Each section can be focused and returned to the shared
+view. Empty sections offer model authoring or account selection, not a prerequisite
+wizard. Generator keeps the profile controls, task and explicit review/launch path
+visible. The `?` controls reveal instructions by hover, keyboard focus or touch;
+Escape dismisses help without editing the profile or stealing unrelated focus.
 Session behavior reveals budget, priority, Spark, prewalk, plans and fallbacks.
 Its summary retains selected non-default policy, including plan auto-approval.
 Priority's higher-cost warning remains visible when selected.
 
 Session options reveal automation and optional skills. Their closed summary
 retains restricted tool counts, skill selections or explicit disable-all.
-Restrictions are not an OS or network sandbox. Routing, usage, saved-session
-inventory and exact configuration/runtime observations open separately; opening
-a disclosure grants no permission and starts no inventory, benchmark or session.
+Restrictions are not an OS or network sandbox. Generated profiles and compact
+usage stay visible; full routing detail, saved-session inventory and exact runtime
+observations open deliberately. Opening help or a disclosure grants no permission
+and starts no inventory, benchmark or session.
 Blocked, offline, read-only, stale/conflict and failed-observation status remains
 visible, with full error detail reachable deliberately.
 
-Setup shows its current task and contextual next action. Models leads with
-catalog authoring/discovery; the editor reveals pricing, performance, limits and
-thinking metadata independently. Charge-bearing measurement keeps its warning
-beside the action. Visited views and disclosed controls remain mounted, preserving
-profile, task, catalog, account and per-session drafts. Destination changes still
+Setup is optional runtime management: connection status, independent machine
+capabilities, folder preparation and the external suggestion classifier. Models
+leads with authoring/discovery; the editor reveals pricing, performance, limits and
+thinking metadata independently. Editing/import needs no runtime or account setup.
+The first explicit catalog save initializes an absent configuration at its observed
+revision, stages and reviews the document through the existing doors, and requires
+separate exact-reviewed promotion. A competing initialization leaves the local
+draft exportable and refuses its stale first save rather than rebasing absence.
+Charge-bearing measurement keeps its warning beside the action. Visited views and
+disclosed controls remain mounted, preserving profile, task, catalog, account and
+per-session drafts across empty-to-active transitions. Destination changes still
 invalidate native reviews and clear destination-specific session choices.
 
 ## Ordinary Code/OMP workflow

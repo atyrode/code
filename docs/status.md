@@ -62,6 +62,13 @@ files, service state, credentials or backups.
 - The gateway owner alone reviews/configures the destination service. Code's
   service actions bind only the optional external suggestion classifier.
   Neither path grants account authority or supplies credentials.
+- The first workbench composes Generator, generated per-role Profiles and Usage,
+  including empty workspaces. Catalog edit/import needs no native runtime setup;
+  only an explicit first catalog save initializes shared configuration. Disposable
+  browser acceptance covers task retention across promotion, refusal of competing
+  initialization, hover-help dismissal without focus theft and independent folder
+  permission review. These are presentation/CAS proofs, not native consent,
+  configured accounts or provider execution.
 - Pure catalog/preferences actions need no machine process or selected account.
   `composeProbe` and `composeSession` consume typed caller-supplied OMP
   observations but do not attest them; OMP rechecks concrete account slots before
