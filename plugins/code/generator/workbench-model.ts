@@ -12,13 +12,16 @@ import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailu
 import { operationReady } from "../permission-plan.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
+import { launchStatusText, saveGate, type LaunchFacts, type ProfileSource } from "./launch-step.ts";
+import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 
 /** The suggest door's prompt limit (contract.ts `suggest` input); longer tasks are kept, never truncated. */
 const SUGGESTION_PROMPT_MAX = 16384;
 
-/** The profile the controls show: the frozen local draft, or one derived from the shared record or bundled starter facts. */
+/** The profile the controls show: the frozen local draft, or one derived from the shared record
+ * or the bundled preview. A `starter` profile is render-only: verification is what saves it. */
 export type ProfileDraft = {
-  source: "starter" | "active" | "draft";
+  source: ProfileSource;
   document: CatalogDocument;
   selection: Selection;
   revision: number;
@@ -54,7 +57,7 @@ export type WorkbenchActions = {
   updateSelection: (value: Selection) => void;
   /** Drop the local draft and any acknowledged CAS receipt; return to the observed shared profile. */
   discardChanges: () => void;
-  /** CAS-save the local profile (adopting starter material when frozen from it). No-op unless saveable. */
+  /** CAS-save a local edit of the active profile. No-op unless saveable; the bundled preview is saved by verification. */
   saveProfile: () => Promise<void>;
   /** Review the launch for the saved profile. Like today's handler it relies on the caller honouring `canReview`. */
   review: () => Promise<void>;
@@ -84,7 +87,7 @@ export type WorkbenchModel = {
   /** Increments whenever the destination machine changes; scopes per-destination children. */
   destinationGeneration: number;
   document: CatalogDocument | null;
-  /** Why bundled starter material could not be derived, if it could not. */
+  /** Why the bundled preview could not be derived, if it could not. */
   starterError: string | null;
   compiled: CompiledCatalog | null;
   selection: Selection | null;
@@ -109,13 +112,13 @@ export type WorkbenchModel = {
   busy: boolean;
   profileState: ProfileState;
   stateLabel: string;
-  /** Today's launch status sentence; same precedence as `nextLaunchStep`. */
+  /** The launch status sentence; `nextLaunchStep`'s precedence (launch-step.ts). */
   launchStatus: string;
   message: WorkbenchMessage | null;
   /** Copyable JSON of the local profile; empty when there is nothing local to export. */
   exportedDraft: string;
   // Enablement, excluding `busy` (callers disable everything while busy).
-  /** A Save profile control is offered and its preconditions hold. */
+  /** A Save profile control is offered and its preconditions hold, including a current verification. */
   canSave: boolean;
   /** The Review/Launch control may proceed. */
   canReview: boolean;
@@ -150,98 +153,9 @@ export type WorkbenchModel = {
   suggestion: ActionResult<"suggest"> | null;
   suggesting: boolean;
   actions: WorkbenchActions;
+  /** Whether the active catalog's verification holds, and the verify flow that renews it. */
+  verification: ModelVerification;
 };
-
-/** The facts `nextLaunchStep` reads. A `WorkbenchModel` satisfies it. */
-export type LaunchFacts = Pick<WorkbenchModel, "configurationCurrent" | "unsaved" | "stale" | "writable" | "available" | "launchReady" | "previewCurrent"> & {
-  profile: Pick<ProfileDraft, "source"> | null;
-  localDraft: { source: ProfileDraft["source"]; metadata: object | null } | null;
-  record: { active?: unknown } | null;
-  localReview: object | null;
-  skillProblems: readonly string[];
-  queries: { setup: Pick<WorkbenchQuery<unknown>, "error">; metadata: Pick<WorkbenchQuery<unknown>, "data" | "error"> };
-};
-export type LaunchBlockerCode =
-  | "configuration" | "staged" | "unsaved" | "read-only" | "conflict" | "models" | "source"
-  | "unavailable" | "sessions" | "permissions" | "skills";
-/** What fixes a blocker: re-observe, open Models, discard the local draft, review native permissions, or open launch options. */
-export type LaunchBlockerAction = "refresh" | "models" | "discard" | "permissions" | "options";
-export type LaunchBlocker = { code: LaunchBlockerCode; text: string; action?: LaunchBlockerAction };
-export type LaunchStep =
-  | { step: "save" | "review" | "launch"; reason: null }
-  | { step: "blocked"; reason: LaunchBlocker };
-
-const blockerText: Readonly<Record<LaunchBlockerCode, string>> = {
-  configuration: "Shared choices need a fresh observation.",
-  staged: "Review and promote the staged catalog first.",
-  unsaved: "Save this profile before launch review.",
-  "read-only": "Edit access needed.",
-  conflict: "Shared profile changed.",
-  models: "Review your models.",
-  source: "Bundled model source unavailable.",
-  unavailable: "Runtime unavailable · profile and task are retained.",
-  sessions: "Sessions unavailable on this machine.",
-  permissions: "Review native session permissions when you're ready to run.",
-  skills: "Skill choices need attention.",
-};
-const blockerAction: Readonly<Partial<Record<LaunchBlockerCode, LaunchBlockerAction>>> = {
-  configuration: "refresh", staged: "models", conflict: "discard", models: "models", source: "refresh",
-  sessions: "permissions", permissions: "permissions", skills: "options",
-};
-function blocked(code: LaunchBlockerCode): LaunchStep {
-  const action = blockerAction[code];
-  return { step: "blocked", reason: action ? { code, text: blockerText[code], action } : { code, text: blockerText[code] } };
-}
-/** Precedence of the launch status sentence: the first unmet launch precondition, or null when review/launch may proceed. */
-function launchGate(facts: LaunchFacts): LaunchBlockerCode | null {
-  if (!facts.configurationCurrent) return "configuration";
-  if (facts.profile?.source === "draft") return "staged";
-  if (facts.unsaved || !facts.record?.active) return "unsaved";
-  if (!facts.writable) return "read-only";
-  if (!facts.available) return "unavailable";
-  if (facts.queries.setup.error) return "sessions";
-  if (!facts.launchReady) return "permissions";
-  if (!facts.localReview) return "models";
-  if (facts.skillProblems.length) return "skills";
-  return null;
-}
-/** Save profile preconditions after a current configuration, in the Save control's order; null when saving may proceed. */
-function saveGate(facts: LaunchFacts): LaunchBlockerCode | null {
-  // Only a frozen local draft that is not a staged-catalog preview offers Save.
-  if (!facts.localDraft || facts.localDraft.source === "draft") return "unsaved";
-  if (!facts.writable) return "read-only";
-  if (facts.stale) return "conflict";
-  if (!facts.localReview) return "models";
-  if (facts.localDraft.metadata && (facts.queries.metadata.data === null || facts.queries.metadata.error !== null)) return "source";
-  return null;
-}
-
-/**
- * The next step the primary launch control should take, and why it cannot when blocked.
- *
- * Precedence is the launch status sentence's (`launchStatus`): configuration not current →
- * staged catalog previewed → unsaved profile (or no saved active catalog) → read-only → runtime
- * unavailable → sessions unavailable → launch permission not ready → no local model review →
- * skill problems → `launch` when the review is current, else `review`. For every model the hook
- * produces, `review`/`launch` are returned exactly when today's Review/Launch button is enabled
- * apart from `busy` (`canReview`): a staged preview is always unsaved, and a sessions error
- * leaves launch permission unobserved. Blocked reasons carry the sentence's text.
- *
- * The unsaved branch folds in the Save control: `save` when it would be enabled (`canSave`),
- * otherwise the first failing Save precondition in its order (read-only → conflict → models →
- * source), whose reason replaces the generic sentence. With no frozen local draft there is
- * nothing to save, so the step stays blocked on `unsaved`.
- *
- * `reason` is non-null exactly when `step` is `blocked`. `busy` is deliberately not a step:
- * callers disable the control while busy and label the step in flight themselves.
- */
-export function nextLaunchStep(facts: LaunchFacts): LaunchStep {
-  const gate = launchGate(facts);
-  if (gate === null) return { step: facts.previewCurrent ? "launch" : "review", reason: null };
-  if (gate !== "unsaved") return blocked(gate);
-  const save = saveGate(facts);
-  return save === null ? { step: "save", reason: null } : blocked(save);
-}
 
 /**
  * The local catalog review a hypothetical selection would produce, or null when the domain
@@ -344,6 +258,15 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const writable = canWriteCodeWorkspace(host);
   const canSuggest = !!record?.active && classifier.data !== null && classifier.data !== undefined;
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
+  // A confirmed verification is itself the save of the shown selection: the bundled preview's
+  // dials, or the active profile's, narrowed to what the verified catalog hosts.
+  const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
+    configurationCurrent, selection, ompVersion: metadata.data?.ompVersion ?? null, setup: setup.data, writable, available,
+    onVerified: saved => {
+      setSavedPolicy(saved); setDials(null); setPreview(null); setSuggestion(null);
+      setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
+    } });
+  const verified = verification.status === "current";
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };
@@ -357,7 +280,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const reviewKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
     machineId, available, rosterError !== null, configurationCurrent, record?.revision, record?.active?.digest, record?.draft?.digest,
     record?.selection, defaults.data?.revision, defaults.error !== null, skillCatalog.data?.revision, skillCatalog.error !== null,
-    setup.error !== null, setup.data === null, accountObservation, prompt, skillChoice, automation, savedSessionId]);
+    setup.error !== null, setup.data === null, accountObservation, prompt, skillChoice, automation, savedSessionId, verification.status]);
   const reviewScope = useRef({ key: reviewKey, epoch: 0 });
   if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
   // Exact CAS arbitrates shared revision changes. Observing this save's own
@@ -397,11 +320,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     setDials(null); setSavedPolicy(null); setPreview(null); setSuggestion(null); setMessage(null);
   }
   async function saveProfile() {
-    if (!profile || !configurationCurrent || stale || !localReview || (profile.source === "starter" && (metadata.data === null || metadata.error !== null))) return;
+    // Only a local edit of a verified active profile saves here; the bundled preview has no save.
+    if (!profile || dials?.source !== "active" || !configurationCurrent || stale || !localReview || !verified) return;
     await perform(async () => {
-      const saved = profile.metadata ? await codeWorkflow(host, policyCurrent).adoptStarterProfile({
-        containerId: host.containerId!, expectedRevision: profile.revision, metadata: profile.metadata, selection: profile.selection,
-      }, policyCurrent) : await codeWorkflow(host, policyCurrent).code("select", {
+      const saved = await codeWorkflow(host, policyCurrent).code("select", {
         containerId: host.containerId!, expectedRevision: profile.revision, selection: profile.selection,
       });
       if (!policyCurrent()) throw new Error("Profile confirmation changed. Observe the shared result before trying again.");
@@ -439,7 +361,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   async function resume(withProfile: boolean) {
     if (!target || !savedSessionId || !available ||
-      (withProfile && (!configurationCurrent || !record?.active || unsaved || !localReview))) return;
+      (withProfile && (!configurationCurrent || !record?.active || unsaved || !localReview || !verified))) return;
     await perform(async () => {
       setPreview(null);
       const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
@@ -478,11 +400,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   function changeAutomation(value: AutomationChoice) { setAutomation(value); setPreview(null); setMessage(null); }
   const profileState: ProfileState = stale ? "conflict" : unsaved ? "local" : "saved";
   const stateLabel = !configurationCurrent ? "Shared choices unavailable" : stale ? "Shared profile changed" :
-    profile?.source === "starter" ? "Local starter · not saved" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
+    profile?.source === "starter" ? "Bundled preview · verify to save" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
   const facts: LaunchFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, available, launchReady,
-    previewCurrent, localReview, skillProblems, queries: { setup, metadata } };
-  const gate = launchGate(facts);
-  const launchStatus = gate ? blockerText[gate] : previewCurrent ? "Ready to open a terminal." : "Review before opening a terminal.";
+    previewCurrent, localReview, skillProblems, queries: { setup }, verification };
   const suggestionPromptTooLong = prompt.length > SUGGESTION_PROMPT_MAX;
   const suggestionStale = suggestion !== null && (suggestion.revision !== record?.revision || suggestion.serviceRevision !== classifier.data?.revision);
   return {
@@ -490,11 +410,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     observed, record, machineId, destinationGeneration: generation, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
     configurationCurrent, unsaved, stale, writable, available, launchReady, previewCurrent, busy,
-    profileState, stateLabel, launchStatus, message, exportedDraft,
-    canSave: configurationCurrent && saveGate(facts) === null,
-    canReview: writable && available && configurationCurrent && !!record?.active && launchReady && !unsaved && !!localReview && skillProblems.length === 0,
+    profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
+    canSave: configurationCurrent && verified && saveGate(facts) === null,
+    canReview: writable && available && configurationCurrent && verified && !!record?.active && launchReady && !unsaved && !!localReview && skillProblems.length === 0,
     canResume: writable && available && !!savedSessionId && skillProblems.length === 0,
-    canResumeWithProfile: writable && available && !!savedSessionId && configurationCurrent && !!record?.active && !unsaved && !!localReview && skillProblems.length === 0,
+    canResumeWithProfile: writable && available && !!savedSessionId && configurationCurrent && verified && !!record?.active && !unsaved && !!localReview && skillProblems.length === 0,
     canSuggest,
     canRequestSuggestion: writable && available && configurationCurrent && !!prompt.trim() && !suggestionPromptTooLong && !!classifier.data,
     canApplySuggestion: suggestion !== null && !unsaved && !suggestionStale,
@@ -508,5 +428,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       updateSelection, discardChanges, saveProfile, review, launch, resume,
       openSuggestion: () => setSuggesting(true), closeSuggestion, suggest, applySuggestion, refresh,
     },
+    verification,
   };
 }

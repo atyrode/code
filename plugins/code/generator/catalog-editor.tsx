@@ -209,7 +209,7 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
       {setup.error && <><p>Discovery readiness</p><pre>{setup.error}</pre></>}
     </details>}
     {inventoryId && <div className="plugin-atyrode_code_generator__job-progress" role="status">
-      {inventoryJob.error ? "Discovery status unavailable. Open job history or retry." : inventory.error ? "Discovered models could not be read. Open error details or retry." : inventory.data ? inventory.data.draft.document.models.length + " models discovered" : inventoryJob.job?.state === "exited" ? inventoryJob.job.result?.exitCode === 0 ? "Reading catalog…" : "Discovery failed. Open job history for details." : inventoryJob.job && ["refused", "cancelled", "interrupted"].includes(inventoryJob.job.state) ? "Discovery " + inventoryJob.job.state : "Reading models from the configured runtime…"}
+      {inventoryJob.error ? "Discovery status unavailable. Open job history or retry." : inventory.error ? "Discovered models could not be read. Open error details or retry." : inventory.data ? inventory.data.draft.benchmark.candidates.length + " models discovered" : inventoryJob.job?.state === "exited" ? inventoryJob.job.result?.exitCode === 0 ? "Reading catalog…" : "Discovery failed. Open job history for details." : inventoryJob.job && ["refused", "cancelled", "interrupted"].includes(inventoryJob.job.state) ? "Discovery " + inventoryJob.job.state : "Reading models from the configured runtime…"}
       {(inventoryJob.error || inventory.error) && <>
         <button type="button" disabled={busy} onClick={refresh}>Retry discovery status</button>
         <details className="plugin-atyrode_code__details"><summary>Discovery error details</summary>
@@ -217,7 +217,6 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
           {inventory.error && <pre>{inventory.error}</pre>}
         </details>
       </>}
-      {inventory.data && !editor && !review && <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.stageCatalog" disabled={!writable || busy} onClick={() => { if (base && inventory.data) void perform(() => stage(inventory.data!.draft.document, base, destinationCurrent)); }}>Stage and review models</button>}
       <button type="button" onClick={() => host.navigate("manifold://plugin/" + OMP_PLUGIN_ID)}>job history</button>
     </div>}
     {editor && <div className="plugin-atyrode_code_generator__model-editor">
