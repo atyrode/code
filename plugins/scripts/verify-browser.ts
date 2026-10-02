@@ -256,6 +256,22 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, server: TestSer
   const thinking = `[...document.querySelectorAll('${generator} [role="radiogroup"]')].find(el => document.getElementById(el.getAttribute('aria-labelledby'))?.textContent === 'Thinking')`;
   const thinkingHelp = element(`${generator} button[aria-label="About thinking"]`);
   const beforeHelp = await browser.evaluate(`${thinking}.querySelector('[aria-checked="true"]').dataset.value`);
+  await click(browser, promptField);
+  const hoverPoint = await browser.evaluate<{ x: number; y: number }>(`(() => {
+    const trigger = ${thinkingHelp}; trigger.scrollIntoView({block:'center'});
+    const rect = trigger.getBoundingClientRect(); return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+  })()`);
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...hoverPoint });
+  await until(browser, "hover opens help without moving task focus", `${thinkingHelp}.getAttribute('aria-expanded') === 'true' && document.activeElement === ${promptField}`);
+  const contentPoint = await browser.evaluate<{ x: number; y: number }>(`(() => {
+    const rect = document.getElementById(${thinkingHelp}.getAttribute('aria-controls')).getBoundingClientRect();
+    return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+  })()`);
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...contentPoint });
+  await until(browser, "pointer can enter and read help content", `${thinkingHelp}.getAttribute('aria-expanded') === 'true'`);
+  await key(browser, "Escape", 27);
+  assert.equal(await browser.evaluate(`${thinkingHelp}.getAttribute('aria-expanded')`), "false", "Escape dismisses hover-only help");
+  assert.equal(await browser.evaluate(`document.activeElement === ${promptField}`), true, "Dismissing hover-only help does not steal task focus");
   await click(browser, thinkingHelp);
   await until(browser, "contextual thinking help opens by pointer", `${thinkingHelp}.getAttribute('aria-expanded') === 'true'`);
   await key(browser, "Escape", 27);
@@ -590,11 +606,17 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
     for (const route of routes) {
       selected = route; folderReady = false;
       await click(browser, workspaceButton("Setup"));
-      for (const option of routes) await control(browser, "unapproved folder options remain disabled", workspaceButton(option.label), true);
+      for (const option of routes) {
+        await control(browser, "unapproved folders offer only explicit scope review", workspaceButton(`Review: ${option.label}`), false);
+        assert.equal(await browser.evaluate(`${element(`${generator} section[aria-label="${option.label}"] button[data-action="atyrode.omp.prepareWorkspace"]`)} === null`), true,
+          "Unapproved folder scope cannot be executed");
+      }
       folderReady = true;
       await click(browser, workspaceButton("Setup"));
       await control(browser, "selected folder action resumes without discovery or session readiness", workspaceButton(route.label), false);
-      await control(browser, "unselected folder action still requires its own permission", workspaceButton(routes.find(option => option !== route)!.label), true);
+      const unselected = routes.find(option => option !== route)!;
+      await control(browser, "unselected folder scope still requires its own review", workspaceButton(`Review: ${unselected.label}`), false);
+      assert.equal(await browser.evaluate(`${element(`${generator} section[aria-label="${unselected.label}"] button[data-action="atyrode.omp.prepareWorkspace"]`)} === null`), true);
       assert.equal(await browser.evaluate(`${workspaceButton(route.label)}.dataset.action`), "atyrode.omp.prepareWorkspace",
         "OMP preparation controls name their declared door");
       await click(browser, workspaceButton(route.label));

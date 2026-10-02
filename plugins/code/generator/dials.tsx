@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import { SelectionSchema, type Lane, type Selection } from "../../domain/contracts.ts";
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
@@ -29,13 +29,39 @@ export function ContextHelp({ label, children }: { label: string; children: Reac
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const pinned = useRef(false);
+  const hovered = useRef(false);
   const dismissed = useRef(false);
+  const closing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const document = trigger.current!.ownerDocument;
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault(); event.stopPropagation();
+      pinned.current = false; dismissed.current = true; setOpen(false);
+      if (trigger.current?.parentElement?.contains(document.activeElement)) trigger.current.focus();
+    }
+    document.addEventListener("keydown", escape, true);
+    return () => { document.removeEventListener("keydown", escape, true); clearTimeout(closing.current); };
+  }, [open]);
   return <div className="plugin-atyrode_code_generator__dial-help"
-    onPointerEnter={event => { if (event.pointerType === "mouse" && !dismissed.current) setOpen(true); }}
-    onPointerLeave={event => { dismissed.current = false; if (!pinned.current && !event.currentTarget.contains(document.activeElement)) setOpen(false); }}
-    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { pinned.current = false; dismissed.current = false; setOpen(false); } }}
-    onKeyDown={event => { if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); pinned.current = false; dismissed.current = true; setOpen(false); trigger.current?.focus(); } }}>
+    onPointerEnter={event => {
+      clearTimeout(closing.current);
+      hovered.current = event.pointerType === "mouse";
+      if (hovered.current && !dismissed.current) setOpen(true);
+    }}
+    onPointerLeave={event => {
+      hovered.current = false; dismissed.current = false;
+      const container = event.currentTarget;
+      closing.current = setTimeout(() => { if (!pinned.current && !container.contains(container.ownerDocument.activeElement)) setOpen(false); }, 150);
+    }}
+    onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget)) {
+        pinned.current = false; dismissed.current = false;
+        if (!hovered.current) setOpen(false);
+      }
+    }}>
     <button ref={trigger} type="button" aria-label={`About ${label}`} aria-expanded={open} aria-controls={id}
       onFocus={event => { if (event.currentTarget.matches(":focus-visible") && !dismissed.current) setOpen(true); }}
       onClick={() => { pinned.current = !pinned.current; dismissed.current = !pinned.current; setOpen(pinned.current); }}><span aria-hidden="true">?</span></button>

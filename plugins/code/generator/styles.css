@@ -93,7 +93,7 @@
 .plugin-atyrode_code_generator__dial-help { position: relative; justify-self: end; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-help > button { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; min-height: 2rem; margin: 0; padding: 0; border: 1px solid color-mix(in srgb, var(--code-rule) 65%, transparent); border-radius: 50%; color: var(--code-dim); font-family: var(--code-mono); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-help > button[aria-expanded="true"] { color: var(--code-accent); border-color: var(--code-accent); }
-.plugin-atyrode_code_generator__help-content { position: absolute; inset-inline-end: 0; z-index: 4; width: min(25rem, calc(100cqi - 3rem)); max-height: min(26rem, 45svh); overflow: auto; margin-top: 0.2rem; padding: 0.85rem; border: 1px solid var(--code-rule); border-radius: 0.5rem; background: var(--code-bg); box-shadow: 0 0.4rem 1.2rem color-mix(in srgb, black 35%, transparent); font-size: 0.8125rem; }
+.plugin-atyrode_code_generator__help-content { position: absolute; inset-inline-end: 0; inset-block-start: 100%; z-index: 4; width: min(25rem, calc(100cqi - 3rem)); max-height: min(26rem, 45svh); overflow: auto; padding: 0.85rem; border: 1px solid var(--code-rule); border-radius: 0.5rem; background: var(--code-bg); box-shadow: 0 0.4rem 1.2rem color-mix(in srgb, black 35%, transparent); font-size: 0.8125rem; }
 .plugin-atyrode_code_generator__help-content[hidden] { display: none; }
 .plugin-atyrode_code_generator__help-content dl { display: grid; gap: 0.65rem; }
 .plugin-atyrode_code_generator__dial-help dt { color: var(--code-accent); font-weight: 600; }
