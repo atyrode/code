@@ -5,12 +5,13 @@ import { CatalogDocumentSchema, CatalogModelSchema, type CatalogDocument, type C
 import { OMP_PLUGIN_ID, INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import { compileCatalog } from "../../domain/catalog.ts";
 import type { CatalogReview, Configuration, Target } from "../contract.ts";
-import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useOmpJob, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
+import { codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useOmpJob, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { Routing } from "./dials.tsx";
 import { PermissionReview } from "../permission-review.tsx";
 import { operationReady } from "../permission-plan.ts";
 
-type Editor = { document: CatalogDocument; revision: number; activeDigest: string | null; draftDigest: string | null };
+type CatalogBase = { containerId: string; revision: number; initialized: boolean; activeDigest: string | null; draftDigest: string | null };
+type Editor = CatalogBase & { document: CatalogDocument };
 const identityFields = [
   { field: "key", label: "Catalog key · routing label" },
   { field: "provider", label: "Provider identifier" },
@@ -92,17 +93,31 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
   const [message, setMessage] = useState<{ summary: string; details: string } | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
+  const scope = useRef({ client: host.client, authoring: host.authoring, principalId: host.principal.id, containerId: host.containerId, generation: 0 });
+  if (scope.current.client !== host.client || scope.current.authoring !== host.authoring ||
+    scope.current.principalId !== host.principal.id || scope.current.containerId !== host.containerId) {
+    scope.current = { client: host.client, authoring: host.authoring, principalId: host.principal.id, containerId: host.containerId, generation: scope.current.generation + 1 };
+  }
+  const scopeGeneration = scope.current.generation;
+  const destinationKey = JSON.stringify([target, available]);
+  const destination = useRef({ key: destinationKey, generation: 0 });
+  if (destination.current.key !== destinationKey) destination.current = { key: destinationKey, generation: destination.current.generation + 1 };
+  const destinationGeneration = destination.current.generation;
+  function workspaceCurrent() { return mounted.current && scope.current.generation === scopeGeneration && canWriteCodeWorkspace(host); }
+  function destinationCurrent() { return workspaceCurrent() && destination.current.generation === destinationGeneration && target !== null; }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!record) return;
-    // Unrelated shared choices advance CAS without changing the catalog draft.
-    // Rebase only when both source catalogs are unchanged.
-    setEditor(previous => previous && previous.revision !== record.revision &&
-      previous.activeDigest === (record.active?.digest ?? null) && previous.draftDigest === (record.draft?.digest ?? null)
-      ? { ...previous, revision: record.revision } : previous);
+    // Account/selection changes can advance CAS only for an already initialized
+    // base with both source catalogs unchanged. Absence is never rebased.
+    setEditor(previous => previous?.initialized && previous.containerId === record.containerId &&
+      previous.revision < record.revision && previous.activeDigest === (record.active?.digest ?? null) &&
+      previous.draftDigest === (record.draft?.digest ?? null) ? { ...previous, revision: record.revision } : previous);
   }, [record]);
-  const writable = canWriteCodeWorkspace(host) && record !== null;
-  const stale = editor !== null && editor.revision !== record?.revision;
+  const writable = canWriteCodeWorkspace(host) && configuration.data !== null && configuration.error === null;
+  const base: CatalogBase | null = configuration.data ? { containerId: host.containerId!, revision: configuration.data.revision,
+    initialized: record !== null, activeDigest: record?.active?.digest ?? null, draftDigest: record?.draft?.digest ?? null } : null;
+  const stale = editor !== null && base !== null && (editor.containerId !== base.containerId || editor.revision !== base.revision || editor.initialized !== base.initialized);
   const parsed = editor ? CatalogDocumentSchema.safeParse(editor.document) : null;
   const currentReview = record && review && review.revision === record.revision && record[review.source]?.digest === review.catalogDigest;
   const compiledReview = useMemo(() => reviewDocument ? compileCatalog(reviewDocument) : null, [reviewDocument]);
@@ -110,13 +125,14 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
   const benchmarkReady = operationReady(setup.data, BENCHMARK_OPERATION_ID);
   const inventoryRunning = inventoryId !== null && (!inventoryJob.job || ["queued", "admitted", "start-committed", "started"].includes(inventoryJob.job.state));
   const benchmarkRunning = benchmarkId !== null && (!benchmarkJob.job || ["queued", "admitted", "start-committed", "started"].includes(benchmarkJob.job.state));
-  const catalogStatus = configuration.error ? "Catalog unavailable. Retry loading your workspace."
-    : !record ? configuration.data ? "Initialize this workspace in Setup before changing models." : "Loading your catalog…"
-    : !writable ? "Models are read-only. Ask a workspace editor to change the catalog."
-    : !target ? "Choose a destination for discovery, or edit or import a catalog."
-    : !available ? "Model discovery is unavailable. Edit or import a catalog instead."
-    : setup.error ? "Discovery readiness is unavailable. Retry or edit or import a catalog."
-    : !inventoryReady ? "Discovery needs setup. Review discovery permissions, or edit or import a catalog."
+  const catalogStatus = configuration.error ? "Catalog unavailable. Retry loading."
+    : !configuration.data ? "Loading catalog…"
+    : !writable ? "Models are read-only."
+    : !record?.active && !editor && !review ? "No active catalog. Add, import or discover models."
+    : !target ? "Discovery needs a destination. Editing and import are available."
+    : !available ? "Discovery unavailable. Editing and import are available."
+    : setup.error ? "Discovery status unavailable. Retry or edit models."
+    : !inventoryReady ? "Discovery needs permission. Editing and import are available."
     : null;
   function refresh() { configuration.refresh(); setup.refresh(); inventoryJob.refresh(); benchmarkJob.refresh(); inventory.refresh(); benchmark.refresh(); }
   async function perform(work: () => Promise<void>) {
@@ -134,27 +150,56 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
     }
     finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
   }
-  function edit(document: CatalogDocument) { if (record) { setEditor({ document: structuredClone(document), revision: record.revision,
-    activeDigest: record.active?.digest ?? null, draftDigest: record.draft?.digest ?? null }); setModelIndex(0); setReview(null); } }
-  async function reviewStaged(staged: Configuration, source: "draft" | "active" = "draft") {
-    if (!mounted.current) return;
-    const result = await callCodeAction(host, "reviewCatalog", { containerId: host.containerId!, expectedRevision: staged.revision, source });
-    if (mounted.current) { setReview(result); setReviewDocument(staged[source]!.document); }
+  function edit(document: CatalogDocument) {
+    if (!writable || !base) return;
+    setEditor({ ...base, document: structuredClone(document) });
+    setModelIndex(0); setReview(null); setMessage(null);
   }
-  async function stage(document: CatalogDocument, expectedRevision: number) {
-    const staged = await callCodeAction(host, "stageCatalog", { containerId: host.containerId!, expectedRevision, document });
-    if (mounted.current) setEditor(null);
-    await reviewStaged(staged);
+  function keepDraftRevision(previousBase: CatalogBase, saved: Configuration) {
+    if (!workspaceCurrent()) return;
+    // An explicit successful CAS supplies the exact next base, even if review fails.
+    setEditor(previous => previous && previous.containerId === previousBase.containerId &&
+      previous.revision === previousBase.revision && previous.initialized === previousBase.initialized
+      ? { ...previous, revision: saved.revision, initialized: true, activeDigest: saved.active?.digest ?? null, draftDigest: saved.draft?.digest ?? null } : previous);
+  }
+  async function initialize(draftBase: CatalogBase, workflow = codeWorkflow(host, workspaceCurrent)) {
+    if (draftBase.initialized) return draftBase;
+    const initialized = await workflow.code("initializeConfiguration", { containerId: draftBase.containerId, expectedRevision: draftBase.revision });
+    keepDraftRevision(draftBase, initialized);
+    return { ...draftBase, revision: initialized.revision, initialized: true,
+      activeDigest: initialized.active?.digest ?? null, draftDigest: initialized.draft?.digest ?? null };
+  }
+  async function reviewStaged(staged: Configuration, source: "draft" | "active" = "draft",
+    workflow = codeWorkflow(host, workspaceCurrent), valid = workspaceCurrent) {
+    if (!valid()) return false;
+    const result = await workflow.code("reviewCatalog", { containerId: staged.containerId, expectedRevision: staged.revision, source });
+    if (!valid()) return false;
+    setReview(result); setReviewDocument(staged[source]!.document);
+    return true;
+  }
+  async function stage(document: CatalogDocument, draftBase: CatalogBase, valid = workspaceCurrent) {
+    compileCatalog(document);
+    const workflow = codeWorkflow(host, valid);
+    const initialized = await initialize(draftBase, workflow);
+    const staged = await workflow.code("stageCatalog", { containerId: initialized.containerId, expectedRevision: initialized.revision, document });
+    keepDraftRevision(initialized, staged);
+    if (await reviewStaged(staged, "draft", workflow, valid)) setEditor(null);
+  }
+  async function discover() {
+    if (!target || !base || !available || !inventoryReady || !destinationCurrent()) return;
+    const workflow = codeWorkflow(host, destinationCurrent);
+    const initialized = await initialize(base, workflow);
+    const job = await workflow.startInventory(target, initialized.revision);
+    if (destinationCurrent()) setInventoryId(job.jobId);
   }
   const model = editor?.document.models[modelIndex];
   return <section className="plugin-atyrode_code_generator__catalog" aria-label="Model catalog">
-    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">Models</h2><span className="plugin-atyrode_code__muted">{record?.active ? record.active.document.models.length + " models" : "choose your models"}</span><button type="button" disabled={busy} onClick={onDone}>back</button></header>
+    <header className="plugin-atyrode_code__section-heading"><h2 className="plugin-atyrode_code__section-label">Models</h2><span className="plugin-atyrode_code__muted">{record?.active ? record.active.document.models.length + " models" : "No active catalog"}</span><button type="button" disabled={busy} onClick={onDone}>back</button></header>
     {!review && !editor && <div className="plugin-atyrode_code__toolbar">
-      <button type="button" className={!record?.active && available && inventoryReady ? "plugin-atyrode_code__primary-action" : undefined} data-action="atyrode.omp.startInventory" disabled={!writable || busy || !available || !inventoryReady || inventoryRunning} onClick={() => { if (record && target) void perform(async () => { const job = await codeWorkflow(host).startInventory(target, record.revision); if (mounted.current) setInventoryId(job.jobId); }); }}>{inventoryRunning ? "Discovering models…" : record?.active ? "Refresh model inventory" : "Discover models"}</button>
+      <button type="button" className={!record?.active && available && inventoryReady ? "plugin-atyrode_code__primary-action" : undefined} data-action="atyrode.omp.startInventory" disabled={!writable || busy || !target || !available || !inventoryReady || inventoryRunning} onClick={() => void perform(discover)}>{inventoryRunning ? "Discovering models…" : record?.active ? "Refresh model inventory" : "Discover models"}</button>
       <button type="button" className={!available || !inventoryReady ? "plugin-atyrode_code__primary-action" : undefined} disabled={!writable || busy} onClick={() => edit(record?.draft?.document ?? record?.active?.document ?? { schemaVersion: 1, models: [] })}>Edit or import models</button>
-      {record?.draft && <button type="button" data-action="atyrode.code.reviewCatalog" disabled={!writable || busy} onClick={() => void perform(() => reviewStaged(record))}>Review saved changes</button>}
+      {record?.draft && <button type="button" data-action="atyrode.code.reviewCatalog" disabled={!writable || busy} onClick={() => void perform(async () => { await reviewStaged(record); })}>Review saved changes</button>}
     </div>}
-    {!review && !editor && <p className="plugin-atyrode_code__muted">Discovery reads account inventory without running a benchmark.</p>}
     {catalogStatus && <div className="plugin-atyrode_code__notice">
       <p role="status">{catalogStatus}</p>
       {(configuration.error || setup.error) && <button type="button" disabled={busy} onClick={refresh}>Retry status</button>}
@@ -172,34 +217,37 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
           {inventory.error && <pre>{inventory.error}</pre>}
         </details>
       </>}
-      {inventory.data && !editor && !review && <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.stageCatalog" disabled={!writable || busy} onClick={() => { if (record && inventory.data) void perform(() => stage(inventory.data!.draft.document, record.revision)); }}>Stage and review models</button>}
+      {inventory.data && !editor && !review && <button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.stageCatalog" disabled={!writable || busy} onClick={() => { if (base && inventory.data) void perform(() => stage(inventory.data!.draft.document, base, destinationCurrent)); }}>Stage and review models</button>}
       <button type="button" onClick={() => host.navigate("manifold://plugin/" + OMP_PLUGIN_ID)}>job history</button>
     </div>}
     {editor && <div className="plugin-atyrode_code_generator__model-editor">
       <div className="plugin-atyrode_code__toolbar"><label>model <select value={modelIndex} disabled={busy || editor.document.models.length === 0} onChange={event => setModelIndex(Number(event.target.value))}>{editor.document.models.map((row, index) => <option key={index} value={index}>{row.key || "new model"}</option>)}</select></label>
-        <button type="button" disabled={busy || editor.document.models.length >= 1024} onClick={() => { setModelIndex(editor.document.models.length); setEditor({ ...editor, document: { ...editor.document, models: [...editor.document.models, { key: "", provider: "", id: "", api: "", tier: 1, quotaBucket: null, inputCostPerMillion: 0, outputCostPerMillion: 0, tokensPerSecond: null, timeToFirstTokenMs: null, contextWindow: null, thinkingLevels: ["medium"], images: false }] } }); }}>+ model</button>
+        <button type="button" disabled={!writable || busy || editor.document.models.length >= 1024} onClick={() => { setModelIndex(editor.document.models.length); setEditor({ ...editor, document: { ...editor.document, models: [...editor.document.models, { key: "", provider: "", id: "", api: "", tier: 1, quotaBucket: null, inputCostPerMillion: 0, outputCostPerMillion: 0, tokensPerSecond: null, timeToFirstTokenMs: null, contextWindow: null, thinkingLevels: ["medium"], images: false }] } }); }}>+ model</button>
       </div>
-      {model && <ModelEditor model={model} index={modelIndex} disabled={busy} update={value => setEditor({ ...editor, document: { ...editor.document, models: editor.document.models.map((row, index) => index === modelIndex ? value : row) } })} remove={() => { setEditor({ ...editor, document: { ...editor.document, models: editor.document.models.filter((_, index) => index !== modelIndex) } }); setModelIndex(Math.max(0, modelIndex - 1)); }} />}
+      {editor.document.models.length === 0 && <p role="status" className="plugin-atyrode_code__muted">Add a model or import a catalog.</p>}
+      {model && <ModelEditor model={model} index={modelIndex} disabled={!writable || busy} update={value => setEditor({ ...editor, document: { ...editor.document, models: editor.document.models.map((row, index) => index === modelIndex ? value : row) } })} remove={() => { setEditor({ ...editor, document: { ...editor.document, models: editor.document.models.filter((_, index) => index !== modelIndex) } }); setModelIndex(Math.max(0, modelIndex - 1)); }} />}
       <details className="plugin-atyrode_code__details"><summary>JSON import / export</summary>
         <label>current catalog<textarea readOnly rows={6} value={JSON.stringify(editor.document, null, 2)} /></label>
-        <label>import catalog<textarea rows={5} value={jsonImport} maxLength={1000000} onChange={event => setJsonImport(event.target.value)} /></label>
-        <button type="button" disabled={busy || !jsonImport.trim()} onClick={() => { try { const document = CatalogDocumentSchema.parse(JSON.parse(jsonImport)); setEditor({ ...editor, document }); setModelIndex(0); setJsonImport(""); setMessage(null); } catch (reason) { setMessage({ summary: "Import rejected. Provide a valid Code catalog document.", details: reason instanceof Error ? reason.message : String(reason) }); } }}>Import into draft</button>
+        <label>import catalog<textarea disabled={!writable || busy} rows={5} value={jsonImport} maxLength={1000000} onChange={event => setJsonImport(event.target.value)} /></label>
+        <button type="button" disabled={!writable || busy || !jsonImport.trim()} onClick={() => { try { const document = CatalogDocumentSchema.parse(JSON.parse(jsonImport)); setEditor({ ...editor, document }); setModelIndex(0); setJsonImport(""); setMessage(null); } catch (reason) { setMessage({ summary: "Import rejected. Provide a valid Code catalog document.", details: reason instanceof Error ? reason.message : String(reason) }); } }}>Import into draft</button>
       </details>
-      {parsed && !parsed.success && <>
-        <p role="alert">Catalog fields need attention before review. See validation details.</p>
+      {parsed && !parsed.success && editor.document.models.length > 0 && <>
+        <p role="alert">Check catalog fields before review.</p>
         <details className="plugin-atyrode_code__details"><summary>Validation details</summary><pre>{JSON.stringify(parsed.error.issues, null, 2)}</pre></details>
       </>}
-      {stale && <p role="alert">The shared catalog changed. Your draft is kept, but cannot overwrite it. Export the draft before discarding.</p>}
-      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || stale || !parsed?.success} onClick={() => { if (parsed?.success) void perform(() => stage(parsed.data, editor.revision)); }}>Stage and review changes</button><button type="button" disabled={busy} onClick={() => setEditor(null)}>discard</button></div>
+      {stale && <p role="alert">Shared choices changed. Your draft is kept; export it before discarding.</p>}
+      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || stale || !parsed?.success} onClick={() => { if (parsed?.success && !stale) void perform(() => stage(parsed.data, editor)); }}>Stage and review changes</button><button type="button" disabled={busy} onClick={() => setEditor(null)}>discard</button></div>
     </div>}
     {review && compiledReview && <section className="plugin-atyrode_code_generator__catalog-review" aria-label="Catalog review">
       <p>{compiledReview.models.length} models · {compiledReview.families.join(" + ")}</p>
       <Routing value={review.review} catalog={compiledReview} />
       {!currentReview && <p role="status">The shared setup changed. Review the current catalog again before using it.</p>}
-      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.promoteCatalog" disabled={!writable || busy || !currentReview} onClick={() => void perform(async () => { await callCodeAction(host, "promoteCatalog", { containerId: host.containerId!, expectedRevision: review.revision, source: review.source, reviewDigest: review.reviewDigest }); if (mounted.current) onDone(); })}>Use this catalog</button><button type="button" disabled={busy} onClick={() => { if (reviewDocument) edit(reviewDocument); }}>edit models</button><button type="button" disabled={busy} onClick={() => setReview(null)}>back</button></div>
+      <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="atyrode.code.promoteCatalog" disabled={!writable || busy || !currentReview} onClick={() => void perform(async () => { await codeWorkflow(host, workspaceCurrent).code("promoteCatalog", { containerId: host.containerId!, expectedRevision: review.revision, source: review.source, reviewDigest: review.reviewDigest }); if (workspaceCurrent()) onDone(); })}>Use this catalog</button><button type="button" disabled={!writable || busy} onClick={() => { if (reviewDocument) edit(reviewDocument); }}>edit models</button><button type="button" disabled={busy} onClick={() => setReview(null)}>back</button></div>
       <details className="plugin-atyrode_code__details"><summary>Exact review</summary><pre>{JSON.stringify({ revision: review.revision, digest: review.reviewDigest, catalogDigest: review.catalogDigest }, null, 2)}</pre></details>
     </section>}
-    <details className="plugin-atyrode_code__details"><summary>Discovery setup and permissions</summary>
+    <details className="plugin-atyrode_code__details"><summary>Catalog help and discovery permissions</summary>
+      <p>Editing and import need no runtime setup. Stage and review changes saves container policy; Use this catalog promotes the exact reviewed revision. Neither action grants native authority.</p>
+      <p>Discovery reads account inventory without running a benchmark. Its explicit action initializes absent container choices before starting discovery. Runtime and provider setup remain separate, reviewed actions.</p>
       <PermissionReview host={host} target={target} intent="discovery" label="Review discovery permissions" onReady={refresh} />
     </details>
     {benchmarkId && <div className="plugin-atyrode_code_generator__job-progress" role="status">
@@ -215,11 +263,11 @@ export function CatalogWorkbench({ host, target, available, onDone }: { host: Ho
     </div>}
     <details className="plugin-atyrode_code__details"><summary>Measure model performance</summary>
       <p>Benchmark requests contact the selected providers and may incur charges. Measurements are reviewed before they replace a catalog.</p>
-      <button type="button" data-action="atyrode.omp.startBenchmark" disabled={!writable || busy || !available || !benchmarkReady || !inventory.data || !inventoryId || benchmarkRunning} onClick={() => { if (record && target && inventoryId) void perform(async () => { const job = await codeWorkflow(host).startBenchmark(target, inventoryId, budget); if (mounted.current) setBenchmarkId(job.jobId); }); }}>{benchmarkRunning ? "Measuring…" : "Run benchmark"}</button>
+      <button type="button" data-action="atyrode.omp.startBenchmark" disabled={!writable || !record || busy || !available || !benchmarkReady || !inventory.data || !inventoryId || benchmarkRunning} onClick={() => { if (record && target && inventoryId) void perform(async () => { const job = await codeWorkflow(host, destinationCurrent).startBenchmark(target, inventoryId, budget); if (destinationCurrent()) setBenchmarkId(job.jobId); }); }}>{benchmarkRunning ? "Measuring…" : "Run benchmark"}</button>
       {!inventory.data && <p>Discover models first.</p>}
       {!benchmarkReady && <p>Benchmark permission is not ready. Review its exact scope before running paid requests.</p>}
       <PermissionReview host={host} target={target} intent="benchmark" label="Review benchmark permissions" onReady={refresh} />
-      {benchmark.data && <button type="button" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || editor !== null} onClick={() => { if (record && target && inventoryId && benchmarkId) void perform(async () => { const staged = await codeWorkflow(host).stageBenchmark({ ...target, inventoryJobId: inventoryId, jobId: benchmarkId }, record.revision, budget); await reviewStaged(staged); }); }}>Stage and review measurements</button>}
+      {benchmark.data && <button type="button" data-action="atyrode.code.stageCatalog" disabled={!writable || busy || editor !== null} onClick={() => { if (base && target && inventoryId && benchmarkId) void perform(async () => { const workflow = codeWorkflow(host, destinationCurrent); const initialized = await initialize(base, workflow); const staged = await workflow.stageBenchmark({ ...target, inventoryJobId: inventoryId, jobId: benchmarkId }, initialized.revision, budget); await reviewStaged(staged, "draft", workflow, destinationCurrent); }); }}>Stage and review measurements</button>}
     </details>
     <details className="plugin-atyrode_code__details"><summary>Recover a previous catalog job</summary>
       <label>inventory job<input value={historyInventory} maxLength={128} onChange={event => setHistoryInventory(event.target.value)} /></label>
