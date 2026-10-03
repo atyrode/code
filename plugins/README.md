@@ -17,7 +17,7 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
 | Directory | Plugin / surface |
 | --- | --- |
 | `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |
-| `atyrode.code/generator/` | `atyrode.code.generator`: workbench, catalog editor, dials, workspace/probe/session flows |
+| `atyrode.code/generator/` | `atyrode.code.generator`: the main view (statement, seat board and earlier statements), catalog editor, Accounts/Models/Setup sheets, workspace/probe/session flows |
 | `atyrode.code/accounts/` | `atyrode.code.accounts`: account-pool choices and OMP sign-in presentation |
 | `atyrode.code/usage/` | `atyrode.code.usage`: selected-capacity and OMP usage presentation |
 
@@ -74,7 +74,7 @@ A dependent plugin's server reaches those five doors through
 `ctx.actions.call`, under the principal of the request it is answering; Code
 reads the account observation and OMP's defaults itself, so a caller supplies
 only a profile, a destination and a prompt. The profile's `revision` is the
-handle: a composition the operator changed in the generator after a caller read
+handle: a composition the operator changed in the Code panel after a caller read
 it refuses rather than posting quietly.
 
 A profile also says which accounts it spends. Account choices are stored as
@@ -253,7 +253,9 @@ Code's one native service policy is the optional external `suggest` classifier.
 that service's exact revision while preserving unrelated native policies.
 `suggest` invokes the reviewed `classify` operation and returns a validated
 revision-bound selection; saving remains an explicit Code CAS. It does not
-configure the OMP gateway or account broker.
+configure the OMP gateway or account broker. The Code panel's main view has no
+Suggest control (its launch is task-less): the classifier is configured in Setup
+and invoked only through the headless `suggest` door.
 
 No actual deployed revision, credential or account-backed provider proof is
 supplied by this source guide. Operational acceptance must name the installed

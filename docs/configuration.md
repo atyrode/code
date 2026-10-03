@@ -45,8 +45,8 @@ All Code actions are `atyrode.code.<name>`:
 | Purpose               | Actions                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
-| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                            |
-| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`          |
+| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                             |
+| Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`           |
 | External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
 `initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `select` and
@@ -87,31 +87,309 @@ only Code's optional external `suggest` classifier. Review takes an explicit
 configuration requires its digest and preserves unrelated service policies.
 `suggest` also binds `expectedServiceRevision`, validates the classifier result
 and returns an unsaved selection plus changed fields. None of these actions
-configures the OMP gateway or broker.
+configures the OMP gateway or broker. The main view has no Suggest control and no
+task text to classify; the `suggest` door and Setup's classifier configuration
+remain for callers.
+
+## Bundled starter and model verification
+
+OMP's passive `readModelCatalog({ providers })` returns a versioned bundled SDK
+snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier`.
+It reads no credentials, provider endpoint, machine inventory or runtime resource.
+Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
+and `openai-codex` providers. Ordinary eligible models retain their declared costs,
+context, image support and thinking levels; special, Spark and unknown quota
+classes are excluded. Unmeasured performance stays null. Derivation admits at
+most 256 budget-eligible candidates before constructing ladders; it never truncates.
+
+Only a successful canonical configuration read establishes an absent revision 0
+or an initialized-empty positive revision. Loading and failure are not absence.
+The local starter freezes the full metadata snapshot, catalog, selection, base
+revision and account-independent configuration digests. Existing active policy
+wins, including historical catalogs without recorded registry provenance. A saved
+staged catalog is an explicit preview, not an active profile or a bundled fallback.
+An unresolved catalog keeps Models repair reachable; the main view then says the
+model list is unavailable, with Retry and Models, whatever else its status lines say.
+
+The starter is render-only. Nothing writes it as the workspace's catalog except a
+model verification, `workflow.verifyModels(target, { expectedRevision, budget })`:
+the one way a Code catalog comes to name models, because only a probe shows which
+this operator can call. Preparing reads the workspace at `expectedRevision`
+(initializing an absent one), runs OMP's inventory with the pool Code composes from
+the saved account choices, and returns the charge, the number of tiny benchmark
+requests per provider, having probed and spent nothing. Only the returned `confirm`
+spends: one benchmark job per provider, then derive, stage, review, promote and save
+the selection narrowed to what the verified catalog hosts. Every step re-observes the
+revision, the exact account pool and OMP defaults, and stops, naming itself, when one
+moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in OMP's
+history and a staged catalog stays staged. A confirmation is used once, and a failed
+or uncertain one is never replayed. The promoted catalog records its verification
+provenance (OMP version, inventory and benchmark times, the account providers and a
+digest of the exact account pool). A catalog stops being verified when OMP serves
+another model list or the saved choices select another pool.
+
+A stale or failed save is never retried or rebased. The local draft remains
+exportable until explicitly discarded. It also survives a reload: the main view keeps
+an unsaved team in the tab's session storage per principal and workspace, with what
+it was made from (base revision and team, the catalog digests, whether choices
+existed, and for a first-use draft the bundled model list), never the catalog itself.
+After a reload the draft returns only onto that same catalog or list; otherwise it is
+dropped without a word. A returned draft is judged like any other: a write that left
+its team and catalogs alone moves its base forward, and a foreign team or catalog
+write is a conflict. A draft that only repeats the team the view shows without it is
+not kept. Skills and automation (the session options) are independent ephemeral
+launch choices, never part of the saved profile. The main view has no task: it opens
+an interactive session and the task is typed there, so its launch review carries an
+empty prompt. Headless callers still pass a prompt.
 
 ## Workbench presentation
 
-Profile keeps the selected model, provider/capability/thinking/advisor controls,
-task prompt and explicit review/launch path visible. The `?` controls explain
-choices without changing them; Escape dismisses help and restores its trigger.
-Session behavior reveals budget, priority, Spark, prewalk, plans and fallbacks.
-Its summary retains selected non-default policy, including plan auto-approval.
-Priority's higher-cost warning remains visible when selected.
+The main view reads top to bottom: the **statement**, the **seat board**, the
+**earlier statements** and a footer. Accounts, Models and Setup open as sheets over
+it, from the footer or from a status fix; Esc or **Back to Code** returns, restoring
+focus to what opened the sheet (its footer link when that has gone) and the scroll
+position. Visited sheets stay mounted, so profile, catalog, account
+and session-option drafts survive moving between them and the empty-to-active
+transition. Opening a sheet grants no permission and starts no inventory, benchmark
+or session. Blocked, offline, read-only, stale/conflict and failed-observation
+status stays visible, with full error detail reachable deliberately.
 
-Session options reveal automation and optional skills. Their closed summary
-retains restricted tool counts, skill selections or explicit disable-all.
-Restrictions are not an OS or network sandbox. Routing, usage, saved-session
-inventory and exact configuration/runtime observations open separately; opening
-a disclosure grants no permission and starts no inventory, benchmark or session.
-Blocked, offline, read-only, stale/conflict and failed-observation status remains
-visible, with full error detail reachable deliberately.
+### The statement
 
-Setup shows its current task and contextual next action. Models leads with
-catalog authoring/discovery; the editor reveals pricing, performance, limits and
-thinking metadata independently. Charge-bearing measurement keeps its warning
-beside the action. Visited views and disclosed controls remain mounted, preserving
-profile, task, catalog, account and per-session drafts. Destination changes still
-invalidate native reviews and clear destination-specific session choices.
+The statement is a verb and six words: lane, tier, thinking, advisor, extras and
+machine. Thinking, advisor and machine read after a connector ("thinking high", "on
+Studio"). The machine is the destination, not part of the team. Advisor adds its real
+role only when selected. Each word changes in place. In the wide forms the first row's
+lane, tier and thinking show their neighbouring values as smaller ghosts, and pressing
+one chooses it. Pressing a word, or Enter or Space on it, opens its options below the
+line, inside the panel and never over the verb; up is more. Extras is a list of
+switches, kept open while they are turned. The width form is chosen by measuring the
+words in the panel's own font: the whole statement on one line, two rows, the verb on
+its own row above pairs of words, or one word per row. A form changes back only once a
+wider one fits with room to spare, so a scrollbar appearing does not flip it.
+
+Pointing at or focusing an option or a status fix writes in the two
+status lines below the words what choosing it would do (which roles rise, fall, change
+provider, appear or go, and how the estimates shift), and the seat board draws the same
+team as moves without choosing it. An option that cannot be chosen is shown unavailable
+with its reason.
+
+**Quota at the point of choice.** An option carries a hatched redline mark, and its
+status line says it, only where choosing it is the cause: it would leave without a
+route a role that has one now (its lead's pool is blocked, maxed or has no included
+account, and no fallback serves it), or it would lead on a blocked, maxed, tight or
+unserved pool that the current team does not already lead on. A pool the team already
+strains marks no option, since nearly every option keeps it and that says nothing about
+any one. An option that gives roles a route again says so. Choosing a stranding option
+is not refused; the status line and the live
+region name the roles that would have no route. Quota comes from the same pools and
+role outcomes the seat board draws. The status lines are written in this precedence:
+a verification running or its charge, a step in flight, the pointed option, team or
+fix, the verb's refusal and its fix, a review that differs from what was shown, a
+failure, the last outcome, a verification still to do, roles with no route and the one
+change of a word that routes them, and at rest where the team's roles lead ("7 on Codex · 6 on
+Claude"), whether any reading is not current, the press's scope, pools that are out or
+tight and the reviewed pool. From the verb's refusal on, a model list that cannot be read
+holds the second line with its Retry and Models, beside the seats the line still holds or
+as the reason there is no team; a fix the second line offered moves up beside the first.
+
+**The verb.** One control whose `data-state` is `ready`, `busy`, `waiting` (a charge
+waits on its own Confirm) or `refused`. It is `aria-disabled` rather than disabled and
+stays focusable, so a step changing its state never drops focus, and a status fix that
+leaves the lines once pressed hands focus to the verb; pressing a refused one
+announces the reason, and the status lines give the reason with a one-press fix where
+there is one (use another online machine, show the accounts, review a staged catalog in
+Models, retry a read, enable discovery or sessions in Setup, use the saved workspace
+team). A read-only workspace (no `containers:write`) is stated in neutral grey:
+"Read-only workspace · changes stay a local preview". Write access is the caps alone:
+without a canvas beside the panel, verifying, saving and account edits still work, and
+only launch and resume refuse, in neutral grey, "Open Code beside the workspace canvas to
+launch". The label names the next step: **Verify models**, **Review**, **Save**
+(no canvas to launch from), **Save & review**, **Save & launch**, **Launch**, **Launch
+anyway** (a role's pools are out; never for a lead no included account serves, which
+save, review and launch all refuse) or **Review in Models** (a staged-only workspace;
+the press opens Models), with **Checking…**, **Verifying…**, **Saving…**,
+**Reviewing…**, **Launching…** and **Resuming…** while one runs. Verify is refused up
+front when the account observation cannot be read or includes no account. An edited
+team saves first, and while it does the status lines say what the save changes
+("2 changes: thinking high → max, advisor glance → off") beside revert, also beside the
+fix for roles with no route. **Save &
+launch** is offered when the projection rests on present readings (every lead's pool
+judged fresh and the served providers known), and the press then continues from the
+review to the launch only if the review shows the projected leads and the same
+providers in the account pool; otherwise it stops and says what differs (roles' seats,
+providers that joined or left the pool) as a choice: launch with the reviewed pool or
+change a word first. **Save & review** stops at the review so the pool is seen first.
+
+**Verification and its charge.** **Verify models** runs OMP's inventory ("Checking
+which models your accounts can reach"), then states the charge: "Verifying spends N tiny
+requests", per provider, "nothing is spent until you confirm", with **Confirm charge**
+and cancel. A charge of nothing says "Nothing to verify through these accounts" and
+cannot be confirmed. Confirm is the next Tab stop after the verb, is never focused for
+the person, and spends only the very charge it showed: never one of zero requests,
+never before the Verify press has stayed in its checking state for 700 ms, and only on
+a deliberate single press, never the second click of a double-click or a held key.
+Progress reads "N of M requests". A verification that stopped or was cancelled says so
+until the next one starts; Verify models again is its retry.
+
+Once the saved, verified team meets every launch precondition and its review inputs
+(options, accounts, revisions, destination) have held still briefly, the workbench
+requests the launch review itself, so Launch is one press. It never does so for an
+unsaved edit, a starter or a staged catalog, and at most once per review scope: a
+refused review or launch waits for an explicit Review or a changed input.
+
+One gate decides every action: the verb, saving, verifying, confirming the charge,
+resuming with or without the team, opening a running session, and every edit of the
+team (including a recalled team), the machine or the account pool. Nothing starts while
+a step runs, and only Confirm while a charge waits; edits wait too, shown unavailable
+in place (a word stays reachable by arrow keys but leaves the Tab order). A chain asks
+the gate again before each later step (save, then review once the save is observed;
+prepare, then open the terminal), so a team, machine, pool or authority change
+mid-flight stops it with the reason. Review and launch refuse only a lead no included
+account serves, as the session door does; fallbacks it would drop are noted, never a
+refusal. Outcome and refusal lines clear whenever the team, machine or account pool
+changes.
+
+**Keys** act only from inside the panel's main view, and keys Code consumes do not reach
+workspace-wide bindings; none act behind a sheet, in a dialog or popover, or once another
+control handled the key. The panel takes focus when it opens: from there an arrow moves
+focus to the lane and `↵` takes the verb's step. `Mod+↵` takes the verb's step from
+anywhere in the main view, typing included, but never on key repeat. A keyboard change
+writes its consequence, or the reason it was refused, in the status lines until the next
+input. Outside text fields and dialogs: `←` and `→` move between the verb and
+the words in reading order; on a word `↑` and `↓` change it (up is more), `Home` and
+`End` jump to its ends, `↵` or `Space` open and close its options, `Backspace` returns
+it to the last launch (the machine is not recorded) and `Esc` closes the options
+without undoing anything. On extras `↑` and `↓` move through the open switches and
+`Space` turns the one under the cursor. `1`–`9` recall the recent team with that
+number, `r` reads accounts, usage, machines and the workspace team again, and `?` shows
+the keys. On a pool head `↵` opens and closes its accounts, `Space` includes or excludes
+the focused account and `Esc` closes them. The mouse wheel turns a word only when it is
+open, or when the keyboard focused it and the pointer has rested on it for 300 ms
+(focus from a click never counts, so the wheel over a just-clicked word scrolls), and
+only while the whole panel has been still for 300 ms, with no scrolling and no wheel
+left to scroll anywhere in it; otherwise it scrolls. One polite live region announces
+outcomes, failures, the charge, recalls and the reason a pressed refused control gave.
+
+### The seat board
+
+Under the statement, provider columns headed by their quota pools, with tier rows of
+model seats and each role on the seat that leads it. From 560 px of panel width the
+board is columns by tier rows; below it is a roster grouped by provider, and the first
+status line says a pointed team as moves of named seats ("default, task sol → astra").
+Both draw one model. Quota comes only from the pools and role outcomes, seats only from
+the seat model, and both are recomputed when the catalog, the team or the reading changes.
+
+A **pool head** is a line (provider, `×included` or `×included of total` accounts and
+the verdict, which takes a second line wherever one cannot hold it, breaking only
+between facts), a track per reported quota window and a note. A track has a cell per
+included account, in one order for every window (present readings from the least to
+the most used, then history, then unread accounts, an account without that window held
+by an empty outline), and the pool's level: the mean used share of the present
+readings, `–` when none is present; each account's reading is in the track's title.
+History is drawn as an outline of the width it had, never as a level. The note says
+readings too old to judge first, then a pace forecast ("5h full ≈ 14:20", "7d full ≈
+Mon 20:00") and the reset: the forecast is the first moment every included account would be
+full at once at its pace, a projection from one reading, said only when every account
+is read fresh, each one with room is on pace to fill before its window resets, and none
+has reopened by then; never a moment already past. Beside a forecast the reset is when
+the first full account frees again; without one, the soonest reset of a window near its
+limit. Times beyond today carry their
+weekday, from six days on their date. The verdict reads room, "N of M with room", tight,
+"blocked" or "maxed" until the reset time or "reset unknown", "none included" or "no
+account". Historical readings are said in neutral grey as "<age> old · availability
+unknown", never as room. Accounts not yet read, or unavailable, are said once for the
+board ("accounts not read yet · capacity unknown, not zero"). A pool without windows
+shows its balance, or that no quota is reported. A provider with no seated role, and
+none under a pointed team, has its tracks and verdict in grey, its numbers kept.
+
+A **seat** shows the model, its roles grouped by thinking level and what each meets:
+"→ model until 14:20" when its lead's pool is out and the first fallback takes over
+(unless its pool is out too), "no route until 14:20" (or "reset unknown"), "no
+<provider> account" when no included account serves its lead, its fallback chain ("then
+A › B"), and fallbacks the session would drop because no included account serves their
+provider. A model whose quota is metered apart says its own state on a line of its own,
+in both forms, "own quota · unknown" when nothing current is read. A capability rung a
+provider has no model for says so ("no elite GPT model"). A provider with no seated role
+takes only the width its head needs, its seats one idle line in the head's note row. A
+pointed team marks the roles it would move or drop, and names its arrivals on the seat
+that receives them ("fable + reviewer, security-reviewer"); after a commit by keyboard
+the moved roles keep a brief afterglow, none under reduced motion. Providers with
+balances that this catalog does not use are listed as "not in this catalog".
+
+Pressing a pool head opens its accounts in place: the workspace pool (Manual and each
+preset), then each account with an in/out switch ("Include <who> in the workspace
+pool", a shared edit every member's next launch draws on) and its readings. Switches
+edit the saved choices through `changeAccounts` at the observed revision, one edit at a
+time, never retried. They wait while a step runs or a charge waits, are unavailable in
+a read-only workspace, and refuse to include an account while the account list is
+historical or its credential is disabled. While a preset is active, accounts change only
+by choosing another pool, because hand edits belong to Manual. A failed edit is said
+once beside the accounts.
+
+### Earlier statements
+
+Below the board, two groups, each said only where it differs from the statement.
+
+**Sessions.** Rows are grouped under their machine, whose head names it once with its
+read. Running sessions (terminals that carry an OMP session reference on their own
+machine) offer **open**; while the terminal inventory is unread or failed, running is
+"unknown", never none. Saved sessions appear only after an explicit read of each
+permitted online machine (**Read <machine>**; a read machine says when it was read and
+offers **read again**, failed reads offer **read again**, offline machines are named
+once); the panel's refresh reads every machine already read again. Saved sessions take
+one row per folder and machine: the folder first, then its newest session's title, when,
+and where it stands among the folder's sessions ("newest of 6", "2nd of 6"), then the
+verbs. The folder's other sessions are in that title's drum, the statement's idiom:
+`↑`/`↓` turn to a newer or older one, `↵`/`Space` open the list below it, `Esc` closes
+it. A saved session offers **resume** (as saved) and **with current team** (resume with
+the statement's saved workspace team); below 480 px a row takes two lines, folder and
+title, then when and the verbs. The note says "team not recorded" because no session
+records the team it ran with. Every row verb asks the one gate for its own session
+before it is pressed and again between its steps. A refused verb stays focusable and
+gives its reason, including that a saved session on another machine waits until that
+machine is chosen on the statement, since resuming runs on the statement's machine, and
+that a read-only workspace allows open only.
+
+**Recent teams.** Each successful launch records its team in this browser's local
+storage per principal and workspace (newest first, one entry per team, nine at most).
+The list is device-local, never shared, and grants nothing; it does not record the
+machine. A team keeps its digit for the panel's life: relaunching it keeps the digit, a
+new team takes the next free one. A row says only the words that differ from the
+statement, extras as changes ("no spark"), or "this team", and what recalling it would
+strand on today's pools ("12 no route until 16:55", each group with its own time). Under
+the pointer or focus a row previews its team in the status line and on the board. A team
+today's catalog cannot form is refused, its word dimmed with the reason in its title.
+Pressing a row, or its digit, recalls the team through the edit gate and announces what
+it strands; it launches nothing, and recalling the saved workspace team is a discard, not
+a local edit that happens to match. When the statement is the saved workspace team and no
+recent team says it already, the group says "Workspace team · last change to the workspace
+<time> by <name>": every write to the workspace record stamps that time and name.
+
+### The footer and session options
+
+The footer says where the facts come from: "models verified <time>" (the last
+benchmark), "accounts updated <age>" and, when a staged catalog waits beside the active
+one, "a staged catalog waits in Models"; then the links refresh, Accounts, Models,
+Setup and keys `?`. **Session options** is a quiet verb beside the first status line
+("session options · restricted", "· skills off" or "· N skills" when set). It opens
+Automation and Optional skills for the next launch or resume only: the workspace team
+stays as it is, the restrictions are not an OS or network sandbox, and a successful
+launch or resume clears them. Their closed summary retains restricted tool counts,
+skill selections or explicit disable-all.
+
+Setup is optional runtime management: connection status, independent machine
+capabilities, folder preparation and the external suggestion classifier, and, under
+Profile & source details, the displayed catalog's source, the destination and the
+last verification's excluded models. Models leads with authoring/discovery; the editor
+reveals pricing, performance, limits and thinking metadata independently.
+Editing/import needs no runtime or account setup. Manual catalog authoring retains its
+explicit first-save initialization, staging, owner review and separate exact-reviewed
+promotion. It is an advanced alternative, not a prerequisite for the bundled starter.
+A competing initialization preserves the local draft and refuses a stale first save
+instead of rebasing absence. Charge-bearing measurement keeps its warning beside the
+action. Destination changes still invalidate native reviews and clear
+destination-specific session choices.
 
 ## Ordinary Code/OMP workflow
 
@@ -203,6 +481,18 @@ something else returns what the key posted, or refuses `code_session_conflict`;
 `adoptOnly` then settles the key. A posting whose record after the post never
 landed is completed from the intent on the next keyed call.
 
+`listProfiles` remembers each workspace's last posted destination through a
+`destinations/<containerDigest>` pointer containing `machineId`, `postedAt` and
+`jobId`. Direct posts and adopted or rebuilt receipts advance it only for a
+strictly newer retained timestamp, using exact CAS with at most eight attempts;
+contention leaves the winning pointer in place. An absent or unreadable pointer
+is ignored by reads and rebuilt from the newest retained receipt by the next
+post, including pre-existing receipts. Reads use one pointer lookup, scan the
+receipts only while no valid pointer exists, and never write. Maintaining the
+pointer never fails a post whose receipt already committed. This derived index
+is not a saved launch default or authority; receipt retention, action contracts
+and configuration data versions are unchanged.
+
 `adoptOnly: true` never composes, reviews or posts: it retires the key at OMP
 (`adoptSession` with `retire: true`) and returns the key's session, or refuses:
 
@@ -288,8 +578,8 @@ selection, and fences the returned job against both material and native-derived
 optional input bindings. Optional source bindings never replace the caller's
 material. Independent headless calls have no inherited skill choice.
 
-The workbench presents available and selected metadata, deliberate sets and
-conflict reasons. Choices are local to the pending launch: unrelated navigation
+The session options popover presents available and selected metadata, deliberate sets and
+conflict reasons. Choices are local to the pending launch or resume: unrelated navigation
 and refresh retain them; destination changes, a successful terminal placement
 and a fresh workbench clear them. “Clear optional choices” preserves ordinary
 loading only in ordinary mode; restricted mode still suppresses ambient loading.
@@ -331,7 +621,8 @@ default is stored in a shared profile.
 
 `workflow.listSessions(machineId)` returns OMP's bounded header/title metadata
 only (`id`, `title`, `cwd`, `updatedAt`), never message bodies or transcript paths.
-The workbench requests each permitted machine explicitly and distinguishes pending,
+The earlier statements request each permitted online machine explicitly (a **Read**
+control per machine) and distinguish pending,
 failed, unavailable and empty inventories. Native metadata is not a fleet archive.
 `workflow.runningSession(ref)` correlates only the exact harness, machine and session
 ID in public running-terminal metadata. A matched terminal supplies its authoritative
@@ -355,9 +646,13 @@ OMP's `{ harness: "atyrode.omp", machineId, sessionId }` reference.
   Native missing, incompatible or unavailable model/thinking state refuses before
   a replacement session or inference can be created.
 
-The workbench offers separate **Resume saved state** and **Resume with this
-profile** actions after explicitly listing and selecting native saved state.
-Local unsaved profile edits cannot be resumed as a profile. The workflow refreshes
+The earlier statements offer separate **resume** (saved state) and **with current team**
+(the statement's saved workspace team) actions on a listed saved session, and **open** on
+a running one. Session options chosen in the popover apply to the resume. Resuming with
+the current team needs the
+saved, verified, reviewed team and a lead some included account serves; local
+unsaved edits cannot be resumed as a team, and a team that approves plans
+automatically refuses. The workflow refreshes
 the machine roster, native inventory and public terminals before preparing a resume.
 It returns either `{ kind: "reopen", terminals }` for an exact running match, or
 `{ kind: "prepared", prepared }` for native continuation. The UI reopens through the
@@ -378,6 +673,22 @@ set or a named preset. Selection against an unavailable, stale or changed
 observation refuses rather than broadening to another account. Unknown,
 stale, blocked, disabled and exhausted remain different states; a fresh native
 quota verdict takes precedence over a rounded fraction.
+
+The Accounts sheet's ledger uses inclusion checkboxes for exact full identities or
+API-key slots; each pool head on the main view offers the same inclusion as in/out
+switches over the same Manual and preset pools and the same `changeAccounts` edit.
+Same-email OAuth organizations are distinct choices. Manual changes save
+immediately; Edit pool creates a local preset draft, and creating a preset does
+not activate it. A preset named “Manual” is still a saved preset. Excluding an
+account is not disabling its native credential; credential actions and sign-in
+remain explicit OMP handoffs.
+
+Usage lists reported windows per account, never an average across incompatible
+windows or providers. Missing capacity has no fabricated meter. Failed reads keep
+the last permitted facts visibly historical, including blocks, reset deadlines,
+balance and credits; none proves current availability. Detailed account facts open in
+place under each pool head, and the Accounts sheet keeps the complete ledger. Exact selections omit providers
+with no selected account and refuse unresolved saved exclusions.
 
 OMP's accounts action door owns `accounts`, `usage`, `clearAccountBlocks`,
 `disableCredential`, `readAccountSetup`, `reviewAccountRuntime`,
@@ -403,6 +714,10 @@ manual and preset exclusion in one revision. Missing evidence or changed slots
 refuse without changing choices; no compatibility alias, email-only match or
 intermediate widened pool is created. Credential bytes and protected backups
 are not part of Code configuration.
+The editor retains the last fresh source observation while a saved manual or
+inactive-preset exclusion still references it, even across unavailable readings
+and multiple later scope changes. Recovery remains an explicit all-exclusions
+review, never an automatic credential or ownership transfer.
 
 ## Native installation and evidence
 

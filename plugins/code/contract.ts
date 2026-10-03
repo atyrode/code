@@ -1,12 +1,12 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
-import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema,
+import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, ModelCatalogSnapshotSchema,
   JobInputBindingSchema, OverlaySchema, PostingKeySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
   SessionSilenceSchema, SessionActivitySchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { z } from "zod";
 import { AccountChoiceChangeSchema, AccountChoicesSchema, CapabilitySchema, CatalogDocumentSchema, SelectionSchema } from "../domain/contracts.ts";
 import { ReviewSchema } from "../domain/routing.ts";
-import { CatalogDraftSchema } from "../domain/probe.ts";
+import { CatalogDraftSchema, DerivedCatalogSchema } from "../domain/probe.ts";
 
 export const CODE_PLUGIN_ID = "atyrode.code";
 export const GENERATOR_PLUGIN_ID = "atyrode.code.generator";
@@ -25,9 +25,28 @@ export const ConfigurationLookupSchema = WorkspaceSchema.extend({ legacyMachineI
 export const TargetSchema = WorkspaceSchema.extend({ machineId: id });
 export type Target = z.infer<typeof TargetSchema>;
 export const RevisionTargetSchema = TargetSchema.extend({ expectedRevision: revision });
-export const CatalogRevisionSchema = z.strictObject({ document: CatalogDocumentSchema, digest });
+/**
+ * WHAT A CATALOG WAS VERIFIED AGAINST, so a later observation can say whether it still holds:
+ * the OMP version whose inventory and benchmark answered, when they answered, the providers the
+ * account pool covered and the identity of that exact pool (`composeProbe`'s
+ * `poolIdentityDigest`). The pool facts are Code's own reading of the account observation
+ * `stageCatalog` was given; the version and times are the receipts' as the caller read them from
+ * OMP. A catalog with `provenance: null` was authored, imported or kept from before verification
+ * existed, and is unverified.
+ */
+export const VerificationProvenanceSchema = z.strictObject({
+  ompVersion: ModelCatalogSnapshotSchema.shape.ompVersion,
+  inventoryObservedAt: epochMilliseconds,
+  benchmarkCompletedAt: epochMilliseconds,
+  providers: z.array(identifier).min(1).max(64),
+  poolIdentityDigest: digest,
+}).refine(value => value.benchmarkCompletedAt >= value.inventoryObservedAt &&
+  value.providers.every((provider, index) => index === 0 || value.providers[index - 1]! < provider),
+"a benchmark completes after its inventory, and providers are listed once, in order");
+export type VerificationProvenance = z.infer<typeof VerificationProvenanceSchema>;
+export const CatalogRevisionSchema = z.strictObject({ document: CatalogDocumentSchema, digest, provenance: VerificationProvenanceSchema.nullable() });
 export const ConfigurationSchema = WorkspaceSchema.extend({
-  schemaVersion: z.literal(3), revision: revision.positive(),
+  schemaVersion: z.literal(4), revision: revision.positive(),
   accounts: AccountChoicesSchema,
   draft: CatalogRevisionSchema.nullable(), active: CatalogRevisionSchema.nullable(),
   selection: SelectionSchema.nullable(), updatedBy: id, updatedAt: epochMilliseconds,
@@ -36,9 +55,24 @@ export type Configuration = z.infer<typeof ConfigurationSchema>;
 export const ConfigurationReadSchema = z.strictObject({ revision, configuration: ConfigurationSchema.nullable(), legacyMachineId: id.nullable() });
 export const CatalogReviewInputSchema = RevisionWorkspaceSchema.extend({ source: z.enum(["active", "draft"]) });
 export const CatalogReviewSchema = z.strictObject({
-  revision, source: z.enum(["active", "draft"]), catalogDigest: digest, review: ReviewSchema, reviewDigest: digest,
+  revision, source: z.enum(["active", "draft"]), catalogDigest: digest, provenance: VerificationProvenanceSchema.nullable(),
+  review: ReviewSchema, reviewDigest: digest,
 });
 export type CatalogReview = z.infer<typeof CatalogReviewSchema>;
+/**
+ * A staged catalog's claim to have been verified. `accounts` is the observation the pool is
+ * read from, and `poolIdentityDigest` the pool the caller probed with: Code recomputes the pool
+ * from this observation and the saved choices and refuses `code_accounts_changed` unless it is
+ * that exact pool, so the recorded pool is the one the benchmark ran against, not whatever it
+ * became before staging. The OMP version and times are copied from the receipts the caller read.
+ */
+export const CatalogVerificationSchema = z.strictObject({
+  ompVersion: ModelCatalogSnapshotSchema.shape.ompVersion,
+  inventoryObservedAt: epochMilliseconds,
+  benchmarkCompletedAt: epochMilliseconds,
+  accounts: AccountsObservationSchema,
+  poolIdentityDigest: digest,
+});
 /** The prompt bound is OMP's, in bytes, because the prompt reaches the machine as one entry
  * of the job input map the hub bounds (`PROMPT_MAX_BYTES`, 44 KiB). Code takes the schema
  * itself rather than the number, so the two can never disagree. */
@@ -167,18 +201,25 @@ export const PermissionPlanSchema = z.strictObject({
 export const rootActionSchemas = {
   readConfiguration: { input: ConfigurationLookupSchema, result: ConfigurationReadSchema },
   initializeConfiguration: { input: ConfigurationLookupSchema.extend({ expectedRevision: revision }), result: ConfigurationSchema },
-  stageCatalog: { input: RevisionWorkspaceSchema.extend({ document: CatalogDocumentSchema }), result: ConfigurationSchema },
+  // `verification` is present exactly when the document is a benchmark-derived catalog; manual
+  // authorship and import stage without it and stay unverified.
+  stageCatalog: { input: RevisionWorkspaceSchema.extend({ document: CatalogDocumentSchema, verification: CatalogVerificationSchema.optional() }), result: ConfigurationSchema },
   reviewCatalog: { input: CatalogReviewInputSchema, result: CatalogReviewSchema },
   promoteCatalog: { input: CatalogReviewInputSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
   select: { input: RevisionWorkspaceSchema.extend({ selection: SelectionSchema }), result: ConfigurationSchema },
   changeAccounts: { input: RevisionWorkspaceSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
+  // `poolIdentityDigest` names this exact pool, independent of the order OMP lists accounts in:
+  // it is what a verified catalog records and what `stageCatalog` checks a verification against.
   composeProbe: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema }),
-    result: z.strictObject({ revision, accountPool: RuntimeAccountPoolSchema }) },
+    result: z.strictObject({ revision, accountPool: RuntimeAccountPoolSchema, poolIdentityDigest: digest }) },
   // The budget DERIVES the catalog: `free` ladders the free models rather than hoping one of them
   // wins a rung against paid ones. Stated on every call, because a catalog's admissible set is
   // part of what it is, and a default would let two derivations differ without saying so.
+  // A draft is only the charge: the candidates a benchmark would probe, never a stageable catalog.
   draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema, budget: SelectionSchema.shape.budget }), result: CatalogDraftSchema },
-  deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema, budget: SelectionSchema.shape.budget }), result: CatalogDocumentSchema },
+  // `metadata` is OMP's bundled snapshot, read only for the quota class inventory rows do not carry
+  // yet (Spark); it is joined by exact identity and only at the inventory's own OMP version.
+  deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema, budget: SelectionSchema.shape.budget, metadata: ModelCatalogSnapshotSchema.optional() }), result: DerivedCatalogSchema },
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: sessionPrompt }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },
   runSession: { input: SessionRunInputSchema, result: PublicJobSchema },
@@ -222,7 +263,10 @@ export const actionSchemas = rootActionSchemas;
 export type CodeAction = keyof typeof actionSchemas;
 export type ActionInput<K extends CodeAction> = z.infer<(typeof actionSchemas)[K]["input"]>;
 export type ActionResult<K extends CodeAction> = z.infer<(typeof actionSchemas)[K]["result"]>;
-export const RefusalSchema = z.strictObject({ refused: z.string().regex(/^code_[a-z0-9_]+$/) });
+/** `code_<token>`, optionally followed by `: <detail>` naming what the token is about — the model
+ * a launch cannot reach, the pair a ladder regresses on — because the token alone cannot say which.
+ * The token stays the machine-readable part; the detail is printable ASCII for a person. */
+export const RefusalSchema = z.strictObject({ refused: z.string().regex(/^code_[a-z0-9_]+(?:: [\x20-\x7E]{1,512})?$/) });
 export type ActionReply<K extends CodeAction> = ActionResult<K> | z.infer<typeof RefusalSchema>;
 export function actionDoor(name: CodeAction): string { return `${CODE_PLUGIN_ID}.${name}`; }
 /** Ordinary caller dispatch only; this adapter neither grants nor proxies native authority. */

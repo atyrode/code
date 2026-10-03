@@ -5,29 +5,24 @@ import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary, 
 import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient, WorkflowError } from "./workflow.ts";
+import { createCodeWorkflowClient, failureWords, WorkflowError } from "./workflow.ts";
 
 const CODE_PREFERENCES_TOPIC = { kind: "plugin", pluginId: CODE_PLUGIN_ID } as const;
-const messages: Readonly<Record<string, string>> = {
-  code_stale_preferences: "Shared choices changed. Read the current revision before committing your edit.",
-  code_composition_changed: "The saved profile, account pool or OMP defaults changed. Review the session again before launching.",
-  code_configuration_missing: "Initialize Code for this container first.",
-  code_catalog_missing: "Stage, review and promote a catalog first.",
-  code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
-  code_scope_refused: "Your current authority does not cover this container.",
-  code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
-  code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
-  code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
-};
-/** An authoring handle exposes operations; the native cap set grants write access. */
+/**
+ * Write access is the caller's native caps alone: Manifold admits Code's mutating actions, which
+ * declare `containers:write`, on that cap at the container, whatever view is mounted. A mounted
+ * view adds no authority; its authoring door (`host.authoring`) only places terminals.
+ */
 export function canWriteCodeWorkspace(host: HostServices): boolean {
-  return host.authoring !== null && hasCap(host.client.selfCaps(), "containers:write");
+  return hasCap(host.client.selfCaps(), "containers:write");
 }
+/** A failure in the panel's words (workflow.ts `failureWords`); one that no workflow raised says only that the action could not be completed. */
 export function codeOperationFailure(reason: unknown): string {
-  return reason instanceof WorkflowError ? messages[reason.message] ?? reason.message : "The Code action could not be completed.";
+  return reason instanceof WorkflowError ? failureWords(reason.message) : "The Code action could not be completed.";
 }
-export function codeWorkflow(host: HostServices) {
+export function codeWorkflow(host: HostServices, current?: () => boolean) {
   return createCodeWorkflowClient(async (door, input) => {
+    if (current && !current()) throw new WorkflowError("code_destination_changed");
     if (door === "core.machines.list") return { machines: await host.client.machines() };
     if (door === "core.terminals.listAll") return { terminals: await host.client.allTerminals() };
     const outcome = await host.client.action(door, input);

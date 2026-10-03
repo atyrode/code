@@ -30,7 +30,7 @@
     ]
   },
   "dependencies": {
-    "atyrode.omp": { "type": "required", "reason": "OMP owns destination readiness, workspace preparation, probing and reviewed session execution; Code's session doors call its own doors in process." },
+    "atyrode.omp": { "type": "required", "reason": "OMP owns passive bundled model metadata, destination readiness, workspace preparation, probing and reviewed session execution; Code calls its public typed actions." },
     "atyrode.omp.accounts": { "type": "required", "reason": "OMP owns the shared account broker, usage observations and sign-in authority; Code's session doors read its observation in process." },
     "atyrode.omp.gateway": { "type": "required", "reason": "OMP owns the governed per-destination model gateway." }
   },

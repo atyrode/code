@@ -42,6 +42,9 @@ export {
   SessionReadInputSchema,
   SessionCancelInputSchema,
   SessionCompositionSchema,
+  /** What a verified catalog records about the verification behind it; `null` is unverified. */
+  VerificationProvenanceSchema,
+  type VerificationProvenance,
   /** A workspace, and a workspace plus the destination a caller chose for it. */
   WorkspaceSchema,
   TargetSchema,
@@ -65,5 +68,8 @@ export {
  * entry of the job input map the hub bounds. Code's door takes OMP's schema itself, so a
  * caller that checks a prompt against this number is checking the rule Code enforces. */
 export { PROMPT_MAX_BYTES, RESTRICTED_TOOL_NAMES, RestrictedAutomationSchema } from "@atyrode/manifold-omp";
-/** React-free owner-to-owner review, preparation and strict saved-session resume. */
-export { createCodeWorkflowClient, WorkflowError, type Dispatch, type SessionReview, type ResumeSessionOptions, type RuntimeConfigurationReview } from "../code/workflow.ts";
+/** React-free owner-to-owner review, preparation, strict saved-session resume, and model
+ * verification: the inventory-then-benchmark flow that is the only source of a verified catalog. */
+export { createCodeWorkflowClient, WorkflowError, VerificationError, type Dispatch, type SessionReview, type ResumeSessionOptions,
+  type RuntimeConfigurationReview, type ChargeReview, type PendingVerification, type VerificationOptions, type VerificationProgress,
+  type VerificationStep, type VerifiedModels } from "../code/workflow.ts";

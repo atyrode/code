@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AccountReference, AccountsObservation } from "@atyrode/manifold-omp";
 import { accountSelectionDisabled, checkedAccountsObservation, disabledAccountReferences, initialAccountChoices,
-  reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
+  reduceAccountChoices, selectedAccountPool, servedProviders } from "../domain/accounts.ts";
 import { DomainError } from "../domain/contracts.ts";
 
 const scope = "machine-a/broker-grant-1";
@@ -70,7 +70,6 @@ describe("Code account selection over explicit OMP observations", () => {
       expectCode(() => selectedAccountPool(snapshot, { ...rebound, activePreset }), "account_unavailable");
     }
     expect(rebound.activePreset).toBe("focus");
-    expect(selectedAccountPool(snapshot, choices).anthropic).toEqual([]);
   });
 
   test("scope rebind refuses changed identity, credential population or unavailable evidence without losing exclusions", () => {
@@ -88,27 +87,45 @@ describe("Code account selection over explicit OMP observations", () => {
     ]) {
       expectCode(() => reduceAccountChoices(choices, { kind: "rebind-scope", previous: snapshot, current: changed }), "account_unavailable");
       expect(selectedAccountPool(snapshot, choices).openai).toEqual([{ scope, credentialId: 3, identityKey: null }]);
-      expect(selectedAccountPool(snapshot, { ...choices, activePreset: "focus" }).anthropic).toEqual([]);
     }
     const missing = { ...choices, presets: [{ id: "focus", name: "Focus", disabled: [{ ...alice, identityKey: "missing" }] }] };
     expectCode(() => reduceAccountChoices(missing, { kind: "rebind-scope", previous: snapshot, current }), "account_unavailable");
     expect(selectedAccountPool(snapshot, missing).openai).toEqual([{ scope, credentialId: 3, identityKey: null }]);
   });
 
-  test("re-login email protection remains provider- and service-scoped without weakening exact launch refusal", () => {
+  test("keeps same-email organizations independent when excluding and enabling concrete identities", () => {
+    const sibling: AccountReference = { ...alice, identityKey: "email:Alice@example.test|org:other" };
+    const observation: AccountsObservation = { ...snapshot, accounts: [...snapshot.accounts, {
+      ...snapshot.accounts[0]!, reference: sibling, credentialId: 5, identityKey: sibling.identityKey,
+    }] };
+    const excludedAlice = reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference: alice, enabled: false });
+    expect(accountSelectionDisabled(observation.accounts[4]!, disabledAccountReferences(excludedAlice))).toBe(false);
+    expect(selectedAccountPool(observation, excludedAlice).anthropic).toEqual([{ scope, credentialId: 5, identityKey: sibling.identityKey }]);
+    const excludedBoth = reduceAccountChoices(excludedAlice, { kind: "set-account", reference: sibling, enabled: false });
+    const enabledAlice = reduceAccountChoices(excludedBoth, { kind: "set-account", reference: alice, enabled: true });
+    expect(disabledAccountReferences(enabledAlice)).toEqual([sibling]);
+    expect(selectedAccountPool(observation, enabledAlice).anthropic).toEqual([{ scope, credentialId: 1, identityKey: alice.identityKey }]);
+  });
+
+  test("cannot clear a missing organization's exclusion by enabling a same-email replacement", () => {
     const observation = structuredClone(snapshot);
-    const identityKey = "email:alice@EXAMPLE.test|org:new";
+    const identityKey = "email:Alice@example.test|org:new";
     observation.accounts[0]!.identityKey = identityKey;
     observation.accounts[0]!.reference = { ...alice, identityKey };
+    const excluded = reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference: alice, enabled: false });
+    const enabled = reduceAccountChoices(excluded, { kind: "set-account", reference: observation.accounts[0]!.reference, enabled: true });
+    expect(disabledAccountReferences(enabled)).toEqual([alice]);
+    expectCode(() => selectedAccountPool(observation, enabled), "account_unavailable");
+  });
+
+  test("omits excluded or disabled providers without broadening the remaining concrete pool", () => {
     const choices = reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference: alice, enabled: false });
-    const disabled = disabledAccountReferences(choices);
-    expect(accountSelectionDisabled(observation.accounts[0]!, disabled)).toBe(true);
-    expect(accountSelectionDisabled(observation.accounts[3]!, disabled)).toBe(false);
-    const elsewhere = { ...observation.accounts[0]!, reference: { ...observation.accounts[0]!.reference, scope: "other-scope" } };
-    expect(accountSelectionDisabled(elsewhere, disabled)).toBe(false);
-    expectCode(() => selectedAccountPool(observation, choices), "account_unavailable");
-    const enabled = reduceAccountChoices(choices, { kind: "set-account", reference: observation.accounts[0]!.reference, enabled: true });
-    expect(selectedAccountPool(observation, enabled).anthropic).toEqual([{ scope, credentialId: 1, identityKey }]);
+    const observation = { ...snapshot, accounts: snapshot.accounts.map(account =>
+      account.reference.provider === "openai" ? { ...account, disabled: true } : account) };
+    expect(selectedAccountPool(observation, choices)).toEqual({
+      "openai-codex": [{ scope, credentialId: 4, identityKey: "Alice@example.test" }],
+    });
+    expect(disabledAccountReferences(choices)).toEqual([alice]);
   });
 
   test("uses preset IDs, rejects case-folded name conflicts and preserves selection on active deletion", () => {
@@ -165,5 +182,23 @@ describe("Code account selection over explicit OMP observations", () => {
     expectCode(() => selectedAccountPool({ scope, status: "unavailable", observedAt: null, accounts: [] }, initialAccountChoices()), "account_unavailable");
     expectCode(() => selectedAccountPool({ ...snapshot, status: "stale" }, initialAccountChoices()), "account_unavailable");
     expectCode(() => selectedAccountPool({ ...snapshot, observedAt: null }, initialAccountChoices()), "invalid_accounts");
+  });
+});
+
+describe("the providers a launch's pool would serve", () => {
+  test("exactly the session door's pool: excluded and disabled credentials serve nothing, per provider not per family", () => {
+    const without = (reference: AccountReference) => reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference, enabled: false });
+    expect([...servedProviders(snapshot, initialAccountChoices())!].sort()).toEqual(["anthropic", "openai", "openai-codex"]);
+    expect([...servedProviders(snapshot, without(alice))!].sort()).toEqual(["openai", "openai-codex"]);
+    // Both API-key slots must go before the openai provider stops serving; its codex sibling is another provider.
+    const disabled = { ...snapshot, accounts: snapshot.accounts.map(account => account.reference.provider === "openai" ? { ...account, disabled: true } : account) };
+    expect([...servedProviders(disabled, initialAccountChoices())!].sort()).toEqual(["anthropic", "openai-codex"]);
+  });
+
+  test("a fresh observation with nothing included serves nothing; a pool the door would refuse outright is unknown", () => {
+    expect(servedProviders({ ...snapshot, accounts: [] }, initialAccountChoices())).toEqual(new Set());
+    expect(servedProviders({ ...snapshot, status: "stale" }, initialAccountChoices())).toBeNull();
+    const gone: AccountReference = { kind: "identity", scope, provider: "anthropic", identityKey: "email:gone@example.test" };
+    expect(servedProviders(snapshot, reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference: gone, enabled: false }))).toBeNull();
   });
 });

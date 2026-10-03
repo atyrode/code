@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routeService, servedRoutes } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -109,6 +109,29 @@ describe("catalog capabilities and identity", () => {
     input.models[0]!.thinkingLevels.splice(0);
     const review = reviewCatalog(catalog, selection({ capability: 1 }), daytime);
     expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default).toBe("openai/native-o1:medium");
+  });
+});
+
+describe("default selection", () => {
+  test("is old Code's Capable, glance profile, with Spark exactly where the catalog can host it", () => {
+    const pair = document();
+    pair.models = pair.models.filter(value => value.provider !== "deepseek");
+    const catalog = compileCatalog(pair);
+    const chosen = defaultSelection(catalog);
+    expect(chosen).toEqual({ lane: { kind: "mixed" }, capability: 3, thinking: "medium", advisor: "glance", spark: true,
+      priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any" });
+    const review = reviewCatalog(catalog, chosen, daytime);
+    expect(route(review.routes, "advisor").lead).toEqual({ key: "a1", thinking: "low" });
+    expect(route(review.routes, "tiny").lead.key).toBe("spark");
+    expect(defaultSelection(compileCatalog({ ...pair, models: pair.models.filter(value => value.tier !== 0) }))).toEqual({ ...chosen, spark: false });
+  });
+
+  test("a single-family catalog gets its own pure lane at Capable", () => {
+    const single = document();
+    single.models = single.models.filter(value => value.provider === "anthropic");
+    expect(defaultSelection(compileCatalog(single))).toMatchObject({
+      lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, advisor: "glance", spark: false,
+    });
   });
 });
 
@@ -359,5 +382,65 @@ describe("a cost constraint is a property, not a list of names", () => {
     const without = reviewCatalog(catalog, selection({ budget: "free", fallback: false }), daytime);
     expect(withFallback.routes.some(entry => entry.fallback.length > 0)).toBe(true);
     expect(without.routes.every(entry => entry.fallback.length === 0)).toBe(true);
+  });
+});
+
+describe("a verified catalog and the accounts a launch meets", () => {
+  test("a preview selection keeps every choice the verified catalog hosts and narrows only the ones it lacks", () => {
+    const openaiOnly = compileCatalog({ schemaVersion: 1, models: document().models.filter(entry => providerPolicy(entry.provider).family === "openai") });
+    const wanted = selection({ lane: { kind: "provider", family: "anthropic", blend: "led" }, capability: 4, thinking: "high",
+      advisor: "review", spark: true, priority: true, prewalk: true, planYolo: true, fallback: false });
+    // No Anthropic and no fourth rung: the default lane and the highest capability below 4.
+    expect(clampSelection(openaiOnly, wanted)).toEqual({ ...wanted, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3 });
+    // A family that survived keeps its lane in the blend the catalog still offers.
+    expect(clampSelection(openaiOnly, { ...wanted, lane: { kind: "provider", family: "openai", blend: "led" } }).lane)
+      .toEqual({ kind: "provider", family: "openai", blend: "only" });
+    const full = compileCatalog(document());
+    expect(clampSelection(full, wanted)).toEqual(wanted);
+    const withoutSpark = compileCatalog({ schemaVersion: 1, models: document().models.filter(entry => entry.tier !== 0) });
+    expect(clampSelection(withoutSpark, selection({ spark: true })).spark).toBe(false);
+    expect(clampSelection(full, null)).toEqual(defaultSelection(full));
+    // The budget is a constraint: a free preview this paid catalog cannot serve refuses rather than spends.
+    expect(() => clampSelection(full, selection({ budget: "free" }))).toThrow("code_budget_unsatisfiable");
+  });
+
+  test("a fallback no included account serves is pruned exactly, while an unserved lead refuses", () => {
+    // Spark leads `tiny` and `commit`, so the tier-1 rung on `openai` appears only as a fallback.
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("o1", "openai", 1, { inputCostPerMillion: 1 }), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3, { inputCostPerMillion: 8 }),
+      model("spark", "openai-codex", 0, { images: false, inputCostPerMillion: 0.5 }),
+    ] });
+    const chosen = selection({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true });
+    const review = reviewCatalog(catalog, chosen, daytime);
+    expect(review.routes.some(entry => entry.fallback.some(choice => choice.key === "o1"))).toBe(true);
+    expect(review.routes.some(entry => entry.lead.key === "o1")).toBe(false);
+    const serves = (provider: string) => provider !== "openai";
+    const pruned = servedRoutes(catalog, review.routes, serves);
+    expect(pruned.map(entry => entry.lead)).toEqual(review.routes.map(entry => entry.lead));
+    expect(pruned.map(entry => entry.fallback)).toEqual(review.routes.map(entry => entry.fallback.filter(choice => choice.key !== "o1")));
+    const overlay = compileOmpOverlay(catalog, chosen, pruned, serves);
+    expect(Object.values(overlay.retry?.fallbackChains ?? {}).flat().some(reference => reference.startsWith("openai/"))).toBe(false);
+    // Exactly the served routes: neither the unpruned ones nor pruned ones without the rule that pruned them.
+    expect(() => compileOmpOverlay(catalog, chosen, review.routes, serves)).toThrow("code_invalid_selection");
+    expect(() => compileOmpOverlay(catalog, chosen, pruned)).toThrow("code_invalid_selection");
+    expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
+  });
+
+  test("judged beforehand, the door's rule refuses only an unserved lead and notes the fallbacks it drops", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("o1", "openai", 1, { inputCostPerMillion: 1 }), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3, { inputCostPerMillion: 8 }),
+      model("spark", "openai-codex", 0, { images: false, inputCostPerMillion: 0.5 }),
+    ] });
+    const review = reviewCatalog(catalog, selection({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true }), daytime);
+    const withoutApi = (provider: string) => provider !== "openai";
+    const service = routeService(catalog, review.routes, withoutApi);
+    expect(service.lead).toBeNull();
+    const pruned = servedRoutes(catalog, review.routes, withoutApi);
+    expect(service.pruned).toEqual([{ provider: "openai", family: "openai",
+      roles: review.routes.filter((entry, index) => entry.fallback.length !== pruned[index]!.fallback.length).map(entry => entry.role) }]);
+    // Without codex every lead is unserved: the door refuses, and the judgement names the provider and the roles it leads.
+    const withoutCodex = routeService(catalog, review.routes, provider => provider !== "openai-codex");
+    expect(withoutCodex.lead).toEqual({ provider: "openai-codex", family: "openai", roles: review.routes.map(entry => entry.role) });
+    expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
   });
 });

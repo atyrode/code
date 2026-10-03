@@ -6,7 +6,23 @@ import type { PermissionPlan as Plan, PermissionPlanInput } from "./permission-p
 import { WorkflowError, type RuntimeConfigurationReview } from "./workflow.ts";
 import { ACCOUNT_REFRESH_MS, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure } from "./machine-web.ts";
 
-class NativeReviewError extends WorkflowError {}
+function reviewStatus(detail: string): string {
+  if (/waiting for OMP/i.test(detail)) return "Waiting for runtime readiness. Review the current status again.";
+  if (/changed|outdated|stale/i.test(detail)) return "Review changed. Review the current scope again.";
+  if (/offline|disconnected|not[_ -]connected|connection|connectivity|transport/i.test(detail)) return "Connection unavailable. Reconnect the machine, then review again.";
+  if (/denied|forbidden|unauthorized|not[_ -]authorized|scope[_ -]refused|owner[_ -]required|consent[_ -]required/i.test(detail))
+    return "Scope denied. Ask the instance owner to review the requested access.";
+  if (/unavailable|not[_ -]installed|not[_ -]ready|unprepared|missing|no declared account owner|choose a workspace machine/i.test(detail))
+    return "Runtime unavailable. Check the destination and native runtime, then review again.";
+  return "Request refused. Check the diagnostics before retrying.";
+}
+
+function ReviewStatus({ detail }: { detail: string }) {
+  return <div>
+    <p role="status" className="plugin-atyrode_code__warning">{reviewStatus(detail)}</p>
+    <details className="plugin-atyrode_code__details"><summary>Diagnostic details</summary><pre>{detail}</pre></details>
+  </div>;
+}
 type ConfigurationReview = RuntimeConfigurationReview;
 type Flow = {
   plan: Plan; index: number; phase: "review" | "progress" | "configuration" | "checking" | "ready";
@@ -86,7 +102,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
         if (choices === null) setChoices(value.features.filter(feature => feature.selected).map(feature => feature.id));
         else { setPlan(value); setPlanKey(inputKey); }
       }
-    }).catch(reason => { if (!cancelled) setMessage(codeOperationFailure(reason)); });
+    }).catch(reason => { if (!cancelled) setMessage(reason instanceof Error ? reason.message : typeof reason === "string" ? reason : codeOperationFailure(reason)); });
     return () => { cancelled = true; };
   }, [host.client, host.principal.id, inputKey]);
 
@@ -98,15 +114,15 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
       currentHost.current.authoring === host.authoring && currentHost.current.containerId === containerId;
     pending.current = true; setBusy(true); setMessage(null);
     try { await work(valid); }
-    catch (reason) { if (valid()) setMessage(reason instanceof NativeReviewError ? reason.message : codeOperationFailure(reason)); }
+    catch (reason) { if (valid()) setMessage(reason instanceof Error ? reason.message : typeof reason === "string" ? reason : codeOperationFailure(reason)); }
     finally { if (issued === generation.current) pending.current = false; if (valid()) setBusy(false); }
   }
   async function requireCurrent(scope: Plan, valid: () => boolean) {
     const latest = await codeWorkflow(host).permissionPlan(input);
     if (!valid()) return null;
     setPlan(latest);
-    if (latest.blockers.length > 0) throw new NativeReviewError(latest.blockers.join(" "));
-    if (latest.scopeDigest !== scope.scopeDigest) throw new NativeReviewError("The destination or requested scope changed. Review the current choices again; any stored native approval remains visible in native progress.");
+    if (latest.blockers.length > 0) throw new WorkflowError(latest.blockers.join("\n"));
+    if (latest.scopeDigest !== scope.scopeDigest) throw new WorkflowError("The destination or requested scope changed. Review the current choices again; any stored native approval remains visible in native progress.");
     return latest;
   }
   function restart() { setFlow(null); setMessage(null); setRequestId(crypto.randomUUID()); }
@@ -152,7 +168,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
     const configuration = await codeWorkflow(host).reviewRuntimeConfiguration(step.configuration, destination);
     if (!valid()) return;
     if (configuration.kind === "account-runtime" && configuration.result.ownerMachineId !== destination.machineId)
-      throw new NativeReviewError("The shared account owner changed. No other destination was used; review again.");
+      throw new WorkflowError("The shared account owner changed. No other destination was used; review again.");
     setFlow({ ...state, phase: "configuration", configuration });
   }
   async function approveNative() {
@@ -198,22 +214,28 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
   return <dialog ref={dialog} className="plugin-atyrode_code plugin-atyrode_code__permission-dialog" aria-labelledby={`${id}-title`} aria-busy={busy}
     onCancel={event => { event.preventDefault(); onClose(); }}>
     <header className="plugin-atyrode_code__section-heading"><h2 ref={heading} tabIndex={-1} id={`${id}-title`}>Review: {label}</h2><button type="button" onClick={onClose} aria-label="Close permission review">Close</button></header>
-    <p>Choices are requests, not grants. Native rights and OMP runtime configuration are separate approvals. Code’s shared catalog and account choices remain separate saves. Closing this dialog never revokes existing access.</p>
-    {!shownPlan && <p role="status">{message ?? "Reading the headless permission plan…"}</p>}
-    {shownPlan?.ownerApprovalRequired && <p role="status" className="plugin-atyrode_code__notice">Native installation and runtime policy require the instance owner’s approval. Workspace edit access cannot approve installations or impersonate the owner. Share these exact requests with the owner if native review refuses your current identity.</p>}
+    <details className="plugin-atyrode_code__details"><summary>How permission reviews work</summary>
+      <p>Choices are requests, not grants. Native rights and OMP runtime configuration are separate approvals. Code’s shared catalog and account choices remain separate saves. Closing this dialog never revokes existing access.</p>
+    </details>
+    {!shownPlan && !message && <p role="status">Reading permission status…</p>}
+    {shownPlan?.ownerApprovalRequired && <div>
+      <p role="status" className="plugin-atyrode_code__notice">Instance owner approval required for native installation and runtime policy.</p>
+      <details className="plugin-atyrode_code__details"><summary>Approval authority</summary><p>Workspace edit access cannot approve installations or impersonate the owner. Share these exact requests with the owner if native review refuses your current identity.</p></details>
+    </div>}
     {!flow && plan && <>
       <fieldset disabled={busy}><legend>Choose independently what to review</legend><div className="plugin-atyrode_code__permission-choices">
         {plan.features.map(feature => <section key={feature.id} data-code-capability={feature.id} className="plugin-atyrode_code__permission-choice">
           <label><input type="checkbox" checked={choices?.includes(feature.id) ?? feature.selected} onChange={event => changeChoice(feature.id, event.target.checked)} />{feature.title}</label>
-          <p>{feature.effect}</p>
-          <details className="plugin-atyrode_code__details"><summary>Scope and if deferred</summary>
+          {feature.id === "benchmark" && <p className="plugin-atyrode_code__warning">Running benchmarks may incur provider charges.</p>}
+          <details className="plugin-atyrode_code__details"><summary>Effect and scope</summary>
+            <p>{feature.effect}</p>
             <p>Destination: {feature.destination?.label ?? "not available"}{feature.destination && ` · ${feature.destination.machineId}`}</p>
             <p className="plugin-atyrode_code__muted">{feature.deferredEffect}</p>
             {feature.prerequisites.length > 0 && <p className="plugin-atyrode_code__muted">Prerequisites (already prepared access is kept): {feature.prerequisites.map(id => plan.features.find(row => row.id === id)?.title).join(", ")}. Unselected prerequisites are not approved by this request.</p>}
           </details>
         </section>)}
       </div></fieldset>
-      {plan.blockers.map(reason => <p key={reason} role="status">{reason}</p>)}
+      {plan.blockers.length > 0 && <ReviewStatus detail={plan.blockers.join("\n")} />}
       <div className="plugin-atyrode_code__toolbar"><button type="button" className="plugin-atyrode_code__primary-action" data-action="engine.jobs.reviewDeployment" disabled={busy || planKey !== inputKey || plan.steps.length === 0 || plan.blockers.length > 0} onClick={() => void perform(valid => nextGroup({ plan, index: 0, phase: "review", review: null, deployment: null, configuration: null }, valid))}>Review selected requests</button><button type="button" onClick={onClose}>Not now — keep existing access</button></div>
     </>}
     {step && <p>Request {flow!.index + 1} of {flow!.plan.steps.length} · {step.featureIds.map(id => flow!.plan.features.find(feature => feature.id === id)?.title).join(" + ")}</p>}
@@ -224,7 +246,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
       {flow.review.targets.map(target => <section key={target.machineId}>
         <h4>{target.machineName} · {target.machineId}</h4><p>{target.connected ? "online" : "offline"} · {target.platform ?? "unsupported or unknown platform"}</p>
         <p>Artifact: <code>{target.artifactSha256 ?? "unavailable"}</code></p>
-        {target.reason && <p role="status">{target.reason}</p>}
+        {target.reason && <ReviewStatus detail={target.reason} />}
         <ul>{target.consents.map(consent => <li key={`${consent.node}/${consent.cap}`}><code>{consent.cap}</code> · <code>{consent.node}</code> · {consent.approved ? "already approved" : "requires approval"}</li>)}</ul>
         <details className="plugin-atyrode_code__details"><summary>Exact artifact, resources and binding revisions</summary><pre>{JSON.stringify(target, null, 2)}</pre></details>
       </section>)}
@@ -233,7 +255,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
       <details className="plugin-atyrode_code__details"><summary>Published native apply request</summary><pre>{JSON.stringify({ request: flow.review.request, reviewDigest: flow.review.reviewDigest }, null, 2)}</pre></details>
     </section>}
     {flow?.deployment && <section aria-label="Native deployment progress"><h3>Native progress</h3><p>Approval is stored by Manifold. Ready requires acknowledgement from the actual native owner, not a successful submit.</p>
-      <ul>{flow.deployment.targets.map(target => <li key={target.machineId}>{target.machineId} · {target.state}{target.reason && ` · ${target.reason}`}{!target.connected && " · offline"}</li>)}</ul>
+      <ul>{flow.deployment.targets.map(target => <li key={target.machineId}>{target.machineId} · {target.state}{!target.connected && " · offline"}{target.reason && <ReviewStatus detail={target.reason} />}</li>)}</ul>
     </section>}
     {configuration && <section aria-label="OMP runtime configuration review"><h3>Separate OMP runtime configuration</h3>
       <p>{configuration.kind === "account-runtime" ? "Use this exact shared account runtime on its declared owner. This affects the instance; credential custody remains with OMP." : "Connect this destination to the reviewed OMP gateway. Other service policies and the account broker stay unchanged."}</p>
@@ -246,7 +268,7 @@ function PermissionDialog({ host, target, intent, label, onReady, onClose, conta
     {shownPlan && (flow || planKey === inputKey) && <details className="plugin-atyrode_code__details" aria-label="Typed headless permission plan"><summary>Typed headless permission plan</summary><pre>{JSON.stringify({ workflow: "createCodeWorkflowClient.permissionPlan", input, result: shownPlan }, null, 2)}</pre></details>}
     {!flow && plan && planKey !== inputKey && <p role="status">Updating the exact request for your choices…</p>}
     {flow && <button type="button" disabled={busy} onClick={restart}>Reconsider choices / review current scope</button>}
-    {message && <p role="status" className="plugin-atyrode_code__warning">{message}</p>}
+    {message && <ReviewStatus detail={message} />}
     {busy && <p role="status">Reading or applying the exact reviewed request…</p>}
   </dialog>;
 }

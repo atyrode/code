@@ -9,17 +9,11 @@ function referenceKey(reference: AccountReference): string {
     reference.kind === "identity" ? reference.identityKey : reference.credentialId]);
 }
 
-function email(identity: string): string | null {
-  const value = identity.startsWith("email:") ? identity.slice(6).split("|")[0]! : identity;
-  return value.includes("@") && !value.includes("|") ? value.toLowerCase() : null;
-}
 
 function sameDisabledIdentity(left: AccountReference, right: AccountReference): boolean {
   if (left.scope !== right.scope || left.provider !== right.provider || left.kind !== right.kind) return false;
-  if (referenceKey(left) === referenceKey(right)) return true;
-  if (left.kind !== "identity" || right.kind !== "identity") return false;
-  const leftEmail = email(left.identityKey);
-  return leftEmail !== null && leftEmail === email(right.identityKey);
+  return left.kind === "identity" && right.kind === "identity" ? left.identityKey === right.identityKey :
+    left.kind === "credential" && right.kind === "credential" && left.credentialId === right.credentialId;
 }
 
 function uniqueReferences(references: AccountReference[]): void {
@@ -166,7 +160,7 @@ export function disabledAccountReferences(choices: AccountChoices): AccountRefer
   return currentDisabled(parseChoices(choices));
 }
 
-/** Includes re-login protection for display; launch additionally requires exact reference resolution. */
+/** Display and launch use the same concrete identity; unresolved saved exclusions remain explicit. */
 export function accountSelectionDisabled(account: AccountRecord, disabled: readonly AccountReference[]): boolean {
   return disabled.some(reference => sameDisabledIdentity(reference, account.reference));
 }
@@ -183,11 +177,28 @@ export function selectedAccountPool(observation: AccountsObservation, choices: A
   const pool: RuntimeAccountPool = Object.create(null);
   for (const account of accounts.accounts) {
     const provider = account.reference.provider;
-    pool[provider] ??= [];
     if (account.disabled || disabled.some(reference => sameDisabledIdentity(reference, account.reference))) continue;
+    pool[provider] ??= [];
     pool[provider]!.push({ scope: accounts.scope, credentialId: account.credentialId, identityKey: account.identityKey });
   }
   const parsed = RuntimeAccountPoolSchema.safeParse(pool);
   if (!parsed.success) throw new DomainError("invalid_accounts");
   return parsed.data;
+}
+
+/**
+ * The providers a launch's pool would serve, exactly as the session door builds that pool
+ * (`selectedAccountPool`): included, enabled accounts of a fresh observation. Null when the door
+ * would refuse the pool outright (an observation that is not fresh, a saved exclusion that no
+ * longer resolves), which says nothing about any one provider. An empty set is a fresh observation
+ * with nothing included, which refuses every lead.
+ */
+export function servedProviders(observation: AccountsObservation, choices: AccountChoices): ReadonlySet<string> | null {
+  try {
+    const pool = selectedAccountPool(observation, choices);
+    return new Set(Object.keys(pool).filter(provider => pool[provider]!.length > 0));
+  } catch (error) {
+    if (error instanceof DomainError) return null;
+    throw error;
+  }
 }
