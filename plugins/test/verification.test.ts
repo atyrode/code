@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { VerificationProvenance } from "../code/contract.ts";
-import { autoReviewDue, draftStale, followInitialization, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import { autoReviewDue, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
@@ -107,6 +107,30 @@ describe("a first verification that stops before it saves", () => {
       .toMatchObject({ step: "blocked", reason: { code: "conflict" } });
     // A report from another starting revision is not this draft's to follow.
     expect(followInitialization(starter, 5, 6)).toBe(starter);
+  });
+});
+
+describe("a local edit of the saved team and later writes to the record", () => {
+  const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: true, priority: false, prewalk: false,
+    planYolo: false, fallback: true, budget: "any" } as const;
+  // A dial edit made at revision 7, on the saved team and the active catalog.
+  const edit: DraftBase = { source: "active", revision: 7, initialized: true, catalogDigest: "a".repeat(64), draftDigest: null, baseSelection: selection, metadataKey: null };
+  const record: SharedBase = { revision: 7, initialized: true, catalogDigest: "a".repeat(64), draftDigest: null, selection, metadataKey: null };
+
+  test("an account edit, own or anyone's, is no conflict: the draft's base moves to the new revision, so its save's CAS holds", () => {
+    const accountsChanged = { ...record, revision: 8 };
+    expect(draftStale(edit, accountsChanged)).toBe(false);
+    expect(followRecord(edit, accountsChanged)).toEqual({ ...edit, revision: 8 });
+    expect(followRecord(edit, record)).toBe(edit);
+  });
+
+  test("a foreign write of the selection or a catalog is a conflict, and the draft keeps its base", () => {
+    const selected = { ...record, revision: 8, selection: { ...selection, thinking: "max" as const } };
+    const staged = { ...record, revision: 8, draftDigest: "d".repeat(64) };
+    for (const foreign of [selected, staged]) {
+      expect(draftStale(edit, foreign)).toBe(true);
+      expect(followRecord(edit, foreign)).toBe(edit);
+    }
   });
 });
 

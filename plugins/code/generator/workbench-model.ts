@@ -16,8 +16,8 @@ import { useAccountUsage } from "../usage-view.tsx";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, launchStatusText, nextLaunchStep,
-  type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type WorkbenchIntent } from "./launch-step.ts";
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep,
+  type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
@@ -270,9 +270,16 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });
   }, [localReview, compiled, selection, initialSelection]);
-  const stale = dials !== null && configurationCurrent && draftStale(dials, {
+  const shared: SharedBase | null = configurationCurrent ? {
     revision: configuration.data!.revision, initialized: configuration.data!.configuration !== null,
     catalogDigest: record?.active?.digest ?? null, draftDigest: record?.draft?.digest ?? null, selection: record?.selection ?? null, metadataKey,
+  } : null;
+  const stale = dials !== null && shared !== null && draftStale(dials, shared);
+  // A write that leaves the draft's selection and catalogs as they were (an account edit, this panel's
+  // own or anyone's) moves its base forward rather than reading as someone else's team.
+  useLayoutEffect(() => {
+    if (dials === null || shared === null) return;
+    if (followRecord(dials, shared) !== dials) setDials(previous => previous && followRecord(previous, shared));
   });
   const unsaved = dials !== null || profile?.source !== "active";
   const draftSkills = skillDraft(skillCatalog.data, skillChoice);

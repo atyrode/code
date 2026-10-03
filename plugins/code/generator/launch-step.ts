@@ -26,12 +26,24 @@ export type SharedBase = {
   /** The bundled model list OMP serves now, null while it is not observed. */
   metadataKey: string | null;
 };
-/** A draft no longer rests on the shared record: any write since it was made, or a first-use draft whose bundled list moved. */
+/**
+ * A draft no longer rests on the shared record: the record's selection, catalogs or initialization
+ * moved under it, or a first-use draft's bundled list did. A newer revision alone is not a conflict:
+ * an account edit, this panel's own or anyone's, writes the record without touching what the draft
+ * was made from (`followRecord`).
+ */
 export function draftStale(draft: DraftBase, shared: SharedBase): boolean {
-  return draft.revision !== shared.revision || draft.initialized !== shared.initialized ||
+  return draft.initialized !== shared.initialized ||
     draft.catalogDigest !== shared.catalogDigest || draft.draftDigest !== shared.draftDigest ||
     JSON.stringify(draft.baseSelection) !== JSON.stringify(shared.selection) ||
     (draft.source === "starter" && shared.metadataKey !== null && draft.metadataKey !== shared.metadataKey);
+}
+/**
+ * A draft that still rests on the record moves its base to a newer revision, so a save's exact CAS
+ * names the revision it was judged against; a stale draft keeps its base and stays a conflict.
+ */
+export function followRecord<T extends DraftBase>(draft: T, shared: SharedBase): T {
+  return shared.revision > draft.revision && !draftStale(draft, shared) ? { ...draft, revision: shared.revision } : draft;
 }
 /**
  * A first verification initializes an absent workspace (`from` → `to`) before anything else. When it
