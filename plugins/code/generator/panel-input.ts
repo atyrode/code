@@ -2,8 +2,8 @@
  * The main view's keys and wheel, as decisions over plain facts so the rules can be read and
  * tested apart from the DOM. Code's keys are panel-local: in-realm plugins share one document, so a
  * key pressed in another plugin must never act on Code, and a key Code consumes must not also act
- * on another plugin's global binding. The wheel belongs to scrolling unless a dial holds focus and
- * the page is at rest, so scrolling past the dials never edits the team.
+ * on another plugin's global binding. The wheel belongs to scrolling unless a control holds focus and
+ * the whole panel is at rest, so scrolling past the dials never edits the team.
  */
 
 export type PanelShortcut = "next-step" | "leave-task" | "unpin" | "task" | "defaults" | "fallbacks" | "ids" | "refresh" | "keys";
@@ -42,30 +42,12 @@ export function panelShortcut(press: PanelKey): PanelShortcut | null {
   return BARE_KEYS[press.key] ?? null;
 }
 
-/** How long the page must have been still, from scrolling and from wheel turns it kept, before a wheel turns a dial. */
+/** How long the whole panel must have been still, from scrolling and from wheel events left to scroll, before a wheel turns a control. */
 export const WHEEL_REST_MS = 300;
-/** Wheel travel per dial step: one mouse notch is usually 100 px; a trackpad gathers its small deltas into steps. */
+/** Wheel travel per step: one mouse notch is usually 100 px; a trackpad gathers its small deltas into steps. */
 export const WHEEL_STEP_PX = 40;
 /** A pause after which partial travel is dropped, so a stray nudge never completes a later step. */
 export const WHEEL_IDLE_MS = 220;
-
-export type WheelGate = {
-  /** Focus is inside the dial the pointer is over. */
-  readonly focused: boolean;
-  /** Ctrl or Cmd is held: the browser's zoom gesture. */
-  readonly zoom: boolean;
-  /** Since the panel last scrolled. */
-  readonly sinceScrollMs: number;
-  /** Since a wheel event was last left to scroll the page. */
-  readonly sincePassedMs: number;
-};
-/**
- * Whether the wheel may turn the dial under the pointer rather than scroll. A scroll gesture that
- * reaches a focused dial keeps scrolling: each event it passes renews the rest it must wait out.
- */
-export function wheelTurnsDial(gate: WheelGate): boolean {
-  return gate.focused && !gate.zoom && gate.sinceScrollMs >= WHEEL_REST_MS && gate.sincePassedMs >= WHEEL_REST_MS;
-}
 
 /** Travel toward the next option in px: wheel up or right is more, the knob's direction; lines and pages scale to px. */
 export function wheelTravel(event: { readonly deltaX: number; readonly deltaY: number; readonly deltaMode: number }, pagePx: number): number {
@@ -73,11 +55,40 @@ export function wheelTravel(event: { readonly deltaX: number; readonly deltaY: n
   return (Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? -event.deltaY : event.deltaX) * unit;
 }
 
-export type WheelTurn = { readonly travel: number; readonly at: number };
-export const WHEEL_AT_REST: WheelTurn = { travel: 0, at: Number.NEGATIVE_INFINITY };
-/** Gather travel into whole steps: +1 for the next option, -1 for the previous, 0 while a step is still gathering. */
-export function turnWheel(turn: WheelTurn, travel: number, nowMs: number): { turn: WheelTurn; step: -1 | 0 | 1 } {
-  const gathered = (nowMs - turn.at > WHEEL_IDLE_MS || Math.sign(turn.travel) !== Math.sign(travel) ? 0 : turn.travel) + travel;
-  if (Math.abs(gathered) < WHEEL_STEP_PX) return { turn: { travel: gathered, at: nowMs }, step: 0 };
-  return { turn: { travel: 0, at: nowMs }, step: gathered > 0 ? 1 : -1 };
+/** The panel's wheel memory: when it last scrolled, when a wheel event was last left to scroll, and travel gathering toward a step. */
+export type WheelRest = { readonly scrolledAt: number; readonly passedAt: number; readonly travel: number; readonly turnedAt: number };
+export const WHEEL_STILL: WheelRest = {
+  scrolledAt: Number.NEGATIVE_INFINITY, passedAt: Number.NEGATIVE_INFINITY, travel: 0, turnedAt: Number.NEGATIVE_INFINITY,
+};
+
+/** Anything in the panel scrolled: a turn waits for rest again, and partial travel is dropped. */
+export function wheelScrolled(rest: WheelRest, nowMs: number): WheelRest {
+  return { ...rest, scrolledAt: nowMs, travel: 0 };
+}
+
+export type WheelInput = {
+  /** The event is over a turnable control that holds focus, in the region allowed to turn. */
+  readonly focusedControl: boolean;
+  /** Ctrl or Cmd is held: the browser's zoom gesture. */
+  readonly zoom: boolean;
+  /** `wheelTravel` of the event. */
+  readonly travel: number;
+  readonly nowMs: number;
+};
+
+/**
+ * One wheel event anywhere in the panel. It is taken only over a focused control while the panel
+ * has been still for `WHEEL_REST_MS`, and then turns one step (+1 next, -1 previous) once a notch
+ * of travel has gathered. Every other event is left to scroll and renews the rest wherever in the
+ * panel it lands, so a scroll gesture that drifts onto a focused control keeps scrolling, even at a
+ * scroll boundary where nothing moves and no scroll event fires.
+ */
+export function panelWheel(rest: WheelRest, input: WheelInput): { rest: WheelRest; take: boolean; step: -1 | 0 | 1 } {
+  const { nowMs, travel } = input;
+  if (!input.focusedControl || input.zoom || nowMs - rest.scrolledAt < WHEEL_REST_MS || nowMs - rest.passedAt < WHEEL_REST_MS) {
+    return { rest: { ...rest, passedAt: nowMs, travel: 0 }, take: false, step: 0 };
+  }
+  const gathered = (nowMs - rest.turnedAt > WHEEL_IDLE_MS || Math.sign(rest.travel) !== Math.sign(travel) ? 0 : rest.travel) + travel;
+  if (Math.abs(gathered) < WHEEL_STEP_PX) return { rest: { ...rest, travel: gathered, turnedAt: nowMs }, take: true, step: 0 };
+  return { rest: { ...rest, travel: 0, turnedAt: nowMs }, take: true, step: gathered > 0 ? 1 : -1 };
 }

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import { ControlIcon, prefersReducedMotion, Spinner } from "@manifold/ui";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
@@ -7,7 +7,7 @@ import type { Review } from "../../domain/routing.ts";
 import { accountWord, Button, capitalized, Check, familyWord, hueOf, middleId, ReadoutLine, SectionBand, SegmentMeter, withKey, type Readout } from "../ui.tsx";
 import { routeChanges } from "./consequences.ts";
 import { chooseOption, laneWord, MAIN_DIALS, MORE_DIALS, SPECS, type DialId, type MoreDial, type OptionRefusal } from "./dial-space.ts";
-import { turnWheel, wheelTravel, wheelTurnsDial, WHEEL_AT_REST } from "./panel-input.ts";
+import { useWheelTurn } from "./wheel-turn.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -298,42 +298,6 @@ function useScrub(disabled: boolean, commit: (dial: DialId, word: string) => voi
   };
 }
 
-/**
- * The wheel turns a dial only while focus is inside that dial and the panel is at rest
- * (panel-input.ts), so scrolling past the dials never edits the team. The listener is native
- * because React's wheel handler is passive and could not keep a turn from also scrolling the page.
- */
-function useWheelTurn(zone: RefObject<HTMLElement | null>, disabled: boolean, turn: (dial: DialId, step: 1 | -1) => void) {
-  const latest = useRef({ disabled, turn });
-  latest.current = { disabled, turn };
-  useEffect(() => {
-    const element = zone.current;
-    if (!element) return;
-    const root = element.closest(".plugin-atyrode_code_generator") ?? element;
-    let scrolledAt = Number.NEGATIVE_INFINITY, passedAt = Number.NEGATIVE_INFINITY, gathered = WHEEL_AT_REST;
-    const scrolled = () => { scrolledAt = performance.now(); };
-    const wheel = (event: WheelEvent) => {
-      const now = performance.now();
-      const group = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-dial-group]") : null;
-      const focused = group !== null && group.contains(group.ownerDocument.activeElement);
-      if (!group || latest.current.disabled ||
-        !wheelTurnsDial({ focused, zoom: event.ctrlKey || event.metaKey, sinceScrollMs: now - scrolledAt, sincePassedMs: now - passedAt })) {
-        passedAt = now;
-        gathered = WHEEL_AT_REST;
-        return;
-      }
-      event.preventDefault();
-      const result = turnWheel(gathered, wheelTravel(event, element.clientHeight), now);
-      gathered = result.turn;
-      // The group's attribute is written from its dial's id; an unknown value finds no dial and turns nothing.
-      if (result.step !== 0) latest.current.turn(group.dataset.dialGroup as DialId, result.step);
-    };
-    root.addEventListener("scroll", scrolled, { capture: true, passive: true });
-    element.addEventListener("wheel", wheel, { passive: false });
-    return () => { root.removeEventListener("scroll", scrolled, { capture: true }); element.removeEventListener("wheel", wheel); };
-  }, [zone]);
-}
-
 /** The nearest option that can be chosen from `from`, one step toward the end (`1`) or the start (`-1`). */
 function nextOption(dial: DialState, from: string, step: 1 | -1): string | undefined {
   for (let at = dial.words.indexOf(from) + step; at >= 0 && at < dial.words.length; at += step) {
@@ -358,7 +322,10 @@ export function GeneratorZone({ model, disabled, onChange, estimates, previewEst
     onChange(state.selection);
   }
   const scrub = useScrub(disabled, (dial, word) => commit(dial, word, true));
-  useWheelTurn(zone, disabled, (id, step) => {
+  // The panel-wide wheel rule (wheel-turn.ts): only a focused dial turns, and only while the whole panel rests.
+  useWheelTurn(zone, "[data-dial-group]", disabled, (control, step) => {
+    // The group's attribute is written from its dial's id; an unknown value finds no dial and turns nothing.
+    const id = control.dataset.dialGroup as DialId;
     const dial = model.dials.get(id);
     const target = dial && nextOption(dial, dial.current, step);
     if (target) commit(id, target, true);
