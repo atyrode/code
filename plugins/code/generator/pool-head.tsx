@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent } from "react";
+import { useLayoutEffect, useMemo, useRef, type CSSProperties, type FocusEvent, type KeyboardEvent } from "react";
 import { accountWord, ago, clock, hhmm, hueOf } from "../ui.tsx";
 import { accountRows, type BoardAccounts, type BoardUsage, type HeadVerdict, type PoolHead as PoolHeadView } from "./board-model.ts";
 import type { KeyHelp } from "./keys-dialog.tsx";
@@ -78,6 +78,22 @@ export function PoolHead({ head, usage, accountsGate, rows, quiet, open, onToggl
     opened.current = false;
     (list.current?.querySelector<HTMLElement>("[role=switch]") ?? list.current?.querySelector<HTMLElement>("button") ?? list.current)?.focus();
   }, [open]);
+  // An include switch or preset the keyboard was on, by its stable key. An edit re-reads the accounts,
+  // and while the reading is out the list is redrawn without its rows; focus then waits on the list
+  // and returns to the same control once it is back, instead of falling out of the panel.
+  const kept = useRef<{ element: HTMLElement; key: string } | null>(null);
+  useLayoutEffect(() => {
+    const box = list.current, was = kept.current;
+    if (!box || !was || was.element.isConnected) return;
+    const active = box.ownerDocument.activeElement;
+    if (active !== box && active !== box.ownerDocument.body) { kept.current = null; return; }
+    const again = box.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(was.key)}"]`);
+    (again ?? box).focus({ preventScroll: true });
+  });
+  function remember(event: FocusEvent<HTMLDivElement>) {
+    const key = event.target === event.currentTarget ? undefined : (event.target as HTMLElement).dataset.focusKey;
+    if (key !== undefined) kept.current = { element: event.target as HTMLElement, key };
+  }
   function toggle() {
     opened.current = !open;
     onToggle();
@@ -116,7 +132,7 @@ export function PoolHead({ head, usage, accountsGate, rows, quiet, open, onToggl
       </div>;
     })}
     {noteRow && <div className={`${G}phead-note`} title={head.forecast !== null ? `${note} (a projection from one reading)` : note || undefined}>{note}</div>}
-    {open && <div ref={list} id={listId} className={`${G}paccounts`} role="group" aria-label={`${name} accounts`} tabIndex={-1} onKeyDown={closeOnEscape}>
+    {open && <div ref={list} id={listId} className={`${G}paccounts`} role="group" aria-label={`${name} accounts`} tabIndex={-1} onKeyDown={closeOnEscape} onFocus={remember}>
       <AccountList family={head.family} usage={usage} accountsGate={accountsGate} />
     </div>}
   </div>;
@@ -126,7 +142,8 @@ function AccountList({ family, usage, accountsGate }: { family: string; usage: B
   const rows = useMemo(() => accountRows(family, usage), [family, usage.view, usage.current, usage.nowMs]);
   const accounts: BoardAccounts | null = usage.accounts;
   const { nowMs } = usage;
-  if (!rows.length) return <p className={`${G}paccount-empty`}>No {accountWord(family)} account is signed in.</p>;
+  // Without a reading there are no rows to list, which says nothing about who is signed in.
+  if (!rows.length) return <p className={`${G}paccount-empty`}>{usage.view === null ? "Accounts not read yet." : `No ${accountWord(family)} account is signed in.`}</p>;
   const choices = accounts?.choices ?? null;
   const preset = choices && choices.activePreset !== null ? choices.presets.find(entry => entry.id === choices.activePreset) ?? null : null;
   const editable = accounts !== null && accountsGate.open && !accounts.pending;
@@ -139,7 +156,7 @@ function AccountList({ family, usage, accountsGate }: { family: string; usage: B
     {choices && choices.presets.length > 0 && <div className={`${G}ppresets`} role="group" aria-label="Account pool">
       {[{ id: null, name: "Manual" }, ...choices.presets].map(entry => {
         const current = choices.activePreset === entry.id;
-        return <button key={entry.id ?? ""} type="button" className={`${G}ppreset`} aria-pressed={current} aria-disabled={!editable || undefined}
+        return <button key={entry.id ?? ""} type="button" className={`${G}ppreset`} data-focus-key={`preset:${entry.id ?? ""}`} aria-pressed={current} aria-disabled={!editable || undefined}
           title={editable ? undefined : why ?? undefined} onClick={() => { if (editable && !current) accounts!.change({ kind: "activate-preset", id: entry.id }); }}>{entry.name}</button>;
       })}
     </div>}
@@ -151,7 +168,7 @@ function AccountList({ family, usage, accountsGate }: { family: string; usage: B
         row.ageMs !== null ? `${ago(row.ageMs)} old` : null,
       ].filter(Boolean).join(" · ");
       return <div key={row.key} className={`${G}paccount`} data-excluded={!row.included || undefined}>
-        <button type="button" role="switch" className={`${G}paccount-switch`} aria-checked={row.included} aria-disabled={!can || undefined}
+        <button type="button" role="switch" className={`${G}paccount-switch`} data-focus-key={`account:${row.key}`} aria-checked={row.included} aria-disabled={!can || undefined}
           aria-label={`Include ${row.who} in the next launch`} title={can ? undefined : row.disabled ? "Credential disabled" : why ?? undefined}
           onClick={() => { if (can) accounts!.change({ kind: "set-account", reference: row.reference, enabled: !row.included }); }}>
           <i aria-hidden="true" />{row.included ? "in" : "out"}
