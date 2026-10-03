@@ -3,7 +3,7 @@
  * tokens live here as custom properties and the shared primitives (ui.tsx) are styled here.
  * Every value is one Manifold already paints with (the shell sidebar and the Plugin Manager);
  * no colour is introduced by this file. Sections: tokens · Phase 2 views (sheets and the
- * standalone panels, still on element defaults) · primitives · usage section · sheet frame · motion.
+ * standalone panels, still on element defaults) · primitives · sheet frame · motion.
  * Layout answers container queries on the `code` container, never the viewport.
  */
 
@@ -632,38 +632,15 @@
 .plugin-atyrode_code__permission-dialog section > button { justify-self: start; }
 
 /* ---------------------------------------------------------------- primitives (ui.tsx)
- * Precise, not rounded: radius 0 for rules, meter cells and tags; 3px for inputs, buttons, option
- * cells, menus and popovers; circles only for 6px status dots. Only inputs and the primary button
- * have visible edges. Each state sets every property the Phase 2 element defaults touch, so a
- * primitive never inherits their hover or pressed paint.
+ * Precise, not rounded: radius 0 for rules, marks and tags; 3px for inputs, buttons, menus and
+ * popovers. Only inputs have visible edges. Each state sets every property the Phase 2 element
+ * defaults touch, so a primitive never inherits their hover or pressed paint.
  */
 .plugin-atyrode_code .plugin-atyrode_code__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--code-text-3); }
-.plugin-atyrode_code .plugin-atyrode_code__dot[data-state="ok"] { background: var(--code-ok); }
-.plugin-atyrode_code .plugin-atyrode_code__dot[data-state="warn"] { background: var(--code-warn); }
 /* A provider is a 6px square: data, never decoration. */
 .plugin-atyrode_code .plugin-atyrode_code__mark { flex: none; width: 6px; height: 6px; border-radius: 0; background: var(--code-hue, var(--code-other)); }
 
-/* State: a dot and coloured text; neighbouring facts are divided by a thin rule. */
-.plugin-atyrode_code .plugin-atyrode_code__state {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: 0;
-  color: var(--code-text-3);
-  font-size: 0.72rem;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-.plugin-atyrode_code .plugin-atyrode_code__state > .plugin-atyrode_code__dot { background: currentColor; }
-.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="warn"] { color: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="attention"] { color: var(--code-attention); }
-.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="ok"] { color: var(--code-ok); }
-.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="on"] { color: var(--code-accent-text); }
-.plugin-atyrode_code .plugin-atyrode_code__state + .plugin-atyrode_code__state { border-left: 1px solid var(--code-line); padding-left: 0.5rem; }
-
-/* Secondary and icon buttons: borderless, 24px, a ground only on hover. */
+/* Secondary buttons: borderless, 24px, a ground only on hover. */
 .plugin-atyrode_code .plugin-atyrode_code__button {
   display: inline-flex;
   flex: none;
@@ -692,7 +669,6 @@
 .plugin-atyrode_code .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { border: 0; color: var(--code-text); background: var(--code-hover); }
 .plugin-atyrode_code .plugin-atyrode_code__button:disabled { opacity: 0.45; color: var(--code-text-2); background: transparent; cursor: default; }
 .plugin-atyrode_code .plugin-atyrode_code__button:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__icon-button { width: 24px; padding: 0; }
 
 /* Checkbox: a 12px square with its label; `aria-checked` is the state. */
 .plugin-atyrode_code .plugin-atyrode_code__check {
@@ -736,39 +712,6 @@
 .plugin-atyrode_code .plugin-atyrode_code__check:is(:disabled, [aria-disabled="true"]) { opacity: 0.55; cursor: default; }
 .plugin-atyrode_code .plugin-atyrode_code__check:is(:disabled, [aria-disabled="true"]):hover { color: var(--code-text-2); background: transparent; }
 .plugin-atyrode_code .plugin-atyrode_code__check:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 0; }
-
-/* Primary: the one filled button per surface; busy shows the host spinner, disabled goes grey. */
-.plugin-atyrode_code .plugin-atyrode_code__primary {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  height: 28px;
-  min-height: 28px;
-  margin: 0;
-  border: 1px solid var(--code-accent);
-  border-radius: 3px;
-  padding: 0 0.7rem;
-  color: var(--code-on-accent);
-  background: var(--code-accent);
-  font: inherit;
-  font-size: 0.74rem;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color var(--code-fast) ease, border-color var(--code-fast) ease;
-}
-.plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--code-accent-hover); color: var(--code-on-accent); background: var(--code-accent-hover); }
-.plugin-atyrode_code .plugin-atyrode_code__primary:focus-visible { border-color: var(--code-accent-text); outline: none; box-shadow: 0 0 0 3px var(--code-focus-ring); }
-/* Unavailable reads aria-disabled, never the native attribute, so focus stays on the primary; busy keeps the accent. */
-.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]:not([aria-busy="true"])) { border-color: var(--code-line); color: var(--code-text-3); background: var(--code-raised); cursor: default; }
-.plugin-atyrode_code .plugin-atyrode_code__primary[aria-busy="true"] { cursor: progress; }
-.plugin-atyrode_code .plugin-atyrode_code__primary .keycap { border-color: rgb(237 242 255 / 32%); border-radius: 2px; padding: 0.02rem 0.3rem; color: inherit; background: transparent; font-size: 0.62rem; font-weight: 600; opacity: 0.75; }
-.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]:not([aria-busy="true"])) .keycap { border-color: var(--code-line); }
-.plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner { gap: 0.45rem; color: inherit; font-size: inherit; line-height: 1; }
-.plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner__mark { border-color: rgb(237 242 255 / 30%); border-top-color: var(--code-on-accent); }
 
 /* Section band: the one uppercase title of a section, a count, then its actions. */
 .plugin-atyrode_code .plugin-atyrode_code__band {
@@ -849,34 +792,7 @@
   word-break: break-all;
 }
 
-/* Segment meter: five square-ended cells; cost lights warn only at the top step. */
-.plugin-atyrode_code .plugin-atyrode_code__segments { display: inline-flex; flex: none; gap: 2px; }
-.plugin-atyrode_code .plugin-atyrode_code__segments > i { width: 0.7rem; height: 0.3rem; border-radius: 1px; background: var(--code-hairline); }
-.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-on] { background: var(--code-text-2); }
-.plugin-atyrode_code .plugin-atyrode_code__segments[data-top] > i[data-on] { background: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-pv="add"] { background: var(--code-accent-text); }
-.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-pv="drop"] { opacity: 0.35; }
-
-/* Usage bar: one square-ended reading; neutral below 80%. */
-.plugin-atyrode_code .plugin-atyrode_code__ubar { display: block; min-width: 1.5rem; height: 6px; border-radius: 1px; background: var(--code-hairline); overflow: hidden; }
-.plugin-atyrode_code .plugin-atyrode_code__ubar > span { display: block; height: 100%; background: var(--code-text-3); transform-origin: left center; animation: plugin-atyrode_code__grow 300ms var(--code-meter-ease) both; }
-.plugin-atyrode_code .plugin-atyrode_code__ubar[data-level="warn"] > span { background: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__ubar[data-level="error"] > span { background: var(--code-attention); }
-
-/* Readout: one stable line; its box never changes size. */
-.plugin-atyrode_code .plugin-atyrode_code__readout {
-  height: 1.2rem;
-  margin: 0;
-  overflow: hidden;
-  color: var(--code-text-2);
-  font-size: 0.72rem;
-  line-height: 1.2rem;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.plugin-atyrode_code .plugin-atyrode_code__readout strong { margin-right: 0.45rem; color: var(--code-text-strong); font-weight: 600; }
-
-/* Menus and popovers live in the panel's overlay layer. */
+/* Popovers live in the panel's overlay layer. */
 .plugin-atyrode_code .plugin-atyrode_code__pop {
   position: absolute;
   z-index: 20;
@@ -896,89 +812,6 @@
   animation: plugin-atyrode_code__pop var(--code-fast) ease both;
 }
 .plugin-atyrode_code .plugin-atyrode_code__pop:focus-visible { outline: none; }
-.plugin-atyrode_code .plugin-atyrode_code__mh { padding: 0.3rem 0.45rem 0.15rem; color: var(--code-text-3); font-size: 0.68rem; font-weight: 600; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__mi {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.4rem;
-  width: 100%;
-  min-height: 24px;
-  margin: 0;
-  border: 0;
-  border-radius: 2px;
-  padding: 0.1rem 0.45rem 0.1rem 0.3rem;
-  color: var(--code-text-strong);
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.plugin-atyrode_code .plugin-atyrode_code__mi:is(:hover, :focus-visible):not(:disabled) { border: 0; color: var(--code-text); background: var(--code-hover); outline: none; }
-.plugin-atyrode_code .plugin-atyrode_code__mi:disabled { color: var(--code-text-3); background: transparent; cursor: default; }
-.plugin-atyrode_code .plugin-atyrode_code__mi[data-tone="danger"] { color: var(--code-attention); }
-.plugin-atyrode_code .plugin-atyrode_code__mi-mark { display: inline-grid; place-items: center; color: var(--code-accent-text); }
-.plugin-atyrode_code .plugin-atyrode_code__mi-label { overflow: hidden; text-overflow: ellipsis; }
-.plugin-atyrode_code .plugin-atyrode_code__mi-aside { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--code-text-3); font-size: 0.68rem; }
-.plugin-atyrode_code .plugin-atyrode_code__mi-aside .keycap { border-radius: 2px; font-size: 0.62rem; padding: 0.02rem 0.3rem; }
-.plugin-atyrode_code .plugin-atyrode_code__mrule { width: auto; margin: 0.2rem 0.1rem; border: 0; border-top: 1px solid var(--code-hairline); }
-
-/* ---------------------------------------------------------------- usage section (usage-view.tsx `UsageZone`) */
-.plugin-atyrode_code .plugin-atyrode_code__pool > .mf-icon { color: var(--code-text-3); }
-.plugin-atyrode_code .plugin-atyrode_code__pool-name { min-width: 0; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
-.plugin-atyrode_code .plugin-atyrode_code__updated { color: var(--code-text-3); font-size: 0.68rem; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__ugroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: 0.6rem 1.5rem; }
-.plugin-atyrode_code .plugin-atyrode_code__ugroup { display: grid; align-content: start; gap: 0.3rem; min-width: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__ghead { display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 24px; }
-.plugin-atyrode_code .plugin-atyrode_code__pname { margin: 0; color: var(--code-text-strong); font-size: 0.74rem; font-weight: 600; }
-.plugin-atyrode_code .plugin-atyrode_code__count { color: var(--code-text-3); font-size: 0.7rem; }
-.plugin-atyrode_code .plugin-atyrode_code__acct { display: grid; gap: 0.05rem; min-width: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__idline { display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 24px; }
-.plugin-atyrode_code .plugin-atyrode_code__incl { padding: 0 0.15rem; margin-left: -0.15rem; }
-.plugin-atyrode_code .plugin-atyrode_code__ident {
-  display: block;
-  flex: 0 1 auto;
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
-  border: 0;
-  border-radius: 2px;
-  padding: 0;
-  overflow: hidden;
-  color: var(--code-text-strong);
-  background: transparent;
-  font: inherit;
-  font-size: 0.76rem;
-  line-height: 1.4;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.plugin-atyrode_code .plugin-atyrode_code__ident:hover { border: 0; color: var(--code-text); background: transparent; text-decoration: underline; text-decoration-color: var(--code-line-hover); text-underline-offset: 3px; }
-.plugin-atyrode_code .plugin-atyrode_code__ident:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 2px; }
-.plugin-atyrode_code .plugin-atyrode_code__idstate { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 0.5rem; min-width: 0; margin-left: auto; overflow: hidden; }
-/* Fixed percent and reset columns, so every bar in a provider column has the same length. */
-.plugin-atyrode_code .plugin-atyrode_code__win { display: grid; grid-template-columns: 1.6rem minmax(1.5rem, 1fr) 2.2rem minmax(0, 6.1rem); align-items: center; gap: 0.5rem; min-height: 18px; }
-.plugin-atyrode_code .plugin-atyrode_code__wl { color: var(--code-text-3); font-size: 0.66rem; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__pct { color: var(--code-text-strong); font-size: 0.72rem; text-align: right; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__rs { min-width: 0; overflow: hidden; color: var(--code-text-3); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="warn"] .plugin-atyrode_code__pct { color: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="error"] .plugin-atyrode_code__pct { color: var(--code-attention); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="unknown"] .plugin-atyrode_code__pct { color: var(--code-text-3); }
-.plugin-atyrode_code .plugin-atyrode_code__balance { display: flex; align-items: baseline; gap: 0.5rem; min-height: 18px; }
-.plugin-atyrode_code .plugin-atyrode_code__balance > .plugin-atyrode_code__wl { min-width: 1.6rem; }
-.plugin-atyrode_code .plugin-atyrode_code__amount { color: var(--code-text-strong); font-size: 0.72rem; }
-.plugin-atyrode_code .plugin-atyrode_code__block { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; color: var(--code-text-3); font-size: 0.66rem; }
-.plugin-atyrode_code .plugin-atyrode_code__unreported { margin: 0; color: var(--code-text-3); font-size: 0.68rem; }
-.plugin-atyrode_code .plugin-atyrode_code__show-more { justify-self: start; margin-left: -0.4rem; }
-.plugin-atyrode_code .plugin-atyrode_code__usage-empty { display: grid; justify-items: start; gap: 0.35rem; margin: 0; color: var(--code-text-2); font-size: 0.76rem; }
-.plugin-atyrode_code .plugin-atyrode_code__usage-empty > p { margin: 0; }
-/* Excluded and historical readings dim whole: they inform, they do not promise capacity. */
-.plugin-atyrode_code .plugin-atyrode_code__acct:is([data-excluded], [data-hist]) .plugin-atyrode_code__ubar > span { background: var(--code-line-hover); }
-.plugin-atyrode_code .plugin-atyrode_code__acct:is([data-excluded], [data-hist]) :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__amount) { color: var(--code-text-3); }
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-excluded] .plugin-atyrode_code__ident { color: var(--code-text-3); }
 
 /* ---------------------------------------------------------------- sheet frame: Back to Code, the sheet's title, its actions */
 .plugin-atyrode_code .plugin-atyrode_code__sheet { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; }
@@ -1005,16 +838,15 @@
 
 /* ---------------------------------------------------------------- touch: 44px targets for a coarse pointer, compact boxes otherwise */
 @media (pointer: coarse) {
-  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__check, .plugin-atyrode_code__primary) {
+  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__check) {
     min-width: 44px;
     min-height: 44px;
   }
 }
 
 /* ---------------------------------------------------------------- motion */
-@keyframes plugin-atyrode_code__grow { from { transform: scaleX(0); } to { transform: none; } }
 @keyframes plugin-atyrode_code__pop { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .plugin-atyrode_code :is(.plugin-atyrode_code__ubar > span, .plugin-atyrode_code__pop) { animation: none; }
-  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__primary, .plugin-atyrode_code__disclosure > summary > .mf-icon) { transition: none; }
+  .plugin-atyrode_code .plugin-atyrode_code__pop { animation: none; }
+  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__disclosure > summary > .mf-icon) { transition: none; }
 }

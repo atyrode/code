@@ -726,7 +726,10 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   }
 }
 
-/** The line's team at rest: where its roles lead, then the one thing worth saying next (the press's scope, quota, the review). */
+/**
+ * The line's team at rest: where its roles lead, then the one thing worth saying next (the press's
+ * scope, quota, the review). A press that saves the workspace team offers to revert the edit instead.
+ */
 function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] {
   const { team, verb } = facts;
   const counts = team.counts.map(({ family, count }) => `${count} on ${vocab.account(family)}`).join(" · ");
@@ -741,7 +744,7 @@ function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
     const pool = facts.reviewed.pool.map(({ family, count }) => `${vocab.account(family)} ${count}`).join(" · ");
     notes.push(part(`reviewed on ${facts.reviewed.machine}${pool ? `: ${pool}` : ""}`));
   } else if (team.unread && (verb.label === "Review" || verb.label === "Save & review")) notes.push(part("the review shows the pool before anything runs", "meta"));
-  return [first, line(notes)];
+  return [first, line(notes, verb.saves ? [{ kind: "fix", key: "revert", label: "revert", fix: { kind: "discard" } }] : [])];
 }
 
 /**

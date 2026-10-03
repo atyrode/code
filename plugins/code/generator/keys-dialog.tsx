@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef } from "react";
 import { keyCapLabel } from "@manifold/plugin/hooks";
 import { KeyCap } from "@manifold/ui";
 
-/** Keys-dialog class prefix; every part hangs from the generator root (statement.css). */
+/** Keys-dialog class prefix; every part hangs from the generator root (styles.css). */
 const K = "plugin-atyrode_code_generator__keys-dialog";
 
 export type KeyHelp = { readonly keys: readonly string[]; readonly text: string };

@@ -30,11 +30,11 @@ export const ROSTER_BELOW_PX = 560;
 export type BoardPreview = { readonly key: string; readonly review: Review };
 
 /**
- * What the board needs from the usage reading (today `usage-view.tsx` `WorkspaceUsageZone`), as the
+ * What the board needs from the usage reading (the workbench model's `usage`), as the
  * `QuotaReading` every pool is judged on plus the account choices it edits.
  * `view`: `useAccountUsage(...).value`, the projection retained across polls; null before the first read.
- * `current`: true only while `view` is the present reading, the inverse of the zone's `cached`
- * (`useAccountUsage(...).cached`, historical choices, a failed configuration or accounts read).
+ * `current`: true only while `view` is the present reading: not `useAccountUsage(...).cached`, not
+ * historical choices, and no failed configuration or accounts read.
  * `nowMs`: the clock the board judges against, read once per minute (`ui.tsx` `useMinuteTick`) so
  * ages and elapsed ticks move without re-judging every render.
  * `accounts`: the saved inclusion and its edit, or null when the workspace has no account choices yet.
@@ -43,13 +43,13 @@ export type BoardUsage = QuotaReading & { readonly accounts: BoardAccounts | nul
 export type BoardAccounts = {
   /** The saved choices (`Configuration.accounts`): the active preset, its exclusions, the presets. */
   readonly choices: AccountChoices;
-  /** The account inventory is history (the zone's `historicalAccounts`): an include switch refuses on it. */
+  /** The account inventory is history (stale, unread or failed): an include switch refuses on it. */
   readonly historical: boolean;
   /** An edit is in flight; switches wait for it. */
   readonly pending: boolean;
   /** Why the last edit failed, said once beside the accounts; null when it did not. */
   readonly failure: string | null;
-  /** The zone's guarded `changeAccounts` edit: the exact saved revision, never retried. */
+  /** The model's guarded `changeAccounts` edit: the exact saved revision, never retried. */
   readonly change: (edit: AccountChoiceChange) => void;
 };
 

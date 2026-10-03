@@ -5,12 +5,12 @@ import { DomainError } from "../../domain/contracts.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import { quotaPools, roleOutcomes, type QuotaPool, type RoleOutcome } from "../../domain/quota.ts";
 import { accountWord, ago, hueOf } from "../ui.tsx";
-import { displayAliases } from "./dials.tsx";
+import { displayAliases } from "./aliases.ts";
 import { boardView, ROSTER_BELOW_PX, type BoardMove, type BoardPreview, type BoardSeat, type BoardUsage, type BoardView, type SeatLine } from "./board-model.ts";
 import { balanceText, PoolHead, when } from "./pool-head.tsx";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
-/** Generator-panel class prefix; every part hangs from the generator root (board.css). */
+/** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const THINKING = ThinkingLevelSchema.options;
 const EFFORT_WORDS: Readonly<Record<string, string>> = { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "x-high", max: "max" };
@@ -78,7 +78,7 @@ export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardP
     rows={form === "grid" ? board.headRows : null} quiet={quiet} open={open === column.family} style={style}
     onToggle={() => setOpen(previous => previous === column.family ? null : column.family)} />;
   const draw = { compiled, aliases, nowMs: usage.nowMs, rungs: board.rungs, tiers: board.tiers };
-  return <section ref={root} className={`${G}board`} data-form={form} aria-labelledby={`${G}board-title`}>
+  return <section ref={root} className={`${G}section ${G}board`} data-form={form} aria-labelledby={`${G}board-title`}>
     <h2 id={`${G}board-title`} className="plugin-atyrode_code__sr">Seats</h2>
     {/* The roster reserves its preview line, so pointing at a team never moves the rows; columns need one only for a notice. */}
     {(form === "roster" || notice) && <p className={`${G}board-line`} title={moves || notice || undefined}>{moves || notice}</p>}

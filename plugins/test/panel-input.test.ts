@@ -1,45 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  panelShortcut, panelWheel, wheelScrolled, wheelTravel, WHEEL_IDLE_MS, WHEEL_REST_MS, WHEEL_STEP_PX, WHEEL_STILL, type PanelKey, type WheelInput, type WheelRest,
+  panelWheel, wheelScrolled, wheelTravel, WHEEL_IDLE_MS, WHEEL_REST_MS, WHEEL_STEP_PX, WHEEL_STILL, type WheelInput, type WheelRest,
 } from "../code/generator/panel-input.ts";
-
-/** A key pressed on a dial inside the panel; each test changes only what it is about. */
-function press(key: string, changes: Partial<PanelKey> = {}): PanelKey {
-  return { key, mod: false, alt: false, repeat: false, defaultPrevented: false, inPanel: true, inField: false, inPopover: false, inTask: false, pinned: false, ...changes };
-}
-
-describe("the panel's keys", () => {
-  test("a key pressed in another plugin never acts on Code, not even the next-step chord or Escape", () => {
-    for (const key of ["Enter", "Escape", "d", "f", "i", "r", "/", "?"]) {
-      expect(panelShortcut(press(key, { inPanel: false }))).toBeNull();
-      expect(panelShortcut(press(key, { inPanel: false, mod: true }))).toBeNull();
-    }
-    expect(panelShortcut(press("Escape", { inPanel: false, inTask: true, pinned: true }))).toBeNull();
-  });
-
-  test("Mod+Enter takes the next step from anywhere in the panel, once per press", () => {
-    expect(panelShortcut(press("Enter", { mod: true }))).toBe("next-step");
-    expect(panelShortcut(press("Enter", { mod: true, inTask: true, inField: true }))).toBe("next-step");
-    expect(panelShortcut(press("Enter", { mod: true, inPopover: true }))).toBe("next-step");
-    expect(panelShortcut(press("Enter", { mod: true, repeat: true }))).toBeNull();
-    expect(panelShortcut(press("Enter"))).toBeNull();
-  });
-
-  test("Escape leaves the task or unpins roles, and otherwise does nothing: it never discards edits", () => {
-    expect(panelShortcut(press("Escape", { inTask: true, inField: true, pinned: true }))).toBe("leave-task");
-    expect(panelShortcut(press("Escape", { pinned: true }))).toBe("unpin");
-    expect(panelShortcut(press("Escape"))).toBeNull();
-    expect(panelShortcut(press("Escape", { inPopover: true, pinned: true }))).toBeNull();
-  });
-
-  test("bare keys act on the panel but never while typing, under a modifier, in a popover or once handled", () => {
-    expect([..."/dfir?"].map(key => panelShortcut(press(key)))).toEqual(["task", "defaults", "fallbacks", "ids", "refresh", "keys"]);
-    for (const changes of [{ inField: true }, { mod: true }, { alt: true }, { inPopover: true }, { defaultPrevented: true }, { repeat: true }]) {
-      expect(panelShortcut(press("d", changes))).toBeNull();
-    }
-    expect(panelShortcut(press("x"))).toBeNull();
-  });
-});
 
 describe("the wheel in the panel", () => {
   /** A keyboard-focused control the pointer has rested on: the one state, besides an open drum, that turns. */

@@ -6,8 +6,8 @@ import { OMP_PLUGIN_ID } from "@atyrode/manifold-omp";
 import type { Lane } from "../../domain/contracts.ts";
 import { codeOperationFailure, codeWorkflow, useCodeMachines, useCodeTerminals, useWorkflowQuery } from "../machine-web.ts";
 import { WorkflowError } from "../workflow.ts";
-import { ago, familyWord, hueOf, useMinuteTick } from "../ui.tsx";
-import type { GateVerdict, WorkbenchIntent } from "./launch-step.ts";
+import { familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
+import type { KeyHelp } from "./keys-dialog.tsx";
 import type { RecentTeam } from "./recent-teams.ts";
 import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
@@ -16,19 +16,18 @@ import {
 } from "./earlier-model.ts";
 import { sameTeam, teamWords } from "./statement-model.ts";
 
-/** Generator-panel class prefix; every part hangs from the generator root (earlier.css). */
+/** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 /** Saved sessions shown before "Show all": the newest, so a machine with hundreds of transcripts stays one glance. */
 const SAVED_SHOWN = 5;
+/** The keys the panel's keys dialog lists for this section; the digits are decided with the statement's keys (statement-keys.ts). */
+export const EARLIER_KEY_HELP: readonly KeyHelp[] = [{ keys: ["1–9"], text: "Recall the recent team with that number" }];
 
 /**
  * The part of the workbench the earlier statements read and act through; a `WorkbenchModel`
- * satisfies it. `gate` may take the session a resume would name: the one gate cannot judge a row's
- * Resume without it, because it refuses an unchosen session before its later checks. A gate that
- * ignores the argument still guards every press, it just says those later refusals only when pressed.
+ * satisfies it. A row's Resume asks `gate` with its own session, so its refusal shows before it is pressed.
  */
-export type EarlierModel = Pick<WorkbenchModel, "selection" | "record" | "localDraft" | "machineId" | "savedSessionId" | "setSavedSessionId" | "inFlight"> & {
-  gate: (intent: WorkbenchIntent, sessionId?: string) => GateVerdict;
+export type EarlierModel = Pick<WorkbenchModel, "selection" | "record" | "localDraft" | "machineId" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "gate"> & {
   actions: Pick<WorkbenchActions, "resume" | "recallTeam" | "discardChanges">;
 };
 export type EarlierProps = {
@@ -92,12 +91,6 @@ function Verb({ className, name, subject, verdict, busy = false, onPress, announ
       onClick={() => { if (verdict.open) onPress(); else announce(`${subject ?? name} · ${verdict.reason}`); }}>{children}</button>
     {!verdict.open && <span id={reason} hidden>{verdict.reason}</span>}
   </>;
-}
-
-/** `2d ago`, or `just now`. */
-function since(ms: number): string {
-  const age = ago(ms);
-  return age === "now" ? "just now" : `${age} ago`;
 }
 
 /**

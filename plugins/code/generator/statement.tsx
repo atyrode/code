@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode, type RefObject } from "react";
 import type { MachineSummary } from "@manifold/protocol";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
@@ -17,7 +17,7 @@ import {
 import { useWheelTurn } from "./wheel-turn.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
-/** Statement class prefix; every part hangs from the generator root (statement.css). */
+/** Statement class prefix; every part hangs from the generator root (styles.css). */
 const S = "plugin-atyrode_code_generator__stmt-";
 const PANEL_ROOT = ".plugin-atyrode_code_generator";
 const HOUR = 3_600_000;
@@ -47,6 +47,10 @@ export type StatementProps = {
   readonly onOpen: (place: StatementPlace, family?: string) => void;
   /** `?`: show the keys dialog. */
   readonly onKeys: () => void;
+  /** `r`: read the accounts, usage, machines and the workspace team again. */
+  readonly onRefresh: () => void;
+  /** A quiet control beside the status lines (the session options). */
+  readonly aside?: ReactNode;
 };
 
 /** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */
@@ -98,7 +102,7 @@ function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonl
  * through the workbench model's gate; the line only names the step, shows what each option would do
  * and quota's verdict on it, and writes the consequence of whatever is pointed in the status lines.
  */
-export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys }: StatementProps) {
+export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, aside }: StatementProps) {
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLDivElement>(null);
@@ -115,6 +119,8 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   const starter = model.profile?.metadata != null;
   const lastLaunch = model.recentTeams[0]?.selection ?? null;
   const shown = model.review ?? controlsReview;
+  // Nothing to show yet because the first reads are still out, rather than because one failed.
+  const reading = !model.profile && !model.document && model.queries.configuration.error === null && model.queries.metadata.error === null;
   const teamGate = model.gate("edit-team"), machineGate = model.gate("edit-machine");
   const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, account: accountWord, time: at => at - Date.now() > 20 * HOUR ? clock(at) : hhmm(at) }), []);
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
@@ -182,10 +188,15 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     machine: machine?.name ?? model.launchReview.destination.machineId,
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
   } : null;
+  // A verification that stopped says so until the next one starts; the verb, Verify models again, is its retry.
+  const stoppedVerifying = verification.failure && verification.phase === null ? {
+    text: verification.failure.cancelled ? "Verification cancelled" : `Verification stopped at ${verification.failure.step}: ${verification.failure.reason}`,
+    failed: !verification.failure.cancelled,
+  } : null;
   const lines = statusLines({
     verb, phase: verification.phase, progress, charge, inFlight: model.inFlight, busy: model.busy, chaining: model.chaining, launching,
     machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, otherMachine: other && { id: other.id, name: other.name },
-    message: model.message, outcome: model.outcome, launchStatus: model.launchStatus, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
+    message: model.message ?? stoppedVerifying, outcome: model.outcome, launchStatus: model.launchStatus, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
     team: quota?.team ?? { counts: [], fallsBack: null, tight: [], unread: false }, reviewed, differs: stopped !== null && stopped === model.launchReview,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, pointed,
@@ -292,6 +303,7 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     switch (action.kind) {
       case "verb": press(); return true;
       case "keys": onKeys(); return true;
+      case "refresh": onRefresh(); return true;
       case "recall": recall(action.index); return true;
       case "focus": (action.to === "verb" ? verbButton.current : slotElement(action.to))?.focus(); return true;
       case "open": toggleOpen(action.word); return true;
@@ -415,7 +427,7 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
           onCommit={(option, via, from) => { commitOption(word, option, via, from); if (word !== "extras") setOpen(null); }}
           onPoint={option => point(word, option)} />)}
       </div>) : <div className={`${S}row`} style={{ gridTemplateColumns: inline ? "max-content minmax(0, 1fr)" : "minmax(0, 1fr)" }}>
-        {inline && verbCell}<span className={`${S}empty`}>{model.starterError ?? "Reading the team"}</span>
+        {inline && verbCell}<span className={`${S}empty`}>{model.starterError ?? (reading ? "Reading the team" : "No team to show")}</span>
       </div>}
     </div>
     <div className={`${S}status`}>
@@ -425,6 +437,7 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
           onClick={event => model.actions.confirmCharge({ detail: event.detail, repeat: false }, charge)}
           onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>Confirm charge</button>}
         onCancel={verification.cancel} onFix={runFix} onPointFix={pointFix} />)}
+      {aside && <div className={`${S}aside`}>{aside}</div>}
     </div>
   </section>;
 }

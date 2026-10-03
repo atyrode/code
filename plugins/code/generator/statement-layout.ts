@@ -54,7 +54,7 @@ export function ghostedWords(form: StatementForm): readonly StatementWord[] {
 /** One word cell's width at a line size: connector, the widest value or ghost, the room after it. */
 export function slotWidth(word: StatementWord, text: SlotText, size: LineSize, ghosted: boolean, measure: TextMeasure): number {
   const connector = text.connector ? measure(text.connector, size, 400) + 0.3 * size : 0;
-  // A lane mark is 0.9em wide (statement.css `stmt-lane-mark`) and sits 0.3em before its value.
+  // A lane mark is 0.9em wide (styles.css `stmt-lane-mark`) and sits 0.3em before its value.
   const mark = text.marked ? 1.2 * size : 0;
   let value = Math.max(0, ...text.labels.map(label => measure(label, size, 650)));
   if (word === "machine") value = Math.min(value, MACHINE_EM * size);

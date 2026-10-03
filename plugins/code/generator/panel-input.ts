@@ -1,46 +1,9 @@
 /*
- * The main view's keys and wheel, as decisions over plain facts so the rules can be read and
- * tested apart from the DOM. Code's keys are panel-local: in-realm plugins share one document, so a
- * key pressed in another plugin must never act on Code, and a key Code consumes must not also act
- * on another plugin's global binding. The wheel belongs to scrolling unless a control holds focus and
- * the whole panel is at rest, so scrolling past the dials never edits the team.
+ * The panel's wheel, as decisions over plain facts so the rules can be read and tested apart from
+ * the DOM. The wheel belongs to scrolling unless a word is open or holds keyboard focus and the
+ * whole panel is at rest, so scrolling past the statement never edits the team. The panel's keys
+ * are decided in statement-keys.ts.
  */
-
-export type PanelShortcut = "next-step" | "leave-task" | "unpin" | "task" | "defaults" | "fallbacks" | "ids" | "refresh" | "keys";
-export type PanelKey = {
-  readonly key: string;
-  /** Ctrl or Cmd: the platform's `Mod`. */
-  readonly mod: boolean;
-  readonly alt: boolean;
-  readonly repeat: boolean;
-  readonly defaultPrevented: boolean;
-  /** The event's target is inside this panel's root (its popovers included). */
-  readonly inPanel: boolean;
-  /** The target edits text, where bare keys are typing. */
-  readonly inField: boolean;
-  /** The target is inside one of the panel's menus or popovers, which own their own keys. */
-  readonly inPopover: boolean;
-  /** The target is the task field. */
-  readonly inTask: boolean;
-  /** Roles are pinned open in the routing table. */
-  readonly pinned: boolean;
-};
-const BARE_KEYS: Readonly<Record<string, PanelShortcut>> = { "/": "task", d: "defaults", f: "fallbacks", i: "ids", r: "refresh", "?": "keys" };
-
-/**
- * The shortcut a key press means, or null when Code must leave it alone: anything from outside
- * the panel; a held key's repeats, so holding Mod+Enter cannot take one step after another; bare
- * keys while typing; keys a popover already handled. Escape leaves the task or unpins roles and
- * never discards edits.
- */
-export function panelShortcut(press: PanelKey): PanelShortcut | null {
-  if (!press.inPanel || press.repeat) return null;
-  if (press.mod && press.key === "Enter") return "next-step";
-  if (press.defaultPrevented || press.inPopover) return null;
-  if (press.key === "Escape") return press.inTask ? "leave-task" : press.pinned ? "unpin" : null;
-  if (press.inField || press.mod || press.alt) return null;
-  return BARE_KEYS[press.key] ?? null;
-}
 
 /**
  * How long the whole panel must have been still, from scrolling and from wheel events left to

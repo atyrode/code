@@ -1,10 +1,17 @@
 import { useLayoutEffect, useMemo, useRef, type CSSProperties, type KeyboardEvent } from "react";
 import { accountWord, ago, clock, hhmm, hueOf } from "../ui.tsx";
 import { accountRows, type BoardAccounts, type BoardUsage, type HeadVerdict, type PoolHead as PoolHeadView } from "./board-model.ts";
+import type { KeyHelp } from "./keys-dialog.tsx";
 import type { GateVerdict } from "./launch-step.ts";
 
-/** Generator-panel class prefix; every part hangs from the generator root (board.css). */
+/** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
+/** The keys the panel's keys dialog lists for the pool heads and their accounts. */
+export const BOARD_KEY_HELP: readonly KeyHelp[] = [
+  { keys: ["↵"], text: "Open or close a pool's accounts" },
+  { keys: ["Space"], text: "Include or exclude the focused account" },
+  { keys: ["Esc"], text: "Close the accounts" },
+];
 
 /** A reset or reopening as the board says it: a clock time today, with the weekday once it is a day away. */
 export function when(at: number, nowMs: number): string {

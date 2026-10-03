@@ -1,10 +1,10 @@
 import {
   createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
-  type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, type RefObject,
+  type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref, type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { keyCapLabel } from "@manifold/plugin/hooks";
-import { ControlIcon, KeyCap, Spinner, type ControlKind } from "@manifold/ui";
+import { ControlIcon, type ControlKind } from "@manifold/ui";
 
 /*
  * The primitives shared by every Code panel, in Manifold's own vocabulary: the Plugin Manager's
@@ -65,20 +65,17 @@ export function middleId(value: string, max: number): string {
   return slash > 0 ? middle(value.slice(slash + 1), max) : middle(value, max);
 }
 const MINUTE = 60_000;
-export function countdown(ms: number): string {
-  if (ms < 30_000) return "now";
-  const total = Math.ceil(ms / MINUTE);
-  const days = Math.floor(total / 1440), hours = Math.floor((total % 1440) / 60), minutes = total % 60;
-  if (days) return `${days}d ${hours}h`;
-  if (hours) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
 export function ago(ms: number): string {
   const minutes = Math.floor(Math.max(0, ms) / MINUTE);
   if (minutes < 1) return "now";
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+/** How long ago, as a phrase: `2d ago`, or `just now`. */
+export function since(ms: number): string {
+  const age = ago(ms);
+  return age === "now" ? "just now" : `${age} ago`;
 }
 const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function hhmm(timestamp: number): string {
@@ -104,32 +101,13 @@ export function useMinuteTick(): number {
   return tick;
 }
 
-// ---------------------------------------------------------------- status, buttons, checkboxes
-
-type Tone = "warn" | "attention" | "ok" | "on" | "muted";
-/**
- * One status fact as a dot and coloured text, never a box: `● Unverified` in warn, `Read-only` in
- * muted text. Adjacent facts are divided by a thin rule (CSS), so a status line reads as one sentence.
- */
-export function State({ tone = "muted", title, children }: { tone?: Tone | undefined; title?: string | undefined; children: ReactNode }) {
-  return <span className="plugin-atyrode_code__state" data-tone={tone} title={title}>
-    {tone !== "muted" && <span className="plugin-atyrode_code__dot" aria-hidden="true" />}{children}
-  </span>;
-}
+// ---------------------------------------------------------------- buttons and checkboxes
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { icon?: ControlKind | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
 /** The secondary button: borderless, a word and optionally a host control icon before it; only hover gives it a ground. */
 export function Button({ icon, className, buttonRef, type = "button", children, ...rest }: ButtonProps) {
   return <button ref={buttonRef} type={type} className={cx("plugin-atyrode_code__button", className)} {...rest}>
     {icon && <ControlIcon kind={icon} size={13} />}{children}
-  </button>;
-}
-
-type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { icon: ControlKind; label: string; buttonRef?: Ref<HTMLButtonElement> | undefined };
-/** One host control icon on a borderless 24px button, named for assistive technology. */
-export function IconButton({ icon, label, className, buttonRef, type = "button", title, ...rest }: IconButtonProps) {
-  return <button ref={buttonRef} type={type} className={cx("plugin-atyrode_code__button plugin-atyrode_code__icon-button", className)} aria-label={label} title={title ?? label} {...rest}>
-    <ControlIcon kind={icon} size={14} />
   </button>;
 }
 
@@ -148,25 +126,7 @@ export function Check({ checked, onChange, className, buttonRef, onClick, childr
   </button>;
 }
 
-type PrimaryProps = ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean | undefined; keyHint?: boolean | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
-/**
- * The one accent button per surface, naming the next step. Busy shows the host Spinner with the
- * step in flight. Neither busy nor `disabled` ever sets the native attribute: the button reads
- * `aria-disabled` and ignores presses, so a press that turns it unavailable never drops focus to
- * the page. A held Enter repeats its keydown; only the first press activates, so holding it cannot
- * take a second step.
- */
-export function PrimaryButton({ busy = false, disabled = false, keyHint = true, className, children, buttonRef, onClick, onKeyDown, title, ...rest }: PrimaryProps) {
-  const inert = busy || disabled;
-  return <button ref={buttonRef} type="button" className={cx("plugin-atyrode_code__primary", className)} aria-disabled={inert || undefined} aria-busy={busy || undefined}
-    title={title ?? (keyHint && typeof children === "string" ? withKey(children, LAUNCH_STROKE) : undefined)}
-    onClick={event => { if (!inert) onClick?.(event); }} onKeyDown={event => { if (event.repeat && event.key === "Enter") event.preventDefault(); onKeyDown?.(event); }} {...rest}>
-    {busy && typeof children === "string" ? <Spinner label={children} /> : children}
-    {keyHint && !busy && <KeyCap label={keyCapLabel(LAUNCH_STROKE)} />}
-  </button>;
-}
-
-// ---------------------------------------------------------------- section bands, notices, meters
+// ---------------------------------------------------------------- section bands and notices
 
 /** A section's heading row (Generator, Routing, Usage): uppercase label, a count, then the section's actions. */
 export function SectionBand({ id, title, count, actions }: { id?: string | undefined; title: string; count?: ReactNode; actions?: ReactNode }) {
@@ -187,103 +147,11 @@ export function Notice({ kind = "info", children, actions, details, live = true,
   </div>;
 }
 /** Technical text behind a disclosure, never in the main flow. */
-export function Details({ label, children }: { label: string; children: string }) {
+function Details({ label, children }: { label: string; children: string }) {
   return <details className="plugin-atyrode_code__disclosure">
     <summary><ControlIcon kind="collapsed" size={12} />{label}</summary>
     <pre>{children}</pre>
   </details>;
-}
-
-/** A five-step estimate as segments; `preview` marks what a hovered choice would add or drop. */
-export function SegmentMeter({ value, preview = null, total = 5, warnAtTop = false }: { value: number; preview?: number | null; total?: number; warnAtTop?: boolean }) {
-  const lit = Math.max(0, Math.min(total, Math.round(value)));
-  const next = preview === null ? lit : Math.max(0, Math.min(total, Math.round(preview)));
-  return <span className="plugin-atyrode_code__segments" data-top={warnAtTop && (preview === null ? lit : next) === total || undefined} aria-hidden="true">
-    {Array.from({ length: total }, (_, index) => <i key={index} data-on={index < lit || undefined}
-      data-pv={index >= lit && index < next ? "add" : index < lit && index >= next ? "drop" : undefined} />)}
-  </span>;
-}
-
-/** A quota reading as one continuous bar. Neutral below 80%; warn from 80%, attention from 95%. */
-export function UsageBar({ percent, level }: { percent: number; level: "ok" | "warn" | "error" | "unknown" }) {
-  const width = Math.max(0, Math.min(100, percent));
-  return <span className="plugin-atyrode_code__ubar" data-level={level} aria-hidden="true">
-    <span style={{ inlineSize: `${width}%` } as CSSProperties} />
-  </span>;
-}
-
-// ---------------------------------------------------------------- readout
-
-/**
- * The readout follows whatever control the pointer rests on, else whatever holds keyboard focus.
- * Controls opt in declaratively with `data-readout` (and `data-readout-label`), so the same text
- * serves hover and focus without a second source.
- */
-type ReadoutState = { active: HTMLElement | null };
-const ReadoutContext = createContext<ReadoutState>({ active: null });
-export const ReadoutProvider = ReadoutContext.Provider;
-
-export function useReadoutRoot(onActive?: (element: HTMLElement | null) => void) {
-  const hover = useRef<HTMLElement | null>(null);
-  const focus = useRef<HTMLElement | null>(null);
-  const [state, setState] = useState<ReadoutState>({ active: null });
-  const notify = useRef(onActive);
-  notify.current = onActive;
-  const last = useRef<HTMLElement | null>(null);
-  function publish() {
-    const active = hover.current ?? focus.current;
-    setState(previous => previous.active === active ? previous : { active });
-    if (last.current !== active) { last.current = active; notify.current?.(active); }
-  }
-  return {
-    state,
-    rootProps: {
-      onMouseOver(event: MouseEvent<HTMLElement>) {
-        const element = (event.target as Element).closest<HTMLElement>("[data-readout]");
-        if (element === hover.current) return;
-        hover.current = element && event.currentTarget.contains(element) ? element : null;
-        publish();
-      },
-      onMouseLeave() { hover.current = null; publish(); },
-      onFocus(event: FocusEvent<HTMLElement>) {
-        const target = event.target as HTMLElement;
-        const element = target.closest<HTMLElement>("[data-readout]");
-        // Only keyboard focus drives the readout; a click already shows it through hover.
-        focus.current = element && target.matches(":focus-visible") ? element : null;
-        publish();
-      },
-      onBlur(event: FocusEvent<HTMLElement>) {
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-        focus.current = null;
-        publish();
-      },
-    },
-  };
-}
-
-export type Readout = { label: string | null; text: string };
-function readoutOf(element: HTMLElement | null): Readout | null {
-  if (!element?.isConnected || element.dataset.readout === undefined) return null;
-  return { label: element.dataset.readoutLabel ?? null, text: element.dataset.readout };
-}
-/** The active control's readout, re-read after every render because a commit rewrites the same element's text. */
-function useReadout(): Readout | null {
-  const { active } = useContext(ReadoutContext);
-  const [value, setValue] = useState<Readout | null>(null);
-  useLayoutEffect(() => {
-    const next = readoutOf(active);
-    setValue(previous => previous?.label === next?.label && previous?.text === next?.text ? previous : next);
-  });
-  return value;
-}
-
-/** The stable help line: the hovered or focused control's explanation, else `fallback`. Its box never changes size. */
-export function ReadoutLine({ fallback, className }: { fallback: Readout | null; className?: string | undefined }) {
-  const readout = useReadout();
-  const shown = readout ?? fallback;
-  return <p className={cx("plugin-atyrode_code__readout", className)} aria-live="polite">
-    {shown && <>{shown.label && <strong>{shown.label}</strong>}{shown.text}</>}
-  </p>;
 }
 
 // ---------------------------------------------------------------- menus and popovers
@@ -318,8 +186,6 @@ export function useMenu(onChange?: (open: boolean) => void): MenuHandle {
   const toggle = useCallback(() => set(!latest.current.open), [set]);
   return { open, anchor, toggle, close };
 }
-
-const MenuContext = createContext<{ close: (restore?: boolean) => void } | null>(null);
 
 /** `role="menu"`: arrow keys move, Esc and Tab close. `role="dialog"`: a small form that stays open while scrolling. */
 export function Menu({ menu, label, role = "menu", placement = "below", align = "start", className, children }: {
@@ -388,31 +254,9 @@ export function Menu({ menu, label, role = "menu", placement = "below", align = 
     event.preventDefault();
     items[next]?.focus();
   }
-  return createPortal(<MenuContext.Provider value={{ close }}>
-    <div ref={surface} className={cx("plugin-atyrode_code__pop", className)} role={role} aria-label={label} data-popover="" tabIndex={-1} style={position} onKeyDown={keys}>
-      {children}
-    </div>
-  </MenuContext.Provider>, layer);
-}
-
-export function MenuHeader({ children }: { children: ReactNode }) {
-  return <div className="plugin-atyrode_code__mh">{children}</div>;
-}
-export function MenuRule() {
-  return <hr className="plugin-atyrode_code__mrule" />;
-}
-/** A menu row: a check for the current choice, the label, then a quiet fact or key on the right. */
-export function MenuItem({ children, onSelect, current = false, aside, tone, disabled = false, keepOpen = false }: {
-  children: ReactNode; onSelect: () => void; current?: boolean; aside?: ReactNode; tone?: "danger" | undefined;
-  disabled?: boolean; keepOpen?: boolean;
-}) {
-  const menu = useContext(MenuContext);
-  return <button type="button" role="menuitem" className="plugin-atyrode_code__mi" aria-current={current || undefined} data-tone={tone} disabled={disabled}
-    onClick={() => { if (!keepOpen) menu?.close(true); onSelect(); }}>
-    <span className="plugin-atyrode_code__mi-mark" aria-hidden="true">{current && <ControlIcon kind="confirm" size={14} />}</span>
-    <span className="plugin-atyrode_code__mi-label">{children}</span>
-    {aside !== undefined && <span className="plugin-atyrode_code__mi-aside">{aside}</span>}
-  </button>;
+  return createPortal(<div ref={surface} className={cx("plugin-atyrode_code__pop", className)} role={role} aria-label={label} data-popover="" tabIndex={-1} style={position} onKeyDown={keys}>
+    {children}
+  </div>, layer);
 }
 
 // ---------------------------------------------------------------- sheets

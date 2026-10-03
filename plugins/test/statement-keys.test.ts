@@ -13,12 +13,15 @@ describe("the verb, the keys dialog and recent teams", () => {
     expect(statementKey(press("Enter", { mod: true, repeat: true }))).toBeNull();
   });
 
-  test("digits recall only the teams there are, and never while typing or inside a dialog", () => {
+  test("digits recall only the teams there are; digits, ? and r never act while typing or inside a dialog", () => {
     expect(statementKey(press("3", { word: null }))).toEqual({ kind: "recall", index: 2 });
     expect(statementKey(press("4", { word: null }))).toBeNull();
     expect(statementKey(press("1", { inField: true }))).toBeNull();
     expect(statementKey(press("1", { inDialog: true }))).toBeNull();
     expect(statementKey(press("?", { word: null }))).toEqual({ kind: "keys" });
+    expect(statementKey(press("r", { word: null }))).toEqual({ kind: "refresh" });
+    expect(statementKey(press("r", { inField: true }))).toBeNull();
+    expect(statementKey(press("r", { repeat: true }))).toBeNull();
   });
 
   test("a key another control already handled, or held with Alt, is left alone", () => {

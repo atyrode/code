@@ -6,7 +6,7 @@ import { OMP_PLUGIN_ID, INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, Thinking
 import { compileCatalog } from "../../domain/catalog.ts";
 import type { CatalogReview, Configuration, Target } from "../contract.ts";
 import { codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useOmpJob, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
-import { Routing } from "./dials.tsx";
+import { Routing } from "./routing-table.tsx";
 import { PermissionReview } from "../permission-review.tsx";
 import { operationReady } from "../permission-plan.ts";
 

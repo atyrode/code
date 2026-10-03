@@ -1,15 +1,19 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { formatManifoldUri, type MachineSummary, type ServiceReadArgs } from "@manifold/protocol";
+import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
+import { servedProviders } from "../../domain/accounts.ts";
 import { defaultSelection, routeService, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
-import type { CatalogDocument, Selection } from "../../domain/contracts.ts";
+import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import type { ChargeReview, SessionReview } from "../workflow.ts";
-import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
+import { useMinuteTick } from "../ui.tsx";
+import { useAccountUsage } from "../usage-view.tsx";
+import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
 import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, launchStatusText, nextLaunchStep,
@@ -18,9 +22,6 @@ import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 import type { ConfirmActivation } from "./verification.ts";
-
-/** The suggest door's prompt limit (contract.ts `suggest` input); longer tasks are kept, never truncated. */
-const SUGGESTION_PROMPT_MAX = 16384;
 
 /** The profile the controls show: the frozen local draft, or one derived from the shared record
  * or the bundled preview. A `starter` profile is render-only: verification is what saves it. */
@@ -38,17 +39,14 @@ export type ProfileDraft = {
 };
 /** A polled observation (machine-web.ts `useWorkflowQuery`): `data` and `error` are mutually exclusive. */
 export type WorkbenchQuery<T> = { data: T | null; error: string | null; refreshing: boolean; refresh: () => void };
-/** The ready `suggest`/`classify` service that `codeWorkflow(host).classifier` finds on the destination (workflow.ts). */
-export type ClassifierService = Pick<ServiceReadArgs, "serviceId" | "revision"> & {
-  operations: (Pick<ServiceReadArgs, "operationId"> & { ready: boolean; invocable: boolean })[];
-};
 export type WorkbenchQueries = {
   configuration: WorkbenchQuery<ActionResult<"readConfiguration">>;
   metadata: WorkbenchQuery<ModelCatalogSnapshot>;
   setup: WorkbenchQuery<OmpResult<"describeDestination">>;
-  classifier: WorkbenchQuery<ClassifierService | null>;
   defaults: WorkbenchQuery<OmpResult<"readDefaults">>;
   skillCatalog: WorkbenchQuery<OmpResult<"readSkillCatalog">>;
+  /** OMP's account observation: who is signed in, which the saved choices include, and its freshness. */
+  accounts: WorkbenchQuery<OmpResult<"accounts">>;
 };
 export type WorkbenchMessage = { text: string; failed: boolean };
 /** A step in flight, for the verb to name it. */
@@ -64,7 +62,7 @@ export type WorkbenchInput = { host: HostServices; target: Target | null; machin
  * it starts and, in a chain, again before each later step; a refused one does nothing.
  */
 export type WorkbenchActions = {
-  /** Edit the profile controls. Re-derives a starter document for a new budget; revokes review and suggestion. */
+  /** Edit the profile controls. Re-derives a starter document for a new budget; revokes the review. */
   updateSelection: (value: Selection) => void;
   /** Recall a team this browser launched, if the current catalog still forms it exactly; otherwise say so. */
   recallTeam: (team: RecentTeam) => void;
@@ -80,15 +78,12 @@ export type WorkbenchActions = {
   confirmCharge: (activation: ConfirmActivation, shown: ChargeReview) => void;
   /** Resume the selected saved session, optionally replacing its model choices with this saved team. */
   resume: (withTeam: boolean) => Promise<void>;
-  /** Show the suggestion panel; nothing is sent until `suggest`. */
-  openSuggestion: () => void;
-  /** Close the suggestion panel and drop its result. */
-  closeSuggestion: () => void;
-  /** Explicitly send the task to the configured classifier. Nothing is saved. */
-  suggest: () => Promise<void>;
-  /** Apply the shown suggestion as a local edit and close the panel. */
-  applySuggestion: () => void;
-  /** Re-observe every query. */
+  /**
+   * Edit the saved account choices (`changeAccounts`) at the exact observed revision, never retried,
+   * never an inclusion on a historical inventory; one edit at a time, through the accounts gate.
+   */
+  changeAccounts: (edit: AccountChoiceChange) => void;
+  /** Re-observe every query, accounts and usage included. */
   refresh: () => void;
 };
 
@@ -99,8 +94,6 @@ export type WorkbenchModel = {
   /** Shared workspace policy: an acknowledged save receipt until a read catches up with it, else the observation. */
   record: Configuration | null;
   machineId: string;
-  /** Increments whenever the destination machine changes; scopes per-destination children. */
-  destinationGeneration: number;
   document: CatalogDocument | null;
   /** Why the bundled preview could not be derived, if it could not. */
   starterError: string | null;
@@ -136,28 +129,22 @@ export type WorkbenchModel = {
   message: WorkbenchMessage | null;
   /** Copyable JSON of the local profile; empty when there is nothing local to export. */
   exportedDraft: string;
-  /** Whether an action may start now: the one gate every action path asks (launch-step.ts `actionGate`). */
-  gate: (intent: WorkbenchIntent) => GateVerdict;
+  /**
+   * Whether an action may start now: the one gate every action path asks (launch-step.ts
+   * `actionGate`). A resume names the session it would resume, so a row can be judged before it is
+   * chosen; without one, the chosen session is judged.
+   */
+  gate: (intent: WorkbenchIntent, sessionId?: string) => GateVerdict;
   /** The verb's next step, and the gate's verdict on it (a blocked step's verdict carries its reason). */
   step: LaunchStep;
   verb: GateVerdict;
-  /** The providers a launch's pool would serve, when known; set by the usage section (`UsageZone onServed`). */
+  /** The providers a launch's pool would serve (accounts.ts `servedProviders`), when known. Stable while they are the same. */
   served: ReadonlySet<string> | null;
-  /** Stable identity: consumers use it as an effect dependency. */
-  setServed: (providers: ReadonlySet<string> | null) => void;
   /** A lead of the shown team no included account serves, which the session door refuses. */
   unservedLead: ServiceGap | null;
   outcome: WorkbenchOutcome | null;
-  /** A saved profile and a ready classifier exist, so suggestion is offered. */
-  canSuggest: boolean;
-  canRequestSuggestion: boolean;
-  canApplySuggestion: boolean;
-  suggestionPromptTooLong: boolean;
-  /** The shown suggestion was made against a different profile revision or classifier policy. */
-  suggestionStale: boolean;
-  prompt: string;
-  /** Edits revoke the current review and suggestion. */
-  setPrompt: (value: string) => void;
+  /** The usage reading every pool is judged on, and the saved account choices with their guarded edit. */
+  usage: BoardUsage;
   skillChoice: SkillChoice;
   /** Choices revoke the current review and clear the message. */
   setSkillChoice: (value: SkillChoice) => void;
@@ -170,10 +157,6 @@ export type WorkbenchModel = {
   savedSessionId: string;
   /** Stable identity: consumers use it as an effect dependency. */
   setSavedSessionId: (id: string) => void;
-  /** Stable identity: consumers use it as an effect dependency. Any change revokes the review. */
-  setAccountObservation: (signature: string) => void;
-  suggestion: ActionResult<"suggest"> | null;
-  suggesting: boolean;
   actions: WorkbenchActions;
   /** Whether the active catalog's verification holds, and the verify flow that renews it. */
   verification: ModelVerification;
@@ -187,7 +170,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const configuration = useCodeQuery(host, "readConfiguration", { containerId: host.containerId! });
   const metadata = useWorkflowQuery(host, "bundled-model-catalog", true, () => codeWorkflow(host).readStarterCatalog());
   const setup = useOmpQuery(host, "describeDestination", target);
-  const classifier = useWorkflowQuery(host, `classifier:${JSON.stringify(target)}`, target !== null, () => codeWorkflow(host).classifier(target!));
   const defaults = useOmpQuery(host, "readDefaults", {});
   const skillCatalog = useWorkflowQuery(host, `skills:${JSON.stringify(target)}`, target !== null, () => codeWorkflow(host).readSkillCatalog(target!));
   const lastConfiguration = useRef(configuration.data);
@@ -199,21 +181,41 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const record = savedPolicy && (observed?.revision ?? -1) < savedPolicy.revision ? savedPolicy : observed?.configuration ?? null;
   const configurationCurrent = configuration.data !== null && configuration.error === null &&
     (savedPolicy === null || configuration.data.revision >= savedPolicy.revision);
-  const [accountObservation, setAccountObservation] = useState("");
+  // The account observation and its usage reading: every pool head, fate and redline is judged on
+  // them, and the session door builds its pool from the same observation and saved choices.
+  const accounts = useOmpQuery(host, "accounts", {}, ACCOUNT_REFRESH_MS);
+  const choices = observed?.configuration?.accounts ?? null;
+  const reading = useAccountUsage(host, choices, accounts.data);
+  const historicalChoices = configuration.data === null && choices !== null;
+  const historicalAccounts = historicalChoices || accounts.data === null || accounts.data.status !== "fresh" ||
+    configuration.error !== null || accounts.error !== null;
+  // Ages and elapsed ticks move once a minute; within one, every pool is judged on the same clock.
+  const minute = useMinuteTick();
+  const nowMs = useMemo(() => Date.now(), [minute]);
+  // Any change to the account observation revokes a reviewed launch, so it is part of the review's scope.
+  const accountObservation = useMemo(() => JSON.stringify([configuration.error !== null, accounts.error !== null, reading.error !== null,
+    accounts.data?.status, accounts.data?.scope, accounts.data?.accounts]), [configuration.error, accounts.error, reading.error, accounts.data]);
+  // The pool the session door would build: from the account observation and the saved choices, not
+  // from usage readings. A fresh observation with nothing included is an empty set, never unknown.
+  const servedKey = useMemo(() => {
+    if (!accounts.data || !configuration.data?.configuration || accounts.error !== null || configuration.error !== null) return null;
+    const providers = servedProviders(accounts.data, configuration.data.configuration.accounts);
+    return providers === null ? null : JSON.stringify([...providers].sort());
+  }, [accounts.data, accounts.error, configuration.data, configuration.error]);
+  const served = useMemo<ReadonlySet<string> | null>(() => servedKey === null ? null : new Set(JSON.parse(servedKey) as string[]), [servedKey]);
+  const [accountsPending, setAccountsPending] = useState(false);
+  const [accountsFailure, setAccountsFailure] = useState<string | null>(null);
+  const accountsBusy = useRef(false);
   const [dials, setDials] = useState<ProfileDraft | null>(null);
   const [preview, setPreview] = useState<SessionReview | null>(null);
   const [skillChoice, setSkillChoice] = useState<SkillChoice>(undefined);
   const [automation, setAutomation] = useState<AutomationChoice>(undefined);
   const [savedSessionId, setSavedSessionId] = useState("");
-  const [suggestion, setSuggestion] = useState<ActionResult<"suggest"> | null>(null);
-  const [suggesting, setSuggesting] = useState(false);
-  const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [inFlight, setInFlight] = useState<WorkbenchStep | null>(null);
   const [chaining, setChaining] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
-  const [served, setServed] = useState<ReadonlySet<string> | null>(null);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
   const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
   const pending = useRef(false);
@@ -229,7 +231,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       current.current.target?.machineId === machineId && current.current.available;
   }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useLayoutEffect(() => { setPreview(null); setSuggestion(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
+  useLayoutEffect(() => { setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
   const storedDocument = useMemo(() => record?.active?.document ?? record?.draft?.document ?? null,
     [record?.active?.digest, record?.draft?.digest]);
   const metadataKey = useMemo(() => metadata.data === null ? null : JSON.stringify(metadata.data), [metadata.data]);
@@ -277,14 +279,13 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const draftSkills = skillDraft(skillCatalog.data, skillChoice);
   const skillProblems = draftSkills.problems;
   const writable = canWriteCodeWorkspace(host);
-  const canSuggest = !!record?.active && classifier.data !== null && classifier.data !== undefined;
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
     configurationCurrent, selection, ompVersion: metadata.data?.ompVersion ?? null, setup: setup.data, writable, available,
     onVerified: saved => {
-      setSavedPolicy(saved); setDials(null); setPreview(null); setSuggestion(null);
+      setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
     } });
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
@@ -300,14 +301,14 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const reviewKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
     machineId, available, rosterError !== null, configurationCurrent, record?.revision, record?.active?.digest, record?.draft?.digest,
     record?.selection, defaults.data?.revision, defaults.error !== null, skillCatalog.data?.revision, skillCatalog.error !== null,
-    setup.error !== null, setup.data === null, accountObservation, prompt, skillChoice, automation, savedSessionId, verification.status]);
+    setup.error !== null, setup.data === null, accountObservation, skillChoice, automation, savedSessionId, verification.status]);
   const reviewScope = useRef({ key: reviewKey, epoch: 0 });
   if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
   // Exact CAS arbitrates shared revision changes. Observing this save's own
   // successful revision must not revoke its acknowledgement. Lost observations
   // and changed local intent still revoke policy confirmation monotonically.
   const policyKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
-    configuration.data === null, configuration.error !== null, prompt, skillChoice, automation, savedSessionId]);
+    configuration.data === null, configuration.error !== null, skillChoice, automation, savedSessionId]);
   const policyScope = useRef({ key: policyKey, epoch: 0 });
   if (policyScope.current.key !== policyKey) policyScope.current = { key: policyKey, epoch: policyScope.current.epoch + 1 };
   const policyEpoch = policyScope.current.epoch;
@@ -316,7 +317,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const previewCurrent = preview !== null && reviewedEpoch.current === reviewEpoch && writable && available && configurationCurrent &&
     defaults.error === null && skillCatalog.error === null && setup.error === null && !!record?.active &&
     preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
-    preview.composition.prompt === prompt && preview.native.defaultsRevision === defaults.data?.revision && !unsaved &&
+    preview.native.defaultsRevision === defaults.data?.revision && !unsaved &&
     skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
   const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
   const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
@@ -355,7 +356,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   function applySelection(document: CatalogDocument, value: Selection) {
     if (!profile) return;
     setDials({ ...profile, document, selection: value });
-    setPreview(null); setSuggestion(null); setMessage(null);
+    setPreview(null); setMessage(null);
   }
   function updateSelection(value: Selection) {
     if (!profile || !allowed("edit-team")) return;
@@ -374,7 +375,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   function discardChanges() {
     if (!allowed("edit-team")) return;
-    setDials(null); setSavedPolicy(null); setPreview(null); setSuggestion(null); setMessage(null);
+    setDials(null); setSavedPolicy(null); setPreview(null); setMessage(null);
   }
   async function save() {
     // Only a local edit of a verified active profile saves here; the bundled preview has no save.
@@ -391,7 +392,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
     baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
   }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
-  function refresh() { configuration.refresh(); metadata.refresh(); setup.refresh(); classifier.refresh(); defaults.refresh(); skillCatalog.refresh(); }
+  function refresh() {
+    configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
+  }
   async function perform(kind: WorkbenchStep | null, work: () => Promise<void>) {
     if (pending.current || !writable) return;
     pending.current = true; setBusy(true); setInFlight(kind); setMessage(null); setOutcome(null);
@@ -401,10 +404,15 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   // The scope of the last review attempt, explicit or automatic: a refused one waits for a press or a changed input.
   const reviewAttempt = useRef<number | null>(null);
+  // The workbench opens interactive sessions: the task is typed in the session itself, so the composition carries no prompt.
   async function review() {
     if (!record || !target) return;
     reviewAttempt.current = reviewEpoch;
-    await perform("review", async () => { const value = await codeWorkflow(host, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host)).reviewSession(target, record.revision, prompt, { skills: skillChoice, automation }); if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); } });
+    await perform("review", async () => {
+      const value = await codeWorkflow(host, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host))
+        .reviewSession(target, record.revision, "", { skills: skillChoice, automation });
+      if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); }
+    });
   }
   async function launch() {
     const reviewed = preview;
@@ -492,18 +500,18 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       }
     });
   }
-  async function suggest() {
-    if (record && target && classifier.data) await perform(null, async () => {
-      const value = await callCodeAction(host, "suggest", { ...target, expectedRevision: record.revision, expectedServiceRevision: classifier.data!.revision, prompt });
-      if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch) setSuggestion(value);
-    });
+  async function changeAccounts(edit: AccountChoiceChange) {
+    if (!record || !configurationCurrent || accountsBusy.current || !allowed("edit-accounts") || (edit.kind === "set-account" && historicalAccounts)) return;
+    accountsBusy.current = true; setAccountsPending(true); setAccountsFailure(null);
+    try {
+      await callCodeAction(host, "changeAccounts", { containerId: host.containerId!, expectedRevision: record.revision, change: edit });
+    } catch (reason) {
+      if (mounted.current) setAccountsFailure(`${codeOperationFailure(reason)} Nothing was retried.`);
+    } finally {
+      accountsBusy.current = false;
+      if (mounted.current) { setAccountsPending(false); configuration.refresh(); accounts.refresh(); reading.refresh(); }
+    }
   }
-  function applySuggestion() {
-    if (!suggestion) return;
-    updateSelection(suggestion.selection); setSuggesting(false);
-  }
-  function closeSuggestion() { setSuggesting(false); setSuggestion(null); }
-  function changePrompt(value: string) { setPrompt(value); setPreview(null); setSuggestion(null); setOutcome(null); }
   function changeSkillChoice(value: SkillChoice) { setSkillChoice(value); setPreview(null); setMessage(null); }
   function changeAutomation(value: AutomationChoice) { setAutomation(value); setPreview(null); setMessage(null); }
   // Outcome and refusal lines describe a premise: the team, the machine and the account pool. Any change to
@@ -519,28 +527,25 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const profileState: ProfileState = stale ? "conflict" : unsaved ? "local" : "saved";
   const stateLabel = !configurationCurrent ? "Shared choices unavailable" : stale ? "Shared profile changed" :
     profile?.source === "starter" ? "Bundled preview · verify to save" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
-  const suggestionPromptTooLong = prompt.length > SUGGESTION_PROMPT_MAX;
-  const suggestionStale = suggestion !== null && (suggestion.revision !== record?.revision || suggestion.serviceRevision !== classifier.data?.revision);
+  const usage: BoardUsage = {
+    view: reading.value, current: !(reading.cached || historicalChoices || configuration.error !== null || accounts.error !== null), nowMs,
+    accounts: choices && {
+      choices, historical: historicalAccounts, pending: accountsPending, failure: accountsFailure,
+      change: edit => void changeAccounts(edit),
+    },
+  };
   return {
-    queries: { configuration, metadata, setup, classifier, defaults, skillCatalog },
-    observed, record, machineId, destinationGeneration: generation, document, starterError: starter.error, compiled, selection,
+    queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
+    observed, record, machineId, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
     configurationCurrent, unsaved, stale, writable, available, launchReady, previewCurrent, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
-    gate: intent => actionGate(facts, intent), step, verb, served, setServed, unservedLead, outcome,
-    canSuggest,
-    canRequestSuggestion: writable && available && configurationCurrent && !!prompt.trim() && !suggestionPromptTooLong && !!classifier.data,
-    canApplySuggestion: suggestion !== null && !unsaved && !suggestionStale,
-    suggestionPromptTooLong, suggestionStale,
-    prompt, setPrompt: changePrompt,
+    gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
+    step, verb, served, unservedLead, outcome, usage,
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
-    savedSessionId, setSavedSessionId, setAccountObservation,
-    suggestion, suggesting,
-    actions: {
-      updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume,
-      openSuggestion: () => setSuggesting(true), closeSuggestion, suggest, applySuggestion, refresh,
-    },
+    savedSessionId, setSavedSessionId,
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh },
     verification, recentTeams,
   };
 }

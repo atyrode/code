@@ -3,7 +3,7 @@ import { prefersReducedMotion } from "@manifold/ui";
 import { hueOf } from "../ui.tsx";
 import { CONNECTORS, WORD_NAMES, type LaneMark, type Slot, type SlotOption } from "./statement-model.ts";
 
-/** Statement class prefix; every part hangs from the generator root (statement.css). */
+/** Statement class prefix; every part hangs from the generator root (styles.css). */
 const S = "plugin-atyrode_code_generator__stmt-";
 
 /** A commit's motion: a pointer commit rolls the word in from the side it came from, a keyboard commit blinks it. */
