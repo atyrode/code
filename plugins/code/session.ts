@@ -39,6 +39,9 @@ const SessionProvenanceSchema = z.strictObject({
 type SessionProvenance = z.infer<typeof SessionProvenanceSchema>;
 /** What Code composed for a posting key, retained before it posts; the record without its job. */
 const IntentSchema = SessionProvenanceSchema.omit({ jobId: true });
+const DestinationSchema = z.strictObject({
+  machineId: id, postedAt: epochMilliseconds, jobId: id,
+});
 
 /**
  * One workspace's saved catalog, selection and account choices against one caller-supplied
@@ -203,10 +206,23 @@ function selectedModel(document: CatalogDocument, selection: Selection, now: num
     throw error;
   }
 }
-/** Where Code last posted a session for this workspace, read from the provenance `readSession`
- * relies on. Code stores no destination of its own: choosing one is the caller's, and this is
- * only the destination it chose last. */
+/** The remembered destination is a derived index of retained receipts, never a launch default or
+ * authority. A pointer that does not validate is ignored and rebuilt by the next post; workspaces
+ * without one still read their receipts, without migrating on a read. */
 async function lastDestination(ctx: CodeContext, containerId: string): Promise<string | null> {
+  const pointer = readDestination(await ctx.storage.get(`destinations/${digestOf({ containerId })}`));
+  if (pointer !== null) return pointer.machineId;
+  return (await newestSession(ctx, containerId))?.machineId ?? null;
+}
+function readDestination(raw: string | null): z.infer<typeof DestinationSchema> | null {
+  if (raw === null) return null;
+  try {
+    return DestinationSchema.safeParse(JSON.parse(raw)).data ?? null;
+  } catch {
+    return null;
+  }
+}
+async function newestSession(ctx: CodeContext, containerId: string): Promise<SessionProvenance | null> {
   let newest: SessionProvenance | null = null;
   for (const key of await ctx.storage.keys(`sessions/${digestOf({ containerId })}/`)) {
     const raw = await ctx.storage.get(key);
@@ -214,7 +230,35 @@ async function lastDestination(ctx: CodeContext, containerId: string): Promise<s
     const provenance = SessionProvenanceSchema.parse(JSON.parse(raw));
     if (!newest || provenance.postedAt > newest.postedAt) newest = provenance;
   }
-  return newest?.machineId ?? null;
+  return newest;
+}
+/** Index maintenance runs after the receipt committed: the session exists and Code speaks for
+ * it, so an unreadable receipt, storage trouble or sustained contention here must never turn a
+ * posted session into a reported failure. Reads fall back to the receipts while the index lags. */
+async function rememberDestination(ctx: CodeContext, retained: SessionProvenance): Promise<void> {
+  try {
+    await advanceDestination(ctx, retained);
+  } catch {
+    // The receipt is the record; a lagging index only costs the next read a receipt scan.
+  }
+}
+/** Exact CAS keeps a delayed post or adoption from replacing a newer retained destination. A
+ * missing or unreadable pointer is seeded from every retained receipt on this write path, so
+ * adopting an old posting cannot hide a newer one and a corrupt index is rebuilt from its source. */
+async function advanceDestination(ctx: CodeContext, retained: SessionProvenance): Promise<void> {
+  const key = `destinations/${digestOf({ containerId: retained.containerId })}`;
+  let raw = await ctx.storage.get(key);
+  if (readDestination(raw) === null) {
+    const newest = await newestSession(ctx, retained.containerId);
+    if (newest !== null && newest.postedAt > retained.postedAt) retained = newest;
+  }
+  const next = JSON.stringify({ machineId: retained.machineId, postedAt: retained.postedAt, jobId: retained.jobId });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const current = readDestination(raw);
+    if (current !== null && current.postedAt >= retained.postedAt) return;
+    if (await ctx.storage.compareAndSet(key, raw, next)) return;
+    raw = await ctx.storage.get(key);
+  }
 }
 
 /** Whether a retained record speaks for `job` as this caller's session in this workspace. */
@@ -260,6 +304,7 @@ async function adoptPosting(ctx: CodeContext, args: ActionInput<"runSession">, p
     raw = await ctx.storage.compareAndSet(key, null, record) ? record : await ctx.storage.get(key);
   }
   if (!vouches(ctx, args.containerId, job, raw)) throw new CodeRefusal("session_conflict");
+  await rememberDestination(ctx, SessionProvenanceSchema.parse(JSON.parse(raw!)));
   return job;
 }
 /**
@@ -356,9 +401,14 @@ export async function runSession(ctx: CodeContext, args: ActionInput<"runSession
   // it is still OMP's job, and OMP's own retained provenance still reads it. A keyed call that
   // raced another with the same key keeps the first record when it is this caller's same job.
   const retainedKey = `sessions/${digestOf({ containerId: args.containerId })}/${job.jobId}`;
-  if (!(await ctx.storage.compareAndSet(retainedKey, null, JSON.stringify({ ...provenance, jobId: job.jobId }))) &&
-    (intentKey === undefined || !vouches(ctx, args.containerId, job, await ctx.storage.get(retainedKey))))
-    throw new CodeRefusal("session_conflict");
+  let retained: SessionProvenance = { ...provenance, jobId: job.jobId };
+  if (!(await ctx.storage.compareAndSet(retainedKey, null, JSON.stringify(retained)))) {
+    const winner = await ctx.storage.get(retainedKey);
+    if (intentKey === undefined || !vouches(ctx, args.containerId, job, winner))
+      throw new CodeRefusal("session_conflict");
+    retained = SessionProvenanceSchema.parse(JSON.parse(winner!));
+  }
+  await rememberDestination(ctx, retained);
   return job;
 }
 /** The session Code retained under this workspace. Both job doors start here: a job id alone

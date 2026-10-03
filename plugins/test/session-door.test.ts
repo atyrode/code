@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { PublicJobSchema, type PublicJob } from "@manifold/protocol";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, PROMPT_MAX_BYTES, SESSION_GUEST_PATH,
   SESSION_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, SessionInputSchema, SessionSilenceSchema, actionDoor, actionSchemas as ompActionSchemas,
@@ -281,6 +281,177 @@ describe("Code profiles a dependent plugin may offer", () => {
     f.omp.refuse.clear();
     f.omp.accounts = { ...observation(), status: "stale" };
     expect((await accepted(f, "listProfiles", {})).profiles[0]).toMatchObject({ accounts: [], resolved: false });
+  });
+
+  test("the newest destination comes from its pointer without enumerating session receipts", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    await accepted(f, "runSession", input);
+    f.ctx.now = () => now + 1;
+    f.omp.job = { ...job("job-b"), machineId: "machine-b" };
+    await accepted(f, "runSession", { ...input, machineId: "machine-b" });
+    const keys = mock(f.ctx.storage.keys);
+    f.ctx.storage.keys = keys;
+    f.ctx.storage.compareAndSet = unavailable;
+    expect((await accepted(f, "listProfiles", {})).profiles).toEqual([
+      { containerId: target.containerId, revision: record.revision, machineId: "machine-b",
+        selected: { model: "anthropic/native-model-3", thinking: record.selection!.thinking,
+          capability: record.selection!.capability, advisor: record.selection!.advisor },
+        accounts: everyAccount, resolved: true },
+    ]);
+    expect(keys.mock.calls).toEqual([["configuration/"]]);
+  });
+
+  test.each([now - 1, now])("a post at %i cannot replace an equal or newer destination", async postedAt => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    await accepted(f, "runSession", input);
+    const key = `destinations/${digestOf(workspace)}`;
+    const retained = f.store.get(key);
+    f.ctx.now = () => postedAt;
+    f.omp.job = { ...job("job-older"), machineId: "machine-older" };
+    await accepted(f, "runSession", { ...input, machineId: f.omp.job.machineId });
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
+    expect(f.store.get(key)).toBe(retained);
+  });
+
+  test.each(["older", "newer"])("concurrent posts converge on the newest when %s wins the first CAS", async first => {
+    const older = fixture();
+    const record = await configured(older);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    older.ctx.now = () => now - 1;
+    older.omp.job = job("job-seed");
+    await accepted(older, "runSession", input);
+    older.ctx.now = () => now;
+    older.omp.job = job();
+    const newer = fixture();
+    newer.ctx = { ...newer.ctx, storage: older.ctx.storage };
+    newer.ctx.now = () => now + 1;
+    newer.omp.job = { ...job("job-newer"), machineId: "machine-newer" };
+    const key = `destinations/${digestOf(workspace)}`;
+    const initial = older.store.get(key)!;
+    const compareAndSet = older.ctx.storage.compareAndSet;
+    const waiting = Promise.withResolvers<void>();
+    const committed = Promise.withResolvers<void>();
+    const firstJob = first === "older" ? older.omp.job.jobId : newer.omp.job.jobId;
+    older.ctx.storage.compareAndSet = async (candidateKey, expected, value) => {
+      if (candidateKey === key && expected === initial) {
+        if (JSON.parse(value).jobId === firstJob) {
+          await waiting.promise;
+          const result = await compareAndSet(candidateKey, expected, value);
+          committed.resolve();
+          return result;
+        }
+        waiting.resolve();
+        await committed.promise;
+      }
+      return compareAndSet(candidateKey, expected, value);
+    };
+    const posted = await Promise.all([
+      accepted(older, "runSession", input),
+      accepted(newer, "runSession", { ...input, machineId: newer.omp.job.machineId }),
+    ]);
+    expect(posted.map(value => value.jobId)).toEqual(["job-a", "job-newer"]);
+    expect(JSON.parse(older.store.get(key)!)).toEqual({ machineId: "machine-newer", postedAt: now + 1, jobId: "job-newer" });
+    expect((await accepted(older, "listProfiles", {})).profiles[0]?.machineId).toBe("machine-newer");
+  });
+
+  test("pre-pointer receipts still answer the newest destination without writing on the read path", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const input = { ...target, expectedRevision: record.revision, prompt: "Implement the change" };
+    await accepted(f, "runSession", input);
+    f.ctx.now = () => now + 1;
+    f.omp.job = { ...job("job-b"), machineId: "machine-b" };
+    await accepted(f, "runSession", { ...input, machineId: "machine-b" });
+    f.store.delete(`destinations/${digestOf(workspace)}`);
+    const before = new Map(f.store);
+    const keys = mock(f.ctx.storage.keys);
+    f.ctx.storage.keys = keys;
+    f.ctx.storage.compareAndSet = unavailable;
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe("machine-b");
+    expect(keys.mock.calls).toEqual([["configuration/"], [`sessions/${digestOf(workspace)}/`]]);
+    expect(f.store).toEqual(before);
+  });
+
+  test.each([false, true])("adopting a legacy receipt seeds the pointer without hiding newer receipts: %s", async hasNewer => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Implement the change", postingKey: "old-post" };
+    const posted = await accepted(f, "runSession", keyed);
+    if (hasNewer) {
+      f.ctx.now = () => now + 1;
+      f.omp.job = { ...job("job-newer"), machineId: "machine-newer" };
+      await accepted(f, "runSession", { ...keyed, machineId: "machine-newer", postingKey: "new-post" });
+    }
+    const key = `destinations/${digestOf(workspace)}`;
+    f.store.delete(key);
+    f.ctx.now = () => now + 100;
+    expect(await accepted(f, "runSession", { ...keyed, adoptOnly: true })).toEqual(posted);
+    const expected = hasNewer
+      ? { machineId: "machine-newer", postedAt: now + 1, jobId: "job-newer" }
+      : { machineId: target.machineId, postedAt: now, jobId: posted.jobId };
+    expect(JSON.parse(f.store.get(key)!)).toEqual(expected);
+    const retained = f.store.get(key);
+    expect(await accepted(f, "runSession", { ...keyed, adoptOnly: true })).toEqual(posted);
+    expect(f.store.get(key)).toBe(retained);
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(expected.machineId);
+  });
+
+  test("a keyed receipt race remembers the retained timestamp rather than the losing caller's timestamp", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const keyed = { ...target, expectedRevision: record.revision, prompt: "Implement the change", postingKey: "same-post" };
+    f.omp.during.set(actionDoor("runSession"), async () => {
+      f.omp.during.clear();
+      f.ctx.now = () => now - 2;
+      await accepted(f, "runSession", keyed);
+      f.ctx.now = () => now - 1;
+      f.omp.job = { ...job("job-between"), machineId: "machine-between" };
+      await accepted(f, "runSession", { ...keyed, machineId: "machine-between", postingKey: "between-post" });
+    });
+    expect((await accepted(f, "runSession", keyed)).jobId).toBe("job-a");
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe("machine-between");
+    expect(JSON.parse(f.store.get(`destinations/${digestOf(workspace)}`)!))
+      .toEqual({ machineId: "machine-between", postedAt: now - 1, jobId: "job-between" });
+  });
+
+  test.each([
+    { machineId: "", postedAt: now, jobId: "job-a" },
+    { machineId: target.machineId, postedAt: -1, jobId: "job-a" },
+    { machineId: target.machineId, postedAt: now + 0.5, jobId: "job-a" },
+    { machineId: target.machineId, postedAt: now },
+    { machineId: target.machineId, postedAt: now, jobId: "job-a", extra: true },
+    "{not json",
+  ])("an unreadable destination is ignored by reads and rebuilt by the next post: %j", async pointer => {
+    const f = fixture();
+    const record = await configured(f);
+    const key = `destinations/${digestOf(workspace)}`;
+    const raw = typeof pointer === "string" ? pointer : JSON.stringify(pointer);
+    f.store.set(key, raw);
+    // Nothing is posted yet: the read answers from the receipts and leaves the index alone.
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBeNull();
+    expect(f.store.get(key)).toBe(raw);
+    await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
+    expect(JSON.parse(f.store.get(key)!)).toEqual({ machineId: target.machineId, postedAt: now, jobId: "job-a" });
+    expect((await accepted(f, "listProfiles", {})).profiles[0]?.machineId).toBe(target.machineId);
+  });
+
+  test("a post whose receipt committed succeeds even when its destination index cannot be maintained", async () => {
+    const f = fixture();
+    const record = await configured(f);
+    const key = `destinations/${digestOf(workspace)}`;
+    const get = f.ctx.storage.get;
+    f.ctx.storage.get = async storageKey => {
+      if (storageKey === key) throw new Error("storage unavailable");
+      return get(storageKey);
+    };
+    const posted = await accepted(f, "runSession", { ...target, expectedRevision: record.revision, prompt: "Implement the change" });
+    expect(posted).toEqual(f.omp.job);
+    expect(f.store.has(`sessions/${digestOf(workspace)}/${posted.jobId}`)).toBe(true);
+    expect(f.store.has(key)).toBe(false);
   });
 });
 
@@ -782,8 +953,12 @@ describe("a keyed posting Code passes to OMP", () => {
     const retained = f.store.get(key)!;
     // The post landed at OMP but Code's record after it did not.
     f.store.delete(key);
+    const destinationKey = `destinations/${digestOf(workspace)}`;
+    f.store.delete(destinationKey);
+    f.ctx.now = () => now + 100;
     expect(await accepted(f, "runSession", { ...keyed, adoptOnly: true })).toEqual(job);
     expect(JSON.parse(f.store.get(key)!)).toEqual(JSON.parse(retained));
+    expect(JSON.parse(f.store.get(destinationKey)!)).toEqual({ machineId: target.machineId, postedAt: now, jobId: job.jobId });
     expect((await accepted(f, "readSession", { ...workspace, jobId: job.jobId })).job).toEqual(job);
     expect(f.omp.posted).toHaveLength(1);
     // A job Code never composed under this key is not Code's to vouch for.

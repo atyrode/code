@@ -247,6 +247,18 @@ something else returns what the key posted, or refuses `code_session_conflict`;
 `adoptOnly` then settles the key. A posting whose record after the post never
 landed is completed from the intent on the next keyed call.
 
+`listProfiles` remembers each workspace's last posted destination through a
+`destinations/<containerDigest>` pointer containing `machineId`, `postedAt` and
+`jobId`. Direct posts and adopted or rebuilt receipts advance it only for a
+strictly newer retained timestamp, using exact CAS with at most eight attempts;
+contention leaves the winning pointer in place. An absent or unreadable pointer
+is ignored by reads and rebuilt from the newest retained receipt by the next
+post, including pre-existing receipts. Reads use one pointer lookup, scan the
+receipts only while no valid pointer exists, and never write. Maintaining the
+pointer never fails a post whose receipt already committed. This derived index
+is not a saved launch default or authority; receipt retention, action contracts
+and configuration data versions are unchanged.
+
 `adoptOnly: true` never composes, reviews or posts: it retires the key at OMP
 (`adoptSession` with `retire: true`) and returns the key's session, or refuses:
 
