@@ -3,53 +3,51 @@ import {
   type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { keyCapLabel } from "@manifold/plugin/hooks";
+import { ControlIcon, KeyCap, Spinner, type ControlKind } from "@manifold/ui";
 
 /*
- * The "Ledger, alive" primitives shared by every Code panel. Classes hang from the shared
- * `.plugin-atyrode_code` root (styles.css) so the generator, accounts and usage panels speak one
- * visual language; layout that belongs to a single panel stays in that panel's stylesheet.
+ * The primitives shared by every Code panel, in Manifold's own vocabulary: the Plugin Manager's
+ * pills, switches, chips, section bands and buttons, the host's KeyCap, Spinner and icons.
+ * Classes hang from the shared `.plugin-atyrode_code` root (styles.css); layout that belongs to a
+ * single panel stays in that panel's stylesheet.
  */
 
-export function cx(...classes: (string | false | null | undefined)[]): string {
+function cx(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
 }
 
-// ---------------------------------------------------------------- platform and vocabulary
+// ---------------------------------------------------------------- vocabulary
 
-/** macOS readers expect ⌘; everyone else presses Ctrl. Evaluated lazily so tests without a DOM still import this module. */
-export function isMac(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const data = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
-  return /mac|iphone|ipad/i.test(data?.platform ?? navigator.platform ?? "");
+/** A control's tooltip naming its key as this keyboard labels it: `Defaults (D)`, `Verify models (Ctrl ↵)`. */
+export function withKey(label: string, stroke: string): string {
+  return `${label} (${keyCapLabel(stroke)})`;
 }
+export const LAUNCH_STROKE = "Mod+↵";
 
-/** The launch chord as the reader's keyboard labels it. The return glyph sits in a fixed cell because mono faces often lack it. */
-export function LaunchKey() {
-  return <>{isMac() ? "⌘" : "ctrl"}<span className="plugin-atyrode_code__gk">↵</span></>;
-}
-export function EnterKey() {
-  return <span className="plugin-atyrode_code__gk">↵</span>;
-}
-
-/** Provider families have a hue; anything without one shares the neutral fallback. */
+/** Provider families have a mark colour; anything without one shares the neutral fallback. */
 export function hueOf(family: string | null | undefined): "openai" | "anthropic" | "deepseek" | "other" {
   return family === "openai" || family === "anthropic" || family === "deepseek" ? family : "other";
 }
-const accountWords: Readonly<Record<string, string>> = { openai: "codex", anthropic: "claude", deepseek: "deepseek" };
-const familyWords: Readonly<Record<string, string>> = { openai: "gpt", anthropic: "claude", deepseek: "deepseek" };
-/** The word an account group goes by (`codex`, `claude`), which is how people name their subscriptions. */
-export function accountWord(family: string | null | undefined, fallback = "other"): string {
-  return family ? accountWords[family] ?? family : fallback;
+const accountWords: Readonly<Record<string, string>> = { openai: "Codex", anthropic: "Claude", deepseek: "DeepSeek" };
+const familyWords: Readonly<Record<string, string>> = { openai: "GPT", anthropic: "Claude", deepseek: "DeepSeek" };
+/** Sentence-cases a vocabulary word (`claude` → `Claude`); identifiers keep their own case. */
+export function capitalized(word: string): string {
+  return word ? `${word[0]!.toUpperCase()}${word.slice(1)}` : word;
 }
-/** The word a model family goes by in lane names (`gpt-led`, `claude-only`). */
+/** The name an account group goes by (`Codex`, `Claude`), which is how people name their subscriptions. */
+export function accountWord(family: string | null | undefined, fallback = "Other"): string {
+  return family ? accountWords[family] ?? capitalized(family) : fallback;
+}
+/** The name a model family goes by in lane names (`GPT-led`, `Claude only`). */
 export function familyWord(family: string): string {
-  return familyWords[family] ?? family;
+  return familyWords[family] ?? capitalized(family);
 }
 
 // ---------------------------------------------------------------- text and time
 
 /** Keeps both ends of a long value readable, which is where identities and model ids differ. */
-export function middle(value: string, max: number): string {
+function middle(value: string, max: number): string {
   if (value.length <= max) return value;
   if (max <= 1) return "…";
   const keep = max - 1;
@@ -82,7 +80,7 @@ export function ago(ms: number): string {
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
-const weekdays = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function hhmm(timestamp: number): string {
   const date = new Date(timestamp);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
@@ -106,111 +104,131 @@ export function useMinuteTick(): number {
   return tick;
 }
 
-// ---------------------------------------------------------------- small pieces
+// ---------------------------------------------------------------- status, buttons, checkboxes
 
-export function Sep() {
-  return <span className="plugin-atyrode_code__sep" aria-hidden="true">·</span>;
-}
-/** Joins inline facts with the dim middle dot used everywhere in the ledger language. */
-export function Dotted({ items }: { items: readonly ReactNode[] }) {
-  const shown = items.filter(item => item !== null && item !== false && item !== undefined && item !== "");
-  return <>{shown.map((item, index) => <span key={index} className="plugin-atyrode_code__dotted">{index > 0 && <Sep />}{item}</span>)}</>;
-}
-
-/** The zone label. Solid while its zone holds focus (CSS), or when a sheet names itself. */
-export function ZoneChip({ children, solid = false }: { children: ReactNode; solid?: boolean }) {
-  return <span className="plugin-atyrode_code__chip" data-solid={solid || undefined}>{children}</span>;
+type Tone = "warn" | "attention" | "ok" | "on" | "muted";
+/**
+ * One status fact as a dot and coloured text, never a box: `● Unverified` in warn, `Read-only` in
+ * muted text. Adjacent facts are divided by a thin rule (CSS), so a status line reads as one sentence.
+ */
+export function State({ tone = "muted", title, children }: { tone?: Tone | undefined; title?: string | undefined; children: ReactNode }) {
+  return <span className="plugin-atyrode_code__state" data-tone={tone} title={title}>
+    {tone !== "muted" && <span className="plugin-atyrode_code__dot" aria-hidden="true" />}{children}
+  </span>;
 }
 
-/** A zone's first line: chip, optional status and extras, then right-aligned key hints. */
-export function ZoneHead({ chip, status, children, hints, className }: {
-  chip: ReactNode; status?: ReactNode; children?: ReactNode; hints?: readonly ReactNode[]; className?: string | undefined;
-}) {
-  return <div className={cx("plugin-atyrode_code__zh", className)}>
-    <ZoneChip>{chip}</ZoneChip>
-    {status !== undefined && status !== null && <span className="plugin-atyrode_code__zh-status">{status}</span>}
-    {children}
-    {hints && hints.length > 0 && <span className="plugin-atyrode_code__hints"><Dotted items={hints} /></span>}
-  </div>;
-}
-
-/** A clickable `key label` pair; pressed hints light their key in the accent. */
-export function Hint({ k, label, pressed, onClick, readout, buttonRef }: {
-  k: ReactNode; label: ReactNode; pressed?: boolean | undefined; onClick?: (() => void) | undefined; readout?: string | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined;
-}) {
-  if (!onClick) return <span className="plugin-atyrode_code__hk"><kbd>{k}</kbd> {label}</span>;
-  return <button ref={buttonRef} type="button" className="plugin-atyrode_code__hk" aria-pressed={pressed} onClick={onClick} data-readout={readout}>
-    <kbd>{k}</kbd> {label}
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { icon?: ControlKind | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
+/** The secondary button: borderless, a word and optionally a host control icon before it; only hover gives it a ground. */
+export function Button({ icon, className, buttonRef, type = "button", children, ...rest }: ButtonProps) {
+  return <button ref={buttonRef} type={type} className={cx("plugin-atyrode_code__button", className)} {...rest}>
+    {icon && <ControlIcon kind={icon} size={13} />}{children}
   </button>;
 }
 
-type QuietProps = ButtonHTMLAttributes<HTMLButtonElement> & { tone?: "danger" | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
-/** Text action: secondary ink, accent underline on hover and focus, a 24px hit area. */
-export function QuietButton({ tone, className, buttonRef, type = "button", ...rest }: QuietProps) {
-  return <button ref={buttonRef} type={type} className={cx("plugin-atyrode_code__q", className)} data-tone={tone} {...rest} />;
+type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { icon: ControlKind; label: string; buttonRef?: Ref<HTMLButtonElement> | undefined };
+/** One host control icon on a borderless 24px button, named for assistive technology. */
+export function IconButton({ icon, label, className, buttonRef, type = "button", title, ...rest }: IconButtonProps) {
+  return <button ref={buttonRef} type={type} className={cx("plugin-atyrode_code__button plugin-atyrode_code__icon-button", className)} aria-label={label} title={title ?? label} {...rest}>
+    <ControlIcon kind={icon} size={14} />
+  </button>;
+}
+
+type CheckProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange"> & {
+  checked: boolean; onChange: (checked: boolean) => void; buttonRef?: Ref<HTMLButtonElement> | undefined;
+};
+/**
+ * A square checkbox with its label: `aria-checked` IS the state. A refused one keeps its mark at
+ * reduced opacity and stays hoverable (`aria-disabled`), so its reason can be read.
+ */
+export function Check({ checked, onChange, className, buttonRef, onClick, children, ...rest }: CheckProps) {
+  return <button ref={buttonRef} type="button" role="checkbox" aria-checked={checked} className={cx("plugin-atyrode_code__check", className)}
+    onClick={event => { onClick?.(event); if (!event.defaultPrevented && rest["aria-disabled"] !== true && !rest.disabled) onChange(!checked); }} {...rest}>
+    <span className="plugin-atyrode_code__check-box" aria-hidden="true">{checked && <ControlIcon kind="confirm" size={10} />}</span>
+    {children}
+  </button>;
 }
 
 type PrimaryProps = ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean | undefined; keyHint?: boolean | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
-/** The one accent button per surface. It stays focusable while busy so focus never falls to the page. */
-export function PrimaryButton({ busy = false, keyHint = true, className, children, buttonRef, onClick, ...rest }: PrimaryProps) {
-  return <button ref={buttonRef} type="button" className={cx("plugin-atyrode_code__primary", className)} aria-disabled={busy || undefined}
+/**
+ * The one accent button per surface, naming the next step. Busy shows the host Spinner with the
+ * step in flight and stays focusable (`aria-disabled`) so focus never falls to the page.
+ */
+export function PrimaryButton({ busy = false, keyHint = true, className, children, buttonRef, onClick, title, ...rest }: PrimaryProps) {
+  return <button ref={buttonRef} type="button" className={cx("plugin-atyrode_code__primary", className)} aria-disabled={busy || undefined} aria-busy={busy || undefined}
+    title={title ?? (keyHint && typeof children === "string" ? withKey(children, LAUNCH_STROKE) : undefined)}
     onClick={event => { if (!busy) onClick?.(event); }} {...rest}>
-    {children}{keyHint && <span className="plugin-atyrode_code__kh"><LaunchKey /></span>}
+    {busy && typeof children === "string" ? <Spinner label={children} /> : children}
+    {keyHint && !busy && <KeyCap label={keyCapLabel(LAUNCH_STROKE)} />}
   </button>;
 }
 
-/** One line, a leading glyph and short text, then inline actions; exact technical text waits behind `details`. Never a box. */
-export function Notice({ kind = "info", children, actions, details, live = true, className }: {
-  kind?: "info" | "warn" | "error"; children: ReactNode; actions?: readonly ReactNode[] | undefined; details?: string | null | undefined; live?: boolean; className?: string | undefined;
-}) {
-  return <div className={cx("plugin-atyrode_code__note", className)} data-kind={kind} role={live ? "status" : undefined}>
-    <span className="plugin-atyrode_code__note-glyph" aria-hidden="true">{kind === "error" ? "×" : kind === "warn" ? "!" : "·"}</span>
-    <span className="plugin-atyrode_code__note-text">
-      <span>{children}</span>
-      {actions?.map((action, index) => <span key={index} className="plugin-atyrode_code__dotted"><Sep />{action}</span>)}
-    </span>
-    {details && <details className="plugin-atyrode_code__note-details"><summary>details</summary><pre>{details}</pre></details>}
+// ---------------------------------------------------------------- section bands, notices, meters
+
+/** A section's heading row (Generator, Routing, Usage): uppercase label, a count, then the section's actions. */
+export function SectionBand({ id, title, count, actions }: { id?: string | undefined; title: string; count?: ReactNode; actions?: ReactNode }) {
+  return <div className="plugin-atyrode_code__band">
+    <h2 className="plugin-atyrode_code__band-title" id={id}>{title}{count !== undefined && count !== null && <span className="plugin-atyrode_code__band-count">{count}</span>}</h2>
+    {actions && <div className="plugin-atyrode_code__band-actions">{actions}</div>}
   </div>;
 }
 
-/** `$$$··`: lit glyphs then unlit ones. The word beside it carries the meaning; colour only reinforces. */
-export function GlyphMeter({ glyph, value, total = 5, kind }: { glyph: string; value: number; total?: number; kind: "cost" | "speed" }) {
+/** An inline notice: a tone accent on the card ground, short text, secondary-button actions; exact technical text waits behind Details. */
+export function Notice({ kind = "info", children, actions, details, live = true, className }: {
+  kind?: "info" | "warn" | "error"; children: ReactNode; actions?: ReactNode; details?: string | null | undefined; live?: boolean; className?: string | undefined;
+}) {
+  return <div className={cx("plugin-atyrode_code__note", className)} data-kind={kind} role={live ? "status" : undefined}>
+    <p className="plugin-atyrode_code__note-text">{children}</p>
+    {actions && <div className="plugin-atyrode_code__note-actions">{actions}</div>}
+    {details && <Details label="Details">{details}</Details>}
+  </div>;
+}
+/** Technical text behind a disclosure, never in the main flow. */
+export function Details({ label, children }: { label: string; children: string }) {
+  return <details className="plugin-atyrode_code__disclosure">
+    <summary><ControlIcon kind="collapsed" size={12} />{label}</summary>
+    <pre>{children}</pre>
+  </details>;
+}
+
+/** A five-step estimate as segments; `preview` marks what a hovered choice would add or drop. */
+export function SegmentMeter({ value, preview = null, total = 5, warnAtTop = false }: { value: number; preview?: number | null; total?: number; warnAtTop?: boolean }) {
   const lit = Math.max(0, Math.min(total, Math.round(value)));
-  return <span className="plugin-atyrode_code__glyphs" data-kind={kind} aria-hidden="true">
-    <span className="plugin-atyrode_code__lit">{glyph.repeat(lit)}</span><span className="plugin-atyrode_code__unlit">{glyph.repeat(total - lit)}</span>
+  const next = preview === null ? lit : Math.max(0, Math.min(total, Math.round(preview)));
+  return <span className="plugin-atyrode_code__segments" data-top={warnAtTop && (preview === null ? lit : next) === total || undefined} aria-hidden="true">
+    {Array.from({ length: total }, (_, index) => <i key={index} data-on={index < lit || undefined}
+      data-pv={index >= lit && index < next ? "add" : index < lit && index >= next ? "drop" : undefined} />)}
   </span>;
 }
 
-/** A quota cell bar. Cells fill once when they first mount; later readings just change. */
-export function CellBar({ percent, cells }: { percent: number; cells: 5 | 10 }) {
-  const lit = Math.round((Math.max(0, Math.min(100, percent)) / 100) * cells);
-  return <span className="plugin-atyrode_code__bar" data-cells={cells} aria-hidden="true">
-    {Array.from({ length: cells }, (_, index) => <i key={index} data-on={index < lit || undefined} style={{ "--i": index } as CSSProperties} />)}
+/** A quota reading as one continuous bar. Neutral below 80%; warn from 80%, attention from 95%. */
+export function UsageBar({ percent, level }: { percent: number; level: "ok" | "warn" | "error" | "unknown" }) {
+  const width = Math.max(0, Math.min(100, percent));
+  return <span className="plugin-atyrode_code__ubar" data-level={level} aria-hidden="true">
+    <span style={{ inlineSize: `${width}%` } as CSSProperties} />
   </span>;
 }
 
-// ---------------------------------------------------------------- readout and hint bar
+// ---------------------------------------------------------------- readout
 
 /**
  * The readout follows whatever control the pointer rests on, else whatever holds keyboard focus.
- * Controls opt in declaratively with `data-readout` (and `data-readout-label`, `data-readout-prose`),
- * so the same text serves hover, focus and the narrow consequence line without a second source.
+ * Controls opt in declaratively with `data-readout` (and `data-readout-label`), so the same text
+ * serves hover and focus without a second source.
  */
-type ReadoutState = { active: HTMLElement | null; zone: string | null };
-const ReadoutContext = createContext<ReadoutState>({ active: null, zone: null });
+type ReadoutState = { active: HTMLElement | null };
+const ReadoutContext = createContext<ReadoutState>({ active: null });
 export const ReadoutProvider = ReadoutContext.Provider;
 
 export function useReadoutRoot(onActive?: (element: HTMLElement | null) => void) {
   const hover = useRef<HTMLElement | null>(null);
   const focus = useRef<HTMLElement | null>(null);
-  const [state, setState] = useState<ReadoutState>({ active: null, zone: null });
+  const [state, setState] = useState<ReadoutState>({ active: null });
   const notify = useRef(onActive);
   notify.current = onActive;
   const last = useRef<HTMLElement | null>(null);
-  function publish(zone?: string | null) {
+  function publish() {
     const active = hover.current ?? focus.current;
-    setState(previous => previous.active === active && (zone === undefined || previous.zone === zone) ? previous :
-      { active, zone: zone === undefined ? previous.zone : zone });
+    setState(previous => previous.active === active ? previous : { active });
     if (last.current !== active) { last.current = active; notify.current?.(active); }
   }
   return {
@@ -228,45 +246,40 @@ export function useReadoutRoot(onActive?: (element: HTMLElement | null) => void)
         const element = target.closest<HTMLElement>("[data-readout]");
         // Only keyboard focus drives the readout; a click already shows it through hover.
         focus.current = element && target.matches(":focus-visible") ? element : null;
-        publish(target.closest<HTMLElement>("[data-zone]")?.dataset.zone ?? null);
+        publish();
       },
       onBlur(event: FocusEvent<HTMLElement>) {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
         focus.current = null;
-        publish(null);
+        publish();
       },
     },
   };
 }
 
-export type Readout = { label: string | null; text: string; prose: boolean };
+export type Readout = { label: string | null; text: string };
 function readoutOf(element: HTMLElement | null): Readout | null {
   if (!element?.isConnected || element.dataset.readout === undefined) return null;
-  return { label: element.dataset.readoutLabel ?? null, text: element.dataset.readout, prose: element.dataset.readoutProse !== undefined };
-}
-/** The zone that holds focus, for zone-specific key hints. */
-export function useReadoutZone(): string | null {
-  return useContext(ReadoutContext).zone;
+  return { label: element.dataset.readoutLabel ?? null, text: element.dataset.readout };
 }
 /** The active control's readout, re-read after every render because a commit rewrites the same element's text. */
-export function useReadout(): Readout | null {
+function useReadout(): Readout | null {
   const { active } = useContext(ReadoutContext);
   const [value, setValue] = useState<Readout | null>(null);
   useLayoutEffect(() => {
     const next = readoutOf(active);
-    setValue(previous => previous?.label === next?.label && previous?.text === next?.text && previous?.prose === next?.prose ? previous : next);
+    setValue(previous => previous?.label === next?.label && previous?.text === next?.text ? previous : next);
   });
   return value;
 }
 
-/** The bottom line: zone key hints at rest, replaced by the readout of the hovered or focused control. */
-export function HintBar({ hints, className }: { hints: ReactNode; className?: string }) {
+/** The stable help line: the hovered or focused control's explanation, else `fallback`. Its box never changes size. */
+export function ReadoutLine({ fallback, className }: { fallback: Readout | null; className?: string | undefined }) {
   const readout = useReadout();
-  return <div className={cx("plugin-atyrode_code__hintbar", className)} aria-live="polite">
-    {readout ? <span className="plugin-atyrode_code__ro" data-prose={readout.prose || undefined}>
-      {readout.label && <><b>{readout.label}</b> · </>}{readout.text}
-    </span> : hints}
-  </div>;
+  const shown = readout ?? fallback;
+  return <p className={cx("plugin-atyrode_code__readout", className)} aria-live="polite">
+    {shown && <>{shown.label && <strong>{shown.label}</strong>}{shown.text}</>}
+  </p>;
 }
 
 // ---------------------------------------------------------------- menus and popovers
@@ -275,7 +288,7 @@ export function HintBar({ hints, className }: { hints: ReactNode; className?: st
 const LayerContext = createContext<HTMLElement | null>(null);
 export const LayerProvider = LayerContext.Provider;
 
-export type MenuHandle = {
+type MenuHandle = {
   open: boolean;
   anchor: RefObject<HTMLButtonElement | null>;
   toggle: () => void;
@@ -323,8 +336,8 @@ export function Menu({ menu, label, role = "menu", placement = "below", align = 
       let left = align === "end" ? rect.right - frame.left - width : rect.left - frame.left;
       if (left + width > frame.width - 8) left = rect.right - frame.left - width;
       left = Math.max(8, left);
-      const below = rect.bottom - frame.top + 4;
-      const above = rect.top - frame.top - height - 4;
+      const below = rect.bottom - frame.top + 6;
+      const above = rect.top - frame.top - height - 6;
       const fitsBelow = below + height <= frame.height - 8;
       const top = (placement === "above" || !fitsBelow) && above >= 8 ? above : below;
       setPosition({ left: Math.round(left), top: Math.round(Math.max(8, top)), maxHeight: Math.max(120, frame.height - 16) });
@@ -333,7 +346,7 @@ export function Menu({ menu, label, role = "menu", placement = "below", align = 
     const initial = surface.current?.querySelector<HTMLElement>(role === "menu"
       ? "[role=menuitem][aria-current=true]:not(:disabled), [role=menuitem]:not(:disabled)"
       : "[data-autofocus], button:not(:disabled), input:not(:disabled), [tabindex='0']");
-    initial?.focus({ preventScroll: true });
+    (initial ?? surface.current)?.focus({ preventScroll: true });
     const observer = new ResizeObserver(place);
     observer.observe(layer);
     if (surface.current) observer.observe(surface.current);
@@ -372,7 +385,7 @@ export function Menu({ menu, label, role = "menu", placement = "below", align = 
     items[next]?.focus();
   }
   return createPortal(<MenuContext.Provider value={{ close }}>
-    <div ref={surface} className={cx("plugin-atyrode_code__pop", className)} role={role} aria-label={label} data-popover="" style={position} onKeyDown={keys}>
+    <div ref={surface} className={cx("plugin-atyrode_code__pop", className)} role={role} aria-label={label} data-popover="" tabIndex={-1} style={position} onKeyDown={keys}>
       {children}
     </div>
   </MenuContext.Provider>, layer);
@@ -384,30 +397,32 @@ export function MenuHeader({ children }: { children: ReactNode }) {
 export function MenuRule() {
   return <hr className="plugin-atyrode_code__mrule" />;
 }
-/** A menu row: accent mark for the current choice, label, then a dim key or fact on the right. */
-export function MenuItem({ children, onSelect, current = false, mark, aside, tone, disabled = false, readout, keepOpen = false }: {
-  children: ReactNode; onSelect: () => void; current?: boolean; mark?: ReactNode; aside?: ReactNode; tone?: "danger" | undefined;
-  disabled?: boolean; readout?: string | undefined; keepOpen?: boolean;
+/** A menu row: a check for the current choice, the label, then a quiet fact or key on the right. */
+export function MenuItem({ children, onSelect, current = false, aside, tone, disabled = false, keepOpen = false }: {
+  children: ReactNode; onSelect: () => void; current?: boolean; aside?: ReactNode; tone?: "danger" | undefined;
+  disabled?: boolean; keepOpen?: boolean;
 }) {
   const menu = useContext(MenuContext);
   return <button type="button" role="menuitem" className="plugin-atyrode_code__mi" aria-current={current || undefined} data-tone={tone} disabled={disabled}
-    data-readout={readout} onClick={() => { if (!keepOpen) menu?.close(true); onSelect(); }}>
-    <span className="plugin-atyrode_code__mi-mark" aria-hidden="true">{mark ?? (current ? "›" : "")}</span>
+    onClick={() => { if (!keepOpen) menu?.close(true); onSelect(); }}>
+    <span className="plugin-atyrode_code__mi-mark" aria-hidden="true">{current && <ControlIcon kind="confirm" size={14} />}</span>
     <span className="plugin-atyrode_code__mi-label">{children}</span>
-    <span className="plugin-atyrode_code__mi-aside">{aside}</span>
+    {aside !== undefined && <span className="plugin-atyrode_code__mi-aside">{aside}</span>}
   </button>;
 }
 
 // ---------------------------------------------------------------- sheets
 
-/** A secondary surface that replaces the main view: `‹ code` back, the sheet's chip, its actions. */
+/** A secondary surface that replaces the main view: a Back button to Code, the sheet's title, its actions. */
 export function SheetFrame({ name, onBack, actions, status, backRef, children, className }: {
   name: string; onBack: () => void; actions?: ReactNode; status?: ReactNode; backRef?: Ref<HTMLButtonElement> | undefined; children: ReactNode; className?: string | undefined;
 }) {
   return <section className={cx("plugin-atyrode_code__sheet", className)} aria-label={name}>
     <div className="plugin-atyrode_code__sheet-head">
-      <button ref={backRef} type="button" className="plugin-atyrode_code__back" onClick={onBack} aria-label="back to code">‹ code</button>
-      <ZoneChip solid>{name}</ZoneChip>
+      <button ref={backRef} type="button" className="plugin-atyrode_code__button plugin-atyrode_code__back" onClick={onBack} aria-label="Back to Code" title="Back to Code (Esc)">
+        <ControlIcon kind="collapsed" size={14} />Code
+      </button>
+      <h2 className="plugin-atyrode_code__sheet-title">{name}</h2>
       {status && <span className="plugin-atyrode_code__sheet-status">{status}</span>}
       {actions && <span className="plugin-atyrode_code__sheet-acts">{actions}</span>}
     </div>

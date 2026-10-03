@@ -1,64 +1,74 @@
 /*
- * Code's shared stylesheet ("Ledger, alive"). Every Code panel root carries `.plugin-atyrode_code`,
- * so the design tokens live here as custom properties and the shared primitives (ui.tsx) are
- * styled here. Sections: tokens · legacy view base · primitives · usage zone · legacy views.
+ * Code's shared stylesheet. Every Code panel root carries `.plugin-atyrode_code`, so the design
+ * tokens live here as custom properties and the shared primitives (ui.tsx) are styled here.
+ * Every value is one Manifold already paints with (the shell sidebar and the Plugin Manager);
+ * no colour is introduced by this file. Sections: tokens · Phase 2 views (sheets and the
+ * standalone panels, still on element defaults) · primitives · usage section · sheet frame · motion.
  * Layout answers container queries on the `code` container, never the viewport.
  */
 
 /* ---------------------------------------------------------------- tokens */
 .plugin-atyrode_code {
-  /* Palette: dark only. Accent means "your choice / where you are"; hues mean providers; amber/red mean quota and failure. */
-  --code-bg: #1b1e24;
-  --code-bg-recessed: #15171c;
-  --code-bg-raised: #23272f;
-  --code-hairline: #2c313a;
-  --code-track: #353b46;
-  --code-text: #e6e8ec;
-  --code-text-2: #a3abba;
-  --code-ghost: #858ea2;
-  --code-ghost-hover: #c1c8d4;
-  --code-hint: #646d80;
-  --code-accent: #aa96e1;
-  --code-accent-hover: #b6a4e6;
-  --code-accent-14: rgb(170 150 225 / 14%);
-  --code-accent-18: rgb(170 150 225 / 18%);
-  --code-on-accent: #14161b;
-  --code-ok: #8fbf7a;
-  --code-warn: #d9b860;
-  --code-error: #e06c75;
-  --code-cost: #d7c368;
-  /* Meter fill stays neutral below 80%: colour is reserved for warn and error. */
-  --code-fill: #8a93a6;
-  --code-fill-dim: #5d6577;
+  /* Grounds */
+  --code-panel: #181a1f;
+  --code-card: #1d2025;
+  --code-input: #16181c;
+  --code-raised: #22262c;
+  --code-hover: #22252b;
+  --code-active: #2b3036;
+  /* Lines */
+  --code-line: #343a40;
+  --code-line-hover: #495057;
+  --code-hairline: #2b3036;
+  /* Text */
+  --code-text: #e9ecef;
+  --code-text-strong: #dee2e6;
+  --code-text-2: #adb5bd;
+  --code-text-3: #868e96;
+  --code-text-bright: #f1f3f5;
+  /* Accent: the one colour that means "selected / yours" */
+  --code-accent: #4263eb;
+  --code-focus: #4c6ef5;
+  --code-accent-text: #748ffc;
+  --code-on-accent: #edf2ff;
+  --code-selected: rgb(66 99 235 / 22%);
+  --code-selected-row: rgb(66 99 235 / 14%);
+  --code-afterglow: rgb(76 110 245 / 22%);
+  --code-focus-ring: rgb(116 143 252 / 18%);
+  /* Status */
+  --code-warn: #ffd43b;
+  --code-attention: #ffa8a8;
+  --code-attention-line: #c92a2a;
+  --code-attention-fill: rgb(201 42 42 / 18%);
+  --code-ok: #b2f2bb;
+  --code-ok-line: #2f6f4f;
+  --code-ok-fill: #1b2b22;
+  /* Provider marks: data only, worn as dots and nothing else */
   --code-openai: #76a5dc;
   --code-anthropic: #d4956a;
   --code-deepseek: #64bdb0;
-  --code-other: #b39ddb;
-  /* Type: mono everywhere except prose longer than a line. No webfonts. */
-  --code-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-  --code-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  /* Grid: 4px base, 24px interactive rows, 20px dense rows. */
-  --code-row: 24px;
-  --code-dense: 20px;
-  --code-zone-pad: 20px;
-  --code-ease-out: cubic-bezier(.2, 0, 0, 1);
+  --code-other: #adb5bd;
+  /* Type: the host's sans everywhere; mono only for machine identifiers */
+  --code-mono: var(--font-family-monospace, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  --code-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Motion */
   --code-fast: 120ms;
-  --code-fold: 140ms;
-  --code-slide: 160ms;
-  /* Legacy view tokens, mapped onto the palette until those views are redesigned. */
+  --code-meter-ease: cubic-bezier(.2, 0, 0, 1);
+  /* Phase 2 view names, mapped onto the palette until those views are redesigned. */
   --code-fg: var(--code-text);
   --code-muted: var(--code-text-2);
-  --code-dim: var(--code-ghost);
+  --code-dim: var(--code-text-3);
+  --code-rule: var(--code-line);
+  --code-bg: var(--code-panel);
   --code-blue: var(--code-openai);
   --code-amber: var(--code-anthropic);
   --code-positive: var(--code-ok);
   --code-warning: var(--code-warn);
-  --code-danger: var(--code-error);
-  --code-rule: #434957;
+  --code-danger: var(--code-attention);
   container: code / inline-size;
-  color: var(--code-fg);
-  background: var(--code-bg);
-  font-family: var(--code-sans);
+  color: var(--code-text);
+  background: var(--code-panel);
+  font-family: inherit;
   font-size: 0.875rem;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
@@ -71,16 +81,17 @@
 .plugin-atyrode_code [data-fam="deepseek"] { --code-hue: var(--code-deepseek); }
 .plugin-atyrode_code [data-fam="other"] { --code-hue: var(--code-other); }
 
-/* ---------------------------------------------------------------- legacy view base
- * Element defaults for the views not yet redesigned. Zero-specificity `:where()` keeps them from
- * outranking any class rule, so the primitives below never fight them.
+/* ---------------------------------------------------------------- Phase 2 views
+ * Element defaults for the sheets and standalone panels not yet redesigned, on the Manifold
+ * palette. Zero-specificity `:where()` keeps them from outranking any class rule, so the
+ * primitives below never fight them.
  */
 .plugin-atyrode_code,
 .plugin-atyrode_code * { box-sizing: border-box; }
 .plugin-atyrode_code :where(h1, h2, h3, h4, h5, p, dl) { margin: 0; }
 .plugin-atyrode_code :where(h1, h2, h3, h4, h5) { font: inherit; font-weight: 600; }
-.plugin-atyrode_code :where(h2, h3) { color: var(--code-accent); }
-.plugin-atyrode_code :where(code, pre, kbd) { font-family: var(--code-mono); font-size: 0.9em; }
+.plugin-atyrode_code :where(h2, h3) { color: var(--code-accent-text); }
+.plugin-atyrode_code :where(code, pre) { font-family: var(--code-mono); font-size: 0.9em; }
 .plugin-atyrode_code :where(pre) { max-width: 100%; overflow: auto; white-space: pre-wrap; }
 .plugin-atyrode_code :where(ul, ol) { margin: 0; padding-inline-start: 1.4em; }
 .plugin-atyrode_code :where(button, input, select, textarea) {
@@ -115,40 +126,42 @@
   overflow-wrap: anywhere;
 }
 .plugin-atyrode_code :where(button:hover:not(:disabled)) {
-  color: var(--code-accent);
-  background: color-mix(in srgb, var(--code-accent) 9%, transparent);
-  border-color: var(--code-accent);
+  color: var(--code-text-bright);
+  background: var(--code-active);
+  border-color: var(--code-line-hover);
 }
 .plugin-atyrode_code :where(button[aria-pressed="true"], button[aria-selected="true"]) {
-  color: var(--code-accent);
-  background: color-mix(in srgb, var(--code-accent) 13%, var(--code-bg));
+  color: var(--code-on-accent);
+  background: var(--code-selected);
+  border-color: var(--code-accent);
   font-weight: 600;
 }
 .plugin-atyrode_code :where(button, input, select, textarea):disabled { color: var(--code-dim); cursor: not-allowed; }
-.plugin-atyrode_code :where(a) { color: var(--code-accent); text-underline-offset: 0.18em; }
+.plugin-atyrode_code :where(a) { color: var(--code-accent-text); text-underline-offset: 0.18em; }
 .plugin-atyrode_code :where(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
-  outline: 2px solid var(--code-accent);
+  outline: 2px solid var(--code-focus);
   outline-offset: 3px;
 }
 .plugin-atyrode_code :where(button, summary) { touch-action: manipulation; }
 .plugin-atyrode_code :where(details) { min-width: 0; }
 .plugin-atyrode_code :where(summary) { cursor: pointer; color: var(--code-muted); }
-.plugin-atyrode_code :where(summary)::marker { color: var(--code-accent); }
-.plugin-atyrode_code :where(summary:hover) { color: var(--code-accent); }
+.plugin-atyrode_code :where(summary)::marker { color: var(--code-text-3); }
+.plugin-atyrode_code :where(summary:hover) { color: var(--code-text-strong); }
 .plugin-atyrode_code :where(details[open] > summary) { margin-bottom: 0.45rem; }
 .plugin-atyrode_code :where(hr) { width: 100%; border: 0; border-top: 1px solid var(--code-rule); }
 .plugin-atyrode_code :where(fieldset) { min-width: 0; border: 1px solid var(--code-rule); padding: 0.6rem; }
-.plugin-atyrode_code :where(legend) { color: var(--code-accent); padding-inline: 0.3rem; }
+.plugin-atyrode_code :where(legend) { color: var(--code-text-2); padding-inline: 0.3rem; }
 .plugin-atyrode_code .plugin-atyrode_code__primary-action {
-  color: var(--code-bg);
+  color: var(--code-on-accent);
   background: var(--code-accent);
   border-color: var(--code-accent);
   padding-inline: 0.9rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 .plugin-atyrode_code .plugin-atyrode_code__primary-action:hover:not(:disabled) {
-  color: var(--code-bg);
-  background: color-mix(in srgb, var(--code-accent) 80%, white);
+  color: var(--code-on-accent);
+  background: var(--code-focus);
+  border-color: var(--code-focus);
 }
 .plugin-atyrode_code .plugin-atyrode_code__primary-action:disabled {
   color: var(--code-muted);
@@ -160,7 +173,7 @@
   align-self: center;
   width: fit-content;
   padding: 0;
-  color: var(--code-accent);
+  color: var(--code-text-3);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.1em;
@@ -425,9 +438,9 @@
   font-size: 0.8125rem;
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-feedback:empty { display: none; }
-.plugin-atyrode_code .plugin-atyrode_code__account-feedback[data-pending="true"] { color: var(--code-accent); }
+.plugin-atyrode_code .plugin-atyrode_code__account-feedback[data-pending="true"] { color: var(--code-accent-text); }
 .plugin-atyrode_code .plugin-atyrode_code__account-group {
-  --account-provider: var(--code-accent);
+  --account-provider: var(--code-accent-text);
   min-width: 0;
   border-block-start: 1px solid var(--code-rule);
   margin-block-end: 0.35rem;
@@ -486,7 +499,7 @@
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="included"],
 .plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="draft"] {
-  color: var(--code-accent);
+  color: var(--code-accent-text);
 }
 .plugin-atyrode_code .plugin-atyrode_code__account-chip[data-state="warning"],
 .plugin-atyrode_code .plugin-atyrode_code__account-caution { color: var(--code-warning); }
@@ -616,364 +629,389 @@
 .plugin-atyrode_code__permission-choice > button,
 .plugin-atyrode_code__permission-dialog section > button { justify-self: start; }
 
-/* ---------------------------------------------------------------- primitives (ui.tsx) */
+/* ---------------------------------------------------------------- primitives (ui.tsx)
+ * Precise, not rounded: radius 0 for rules, meter cells and tags; 3px for inputs, buttons, option
+ * cells, menus and popovers; circles only for 6px status dots. Only inputs and the primary button
+ * have visible edges. Each state sets every property the Phase 2 element defaults touch, so a
+ * primitive never inherits their hover or pressed paint.
+ */
 .plugin-atyrode_code .plugin-atyrode_code__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* Glyphs the mono face may lack (↵) fall back to a proportional face; hold them to the grid. */
-.plugin-atyrode_code .plugin-atyrode_code__gk { display: inline-block; width: 1.5ch; text-align: center; }
-.plugin-atyrode_code .plugin-atyrode_code__sep { color: var(--code-hint); }
-.plugin-atyrode_code .plugin-atyrode_code__dotted { display: inline-flex; align-items: baseline; gap: 1ch; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--code-text-3); }
+.plugin-atyrode_code .plugin-atyrode_code__dot[data-state="ok"] { background: var(--code-ok); }
+.plugin-atyrode_code .plugin-atyrode_code__dot[data-state="warn"] { background: var(--code-warn); }
+/* A provider is a 6px square: data, never decoration. */
+.plugin-atyrode_code .plugin-atyrode_code__mark { flex: none; width: 6px; height: 6px; border-radius: 0; background: var(--code-hue, var(--code-other)); }
 
-.plugin-atyrode_code .plugin-atyrode_code__chip {
+/* State: a dot and coloured text; neighbouring facts are divided by a thin rule. */
+.plugin-atyrode_code .plugin-atyrode_code__state {
+  display: inline-flex;
   flex: none;
-  padding: 0 6px;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--code-text-3);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.plugin-atyrode_code .plugin-atyrode_code__state > .plugin-atyrode_code__dot { background: currentColor; }
+.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="warn"] { color: var(--code-warn); }
+.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="attention"] { color: var(--code-attention); }
+.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="ok"] { color: var(--code-ok); }
+.plugin-atyrode_code .plugin-atyrode_code__state[data-tone="on"] { color: var(--code-accent-text); }
+.plugin-atyrode_code .plugin-atyrode_code__state + .plugin-atyrode_code__state { border-left: 1px solid var(--code-line); padding-left: 0.5rem; }
+
+/* Secondary and icon buttons: borderless, 24px, a ground only on hover. */
+.plugin-atyrode_code .plugin-atyrode_code__button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  height: 24px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  border: 0;
   border-radius: 3px;
-  color: var(--code-accent);
-  background: var(--code-accent-14);
-  font: 600 11.5px/18px var(--code-mono);
-  transition: background-color var(--code-fast) var(--code-ease-out), color var(--code-fast) var(--code-ease-out);
-}
-/* The zone holding focus wears the solid chip; with nothing focused, the hovered zone does. */
-.plugin-atyrode_code [data-zone]:focus-within .plugin-atyrode_code__chip,
-.plugin-atyrode_code:not(:has([data-zone]:focus-within)) [data-zone]:hover .plugin-atyrode_code__chip,
-.plugin-atyrode_code .plugin-atyrode_code__chip[data-solid] { color: var(--code-on-accent); background: var(--code-accent); }
-
-.plugin-atyrode_code .plugin-atyrode_code__zh {
-  display: flex;
-  align-items: center;
-  gap: 2ch;
-  min-width: 0;
-  height: var(--code-row);
-  margin-bottom: 8px;
-  white-space: nowrap;
-  font: 400 13px/20px var(--code-mono);
-}
-.plugin-atyrode_code .plugin-atyrode_code__zh-status { color: var(--code-ghost); font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__hints {
-  display: inline-flex;
-  align-items: center;
-  gap: 1ch;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-  color: var(--code-ghost);
-  font-size: 12px;
-}
-.plugin-atyrode_code .plugin-atyrode_code__hk {
-  position: relative;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 1ch;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--code-ghost);
-  font: inherit;
-  line-height: inherit;
-  white-space: nowrap;
-}
-.plugin-atyrode_code button.plugin-atyrode_code__hk::before { content: ""; position: absolute; inset: -6px -0.5ch; }
-.plugin-atyrode_code .plugin-atyrode_code__hk kbd { color: var(--code-text-2); font: inherit; }
-.plugin-atyrode_code button.plugin-atyrode_code__hk:is(:hover, :focus-visible) { color: var(--code-text); background: none; }
-.plugin-atyrode_code .plugin-atyrode_code__hk[aria-pressed="true"] { color: var(--code-text); background: none; font-weight: 400; }
-.plugin-atyrode_code .plugin-atyrode_code__hk[aria-pressed="true"] kbd { color: var(--code-accent); }
-
-/* Quiet text action: secondary ink, accent underline on hover and focus, a 24px hit area. */
-.plugin-atyrode_code .plugin-atyrode_code__q {
-  position: relative;
-  display: inline;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
+  padding: 0 0.4rem;
   color: var(--code-text-2);
+  background: transparent;
   font: inherit;
-  line-height: inherit;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1;
   white-space: nowrap;
-  text-decoration: underline transparent;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: background-color var(--code-fast) ease, color var(--code-fast) ease;
 }
-.plugin-atyrode_code .plugin-atyrode_code__q::before { content: ""; position: absolute; inset: -4px -0.5ch; }
-.plugin-atyrode_code .plugin-atyrode_code__q:is(:hover, :focus-visible):not(:disabled) { color: var(--code-text); background: none; text-decoration-color: var(--code-accent); }
-.plugin-atyrode_code .plugin-atyrode_code__q:focus-visible { outline: 2px solid var(--code-accent); outline-offset: 3px; border-radius: 3px; }
-.plugin-atyrode_code .plugin-atyrode_code__q:disabled { color: var(--code-ghost); cursor: default; }
-.plugin-atyrode_code .plugin-atyrode_code__q[data-tone="danger"] { color: var(--code-error); }
+.plugin-atyrode_code .plugin-atyrode_code__button > .mf-icon { flex: none; }
+.plugin-atyrode_code .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { border: 0; color: var(--code-text); background: var(--code-hover); }
+.plugin-atyrode_code .plugin-atyrode_code__button:disabled { opacity: 0.45; color: var(--code-text-2); background: transparent; cursor: default; }
+.plugin-atyrode_code .plugin-atyrode_code__button:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__icon-button { width: 24px; padding: 0; }
 
-/* Primary: the one accent button per surface. Busy keeps focus (aria-disabled) and dims like disabled. */
+/* Checkbox: a 12px square with its label; `aria-checked` is the state. */
+.plugin-atyrode_code .plugin-atyrode_code__check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  height: 24px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  border: 0;
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  color: var(--code-text-2);
+  background: transparent;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.plugin-atyrode_code .plugin-atyrode_code__check-box {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--code-line-hover);
+  border-radius: 2px;
+  color: var(--code-on-accent);
+  background: var(--code-input);
+}
+.plugin-atyrode_code .plugin-atyrode_code__check[aria-checked="true"] { color: var(--code-text); }
+.plugin-atyrode_code .plugin-atyrode_code__check[aria-checked="true"] .plugin-atyrode_code__check-box { border-color: var(--code-accent); background: var(--code-accent); }
+.plugin-atyrode_code .plugin-atyrode_code__check:hover:not(:disabled, [aria-disabled="true"]) { border: 0; color: var(--code-text); background: var(--code-hover); }
+.plugin-atyrode_code .plugin-atyrode_code__check:hover:not(:disabled, [aria-disabled="true"]) .plugin-atyrode_code__check-box { border-color: var(--code-focus); }
+.plugin-atyrode_code .plugin-atyrode_code__check:is(:disabled, [aria-disabled="true"]) { opacity: 0.55; cursor: default; }
+.plugin-atyrode_code .plugin-atyrode_code__check:is(:disabled, [aria-disabled="true"]):hover { color: var(--code-text-2); background: transparent; }
+.plugin-atyrode_code .plugin-atyrode_code__check:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 0; }
+
+/* Primary: the one filled button per surface; busy shows the host spinner, disabled goes grey. */
 .plugin-atyrode_code .plugin-atyrode_code__primary {
   display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 1ch;
+  justify-content: center;
+  gap: 0.45rem;
   height: 28px;
   min-height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 5px;
-  background: var(--code-accent);
+  margin: 0;
+  border: 1px solid var(--code-accent);
+  border-radius: 3px;
+  padding: 0 0.7rem;
   color: var(--code-on-accent);
-  font: 600 13px/28px var(--code-mono);
+  background: var(--code-accent);
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--code-fast) ease, border-color var(--code-fast) ease;
+}
+.plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--code-focus); color: var(--code-on-accent); background: var(--code-focus); }
+.plugin-atyrode_code .plugin-atyrode_code__primary:focus-visible { border-color: var(--code-accent-text); outline: none; box-shadow: 0 0 0 3px var(--code-focus-ring); }
+.plugin-atyrode_code .plugin-atyrode_code__primary:disabled { border-color: var(--code-line); color: var(--code-text-3); background: var(--code-raised); cursor: default; }
+.plugin-atyrode_code .plugin-atyrode_code__primary[aria-busy="true"] { cursor: progress; }
+.plugin-atyrode_code .plugin-atyrode_code__primary .keycap { border-color: rgb(237 242 255 / 32%); border-radius: 2px; padding: 0.02rem 0.3rem; color: inherit; background: transparent; font-size: 0.62rem; font-weight: 600; opacity: 0.75; }
+.plugin-atyrode_code .plugin-atyrode_code__primary:disabled .keycap { border-color: var(--code-line); }
+.plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner { gap: 0.45rem; color: inherit; font-size: inherit; line-height: 1; }
+.plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner__mark { border-color: rgb(237 242 255 / 30%); border-top-color: var(--code-on-accent); }
+
+/* Section band: the one uppercase title of a section, a count, then its actions. */
+.plugin-atyrode_code .plugin-atyrode_code__band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 0.75rem;
+  min-height: 24px;
+  margin-bottom: 0.35rem;
+}
+.plugin-atyrode_code .plugin-atyrode_code__band-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--code-text-3);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
   white-space: nowrap;
 }
-.plugin-atyrode_code .plugin-atyrode_code__kh { opacity: .7; font-weight: 400; }
-.plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { background: var(--code-accent-hover); color: var(--code-on-accent); border: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]) { background: var(--code-hairline); color: var(--code-ghost); cursor: default; }
-.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]) .plugin-atyrode_code__kh { opacity: 1; color: var(--code-hint); }
-.plugin-atyrode_code .plugin-atyrode_code__primary:focus-visible { outline: 2px solid var(--code-accent); outline-offset: 2px; }
+.plugin-atyrode_code .plugin-atyrode_code__band-count { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.plugin-atyrode_code .plugin-atyrode_code__band-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.15rem; min-width: 0; max-width: 100%; margin-left: auto; }
 
-/* Notices: one line, a glyph in the marker column, inline actions. Never a box. */
+/* Notice: a tone accent on the card ground; actions are borderless buttons; technical text waits behind Details. */
 .plugin-atyrode_code .plugin-atyrode_code__note {
+  --note-tone: var(--code-line-hover);
   display: grid;
-  grid-template-columns: 2ch minmax(0, 1fr);
-  align-items: baseline;
-  min-height: var(--code-row);
-  padding-block: 2px;
-  color: var(--code-text-2);
-  font: 400 13px/20px var(--code-mono);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  border-left: 2px solid var(--note-tone);
+  border-radius: 0;
+  padding: 0.35rem 0.4rem 0.35rem 0.65rem;
+  color: var(--code-text-strong);
+  background: var(--code-card);
+  font-size: 0.74rem;
+  line-height: 1.4;
 }
-.plugin-atyrode_code .plugin-atyrode_code__note-glyph { color: var(--code-ghost); font-weight: 600; }
-.plugin-atyrode_code .plugin-atyrode_code__note[data-kind="warn"] .plugin-atyrode_code__note-glyph { color: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__note[data-kind="error"] .plugin-atyrode_code__note-glyph { color: var(--code-error); }
-.plugin-atyrode_code .plugin-atyrode_code__note-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 1ch; min-width: 0; overflow-wrap: anywhere; }
-.plugin-atyrode_code .plugin-atyrode_code__note-text .plugin-atyrode_code__q { text-decoration-color: var(--code-hint); }
-.plugin-atyrode_code .plugin-atyrode_code__note-details { grid-column: 2; margin-top: 2px; }
-.plugin-atyrode_code .plugin-atyrode_code__note-details > summary { width: fit-content; margin: 0; list-style: none; color: var(--code-text-2); cursor: pointer; }
-.plugin-atyrode_code .plugin-atyrode_code__note-details > summary::-webkit-details-marker { display: none; }
-.plugin-atyrode_code .plugin-atyrode_code__note-details > summary::after { content: " ›"; color: var(--code-ghost); }
-.plugin-atyrode_code .plugin-atyrode_code__note-details[open] > summary::after { content: " ⌄"; }
-.plugin-atyrode_code .plugin-atyrode_code__note-details pre {
-  max-height: 220px;
-  margin-top: 6px;
-  padding: 8px 1ch;
-  overflow: auto;
-  border-radius: 4px;
-  background: var(--code-bg-recessed);
+.plugin-atyrode_code .plugin-atyrode_code__note[data-kind="warn"] { --note-tone: var(--code-warn); }
+.plugin-atyrode_code .plugin-atyrode_code__note[data-kind="error"] { --note-tone: var(--code-attention-line); }
+.plugin-atyrode_code .plugin-atyrode_code__note-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.plugin-atyrode_code .plugin-atyrode_code__note-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.15rem; }
+.plugin-atyrode_code .plugin-atyrode_code__note > .plugin-atyrode_code__disclosure { grid-column: 1 / -1; }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  margin: 0;
+  border-radius: 3px;
   color: var(--code-text-2);
-  font: 12px/18px var(--code-mono);
+  font-size: 0.7rem;
+  list-style: none;
+  cursor: pointer;
+}
+.plugin-atyrode_code .plugin-atyrode_code__disclosure > summary::-webkit-details-marker { display: none; }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure > summary:hover { color: var(--code-text-strong); }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure > summary:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure > summary > .mf-icon { transition: transform var(--code-fast) ease; }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure[open] > summary > .mf-icon { transform: rotate(90deg); }
+.plugin-atyrode_code .plugin-atyrode_code__disclosure pre {
+  max-height: 14rem;
+  margin: 0.35rem 0 0;
+  overflow: auto;
+  border: 1px solid var(--code-hairline);
+  border-radius: 3px;
+  padding: 0.45rem 0.55rem;
+  color: var(--code-text-2);
+  background: var(--code-input);
+  font-family: var(--code-mono);
+  font-size: 0.66rem;
+  line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
-/* Meters: glyphs, never fractions; the word beside them carries the meaning. */
-.plugin-atyrode_code .plugin-atyrode_code__glyphs { letter-spacing: 0; white-space: pre; }
-.plugin-atyrode_code .plugin-atyrode_code__glyphs .plugin-atyrode_code__lit { color: var(--code-cost); }
-.plugin-atyrode_code .plugin-atyrode_code__glyphs[data-kind="speed"] .plugin-atyrode_code__lit { color: var(--code-text-2); }
-.plugin-atyrode_code .plugin-atyrode_code__unlit { color: var(--code-track); }
-.plugin-atyrode_code .plugin-atyrode_code__bar { display: inline-flex; height: 9px; }
-.plugin-atyrode_code .plugin-atyrode_code__bar[data-cells="10"] { width: 10ch; }
-.plugin-atyrode_code .plugin-atyrode_code__bar[data-cells="5"] { display: none; width: 5ch; }
-.plugin-atyrode_code .plugin-atyrode_code__bar > i {
-  flex: none;
-  width: 1ch;
-  height: 9px;
-  padding-inline: 1px;
-  border-radius: 2px;
-  background: var(--code-track);
-  background-clip: content-box;
-  /* Cells fill once when they first mount; later readings just change. */
-  animation: plugin-atyrode_code__cell 300ms var(--code-ease-out) both;
-  animation-delay: calc(var(--i, 0) * 18ms);
+/* Segment meter: five square-ended cells; cost lights warn only at the top step. */
+.plugin-atyrode_code .plugin-atyrode_code__segments { display: inline-flex; flex: none; gap: 2px; }
+.plugin-atyrode_code .plugin-atyrode_code__segments > i { width: 0.7rem; height: 0.3rem; border-radius: 1px; background: var(--code-hairline); }
+.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-on] { background: var(--code-text-2); }
+.plugin-atyrode_code .plugin-atyrode_code__segments[data-top] > i[data-on] { background: var(--code-warn); }
+.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-pv="add"] { background: var(--code-accent-text); }
+.plugin-atyrode_code .plugin-atyrode_code__segments > i[data-pv="drop"] { opacity: 0.35; }
+
+/* Usage bar: one square-ended reading; neutral below 80%. */
+.plugin-atyrode_code .plugin-atyrode_code__ubar { display: block; min-width: 1.5rem; height: 6px; border-radius: 1px; background: var(--code-hairline); overflow: hidden; }
+.plugin-atyrode_code .plugin-atyrode_code__ubar > span { display: block; height: 100%; background: var(--code-text-3); transform-origin: left center; animation: plugin-atyrode_code__grow 300ms var(--code-meter-ease) both; }
+.plugin-atyrode_code .plugin-atyrode_code__ubar[data-level="warn"] > span { background: var(--code-warn); }
+.plugin-atyrode_code .plugin-atyrode_code__ubar[data-level="error"] > span { background: var(--code-attention); }
+
+/* Readout: one stable line; its box never changes size. */
+.plugin-atyrode_code .plugin-atyrode_code__readout {
+  height: 1.2rem;
+  margin: 0;
+  overflow: hidden;
+  color: var(--code-text-2);
+  font-size: 0.72rem;
+  line-height: 1.2rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.plugin-atyrode_code .plugin-atyrode_code__bar > i[data-on] { background-color: var(--code-fill); }
+.plugin-atyrode_code .plugin-atyrode_code__readout strong { margin-right: 0.45rem; color: var(--code-text-strong); font-weight: 600; }
 
 /* Menus and popovers live in the panel's overlay layer. */
 .plugin-atyrode_code .plugin-atyrode_code__pop {
   position: absolute;
   z-index: 20;
-  min-width: 26ch;
-  max-width: min(56ch, calc(100% - 16px));
-  padding: 4px 0;
+  min-width: 11rem;
+  max-width: min(28rem, calc(100% - 16px));
   overflow: auto;
-  border: 1px solid var(--code-hairline);
-  border-radius: 6px;
-  background: var(--code-bg-raised);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  border: 1px solid var(--code-line);
+  border-radius: 3px;
+  padding: 0.2rem;
   color: var(--code-text);
-  font: 400 13px/20px var(--code-mono);
+  background: var(--code-card);
+  box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 45%);
+  font-size: 0.74rem;
+  line-height: 1.4;
+  overflow-wrap: normal;
   pointer-events: auto;
-  animation: plugin-atyrode_code__pop 120ms var(--code-ease-out) both;
+  animation: plugin-atyrode_code__pop var(--code-fast) ease both;
 }
 .plugin-atyrode_code .plugin-atyrode_code__pop:focus-visible { outline: none; }
-.plugin-atyrode_code .plugin-atyrode_code__mh { padding: 6px 12px 2px; color: var(--code-ghost); font-size: 12px; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__mh { padding: 0.3rem 0.45rem 0.15rem; color: var(--code-text-3); font-size: 0.68rem; font-weight: 600; white-space: nowrap; }
 .plugin-atyrode_code .plugin-atyrode_code__mi {
   display: grid;
-  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 1ch;
+  gap: 0.4rem;
   width: 100%;
-  height: 28px;
-  min-height: 28px;
-  padding: 0 12px 0 8px;
+  min-height: 24px;
+  margin: 0;
   border: 0;
-  border-radius: 0;
-  background: none;
-  color: var(--code-text-2);
+  border-radius: 2px;
+  padding: 0.1rem 0.45rem 0.1rem 0.3rem;
+  color: var(--code-text-strong);
+  background: transparent;
   font: inherit;
   text-align: left;
   white-space: nowrap;
+  cursor: pointer;
 }
-.plugin-atyrode_code .plugin-atyrode_code__mi:is(:hover, :focus-visible):not(:disabled) { border: 0; background: var(--code-bg-recessed); color: var(--code-text); outline: none; }
-.plugin-atyrode_code .plugin-atyrode_code__mi:disabled { color: var(--code-ghost); cursor: default; }
-.plugin-atyrode_code .plugin-atyrode_code__mi[data-tone="danger"] { color: var(--code-error); }
-.plugin-atyrode_code .plugin-atyrode_code__mi-mark { color: var(--code-accent); }
+.plugin-atyrode_code .plugin-atyrode_code__mi:is(:hover, :focus-visible):not(:disabled) { border: 0; color: var(--code-text); background: var(--code-hover); outline: none; }
+.plugin-atyrode_code .plugin-atyrode_code__mi:disabled { color: var(--code-text-3); background: transparent; cursor: default; }
+.plugin-atyrode_code .plugin-atyrode_code__mi[data-tone="danger"] { color: var(--code-attention); }
+.plugin-atyrode_code .plugin-atyrode_code__mi-mark { display: inline-grid; place-items: center; color: var(--code-accent-text); }
 .plugin-atyrode_code .plugin-atyrode_code__mi-label { overflow: hidden; text-overflow: ellipsis; }
-.plugin-atyrode_code .plugin-atyrode_code__mi[aria-current="true"] .plugin-atyrode_code__mi-label { color: var(--code-accent); font-weight: 600; }
-.plugin-atyrode_code .plugin-atyrode_code__mi-aside { color: var(--code-ghost); font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__mrule { width: auto; margin: 4px 0; border: 0; border-top: 1px solid var(--code-hairline); }
+.plugin-atyrode_code .plugin-atyrode_code__mi-aside { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--code-text-3); font-size: 0.68rem; }
+.plugin-atyrode_code .plugin-atyrode_code__mi-aside .keycap { border-radius: 2px; font-size: 0.62rem; padding: 0.02rem 0.3rem; }
+.plugin-atyrode_code .plugin-atyrode_code__mrule { width: auto; margin: 0.2rem 0.1rem; border: 0; border-top: 1px solid var(--code-hairline); }
 
-/* Sheets replace the main view: `‹ code`, the sheet's chip, its actions. */
+/* ---------------------------------------------------------------- usage section (usage-view.tsx `UsageZone`) */
+.plugin-atyrode_code .plugin-atyrode_code__pool > .mf-icon { color: var(--code-text-3); }
+.plugin-atyrode_code .plugin-atyrode_code__pool-name { min-width: 0; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; }
+.plugin-atyrode_code .plugin-atyrode_code__updated { color: var(--code-text-3); font-size: 0.68rem; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__ugroups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: 0.6rem 1.5rem; }
+.plugin-atyrode_code .plugin-atyrode_code__ugroup { display: grid; align-content: start; gap: 0.3rem; min-width: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__ghead { display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 24px; }
+.plugin-atyrode_code .plugin-atyrode_code__pname { margin: 0; color: var(--code-text-strong); font-size: 0.74rem; font-weight: 600; }
+.plugin-atyrode_code .plugin-atyrode_code__count { color: var(--code-text-3); font-size: 0.7rem; }
+.plugin-atyrode_code .plugin-atyrode_code__acct { display: grid; gap: 0.05rem; min-width: 0; }
+.plugin-atyrode_code .plugin-atyrode_code__idline { display: flex; align-items: center; gap: 0.4rem; min-width: 0; min-height: 24px; }
+.plugin-atyrode_code .plugin-atyrode_code__incl { padding: 0 0.15rem; margin-left: -0.15rem; }
+.plugin-atyrode_code .plugin-atyrode_code__ident {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+  overflow: hidden;
+  color: var(--code-text-strong);
+  background: transparent;
+  font: inherit;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.plugin-atyrode_code .plugin-atyrode_code__ident:hover { border: 0; color: var(--code-text); background: transparent; text-decoration: underline; text-decoration-color: var(--code-line-hover); text-underline-offset: 3px; }
+.plugin-atyrode_code .plugin-atyrode_code__ident:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code .plugin-atyrode_code__idstate { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 0.5rem; min-width: 0; margin-left: auto; overflow: hidden; }
+/* Fixed percent and reset columns, so every bar in a provider column has the same length. */
+.plugin-atyrode_code .plugin-atyrode_code__win { display: grid; grid-template-columns: 1.6rem minmax(1.5rem, 1fr) 2.2rem minmax(0, 6.1rem); align-items: center; gap: 0.5rem; min-height: 18px; }
+.plugin-atyrode_code .plugin-atyrode_code__wl { color: var(--code-text-3); font-size: 0.66rem; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__pct { color: var(--code-text-strong); font-size: 0.72rem; text-align: right; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__rs { min-width: 0; overflow: hidden; color: var(--code-text-3); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code .plugin-atyrode_code__win[data-level="warn"] .plugin-atyrode_code__pct { color: var(--code-warn); }
+.plugin-atyrode_code .plugin-atyrode_code__win[data-level="error"] .plugin-atyrode_code__pct { color: var(--code-attention); }
+.plugin-atyrode_code .plugin-atyrode_code__win[data-level="unknown"] .plugin-atyrode_code__pct { color: var(--code-text-3); }
+.plugin-atyrode_code .plugin-atyrode_code__balance { display: flex; align-items: baseline; gap: 0.5rem; min-height: 18px; }
+.plugin-atyrode_code .plugin-atyrode_code__balance > .plugin-atyrode_code__wl { min-width: 1.6rem; }
+.plugin-atyrode_code .plugin-atyrode_code__amount { color: var(--code-text-strong); font-size: 0.72rem; }
+.plugin-atyrode_code .plugin-atyrode_code__block { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; color: var(--code-text-3); font-size: 0.66rem; }
+.plugin-atyrode_code .plugin-atyrode_code__unreported { margin: 0; color: var(--code-text-3); font-size: 0.68rem; }
+.plugin-atyrode_code .plugin-atyrode_code__show-more { justify-self: start; margin-left: -0.4rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-empty { display: grid; justify-items: start; gap: 0.35rem; margin: 0; color: var(--code-text-2); font-size: 0.76rem; }
+.plugin-atyrode_code .plugin-atyrode_code__usage-empty > p { margin: 0; }
+/* Excluded and historical readings dim whole: they inform, they do not promise capacity. */
+.plugin-atyrode_code .plugin-atyrode_code__acct:is([data-excluded], [data-hist]) .plugin-atyrode_code__ubar > span { background: var(--code-line-hover); }
+.plugin-atyrode_code .plugin-atyrode_code__acct:is([data-excluded], [data-hist]) :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__amount) { color: var(--code-text-3); }
+.plugin-atyrode_code .plugin-atyrode_code__acct[data-excluded] .plugin-atyrode_code__ident { color: var(--code-text-3); }
+
+/* ---------------------------------------------------------------- sheet frame: Back to Code, the sheet's title, its actions */
 .plugin-atyrode_code .plugin-atyrode_code__sheet { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; }
 .plugin-atyrode_code .plugin-atyrode_code__sheet-head {
   position: sticky;
   top: 0;
   z-index: 4;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2ch;
-  height: 44px;
-  padding-inline: var(--code-inset, 16px);
+  gap: 0.25rem 0.6rem;
+  min-height: 40px;
   border-bottom: 1px solid var(--code-hairline);
-  background: var(--code-bg-raised);
-  font: 400 13px/20px var(--code-mono);
-  white-space: nowrap;
+  padding: 0.3rem 1rem 0.3rem 0.6rem;
+  background: var(--code-panel);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
-.plugin-atyrode_code .plugin-atyrode_code__back {
-  position: relative;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--code-text-2);
-  font: inherit;
-}
-.plugin-atyrode_code .plugin-atyrode_code__back::before { content: ""; position: absolute; inset: 0 -0.5ch; }
-.plugin-atyrode_code .plugin-atyrode_code__back:is(:hover, :focus-visible) { border: 0; background: none; color: var(--code-text); }
-.plugin-atyrode_code .plugin-atyrode_code__sheet-status { display: inline-flex; gap: 1ch; color: var(--code-ghost); font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__sheet-acts { display: flex; align-items: center; gap: 2ch; margin-left: auto; }
+.plugin-atyrode_code .plugin-atyrode_code__back > .mf-icon { transform: rotate(180deg); }
+.plugin-atyrode_code .plugin-atyrode_code__sheet-title { margin: 0; color: var(--code-text); font-size: 0.95rem; font-weight: 600; letter-spacing: -0.015em; }
+.plugin-atyrode_code .plugin-atyrode_code__sheet-status { display: inline-flex; gap: 0.4rem; color: var(--code-text-3); font-size: 0.7rem; }
+.plugin-atyrode_code .plugin-atyrode_code__sheet-acts { display: flex; align-items: center; gap: 0.25rem; margin-left: auto; }
 .plugin-atyrode_code .plugin-atyrode_code__sheet-body { flex: 1 0 auto; min-width: 0; }
 
-/* The bottom line: zone hints at rest, the hovered or focused control's readout otherwise. */
-.plugin-atyrode_code .plugin-atyrode_code__hintbar {
-  display: flex;
-  align-items: center;
-  gap: 1ch;
-  height: 28px;
-  padding: 0 var(--code-inset, 16px) 0 calc(var(--code-inset, 16px) + 2ch);
-  overflow: hidden;
-  border-top: 1px solid var(--code-hairline);
-  color: var(--code-ghost);
-  font: 400 12px/20px var(--code-mono);
-  white-space: nowrap;
-}
-.plugin-atyrode_code .plugin-atyrode_code__hintbar kbd { color: var(--code-text-2); font: inherit; }
-.plugin-atyrode_code .plugin-atyrode_code__ro { overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; }
-.plugin-atyrode_code .plugin-atyrode_code__ro[data-prose] { font: 12.5px/18px var(--code-sans); }
-.plugin-atyrode_code .plugin-atyrode_code__ro b { color: var(--code-text); font-weight: 600; }
-
-/* ---------------------------------------------------------------- usage zone (usage-view.tsx `UsageZone`) */
-.plugin-atyrode_code .plugin-atyrode_code__pool {
-  display: inline-flex;
-  align-items: center;
-  gap: .5ch;
-  height: 24px;
-  min-height: 24px;
-  padding: 0 .5ch;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--code-text-2);
-  font: inherit;
-}
-.plugin-atyrode_code .plugin-atyrode_code__pool:is(:hover, [aria-expanded="true"]) { border: 0; background: var(--code-bg-recessed); color: var(--code-text); }
-.plugin-atyrode_code .plugin-atyrode_code__tri { color: var(--code-ghost); font-size: 11px; }
-.plugin-atyrode_code .plugin-atyrode_code__ugroups {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 43ch), 1fr));
-  gap: 16px 32px;
-  font: 400 13px/20px var(--code-mono);
-}
-.plugin-atyrode_code .plugin-atyrode_code__ugroup { min-width: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__ghead { display: flex; align-items: baseline; gap: 1ch; height: var(--code-dense); padding-left: 2ch; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__pname { color: var(--code-hue); font-weight: 600; }
-.plugin-atyrode_code .plugin-atyrode_code__count { color: var(--code-text-2); }
-.plugin-atyrode_code .plugin-atyrode_code__asof { margin-left: auto; color: var(--code-ghost); font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__acct { margin-top: 4px; }
-.plugin-atyrode_code .plugin-atyrode_code__idline { display: flex; align-items: center; gap: 2ch; height: var(--code-row); padding-left: 2ch; white-space: nowrap; }
-.plugin-atyrode_code .plugin-atyrode_code__ident {
-  position: relative;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--code-text-2);
-  font: inherit;
-  white-space: nowrap;
-}
-.plugin-atyrode_code .plugin-atyrode_code__ident::before { content: ""; position: absolute; inset: -3px -0.5ch; }
-.plugin-atyrode_code .plugin-atyrode_code__ident:is(:hover, :focus-visible) { border: 0; background: none; color: var(--code-text); text-decoration: underline var(--code-accent) 1px; text-underline-offset: 3px; }
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-excluded] .plugin-atyrode_code__ident { color: var(--code-ghost); text-decoration: line-through var(--code-hint) 1px; }
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-excluded] .plugin-atyrode_code__ident:is(:hover, :focus-visible) { color: var(--code-text-2); }
-.plugin-atyrode_code .plugin-atyrode_code__exw { color: var(--code-ghost); font-size: 12px; }
-/* Hidden at rest but still focusable, so focus can land on it after a toggle. */
-.plugin-atyrode_code .plugin-atyrode_code__incl { font-size: 12px; opacity: 0; pointer-events: none; }
-.plugin-atyrode_code .plugin-atyrode_code__idline:is(:hover, :focus-within) .plugin-atyrode_code__incl { opacity: 1; pointer-events: auto; }
-.plugin-atyrode_code .plugin-atyrode_code__win {
-  display: grid;
-  grid-template-columns: 2ch 6ch 10ch 6ch 2ch 8ch minmax(0, 1fr);
-  align-items: center;
-  height: var(--code-dense);
-  white-space: nowrap;
-}
-.plugin-atyrode_code .plugin-atyrode_code__wl { grid-column: 2; overflow: hidden; color: var(--code-ghost); text-overflow: ellipsis; }
-.plugin-atyrode_code .plugin-atyrode_code__nobar { grid-column: 3; }
-.plugin-atyrode_code .plugin-atyrode_code__pct { padding-right: 1ch; color: var(--code-text); text-align: right; }
-.plugin-atyrode_code .plugin-atyrode_code__rs { color: var(--code-hint); }
-.plugin-atyrode_code .plugin-atyrode_code__cd,
-.plugin-atyrode_code .plugin-atyrode_code__abs { color: var(--code-text-2); }
-.plugin-atyrode_code .plugin-atyrode_code__abs { display: none; }
-.plugin-atyrode_code .plugin-atyrode_code__win:hover .plugin-atyrode_code__cd { display: none; }
-.plugin-atyrode_code .plugin-atyrode_code__win:hover .plugin-atyrode_code__abs { display: inline; }
-.plugin-atyrode_code .plugin-atyrode_code__wword { padding-left: 1ch; font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__blk { grid-column: 5 / -1; color: var(--code-text-2); font-size: 12px; }
-.plugin-atyrode_code .plugin-atyrode_code__blk .plugin-atyrode_code__wword { padding-left: 0; }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-kind="block"] .plugin-atyrode_code__blk { grid-column: 2 / -1; }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-kind="balance"] { grid-template-columns: 2ch 8ch auto; }
-.plugin-atyrode_code .plugin-atyrode_code__amt { color: var(--code-text); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="warn"] :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__wword) { color: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="error"] :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__wword) { color: var(--code-error); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="unknown"] .plugin-atyrode_code__pct { color: var(--code-ghost); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="warn"] .plugin-atyrode_code__bar > i[data-on] { background-color: var(--code-warn); }
-.plugin-atyrode_code .plugin-atyrode_code__win[data-level="error"] .plugin-atyrode_code__bar > i[data-on] { background-color: var(--code-error); }
-/* Excluded and historical readings dim whole: they inform, they do not promise capacity. */
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-excluded] .plugin-atyrode_code__win :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__cd, .plugin-atyrode_code__wword, .plugin-atyrode_code__blk) { color: var(--code-ghost); }
-.plugin-atyrode_code .plugin-atyrode_code__acct:is([data-excluded], [data-hist]) .plugin-atyrode_code__win .plugin-atyrode_code__bar > i[data-on] { background-color: var(--code-fill-dim); }
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-hist] :is(.plugin-atyrode_code__pct, .plugin-atyrode_code__cd, .plugin-atyrode_code__ident, .plugin-atyrode_code__amt) { color: var(--code-ghost); }
-.plugin-atyrode_code .plugin-atyrode_code__acct[data-hist] .plugin-atyrode_code__win[data-level="warn"] .plugin-atyrode_code__wword { color: var(--code-ghost); }
-.plugin-atyrode_code .plugin-atyrode_code__ugroup[data-hist] .plugin-atyrode_code__pname { opacity: .62; }
-.plugin-atyrode_code .plugin-atyrode_code__manymore { margin: 4px 0 0 2ch; }
-.plugin-atyrode_code .plugin-atyrode_code__checking { display: flex; align-items: center; gap: 1ch; height: var(--code-dense); padding-left: 2ch; color: var(--code-ghost); white-space: nowrap; font: 400 13px/20px var(--code-mono); }
-
-@container code (width < 720px) {
-  .plugin-atyrode_code .plugin-atyrode_code__ugroups { grid-template-columns: repeat(auto-fill, minmax(min(100%, 42ch), 1fr)); }
-}
-@container code (width < 520px) {
-  .plugin-atyrode_code .plugin-atyrode_code__win { grid-template-columns: 2ch 6ch 5ch 6ch 2ch 8ch minmax(0, 1fr); }
-  .plugin-atyrode_code .plugin-atyrode_code__bar[data-cells="10"] { display: none; }
-  .plugin-atyrode_code .plugin-atyrode_code__bar[data-cells="5"] { display: inline-flex; }
-  .plugin-atyrode_code .plugin-atyrode_code__checking .plugin-atyrode_code__bar[data-cells="10"] { display: inline-flex; width: 5ch; overflow: hidden; }
-  .plugin-atyrode_code .plugin-atyrode_code__sheet-head { flex-wrap: wrap; height: auto; min-height: 44px; padding-block: 8px; row-gap: 4px; }
-  .plugin-atyrode_code .plugin-atyrode_code__sheet-status { display: none; }
+/* ---------------------------------------------------------------- touch: 44px targets for a coarse pointer, compact boxes otherwise */
+@media (pointer: coarse) {
+  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__check, .plugin-atyrode_code__primary) {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
-/* Starts dim, never invisible: a paused animation (a background tab) must still leave readable cells. */
-@keyframes plugin-atyrode_code__cell { from { opacity: .45; } to { opacity: 1; } }
+/* ---------------------------------------------------------------- motion */
+@keyframes plugin-atyrode_code__grow { from { transform: scaleX(0); } to { transform: none; } }
 @keyframes plugin-atyrode_code__pop { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .plugin-atyrode_code .plugin-atyrode_code__bar > i,
-  .plugin-atyrode_code .plugin-atyrode_code__pop { animation: none; }
-  .plugin-atyrode_code .plugin-atyrode_code__chip { transition: none; }
+  .plugin-atyrode_code :is(.plugin-atyrode_code__ubar > span, .plugin-atyrode_code__pop) { animation: none; }
+  .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__primary, .plugin-atyrode_code__disclosure > summary > .mf-icon) { transition: none; }
 }

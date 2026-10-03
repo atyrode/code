@@ -7,9 +7,10 @@ import { providerPolicy } from "../domain/providers.ts";
 import type { UsageView } from "../domain/usage.ts";
 import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useCodeQuery, useOmpQuery, useWorkflowQuery } from "./machine-web.ts";
+import { ControlIcon, Spinner } from "@manifold/ui";
 import {
-  accountWord, ago, CellBar, clock, countdown, Hint, hhmm, hueOf, Menu, MenuHeader, MenuItem, MenuRule, middle, Notice, QuietButton,
-  useMenu, useMinuteTick, ZoneHead,
+  accountWord, ago, Button, Check, clock, countdown, hhmm, hueOf, Menu, MenuHeader, MenuItem, MenuRule, Notice, SectionBand, State, UsageBar,
+  useMenu, useMinuteTick, withKey,
 } from "./ui.tsx";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -214,7 +215,7 @@ export function UsageOverview(props: UsageOverviewProps) {
   return <WorkspaceUsageOverview key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
 
-// ---------------------------------------------------------------- compact usage zone ("Ledger, alive")
+// ---------------------------------------------------------------- the main view's usage section
 
 type WindowState = { level: "ok" | "warn" | "error" | "unknown"; word: "" | "tight" | "maxed" | "blocked"; until: number | null; percent: number | null };
 const FAMILY_ORDER = ["openai", "anthropic", "deepseek"];
@@ -253,13 +254,13 @@ function windowLabel(window: UsageWindow, provider: string): string {
 }
 function identityOf(entry: UsageAccount): string {
   const { account } = entry;
-  return account.email ?? (account.type === "api_key" ? `api key ${account.credentialId}` : account.identityKey ?? `oauth ${account.credentialId}`);
+  return account.email ?? (account.type === "api_key" ? `API key ${account.credentialId}` : account.identityKey ?? `OAuth ${account.credentialId}`);
 }
 function balanceText(balance: NonNullable<UsageAccount["balance"]>): string {
   return balance.currency === "USD" ? `$${balance.total}` : `${balance.total} ${balance.currency}`;
 }
 
-export type UsageZoneProps = {
+type UsageZoneProps = {
   host: HostServices;
   className?: string | undefined;
   /** Opens the accounts surface; the generator shows it as a sheet. */
@@ -272,10 +273,12 @@ export type UsageZoneProps = {
   refresher?: RefObject<(() => void) | null> | undefined;
 };
 
-/** The main view's usage zone: provider groups, account rows and quota windows on the same data as `UsageOverview`. */
+/** The main view's usage section: provider columns, account rows and quota windows on the same data as `UsageOverview`. */
 export function UsageZone(props: UsageZoneProps) {
   return <WorkspaceUsageZone key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
+
+const U = "plugin-atyrode_code__";
 
 function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFamilies, refresher }: UsageZoneProps) {
   const now = Date.now();
@@ -329,7 +332,7 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
     } finally { busy.current = false; if (mounted.current) { setPending(false); refresh(); } }
   }
   const presets = current?.accounts.presets ?? [];
-  const poolName = !current ? null : manual ? "manual" : presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "unavailable preset";
+  const poolName = !current ? null : manual ? "Manual" : presets.find(preset => preset.id === current.accounts.activePreset)?.name ?? "Unavailable preset";
   const observed = accounts.data?.accounts ?? [];
   const included = (disabled: AccountChoices["manualDisabled"]) => `${observed.filter(account => !accountSelectionDisabled(account, disabled)).length} of ${observed.length}`;
   const providers = [...value?.providers ?? []].sort((left, right) =>
@@ -338,7 +341,7 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
   const tabKey = tab && idents.includes(tab) ? tab : idents[0];
   // An unavailable observation is not an empty one: zero accounts is only said when the broker freshly reports zero.
   const unavailable = accounts.data?.status === "unavailable" || value?.accountsStatus === "unavailable";
-  const status = unavailable ? null : error && value ? "last check failed" : value?.observedAt ? (now - value.observedAt < 60_000 ? "just now" : `as of ${ago(now - value.observedAt)}`) : null;
+  const status = unavailable ? null : error && value ? "Last check failed" : value?.observedAt ? (now - value.observedAt < 60_000 ? "Updated just now" : `Updated ${ago(now - value.observedAt)} ago`) : null;
   function keys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
     const line = element.closest<HTMLElement>("[data-acct]");
@@ -351,23 +354,24 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
       event.preventDefault();
       const target = all[Math.max(0, Math.min(all.length - 1, next))];
       if (target) { setTab(target.closest<HTMLElement>("[data-acct]")!.dataset.acct!); target.focus(); }
-    } else if (event.key === "ArrowRight" && element === ident && toggle) { event.preventDefault(); toggle.focus(); }
-    else if (event.key === "ArrowLeft" && element === toggle) { event.preventDefault(); ident?.focus(); }
+    } else if (event.key === "ArrowLeft" && element === ident && toggle) { event.preventDefault(); toggle.focus(); }
+    else if (event.key === "ArrowRight" && element === toggle) { event.preventDefault(); ident?.focus(); }
     else if (event.key === " " && element === ident && toggle) { event.preventDefault(); toggle.click(); }
   }
+  const accountCount = providers.reduce((total, provider) => total + provider.accounts.length, 0);
   let body;
-  if (!workspace) body = <Notice>open a workspace to see usage</Notice>;
-  else if (configuration.data?.configuration === null) body = <Notice actions={[<QuietButton key="a" onClick={onAccounts}>accounts</QuietButton>]}>account choices not initialized</Notice>;
+  if (!workspace) body = <p className={`${U}usage-empty`}>Open a workspace to see usage.</p>;
+  else if (configuration.data?.configuration === null) body = <div className={`${U}usage-empty`}><p>Account choices are not initialized yet.</p><Button onClick={onAccounts}>Open Accounts</Button></div>;
+  // The band's own Retry stays beside every failure below, so the notices carry only the facts.
   else if (!value && error) {
-    body = <Notice kind="error" details={error} actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>accounts unavailable</Notice>;
+    body = <Notice kind="error" details={error}>Accounts are unavailable.</Notice>;
   } else if (!value) {
-    body = <div className="plugin-atyrode_code__checking" role="status"><CellBar percent={0} cells={10} /><span>checking accounts…</span></div>;
-  } else if (!providers.some(provider => provider.accounts.length)) {
-    body = unavailable ? <Notice kind="error" details={error ?? "The account broker reported no current observation; current capacity is unknown, not zero."}
-      actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>accounts unavailable</Notice>
-      : <Notice actions={[<QuietButton key="s" onClick={onAccounts}>sign in</QuietButton>]}>no accounts</Notice>;
+    body = <Spinner label="Checking accounts…" />;
+  } else if (!accountCount) {
+    body = unavailable ? <Notice kind="error" details={error ?? "The account broker reported no current observation; current capacity is unknown, not zero."}>Accounts are unavailable.</Notice>
+      : <div className={`${U}usage-empty`}><p>No accounts are connected yet.</p><Button onClick={onAccounts}>Sign in</Button></div>;
   } else {
-    body = <div className="plugin-atyrode_code__ugroups" onKeyDown={keys}>{providers.filter(provider => provider.accounts.length).map(provider => {
+    body = <div className={`${U}ugroups`} onKeyDown={keys}>{providers.filter(provider => provider.accounts.length).map(provider => {
       const rows = provider.accounts;
       const historicalOf = (entry: UsageAccount) => cached || entry.freshness === "stale";
       const groupHistorical = rows.every(historicalOf);
@@ -375,10 +379,12 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
       const count = rows.filter(entry => entry.selected).length;
       const limit = rows.length > 5 && !expanded.has(provider.provider) ? 4 : rows.length;
       const word = accountWord(provider.family, provider.provider);
-      return <div key={provider.provider} className="plugin-atyrode_code__ugroup" data-fam={hueOf(provider.family)} data-hist={groupHistorical || undefined}>
-        <div className="plugin-atyrode_code__ghead">
-          <span className="plugin-atyrode_code__pname">{word}</span><span className="plugin-atyrode_code__count">{count === rows.length ? count : `${count} of ${rows.length}`}</span>
-          {groupHistorical && <span className="plugin-atyrode_code__asof">as of {ago(now - oldest)}</span>}
+      return <section key={provider.provider} className={`${U}ugroup`} data-hist={groupHistorical || undefined} aria-label={`${word} accounts`}>
+        <div className={`${U}ghead`}>
+          <span className={`${U}mark`} data-fam={hueOf(provider.family)} aria-hidden="true" />
+          <h3 className={`${U}pname`}>{word}</h3>
+          <span className={`${U}count`} title={`${count} of ${rows.length} included in the pool`}>{count === rows.length ? count : `${count} of ${rows.length}`}</span>
+          {groupHistorical && <State title="Historical reading; current availability unknown">{ago(now - oldest)} old</State>}
         </div>
         {rows.slice(0, limit).map(entry => {
           const key = accountKey(entry);
@@ -388,71 +394,76 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
           const windows = entry.windows.map(window => ({ window, state: windowState(entry, window, provider.provider), label: windowLabel(window, provider.provider) }));
           // A block on a scope no shown window meters still stops work there; it gets its own line rather than vanishing.
           const otherBlocks = entry.account.blocks.filter(block => !entry.windows.some(window => covers(block, window, provider.provider)));
-          return <div key={key} className="plugin-atyrode_code__acct" data-acct={key} data-excluded={!entry.selected || undefined} data-hist={historical || undefined}>
-            <div className="plugin-atyrode_code__idline" title={manual ? undefined : `set by the ${poolName} preset`}>
-              <button type="button" className="plugin-atyrode_code__ident" data-ident="" tabIndex={key === tabKey ? 0 : -1} title={who} onClick={onAccounts}
-                data-readout-label={who} data-readout={`${word} ${entry.account.type === "api_key" ? "api key" : "oauth"}${entry.selected ? "" : " · excluded"}${disabled ? " · credential disabled" : ""} · open in accounts`}>
-                {middle(who, 24)}{!entry.selected && <span className="plugin-atyrode_code__sr">, excluded</span>}
+          const blockedUntil = Math.max(0, ...windows.filter(({ state }) => state.word === "blocked").map(({ state }) => state.until!));
+          const worst = blockedUntil ? <State tone="attention">Blocked until {hhmm(blockedUntil)}</State>
+            : windows.some(({ state }) => state.word === "maxed") ? <State tone="attention">Maxed</State>
+            : windows.some(({ state }) => state.word === "tight") ? <State tone="warn">Tight</State> : null;
+          const editable = manual && canEdit && !historicalAccounts;
+          return <div key={key} className={`${U}acct`} data-acct={key} data-excluded={!entry.selected || undefined} data-hist={historical || undefined}>
+            <div className={`${U}idline`} title={manual ? undefined : `Set by the ${poolName} preset`}>
+              {editable && <Check className={`${U}incl`} data-incl="" tabIndex={-1} data-action="atyrode.code.changeAccounts" checked={entry.selected}
+                aria-label={`Include ${who} in the next launch`} title={entry.selected ? "Included: the next launch may use it" : "Excluded: the next launch will not use it; it stays signed in"}
+                onChange={enabled => void change({ kind: "set-account", reference: entry.account.reference, enabled })} />}
+              <button type="button" className={`${U}ident`} data-ident="" tabIndex={key === tabKey ? 0 : -1} onClick={onAccounts}
+                title={`Open ${who} in Accounts (${entry.account.type === "api_key" ? "API key" : "OAuth"}${entry.selected ? "" : ", excluded"}${disabled ? ", credential disabled" : ""})`}>
+                {who}{!entry.selected && <span className={`${U}sr`}>, excluded</span>}
               </button>
-              {!entry.selected && <span className="plugin-atyrode_code__exw" aria-hidden="true">excluded</span>}
-              {disabled && <span className="plugin-atyrode_code__exw">disabled</span>}
-              {manual && canEdit && !historicalAccounts && <QuietButton className="plugin-atyrode_code__incl" data-incl="" tabIndex={-1} data-action="atyrode.code.changeAccounts"
-                aria-label={`${entry.selected ? "exclude" : "include"} ${who}`} data-readout-label={`${entry.selected ? "exclude" : "include"} ${who}`}
-                data-readout={entry.selected ? "the next launch will not use it; it stays signed in" : "the next launch may use it again"}
-                onClick={() => void change({ kind: "set-account", reference: entry.account.reference, enabled: !entry.selected })}>{entry.selected ? "exclude" : "include"}</QuietButton>}
-              {historical && !groupHistorical && <span className="plugin-atyrode_code__asof">as of {entry.observedAt === null ? "—" : ago(now - entry.observedAt)}</span>}
+              <span className={`${U}idstate`}>
+                {!entry.selected && !editable && <State>Excluded</State>}
+                {disabled && <State>Disabled</State>}
+                {worst}
+                {historical && !groupHistorical && <State title="Historical reading; current availability unknown">{entry.observedAt === null ? "Age unknown" : `${ago(now - entry.observedAt)} old`}</State>}
+              </span>
             </div>
-            {entry.balance && <div className="plugin-atyrode_code__win" data-kind="balance" data-readout-label={`${word} ${who}`}
-              data-readout={`prepaid balance${historical ? ` as of ${ago(now - entry.balance.observedAt)}` : ""} · billed per token`}>
-              <span className="plugin-atyrode_code__wl">balance</span><span className="plugin-atyrode_code__amt">{balanceText(entry.balance)}</span>
+            {entry.balance && <div className={`${U}balance`}>
+              <span className={`${U}wl`}>Balance</span><span className={`${U}amount`}>{balanceText(entry.balance)}</span>
+              {historical && <span className={`${U}rs`}>as of {ago(now - entry.balance.observedAt)} ago</span>}
             </div>}
             {/* A prepaid balance with only unknown windows says just the balance: unknown windows add noise, not facts. */}
             {windows.filter(({ state }) => !entry.balance || state.level !== "unknown").map(({ window, state, label }) => {
               const reset = window.resetsAt !== null && window.resetsAt > now ? window.resetsAt : null;
-              const facts = [state.percent === null ? "usage unknown" : `${Math.round(state.percent)}% used`, state.word === "blocked" ? `blocked until ${hhmm(state.until!)}` : state.word,
-                reset !== null ? `resets ${clock(reset)} local, in ${countdown(reset - now)}` : "reset unknown", historical && window.observedAt !== null ? `as of ${ago(now - window.observedAt)}` : ""].filter(Boolean).join(" · ");
-              return <div key={JSON.stringify([window.windowId, window.tier])} className="plugin-atyrode_code__win" data-level={state.level}
-                data-readout-label={`${word} ${who} · ${label} window${window.tier && window.tier.toLowerCase() !== label ? ` (${window.tier})` : ""}`} data-readout={facts} title={reset !== null ? `resets ${clock(reset)} local` : undefined}>
-                <span className="plugin-atyrode_code__wl">{label}</span>
-                {state.percent === null ? <span className="plugin-atyrode_code__nobar" /> : <><CellBar percent={state.percent} cells={10} /><CellBar percent={state.percent} cells={5} /></>}
-                <span className="plugin-atyrode_code__pct">{state.percent === null ? "—" : `${Math.round(state.percent)}%`}</span>
-                {state.word === "blocked" ? <span className="plugin-atyrode_code__blk"><span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(state.until!)}</span> : <>
-                  <span className="plugin-atyrode_code__rs" aria-hidden="true">{reset !== null ? "↻" : ""}</span>
-                  <span className="plugin-atyrode_code__cdc">{reset !== null && <><span className="plugin-atyrode_code__cd">{countdown(reset - now)}</span><span className="plugin-atyrode_code__abs">{clock(reset)}</span></>}</span>
-                  <span className="plugin-atyrode_code__wword">{state.word}</span>
-                </>}
+              return <div key={JSON.stringify([window.windowId, window.tier])} className={`${U}win`} data-level={state.level}
+                title={[state.percent === null ? "Usage unknown" : `${Math.round(state.percent)}% used`, state.word === "blocked" ? `blocked until ${clock(state.until!)} local` : state.word,
+                  reset !== null ? `resets ${clock(reset)} local` : "reset unknown", historical && window.observedAt !== null ? `as of ${ago(now - window.observedAt)} ago` : "",
+                  window.tier && window.tier.toLowerCase() !== label ? `${window.tier} tier` : ""].filter(Boolean).join(", ")}>
+                <span className={`${U}wl`}>{label}</span>
+                <UsageBar percent={state.percent ?? 0} level={state.level} />
+                <span className={`${U}pct`}>{state.percent === null ? "—" : `${Math.round(state.percent)}%`}</span>
+                <span className={`${U}rs`}>{state.word === "blocked" ? `blocked until ${hhmm(state.until!)}` : reset !== null ? `resets in ${countdown(reset - now)}` : "reset unknown"}</span>
               </div>;
             })}
-            {!entry.balance && entry.windows.length === 0 && <div className="plugin-atyrode_code__win" data-level="unknown" data-readout-label={`${word} ${who}`} data-readout="the provider reported no quota windows; capacity is unknown, not zero">
-              <span className="plugin-atyrode_code__wl">quota</span><span className="plugin-atyrode_code__nobar" /><span className="plugin-atyrode_code__pct">—</span>
-            </div>}
-            {otherBlocks.map(block => <div key={block.scope} className="plugin-atyrode_code__win" data-level="error" data-kind="block"
-              data-readout-label={`${word} ${who}`} data-readout={`the provider blocks ${block.scope ? `${block.scope} requests` : "this account"} until ${clock(block.until)} local`}>
-              <span className="plugin-atyrode_code__blk"><span className="plugin-atyrode_code__wword">blocked</span> until {hhmm(block.until)}</span>
+            {!entry.balance && entry.windows.length === 0 && <p className={`${U}unreported`}>No quota windows reported; capacity unknown, not zero.</p>}
+            {otherBlocks.map(block => <div key={block.scope} className={`${U}block`}>
+              <State tone="attention" title={`Blocked until ${clock(block.until)} local`}>Blocked until {hhmm(block.until)}</State>
+              <span>{block.scope ? `${block.scope} requests` : "All requests"}</span>
             </div>)}
           </div>;
         })}
-        {limit < rows.length && <QuietButton className="plugin-atyrode_code__manymore" onClick={() => setExpanded(new Set([...expanded, provider.provider]))}>+{rows.length - limit} more</QuietButton>}
-      </div>;
+        {limit < rows.length && <Button className={`${U}show-more`} onClick={() => setExpanded(new Set([...expanded, provider.provider]))}>Show {rows.length - limit} more</Button>}
+      </section>;
     })}</div>;
   }
-  return <section className={className} data-zone="usage" aria-label="usage" aria-busy={configuration.refreshing || usage.refreshing || undefined}>
-    <ZoneHead chip="usage" hints={[status, <Hint key="r" k="r" label={error || unavailable ? "retry" : "refresh"} onClick={refresh} readout="check the account broker again; provider readings may be up to five minutes old" />]}>
+  return <section className={className} data-zone="usage" aria-labelledby={`${U}usage-title`} aria-busy={configuration.refreshing || usage.refreshing || undefined}>
+    <SectionBand id={`${U}usage-title`} title="Usage" count={accountCount ? `${accountCount} ${accountCount === 1 ? "account" : "accounts"}` : undefined} actions={<>
       {poolName !== null && <>
-        <button ref={poolMenu.anchor} type="button" className="plugin-atyrode_code__pool" aria-haspopup="menu" aria-expanded={poolMenu.open} onClick={poolMenu.toggle}
-          data-readout-label={poolName} data-readout="which accounts the next launch may use">{poolName} <span className="plugin-atyrode_code__tri" aria-hidden="true">▾</span></button>
-        <Menu menu={poolMenu} label="account pool">
-          <MenuHeader>account pool</MenuHeader>
-          <MenuItem current={manual} aside={included(current!.accounts.manualDisabled)} disabled={!canEdit} onSelect={() => void change({ kind: "activate-preset", id: null })}>manual</MenuItem>
+        <button ref={poolMenu.anchor} type="button" className={`${U}button ${U}pool`} aria-haspopup="menu" aria-expanded={poolMenu.open} onClick={poolMenu.toggle}
+          aria-label={`Account pool: ${poolName}`} title="Which accounts the next launch may use">
+          <span className={`${U}pool-name`}>{poolName}</span><ControlIcon kind="disclosed" size={12} />
+        </button>
+        <Menu menu={poolMenu} label="Account pool" align="end">
+          <MenuHeader>Account pool</MenuHeader>
+          <MenuItem current={manual} aside={included(current!.accounts.manualDisabled)} disabled={!canEdit} onSelect={() => void change({ kind: "activate-preset", id: null })}>Manual</MenuItem>
           {presets.map(preset => <MenuItem key={preset.id} current={current!.accounts.activePreset === preset.id} aside={included(preset.disabled)} disabled={!canEdit}
             onSelect={() => void change({ kind: "activate-preset", id: preset.id })}>{preset.name}</MenuItem>)}
           <MenuRule />
-          <MenuItem onSelect={onAccounts}>manage accounts…</MenuItem>
+          <MenuItem onSelect={onAccounts}>Manage accounts…</MenuItem>
         </Menu>
       </>}
-    </ZoneHead>
+      {status && <span className={`${U}updated`}>{status}</span>}
+      <Button icon="restart" onClick={refresh} title={withKey("Check the account broker again; provider readings may be up to five minutes old", "r")}>{error || unavailable ? "Retry" : "Refresh"}</Button>
+    </>} />
     {failure && <Notice kind="error">{failure}</Notice>}
-    {error && value && <Notice kind="warn" details={error} actions={[<QuietButton key="r" onClick={refresh}>retry</QuietButton>]}>last check failed · showing retained readings</Notice>}
+    {error && value && <Notice kind="warn" details={error}>The last check failed; showing retained readings.</Notice>}
     {body}
   </section>;
 }
