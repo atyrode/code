@@ -121,8 +121,11 @@ export type TrackSegment = {
  * pool is, which the verdict's "N of M with room" judges; no single account speaks for the pool.
  */
 export type PoolTrack = { readonly label: string; readonly segments: readonly TrackSegment[]; readonly level: number | null };
-/** When the pool would be full at its accounts' pace so far, in the window that fills it last. */
-export type PoolForecast = { readonly label: string; readonly at: number };
+/**
+ * When the pool would be full at its accounts' pace so far, in the window that fills it last, and when it next has an
+ * account with room again (null when no full account reports a reset).
+ */
+export type PoolForecast = { readonly label: string; readonly at: number; readonly reopens: { readonly label: string; readonly at: number } | null };
 export type PoolHead = {
   readonly family: string;
   /** The column's head pool: its provider's base bucket, else its first unmetered provider. */
@@ -138,7 +141,11 @@ export type PoolHead = {
   readonly unreported: boolean;
   /** When the last account with room would fill at its pace, while every other is still full (`poolForecast`). */
   readonly forecast: PoolForecast | null;
-  /** The soonest reset of a present window near its limit, while the pool is not already out. */
+  /**
+   * When the pool has room again after its forecast fill; with no forecast, while the pool is not already out, the soonest
+   * reset of a present window near its limit. Never a later window's reset beside a forecast, which would say the pool
+   * stays full past the moment another account frees.
+   */
   readonly reset: { readonly label: string; readonly at: number } | null;
   /** Readings left out of the judgement for their age, said once for the pool; never beside a `stale` verdict, which says it. */
   readonly stale: { readonly count: number; readonly ageMs: number } | null;
@@ -216,7 +223,11 @@ function poolForecast(pool: QuotaPool, current: boolean): PoolForecast | null {
   if (spans.some(list => list.length === 0)) return null;
   const fills = spans.flat().filter(span => Number.isFinite(span.from)).sort((left, right) => left.from - right.from);
   const full = fills.find(fill => spans.every(list => list.some(span => span.from <= fill.from && fill.from < span.to)));
-  return full ? { label: full.label, at: full.from } : null;
+  if (!full) return null;
+  // Each account stays full until the last of its spans holding that moment ends; the pool has room again when the first one frees.
+  const frees = spans.map(list => list.filter(span => span.from <= full.from && full.from < span.to).reduce((last, span) => span.to > last.to ? span : last));
+  const first = frees.reduce((soonest, span) => span.to < soonest.to ? span : soonest);
+  return { label: full.label, at: full.from, reopens: Number.isFinite(first.to) ? { label: first.label, at: first.to } : null };
 }
 
 /** The head of one provider column, from its pools and the reading. */
@@ -228,18 +239,20 @@ export function poolHead(family: string, pools: readonly QuotaPool[], reading: Q
   const verdict = headVerdict(pool, total);
   const tracks = pool ? tracksOf(pool, group, current, reading.nowMs) : [];
   const balances = pool?.bucket === null ? group?.accounts.filter(entry => entry.selected && !entry.account.disabled && entry.balance !== null).map(entry => entry.balance!) ?? [] : [];
-  // The reset that matters while the pool still serves: the soonest of a present window near or at its limit.
+  // The reset that matters while the pool still serves: when it has room again after a forecast fill, else the soonest of a
+  // present window near or at its limit.
   const open = verdict.kind === "room" || verdict.kind === "thin" || verdict.kind === "tight";
   const pressing = open && pool ? pool.windows.filter(window => current && window.status === "fresh" &&
     (window.state.word === "tight" || window.state.word === "maxed") && window.resetsAt !== null && window.resetsAt > reading.nowMs)
     .sort((left, right) => left.resetsAt! - right.resetsAt!)[0] : undefined;
+  const forecast = pool ? poolForecast(pool, current) : null;
   const staleCount = pool?.standings.filter(account => account.standing === "stale").length ?? 0;
   const staleAge = pool?.staleAgeMs ?? null;
   return {
     family, pool, included: pool?.accounts ?? 0, total, verdict, tracks, balances,
     unreported: pool?.bucket === null && pool.accounts > 0 && balances.length === 0 && reading.view !== null && reading.view.accountsStatus !== "unavailable",
-    forecast: pool ? poolForecast(pool, current) : null,
-    reset: pressing ? { label: pressing.label, at: pressing.resetsAt! } : null,
+    forecast,
+    reset: forecast ? forecast.reopens : pressing ? { label: pressing.label, at: pressing.resetsAt! } : null,
     stale: verdict.kind !== "stale" && staleAge !== null && staleCount > 0 ? { count: staleCount, ageMs: staleAge } : null,
   };
 }

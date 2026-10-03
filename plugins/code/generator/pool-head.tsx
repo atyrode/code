@@ -92,11 +92,11 @@ export function PoolHead({ head, usage, accountsGate, grid, quiet, idle, seats, 
   const { parts, tone } = verdictWords(head.verdict, nowMs);
   const shown = quiet && head.verdict.kind === "unknown" ? [] : parts;
   const count = head.total === 0 ? "" : head.included === head.total ? `×${head.included}` : `×${head.included} of ${head.total}`;
-  // The age of readings left out comes first, so a narrow column never loses it.
+  // The age of readings left out comes first, so a narrow column never loses it; a forecast fill reads before the reset that ends it.
   const note = [
     head.stale && `${head.stale.count} ${head.stale.count === 1 ? "reading" : "readings"} ${ago(head.stale.ageMs)} old`,
-    head.reset && `${head.reset.label} resets ${when(head.reset.at, nowMs)}`,
     head.forecast && `${head.forecast.label} full ≈ ${when(head.forecast.at, nowMs)}`,
+    head.reset && `${head.reset.label} resets ${when(head.reset.at, nowMs)}`,
   ].filter((part): part is string => Boolean(part));
   const listId = `${G}paccounts-${head.family}`;
   // Focus follows a press that opens the accounts, never a re-render that finds them open: the first switch, else the first control.

@@ -218,6 +218,15 @@ describe("a pool is forecast full only when its last account with room would fil
     const tonight = new Date(now).setHours(23, 0, 0, 0), early = new Date(now).setHours(26, 0, 0, 0);
     expect(when(early, tonight)).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) 02:00$/);
   });
+
+  test("a pool forecast full reopens when its first account frees, never at a later window's reset", () => {
+    // Alice is tight and fills in minutes, resetting in two hours; Dave fills in about 70 minutes and resets at 90.
+    const value = reading({ windows: { alice: [pace(0.95)], dave: [pace(0.75, { resetsAt: now + 90 * MINUTE })] }, excluded: ["bob"] });
+    const head = poolHead("openai", quotaPools(catalog, value), value);
+    expect(head.forecast!.at).toBeCloseTo(now + 70 * MINUTE, -4);
+    expect(head.reset).toEqual({ label: "5h", at: now + 90 * MINUTE });
+    expect(head.forecast!.at).toBeLessThan(head.reset!.at);
+  });
 });
 
 describe("seats", () => {

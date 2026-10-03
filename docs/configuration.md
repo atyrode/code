@@ -288,11 +288,13 @@ the most used, then history, then unread accounts, an account without that windo
 by an empty outline), and the pool's level: the mean used share of the present
 readings, `–` when none is present; each account's reading is in the track's title.
 History is drawn as an outline of the width it had, never as a level. The note says
-readings too old to judge first, then the pressing reset and a pace forecast ("5h full
-≈ 14:20", "7d full ≈ Mon 20:00"): the first moment every included account would be
+readings too old to judge first, then a pace forecast ("5h full ≈ 14:20", "7d full ≈
+Mon 20:00") and the reset: the forecast is the first moment every included account would be
 full at once at its pace, a projection from one reading, said only when every account
 is read fresh, each one with room is on pace to fill before its window resets, and none
-has reopened by then; never a moment already past. Times beyond today carry their
+has reopened by then; never a moment already past. Beside a forecast the reset is when
+the first full account frees again; without one, the soonest reset of a window near its
+limit. Times beyond today carry their
 weekday, from six days on their date. The verdict reads room, "N of M with room", tight,
 "blocked" or "maxed" until the reset time or "reset unknown", "none included" or "no
 account". Historical readings are said in neutral grey as "<age> old · availability
