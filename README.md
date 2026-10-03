@@ -33,18 +33,26 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
-- **Code workbench:** four visible generator dials beside the complete per-agent
-  profile ledger, then compact account/window facts and one Task/review path.
-  Empty workspaces derive sensible local defaults from OMP's passive bundled
-  model metadata; adding models, credentials or runtime setup is not a prerequisite.
-  The first explicit **Save profile** adopts the chosen catalog and selection in
-  one exact CAS, preserving account choices. Stored active policy always wins.
-  Wide views stay aligned; narrow views put each role above its model and effort.
-  Focus views and hover/keyboard/touch help preserve navigation and Task drafts.
-  Models still supports manual authoring, import/export, discovery and measurement.
+- **Code workbench:** one main view of statement, seats and earlier statements. The
+  **statement** is a verb and six words (lane, tier, thinking, advisor, extras,
+  machine) changed in place by pointer, keys or wheel, with two status lines that say
+  what a pointed choice does, including to quota where it strands a role or leads on
+  a strained pool. The verb names the next step (Verify models, Save & launch,
+  Launch) and, when refused, stays focusable and gives the reason with a fix. The
+  **seat board** shows provider columns headed by their quota pools, tier rows of
+  model seats and each role on the seat that leads it, with fallbacks and fates; a
+  pool head opens its accounts in place. The **earlier statements** list running and
+  explicitly read saved sessions and this device's recent teams. Launch is task-less:
+  the task is typed in the session. Empty workspaces derive a render-only starter
+  from OMP's passive bundled model metadata, so exploring needs no models,
+  credentials or runtime setup; saving starts with **Verify models**. Stored active
+  policy always wins. Accounts, Models (manual authoring, import/export, discovery
+  and measurement) and Setup open as sheets, and the session options hold skills and
+  automation for one launch.
 - **Accounts / Usage:** include exact OMP-observed identities or credential slots
-  with straightforward checkboxes and reusable presets. Read each reported quota
-  window separately; unknown and historical facts never imply free capacity.
+  with straightforward checkboxes in the Accounts sheet, or switches under each pool
+  head, and reusable presets. Read each reported quota window separately; unknown
+  and historical facts never imply free capacity.
   OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and
@@ -64,15 +72,16 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 - **Native fleet sessions:** explicitly read bounded header/title metadata from
   each permitted machine. An exact harness/machine/session correlation can reopen
   its existing terminal at its authoritative current home; similar names or
-  directories never imply a match. Otherwise choose **Resume saved state** or
-  **Resume with this profile** on the selected destination. The latter sends
-  explicit next-resume model/thinking choices and the exact composed overlay/account
-  pool, not a claim about live effective settings. Resume rechecks native inventory
+  directories never imply a match. Otherwise choose **Resume** or **Resume with
+  this team** on a saved session; resuming runs on the statement's machine. The
+  latter sends explicit next-resume model/thinking choices and the exact composed
+  overlay/account pool, not a claim about live effective settings. Resume rechecks
+  native inventory
   and running terminals before preparing anything; native refusals and placement
-  permissions remain authoritative.
+  permissions remain authoritative. Recent teams are device-local and grant nothing.
 - **Suggestions:** Code reviews and invokes only its optional external
-  classifier service. This policy is separate from OMP account and gateway
-  configuration.
+  classifier service, configured in Setup; the main view has no Suggest control.
+  This policy is separate from OMP account and gateway configuration.
 
 Native Plugins installs and governs OMP's root, accounts and gateway bundles,
 managed resources, locations, service bindings and operation consent. Code has
