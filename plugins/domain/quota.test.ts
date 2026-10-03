@@ -59,9 +59,10 @@ function window(usedFraction: number | null, changes: Partial<Window> = {}): Win
     observedAt: usedFraction === null ? null : now, ...changes };
 }
 
-/** A real projection of this usage; Codex accounts not given windows report a quiet one. */
+/** A real projection of this usage; Codex accounts not given windows report a quiet one. `readAt` dates one account's own report. */
 function reading(windows: Partial<Record<Person, Window[]>>, options: {
   blocks?: Partial<Record<Person, { scope: string; until: number }[]>>; excluded?: Person[]; observedAt?: number; current?: boolean;
+  readAt?: Partial<Record<Person, number>>;
 } = {}): QuotaReading {
   const accounts = observation(options.blocks ?? {});
   const observedAt = options.observedAt ?? now;
@@ -69,11 +70,14 @@ function reading(windows: Partial<Record<Person, Window[]>>, options: {
   for (const name of options.excluded ?? []) {
     choices = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts.find(account => account.credentialId === people[name].credentialId)!.reference, enabled: false });
   }
-  const reports = (Object.keys(people) as Person[]).map(name => ({
-    provider: people[name].provider, credentialId: people[name].credentialId, identityKey: people[name].identityKey, observedAt,
-    status: name === "erin" ? "no_usage" as const : "reported" as const,
-    windows: name === "erin" ? [] : (windows[name] ?? [window(0.1)]).map(entry => entry.observedAt === null ? entry : { ...entry, observedAt }),
-  }));
+  const reports = (Object.keys(people) as Person[]).map(name => {
+    const readAt = options.readAt?.[name] ?? observedAt;
+    return {
+      provider: people[name].provider, credentialId: people[name].credentialId, identityKey: people[name].identityKey, observedAt: readAt,
+      status: name === "erin" ? "no_usage" as const : "reported" as const,
+      windows: name === "erin" ? [] : (windows[name] ?? [window(0.1)]).map(entry => entry.observedAt === null ? entry : { ...entry, observedAt: readAt }),
+    };
+  });
   const view = projectUsage({ scope, observedAt, accounts: reports }, accounts, choices, now, { maxAgeMs: 5 * MINUTE, refreshStatus: "succeeded" });
   return { view, current: options.current ?? true, nowMs: now };
 }
@@ -187,6 +191,25 @@ describe("pool verdicts", () => {
     const exhausted = [window(1, { quotaStatus: "exhausted" })];
     const result = outcomes(selection(), reading({ alice: exhausted, bob: exhausted, dave: exhausted }, { observedAt: now - 2 * HOUR }));
     expect(result.get("default")).toMatchObject({ kind: "leads", pool: { verdict: { kind: "stale", ageMs: 2 * HOUR } } });
+  });
+
+  test("each account is judged on its own reading: a stale one counts neither as room nor against it, and its age is said once", () => {
+    // Old code counted every included account in the denominator: one fresh room beside two stale readings read as thin.
+    const twoOld = reading({ alice: [window(0.1)], bob: [window(0.1)], dave: [window(0.1)] }, { readAt: { bob: now - 2 * HOUR, dave: now - 3 * HOUR } });
+    const codex = pool(quotaPools(catalog, twoOld), "openai-codex:codex");
+    expect(codex).toMatchObject({ verdict: { kind: "room" }, accounts: 3, room: 1, judged: 1, staleAgeMs: 3 * HOUR });
+    expect(codex.standings.map(account => account.standing)).toEqual(["room", "stale", "stale"]);
+    expect(codex.windows.map(entry => entry.status)).toEqual(["fresh", "stale", "stale"]);
+    // A stale account at 10% never makes a tight pool look roomy; "N of M" counts only what was read fresh.
+    const tightBesideOld = pool(quotaPools(catalog, reading({ alice: [window(0.9)], bob: [window(0.1)], dave: [window(0.95)] },
+      { readAt: { bob: now - 2 * HOUR } })), "openai-codex:codex");
+    expect(tightBesideOld).toMatchObject({ verdict: { kind: "tight" }, room: 0, judged: 2, staleAgeMs: 2 * HOUR });
+    expect(pool(quotaPools(catalog, reading({ alice: [window(0.9)], bob: [window(0.1)], dave: [window(0.1)] },
+      { readAt: { bob: now - 2 * HOUR, dave: now - 2 * HOUR } })), "openai-codex:codex")).toMatchObject({ verdict: { kind: "tight" }, room: 0, judged: 1 });
+    // A whole reading that is not current judges nobody.
+    const history = pool(quotaPools(catalog, reading({}, { current: false })), "openai-codex:codex");
+    expect(history).toMatchObject({ room: 0, judged: 0, staleAgeMs: 0 });
+    expect(history.standings.every(account => account.standing === "stale")).toBe(true);
   });
 });
 

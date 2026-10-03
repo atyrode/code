@@ -73,11 +73,13 @@ export function paceForecast(window: UsageWindow, state: WindowState, current: b
 // ---------------------------------------------------------------- pools
 
 /**
- * A pool's standing at the reading. `room`: at least half its accounts have every window fresh and
- * under 80%. `thin`: some, but fewer than half, do. `tight`: none does, though one is still allowed.
- * `blocked`/`maxed`: no account can serve until `until` (null when no reset is reported). `stale`:
- * the reading is not current, `ageMs` old; `unknown`: nothing reported. `none`: no included, enabled
- * account serves it. `unmetered`: served by accounts whose provider reports no quota windows.
+ * A pool's standing at the reading, judged only over accounts whose own reading is fresh: an account
+ * read long ago or never counts neither as room nor as tight. `room`: at least half the judged
+ * accounts have every window under 80%. `thin`: some, but fewer than half, do. `tight`: none does,
+ * though one is still allowed. `blocked`/`maxed`: no account can serve until `until` (null when no
+ * reset is reported). `stale`: no current judgement is possible, the oldest reading `ageMs` old;
+ * `unknown`: nothing reported. `none`: no included, enabled account serves it. `unmetered`: served by
+ * accounts whose provider reports no quota windows.
  */
 export type PoolVerdict =
   | { readonly kind: "room" | "thin" | "tight" | "unknown" | "none" | "unmetered" }
@@ -88,10 +90,18 @@ export type PoolWindow = {
   readonly windowId: string;
   readonly label: string;
   readonly state: WindowState;
+  /** Whether this reading is current; a stale one keeps its percentage as history, never as standing. */
+  readonly status: "fresh" | "stale" | "unknown";
   readonly resetsAt: number | null;
   readonly durationMs: number | null;
   readonly forecast: PaceForecast | null;
 };
+/**
+ * One included account in one pool. `room` and `tight` come from fresh readings of every window it
+ * has there; `out` is a block, or a fresh exhausted window. `stale` and `unknown` are judged neither
+ * way: the account is history (`observedAt` says how old) or unread.
+ */
+export type PoolAccount = { readonly credentialId: number; readonly standing: "room" | "tight" | "out" | "stale" | "unknown"; readonly observedAt: number | null };
 /** What one provider's metered bucket, or one unmetered provider, offers the team. */
 export type QuotaPool = {
   /** `provider:bucket` for a metered bucket, the provider alone otherwise; identifiers cannot contain `:`. */
@@ -103,6 +113,13 @@ export type QuotaPool = {
   readonly verdict: PoolVerdict;
   /** Included, enabled accounts serving it at the reading. */
   readonly accounts: number;
+  /** Each of those accounts' standing; empty for an unmetered provider. */
+  readonly standings: readonly PoolAccount[];
+  /** "N of M with room": accounts with room, of the accounts whose reading is fresh enough to judge. */
+  readonly room: number;
+  readonly judged: number;
+  /** The age of the oldest reading not judged for being stale, said once for the pool; null when none is stale. */
+  readonly staleAgeMs: number | null;
   /** The included, enabled accounts' windows metering this bucket. */
   readonly windows: readonly PoolWindow[];
 };
@@ -134,7 +151,19 @@ function usableAccounts(group: UsageProvider | undefined): UsageAccount[] {
   return group?.accounts.filter(entry => entry.selected && !entry.account.disabled && entry.status !== "credential_disabled") ?? [];
 }
 
-function verdictOf(provider: string, bucket: string | null, group: UsageProvider | undefined, reading: QuotaReading): PoolVerdict {
+/** One account's standing in a bucket, from its own windows there and the account's blocks. */
+function standing(entry: UsageAccount, bucket: string, provider: string): PoolAccount {
+  const windows = entry.windows.filter(window => window.bucket === bucket);
+  const states = windows.map(window => ({ window, state: windowState(entry, window, provider) }));
+  const fact = (kind: PoolAccount["standing"]): PoolAccount => ({ credentialId: entry.account.credentialId, standing: kind, observedAt: entry.observedAt });
+  // A block is an account fact, current whenever the account observation is; exhaustion is current only when read fresh.
+  if (states.some(({ window, state }) => state.word === "blocked" || (state.word === "maxed" && window.status === "fresh"))) return fact("out");
+  if (windows.some(window => window.status === "stale")) return fact("stale");
+  if (windows.length === 0 || windows.some(window => window.status === "unknown")) return fact("unknown");
+  return fact(states.every(({ state }) => state.word === "") ? "room" : "tight");
+}
+
+function verdictOf(bucket: string | null, group: UsageProvider | undefined, reading: QuotaReading, count: { room: number; judged: number }): PoolVerdict {
   const { view, current, nowMs } = reading;
   if (view === null || view.accountsStatus === "unavailable") return { kind: "unknown" };
   const usable = usableAccounts(group);
@@ -159,17 +188,15 @@ function verdictOf(provider: string, bucket: string | null, group: UsageProvider
     case "available": break;
     default: return { kind: "unknown" };
   }
-  const room = usable.filter(entry => {
-    const windows = entry.windows.filter(window => window.bucket === bucket);
-    return windows.length > 0 && windows.every(window => window.status === "fresh" && windowState(entry, window, provider).word === "");
-  }).length;
-  return { kind: room === 0 ? "tight" : room * 2 < usable.length ? "thin" : "room" };
+  return { kind: count.room === 0 ? "tight" : count.room * 2 < count.judged ? "thin" : "room" };
 }
 
 /**
  * Every pool the catalog's models draw on, joined with the reading: in the catalog's family order,
  * a family's base bucket, then its special buckets, then its unmetered providers. Never `room` over
- * a reading that is not fresh and current: such a pool is `stale` with its age, or `unknown`.
+ * a reading that is not fresh and current, for the pool or for any one account: such a pool is
+ * `stale` with its age, or `unknown`, and such an account is left out of the judgement and its age
+ * is stated once for the pool.
  */
 export function quotaPools(catalog: CompiledCatalog, reading: QuotaReading): QuotaPool[] {
   const keys = new Map<string, { provider: string; family: string; bucket: string | null; rank: number }>();
@@ -188,10 +215,17 @@ export function quotaPools(catalog: CompiledCatalog, reading: QuotaReading): Quo
     const current = reading.current && reading.view?.accountsStatus === "fresh";
     const windows = bucket === null ? [] : usable.flatMap(entry => entry.windows.filter(window => window.bucket === bucket).map(window => {
       const state = windowState(entry, window, provider);
-      return { credentialId: entry.account.credentialId, windowId: window.windowId, label: windowLabel(window, provider), state,
+      return { credentialId: entry.account.credentialId, windowId: window.windowId, label: windowLabel(window, provider), state, status: window.status,
         resetsAt: window.resetsAt, durationMs: window.durationMs, forecast: paceForecast(window, state, current, reading.nowMs) };
     }));
-    return { id, provider, family, bucket, verdict: verdictOf(provider, bucket, group, reading), accounts: usable.length, windows };
+    // A whole reading that is not current judges no account: each is history, whatever its own status says.
+    const standings = bucket === null ? [] : usable.map(entry => current ? standing(entry, bucket, provider)
+      : { credentialId: entry.account.credentialId, standing: entry.observedAt === null ? "unknown" as const : "stale" as const, observedAt: entry.observedAt });
+    const staleTimes = standings.flatMap(account => account.standing === "stale" && account.observedAt !== null ? [account.observedAt] : []);
+    const count = { room: standings.filter(account => account.standing === "room").length,
+      judged: standings.filter(account => account.standing === "room" || account.standing === "tight" || account.standing === "out").length };
+    return { id, provider, family, bucket, verdict: verdictOf(bucket, group, reading, count), accounts: usable.length, standings, ...count,
+      staleAgeMs: staleTimes.length ? Math.max(0, reading.nowMs - Math.min(...staleTimes)) : null, windows };
   });
 }
 
