@@ -105,15 +105,13 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     actions.refresh();
   }
   function closeSheet() {
-    const closing = currentSheet.current;
     setSheet(null);
     actions.refresh();
-    // A sheet opened from somewhere that has since gone returns focus to its own link in the footer.
-    if (closing && !(returnFocus.current?.isConnected && returnFocus.current.offsetParent !== null)) returnFocus.current = sheetLinks.current[closing] ?? null;
   }
   const sheetChanged = useRef(sheet);
   useLayoutEffect(() => {
-    if (sheetChanged.current === sheet) return;
+    const closed = sheetChanged.current;
+    if (closed === sheet) return;
     sheetChanged.current = sheet;
     const scroller = scrollParent(view.current);
     if (sheet) {
@@ -125,7 +123,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       return;
     }
     if (scroller) scroller.scrollTop = mainScroll.current;
-    returnFocus.current?.focus({ preventScroll: true });
+    // Focus returns to what opened the sheet (the verb, a status fix, a footer link), judged now that the main view shows
+    // again: while the sheet covered it, nothing in it showed. One that has since gone gives way to the sheet's own link.
+    const opener = returnFocus.current;
+    const target = opener?.isConnected && opener.offsetParent !== null ? opener : closed ? sheetLinks.current[closed] ?? null : null;
+    target?.focus({ preventScroll: true });
   }, [sheet]);
   function finish(source: Sheet) {
     if (currentSheet.current === source) closeSheet();

@@ -147,7 +147,8 @@ empty prompt. Headless callers still pass a prompt.
 The main view reads top to bottom: the **statement**, the **seat board**, the
 **earlier statements** and a footer. Accounts, Models and Setup open as sheets over
 it, from the footer or from a status fix; Esc or **Back to Code** returns, restoring
-focus and scroll position. Visited sheets stay mounted, so profile, catalog, account
+focus to what opened the sheet (its footer link when that has gone) and the scroll
+position. Visited sheets stay mounted, so profile, catalog, account
 and session-option drafts survive moving between them and the empty-to-active
 transition. Opening a sheet grants no permission and starts no inventory, benchmark
 or session. Blocked, offline, read-only, stale/conflict and failed-observation
