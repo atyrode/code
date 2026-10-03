@@ -13,28 +13,26 @@ import type { VerificationPhase } from "./model-verification.ts";
 import type { VerificationStatus } from "./verification.ts";
 
 /*
- * The statement line as data: its six words, each word's options with what choosing one would do,
+ * The statement as data: its six settings, each setting's values with what choosing one would do,
  * the verb's label for the workbench's step, and the two status lines under it. Pure, so the rules
- * (which option carries a redline, what the verb says, which status outranks which) are tested apart
- * from the DOM; statement.tsx and slot.tsx only draw what this returns. Quota and gate facts come
- * from the domain and the workbench model; nothing here judges either.
+ * (which value carries a redline, what the verb says, which status outranks which) are tested apart
+ * from the DOM; statement.tsx and settings.tsx only draw what this returns. Quota and gate facts
+ * come from the domain and the workbench model; nothing here judges either.
  */
 
-// ---------------------------------------------------------------- words
+// ---------------------------------------------------------------- settings
 
 export type StatementWord = "lane" | "tier" | "thinking" | "advisor" | "extras" | "machine";
-/** The words a team is made of; the machine is the destination, not part of the team. */
+/** The settings a profile is made of; the machine is the destination, not part of the profile. */
 export type TeamWord = Exclude<StatementWord, "machine">;
 export type TeamWords = Readonly<Record<TeamWord, string>>;
-/** Reading order, which is also the order ←/→ walk and every width form fills its rows in. */
+/** Reading order, which is also the order ↑/↓ walk and every layout fills its lines in. */
 export const STATEMENT_WORDS: readonly StatementWord[] = ["lane", "tier", "thinking", "advisor", "extras", "machine"];
 type DialWord = "lane" | "tier" | "thinking" | "advisor";
 const DIAL_OF: Readonly<Record<DialWord, DialId>> = { lane: "lane", tier: "model", thinking: "thinking", advisor: "advisor" };
 export const WORD_NAMES: Readonly<Record<StatementWord, string>> = {
   lane: "Lane", tier: "Tier", thinking: "Thinking", advisor: "Advisor", extras: "Extras", machine: "Machine",
 };
-/** Words read before a value ("thinking high", "on Studio"); never part of the value itself. */
-export const CONNECTORS: Readonly<Partial<Record<StatementWord, string>>> = { thinking: "thinking", advisor: "advisor", machine: "on" };
 
 /**
  * How the panel names providers and times; the view passes ui.tsx's words and the local clock. A
@@ -56,8 +54,8 @@ function laneLabel(lane: Lane, familyWord: (family: string) => string): string {
 const CAPABILITY_LABELS = ["fast", "normal", "smart", "elite"] as const;
 
 /**
- * The six More switches, in the order the extras word lists them, with the dial words that mean on
- * and off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`).
+ * The six More switches, in the order the extras setting lists them, with the dial words that mean
+ * on and off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`).
  */
 const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } }[] = [
   { dial: "spark", word: "spark", on: "on", off: "off",
@@ -77,7 +75,7 @@ function extraOn(selection: Selection, dial: MoreDial): boolean {
   const extra = EXTRAS.find(entry => entry.dial === dial)!;
   return SPECS[dial].get(selection) === extra.on;
 }
-/** The words of the switches that are on, in the extras word's order ("spark", "free only"). */
+/** The words of the switches that are on, in the extras setting's order ("spark", "free only"). */
 export function extrasOn(selection: Selection): string[] {
   return EXTRAS.flatMap(extra => extraOn(selection, extra.dial) ? [extra.word] : []);
 }
@@ -85,15 +83,10 @@ export function extrasOn(selection: Selection): string[] {
 function extrasLabel(on: readonly string[]): string {
   return on.length === 0 ? "no extras" : on.length <= 2 ? on.join(" · ") : `${on.length} extras`;
 }
-/** Every label the extras word can wear, so a measure of the line holds whichever is on. */
-export const EXTRAS_LABELS: readonly string[] = [
-  extrasLabel([]), extrasLabel(EXTRAS.map(extra => extra.word)),
-  ...EXTRAS.flatMap((first, index) => [extrasLabel([first.word]), ...EXTRAS.slice(index + 1).map(second => extrasLabel([first.word, second.word]))]),
-];
 
 /**
- * A team in the line's words, which the statement, the earlier statements and every control name
- * share. The machine is not part of a team: the caller adds its name.
+ * A profile in the settings' words, which the earlier statements and every control name share.
+ * The machine is not part of a profile: the caller adds its name.
  */
 export function teamWords(selection: Selection, familyWord: (family: string) => string): TeamWords {
   return {
@@ -122,7 +115,7 @@ export function roleList(roles: readonly string[]): string {
   return `${roles.slice(0, 2).join(", ")} and ${roles.length - 2} more`;
 }
 
-// ---------------------------------------------------------------- quota as the team meets it
+// ---------------------------------------------------------------- quota as the profile meets it
 
 function stranded(outcome: RoleOutcome): boolean {
   return outcome.kind === "no-route" || outcome.kind === "no-account";
@@ -193,7 +186,7 @@ function quotaNote(catalog: CompiledCatalog, current: Review, next: Review, mark
 
 // ---------------------------------------------------------------- consequence sentences
 
-/** One sentence of what a team change does: which roles rise, fall, move provider, appear or go. List-price cost and speed indices are left out: they mean nothing on a subscription. */
+/** One sentence of what a profile change does: which roles rise, fall, move provider, appear or go. Cost and speed are the estimates' own readouts beside the status lines, never words here. */
 export function changeSentence(catalog: CompiledCatalog, before: Review, after: Review, familyWord: (family: string) => string): string {
   const raised: string[] = [], lowered: string[] = [], added: string[] = [], removed: string[] = [];
   let chains = 0;
@@ -226,7 +219,7 @@ export function changeSentence(catalog: CompiledCatalog, before: Review, after: 
   return `${sentence[0]!.toUpperCase()}${sentence.slice(1)}`;
 }
 
-/** What moving the line's team to `next` would do, for a team pointed outside the line (a recent team, a fix): its sentence and quota note. */
+/** What moving the shown profile to `next` would do, for a profile pointed outside the settings (a recent profile, a fix): its sentence and quota note. */
 export function teamChange(catalog: CompiledCatalog, current: Review, next: Review, pools: readonly QuotaPool[], familyWord: (family: string) => string):
   { readonly sentence: string; readonly quota: QuotaNote | null } {
   const marked = causalRedline(catalog, current, { review: next, redline: redline(catalog, next.routes, pools) }, pools);
@@ -238,11 +231,11 @@ function refusalText(word: StatementWord, value: string, selection: Selection, r
   const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   if (word === "tier") return `No ${value} ${vocab.family(lead)} model`;
   if (value === "spark" || value === "priority") return `${value === "spark" ? "Spark" : "Priority"} needs a GPT lane`;
-  if (value === "budget") return "No free route for this team";
+  if (value === "budget") return "No free route for this profile";
   return "Not among the current models";
 }
 
-// ---------------------------------------------------------------- the words' options
+// ---------------------------------------------------------------- the settings' values
 
 /** A lane option's mark: its family's square, a small one for the family it crosses to when led, or both for Mixed. */
 export type LaneMark = { readonly kind: "mixed" } | { readonly kind: "provider"; readonly family: string; readonly cross: string | null };
@@ -252,17 +245,19 @@ export type SlotOption = {
   readonly value: string;
   readonly label: string;
   readonly mark: LaneMark | null;
-  /** The value on the line. Extras have none: each switch is `on` or not. */
+  /** The setting's value now. Extras have none: each switch is `on` or not. */
   readonly current: boolean;
   /** Extras only: the switch is on. */
   readonly on: boolean;
+  /** Machines only: the machine is online; null for every other value and for a destination the roster does not list. */
+  readonly online: boolean | null;
   /** It can be chosen; the current option always can. */
   readonly available: boolean;
-  /** Why it cannot be chosen, in the word's own terms. */
+  /** Why it cannot be chosen, in the setting's own terms. */
   readonly reason: string | null;
-  /** The team choosing it commits; null for machines, refused options and the current one. */
+  /** The profile choosing it commits; null for machines, refused values and the current one. */
   readonly selection: Selection | null;
-  /** The review that team produces when it can be previewed: what the board draws while the option is pointed. */
+  /** The review that profile produces when it can be previewed: what the board draws while the value is pointed. */
   readonly review: Review | null;
   readonly moves: readonly RoleMove[];
   /** Only where choosing it is the cause (`causalRedline`); never on the current value. */
@@ -273,39 +268,34 @@ export type SlotOption = {
   readonly note: string;
   readonly quota: QuotaNote | null;
 };
-/** One word: its options in drum order (the top is more), and where the line's value sits among them. */
+/** One setting: its values in row order, low to high from left to right, and where its value sits among them. */
 export type Slot = {
   readonly word: StatementWord;
   readonly options: readonly SlotOption[];
   /** Index of the current option; -1 for extras, which have no single value. */
   readonly current: number;
-  /** The label on the line. */
-  readonly label: string;
-  /** The value on the line differs from the last launch. */
+  /** The setting's value differs from the last launch. */
   readonly changed: boolean;
-  /** The value on the line differs from the saved workspace team, which the verb's save would change. */
+  /** The setting's value differs from the saved workspace profile, which the verb's save would change. */
   readonly edited: boolean;
 };
 
 export type StatementContext = OptionContext & {
   readonly catalog: CompiledCatalog;
-  /** The team on the line. */
+  /** The profile the settings show. */
   readonly selection: Selection;
   /** The review the controls show, which names the lanes on offer (`controlsReview`). */
   readonly review: Review;
   readonly pools: readonly QuotaPool[];
-  /** The newest team this browser launched, if any. */
+  /** The newest profile this browser launched, if any. */
   readonly lastLaunch: Selection | null;
-  /** The saved workspace team while the line holds an unsaved edit of it; null otherwise. */
+  /** The saved workspace profile while the settings hold an unsaved edit of it; null otherwise. */
   readonly saved: Selection | null;
   readonly machines: readonly MachineSummary[] | null;
   /** The machine list could not be read; `machines` is the last list read, or null when none was. */
   readonly rosterError: boolean;
   readonly machineId: string;
 };
-
-/** Ordinal words run strongest at the top of the drum, so up is more; lanes keep their spectrum, machines the roster. */
-const DESCENDING: Readonly<Partial<Record<StatementWord, true>>> = { tier: true, thinking: true, advisor: true };
 
 function laneMark(lane: Lane | undefined): LaneMark | null {
   if (!lane) return null;
@@ -339,7 +329,7 @@ function dialSlot(word: DialWord, context: StatementContext, vocab: Vocabulary):
   const options = spec.words(review).flat().map((value): SlotOption => {
     const label = optionLabel(word, value, review, vocab);
     const mark = word === "lane" ? laneMark(review.available.lanes.find(lane => laneWord(lane) === value)) : null;
-    const base = { value, label, mark, on: false, last: last === value && value !== now };
+    const base = { value, label, mark, on: false, online: null, last: last === value && value !== now };
     if (value === now) {
       return { ...base, current: true, available: true, reason: null, selection: null, review: null, moves: [], redline: null, note: "now", quota: null };
     }
@@ -359,10 +349,8 @@ function dialSlot(word: DialWord, context: StatementContext, vocab: Vocabulary):
       quota: consequence ? quotaNote(catalog, review, consequence.review, marked, pools) : null,
     };
   });
-  const ordered = DESCENDING[word] ? options.reverse() : options;
-  const current = ordered.findIndex(option => option.current);
-  return { word, options: ordered, current, label: ordered[current]?.label ?? now, changed: last !== null && last !== now,
-    edited: saved !== null && spec.get(saved) !== now };
+  const current = options.findIndex(option => option.current);
+  return { word, options, current, changed: last !== null && last !== now, edited: saved !== null && spec.get(saved) !== now };
 }
 
 function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
@@ -371,7 +359,7 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
     const on = extraOn(selection, extra.dial);
     const target = on ? extra.off : extra.on;
     const choice = chooseOption(catalog, selection, review, extra.dial, target, context);
-    const base = { value: extra.dial, label: extra.word, mark: null, current: false, on, last: lastLaunch !== null && extraOn(lastLaunch, extra.dial) !== on };
+    const base = { value: extra.dial, label: extra.word, mark: null, current: false, on, online: null, last: lastLaunch !== null && extraOn(lastLaunch, extra.dial) !== on };
     if (choice.refusal || !choice.selection) {
       const reason = choice.refusal ? refusalText("extras", extra.dial, selection, choice.refusal, vocab) : "Not among the current models";
       return { ...base, available: false, reason, selection: null, review: null, moves: [], redline: null, note: reason, quota: null };
@@ -384,8 +372,7 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
     };
   });
   const differs = (team: Selection) => EXTRAS.some(extra => extraOn(team, extra.dial) !== extraOn(selection, extra.dial));
-  return { word: "extras", options, current: -1, label: extrasLabel(extrasOn(selection)),
-    changed: lastLaunch !== null && differs(lastLaunch), edited: saved !== null && differs(saved) };
+  return { word: "extras", options, current: -1, changed: lastLaunch !== null && differs(lastLaunch), edited: saved !== null && differs(saved) };
 }
 
 function machineSlot(context: StatementContext): Slot {
@@ -394,22 +381,21 @@ function machineSlot(context: StatementContext): Slot {
     const current = machine.id === machineId;
     const reason = machine.revoked ? "access revoked" : machine.online ? null : "offline";
     return {
-      value: machine.id, label: machine.name, mark: null, current, on: false, available: reason === null || current, reason,
+      value: machine.id, label: machine.name, mark: null, current, on: false, online: machine.online && !machine.revoked, available: reason === null || current, reason,
       selection: null, review: null, moves: [], redline: null, last: false, note: reason ?? "online", quota: null,
     };
   });
-  // A destination the roster does not list is still the line's value: said as such, never replaced.
+  // A destination the roster does not list is still the setting's value: said as such, never replaced.
   if (!options.some(option => option.current)) {
     const label = machines === null ? rosterError ? "unread machines" : "reading machines" : machineId ? "unlisted machine" : "no machine";
     const note = machines === null && rosterError ? "the machine list could not be read" : machineId ? "not in your machine list" : "choose where sessions run";
-    options.unshift({ value: machineId, label, mark: null, current: true, on: false, available: true, reason: null, selection: null, review: null,
+    options.unshift({ value: machineId, label, mark: null, current: true, on: false, online: null, available: true, reason: null, selection: null, review: null,
       moves: [], redline: null, last: false, note, quota: null });
   }
-  const current = options.findIndex(option => option.current);
-  return { word: "machine", options, current, label: options[current]!.label, changed: false, edited: false };
+  return { word: "machine", options, current: options.findIndex(option => option.current), changed: false, edited: false };
 }
 
-/** Every word of the line with its options, consequences and redlines, computed once per team, pool and roster. */
+/** Every setting with its values, consequences and redlines, computed once per profile, pool and roster. */
 export function statementSlots(context: StatementContext, vocab: Vocabulary): Readonly<Record<StatementWord, Slot>> {
   return {
     lane: dialSlot("lane", context, vocab), tier: dialSlot("tier", context, vocab), thinking: dialSlot("thinking", context, vocab),
@@ -417,28 +403,28 @@ export function statementSlots(context: StatementContext, vocab: Vocabulary): Re
   };
 }
 
-/** The nearest option that can be chosen, one step up the drum (`more`) or down; null at the end. */
-export function stepOption(slot: Slot, more: boolean): SlotOption | null {
+/** The nearest value that can be chosen one step right (`forward`) or left; null at the end of the row. */
+export function stepOption(slot: Slot, forward: boolean): SlotOption | null {
   if (slot.current < 0) return null;
-  const direction = more ? -1 : 1;
+  const direction = forward ? 1 : -1;
   for (let at = slot.current + direction; at >= 0 && at < slot.options.length; at += direction) {
     if (slot.options[at]!.available) return slot.options[at]!;
   }
   return null;
 }
-/** The topmost (`top`) or bottommost option that can be chosen, unless it is already the value. */
-export function edgeOption(slot: Slot, top: boolean): SlotOption | null {
+/** The leftmost value (or with `last`, the rightmost) that can be chosen, unless it is already the value. */
+export function edgeOption(slot: Slot, last: boolean): SlotOption | null {
   const available = slot.options.filter(option => option.available);
-  const edge = top ? available[0] : available.at(-1);
+  const edge = last ? available.at(-1) : available[0];
   return edge && !edge.current ? edge : null;
 }
 
-/** The team Backspace returns a word to: the last launch's value there, or every extra as it was. Null when nothing differs or the catalog refuses it. */
+/** The profile Backspace returns a setting to: the last launch's value there, or every extra as it was. Null when nothing differs or the catalog refuses it. */
 export function lastLaunchTeam(word: StatementWord, slot: Slot, context: StatementContext): Selection | null {
   const { lastLaunch, catalog } = context;
   if (!lastLaunch || !slot.changed || word === "machine") return null;
   if (word !== "extras") return slot.options.find(option => option.last && option.available)?.selection ?? null;
-  // Each switch that differs is turned as the extras word turns it, so the result is a team the dials would form.
+  // Each switch that differs is turned as the extras setting turns it, so the result is a profile the dials would form.
   let selection = context.selection, review = context.review;
   for (const extra of EXTRAS) {
     if (extraOn(selection, extra.dial) === extraOn(lastLaunch, extra.dial)) continue;
@@ -470,7 +456,7 @@ function moveLabel(move: DialMove, review: Review, vocab: Vocabulary): string {
   const extra = EXTRAS.find(entry => entry.dial === move.dial)!;
   return move.word === extra.on ? extra.word : `no ${extra.word}`;
 }
-/** A pool in the line's provider words: the family ("GPT"), or the family and its own bucket ("GPT spark"). */
+/** A pool in the statement's provider words: the family ("GPT"), or the family and its own bucket ("GPT spark"). */
 function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {
   if (!pool) return "its pool";
   const special = pool.bucket !== null && pool.bucket !== providerPolicy(pool.provider).quotaBucketBase;
@@ -564,7 +550,7 @@ export type VerbView = {
 const RUNNING_LABELS: Readonly<Record<"save" | "review" | "launch" | "resume", string>> = {
   save: "Saving…", review: "Reviewing…", launch: "Launching…", resume: "Resuming…",
 };
-/** Every label the verb can wear: its cell is as wide as the widest, so it never moves the line. */
+/** Every label the verb can wear: it is as wide as the widest, so a new label moves nothing. */
 export const VERB_LABELS: readonly string[] = [
   "Verify models", "Checking…", "Verifying…", "Review", "Save", "Save & review", "Save & launch", "Launch", "Launch anyway",
   "Review in Models", "Saving…", "Reviewing…", "Launching…", "Resuming…", "Working…",
@@ -624,7 +610,7 @@ export function reviewMatches(projection: Projection, reviewed: { readonly revie
     shown.providers!.length === projection.providers.length && shown.providers!.every((provider, index) => provider === projection.providers![index]);
 }
 /**
- * What a session review shows unlike the projection a Save & launch was pressed on, in the line's
+ * What a session review shows unlike the projection a Save & launch was pressed on, in the statement's
  * words: the roles whose lead moved, seat by seat, and the providers whose accounts joined or left
  * the pool; that the pool was not known when there was no projection of it.
  */
@@ -641,9 +627,9 @@ export function reviewDifferences(catalog: CompiledCatalog, projected: Review, p
   ];
 }
 
-// ---------------------------------------------------------------- the team at rest
+// ---------------------------------------------------------------- the profile at rest
 
-/** What the line's team meets now: where its roles lead, which fall back, which pools are tight, and whether any reading is not current. */
+/** What the shown profile meets now: where its roles lead, which fall back, which pools are tight, and whether any reading is not current. */
 export type TeamFacts = {
   readonly counts: readonly { readonly family: string; readonly count: number }[];
   /** Roles a fallback serves while their own lead's pool is out, one group per such pool with that pool's own reopening. */
@@ -688,7 +674,7 @@ export function poolCounts(catalog: CompiledCatalog, routes: readonly Route[], a
   return catalog.families.flatMap(family => counts.has(family) ? [{ family, count: counts.get(family)! }] : []);
 }
 
-/** The lane the included accounts can serve nearest the line's: the same leading family first, then a single-provider lane. */
+/** The lane the included accounts can serve nearest the shown one: the same leading family first, then a single-provider lane. */
 export function laneFix(slot: Slot, selection: Selection): SlotOption | null {
   const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   const score = (option: SlotOption) => {
@@ -697,6 +683,37 @@ export function laneFix(slot: Slot, selection: Selection): SlotOption | null {
   };
   const candidates = slot.options.filter(option => option.available && !option.current && option.selection);
   return candidates.reduce<SlotOption | null>((best, option) => best === null || score(option) > score(best) ? option : best, null);
+}
+
+// ---------------------------------------------------------------- the estimates
+
+const COST_WORDS = ["lowest", "lower", "moderate", "higher", "highest"] as const;
+const SPEED_WORDS = ["slowest", "slower", "balanced", "faster", "fastest"] as const;
+/**
+ * One estimate as its readout shows it: its level of five (null when nothing measures it), the
+ * pointed profile's level while one is pointed and differs, and the word for whichever shows.
+ */
+export type EstimateReadout = { readonly level: number | null; readonly next: number | null; readonly word: string };
+
+/**
+ * The cost and speed readouts beside the status lines, from the domain's role-weighted indices
+ * (routing.ts `estimate`). Cost is a relative list-price index. Speed comes from measured
+ * throughput and first-token time only when every lead model has them; otherwise it is said to be
+ * unmeasured rather than shown at the index's middle level. While a profile is pointed, `next`
+ * carries its level when that differs, and the word follows it.
+ */
+export function estimateReadouts(catalog: CompiledCatalog, shown: Review, pointed: Review | null): { readonly cost: EstimateReadout; readonly speed: EstimateReadout } {
+  const measured = (review: Review) => review.routes.every(route => catalog.model(route.lead.key).tokensPerSecond !== null);
+  const readout = (level: number | null, pointedLevel: number | null, words: readonly string[]): EstimateReadout => {
+    const next = pointedLevel !== null && pointedLevel !== level ? pointedLevel : null;
+    const showing = next ?? level;
+    return { level, next, word: showing === null ? "unmeasured" : words[showing - 1]! };
+  };
+  const speedNow = measured(shown) ? shown.estimates.speedScore : null;
+  return {
+    cost: readout(shown.estimates.costScore, pointed ? pointed.estimates.costScore : null, COST_WORDS),
+    speed: readout(speedNow, speedNow !== null && pointed && measured(pointed) ? pointed.estimates.speedScore : null, SPEED_WORDS),
+  };
 }
 
 // ---------------------------------------------------------------- the two status lines
@@ -722,9 +739,9 @@ export type Pointed =
   | { readonly kind: "team"; readonly label: string; readonly sentence: string; readonly quota: QuotaNote | null }
   | { readonly kind: "fix"; readonly fix: FixView; readonly sentence: string };
 
-/** One word the verb's save would change on the workspace team, in the line's words ("thinking high → max"). */
+/** One setting the verb's save would change on the workspace profile, in the settings' words ("thinking high → max"). */
 export type TeamEdit = { readonly word: TeamWord; readonly from: string; readonly to: string };
-/** The words that differ between the saved workspace team and the line's, in reading order. */
+/** The settings that differ between the saved workspace profile and the shown one, in reading order. */
 export function teamEdits(saved: Selection, selection: Selection, familyWord: (family: string) => string): TeamEdit[] {
   const before = teamWords(saved, familyWord), after = teamWords(selection, familyWord);
   return (Object.keys(after) as TeamWord[]).flatMap(word => before[word] === after[word] ? [] : [{ word, from: before[word], to: after[word] }]);
@@ -759,13 +776,13 @@ export type StatusFacts = {
   readonly edits: readonly TeamEdit[];
   /** The launch review on display, with its pool, until the team, machine or pool changes. */
   readonly reviewed: { readonly machine: string; readonly pool: readonly { readonly family: string; readonly count: number }[] } | null;
-  /** A Save & launch press stopped at a review that differs from the projection: what differs, in the line's words. */
+  /** A Save & launch press stopped at a review that differs from the projection: what differs, in the statement's words. */
   readonly differs: readonly string[] | null;
   /** For an unserved lead: the nearest lane the accounts serve. */
   readonly laneFix: SlotOption | null;
   /** No included account serves anything (the pool is known and empty). */
   readonly nobodyServes: boolean;
-  /** The bundled model list could not be read: the seats beside it are still the team on the line, or instead there is no team. */
+  /** The bundled model list could not be read: the seats beside it are still the shown profile's, or instead there is no profile. */
   readonly listFailure: ListFailure;
   readonly pointed: Pointed | null;
   /** The pointed team's moves seat by seat, written in place of its sentence while the board is a roster, which does not draw them. */
@@ -810,7 +827,7 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   const where = facts.machine?.name ?? "this machine";
   switch (refusal.code) {
     case "read-only": return [line([part("Read-only workspace", "neutral")]), line([part("changes stay a local preview", "meta")])];
-    case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the team and accounts still save from here", "meta")])];
+    case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the profile and accounts still save from here", "meta")])];
     case "unavailable": {
       // A failed read says nothing current about any machine: neither offline nor another to use.
       if (facts.rosterUnread) return attention("Machine list unreadable", [fix("retry", { kind: "refresh" })]);
@@ -828,10 +845,10 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
         ? [fix(`use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
       return attention(`No ${word} account included`, [...lane, fix(`show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
     }
-    case "configuration": return attention("The workspace team needs a fresh read", [fix("retry", { kind: "refresh" })]);
+    case "configuration": return attention("The workspace profile needs a fresh read", [fix("retry", { kind: "refresh" })]);
     case "staged": return attention("A staged model list waits in Models", [fix("review in Models", { kind: "open", place: "models" })]);
     case "unsaved": return attention("No model list in use", [fix("open Models", { kind: "open", place: "models" })]);
-    case "conflict": return attention("The workspace team changed elsewhere", [fix("use theirs", { kind: "discard" })]);
+    case "conflict": return attention("The workspace profile changed elsewhere", [fix("use theirs", { kind: "discard" })]);
     case "models": return attention("These choices need a model review", [fix("open Models", { kind: "open", place: "models" })]);
     case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("retry", { kind: "refresh" })]);
     case "verify-permissions": return attention("Discovery is not enabled", [fix("enable in Setup", { kind: "open", place: "setup" })], "verifying needs it");
@@ -844,29 +861,29 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
 
 /**
  * The failed model list holds the second line while it fails, whatever else the lines say: beside the
- * seats the line still holds, or as the reason there is no team, with the read again and Models one
+ * seats the settings still hold, or as the reason there is no profile, with the read again and Models one
  * press away. Whatever the second line offered a press for moves up beside the first, so a refusal's
  * fix, the rescue and the revert stay one press away; words with nothing to press give way.
  */
 function withListFailure([first, second]: [StatusLine, StatusLine], failure: ListFailure): [StatusLine, StatusLine] {
   if (failure === "none") return [first, second];
   const kept = second.actions.length ? line([...first.parts, ...second.parts], [...first.actions, ...second.actions]) : first;
-  return [kept, line([part(failure === "beside" ? "Model list unavailable · the seats are the team on the line" : "Model list unavailable · no team can be formed without it", "warn")], [
+  return [kept, line([part(failure === "beside" ? "Model list unavailable · the seats are this profile's" : "Model list unavailable · no profile can be formed without it", "warn")], [
     { kind: "fix", key: "list-retry", label: "retry", fix: { kind: "refresh" } },
     { kind: "fix", key: "list-models", label: "Models", fix: { kind: "open", place: "models" } },
   ])];
 }
 const REVERT: StatusAction = { kind: "fix", key: "revert", label: "revert", fix: { kind: "discard" } };
-/** What a press that saves the workspace team changes on it ("2 changes: thinking high → max, advisor glance → off"), or that it saves it. */
+/** What a press that saves the workspace profile changes on it ("2 changes to the profile: thinking high → max, advisor glance → off"), or that it saves it. */
 function saveNote(facts: StatusFacts, tone: StatusTone): StatusPart {
   const count = facts.edits.length;
-  return part(count ? `${count} ${count === 1 ? "change" : "changes"}: ${facts.edits.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`).join(", ")}`
-    : `${facts.verb.label} saves the workspace team`, tone);
+  return part(count ? `${count} ${count === 1 ? "change" : "changes"} to the profile: ${facts.edits.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`).join(", ")}`
+    : `${facts.verb.label} saves the workspace profile`, tone);
 }
 
 /**
- * The line's team at rest: where its roles lead, then the one thing worth saying next (what the
- * save changes, quota, the review). A press that saves the workspace team offers to revert the edit
+ * The profile at rest: where its roles lead, then the one thing worth saying next (what the save
+ * changes, quota, the review). A press that saves the workspace profile offers to revert the edit
  * beside what it would change.
  */
 function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] {
@@ -909,7 +926,7 @@ export function statusLines(facts: StatusFacts, vocab: Vocabulary): readonly [St
   if (facts.busy || facts.chaining || facts.launching) {
     const where = facts.machine?.name ?? "the machine";
     const text = facts.launching || facts.inFlight === "launch" ? `Opening a terminal on ${where}`
-      : facts.inFlight === "save" ? "Saving the workspace team"
+      : facts.inFlight === "save" ? "Saving the workspace profile"
       : facts.inFlight === "review" || facts.chaining ? `Reviewing the session on ${where}`
       : facts.inFlight === "resume" ? `Resuming on ${where}` : "Working";
     return [line([part(text, "busy")]), EMPTY];
@@ -923,7 +940,7 @@ export function statusLines(facts: StatusFacts, vocab: Vocabulary): readonly [St
   if (pointed.kind === "team") return [line([part(pointed.label, "strong"), part(said(pointed.sentence))]), line(quotaParts(pointed.quota, vocab))];
   const { word, option } = pointed;
   const name = word === "extras" ? `${option.on ? "Turn off" : "Turn on"} ${option.label}` : `${WORD_NAMES[word]} ${option.label}`;
-  if (option.current) return [line([part(name, "strong"), part("on the line now", "meta")]), base[1]];
+  if (option.current) return [line([part(name, "strong"), part("its value now", "meta")]), base[1]];
   const note = option.available ? said(option.note) : option.note;
   return [line([part(name, "strong"), part(note || "no route changes", option.available ? "plain" : "attention")]), line(quotaParts(option.quota, vocab))];
 }
@@ -931,10 +948,10 @@ export function statusLines(facts: StatusFacts, vocab: Vocabulary): readonly [St
 function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] {
   const { verb } = facts;
   if (verb.state === "refused" && verb.refusal) return refusalLines(verb.refusal, facts, vocab);
-  if (verb.opens === "models") return [line([part("A staged model list waits in Models")]), line([part(`${verb.label} opens it; the line keeps its team`, "meta")])];
+  if (verb.opens === "models") return [line([part("A staged model list waits in Models")]), line([part(`${verb.label} opens it; the profile stays as it is`, "meta")])];
   // A stop is a choice, not a failure: what the review shows instead, and both ways on.
   if (facts.differs) return [line([part("The review differs", "warn"), ...facts.differs.map(text => part(text))]),
-    line([part("Launch to use the reviewed pool, or change a word first", "meta")])];
+    line([part("Launch to use the reviewed pool, or change a setting first", "meta")])];
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
   if (facts.outcome) return [line([part(`${facts.outcome.kind === "launched" ? "Launched" : "Resumed"} on ${facts.outcome.machine}`, "done")]), EMPTY];
   if (facts.message) return [line([part(facts.message.text, "done")]), EMPTY];

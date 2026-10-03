@@ -9,7 +9,7 @@ import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue } from "../code/generator/consequences.ts";
 import type { GateRefusal, LaunchStep } from "../code/generator/launch-step.ts";
 import {
-  causalRedline, commitKind, fixView, grounded, lastLaunchTeam, projectionOf, reviewMatches, statementSlots, statusLines, stepOption, verbView,
+  causalRedline, commitKind, estimateReadouts, fixView, grounded, lastLaunchTeam, projectionOf, reviewMatches, statementSlots, statusLines, stepOption, verbView,
   type Slot, type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
 } from "../code/generator/statement-model.ts";
 
@@ -58,9 +58,9 @@ const vocab: Vocabulary = {
 function context(selection: Selection, pool: readonly QuotaPool[], lastLaunch: Selection | null = null): StatementContext {
   return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, lastLaunch, saved: null, machines: [], rosterError: false, machineId: "studio" };
 }
-/** A drum option as the line shows it; each test sets only what it is about. */
+/** A value as the settings show it; each test sets only what it is about. */
 function slotOption(changes: Partial<SlotOption>): SlotOption {
-  return { value: "", label: "", mark: null, current: false, on: false, available: true, reason: null, selection: null, review: null,
+  return { value: "", label: "", mark: null, current: false, on: false, online: null, available: true, reason: null, selection: null, review: null,
     moves: [], redline: null, last: false, note: "", quota: null, ...changes };
 }
 
@@ -90,7 +90,7 @@ describe("the redline marks only the option that causes the strain", () => {
     expect(causalRedline(catalog, onCodex, optionConsequence(catalog, onCodex, "thinking", "high", { ...known, pools: codexTight }), codexTight)).toBeNull();
   });
 
-  test("the drum never marks the value on the line, and marks the causal lane among the lanes", () => {
+  test("the settings never mark the current value, and mark the causal lane among the lanes", () => {
     const slots = statementSlots(context(team(), claudeBlocked), vocab);
     const lane = slots.lane.options;
     expect(lane.find(option => option.current)?.redline).toBeNull();
@@ -99,20 +99,22 @@ describe("the redline marks only the option that causes the strain", () => {
   });
 });
 
-describe("the words' drums, steps and the last launch", () => {
-  test("up is more: the strongest tier and thinking sit at the top, and a step up passes over a tier the catalog lacks", () => {
+describe("the settings' values, steps and the last launch", () => {
+  test("values run low to high from left to right, and a step right passes over a tier the catalog lacks", () => {
     const slots = statementSlots(context(team({ capability: 2, thinking: "medium" }), pools()), vocab);
-    expect(slots.tier.options.map(option => [option.value, option.available])).toEqual([["elite", false], ["smart", true], ["normal", true], ["fast", true]]);
+    expect(slots.tier.options.map(option => [option.value, option.available])).toEqual([["fast", true], ["normal", true], ["smart", true], ["elite", false]]);
+    expect(slots.thinking.options.map(option => option.value)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(slots.lane.options.map(option => option.value)).toEqual(["gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"]);
     expect(stepOption(statementSlots(context(team({ capability: 3 }), pools()), vocab).tier, true)).toBeNull();
     expect(stepOption(slots.tier, true)?.value).toBe("smart");
     expect(stepOption(slots.thinking, false)?.value).toBe("low");
   });
 
-  test("a step passes over options that cannot be chosen and stops at the end of the drum", () => {
+  test("a step passes over values that cannot be chosen and stops at the end of the row", () => {
     const option = (value: string, available: boolean, current = false) => slotOption({ value, label: value, available, current });
-    const slot: Slot = { word: "tier", current: 2, label: "normal", changed: false, edited: false, options: [option("elite", true), option("smart", false), option("normal", true, true)] };
+    const slot: Slot = { word: "tier", current: 0, changed: false, edited: false, options: [option("normal", true, true), option("smart", false), option("elite", true)] };
     expect(stepOption(slot, true)?.value).toBe("elite");
-    expect(stepOption({ ...slot, current: 0, options: [option("elite", true, true), option("smart", false)] }, false)).toBeNull();
+    expect(stepOption({ ...slot, current: 1, options: [option("smart", false), option("elite", true, true)] }, false)).toBeNull();
   });
 
   test("the last launch's value is tagged, and Backspace returns exactly that word", () => {
@@ -143,6 +145,26 @@ describe("where a commit lands", () => {
     // A starter's draft is not the saved team's edit, so it is never dropped this way.
     expect(commitKind(saved, team({ thinking: "high" }), saved, "starter")).toBe("update");
     expect(commitKind(team(), team(), saved, "active")).toBe("none");
+  });
+});
+
+describe("the cost and speed readouts", () => {
+  test("speed is unmeasured, never the index's middle level, while a lead model has no measured throughput", () => {
+    const unmeasured = compileCatalog({ schemaVersion: 1,
+      models: catalog.models.map(entry => ({ ...entry, thinkingLevels: [...entry.thinkingLevels], tokensPerSecond: null, timeToFirstTokenMs: null })) });
+    const shown = reviewCatalog(unmeasured, team(), now);
+    expect(shown.estimates.speedScore).toBe(3);
+    expect(estimateReadouts(unmeasured, shown, reviewCatalog(unmeasured, team({ thinking: "max" }), now)).speed).toEqual({ level: null, next: null, word: "unmeasured" });
+  });
+
+  test("a pointed profile shows its level and word only where it differs from the shown one", () => {
+    const shown = review({ capability: 1, thinking: "minimal" });
+    const dearer = review({ capability: 3, thinking: "max" });
+    const { cost } = estimateReadouts(catalog, shown, dearer);
+    expect(cost.level).toBe(shown.estimates.costScore);
+    expect(cost.next).toBe(dearer.estimates.costScore);
+    expect(cost.next).toBeGreaterThan(cost.level!);
+    expect(estimateReadouts(catalog, shown, review({ capability: 1, thinking: "minimal", advisor: "off" })).cost).toMatchObject({ next: null });
   });
 });
 

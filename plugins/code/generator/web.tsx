@@ -13,7 +13,7 @@ import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { useWorkbench } from "./workbench-model.ts";
-import { StatementLine, useAnnouncer, type TeamPreview } from "./statement.tsx";
+import { COST_NOTE, StatementLine, useAnnouncer, type TeamPreview } from "./statement.tsx";
 import { STATEMENT_KEY_HELP } from "./statement-keys.ts";
 import { teamWords } from "./statement-model.ts";
 import { SeatBoard, useBoardModel } from "./seat-board.tsx";
@@ -39,7 +39,7 @@ const KEY_GROUPS: readonly KeyGroup[] = [
   { title: "statement", keys: STATEMENT_KEY_HELP },
   { title: "pools", keys: BOARD_KEY_HELP },
   { title: "sessions", keys: SESSIONS_KEY_HELP },
-  { title: "recent teams", keys: EARLIER_KEY_HELP },
+  { title: "recent profiles", keys: EARLIER_KEY_HELP },
   { title: "panel", keys: [
     { keys: ["r"], text: "Read accounts, usage and machines again" },
     { keys: ["?"], text: "Show these keys" },
@@ -62,7 +62,7 @@ type WorkbenchProps = {
 };
 
 /**
- * The main view, top to bottom: the statement (the verb, the team's words and two status lines),
+ * The main view, top to bottom: the statement (the profile's settings, the verb, two status lines and the estimates),
  * the seat board under its quota pools, the earlier statements, and a footer with provenance and the
  * ways into Accounts, Models and Setup, which open as sheets over the main view.
  */
@@ -86,7 +86,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const mainScroll = useRef(0);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
-  // The line's measured width while it is one line, the measure the footer's run (and anything else that should end with the line) keeps to.
+  // The settings' measured width while two sit per line, the measure the footer's run (and anything else that should end with them) keeps to.
   const [measure, setMeasure] = useState<number | null>(null);
   // The roster is polled; the statement's options are recomputed only when it really changes.
   const machinesKey = JSON.stringify(machines);
@@ -155,7 +155,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
   const optionsSummary = model.automation ? "restricted" : model.skillChoice?.mode === "disabled" ? "skills off"
     : model.skillChoice?.mode === "select" ? `${chosenSkills} ${chosenSkills === 1 ? "skill" : "skills"}` : null;
-  // The options wait while a step runs or a charge waits, as the team's words do, and need what a launch needs: write access and the machine.
+  // The options wait while a step runs or a charge waits, as the profile's settings do, and need what a launch needs: write access and the machine.
   const optionsGate = model.gate("edit-options");
   const optionsRefusal = !optionsGate.open ? optionsGate.refusal.text : !writable ? "Edit access needed." : !available ? "The machine is unavailable."
     : busy ? "Wait for the step in progress." : null;
@@ -166,9 +166,10 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const read = usage.view?.observedAt && usage.current && pools.every(pool => pool.staleAgeMs === null) ? `usage read ${since(usage.nowMs - usage.view.observedAt)}` : null;
   // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
   const staged = record?.active && record.draft ? "a staged catalog waits in models" : null;
-  const facts = [verified, read, staged].filter(Boolean).join(" · ");
-  // The bundled list's failure is said in the status lines, with its retry and Models, whatever else they say; the seats of a team
-  // the model holds stay, and with no team to seat there is no board.
+  // What the cost readout is, said once and quietly, while the readouts show.
+  const facts = [verified, read, staged, compiled && COST_NOTE].filter(Boolean).join(" · ");
+  // The bundled list's failure is said in the status lines, with its retry and Models, whatever else they say; the seats of a profile
+  // the model holds stay, and with no profile to seat there is no board.
   const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
 
   const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}
@@ -178,7 +179,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       announce={announce} onOpen={openSheet} onKeys={() => setKeysOpen(true)} onRefresh={refresh} listFailure={listFailure} onMeasure={setMeasure} />
     {listFailure !== "instead" && <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
     <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} setPreview={setPreview} rereads={rereads} announce={announce} />
-    {/* One left-aligned run on the line's measure: the facts, then the ways out, session options with its choice, the keys. */}
+    {/* One left-aligned run on the settings' measure: the facts, then the ways out, session options with its choice, the keys. */}
     <footer className={`${G}footer`}>
       <span className={`${G}footer-facts`}>{facts}</span>
       <button type="button" className={`${G}footer-link`} title="Read accounts, usage and machines again (r)" onClick={refresh}>refresh</button>
@@ -229,7 +230,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       </details>}
     </>)}
     {sheetFrame("options", <>
-      <p className={`${G}options-lede`}>For the next launch or resume only; the workspace team stays as it is.</p>
+      <p className={`${G}options-lede`}>For the next launch or resume only; the workspace profile stays as it is.</p>
       {optionsRefusal && <p className={`${G}options-note`} role="status">{optionsRefusal}</p>}
       <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} refusal={optionsRefusal} change={model.setAutomation} />
       <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
