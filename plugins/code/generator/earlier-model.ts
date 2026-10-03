@@ -1,9 +1,12 @@
 import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { OmpSessionSummary } from "@atyrode/manifold-omp";
-import type { Selection } from "../../domain/contracts.ts";
+import type { CompiledCatalog } from "../../domain/catalog.ts";
+import type { Route, Selection } from "../../domain/contracts.ts";
+import { providerPolicy } from "../../domain/providers.ts";
+import { roleOutcomes, type QuotaPool } from "../../domain/quota.ts";
 import type { GateVerdict } from "./launch-step.ts";
 import { RECENT_TEAMS_LIMIT, type RecentTeam } from "./recent-teams.ts";
-import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords } from "./statement-model.ts";
+import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords, type Vocabulary } from "./statement-model.ts";
 
 /*
  * Earlier statements as data: the teams and sessions under the line, each said in the line's own
@@ -49,6 +52,33 @@ export function differences(team: Selection, line: LineTeam, familyWord: (family
   const extrasDiffer = line.selection ? on.join() !== extrasOn(line.selection).join() : words.extras !== line.words.extras;
   if (extrasDiffer) changed.push({ word: "extras", text: on.length >= 2 ? on.join(" + ") : words.extras });
   return changed;
+}
+
+// ---------------------------------------------------------------- what a team would strand
+
+/**
+ * What a team would strand on the present pools, in a row's words: roles with no route grouped by
+ * when their own routes return, the soonest first, each group with its own time ("3 no route until
+ * 13:00 · 9 until 16:30"), then roles that no included account serves ("2 no Claude account").
+ * Null when every role has a route; a fallback that takes over strands nothing.
+ */
+export function strandsNote(catalog: CompiledCatalog, routes: readonly Route[], pools: readonly QuotaPool[], vocab: Vocabulary): string | null {
+  const waits = new Map<number | null, number>();
+  const unserved = new Map<string, number>();
+  for (const outcome of roleOutcomes(catalog, routes, pools)) {
+    if (outcome.kind === "no-route") waits.set(outcome.until, (waits.get(outcome.until) ?? 0) + 1);
+    if (outcome.kind === "no-account") {
+      const family = providerPolicy(outcome.provider).family;
+      unserved.set(family, (unserved.get(family) ?? 0) + 1);
+    }
+  }
+  // A reopening nobody reported comes last: it may be the latest of all.
+  const groups = [...waits].sort(([left], [right]) => (left ?? Number.POSITIVE_INFINITY) - (right ?? Number.POSITIVE_INFINITY));
+  const parts = [
+    ...groups.map(([until, count], index) => `${count}${index === 0 ? " no route" : ""} ${until === null ? "with no reset known" : `until ${vocab.time(until)}`}`),
+    ...[...unserved].map(([family, count]) => `${count} no ${vocab.account(family)} account`),
+  ];
+  return parts.length ? parts.join(" · ") : null;
 }
 
 // ---------------------------------------------------------------- digits

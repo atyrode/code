@@ -238,10 +238,12 @@ describe("pace forecasts", () => {
     expect(blockedWindow.forecast).toBeNull();
   });
 
-  test("the forecast is measured from the time of the reading, not the time it is shown", () => {
+  test("the forecast is measured from the time of the reading, not the time it is shown, and never names a moment already past", () => {
     const value = reading({ alice: [window(0.9, { resetsAt: now + 2 * HOUR })] }, { excluded: ["bob", "dave"] });
     const entry = value.view!.providers.find(provider => provider.provider === "openai-codex")!.accounts[0]!;
     const shownLater = paceForecast(entry.windows[0]!, windowState(entry, entry.windows[0]!, "openai-codex"), true, now + 4 * MINUTE);
     expect(shownLater).toEqual({ kind: "full", at: now + 20 * MINUTE });
+    // Read fresh but shown after the projected moment: that time is behind the clock, so nothing is forecast.
+    expect(paceForecast(entry.windows[0]!, windowState(entry, entry.windows[0]!, "openai-codex"), true, now + 21 * MINUTE)).toBeNull();
   });
 });

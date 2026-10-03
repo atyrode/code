@@ -58,6 +58,8 @@ export type PaceForecast = { readonly kind: "full"; readonly at: number } | { re
  * the window had run when it was read. Null unless the reading is fresh and current, the window
  * has a known span and reset still ahead, is neither blocked nor maxed, and a quarter of it has
  * elapsed, because a forecast from too little of the window or from an old reading is a guess.
+ * Null too once the projected moment has passed at `nowMs`: a fresh reading can be minutes old,
+ * and a time already behind the clock is not a forecast.
  */
 export function paceForecast(window: UsageWindow, state: WindowState, current: boolean, nowMs: number): PaceForecast | null {
   const { usedFraction: used, resetsAt, durationMs, observedAt } = window;
@@ -67,7 +69,8 @@ export function paceForecast(window: UsageWindow, state: WindowState, current: b
   if (elapsed < durationMs * PACE_MIN_ELAPSED || used >= 1) return null;
   if (used === 0) return { kind: "lasts" };
   const fullAt = observedAt + (1 - used) * elapsed / used;
-  return fullAt < resetsAt ? { kind: "full", at: fullAt } : { kind: "lasts" };
+  if (fullAt >= resetsAt) return { kind: "lasts" };
+  return fullAt > nowMs ? { kind: "full", at: fullAt } : null;
 }
 
 // ---------------------------------------------------------------- pools
