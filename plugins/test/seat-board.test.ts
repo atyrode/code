@@ -6,7 +6,7 @@ import type { CatalogModel, Selection } from "../domain/contracts.ts";
 import { quotaPools, roleOutcomes, type QuotaReading } from "../domain/quota.ts";
 import { reviewCatalog, type Review } from "../domain/routing.ts";
 import { projectUsage } from "../domain/usage.ts";
-import { accountRows, boardView, poolHead, type BoardColumn, type BoardSeat, type BoardView } from "../code/generator/board-model.ts";
+import { accountRows, boardView, modelListFailure, poolHead, type BoardColumn, type BoardSeat, type BoardView } from "../code/generator/board-model.ts";
 
 const scope = "machine/broker-scope";
 const now = Date.UTC(2026, 9, 3, 12);
@@ -257,5 +257,19 @@ describe("accounts under a head", () => {
     expect(rows[0]).toMatchObject({ stop: null, tight: false, ageMs: 3 * HOUR });
     expect(rows[2]).toMatchObject({ stop: { word: "blocked", until: now + 2 * HOUR }, ageMs: null, windows: [{ label: "5h", percent: 85 }] });
     expect(accountRows("deepseek", value)).toMatchObject([{ who: "API key 5", included: true, windows: [] }]);
+  });
+});
+
+describe("the model list failing once a team is on the line", () => {
+  test("a team the model holds keeps its seats, with the failure said beside the board", () => {
+    // A frozen bundled starter, a local draft or a staged catalog: the list failing later takes none of it away.
+    expect(modelListFailure(true, false, true)).toBe("beside");
+  });
+
+  test("only with no team to seat does the failure replace the board, and a stored catalog never needs the list", () => {
+    expect(modelListFailure(true, false, false)).toBe("instead");
+    expect(modelListFailure(true, true, true)).toBe("none");
+    expect(modelListFailure(true, true, false)).toBe("none");
+    expect(modelListFailure(false, false, true)).toBe("none");
   });
 });

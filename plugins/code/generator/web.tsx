@@ -17,6 +17,7 @@ import { StatementLine, useAnnouncer, type StatementPlace, type TeamPreview } fr
 import { STATEMENT_KEY_HELP } from "./statement-keys.ts";
 import { teamWords } from "./statement-model.ts";
 import { SeatBoard, useBoardModel } from "./seat-board.tsx";
+import { modelListFailure } from "./board-model.ts";
 import { BOARD_KEY_HELP } from "./pool-head.tsx";
 import { EARLIER_KEY_HELP, EarlierStatements, usePinnedRecents } from "./earlier.tsx";
 import { pastMoment, type StatementWords } from "./earlier-model.ts";
@@ -159,18 +160,21 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
   const staged = record?.active && record.draft ? "a staged catalog waits in Models" : null;
   const facts = [verified, read, staged].filter(Boolean).join(" · ");
-  // With no stored catalog the team is derived from the bundled model list; without it there is nothing to show, and nothing else says why.
-  const modelsUnavailable = (metadata.error || starterError) && !record?.active;
+  // The bundled list's failure sits beside a team the model holds and replaces the board only when there is none.
+  const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
+  const listNotice = (kind: "warn" | "error", text: string) => <div className={`${G}section`}>
+    <Notice kind={kind} details={metadata.error ?? starterError} actions={<><Button onClick={metadata.refresh}>Retry</Button><Button onClick={() => openSheet("models")}>Models</Button></>}>
+      {text}
+    </Notice>
+  </div>;
 
   const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
     <StatementLine model={model} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
       announce={announce} onOpen={open} onKeys={() => setKeysOpen(true)} onRefresh={refresh} aside={options} />
-    {modelsUnavailable ? <div className={`${G}section`}>
-      <Notice kind="error" details={metadata.error ?? starterError} actions={<><Button onClick={metadata.refresh}>Retry</Button><Button onClick={() => openSheet("models")}>Models</Button></>}>
-        The model list is unavailable.
-      </Notice>
-    </div> : <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
+    {listFailure === "beside" && listNotice("warn", "The model list is unavailable · the seats are the team already on the line.")}
+    {listFailure === "instead" ? listNotice("error", "The model list is unavailable.")
+      : <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
     <EarlierStatements host={host} model={model} line={line} recents={recents} announce={announce} />
     <footer className={`${G}footer`}>
       {facts && <span className={`${G}footer-facts`}>{facts}</span>}

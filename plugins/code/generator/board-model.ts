@@ -26,6 +26,17 @@ type Balance = NonNullable<UsageAccount["balance"]>;
 /** Below this panel width the board is a model-grouped roster; from it up, provider columns by tier rows. */
 export const ROSTER_BELOW_PX = 560;
 
+/**
+ * Where a failed read of the bundled model list, or of the starter derived from it, shows. It
+ * matters only while no catalog is stored, since a stored one never reads the list. The board keeps
+ * seating whatever team the model already holds (a frozen starter, a local draft, a staged catalog),
+ * with the failure said `beside` it; only with no team to seat does the failure take its place.
+ */
+export function modelListFailure(failed: boolean, stored: boolean, team: boolean): "none" | "beside" | "instead" {
+  if (!failed || stored) return "none";
+  return team ? "beside" : "instead";
+}
+
 /** A pointed team the board draws as moves before it is chosen; `key` names the pointed thing and is stable for one review. */
 export type BoardPreview = { readonly key: string; readonly review: Review };
 
