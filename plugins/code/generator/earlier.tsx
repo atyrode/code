@@ -141,11 +141,25 @@ export function EarlierStatements({ host, model, line, recents, announce }: Earl
     return rowVerdict(intent, intent === "open" ? model.gate(intent) : model.gate(intent, row.sessionId),
       machineState(row.machineId, machines, rosterError), row.machineId, model.machineId);
   }
+  // A Read button goes once its read starts, so the read takes focus to the sessions and, when the
+  // machine answers, on to its first row's verb (or Read again); never out of the panel with the button.
+  const sessions = useRef<HTMLElement>(null);
+  const awaited = useRef<string | null>(null);
   function read(machineId: string) {
     setAttempts(previous => new Map(previous).set(machineId, (previous.get(machineId) ?? 0) + 1));
     setReads(previous => new Map(previous).set(machineId, { state: "reading" }));
     terminals.refresh();
+    awaited.current = machineId;
+    sessions.current?.focus({ preventScroll: true });
   }
+  useEffect(() => {
+    const machineId = awaited.current, group = sessions.current;
+    if (machineId === null || !group || reads.get(machineId)?.state === "reading") return;
+    awaited.current = null;
+    if (group.ownerDocument.activeElement !== group) return;
+    const at = CSS.escape(machineId);
+    group.querySelector<HTMLElement>(`[data-machine-id="${at}"] [data-verb], [data-read="${at}"]`)?.focus({ preventScroll: true });
+  }, [reads]);
 
   function settle() {
     acting.current = false;
@@ -253,7 +267,7 @@ export function EarlierStatements({ host, model, line, recents, announce }: Earl
 
   return <section className={`${G}section ${G}earlier`} aria-label="Earlier statements">
     {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
-    <section className={`${G}earlier-group`} aria-labelledby={`${id}-sessions`}>
+    <section ref={sessions} className={`${G}earlier-group`} aria-labelledby={`${id}-sessions`} tabIndex={-1}>
       <div className={`${G}earlier-head`}>
         <h2 id={`${id}-sessions`} className={`${G}earlier-title`}>Sessions</h2>
         <span className={`${G}earlier-meta`}>{sessionsNote(rows.running.length, rows.saved.length, readOnly)}</span>
