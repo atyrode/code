@@ -68,7 +68,8 @@ type Layout = { readonly choice: number; readonly measure: FormMeasure | null };
 /**
  * The width form the field's own width allows (statement-layout.ts `chooseForm`), measured in the
  * field's font before paint, so the first frame is already in its form; again on every resize,
- * keeping the previous form within the hysteresis margin.
+ * keeping the previous form within the hysteresis margin. A field with no width is hidden (the main
+ * view behind a sheet) and keeps its form, so the view comes back in the form it left in.
  */
 function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonly<Record<StatementWord, SlotText>> | null): Layout {
   const [layout, setLayout] = useState<Layout>({ choice: 0, measure: null });
@@ -85,6 +86,7 @@ function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonl
     };
     const measures = FORM_CHOICES.map(choice => measureForm(choice, texts, VERB_LABELS, measure));
     const update = () => {
+      if (element.clientWidth === 0) return;
       const choice = chooseForm(element.clientWidth, measures.map(entry => entry.need), previous.current);
       previous.current = choice;
       setLayout(current => current.choice === choice && current.measure === measures[choice] ? current : { choice, measure: measures[choice]! });
