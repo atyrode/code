@@ -20,6 +20,8 @@ import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followIni
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
+import { browserDraftStorage, readStoredDraft, restoreDraft, storeDraft, storedDraftKey } from "./draft-store.ts";
+import { sameTeam } from "./statement-model.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 import type { ConfirmActivation } from "./verification.ts";
 
@@ -224,6 +226,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
   const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
+  const draftKey = storedDraftKey(host.principal.id, host.containerId!);
+  // The draft this tab kept before a reload (draft-store.ts), until what it was made on is read and it is restored or dropped.
+  const [kept, setKept] = useState(() => readStoredDraft(browserDraftStorage(), draftKey));
   const pending = useRef(false);
   const mounted = useRef(false);
   const destination = useRef({ machineId: machineId, generation: 0 });
@@ -264,10 +269,25 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     metadataKey: storedDocument ? null : metadataKey,
   } : null), [dials, document, selection, record, observed?.revision, storedDocument, metadata.data, metadataKey]);
   // Freeze first-use material before the controls become interactive. Polls and
-  // competing initialization can invalidate it, never silently replace it.
+  // competing initialization can invalidate it, never silently replace it. A draft
+  // kept before a reload comes first, once the record (and for a first-use draft the
+  // bundled list) is read; one that cannot be rebuilt is dropped without a word.
   useLayoutEffect(() => {
+    if (kept !== null) {
+      if (!configurationCurrent || (kept.source === "starter" && metadata.data === null && metadata.error === null)) return;
+      setKept(null);
+      const restored = dials === null ? restoreDraft(kept, record, metadata.data, metadataKey) : null;
+      if (restored) { setDials(restored); return; }
+    }
     if (dials === null && profile?.source === "starter") setDials(profile);
-  }, [dials, profile]);
+  }, [kept, dials, profile, configurationCurrent, record, metadata.data, metadata.error, metadataKey]);
+  // Keep the draft for a reload, unless it only repeats the team the view shows without it (an
+  // untouched first-use preview, or an edit turned back): a kept copy of that could only go stale.
+  useEffect(() => {
+    if (kept !== null) return;
+    const shownWithout = dials?.baseSelection ?? initialSelection;
+    storeDraft(browserDraftStorage(), draftKey, dials && !(shownWithout && sameTeam(dials.selection, shownWithout)) ? dials : null);
+  }, [kept, dials, initialSelection, draftKey]);
   const localReview = useMemo(() => {
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);

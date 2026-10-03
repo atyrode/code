@@ -129,10 +129,18 @@ digest of the exact account pool). A catalog stops being verified when OMP serve
 another model list or the saved choices select another pool.
 
 A stale or failed save is never retried or rebased. The local draft remains
-exportable until explicitly discarded. Skills and automation (the session options)
-are independent ephemeral launch choices, never part of the saved profile. The main
-view has no task: it opens an interactive session and the task is typed there, so
-its launch review carries an empty prompt. Headless callers still pass a prompt.
+exportable until explicitly discarded. It also survives a reload: the main view keeps
+an unsaved team in the tab's session storage per principal and workspace, with what
+it was made from (base revision and team, the catalog digests, whether choices
+existed, and for a first-use draft the bundled model list), never the catalog itself.
+After a reload the draft returns only onto that same catalog or list; otherwise it is
+dropped without a word. A returned draft is judged like any other: a write that left
+its team and catalogs alone moves its base forward, and a foreign team or catalog
+write is a conflict. A draft that only repeats the team the view shows without it is
+not kept. Skills and automation (the session options) are independent ephemeral
+launch choices, never part of the saved profile. The main view has no task: it opens
+an interactive session and the task is typed there, so its launch review carries an
+empty prompt. Headless callers still pass a prompt.
 
 ## Workbench presentation
 
