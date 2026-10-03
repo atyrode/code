@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import type { AccountsObservation } from "@atyrode/manifold-omp";
 import type { AccountChoiceChange, AccountChoices } from "../domain/contracts.ts";
 import { accountSelectionDisabled } from "../domain/accounts.ts";
-import { providerPolicy } from "../domain/providers.ts";
+import { blockCovers, windowLabel, windowState } from "../domain/quota.ts";
 import type { UsageView } from "../domain/usage.ts";
 import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useCodeQuery, useOmpQuery, useWorkflowQuery } from "./machine-web.ts";
@@ -217,41 +217,8 @@ export function UsageOverview(props: UsageOverviewProps) {
 
 // ---------------------------------------------------------------- the main view's usage section
 
-type WindowState = { level: "ok" | "warn" | "error" | "unknown"; word: "" | "tight" | "maxed" | "blocked"; until: number | null; percent: number | null };
 const FAMILY_ORDER = ["openai", "anthropic", "deepseek"];
 
-/** Whether a provider block covers this window's quota bucket, by the same scope rules the pool assessment uses. */
-function covers(block: { scope: string }, window: UsageWindow, provider: string): boolean {
-  const policy = providerPolicy(provider);
-  return block.scope === "" || (window.bucket === policy.quotaBucketBase ? block.scope === "chat" :
-    policy.special.some(special => window.bucket === `${policy.quotaBucketBase}-${special.bucket}` && (block.scope === special.bucket || block.scope === `tier:${special.bucket}`)));
-}
-/** The latest end of a provider block covering this window. High usage alone never reads as blocked. */
-function windowBlock(entry: UsageAccount, window: UsageWindow, provider: string): number | null {
-  const until = entry.account.blocks.filter(block => covers(block, window, provider)).map(block => block.until);
-  return until.length ? Math.max(...until) : null;
-}
-/** Quota words: `tight` from 80% (red from 95%), `maxed` when exhausted, `blocked` only for a provider block. */
-function windowState(entry: UsageAccount, window: UsageWindow, provider: string): WindowState {
-  const percent = window.usedFraction === null || window.status === "unknown" ? null : window.usedFraction * 100;
-  const until = windowBlock(entry, window, provider);
-  if (until !== null) return { level: "error", word: "blocked", until, percent };
-  if (percent === null) return { level: "unknown", word: "", until: null, percent };
-  // OMP can report 100% as a warning while the provider still serves; only a verdict-less meter falls back to its fraction.
-  if (window.quotaStatus === "exhausted" || (window.quotaStatus === null && percent >= 100)) return { level: "error", word: "maxed", until: null, percent };
-  if (percent >= 95) return { level: "error", word: "tight", until: null, percent };
-  if (percent >= 80 || window.quotaStatus === "warning") return { level: "warn", word: "tight", until: null, percent };
-  return { level: "ok", word: "", until: null, percent };
-}
-/** `5h`, `7d`, or the special bucket a window meters (`spark`). */
-function windowLabel(window: UsageWindow, provider: string): string {
-  const duration = window.durationMs;
-  const span = duration === null ? ({ "5-hour": "5h", weekly: "7d", daily: "1d" } as Readonly<Record<string, string>>)[window.windowId] ?? window.windowId
-    : duration % 86_400_000 === 0 ? `${duration / 86_400_000}d` : duration % 3_600_000 === 0 ? `${duration / 3_600_000}h` : `${Math.round(duration / 60_000)}m`;
-  if (window.tier !== null && providerPolicy(provider).special.some(special => special.bucket === window.tier)) return window.tier.toLowerCase();
-  // A plan tier (`Max`) is a fact about the account, not the window; it belongs in the readout, not the 6ch label.
-  return span;
-}
 function identityOf(entry: UsageAccount): string {
   const { account } = entry;
   return account.email ?? (account.type === "api_key" ? `API key ${account.credentialId}` : account.identityKey ?? `OAuth ${account.credentialId}`);
@@ -393,7 +360,7 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
           const disabled = entry.account.disabled || entry.status === "credential_disabled";
           const windows = entry.windows.map(window => ({ window, state: windowState(entry, window, provider.provider), label: windowLabel(window, provider.provider) }));
           // A block on a scope no shown window meters still stops work there; it gets its own line rather than vanishing.
-          const otherBlocks = entry.account.blocks.filter(block => !entry.windows.some(window => covers(block, window, provider.provider)));
+          const otherBlocks = entry.account.blocks.filter(block => !entry.windows.some(window => blockCovers(block, window, provider.provider)));
           const blockedUntil = Math.max(0, ...windows.filter(({ state }) => state.word === "blocked").map(({ state }) => state.until!));
           const worst = blockedUntil ? <State tone="attention">Blocked until {hhmm(blockedUntil)}</State>
             : windows.some(({ state }) => state.word === "maxed") ? <State tone="attention">Maxed</State>
