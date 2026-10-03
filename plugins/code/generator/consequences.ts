@@ -1,6 +1,6 @@
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import type { ModelChoice, Route, Selection } from "../../domain/contracts.ts";
-import { modelBucket, poolId, type QuotaPool } from "../../domain/quota.ts";
+import { modelBucket, poolId, roleOutcomes, type QuotaPool, type RoleOutcome } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
 import { chooseOption, MAIN_DIALS, MORE_DIALS, SPECS, type DialId } from "./dial-space.ts";
 
@@ -88,21 +88,22 @@ const SEATING_BUDGET = 4096;
 const DIALS: readonly DialId[] = [...MAIN_DIALS, ...MORE_DIALS];
 
 /**
- * The smallest dial move that seats `role` on the model `key`: the fewest moves first (breadth
- * first, up to `depth`), then the fewest other roles changing model, then the nearest cost, then
- * dial order. Each move is an option the dial would offer from where the previous one left off, so
- * a lane the reading says nobody can serve is never part of an answer. Zero moves when the role
- * already sits there; null when no reachable selection seats it.
+ * The shallowest reachable review `rank` accepts, breadth first over dial moves, up to `depth`
+ * moves and the review budget. Among those at the shallowest depth the lowest rank wins, compared
+ * element by element, then dial order. Each move is an option the dial would offer from where the
+ * previous one left off, so a selection the dial refuses (a lead nobody serves) is never an answer.
  */
-export function seatRole(catalog: CompiledCatalog, current: Review, role: string, key: string, context: OptionContext, depth = SEATING_DEPTH): Seating | null {
-  const seats = (review: Review) => review.routes.some(route => route.role === role && route.lead.key === key);
-  if (seats(current)) return { moves: [], selection: current.selection, review: current, othersMoved: 0 };
-  const leads = new Map(current.routes.map(route => [route.role, route.lead.key]));
+function nearestMove(catalog: CompiledCatalog, current: Review, context: OptionContext, depth: number,
+  rank: (review: Review) => readonly number[] | null): { moves: DialMove[]; review: Review } | null {
   const seen = new Set([JSON.stringify(current.selection)]);
   let frontier: { moves: DialMove[]; review: Review }[] = [{ moves: [], review: current }];
   let budget = SEATING_BUDGET;
+  const lower = (left: readonly number[], right: readonly number[]) => {
+    for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return left[index]! < right[index]!;
+    return false;
+  };
   for (let level = 1; level <= depth && frontier.length && budget > 0; level++) {
-    let best: (Seating & { distance: number }) | null = null;
+    let best: { moves: DialMove[]; review: Review; rank: readonly number[] } | null = null;
     const next: typeof frontier = [];
     search: for (const node of frontier) {
       for (const dial of DIALS) {
@@ -119,17 +120,104 @@ export function seatRole(catalog: CompiledCatalog, current: Review, role: string
           seen.add(id);
           const moves = [...node.moves, { dial, word }];
           next.push({ moves, review });
-          if (!seats(review)) continue;
-          const othersMoved = review.routes.filter(route => route.role !== role && leads.get(route.role) !== route.lead.key).length;
-          const distance = Math.abs(review.estimates.costScore - current.estimates.costScore);
-          if (!best || othersMoved < best.othersMoved || (othersMoved === best.othersMoved && distance < best.distance)) {
-            best = { moves, selection: review.selection, review, othersMoved, distance };
-          }
+          const ranked = rank(review);
+          if (ranked && (!best || lower(ranked, best.rank))) best = { moves, review, rank: ranked };
         }
       }
     }
-    if (best) return { moves: best.moves, selection: best.selection, review: best.review, othersMoved: best.othersMoved };
+    if (best) return { moves: best.moves, review: best.review };
     frontier = next;
   }
   return null;
+}
+
+/** Roles in `review` other than `except` that lead somewhere else than in `leads`, a role the move adds included. */
+function othersMoved(review: Review, leads: ReadonlyMap<string, string>, except: ReadonlySet<string>): number {
+  return review.routes.filter(route => !except.has(route.role) && leads.get(route.role) !== route.lead.key).length;
+}
+
+/**
+ * The smallest dial move that seats `role` on the model `key`: the fewest moves first (breadth
+ * first, up to `depth`), then the fewest other roles changing model, then the nearest cost, then
+ * dial order. Zero moves when the role already sits there; null when no reachable selection seats it.
+ */
+export function seatRole(catalog: CompiledCatalog, current: Review, role: string, key: string, context: OptionContext, depth = SEATING_DEPTH): Seating | null {
+  if (current.routes.some(route => route.role === role && route.lead.key === key)) return { moves: [], selection: current.selection, review: current, othersMoved: 0 };
+  const leads = new Map(current.routes.map(route => [route.role, route.lead.key]));
+  const except = new Set([role]);
+  const found = nearestMove(catalog, current, context, depth, review =>
+    review.routes.some(route => route.role === role && route.lead.key === key)
+      ? [othersMoved(review, leads, except), Math.abs(review.estimates.costScore - current.estimates.costScore)] : null);
+  return found && { moves: found.moves, selection: found.review.selection, review: found.review, othersMoved: othersMoved(found.review, leads, except) };
+}
+
+/** A role is stranded when no model can serve it: every pool in its chain is out, or no included account serves its lead. */
+function stranded(outcome: RoleOutcome): boolean {
+  return outcome.kind === "no-route" || outcome.kind === "no-account";
+}
+
+/**
+ * The dial move that gives every role a route again, and what it does for each role that had none:
+ * `leads` on an open pool (grouped by pool, so "GPT only keeps all 12 on Codex" can be said),
+ * `fallsBack` while its own pool is out, or `removed` because the move stops routing the role at all
+ * ("advisor off" clears the wait by having no advisor, it seats nothing). `waitedOn` names the pools
+ * the stranded roles were held by. `othersMoved` counts roles that had a route and change model.
+ */
+export type Rescue = Seating & {
+  readonly outcomes: readonly RoleOutcome[];
+  readonly rescued: {
+    readonly leads: readonly { readonly pool: QuotaPool | null; readonly roles: readonly string[] }[];
+    readonly fallsBack: readonly string[];
+    readonly removed: readonly string[];
+  };
+  readonly waitedOn: readonly QuotaPool[];
+};
+
+/**
+ * The smallest dial move after which no role is stranded (`roleOutcomes`), by the same bounded
+ * search as `seatRole`: the fewest moves first, then the fewest roles left falling back (a lead on
+ * an open pool is a fact; a fallback taking over is OMP's policy), then the fewest roles that had a
+ * route changing model, then the fewest roles removed, then the nearest cost, then dial order.
+ * Zero moves when no role is stranded; null when no reachable selection routes every role.
+ */
+export function rescue(catalog: CompiledCatalog, current: Review, pools: readonly QuotaPool[], context: OptionContext, depth = SEATING_DEPTH): Rescue | null {
+  const before = roleOutcomes(catalog, current.routes, pools);
+  const lost = before.filter(stranded);
+  if (lost.length === 0) {
+    return { moves: [], selection: current.selection, review: current, othersMoved: 0, outcomes: before,
+      rescued: { leads: [], fallsBack: [], removed: [] }, waitedOn: [] };
+  }
+  const strandedRoles = new Set(lost.map(outcome => outcome.role));
+  const leads = new Map(current.routes.map(route => [route.role, route.lead.key]));
+  const found = nearestMove(catalog, current, context, depth, review => {
+    const outcomes = roleOutcomes(catalog, review.routes, pools);
+    if (outcomes.some(stranded)) return null;
+    const removed = [...strandedRoles].filter(role => !review.routes.some(route => route.role === role)).length;
+    return [outcomes.filter(outcome => outcome.kind === "falls-back").length, othersMoved(review, leads, strandedRoles), removed,
+      Math.abs(review.estimates.costScore - current.estimates.costScore)];
+  });
+  if (!found) return null;
+  const outcomes = roleOutcomes(catalog, found.review.routes, pools);
+  const after = new Map(outcomes.map(outcome => [outcome.role, outcome]));
+  const byPool = new Map<string, { pool: QuotaPool | null; roles: string[] }>();
+  const fallsBack: string[] = [], removed: string[] = [];
+  for (const { role } of lost) {
+    const outcome = after.get(role);
+    if (!outcome) removed.push(role);
+    else if (outcome.kind === "falls-back") fallsBack.push(role);
+    else if (outcome.kind === "leads") {
+      const id = outcome.pool?.id ?? "";
+      byPool.set(id, { pool: outcome.pool, roles: [...byPool.get(id)?.roles ?? [], role] });
+    }
+  }
+  const waitedOn = new Map<string, QuotaPool>();
+  const leadPools = new Map(pools.map(pool => [pool.id, pool]));
+  for (const route of current.routes) {
+    if (!strandedRoles.has(route.role)) continue;
+    const model = catalog.model(route.lead.key);
+    const pool = leadPools.get(poolId(model.provider, modelBucket(model.provider, model.tier)));
+    if (pool) waitedOn.set(pool.id, pool);
+  }
+  return { moves: found.moves, selection: found.review.selection, review: found.review, othersMoved: othersMoved(found.review, leads, strandedRoles),
+    outcomes, rescued: { leads: [...byPool.values()], fallsBack, removed }, waitedOn: [...waitedOn.values()] };
 }
