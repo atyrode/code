@@ -53,7 +53,8 @@ export type LaunchFacts = {
   previewCurrent: boolean;
   profile: { source: ProfileSource } | null;
   localDraft: { source: ProfileSource } | null;
-  record: { active?: unknown } | null;
+  /** The shared record: only whether it holds an active and a staged catalog is read. */
+  record: { active?: unknown; draft?: unknown } | null;
   localReview: object | null;
   skillProblems: readonly string[];
   queries: { setup: { error: string | null } };
@@ -162,7 +163,8 @@ export function saveGate(facts: LaunchFacts): LaunchBlockerCode | null {
  */
 export function nextLaunchStep(facts: LaunchFacts): LaunchStep {
   if (!facts.configurationCurrent) return blocked("configuration");
-  if (facts.profile?.source === "draft") return blocked("staged");
+  // Judged on the record, not the shown profile: a staged catalog that seats no team forms no profile, and still waits in Models.
+  if (facts.record?.draft && !facts.record.active) return blocked("staged");
   const verify = verifyGate(facts);
   if (verify === "verify") return { step: "verify", reason: null };
   if (verify !== null) return blocked(verify);
@@ -176,7 +178,7 @@ export function nextLaunchStep(facts: LaunchFacts): LaunchStep {
 /** The launch status sentence, in `nextLaunchStep`'s precedence without the Save fold. */
 export function launchStatusText(facts: LaunchFacts): string {
   if (!facts.configurationCurrent) return blockerText.configuration;
-  if (facts.profile?.source === "draft") return blockerText.staged;
+  if (facts.record?.draft && !facts.record.active) return blockerText.staged;
   const verify = verifyGate(facts), status = facts.verification.status;
   if (verify === "verify" && status !== "current" && status !== "verifying") return verifyText[status];
   if (verify !== null && verify !== "verify") return blockerText[verify];

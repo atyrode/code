@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { VerificationProvenance } from "../code/contract.ts";
-import { autoReviewDue, draftStale, followInitialization, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import { autoReviewDue, draftStale, followInitialization, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
@@ -57,7 +57,7 @@ describe("the next launch step with verification", () => {
 
   test("configuration and a staged catalog still come first, and verification has its own preconditions in order", () => {
     expect(nextLaunchStep(facts({ configurationCurrent: false }, "unverified")).reason?.code).toBe("configuration");
-    expect(nextLaunchStep(facts({ profile: { source: "draft" } }, "unverified")).reason?.code).toBe("staged");
+    expect(nextLaunchStep(facts({ profile: { source: "draft" }, record: { draft: {} } }, "unverified")).reason?.code).toBe("staged");
     expect(nextLaunchStep(facts({}, "verifying")).reason?.code).toBe("verifying");
     expect(nextLaunchStep(facts({ writable: false, stale: true }, "unverified")).reason?.code).toBe("read-only");
     expect(nextLaunchStep(facts({ stale: true, available: false }, "unverified")).reason?.code).toBe("conflict");
@@ -68,6 +68,15 @@ describe("the next launch step with verification", () => {
     expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "omp-changed")).step).toBe("verify");
     // Once current, the launch order is unchanged.
     expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
+  });
+
+  test("a staged-only workspace waits in Models even when its staged catalog seats no team", () => {
+    // A text-only staged catalog forms no selection, so no profile: the record still says it is staged.
+    const unseated = facts({ unsaved: true, profile: null, localDraft: null, record: { draft: {}, active: null }, localReview: null }, "unverified");
+    expect(nextLaunchStep(unseated)).toMatchObject({ step: "blocked", reason: { code: "staged", action: "models" } });
+    expect(launchStatusText(unseated)).toBe(nextLaunchStep(unseated).reason!.text);
+    // Beside an active catalog a staged one changes nothing: the active profile verifies and launches as before.
+    expect(nextLaunchStep(facts({ record: { active: {}, draft: {} } })).step).toBe("review");
   });
 });
 
@@ -141,7 +150,7 @@ describe("reviewing the saved team when its inputs settle", () => {
     expect(autoReviewDue(gateFacts(), 4, null)).toBe(true);
     expect(autoReviewDue(gateFacts({ unsaved: true, localDraft: { source: "active" } }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ profile: { source: "draft" } }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ profile: { source: "draft" }, record: { draft: {} } }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({}, "accounts-changed"), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ writable: false }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ launchReady: false }), 4, null)).toBe(false);
