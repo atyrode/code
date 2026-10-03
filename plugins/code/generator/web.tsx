@@ -19,7 +19,7 @@ import { teamWords } from "./statement-model.ts";
 import { SeatBoard, useBoardModel } from "./seat-board.tsx";
 import { modelListFailure } from "./board-model.ts";
 import { BOARD_KEY_HELP } from "./pool-head.tsx";
-import { EARLIER_KEY_HELP, EarlierStatements, usePinnedRecents } from "./earlier.tsx";
+import { EARLIER_KEY_HELP, EarlierStatements, SESSIONS_KEY_HELP, usePinnedRecents } from "./earlier.tsx";
 import { pastMoment, type StatementWords } from "./earlier-model.ts";
 import { KeysDialog, type KeyGroup } from "./keys-dialog.tsx";
 
@@ -37,6 +37,7 @@ const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
 const KEY_GROUPS: readonly KeyGroup[] = [
   { title: "Statement", keys: STATEMENT_KEY_HELP },
   { title: "Pools", keys: BOARD_KEY_HELP },
+  { title: "Sessions", keys: SESSIONS_KEY_HELP },
   { title: "Recent teams", keys: EARLIER_KEY_HELP },
   { title: "Panel", keys: [
     { keys: ["r"], text: "Read accounts, usage and machines again" },
@@ -72,6 +73,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const recents = usePinnedRecents(model.recentTeams);
   const { region, announce } = useAnnouncer();
   const [preview, setPreview] = useState<TeamPreview | null>(null);
+  // Bumped by every panel refresh, so the earlier statements read again the machines they have read.
+  const [rereads, setRereads] = useState(0);
   const [keysOpen, setKeysOpen] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [visited, setVisited] = useState<readonly Sheet[]>([]);
@@ -142,6 +145,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   function refresh() {
     actions.refresh();
     refreshMachines();
+    setRereads(count => count + 1);
   }
   // The Accounts sheet's own edits wait while a step runs or a charge waits, as the pool heads' do; read-only it says itself.
   const accountsGate = model.gate("edit-accounts");
@@ -175,7 +179,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     {listFailure === "beside" && listNotice("warn", "The model list is unavailable · the seats are the team already on the line.")}
     {listFailure === "instead" ? listNotice("error", "The model list is unavailable.")
       : <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
-    <EarlierStatements host={host} model={model} line={line} recents={recents} announce={announce} />
+    <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} setPreview={setPreview} rereads={rereads} announce={announce} />
     <footer className={`${G}footer`}>
       {facts && <span className={`${G}footer-facts`}>{facts}</span>}
       <span className={`${G}footer-links`}>

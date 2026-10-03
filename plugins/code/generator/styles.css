@@ -925,18 +925,20 @@
 }
 
 /* ---------------------------------------------------------------- earlier statements: sessions and recent teams under the line
- * Rows say only what differs from the line, on 4px steps and the 13 / 11.5 type steps. Refused
- * verbs stay focusable and turn neutral grey (`aria-disabled`); nothing changes size on hover or
- * focus. Sessions take one line from 760px; below, the machine and age sit under the title.
+ * Rows say only what differs from the line, on 4px steps and the 13 / 11.5 type steps, on the
+ * line's measure (`--stmt-measure`, when the statement sets it). Refused verbs stay focusable and
+ * turn neutral grey (`aria-disabled`); hover brightens text and nothing else, and nothing changes
+ * size on hover or focus. Sessions take one line from 760px; below, the machine and age sit under
+ * the title, and below 480px the verb, the title and where it is stack.
  */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier { display: grid; gap: 16px; min-width: 0; font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier { display: grid; gap: 24px; min-width: 0; max-width: var(--stmt-measure, none); font-size: 13px; line-height: 20px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-group { display: grid; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; padding-bottom: 4px; font-size: 11.5px; line-height: 20px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-title { margin: 0; color: var(--code-text-2); font-size: 13px; font-weight: 600; line-height: 20px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-meta { min-width: 0; color: var(--code-text-3); overflow-wrap: anywhere; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-sep { color: var(--code-text-3); }
 
-/* Text controls: a word with a ground only on hover, pulled out by its padding so the text keeps its column. */
+/* Text controls: words that brighten under the pointer, pulled out by their padding so the text keeps its column. */
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with) {
   display: inline-flex;
   flex: none;
@@ -944,7 +946,7 @@
   min-height: 24px;
   margin: 0 -4px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 0;
   padding: 2px 4px;
   color: var(--code-text);
   background: transparent;
@@ -961,7 +963,7 @@
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with):hover:not([aria-disabled="true"]) {
   border: 0;
   color: var(--code-text-bright);
-  background: var(--code-hover);
+  background: transparent;
 }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with, .plugin-atyrode_code_generator__earlier-team)[aria-disabled="true"] { cursor: default; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with)[aria-disabled="true"],
@@ -970,19 +972,20 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verb[aria-busy="true"],
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verb[aria-busy="true"]:hover { color: var(--code-text); }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with, .plugin-atyrode_code_generator__earlier-team):focus-visible { outline: 1px solid var(--code-focus); outline-offset: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-more { justify-self: start; margin-top: 4px; }
 
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows { display: grid; min-width: 0; margin: 0; padding: 0; list-style: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li { min-width: 0; border-top: 1px solid var(--code-line); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-empty, .plugin-atyrode_code_generator__earlier-note) { margin: 0; border-top: 1px solid var(--code-line); padding: 4px 0; overflow-wrap: anywhere; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { color: var(--code-text-3); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note { color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li { position: relative; min-width: 0; border-top: 1px solid var(--code-line); }
+/* An open folder drum stacks above the rows after it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li:has([data-open]) { z-index: 3; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note { margin: 0; border-top: 1px solid var(--code-line); padding: 4px 0; color: var(--code-text-2); overflow-wrap: anywhere; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note > .plugin-atyrode_code_generator__earlier-link { margin-left: 0; }
+/* An empty list is a sentence, not a framed row. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { margin: 0; color: var(--code-text-3); overflow-wrap: anywhere; }
 
-/* A session: verb column, then its name (and, saved, "Resume with this team"), then machine and age. */
+/* A session: verb column, then its name (and, saved, "Resume with current team"), then machine, folder and age. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 136px minmax(0, 1fr);
   grid-template-areas: "verbs head" ". where";
   align-items: baseline;
   column-gap: 12px;
@@ -994,10 +997,59 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head-line { grid-area: head; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-name { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; color: var(--code-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-name[data-path] { color: var(--code-text-2); font-weight: 400; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { grid-area: where; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; color: var(--code-text-3); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-machine { min-width: 0; overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { grid-area: where; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; min-width: 0; color: var(--code-text-3); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-machine, .plugin-atyrode_code_generator__earlier-folder) { min-width: 0; overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; }
 
-/* A recent team: its digit, then only the words that differ, then its age; the whole row recalls it. */
+/*
+ * A folder's sessions as the statement's drum: the shown session is the value; open, the others
+ * hang below it on the panel ground between hairlines, their text on the name's x, the shown one
+ * marked by the 2px accent and the cursor by brightness. Closed, the options stay in the document
+ * for the listbox, clipped to nothing, so opening moves nothing.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 100%; cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word:hover > .plugin-atyrode_code_generator__earlier-name { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word:focus-visible { outline: 1px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word[data-open] > .plugin-atyrode_code_generator__earlier-drum {
+  top: calc(100% + 4px);
+  left: -8px;
+  display: grid;
+  width: max-content;
+  min-width: calc(100% + 16px);
+  max-width: min(36rem, calc(100cqi - 16px));
+  height: auto;
+  max-height: calc(8 * 24px);
+  overflow-y: auto;
+  border-block: 1px solid var(--code-line);
+  background: var(--code-panel);
+  clip-path: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 8px 2px 6px;
+  border-left: 2px solid transparent;
+  color: var(--code-text-2);
+  line-height: 20px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option:hover,
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option[data-cursor] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option[data-current] { border-left-color: var(--code-accent); color: var(--code-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* A recent team: its digit, then only the words that differ, what it would strand, then its age; the whole row recalls it. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -1008,7 +1060,7 @@
   min-height: 28px;
   margin: 0 -4px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 0;
   padding: 4px;
   color: var(--code-text);
   background: transparent;
@@ -1018,27 +1070,31 @@
   text-align: left;
   overflow-wrap: normal;
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team:hover:not([aria-disabled="true"]) { border: 0; color: var(--code-text); background: var(--code-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team:hover:not([aria-disabled="true"]) { border: 0; color: var(--code-text-bright); background: transparent; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team[aria-disabled="true"]:hover { border: 0; color: var(--code-text); background: transparent; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-digit { color: var(--code-text-3); font-size: 11.5px; font-weight: 600; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-words { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-same] { color: var(--code-text-2); }
+/* The word today's catalog has no route for, dimmed, its reason in its title: the row cannot be recalled. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-off] { color: var(--code-text-3); }
+/* What recalling the team would strand, in attention: "12 no route until 16:55". */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-fate { color: var(--code-attention); white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-marks { display: inline-flex; flex: none; align-self: center; gap: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-age { color: var(--code-text-3); font-size: 11.5px; white-space: nowrap; }
 
 @container code (width >= 760px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session {
-    grid-template-columns: 96px minmax(0, 36rem) minmax(0, max-content);
+    grid-template-columns: 136px minmax(0, 36rem) minmax(0, max-content);
     grid-template-areas: "verbs head where";
     justify-content: start;
   }
 }
-/* Below 320px a session stacks: its verb, then its name, then where and when, each on the full width. */
-@container code (width < 320px) {
+/* Below 480px a session stacks: its verb, then its name, then where and when, each on the full width. */
+@container code (width < 480px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session { grid-template-columns: minmax(0, 1fr); grid-template-areas: "verbs" "head" "where"; }
 }
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with) { align-items: center; min-width: 44px; min-height: 44px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team { min-height: 44px; align-items: center; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-team, .plugin-atyrode_code_generator__earlier-option) { min-height: 44px; align-items: center; }
 }

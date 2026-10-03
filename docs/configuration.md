@@ -306,26 +306,37 @@ once beside the accounts.
 Below the board, two groups, each said only where it differs from the statement.
 
 **Sessions.** Running sessions (terminals that carry an OMP session reference on their
-own machine) are listed with **Open**. Saved sessions appear only after an explicit
-read of each permitted online machine (**Read <machine>**; failed reads offer **Read
-again**; offline machines are named once): the newest five, then **Show all**. A saved
-session has **Resume** and **Resume with this team**. Rows say no more than the title,
-else the folder, the machine and when; the note says "team not recorded" because no
-session records the team it ran with. Every row verb asks the one gate for its own
-session before it is pressed and again between its steps. A refused verb stays
-focusable and gives its reason, including that a saved session on another machine
-waits until that machine is chosen on the statement, since resuming runs on the
-statement's machine, and that a read-only workspace allows Open only.
+own machine) are listed with **Open**; while the terminal inventory is unread or failed,
+running is "unknown", never none. Saved sessions appear only after an explicit read of
+each permitted online machine (**Read <machine>**; a read machine says when it was read
+and offers **read again**, failed reads offer **read again**, offline machines are named
+once); the panel's refresh reads every machine already read again. Saved sessions
+take one row per folder and machine, showing its newest session; the folder's other
+sessions are in that row's drum, the statement's idiom: `↑`/`↓` on the session turn to
+a newer or older one, `↵`/`Space` open the list below it, `Esc` closes it, and the row
+says which it shows ("2 of 5 here"). A saved session has **Resume as saved** and
+**Resume with current team**. Rows say no more than the title, the machine, the folder
+and when; the note says "team not recorded" because no session records the team it ran
+with. Every row verb asks the one gate for its own session before it is pressed and
+again between its steps. A refused verb stays focusable and gives its reason, including
+that a saved session on another machine waits until that machine is chosen on the
+statement, since resuming runs on the statement's machine, and that a read-only
+workspace allows Open only.
 
 **Recent teams.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).
 The list is device-local, never shared, and grants nothing; it does not record the
 machine. A team keeps its digit for the panel's life: relaunching it keeps the digit, a
 new team takes the next free one. A row says only the words that differ from the
-statement, or "this team". Pressing it, or its digit, recalls the team through the edit
-gate; it launches nothing, and recalling the saved workspace team is a discard, not a
-local edit that happens to match. When the statement is the saved workspace team and no
-recent team says it already, the group says "Workspace team · saved <time> by <name>".
+statement, extras as changes ("no spark"), or "this team", and what recalling it would
+strand on today's pools ("12 no route until 16:55", each group with its own time). Under
+the pointer or focus a row previews its team in the status line and on the board. A team
+today's catalog cannot form is refused, its word dimmed with the reason in its title.
+Pressing a row, or its digit, recalls the team through the edit gate and announces what
+it strands; it launches nothing, and recalling the saved workspace team is a discard, not
+a local edit that happens to match. When the statement is the saved workspace team and no
+recent team says it already, the group says "Workspace team · workspace last changed
+<time> by <name>": every write to the workspace record stamps that time and name.
 
 ### The footer and session options
 
@@ -607,9 +618,10 @@ OMP's `{ harness: "atyrode.omp", machineId, sessionId }` reference.
   Native missing, incompatible or unavailable model/thinking state refuses before
   a replacement session or inference can be created.
 
-The earlier statements offer separate **Resume** (saved state) and **Resume with this
-team** actions on a listed saved session, and **Open** on a running one. Session
-options chosen in the popover apply to the resume. Resume with this team needs the
+The earlier statements offer separate **Resume as saved** (saved state) and **Resume
+with current team** (the statement's saved workspace team) actions on a listed saved
+session, and **Open** on a running one. Session options chosen in the popover apply to
+the resume. Resume with current team needs the
 saved, verified, reviewed team and a lead some included account serves; local
 unsaved edits cannot be resumed as a team, and a team that approves plans
 automatically refuses. The workflow refreshes
