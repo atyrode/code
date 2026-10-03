@@ -37,9 +37,9 @@ describe("earlier statements print only what differs from the line", () => {
   });
 
   test("extras that differ are named, even where the line's count would read the same", () => {
-    const line = lineOf(team({ spark: true, fallback: true }));
-    expect(line.words.extras).toBe("2 extras");
-    expect(differences(team({ priority: true, prewalk: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority + prewalk" }]);
+    const line = lineOf(team({ spark: true, fallback: true, prewalk: true }));
+    expect(line.words.extras).toBe("3 extras");
+    expect(differences(team({ priority: true, prewalk: true, planYolo: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority + prewalk + auto plans" }]);
     expect(differences(team(), line, familyWord)).toEqual([{ word: "extras", text: "no extras" }]);
     expect(differences(team({ budget: "free" }), lineOf(team()), familyWord)).toEqual([{ word: "extras", text: "free only" }]);
   });

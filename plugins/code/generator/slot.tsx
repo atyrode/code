@@ -87,7 +87,7 @@ export function StatementSlot({ slot, id, ghosted, listed, open, locked, cursor,
   return <div className={`${S}slot`} role="listbox" tabIndex={locked ? -1 : 0} aria-label={WORD_NAMES[word]} aria-disabled={locked || undefined}
     aria-multiselectable={extras || undefined} aria-activedescendant={active}
     data-stmt-word={word} data-open={open || undefined} data-ghosted={ghosted || undefined} data-listed={listed || undefined}
-    data-changed={slot.changed || undefined}>
+    data-changed={slot.changed || undefined} data-edited={slot.edited || undefined}>
     {connector && <span className={`${S}connector`} aria-hidden="true">{connector}</span>}
     {/* The value, its ghosts and its drum share one box after the connector, so ghosts and options line up with the value. */}
     <span className={`${S}stack`}>

@@ -57,7 +57,7 @@ const vocab: Vocabulary = {
   time: at => `T+${Math.round((at - now) / HOUR)}h`,
 };
 function context(selection: Selection, pool: readonly QuotaPool[], lastLaunch: Selection | null = null): StatementContext {
-  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, lastLaunch, machines: [], machineId: "studio" };
+  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, lastLaunch, saved: null, machines: [], rosterError: false, machineId: "studio" };
 }
 /** A drum option as the line shows it; each test sets only what it is about. */
 function slotOption(changes: Partial<SlotOption>): SlotOption {
@@ -111,7 +111,7 @@ describe("the words' drums, steps and the last launch", () => {
 
   test("a step passes over options that cannot be chosen and stops at the end of the drum", () => {
     const option = (value: string, available: boolean, current = false) => slotOption({ value, label: value, available, current });
-    const slot: Slot = { word: "tier", current: 2, label: "normal", changed: false, options: [option("elite", true), option("smart", false), option("normal", true, true)] };
+    const slot: Slot = { word: "tier", current: 2, label: "normal", changed: false, edited: false, options: [option("elite", true), option("smart", false), option("normal", true, true)] };
     expect(stepOption(slot, true)?.value).toBe("elite");
     expect(stepOption({ ...slot, current: 0, options: [option("elite", true, true), option("smart", false)] }, false)).toBeNull();
   });
@@ -152,7 +152,7 @@ describe("the verb names the model's step", () => {
   const facts = (step: LaunchStep["step"], changes: Partial<VerbFacts> = {}): VerbFacts => ({
     step: step === "blocked" ? { step, reason: { code: "read-only", text: "Edit access needed." } } : { step, reason: null },
     verdict: open, busy: false, inFlight: null, chaining: false, unsaved: false, draft: false, phase: null, verification: "current",
-    stranded: false, grounded: true, launching: false, ...changes,
+    stranded: false, grounded: true, placeable: true, launching: false, ...changes,
   });
 
   test("an edited team saves first, and continues to the launch only when the readings are present", () => {
@@ -164,6 +164,19 @@ describe("the verb names the model's step", () => {
     expect(verbView(facts("launch", { stranded: true }))).toMatchObject({ label: "Launch anyway", state: "ready" });
     const refusal: GateRefusal = { code: "no-account", text: "No included account serves a provider this team leads on." };
     expect(verbView(facts("review", { verdict: { open: false, refusal } }))).toMatchObject({ label: "Review", state: "refused", refusal });
+  });
+
+  test("Launch anyway is never the label of a save the door refuses for its lead", () => {
+    const refusal: GateRefusal = { code: "no-account", text: "No included account serves a provider this team leads on." };
+    const refused = verbView(facts("save", { unsaved: true, draft: true, stranded: true, verdict: { open: false, refusal } }));
+    expect(refused).toMatchObject({ state: "refused", refusal });
+    expect(refused.label).not.toBe("Launch anyway");
+  });
+
+  test("with no canvas to place a terminal, an edited team only saves; a staged model list is opened, not refused", () => {
+    expect(verbView(facts("save", { unsaved: true, draft: true, placeable: false }))).toMatchObject({ label: "Save", state: "ready", saves: true, launches: false });
+    const staged = { step: "blocked", reason: { code: "staged", text: "A staged model list waits in Models." } } as const;
+    expect(verbView(facts("blocked", { step: staged, verdict: { open: false, refusal: staged.reason } }))).toMatchObject({ state: "ready", opens: "models" });
   });
 
   test("while a charge waits the verb waits too, and while a step runs it names the step", () => {
@@ -193,24 +206,32 @@ describe("Save & launch stops at a review that differs from the projection", () 
 });
 
 describe("the fix for roles with no route", () => {
-  test("GPT-led with Claude blocked and no fallbacks: GPT only keeps all 12 on Codex", () => {
+  test("GPT-led with Claude blocked and no fallbacks: GPT only gives all 12 a route", () => {
     const claudeBlocked = pools({ claudeBlockedUntil: now + 2 * HOUR });
     const stranded = review({ lane: gptLed });
     const fix = fixView(rescue(catalog, stranded, claudeBlocked, known)!, catalog, claudeBlocked, vocab);
-    expect(fix).toMatchObject({ label: "GPT only", result: `keeps all ${stranded.routes.length} on Codex` });
+    expect(fix).toMatchObject({ label: "GPT only", result: `gives all ${stranded.routes.length} a route` });
     expect(fix?.selection.lane).toEqual(gptOnly);
+  });
+
+  test("a fix onto a pool whose reading is not current says its availability is unknown", () => {
+    const claudeBlocked = pools({ claudeBlockedUntil: now + 2 * HOUR });
+    // Codex read long ago: the fix still routes every role there, but no one measured its room.
+    const codexStale = claudeBlocked.map(pool => pool.provider === "openai-codex" ? { ...pool, verdict: { kind: "stale" as const, ageMs: HOUR } } : pool);
+    const fix = fixView(rescue(catalog, review({ lane: gptLed }), codexStale, known)!, catalog, codexStale, vocab);
+    expect(fix?.result).toMatch(/· availability unknown$/);
   });
 });
 
 describe("the status lines, in precedence", () => {
   const charge = { requests: 19, providers: [{ provider: "openai-codex", requests: 12 }, { provider: "anthropic", requests: 7 }] };
   const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-    draft: false, phase: null, verification: "current", stranded: false, grounded: true, launching: false });
+    draft: false, phase: null, verification: "current", stranded: false, grounded: true, placeable: true, launching: false });
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
     verb: ready, phase: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
-    machine: { name: "Studio", online: true, revoked: false }, otherMachine: null, message: null, outcome: null, launchStatus: "Ready to open a terminal.",
-    stop: null, fix: null, team: { counts: [{ family: "openai", count: 12 }], fallsBack: null, tight: [], unread: false }, reviewed: null, differs: false,
-    laneFix: null, nobodyServes: false, pointed: null, ...changes,
+    machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
+    launchStatus: "Ready to open a terminal.", stop: null, fix: null, team: { counts: [{ family: "openai", count: 12 }], fallsBack: [], tight: [], unread: false },
+    edits: [], reviewed: null, differs: null, laneFix: null, nobodyServes: false, listFailure: false, pointed: null, moves: null, ...changes,
   });
   const actions = (line: { actions: readonly { kind: string }[] }) => line.actions.map(action => action.kind);
 
@@ -228,6 +249,22 @@ describe("the status lines, in precedence", () => {
     expect(first.parts).toEqual([{ text: "Read-only workspace", tone: "neutral" }]);
   });
 
+  test("a machine list that cannot be read is said as such, never as a machine being offline, and offers no other machine", () => {
+    const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "" } };
+    const lines = statusLines(facts({ verb: unavailable, rosterUnread: true, otherMachine: { id: "build", name: "Build box" } }), vocab);
+    expect(lines[0].parts[0]!.text).not.toMatch(/offline/);
+    expect(lines[1].actions.map(action => action.kind === "fix" ? action.fix.kind : action.kind)).toEqual(["refresh"]);
+    // Online by the list's own word, yet unavailable: never "offline".
+    expect(statusLines(facts({ verb: unavailable }), vocab)[0].parts[0]!.text).not.toMatch(/offline/);
+  });
+
+  test("roles waiting on two pools name both, each with its own reopening, never one pool with the other's time", () => {
+    const claude = pools({ claudeBlockedUntil: now + 4 * HOUR }).find(pool => pool.provider === "anthropic")!;
+    const codex = { ...pools().find(pool => pool.provider === "openai-codex")!, verdict: { kind: "maxed" as const, until: now + HOUR } };
+    const lines = statusLines(facts({ stop: { roles: ["reviewer", "default"], waits: [claude, codex] } }), vocab);
+    expect(lines[0].parts[0]).toEqual({ text: "Claude blocked until T+4h · GPT maxed until T+1h", tone: "attention" });
+  });
+
   test("an offline destination offers another machine; an unserved lead offers the nearest served lane and its accounts", () => {
     const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "Runtime unavailable." } };
     const offline = statusLines(facts({ verb: unavailable, machine: { name: "Laptop", online: false, revoked: false }, otherMachine: { id: "studio", name: "Studio" } }), vocab);
@@ -239,7 +276,7 @@ describe("the status lines, in precedence", () => {
   });
 
   test("roles with no route say so with the fix that routes them, which commits through a team fix", () => {
-    const stop = { roles: ["reviewer", "security-reviewer"], pool: null, unserved: false, until: null };
+    const stop = { roles: ["reviewer", "security-reviewer"], waits: [] };
     const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
     const [first, second] = statusLines(facts({ stop, fix }), vocab);
     expect(first.parts.some(part => part.tone === "attention")).toBe(true);
