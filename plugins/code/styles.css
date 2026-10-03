@@ -762,10 +762,11 @@
 }
 .plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--code-accent-hover); color: var(--code-on-accent); background: var(--code-accent-hover); }
 .plugin-atyrode_code .plugin-atyrode_code__primary:focus-visible { border-color: var(--code-accent-text); outline: none; box-shadow: 0 0 0 3px var(--code-focus-ring); }
-.plugin-atyrode_code .plugin-atyrode_code__primary:disabled { border-color: var(--code-line); color: var(--code-text-3); background: var(--code-raised); cursor: default; }
+/* Unavailable reads aria-disabled, never the native attribute, so focus stays on the primary; busy keeps the accent. */
+.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]:not([aria-busy="true"])) { border-color: var(--code-line); color: var(--code-text-3); background: var(--code-raised); cursor: default; }
 .plugin-atyrode_code .plugin-atyrode_code__primary[aria-busy="true"] { cursor: progress; }
 .plugin-atyrode_code .plugin-atyrode_code__primary .keycap { border-color: rgb(237 242 255 / 32%); border-radius: 2px; padding: 0.02rem 0.3rem; color: inherit; background: transparent; font-size: 0.62rem; font-weight: 600; opacity: 0.75; }
-.plugin-atyrode_code .plugin-atyrode_code__primary:disabled .keycap { border-color: var(--code-line); }
+.plugin-atyrode_code .plugin-atyrode_code__primary:is(:disabled, [aria-disabled="true"]:not([aria-busy="true"])) .keycap { border-color: var(--code-line); }
 .plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner { gap: 0.45rem; color: inherit; font-size: inherit; line-height: 1; }
 .plugin-atyrode_code .plugin-atyrode_code__primary .mf-vocab-spinner__mark { border-color: rgb(237 242 255 / 30%); border-top-color: var(--code-on-accent); }
 

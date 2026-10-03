@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { VerificationProvenance } from "../code/contract.ts";
-import { autoReviewDue, nextLaunchStep, type AutoReviewContext, type LaunchFacts } from "../code/generator/launch-step.ts";
+import { autoReviewDue, nextLaunchStep, type GateFacts, type LaunchFacts } from "../code/generator/launch-step.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
@@ -72,42 +72,59 @@ describe("the next launch step with verification", () => {
 });
 
 describe("confirming the verification charge", () => {
-  const preparedAt = 10_000;
+  const charge = { requests: 19 };
+  const prepared = { charge, preparedAt: 10_000 };
+  const at = (ms: number) => prepared.preparedAt + ms;
   test("the second click of a double-click on Verify never spends, however long the inventory took", () => {
-    expect(confirmsCharge({ detail: 2, repeat: false }, preparedAt, preparedAt + 250)).toBe(false);
-    expect(confirmsCharge({ detail: 2, repeat: false }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
-    expect(confirmsCharge({ detail: 3, repeat: false }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
+    expect(confirmsCharge({ detail: 2, repeat: false }, charge, prepared, at(250))).toBe(false);
+    expect(confirmsCharge({ detail: 2, repeat: false }, charge, prepared, at(10 * CHECKING_HOLD_MS))).toBe(false);
+    expect(confirmsCharge({ detail: 3, repeat: false }, charge, prepared, at(10 * CHECKING_HOLD_MS))).toBe(false);
   });
 
   test("a single press confirms only once the checking hold has passed, and a held key never does", () => {
-    expect(confirmsCharge({ detail: 1, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS - 1)).toBe(false);
-    expect(confirmsCharge({ detail: 1, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS)).toBe(true);
-    expect(confirmsCharge({ detail: 0, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS)).toBe(true);
-    expect(confirmsCharge({ detail: 0, repeat: true }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
+    expect(confirmsCharge({ detail: 1, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS - 1))).toBe(false);
+    expect(confirmsCharge({ detail: 1, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS))).toBe(true);
+    expect(confirmsCharge({ detail: 0, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS))).toBe(true);
+    expect(confirmsCharge({ detail: 0, repeat: true }, charge, prepared, at(10 * CHECKING_HOLD_MS))).toBe(false);
     // Longer than the 500 ms double-click interval Windows uses by default.
     expect(CHECKING_HOLD_MS).toBeGreaterThan(500);
   });
+
+  test("only the very charge the control showed is spent, never one of nothing", () => {
+    const press = { detail: 1, repeat: false }, later = at(CHECKING_HOLD_MS);
+    // A charge prepared again after the control rendered is a different charge, even with the same count.
+    expect(confirmsCharge(press, { requests: 19 }, prepared, later)).toBe(false);
+    expect(confirmsCharge(press, null, prepared, later)).toBe(false);
+    expect(confirmsCharge(press, charge, null, later)).toBe(false);
+    const nothing = { requests: 0 };
+    expect(confirmsCharge(press, nothing, { charge: nothing, preparedAt: prepared.preparedAt }, later)).toBe(false);
+  });
 });
 
+/** The same workbench, as the gate reads it: nothing in flight, no charge, every lead served. */
+function gateFacts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "current"): GateFacts {
+  return { ...facts({}, status), running: false, charge: null, unservedLead: null, savedSessionId: "", planYolo: false, ...changes };
+}
+
 describe("reviewing the saved team when its inputs settle", () => {
-  const settled: AutoReviewContext = { busy: false, uncovered: false, scope: 4, attempted: null };
   test("only the saved, verified team with every launch precondition reviews by itself", () => {
-    expect(autoReviewDue(facts(), settled)).toBe(true);
-    expect(autoReviewDue(facts({ unsaved: true, localDraft: { source: "active" } }), settled)).toBe(false);
-    expect(autoReviewDue(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), settled)).toBe(false);
-    expect(autoReviewDue(facts({ profile: { source: "draft" } }), settled)).toBe(false);
-    expect(autoReviewDue(facts({}, "accounts-changed"), settled)).toBe(false);
-    expect(autoReviewDue(facts({ writable: false }), settled)).toBe(false);
-    expect(autoReviewDue(facts({ launchReady: false }), settled)).toBe(false);
-    expect(autoReviewDue(facts({ previewCurrent: true }), settled)).toBe(false);
+    expect(autoReviewDue(gateFacts(), 4, null)).toBe(true);
+    expect(autoReviewDue(gateFacts({ unsaved: true, localDraft: { source: "active" } }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ profile: { source: "draft" } }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({}, "accounts-changed"), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ writable: false }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ launchReady: false }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ previewCurrent: true }), 4, null)).toBe(false);
   });
 
-  test("never while busy or with an unserved family, and once per scope until an input changes", () => {
-    expect(autoReviewDue(facts(), { ...settled, busy: true })).toBe(false);
-    expect(autoReviewDue(facts(), { ...settled, uncovered: true })).toBe(false);
+  test("never while a step runs or a charge waits or a lead is unserved, and once per scope until an input changes", () => {
+    expect(autoReviewDue(gateFacts({ running: true }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ charge: { requests: 3 } }), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({ unservedLead: { provider: "anthropic", family: "anthropic", roles: ["reviewer"] } }), 4, null)).toBe(false);
     // A refused review or launch in this scope waits for an explicit Review...
-    expect(autoReviewDue(facts(), { ...settled, attempted: 4 })).toBe(false);
+    expect(autoReviewDue(gateFacts(), 4, 4)).toBe(false);
     // ...and a changed input opens a new scope, which reviews again.
-    expect(autoReviewDue(facts(), { ...settled, scope: 5, attempted: 4 })).toBe(true);
+    expect(autoReviewDue(gateFacts(), 5, 4)).toBe(true);
   });
 });

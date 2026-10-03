@@ -163,8 +163,22 @@ workbench requests the launch review itself, so Launch is one press. It never do
 so for an unsaved edit, a starter or a staged catalog, and at most once per review
 scope: a refused review or launch waits for an explicit Review or a changed input.
 Verify models stays "Checking models…" for at least 700 ms, and Confirm spends only
-on a deliberate single press, never the second click of a double-click or a held
-key. Keys act only from inside the panel, and keys Code consumes do not reach
+the very charge it showed, never one of zero requests, and only on a deliberate
+single press, never the second click of a double-click or a held key.
+
+One gate decides every action: the verb, saving, verifying, confirming the charge,
+resuming with or without the team, opening a running session, and every edit of
+the team (including a recalled team), the machine or the account pool. Nothing
+starts while a step runs, and only Confirm while a charge waits; edits wait too,
+shown unavailable in place. A chain asks the gate again before each later step
+(save, then review once the save is observed; prepare, then open the terminal), so
+a team, machine, pool or authority change mid-flight stops it with the reason.
+Review and launch refuse only a lead no included account serves, as the session
+door does; fallbacks it would drop are noted, never a refusal. Outcome and refusal
+lines clear whenever the team, machine or account pool changes. The verb stays
+focusable while unavailable, so a step changing its state never drops focus.
+
+Keys act only from inside the panel, and keys Code consumes do not reach
 workspace-wide bindings. The mouse wheel turns a dial only when the keyboard
 focused it and the pointer has rested on it for 300 ms (focus from a click never
 counts, so the wheel over a just-clicked dial scrolls), and only while the whole

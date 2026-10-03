@@ -239,6 +239,8 @@ type UsageZoneProps = {
   onServed?: ((providers: ReadonlySet<string> | null) => void) | undefined;
   /** Receives this zone's refresh so a panel-level `r` key reaches it. */
   refresher?: RefObject<(() => void) | null> | undefined;
+  /** Why account edits wait now (a workbench step is in flight or a verification charge waits); null when they may proceed. */
+  locked?: string | null | undefined;
 };
 
 /** The main view's usage section: provider columns, account rows and quota windows on the same data as `UsageOverview`. */
@@ -248,7 +250,7 @@ export function UsageZone(props: UsageZoneProps) {
 
 const U = "plugin-atyrode_code__";
 
-function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onServed, refresher }: UsageZoneProps) {
+function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onServed, refresher, locked = null }: UsageZoneProps) {
   const now = Date.now();
   useMinuteTick();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
@@ -289,7 +291,9 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onServ
     return () => { refresher.current = null; };
   });
   const writable = canWriteCodeWorkspace(host);
-  const canEdit = writable && workspace !== null && current !== null && configuration.data !== null && !pending;
+  // Shown whenever the role may choose, so a step in flight disables the switches in place rather than removing them.
+  const canChoose = writable && workspace !== null && current !== null && configuration.data !== null;
+  const canEdit = canChoose && !pending && locked === null;
   const manual = current?.accounts.activePreset === null;
   /** The same guarded `changeAccounts` edit the accounts view makes: exact revision, no retry, never on historical inventory. */
   async function change(edit: AccountChoiceChange) {
@@ -368,11 +372,11 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onServ
           const worst = blockedUntil ? <State tone="attention">Blocked until {hhmm(blockedUntil)}</State>
             : windows.some(({ state }) => state.word === "maxed") ? <State tone="attention">Maxed</State>
             : windows.some(({ state }) => state.word === "tight") ? <State tone="warn">Tight</State> : null;
-          const editable = manual && canEdit && !historicalAccounts;
+          const editable = manual && canChoose && !historicalAccounts;
           return <div key={key} className={`${U}acct`} data-acct={key} data-excluded={!entry.selected || undefined} data-hist={historical || undefined}>
             <div className={`${U}idline`} title={manual ? undefined : `Set by the ${poolName} preset`}>
-              {editable && <Check className={`${U}incl`} data-incl="" tabIndex={-1} data-action="atyrode.code.changeAccounts" checked={entry.selected}
-                aria-label={`Include ${who} in the next launch`} title={entry.selected ? "Included: the next launch may use it" : "Excluded: the next launch will not use it; it stays signed in"}
+              {editable && <Check className={`${U}incl`} data-incl="" tabIndex={-1} data-action="atyrode.code.changeAccounts" checked={entry.selected} aria-disabled={!canEdit || undefined}
+                aria-label={`Include ${who} in the next launch`} title={locked ?? (entry.selected ? "Included: the next launch may use it" : "Excluded: the next launch will not use it; it stays signed in")}
                 onChange={enabled => void change({ kind: "set-account", reference: entry.account.reference, enabled })} />}
               <button type="button" className={`${U}ident`} data-ident="" tabIndex={key === tabKey ? 0 : -1} onClick={onAccounts}
                 title={`Open ${who} in Accounts (${entry.account.type === "api_key" ? "API key" : "OAuth"}${entry.selected ? "" : ", excluded"}${disabled ? ", credential disabled" : ""})`}>

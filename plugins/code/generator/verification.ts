@@ -67,12 +67,17 @@ export function verificationState(provenance: VerificationProvenance | null, obs
 export const CHECKING_HOLD_MS = 700;
 /** How a Confirm was activated: `detail` is the pointer's click count, 0 from the keyboard; `repeat` is a held key. */
 export type ConfirmActivation = { readonly detail: number; readonly repeat: boolean };
+/** A charge as the verification holds it, waiting: what it charges, and when the Verify press that prepared it came. */
+export type PreparedCharge = { readonly charge: { readonly requests: number }; readonly preparedAt: number };
 
 /**
- * Whether this activation may spend the shown charge. Only a deliberate single press counts: never
- * the second click of a multi-click, never key repeat, and never before the checking hold has
- * passed since the Verify press that prepared the charge.
+ * Whether this activation may spend the prepared charge. Only the very charge the control showed
+ * (`shown`, the object it rendered), and only if it charges at least one request: a charge that was
+ * replaced, or one of nothing, is never confirmed. Only a deliberate single press counts: never the
+ * second click of a multi-click, never key repeat, and never before the checking hold has passed
+ * since the Verify press that prepared the charge.
  */
-export function confirmsCharge(activation: ConfirmActivation, preparedAt: number, nowMs: number): boolean {
-  return activation.detail <= 1 && !activation.repeat && nowMs - preparedAt >= CHECKING_HOLD_MS;
+export function confirmsCharge(activation: ConfirmActivation, shown: object | null, prepared: PreparedCharge | null, nowMs: number): boolean {
+  return prepared !== null && shown === prepared.charge && prepared.charge.requests > 0 &&
+    activation.detail <= 1 && !activation.repeat && nowMs - prepared.preparedAt >= CHECKING_HOLD_MS;
 }

@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import { keyCapLabel } from "@manifold/plugin/hooks";
 import type { MachineSummary } from "@manifold/protocol";
 import { ControlIcon, ItemIcon, KeyCap, prefersReducedMotion, ScrollRegion, Spinner } from "@manifold/ui";
 import { PROMPT_MAX_BYTES } from "@atyrode/manifold-omp";
-import { defaultSelection, routeService } from "../../domain/routing.ts";
+import { defaultSelection } from "../../domain/routing.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget } from "../machine-web.ts";
@@ -23,16 +23,14 @@ import { FleetSessions } from "./fleet.tsx";
 import { displayAliases, GeneratorPlaceholder, GeneratorZone, RoutingZone, useDialModel, type LedgerView, type MapTarget } from "./dials.tsx";
 import type { DialId } from "./dial-space.ts";
 import { useWorkbench } from "./workbench-model.ts";
-import { autoReviewDue, AUTO_REVIEW_SETTLE_MS, nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
+import type { GateRefusal } from "./launch-step.ts";
 import { panelShortcut } from "./panel-input.ts";
-import type { ConfirmActivation } from "./verification.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 type Sheet = "accounts" | "models" | "setup" | "sessions";
 const SHEETS: readonly Sheet[] = ["accounts", "models", "setup", "sessions"];
 const SHEET_TITLES: Readonly<Record<Sheet, string>> = { accounts: "Accounts", models: "Models", setup: "Setup", sessions: "Sessions" };
-type Action = "save" | "review" | "launch" | "resume";
 /** Why the primary cannot act, in a few words, with the one action that fixes it when there is one. */
 type Blocked = { text: string; action?: { label: string; run: () => void } };
 /** Exclusion reasons in plain words, for the verification details. */
@@ -70,8 +68,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const model = useWorkbench({ host, target, machine, rosterError, available });
   const {
     queries: { configuration, metadata, setup, skillCatalog }, observed, record, document, starterError, compiled, selection, profile, localDraft,
-    review, localReview, controlsReview, launchReview, configurationCurrent, stale, writable, launchReady, busy, message, exportedDraft,
-    canSave, canResume, canResumeWithProfile, canSuggest, canRequestSuggestion, canApplySuggestion, suggestionPromptTooLong, suggestionStale,
+    review, localReview, controlsReview, launchReview, configurationCurrent, stale, writable, launchReady, busy, inFlight, chaining, message, exportedDraft,
+    canSuggest, canRequestSuggestion, canApplySuggestion, suggestionPromptTooLong, suggestionStale, gate, step, verb, served, setServed, outcome,
     prompt, setPrompt, skillChoice, setSkillChoice, automation, setAutomation, savedSessionId, setSavedSessionId, setAccountObservation,
     suggestion, unsaved, actions, verification,
   } = model;
@@ -80,14 +78,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [visited, setVisited] = useState<readonly Sheet[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
   const [ledger, setLedger] = useState<LedgerView>({ fallbacks: false, ids: false, pinned: new Set() });
-  const [served, setServed] = useState<ReadonlySet<string> | null>(null);
   const [stripDetails, setStripDetails] = useState(false);
-  const [pendingReview, setPendingReview] = useState(false);
-  const [inFlight, setInFlight] = useState<Action | null>(null);
-  const [outcome, setOutcome] = useState<{ kind: "Launched" | "Resumed"; machine: string } | null>(null);
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
-  const lastAction = useRef<{ action: Action; machine: string } | null>(null);
-  const reviewAttempt = useRef<number | null>(null);
   const view = useRef<HTMLDivElement>(null);
   const task = useRef<HTMLTextAreaElement>(null);
   const backButtons = useRef<Partial<Record<Sheet, HTMLButtonElement | null>>>({});
@@ -106,55 +98,19 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const dialModel = useDialModel(compiled, selection, controlsReview, served, profile?.metadata != null);
   const mapOption = mapTarget ? dialModel?.dials.get(mapTarget.dial)?.options.get(mapTarget.word) : undefined;
   const previewReview = mapOption?.ok && mapOption.review ? mapOption.review : null;
-  const step = nextLaunchStep(model);
-  // A lead no included account serves is refused at the session door; say so first. Fallbacks it would drop are not a refusal.
-  const uncovered = (step.step === "review" || step.step === "launch") && served && compiled && review
-    ? routeService(compiled, review.routes, provider => served.has(provider)).lead ?? undefined : undefined;
-  const unservedLead = uncovered !== undefined;
+  // Edits of the team, machine or accounts wait while a step runs or a charge waits, and say why.
+  const teamGate = gate("edit-team"), machineGate = gate("edit-machine"), accountsGate = gate("edit-accounts");
+  const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
   const loading = !profile && !document && !configuration.error && !starterError && !metadata.error;
   const machineName = machine?.name ?? null;
 
   // ------------------------------------------------------------ actions
-  async function run(action: Action, work: () => Promise<void>) {
-    lastAction.current = { action, machine: machineName ?? "the selected machine" };
-    setInFlight(action); setOutcome(null);
-    try { await work(); } finally { setInFlight(null); }
-  }
-  /** The next step. `activation` says how the press arrived, so a charge is only spent by a deliberate single press. */
-  function primary(activation: ConfirmActivation) {
-    if (busy || blocked !== null) return;
-    // Verification spends only on an explicit confirm of the charge it showed; the first press only prepares it.
-    if (step.step === "verify") { if (verification.canConfirm) void verification.confirm(activation); else if (verification.canPrepare) void verification.prepare(); }
-    else if (step.step === "save") { setPendingReview(true); void run("save", actions.saveProfile); }
-    else if (step.step === "review") reviewNow();
-    else void run("launch", actions.launch);
-  }
-  /** Review in the current scope and remember it, so a refused review or launch is not retried by itself. */
-  function reviewNow() {
-    reviewAttempt.current = model.reviewScope;
-    void run("review", actions.review);
-  }
-  // `Save & review` is one gesture: the review follows once the saved revision is observed, never before.
-  const stepCode = step.step === "blocked" ? step.reason.code : step.step;
-  useEffect(() => {
-    if (!pendingReview || busy) return;
-    if (message?.failed || stepCode === "save") { setPendingReview(false); return; }
-    if (stepCode === "configuration") return;
-    setPendingReview(false);
-    if (stepCode === "review" && !unservedLead) reviewNow();
-  }, [pendingReview, busy, stepCode, message?.failed, unservedLead]);
-  useEffect(() => {
-    const last = lastAction.current;
-    if (!message || message.failed || !last) return;
-    if (last.action === "launch" || last.action === "resume") setOutcome({ kind: last.action === "launch" ? "Launched" : "Resumed", machine: last.machine });
-  }, [message]);
-  function updateSelection(next: Parameters<typeof actions.updateSelection>[0]) {
-    setOutcome(null);
-    actions.updateSelection(next);
+  function selectMachine(id: string) {
+    if (machineGate.open) select(id);
   }
   function restoreDefaults() {
-    if (!compiled || busy) return;
-    try { updateSelection(defaultSelection(compiled)); } catch { /* A catalog without a complete default keeps the current choices. */ }
+    if (!compiled || !teamGate.open) return;
+    try { actions.updateSelection(defaultSelection(compiled)); } catch { /* A catalog without a complete default keeps the current choices. */ }
   }
   function toggleLedger(toggle: "fallbacks" | "ids") {
     setLedger(previous => ({ ...previous, [toggle]: !previous[toggle] }));
@@ -240,7 +196,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     event.preventDefault();
     event.stopPropagation();
     switch (shortcut) {
-      case "next-step": primary({ detail: 0, repeat: false }); return;
+      case "next-step": actions.next(); return;
       case "leave-task": task.current?.blur(); focusGenerator(); return;
       case "unpin": setLedger(previous => ({ ...previous, pinned: new Set() })); return;
       case "task": task.current?.focus(); return;
@@ -261,7 +217,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
   // ------------------------------------------------------------ the composer's next step
   const otherMachine = machines?.find(candidate => candidate.id !== machineId && candidate.online && candidate.revoked !== true);
-  function blocker(reason: LaunchBlocker): Blocked {
+  function blocker(reason: GateRefusal): Blocked {
     switch (reason.code) {
       case "configuration": return { text: "Profile not current", action: { label: "Retry", run: actions.refresh } };
       case "staged": return { text: "Staged catalog", action: { label: "Review in Models", run: () => openSheet("models") } };
@@ -279,39 +235,38 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         if (rosterError) return { text: "Machines unavailable", action: { label: "Retry", run: refreshMachines } };
         if (!machineId) return { text: "No machine chosen", action: { label: "Choose", run: machineMenu.toggle } };
         if (!machine) return { text: "Machine unavailable", action: { label: "Choose", run: machineMenu.toggle } };
-        if (machine.revoked) return { text: `${machine.name} revoked`, ...otherMachine ? { action: { label: `Use ${otherMachine.name}`, run: () => select(otherMachine.id) } } : {} };
-        return { text: `${machine.name} offline`, ...otherMachine ? { action: { label: `Use ${otherMachine.name}`, run: () => select(otherMachine.id) } } : {} };
+        if (machine.revoked) return { text: `${machine.name} revoked`, ...otherMachine ? { action: { label: `Use ${otherMachine.name}`, run: () => selectMachine(otherMachine.id) } } : {} };
+        return { text: `${machine.name} offline`, ...otherMachine ? { action: { label: `Use ${otherMachine.name}`, run: () => selectMachine(otherMachine.id) } } : {} };
+      case "no-account":
+        return { text: reason.gap ? `No ${accountWord(reason.gap.family, reason.gap.provider)} account included` : reason.text, action: { label: "Accounts", run: () => openSheet("accounts") } };
+      case "charge": return { text: "Confirm or cancel the charge" };
+      default: return { text: reason.text };
     }
   }
-  // While the first observation is pending there is nothing to retry yet; say what is happening instead.
-  const blocked: Blocked | null = step.step === "blocked" ? (loading ? { text: "Reading the profile" } : blocker(step.reason))
-    : uncovered ? { text: `No ${accountWord(uncovered.family, uncovered.provider)} account included`, action: { label: "Accounts", run: () => openSheet("accounts") } } : null;
+  const refusal = verb.open ? null : verb.refusal;
+  // While a step runs the verb names it instead; while the first observation is pending there is nothing to retry yet.
+  const blocked: Blocked | null = refusal === null || refusal.code === "running" ? null
+    : loading && step.step === "blocked" ? { text: "Reading the profile" } : blocker(refusal);
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
-  // The saved team reviews itself once its inputs settle, so Launch is one press; an edit never does (launch-step.ts).
-  const autoReview = autoReviewDue(model, { busy: busy || pendingReview || verifyRunning || inFlight !== null, uncovered: unservedLead,
-    scope: model.reviewScope, attempted: reviewAttempt.current });
-  useEffect(() => {
-    if (!autoReview) return;
-    const timer = window.setTimeout(reviewNow, AUTO_REVIEW_SETTLE_MS);
-    return () => window.clearTimeout(timer);
-  }, [autoReview, model.reviewScope]);
   const nextLabel = verifyRunning ? (verification.phase === "inventory" ? "Checking models…" : "Verifying…")
     : busy && inFlight ? { save: "Saving…", review: "Reviewing…", launch: "Launching…", resume: "Resuming…" }[inFlight]
-    : busy ? "Working…" : pendingReview ? "Reviewing…"
-    : step.step === "verify" ? (verification.canConfirm ? "Confirm" : "Verify models")
+    : busy ? "Working…" : chaining ? "Reviewing…"
+    : step.step === "verify" ? "Verify models"
     : step.step === "save" ? "Save & review" : step.step === "launch" ? "Launch" : step.step === "review" ? "Review"
     : verification.status !== "current" ? "Verify models" : model.previewCurrent ? "Launch" : unsaved && localDraft ? "Save & review" : "Review";
   const nextTitle = blocked ? blocked.text
-    : step.step === "verify" ? (verification.canConfirm ? "Spend the tiny requests shown, then save the verified models and this profile"
-      : "Check which models your accounts can reach; nothing is spent until you confirm the charge")
+    : step.step === "verify" ? "Check which models your accounts can reach; nothing is spent until you confirm the charge"
     : step.step === "launch" ? `Open a terminal on ${machineName ?? "the machine"} with this reviewed profile`
     : step.step === "save" ? "Save the profile, then check accounts, models and machine"
     : "Check accounts, models and machine before anything runs";
   const optionsSummary = automation ? "Restricted" : skillChoice?.mode === "disabled" ? "Skills off"
     : skillChoice?.mode === "select" ? `${skillChoice.skillIds.length + skillChoice.setIds.length} skills` : null;
+  const charge = verification.phase === "charge" ? verification.charge : null;
 
   // ------------------------------------------------------------ masthead status: verification, write access, then where the profile stands
-  const save = canSave && <Button disabled={busy} onClick={() => void run("save", actions.saveProfile)}>Save</Button>;
+  // Save stays in place while a step runs, unavailable, so the status line never shifts under the pointer.
+  const saveVerdict = gate("save");
+  const save = (saveVerdict.open || saveVerdict.refusal.code === "running") && <Button disabled={!saveVerdict.open} onClick={() => void actions.save()}>Save</Button>;
   const staged = <><State tone="warn" title="A staged catalog waits for review">Staged catalog</State><Button onClick={() => openSheet("models")}>Review in Models</Button></>;
   function statusLine(): ReactNode {
     if (loading) return null;
@@ -324,12 +279,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       : !verified && (verification.status === "verifying" || verifyRunning) ? <State tone="on">Verifying…</State>
       : !verified ? <><State tone="warn" title="These models are not verified against your current accounts and OMP">
         {verification.status === "accounts-changed" ? "Accounts changed" : verification.status === "omp-changed" ? "OMP updated" : "Unverified"}</State>
-        {verification.canPrepare && step.step !== "verify" && <Button onClick={() => void verification.prepare()}>Verify</Button>}</> : null;
+        {gate("verify").open && step.step !== "verify" && <Button onClick={actions.verify}>Verify</Button>}</> : null;
     const access = !writable && <State title="Your role can explore these choices but not save them">Read-only</State>;
     const standing = !writable && localDraft ? <State title="Shown here only; nothing is saved">Local preview</State>
       : profile?.source === "starter" ? <><State>Starter</State>{save}</>
       : profile?.source === "draft" ? staged
-      : localDraft ? <><State tone="warn">Unsaved</State>{save}<Button disabled={busy} onClick={actions.discardChanges}>Revert</Button></>
+      : localDraft ? <><State tone="warn">Unsaved</State>{save}<Button disabled={!teamGate.open} onClick={actions.discardChanges}>Revert</Button></>
       : record?.draft ? staged
       : verified && writable ? <State>Saved</State> : null;
     return <>{progress}{access}{standing}</>;
@@ -348,7 +303,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       actions={<Button onClick={configuration.refresh}>Retry</Button>}>The profile is unavailable.</Notice>} />
     : !compiled || !selection || !dialModel || !controlsReview ? <GeneratorPlaceholder loading={false} notice={notices.length ? notices
       : <div className={`${G}empty-state`}><p>These choices do not form a profile yet.</p><Button onClick={() => openSheet("models")}>Open Models</Button></div>} />
-    : <GeneratorZone model={dialModel} disabled={busy} onChange={updateSelection} estimates={controlsReview.estimates}
+    : <GeneratorZone model={dialModel} disabled={!teamGate.open} onChange={actions.updateSelection} estimates={controlsReview.estimates}
       previewEstimates={previewReview?.estimates ?? null} measured={controlsReview.routes.every(route => compiled.model(route.lead.key).tokensPerSecond !== null)}
       onDefaults={restoreDefaults} moreOpen={moreOpen} setMoreOpen={setMoreOpen} notice={notices.length ? <div className={`${G}notices`}>{notices}</div> : null} />;
 
@@ -396,7 +351,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         <Menu menu={machineMenu} label="Run on" align="end">
           <MenuHeader>Run on</MenuHeader>
           {machines === null && !rosterError && <MenuItem disabled onSelect={() => {}}>Reading machines…</MenuItem>}
-          {machines?.map(entry => <MenuItem key={entry.id} current={entry.id === machineId} onSelect={() => select(entry.id)}
+          {machines?.map(entry => <MenuItem key={entry.id} current={entry.id === machineId} disabled={!machineGate.open} onSelect={() => selectMachine(entry.id)}
             aside={<><span className="plugin-atyrode_code__dot" data-state={entry.revoked ? "off" : entry.online ? "ok" : "off"} aria-hidden="true" />{entry.revoked ? "Revoked" : entry.online ? "Online" : "Offline"}</>}>{entry.name}</MenuItem>)}
           {machineId && machines && !machine && <MenuItem current disabled onSelect={() => {}} aside="Unavailable">Selected machine</MenuItem>}
           {rosterError && <MenuHeader>{rosterError}</MenuHeader>}
@@ -408,7 +363,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         <Menu menu={moreMenu} label="More" align="end">
           {SHEETS.map(name => <MenuItem key={name} onSelect={() => openSheet(name)}>{SHEET_TITLES[name]}</MenuItem>)}
           <MenuRule />
-          <MenuItem disabled={!compiled || busy} aside={<KeyCap label={keyCapLabel("d")} />} onSelect={restoreDefaults}>Restore defaults</MenuItem>
+          <MenuItem disabled={!compiled || !teamGate.open} aside={<KeyCap label={keyCapLabel("d")} />} onSelect={restoreDefaults}>Restore defaults</MenuItem>
           <MenuItem aside={<KeyCap label="?" />} onSelect={openKeys}>Keyboard shortcuts</MenuItem>
         </Menu>
       </div>
@@ -419,20 +374,23 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         empty={loading ? "loading" : configuration.error && !profile ? "failed" : "incomplete"}
         line={verificationLine} />
     </div>
-    <UsageZone host={host} className={`${G}section ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onServed={setServed} refresher={usageRefresh} />
+    <UsageZone host={host} className={`${G}section ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onServed={setServed}
+      refresher={usageRefresh} locked={accountsLocked} />
     <div className={`${G}dock`} data-zone="composer">
-      {verification.phase === "charge" && verification.charge && <Notice className={`${G}dock-note`} actions={<>
-        <Button data-action="atyrode.code.verifyModels" onClick={event => void verification.confirm({ detail: event.detail, repeat: false })}
+      {charge && <Notice className={`${G}dock-note`} actions={<>
+        {/* The charge it confirms is the one rendered here, and only by a deliberate single press (verification.ts `confirmsCharge`). */}
+        <Button data-action="atyrode.code.verifyModels" aria-disabled={!verification.canConfirm || undefined}
+          onClick={event => actions.confirmCharge({ detail: event.detail, repeat: false }, charge)}
           onKeyDown={event => { if (event.repeat && event.key === "Enter") event.preventDefault(); }}>Confirm</Button>
         <Button onClick={verification.cancel}>Cancel</Button>
       </>}>
-        <span className={`${G}facts`}><strong>Verify models</strong>{verification.charge.providers.map(entry => <ProviderCount key={entry.provider}
+        <span className={`${G}facts`}><strong>Verify models</strong>{charge.providers.map(entry => <ProviderCount key={entry.provider}
           family={providerPolicy(entry.provider).family} name={accountWord(providerPolicy(entry.provider).family, entry.provider)} count={entry.requests} />)}
-          <span>{verification.charge.requests} tiny {verification.charge.requests === 1 ? "request" : "requests"} through your accounts</span></span>
+          <span>{charge.requests === 0 ? "Nothing to verify through these accounts" : `${charge.requests} tiny ${charge.requests === 1 ? "request" : "requests"} through your accounts`}</span></span>
       </Notice>}
       {verification.failure && !verifyRunning && verification.phase !== "charge" && <Notice kind={verification.failure.cancelled ? "info" : "error"} className={`${G}dock-note`}
         details={verification.failure.evidence ? JSON.stringify(verification.failure.evidence, null, 2) : null}
-        actions={verification.canPrepare ? <Button onClick={() => void verification.prepare()}>Retry</Button> : undefined}>
+        actions={gate("verify").open ? <Button onClick={actions.verify}>Retry</Button> : undefined}>
         {verification.failure.cancelled ? "Verification cancelled." : `Verification stopped at ${verification.failure.step}: ${verification.failure.reason}`}
       </Notice>}
       {launchReview && <Notice className={`${G}dock-note`} actions={<>
@@ -452,18 +410,17 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         <Details label="Review JSON">{JSON.stringify({ composition: launchReview.composition, native: launchReview.native }, null, 2)}</Details>
       </div>}
       {outcome && !launchReview && <Notice className={`${G}dock-note`} actions={<Button onClick={() => openSheet("sessions")}>Sessions</Button>}>
-        {outcome.kind} in a terminal on {outcome.machine}.
+        {outcome.kind === "launched" ? "Launched" : "Resumed"} in a terminal on {outcome.machine}.
       </Notice>}
       {message?.failed && <Notice kind="error" className={`${G}dock-note`}>{message.text}</Notice>}
       <div className={`${G}composer`}>
         {/* Characters, because a textarea counts characters: the door's rule is bytes and
             refuses a multibyte prompt over it by name. */}
         <textarea ref={task} className={`${G}task`} rows={1} placeholder="Describe the task…" aria-label="Task" title={withKey("Task", "/")} spellCheck={false} maxLength={PROMPT_MAX_BYTES}
-          value={prompt} onChange={event => { setOutcome(null); setPrompt(event.target.value); }} />
+          value={prompt} onChange={event => setPrompt(event.target.value)} />
         <IconButton icon="settings" label="Launch options" buttonRef={optionsMenu.anchor} aria-haspopup="dialog" aria-expanded={optionsMenu.open} onClick={optionsMenu.toggle}
           title={`Launch options for this session only: ${optionsSummary ?? "ordinary session, default skills"}`} />
-        <PrimaryButton className={`${G}primary`} disabled={blocked !== null && !busy && !verifyRunning} busy={busy || pendingReview || verifyRunning}
-          onClick={event => primary({ detail: event.detail, repeat: false })}
+        <PrimaryButton className={`${G}primary`} disabled={blocked !== null} busy={busy || chaining || verifyRunning} onClick={actions.next}
           data-action={step.step === "launch" ? "atyrode.omp.prepareSession" : step.step === "save" ? "atyrode.code.select" : "atyrode.omp.reviewSession"}
           title={withKey(nextTitle, LAUNCH_STROKE)}>{nextLabel}</PrimaryButton>
       </div>
@@ -520,7 +477,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
   return <>
     {main}
-    {sheetFrame("accounts", <AccountsView host={host} target={target} available={available} onDone={() => finish("accounts")} />)}
+    {sheetFrame("accounts", <AccountsView host={host} target={target} available={available} onDone={() => finish("accounts")} locked={accountsLocked} />)}
     {sheetFrame("models", <CatalogWorkbench host={host} target={target} available={available} onDone={() => finish("models")} />)}
     {sheetFrame("setup", <>
       <RuntimeSettings host={host} target={target} available={available} onDone={() => finish("setup")} />
@@ -544,7 +501,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       </details>}
     </>)}
     {sheetFrame("sessions", <FleetSessions key={model.destinationGeneration} host={host} machines={machines} rosterError={rosterError} machineId={model.machineId}
-      sessionId={savedSessionId} choose={setSavedSessionId} busy={busy}>
+      sessionId={savedSessionId} choose={setSavedSessionId} busy={!gate("open").open}>
       {running => <div className={`${G}resume`}>
         <p>Resume on {machine?.name ?? (machineId || "no selected destination")} in this workspace.</p>
         <details className="plugin-atyrode_code__details"><summary>How resuming works</summary>
@@ -552,8 +509,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <p>Native permission is still required. Code refreshes inventory and reopens a known running terminal instead of starting a replacement. Workspace: {host.containerId}.</p>
         </details>
         <div className="plugin-atyrode_code__toolbar">
-          <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !canResume || running} onClick={() => void run("resume", () => actions.resume(false))}>Resume saved state</button>
-          <button type="button" data-action="atyrode.omp.resumeSession" disabled={busy || !canResumeWithProfile || running} onClick={() => void run("resume", () => actions.resume(true))}>Resume with this profile</button>
+          <button type="button" data-action="atyrode.omp.resumeSession" disabled={!gate("resume").open || running} onClick={() => void actions.resume(false)}>Resume saved state</button>
+          <button type="button" data-action="atyrode.omp.resumeSession" disabled={!gate("resume-with-team").open || running} onClick={() => void actions.resume(true)}>Resume with this profile</button>
         </div>
       </div>}
     </FleetSessions>)}

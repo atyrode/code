@@ -2,20 +2,22 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary, type ServiceReadArgs } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
-import { defaultSelection, type Review } from "../../domain/routing.ts";
+import { defaultSelection, routeService, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import type { SessionReview } from "../workflow.ts";
+import type { ChargeReview, SessionReview } from "../workflow.ts";
 import { callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { launchStatusText, saveGate, type LaunchFacts, type ProfileSource } from "./launch-step.ts";
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, launchStatusText, nextLaunchStep,
+  type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
+import type { ConfirmActivation } from "./verification.ts";
 
 /** The suggest door's prompt limit (contract.ts `suggest` input); longer tasks are kept, never truncated. */
 const SUGGESTION_PROMPT_MAX = 16384;
@@ -49,24 +51,35 @@ export type WorkbenchQueries = {
   skillCatalog: WorkbenchQuery<OmpResult<"readSkillCatalog">>;
 };
 export type WorkbenchMessage = { text: string; failed: boolean };
+/** A step in flight, for the verb to name it. */
+export type WorkbenchStep = "save" | "review" | "launch" | "resume";
+/** What the last launch or resume opened, until the team, machine or pool changes. */
+export type WorkbenchOutcome = { kind: "launched" | "resumed"; machine: string };
 export type ProfileState = "conflict" | "local" | "saved";
 export type EffectiveSkillMode = SessionReview["native"]["skills"]["mode"] | NonNullable<SkillChoice>["mode"];
 export type WorkbenchInput = { host: HostServices; target: Target | null; machine: MachineSummary | null; rosterError: string | null; available: boolean };
 
-/** Every effect the workbench can start. All of them keep today's guards; enablement flags are separate. */
+/**
+ * Every effect the workbench can start. Each asks the one gate (launch-step.ts `actionGate`) before
+ * it starts and, in a chain, again before each later step; a refused one does nothing.
+ */
 export type WorkbenchActions = {
   /** Edit the profile controls. Re-derives a starter document for a new budget; revokes review and suggestion. */
   updateSelection: (value: Selection) => void;
+  /** Recall a team this browser launched, if the current catalog still forms it exactly; otherwise say so. */
+  recallTeam: (team: RecentTeam) => void;
   /** Drop the local draft and any acknowledged CAS receipt; return to the observed shared profile. */
   discardChanges: () => void;
-  /** CAS-save a local edit of the active profile. No-op unless saveable; the bundled preview is saved by verification. */
-  saveProfile: () => Promise<void>;
-  /** Review the launch for the saved profile. Like today's handler it relies on the caller honouring `canReview`. */
-  review: () => Promise<void>;
-  /** Launch the current review. No-op unless `previewCurrent`. */
-  launch: () => Promise<void>;
-  /** Resume the selected saved session, optionally replacing its model choices with this saved profile. */
-  resume: (withProfile: boolean) => Promise<void>;
+  /** The verb: prepare a verification, save then review once the save is observed, review, or launch. */
+  next: () => void;
+  /** Prepare a verification: inventory, then the charge, which spends nothing until `confirmCharge`. */
+  verify: () => void;
+  /** CAS-save a local edit of the active profile, without reviewing it. */
+  save: () => Promise<void>;
+  /** Spend the verification charge the control showed (model-verification.ts `confirm`). */
+  confirmCharge: (activation: ConfirmActivation, shown: ChargeReview) => void;
+  /** Resume the selected saved session, optionally replacing its model choices with this saved team. */
+  resume: (withTeam: boolean) => Promise<void>;
   /** Show the suggestion panel; nothing is sent until `suggest`. */
   openSuggestion: () => void;
   /** Close the suggestion panel and drop its result. */
@@ -111,7 +124,11 @@ export type WorkbenchModel = {
   /** Native session launch permission is ready on the destination. */
   launchReady: boolean;
   previewCurrent: boolean;
+  /** An action is in flight (`perform`); the verb shows `inFlight`. */
   busy: boolean;
+  inFlight: WorkbenchStep | null;
+  /** A save waits for its revision to be observed before its review (the verb's "Save & review"). */
+  chaining: boolean;
   profileState: ProfileState;
   stateLabel: string;
   /** The launch status sentence; `nextLaunchStep`'s precedence (launch-step.ts). */
@@ -119,15 +136,18 @@ export type WorkbenchModel = {
   message: WorkbenchMessage | null;
   /** Copyable JSON of the local profile; empty when there is nothing local to export. */
   exportedDraft: string;
-  // Enablement, excluding `busy` (callers disable everything while busy).
-  /** A Save profile control is offered and its preconditions hold, including a current verification. */
-  canSave: boolean;
-  /** The Review/Launch control may proceed. */
-  canReview: boolean;
-  /** Resume saved state may proceed (callers also exclude running sessions). */
-  canResume: boolean;
-  /** Resume with this profile may proceed (callers also exclude running sessions). */
-  canResumeWithProfile: boolean;
+  /** Whether an action may start now: the one gate every action path asks (launch-step.ts `actionGate`). */
+  gate: (intent: WorkbenchIntent) => GateVerdict;
+  /** The verb's next step, and the gate's verdict on it (a blocked step's verdict carries its reason). */
+  step: LaunchStep;
+  verb: GateVerdict;
+  /** The providers a launch's pool would serve, when known; set by the usage section (`UsageZone onServed`). */
+  served: ReadonlySet<string> | null;
+  /** Stable identity: consumers use it as an effect dependency. */
+  setServed: (providers: ReadonlySet<string> | null) => void;
+  /** A lead of the shown team no included account serves, which the session door refuses. */
+  unservedLead: ServiceGap | null;
+  outcome: WorkbenchOutcome | null;
   /** A saved profile and a ready classifier exist, so suggestion is offered. */
   canSuggest: boolean;
   canRequestSuggestion: boolean;
@@ -159,8 +179,6 @@ export type WorkbenchModel = {
   verification: ModelVerification;
   /** Teams this browser launched in this workspace, newest first. Device-local and never shared (recent-teams.ts). */
   recentTeams: readonly RecentTeam[];
-  /** Changes whenever an input a launch review depends on changes, which revokes a review made in an earlier scope. */
-  reviewScope: number;
 };
 
 /** Owns the workbench's state, observations, safety checks and actions; presentation stays with the caller. */
@@ -191,7 +209,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [suggesting, setSuggesting] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [inFlight, setInFlight] = useState<WorkbenchStep | null>(null);
+  const [chaining, setChaining] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
+  const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
+  const [served, setServed] = useState<ReadonlySet<string> | null>(null);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
   const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
   const pending = useRef(false);
@@ -265,7 +287,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setSavedPolicy(saved); setDials(null); setPreview(null); setSuggestion(null);
       setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
     } });
-  const verified = verification.status === "current";
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };
@@ -300,28 +321,65 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
   const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
   const shownReview = previewCurrent ? preview.composition.review : localReview;
+  // The session door's rule on the team the verb acts on: a lead nobody serves refuses, fallbacks are pruned.
+  const unservedLead = served && compiled && shownReview ? routeService(compiled, shownReview.routes, provider => served.has(provider)).lead : null;
+  const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
+  const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, available, launchReady,
+    previewCurrent, localReview, skillProblems, queries: { setup }, verification,
+    running: busy || chaining || verifyRunning, charge: verification.phase === "charge" ? verification.charge : null,
+    unservedLead, savedSessionId, planYolo: record?.selection?.planYolo ?? false };
+  // A chain's later steps ask the gate again on the facts of the latest render, its own step set aside.
+  const latestFacts = useRef(facts);
+  latestFacts.current = facts;
+  function stillOpen(intent: WorkbenchIntent): GateVerdict {
+    return actionGate({ ...latestFacts.current, running: false }, intent);
+  }
+  /** An action starts only when the gate lets it and nothing started earlier in this same turn. */
+  function allowed(intent: WorkbenchIntent): boolean {
+    return !pending.current && actionGate(facts, intent).open;
+  }
+  const step = nextLaunchStep(facts);
+  const verb: GateVerdict = step.step === "blocked" ? { open: false, refusal: step.reason } : actionGate(facts, step.step);
   function policyCurrent() {
     return mounted.current && policyScope.current.epoch === policyEpoch && current.current.host.client === host.client &&
       current.current.host.principal.id === host.principal.id && current.current.host.containerId === host.containerId &&
       canWriteCodeWorkspace(current.current.host);
   }
-  function updateSelection(value: Selection) {
+  /** The catalog a selection is shown against: a bundled starter is re-derived for a new budget. Null, with the reason said, when that fails. */
+  function documentFor(value: Selection): CatalogDocument | null {
+    if (!profile) return null;
+    if (!profile.metadata || value.budget === profile.selection.budget) return profile.document;
+    try { return catalogFromMetadata(profile.metadata, value.budget); }
+    catch (reason) { setMessage({ text: reason instanceof Error ? reason.message : codeOperationFailure(reason), failed: true }); return null; }
+  }
+  function applySelection(document: CatalogDocument, value: Selection) {
     if (!profile) return;
-    let nextDocument = profile.document;
-    if (profile.metadata && value.budget !== profile.selection.budget) {
-      try { nextDocument = catalogFromMetadata(profile.metadata, value.budget); }
-      catch (reason) { setMessage({ text: reason instanceof Error ? reason.message : codeOperationFailure(reason), failed: true }); return; }
-    }
-    setDials({ ...profile, document: nextDocument, selection: value });
+    setDials({ ...profile, document, selection: value });
     setPreview(null); setSuggestion(null); setMessage(null);
   }
+  function updateSelection(value: Selection) {
+    if (!profile || !allowed("edit-team")) return;
+    const document = documentFor(value);
+    if (document) applySelection(document, value);
+  }
+  function recallTeam(team: RecentTeam) {
+    if (!profile || !allowed("edit-team")) return;
+    const document = documentFor(team.selection);
+    if (!document) return;
+    let formed: Review | null = null;
+    try { formed = previewSelection(compileCatalog(document), team.selection); } catch { /* A catalog that does not compile forms no team. */ }
+    // Recalled exactly or not at all: a team quietly narrowed to the current catalog is not the team that was launched.
+    if (!formed) { setMessage({ text: "That team is not in the current catalog; nothing changed.", failed: true }); return; }
+    applySelection(document, team.selection);
+  }
   function discardChanges() {
+    if (!allowed("edit-team")) return;
     setDials(null); setSavedPolicy(null); setPreview(null); setSuggestion(null); setMessage(null);
   }
-  async function saveProfile() {
+  async function save() {
     // Only a local edit of a verified active profile saves here; the bundled preview has no save.
-    if (!profile || dials?.source !== "active" || !configurationCurrent || stale || !localReview || !verified) return;
-    await perform(async () => {
+    if (!profile || !allowed("save")) return;
+    await perform("save", async () => {
       const saved = await codeWorkflow(host, policyCurrent).code("select", {
         containerId: host.containerId!, expectedRevision: profile.revision, selection: profile.selection,
       });
@@ -334,45 +392,93 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
   }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
   function refresh() { configuration.refresh(); metadata.refresh(); setup.refresh(); classifier.refresh(); defaults.refresh(); skillCatalog.refresh(); }
-  async function perform(work: () => Promise<void>) {
+  async function perform(kind: WorkbenchStep | null, work: () => Promise<void>) {
     if (pending.current || !writable) return;
-    pending.current = true; setBusy(true); setMessage(null);
+    pending.current = true; setBusy(true); setInFlight(kind); setMessage(null); setOutcome(null);
     try { await work(); }
     catch (reason) { if (mounted.current) setMessage({ text: codeOperationFailure(reason), failed: true }); }
-    finally { pending.current = false; if (mounted.current) { setBusy(false); refresh(); } }
+    finally { pending.current = false; if (mounted.current) { setBusy(false); setInFlight(null); refresh(); } }
   }
+  // The scope of the last review attempt, explicit or automatic: a refused one waits for a press or a changed input.
+  const reviewAttempt = useRef<number | null>(null);
   async function review() {
-    if (record && target) await perform(async () => { const value = await codeWorkflow(host, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host)).reviewSession(target, record.revision, prompt, { skills: skillChoice, automation }); if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); } });
+    if (!record || !target) return;
+    reviewAttempt.current = reviewEpoch;
+    await perform("review", async () => { const value = await codeWorkflow(host, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host)).reviewSession(target, record.revision, prompt, { skills: skillChoice, automation }); if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); } });
   }
   async function launch() {
-    if (!target || !record || !previewCurrent || !preview || !available || !launchReady) return;
-    await perform(async () => {
-      // A refused attempt must return to explicit review, even if the shared profile
-      // revision did not change (for example, the account pool changed independently).
-      setPreview(null);
-      const prepared = await codeWorkflow(host).prepareSession(preview);
-      const latest = current.current;
-      if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
-        latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
-      if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
-      const teams = rememberLaunch(browserTeamStorage(), recentKey, preview.composition.review.selection, Date.now());
-      if (mounted.current) setRecentTeams(teams);
-      if (destinationCurrent()) { setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); setMessage({ text: "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.", failed: false }); }
+    const reviewed = preview;
+    if (!target || !record || !reviewed) return;
+    await perform("launch", async () => {
+      try {
+        const prepared = await codeWorkflow(host).prepareSession(reviewed);
+        // Asked again on the latest facts: a team, machine, pool or authority change while preparing stops the launch here.
+        const verdict = stillOpen("launch");
+        if (!verdict.open) throw new Error(`Nothing was opened: ${verdict.refusal.text}`);
+        const latest = current.current;
+        if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
+          latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
+        if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
+        const teams = rememberLaunch(browserTeamStorage(), recentKey, reviewed.composition.review.selection, Date.now());
+        if (mounted.current) setRecentTeams(teams);
+        if (destinationCurrent()) {
+          setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
+          setMessage({ text: "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.", failed: false });
+          setOutcome({ kind: "launched", machine: latest.machine.name });
+        }
+      } finally {
+        // One review, one launch attempt: whether it opened a terminal or was refused, the next launch reviews again.
+        if (mounted.current) setPreview(null);
+      }
     });
   }
-  async function resume(withProfile: boolean) {
-    if (!target || !savedSessionId || !available ||
-      (withProfile && (!configurationCurrent || !record?.active || unsaved || !localReview || !verified))) return;
-    await perform(async () => {
+  function verify() {
+    if (allowed("verify")) void verification.prepare();
+  }
+  /** The verb: whatever the next step is, if the gate lets it start. */
+  function next() {
+    if (pending.current || step.step === "blocked" || !verb.open) return;
+    switch (step.step) {
+      case "verify": verify(); return;
+      case "save": setChaining(true); void save(); return;
+      case "review": void review(); return;
+      case "launch": void launch(); return;
+    }
+  }
+  // `Save & review` is one gesture: the review follows once the saved revision is observed, never before,
+  // and only if the gate, asked again then, lets it; otherwise the chain stops and the verb says why.
+  useEffect(() => {
+    if (!chaining || busy) return;
+    if (message?.failed) { setChaining(false); return; }
+    if (!configurationCurrent) return;
+    setChaining(false);
+    if (stillOpen("review").open) void review();
+  });
+  // The saved team reviews itself once its inputs settle, so Launch is one press; an edit never does (launch-step.ts).
+  const autoReview = autoReviewDue(facts, reviewEpoch, reviewAttempt.current);
+  useEffect(() => {
+    if (!autoReview) return;
+    const timer = window.setTimeout(() => { void review(); }, AUTO_REVIEW_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [autoReview, reviewEpoch]);
+  function confirmCharge(activation: ConfirmActivation, shown: ChargeReview) {
+    if (actionGate(facts, "confirm").open) void verification.confirm(activation, shown);
+  }
+  async function resume(withTeam: boolean) {
+    const intent = withTeam ? "resume-with-team" : "resume";
+    if (!target || !record || !allowed(intent)) return;
+    await perform("resume", async () => {
       setPreview(null);
       const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
-        ...(withProfile ? { profile: { target, expectedRevision: record!.revision } } : {}),
+        ...(withTeam ? { profile: { target, expectedRevision: record.revision } } : {}),
         ...(skillChoice === undefined ? {} : { skills: skillChoice }), ...(automation === undefined ? {} : { automation }),
       }, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
       if (result.kind === "reopen") {
         if (destinationCurrent()) host.navigate(formatManifoldUri({ kind: "terminal", terminalId: result.terminals[0]!.id }));
         return;
       }
+      const verdict = stillOpen(intent);
+      if (!verdict.open) throw new Error(`Nothing was opened: ${verdict.refusal.text}`);
       const prepared = result.prepared;
       const latest = current.current;
       if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || latest.host.principal.id !== host.principal.id ||
@@ -382,11 +488,12 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (destinationCurrent()) {
         setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
         setMessage({ text: "Saved session opened in OMP. Per-session choices were cleared.", failed: false });
+        setOutcome({ kind: "resumed", machine: latest.machine.name });
       }
     });
   }
   async function suggest() {
-    if (record && target && classifier.data) await perform(async () => {
+    if (record && target && classifier.data) await perform(null, async () => {
       const value = await callCodeAction(host, "suggest", { ...target, expectedRevision: record.revision, expectedServiceRevision: classifier.data!.revision, prompt });
       if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch) setSuggestion(value);
     });
@@ -396,26 +503,31 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     updateSelection(suggestion.selection); setSuggesting(false);
   }
   function closeSuggestion() { setSuggesting(false); setSuggestion(null); }
-  function changePrompt(value: string) { setPrompt(value); setPreview(null); setSuggestion(null); }
+  function changePrompt(value: string) { setPrompt(value); setPreview(null); setSuggestion(null); setOutcome(null); }
   function changeSkillChoice(value: SkillChoice) { setSkillChoice(value); setPreview(null); setMessage(null); }
   function changeAutomation(value: AutomationChoice) { setAutomation(value); setPreview(null); setMessage(null); }
+  // Outcome and refusal lines describe a premise: the team, the machine and the account pool. Any change to
+  // one of them clears them, unless the change came with the line itself (a verification saving its team).
+  const premise = JSON.stringify([selection, machineId, record?.accounts ?? null, accountObservation, served ? [...served].sort() : null]);
+  const linePremise = useRef(premise);
+  useLayoutEffect(() => { linePremise.current = premise; }, [message, outcome]);
+  useLayoutEffect(() => {
+    if (linePremise.current === premise) return;
+    linePremise.current = premise;
+    setMessage(null); setOutcome(null);
+  }, [premise]);
   const profileState: ProfileState = stale ? "conflict" : unsaved ? "local" : "saved";
   const stateLabel = !configurationCurrent ? "Shared choices unavailable" : stale ? "Shared profile changed" :
     profile?.source === "starter" ? "Bundled preview · verify to save" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
-  const facts: LaunchFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, available, launchReady,
-    previewCurrent, localReview, skillProblems, queries: { setup }, verification };
   const suggestionPromptTooLong = prompt.length > SUGGESTION_PROMPT_MAX;
   const suggestionStale = suggestion !== null && (suggestion.revision !== record?.revision || suggestion.serviceRevision !== classifier.data?.revision);
   return {
     queries: { configuration, metadata, setup, classifier, defaults, skillCatalog },
     observed, record, machineId, destinationGeneration: generation, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
-    configurationCurrent, unsaved, stale, writable, available, launchReady, previewCurrent, busy,
+    configurationCurrent, unsaved, stale, writable, available, launchReady, previewCurrent, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
-    canSave: configurationCurrent && verified && saveGate(facts) === null,
-    canReview: writable && available && configurationCurrent && verified && !!record?.active && launchReady && !unsaved && !!localReview && skillProblems.length === 0,
-    canResume: writable && available && !!savedSessionId && skillProblems.length === 0,
-    canResumeWithProfile: writable && available && !!savedSessionId && configurationCurrent && verified && !!record?.active && !unsaved && !!localReview && skillProblems.length === 0,
+    gate: intent => actionGate(facts, intent), step, verb, served, setServed, unservedLead, outcome,
     canSuggest,
     canRequestSuggestion: writable && available && configurationCurrent && !!prompt.trim() && !suggestionPromptTooLong && !!classifier.data,
     canApplySuggestion: suggestion !== null && !unsaved && !suggestionStale,
@@ -426,9 +538,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     savedSessionId, setSavedSessionId, setAccountObservation,
     suggestion, suggesting,
     actions: {
-      updateSelection, discardChanges, saveProfile, review, launch, resume,
+      updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume,
       openSuggestion: () => setSuggesting(true), closeSuggestion, suggest, applySuggestion, refresh,
     },
-    verification, recentTeams, reviewScope: reviewEpoch,
+    verification, recentTeams,
   };
 }

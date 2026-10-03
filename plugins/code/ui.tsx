@@ -151,13 +151,16 @@ export function Check({ checked, onChange, className, buttonRef, onClick, childr
 type PrimaryProps = ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean | undefined; keyHint?: boolean | undefined; buttonRef?: Ref<HTMLButtonElement> | undefined };
 /**
  * The one accent button per surface, naming the next step. Busy shows the host Spinner with the
- * step in flight and stays focusable (`aria-disabled`) so focus never falls to the page. A held
- * Enter repeats its keydown; only the first press activates, so holding it cannot take a second step.
+ * step in flight. Neither busy nor `disabled` ever sets the native attribute: the button reads
+ * `aria-disabled` and ignores presses, so a press that turns it unavailable never drops focus to
+ * the page. A held Enter repeats its keydown; only the first press activates, so holding it cannot
+ * take a second step.
  */
-export function PrimaryButton({ busy = false, keyHint = true, className, children, buttonRef, onClick, onKeyDown, title, ...rest }: PrimaryProps) {
-  return <button ref={buttonRef} type="button" className={cx("plugin-atyrode_code__primary", className)} aria-disabled={busy || undefined} aria-busy={busy || undefined}
+export function PrimaryButton({ busy = false, disabled = false, keyHint = true, className, children, buttonRef, onClick, onKeyDown, title, ...rest }: PrimaryProps) {
+  const inert = busy || disabled;
+  return <button ref={buttonRef} type="button" className={cx("plugin-atyrode_code__primary", className)} aria-disabled={inert || undefined} aria-busy={busy || undefined}
     title={title ?? (keyHint && typeof children === "string" ? withKey(children, LAUNCH_STROKE) : undefined)}
-    onClick={event => { if (!busy) onClick?.(event); }} onKeyDown={event => { if (event.repeat && event.key === "Enter") event.preventDefault(); onKeyDown?.(event); }} {...rest}>
+    onClick={event => { if (!inert) onClick?.(event); }} onKeyDown={event => { if (event.repeat && event.key === "Enter") event.preventDefault(); onKeyDown?.(event); }} {...rest}>
     {busy && typeof children === "string" ? <Spinner label={children} /> : children}
     {keyHint && !busy && <KeyCap label={keyCapLabel(LAUNCH_STROKE)} />}
   </button>;

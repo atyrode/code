@@ -46,12 +46,14 @@ export type ModelVerification = VerificationState & {
   /** Discovery and benchmark are ready on the destination. */
   ready: boolean;
   canPrepare: boolean;
+  /** A charge of at least one request waits for its Confirm. */
   canConfirm: boolean;
   /** Initialize if needed and run OMP's inventory, ending at the charge. Spends no benchmark request. */
   prepare: () => Promise<void>;
-  /** Spend the reviewed charge: benchmark per provider, derive, stage, review, promote, save the selection.
-   * Ignored unless the activation is a deliberate single press after the checking hold (`confirmsCharge`). */
-  confirm: (activation: ConfirmActivation) => Promise<void>;
+  /** Spend the charge `shown`: benchmark per provider, derive, stage, review, promote, save the selection. Ignored
+   * unless `shown` is the very charge waiting, of at least one request, and the activation a deliberate single
+   * press after the checking hold (`confirmsCharge`). */
+  confirm: (activation: ConfirmActivation, shown: ChargeReview) => Promise<void>;
   /** Stop: a pending charge is discarded, and the probe job in flight is cancelled at its native owner. */
   cancel: () => void;
 };
@@ -131,9 +133,10 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
       setRun(previous => ({ phase: "charge", progress: previous?.progress ?? null, charge: pending.charge }));
     } catch (reason) { stopped(session, reason); }
   }
-  async function confirm(activation: ConfirmActivation) {
+  async function confirm(activation: ConfirmActivation, shown: ChargeReview) {
     const session = active.current, pending = session?.pending;
-    if (!session || !pending || run?.phase !== "charge" || !confirmsCharge(activation, session.preparedAt, Date.now())) return;
+    if (!session || !pending || run?.phase !== "charge" ||
+      !confirmsCharge(activation, shown, { charge: pending.charge, preparedAt: session.preparedAt }, Date.now())) return;
     session.pending = null;
     setRun(previous => previous && { ...previous, phase: "benchmark" });
     try {
@@ -158,7 +161,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   }
   return {
     ...state, phase: run?.phase ?? null, progress: run?.progress ?? null, charge: run?.charge ?? null,
-    exclusions, provenance, failure, ready, canPrepare, canConfirm: run?.phase === "charge",
+    exclusions, provenance, failure, ready, canPrepare, canConfirm: run?.phase === "charge" && (run.charge?.requests ?? 0) > 0,
     prepare, confirm, cancel,
   };
 }

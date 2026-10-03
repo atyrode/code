@@ -12,7 +12,8 @@ import { AccountUsageReadings, useAccountUsage } from "./usage-view.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
 type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: OmpInput<"clearAccountBlocks"> };
-type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void };
+/** `locked`: why edits wait now, as when a workbench step is in flight or a verification charge waits; null or absent when they may proceed. */
+type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void; locked?: string | null };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
 function referenceKey(reference: AccountReference): string {
@@ -64,7 +65,7 @@ export function AccountsView(props: AccountsViewProps) {
   return <ScopedAccountsView key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
 
-function ScopedAccountsView({ host, target, available, onDone }: AccountsViewProps) {
+function ScopedAccountsView({ host, target, available, onDone, locked = null }: AccountsViewProps) {
   const id = useId();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
@@ -121,7 +122,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
     hadConfirmation.current = confirmation !== null;
   }, [confirmation]);
   const writable = canWriteCodeWorkspace(host);
-  const canEdit = writable && workspace !== null && current !== null && configuration.data !== null && !busy;
+  const canEdit = writable && workspace !== null && current !== null && configuration.data !== null && !busy && locked === null;
   const canAdminister = canEdit && hasCap(host.client.selfCaps(), "services:invoke") && !historical;
   const draftStale = draft !== null && draft.revision !== current?.revision;
   const observedConfirmation = confirmation ? observation?.accounts.find(account =>
@@ -307,7 +308,7 @@ function ScopedAccountsView({ host, target, available, onDone }: AccountsViewPro
       <button type="button" data-action="atyrode.code.initializeConfiguration" disabled={!writable || busy} onClick={() => void initialize()}>Initialize choices</button>
       {target && <LegacyWorkspaceAdoption key={target.machineId} host={host} target={target} onAdopt={refresh} />}
     </div>}
-    <p className="plugin-atyrode_code__account-feedback" role="status" aria-live="polite" data-pending={busy}>{busy ? confirmation ? "Applying native action…" : "Saving account choices…" : message}</p>
+    <p className="plugin-atyrode_code__account-feedback" role="status" aria-live="polite" data-pending={busy}>{busy ? confirmation ? "Applying native action…" : "Saving account choices…" : locked ?? message}</p>
     {choices && current && <section className="plugin-atyrode_code__account-pool" aria-label="Active account pool">
       <div className="plugin-atyrode_code__account-pool-heading">
         <div className="plugin-atyrode_code__account-pool-choice">
