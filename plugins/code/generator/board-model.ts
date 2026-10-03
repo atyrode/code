@@ -6,6 +6,7 @@ import { modelBucket, poolId, roleOutcomes, windowLabel, windowState, type Quota
 import type { Review } from "../../domain/routing.ts";
 import { seatBoard } from "../../domain/seats.ts";
 import type { UsageView } from "../../domain/usage.ts";
+import { displayAliases } from "./aliases.ts";
 import { routeChanges } from "./consequences.ts";
 import { CAPABILITY_WORDS } from "./dial-space.ts";
 
@@ -18,6 +19,12 @@ import { CAPABILITY_WORDS } from "./dial-space.ts";
  */
 
 const THINKING = ThinkingLevelSchema.options;
+const EFFORT_WORDS: Readonly<Record<string, string>> = { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "x-high", max: "max" };
+/** A thinking level as the panel writes it (`x-high`). */
+export function effortWord(level: string): string {
+  return EFFORT_WORDS[level] ?? level;
+}
+
 type UsageProvider = UsageView["providers"][number];
 type UsageAccount = UsageProvider["accounts"][number];
 type AccountReference = UsageAccount["account"]["reference"];
@@ -323,6 +330,24 @@ function previewMoves(review: Review, preview: Review): BoardMove[] {
       { kind: "effort", roles: [role], key: from!.lead.key, from: from!.lead.thinking, to: to!.lead.thinking }, role);
   }
   return [...groups.values()];
+}
+
+/**
+ * A pointed team as moves of named seats, for the roster and the status line that speaks for it:
+ * `reviewer, security-reviewer sol → fable · plan high → x-high`; empty when no role would move.
+ */
+export function movesText(catalog: CompiledCatalog, before: Review, after: Review): string {
+  const aliases = displayAliases(catalog);
+  const name = (key: string) => aliases.get(key) ?? key;
+  return previewMoves(before, after).map(move => {
+    const roles = move.roles.join(", ");
+    switch (move.kind) {
+      case "move": return `${roles} ${name(move.from)} → ${name(move.to)}`;
+      case "add": return `${roles} → ${name(move.to)}`;
+      case "remove": return `${roles} ${name(move.from)} → off`;
+      case "effort": return `${roles} ${effortWord(move.from)} → ${effortWord(move.to)}`;
+    }
+  }).join(" · ");
 }
 
 /**

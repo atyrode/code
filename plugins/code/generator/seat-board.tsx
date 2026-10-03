@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import { DomainError } from "../../domain/contracts.ts";
@@ -6,14 +6,13 @@ import { providerPolicy } from "../../domain/providers.ts";
 import { quotaPools, roleOutcomes, type QuotaPool, type RoleOutcome } from "../../domain/quota.ts";
 import { accountWord, ago, hueOf } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
-import { boardView, ROSTER_BELOW_PX, type BoardMove, type BoardPreview, type BoardSeat, type BoardUsage, type BoardView, type SeatLine } from "./board-model.ts";
+import { boardView, effortWord, ROSTER_BELOW_PX, type BoardPreview, type BoardSeat, type BoardUsage, type BoardView, type SeatLine } from "./board-model.ts";
 import { balanceText, PoolHead, when } from "./pool-head.tsx";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const THINKING = ThinkingLevelSchema.options;
-const EFFORT_WORDS: Readonly<Record<string, string>> = { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "x-high", max: "max" };
 
 /** The pools of the shown catalog and what every role of the shown team runs: one quota truth for the board and the statement. */
 export type BoardModel = { readonly pools: readonly QuotaPool[]; readonly outcomes: readonly RoleOutcome[] };
@@ -31,6 +30,27 @@ export function useBoardModel(model: Pick<WorkbenchModel, "compiled" | "review">
   return useMemo(() => ({ pools, outcomes }), [pools, outcomes]);
 }
 
+/**
+ * Whether the board is the roster: the panel's content box (`.plugin-atyrode_code` less its padding)
+ * is narrower than `ROSTER_BELOW_PX`. Measured before paint and on every resize, so the first frame
+ * is already in its form and the statement, measuring the same box, changes form with the board.
+ * `remeasure` subscribes again when it changes, for a ref that mounts after its component.
+ */
+export function useRosterForm(from: RefObject<HTMLElement | null>, remeasure?: unknown): boolean {
+  const [roster, setRoster] = useState(false);
+  useLayoutEffect(() => {
+    const panel = from.current?.closest<HTMLElement>(".plugin-atyrode_code") ?? from.current?.parentElement;
+    if (!panel) return;
+    const judge = (width: number) => { if (width > 0) setRoster(width < ROSTER_BELOW_PX); };
+    const style = getComputedStyle(panel);
+    judge(panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+    const observer = new ResizeObserver(entries => { for (const entry of entries) judge(entry.contentRect.width); });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [remeasure]);
+  return roster;
+}
+
 type SeatBoardProps = {
   model: Pick<WorkbenchModel, "compiled" | "review" | "served" | "gate">;
   usage: BoardUsage;
@@ -43,12 +63,11 @@ type SeatBoardProps = {
 /**
  * The seat board: provider columns headed by their quota pools, tier rows of model seats, each role
  * on the seat that leads it. From 560px of panel width up, columns by tier rows; below, a roster
- * grouped by provider that says a pointed team as before → after. Both draw one `boardView`.
+ * grouped by provider, whose pointed team the status line says as moves (`movesText`). Both draw one `boardView`.
  */
 export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardProps) {
   const { compiled, review, served } = model;
   const root = useRef<HTMLElement>(null);
-  const [form, setForm] = useState<"grid" | "roster">("grid");
   const [open, setOpen] = useState<string | null>(null);
   const aliases = useMemo(() => compiled ? displayAliases(compiled) : new Map<string, string>(), [compiled]);
   const board = useMemo(() => {
@@ -58,32 +77,20 @@ export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardP
     catch (error) { if (error instanceof DomainError) return null; throw error; }
   }, [compiled, review, preview?.key, pools, outcomes, served, usage.view, usage.current, usage.nowMs]);
   const shown = compiled !== null && board !== null;
-  // The form follows the panel's width, measured before paint so the first frame is already the right one;
-  // the board is not mounted while the team is read, so it is measured again once it is.
-  useLayoutEffect(() => {
-    const panel = root.current?.closest<HTMLElement>(".plugin-atyrode_code") ?? root.current?.parentElement;
-    if (!panel) return;
-    const judge = (width: number) => { if (width > 0) setForm(width < ROSTER_BELOW_PX ? "roster" : "grid"); };
-    const style = getComputedStyle(panel);
-    judge(panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
-    const observer = new ResizeObserver(entries => { for (const entry of entries) judge(entry.contentRect.width); });
-    observer.observe(panel);
-    return () => observer.disconnect();
-  }, [shown]);
+  // The board is not mounted while the team is read, so its form is measured again once it is.
+  const form = useRosterForm(root, shown) ? "roster" : "grid";
   if (!compiled || !board) return null;
   const accountsGate = model.gate("edit-accounts");
   const quiet = board.reading === "unread" || board.reading === "unavailable";
   const notice = board.reading === "unread" ? "accounts not read yet · capacity unknown, not zero"
     : board.reading === "unavailable" ? "accounts unavailable · capacity unknown, not zero" : null;
-  const moves = form === "roster" ? movesText(board.moves, aliases) : "";
   const headOf = (column: BoardView["columns"][number], style?: CSSProperties) => <PoolHead head={column.head} usage={usage} accountsGate={accountsGate}
     rows={form === "grid" ? board.headRows : null} quiet={quiet} open={open === column.family} style={style}
     onToggle={() => setOpen(previous => previous === column.family ? null : column.family)} />;
   const draw = { compiled, aliases, nowMs: usage.nowMs, rungs: board.rungs, tiers: board.tiers };
   return <section ref={root} className={`${G}section ${G}board`} data-form={form} aria-labelledby={`${G}board-title`}>
     <h2 id={`${G}board-title`} className="plugin-atyrode_code__sr">Seats</h2>
-    {/* The roster reserves its preview line, so pointing at a team never moves the rows; columns need one only for a notice. */}
-    {(form === "roster" || notice) && <p className={`${G}board-line`} title={moves || notice || undefined}>{moves || notice}</p>}
+    {notice && <p className={`${G}board-line`} title={notice}>{notice}</p>}
     {form === "grid" ? <div className={`${G}board-grid`} style={{ "--board-columns": board.columns.length } as CSSProperties}>
       {board.rungs.map((rung, index) => <div key={rung} className={`${G}rung`} data-current={board.tiers[index] === board.capability || undefined}
         aria-hidden="true" style={{ gridRow: index + 2 }}>{rung}</div>)}
@@ -148,7 +155,7 @@ function Lines({ seat, draw }: { seat: BoardSeat; draw: Draw }) {
     <span className={`${G}pips`} aria-hidden="true">{THINKING.map((level, step) =>
       <i key={level} data-on={step <= THINKING.indexOf(line.thinking) || undefined} />)}</span>
     <ul className={`${G}roles`} data-level={line.thinking} data-stranded={line.fate?.kind === "no-route" || line.fate?.kind === "no-account" || undefined}
-      aria-label={`${EFFORT_WORDS[line.thinking] ?? line.thinking} thinking`}>
+      aria-label={`${effortWord(line.thinking)} thinking`}>
       {line.roles.map(({ role, change }) => <li key={role} data-main={role === "default" || undefined} data-change={change ?? undefined}>{role}</li>)}
     </ul>
     <LineFate line={line} draw={draw} />
@@ -190,18 +197,4 @@ function Bench({ seats, label, draw, style }: { seats: readonly BoardSeat[]; lab
       aria-label={seat.arriving.length ? `${draw.aliases.get(seat.key) ?? seat.key}, ${seat.arriving.join(", ")} would move here` : undefined}>
       {draw.aliases.get(seat.key) ?? seat.key}</li>)}</ul>
   </div>;
-}
-
-/** The pointed team as the roster says it: `default, task sol → astra · plan high → x-high`. */
-function movesText(moves: readonly BoardMove[], aliases: ReadonlyMap<string, string>): string {
-  const name = (key: string) => aliases.get(key) ?? key;
-  return moves.map(move => {
-    const roles = move.roles.join(", ");
-    switch (move.kind) {
-      case "move": return `${roles} ${name(move.from)} → ${name(move.to)}`;
-      case "add": return `${roles} → ${name(move.to)}`;
-      case "remove": return `${roles} ${name(move.from)} → off`;
-      case "effort": return `${roles} ${EFFORT_WORDS[move.from] ?? move.from} → ${EFFORT_WORDS[move.to] ?? move.to}`;
-    }
-  }).join(" · ");
 }
