@@ -12,7 +12,8 @@ export type KeyGroup = { readonly title: string; readonly keys: readonly KeyHelp
 /**
  * The panel's keys, as a dialog that takes focus when it opens and gives it back when it closes.
  * Esc or `?` closes it, and the statement ignores keys pressed inside it, so nothing behind it acts.
- * Focus leaving it closes it too, leaving focus where it went.
+ * Tab cycles through its own controls, so the keyboard never walks out of it into nothing; focus
+ * leaving it otherwise, as a press elsewhere does, closes it and leaves focus where it went.
  */
 export function KeysDialog({ open, groups, onClose }: { open: boolean; groups: readonly KeyGroup[]; onClose: () => void }) {
   const dialog = useRef<HTMLDivElement>(null);
@@ -31,6 +32,14 @@ export function KeysDialog({ open, groups, onClose }: { open: boolean; groups: r
   if (!open) return null;
   return <div ref={dialog} className={K} role="dialog" aria-labelledby={title} tabIndex={-1}
     onKeyDown={event => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const controls = [...event.currentTarget.querySelectorAll<HTMLElement>("button, [href], [tabindex='0']")];
+        const at = controls.indexOf(event.target as HTMLElement);
+        const next = at === -1 ? (event.shiftKey ? controls.length - 1 : 0) : (at + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+        controls[next]?.focus();
+        return;
+      }
       if (event.key !== "Escape" && event.key !== "?") return;
       event.preventDefault();
       onClose();
