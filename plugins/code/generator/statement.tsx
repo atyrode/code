@@ -4,7 +4,7 @@ import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
 import type { VerificationStep } from "../workflow.ts";
-import { accountWord, clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
+import { clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
 import { movesText } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
@@ -144,7 +144,7 @@ export function StatementLine({ model, active, preview, setPreview, pools, machi
   // Nothing to show yet because the first reads are still out, rather than because one failed.
   const reading = !model.profile && !model.document && model.queries.configuration.error === null && model.queries.metadata.error === null;
   const teamGate = model.gate("edit-team"), machineGate = model.gate("edit-machine");
-  const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, account: accountWord, time: at => at - Date.now() > 20 * HOUR ? clock(at) : hhmm(at) }), []);
+  const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, time: at => at - Date.now() > 20 * HOUR ? clock(at) : hhmm(at) }), []);
   // The saved workspace team, while the line holds an unsaved edit of it: what the verb's save would change.
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;

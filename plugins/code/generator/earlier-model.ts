@@ -68,7 +68,8 @@ export function differences(team: Selection, line: LineTeam, familyWord: (family
 /**
  * What a team would strand on the present pools, in a row's words: roles with no route grouped by
  * when their own routes return, the soonest first, each group with its own time ("3 no route until
- * 13:00 · 9 until 16:30"), then roles that no included account serves ("2 no Claude account").
+ * 13:00 · 9 until 16:30"), then roles that no included account serves ("2 no GPT account"), in the
+ * family words of the status lines.
  * Null when every role has a route; a fallback that takes over strands nothing.
  */
 export function strandsNote(catalog: CompiledCatalog, routes: readonly Route[], pools: readonly QuotaPool[], vocab: Vocabulary): string | null {
@@ -85,7 +86,7 @@ export function strandsNote(catalog: CompiledCatalog, routes: readonly Route[], 
   const groups = [...waits].sort(([left], [right]) => (left ?? Number.POSITIVE_INFINITY) - (right ?? Number.POSITIVE_INFINITY));
   const parts = [
     ...groups.map(([until, count], index) => `${count}${index === 0 ? " no route" : ""} ${until === null ? "with no reset known" : `until ${vocab.time(until)}`}`),
-    ...[...unserved].map(([family, count]) => `${count} no ${vocab.account(family)} account`),
+    ...[...unserved].map(([family, count]) => `${count} no ${vocab.family(family)} account`),
   ];
   return parts.length ? parts.join(" · ") : null;
 }

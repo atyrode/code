@@ -36,10 +36,13 @@ export const WORD_NAMES: Readonly<Record<StatementWord, string>> = {
 /** Words read before a value ("thinking high", "on Studio"); never part of the value itself. */
 export const CONNECTORS: Readonly<Partial<Record<StatementWord, string>>> = { thinking: "thinking", advisor: "advisor", machine: "on" };
 
-/** How the panel names families, accounts and times; the view passes ui.tsx's words and the local clock. */
+/**
+ * How the panel names providers and times; the view passes ui.tsx's words and the local clock. A
+ * provider is named by its family ("GPT"), never by its account group ("Codex"), so the main view
+ * uses one provider word per glance.
+ */
 export type Vocabulary = {
   readonly family: (family: string) => string;
-  readonly account: (family: string) => string;
   readonly time: (epochMs: number) => string;
 };
 

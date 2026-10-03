@@ -7,7 +7,7 @@ import type { Lane } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import { codeOperationFailure, codeWorkflow, useCodeMachines, useCodeTerminals, useWorkflowQuery } from "../machine-web.ts";
 import { WorkflowError } from "../workflow.ts";
-import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
+import { familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import type { KeyHelp } from "./keys-dialog.tsx";
 import { when } from "./board-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
@@ -301,7 +301,7 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
   }, [pending, model.savedSessionId]);
 
   // ------------------------------------------------------------ recent teams on today's catalog and pools
-  const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, account: accountWord, time: at => when(at, Date.now()) }), []);
+  const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, time: at => when(at, Date.now()) }), []);
   const { compiled, selection, profile } = model;
   const forms = useMemo(() => recents.map((team): RecentForm | null => {
     if (!compiled || !selection) return null;

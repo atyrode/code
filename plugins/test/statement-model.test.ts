@@ -53,7 +53,6 @@ function pools(options: { claudeBlockedUntil?: number; codexUsed?: number; stale
 const known = { served: null, starter: false, nowMs: now } as const;
 const vocab: Vocabulary = {
   family: family => ({ openai: "GPT", anthropic: "Claude" })[family] ?? family,
-  account: family => ({ openai: "Codex", anthropic: "Claude" })[family] ?? family,
   time: at => `T+${Math.round((at - now) / HOUR)}h`,
 };
 function context(selection: Selection, pool: readonly QuotaPool[], lastLaunch: Selection | null = null): StatementContext {

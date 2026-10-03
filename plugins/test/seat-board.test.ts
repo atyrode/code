@@ -304,7 +304,7 @@ describe("a pointed team", () => {
 });
 
 describe("what a team would strand, as a recent row says it", () => {
-  const vocab = { family: (family: string) => family, account: (family: string) => family, time: (at: number) => `+${(at - now) / HOUR}h` };
+  const vocab = { family: (family: string) => family === "openai" ? "GPT" : family, time: (at: number) => `+${(at - now) / HOUR}h` };
 
   test("roles with no route are grouped by when their own routes return, each group with its own time, soonest first", () => {
     const codexOut = [{ scope: "", until: now + HOUR }];
@@ -317,10 +317,10 @@ describe("what a team would strand, as a recent row says it", () => {
     expect(strandsNote(catalog, team.routes, pools, vocab)).toBe(`${soon} no route until +1h · ${late} until +5h`);
   });
 
-  test("a lead no included account serves is said as such; a team with a route for every role strands nothing", () => {
-    const unserved = reading({ excluded: ["carol"] });
-    const team = review({ lane: claudeOnly });
-    expect(strandsNote(catalog, team.routes, quotaPools(catalog, unserved), vocab)).toBe(`${team.routes.length} no anthropic account`);
+  test("a lead no included account serves is said in the family word of the status lines; a team with a route for every role strands nothing", () => {
+    const unserved = reading({ excluded: ["alice", "bob", "dave"] });
+    const team = review();
+    expect(strandsNote(catalog, team.routes, quotaPools(catalog, unserved), vocab)).toBe(`${team.routes.length} no GPT account`);
     expect(strandsNote(catalog, review().routes, quotaPools(catalog, reading()), vocab)).toBeNull();
   });
 });
