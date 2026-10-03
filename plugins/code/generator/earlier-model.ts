@@ -196,6 +196,11 @@ export function sessionName(row: SessionRow): string {
   return row.title || row.folder || `session ${row.sessionId.slice(0, 8)}`;
 }
 
+/** What a row shows beside its folder, which already says where: its title, else the start of its session id. */
+export function sessionTitle(row: SessionRow): string {
+  return row.title || `session ${row.sessionId.slice(0, 8)}`;
+}
+
 /** One folder's saved sessions on one machine, newest first: a single row whose drum holds the older ones. */
 export type SavedFolder = { readonly key: string; readonly machineId: string; readonly folder: string | null; readonly sessions: readonly SessionRow[] };
 
@@ -316,5 +321,5 @@ export function teamProvenance(line: Selection | null, recents: readonly RecentT
   if (!line || !saved?.selection || !sameTeam(line, saved.selection)) return null;
   if (recents.some(team => sameTeam(team.selection, line))) return null;
   const by = saved.updatedBy === viewer ? "you" : names.get(saved.updatedBy) ?? "another member";
-  return `Workspace team · workspace last changed ${pastMoment(saved.updatedAt, now)} by ${by}`;
+  return `Workspace team · last change to the workspace ${pastMoment(saved.updatedAt, now)} by ${by}`;
 }
