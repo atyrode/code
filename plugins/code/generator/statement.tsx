@@ -33,6 +33,8 @@ export type StatementPlace = "models" | "setup" | "options" | "accounts";
 
 export type StatementProps = {
   readonly model: WorkbenchModel;
+  /** The main view shows: no sheet covers it. Its keys act only then. */
+  readonly active: boolean;
   readonly preview: TeamPreview | null;
   readonly setPreview: (preview: TeamPreview | null) => void;
   /** `quotaPools` over the present usage reading. */
@@ -104,7 +106,7 @@ function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonl
  * through the workbench model's gate; the line only names the step, shows what each option would do
  * and quota's verdict on it, and writes the consequence of whatever is pointed in the status lines.
  */
-export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, aside }: StatementProps) {
+export function StatementLine({ model, active, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, aside }: StatementProps) {
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLDivElement>(null);
@@ -291,12 +293,16 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   const keys = useRef<(event: KeyboardEvent) => void>(() => {});
   keys.current = event => {
     const target = event.target instanceof HTMLElement ? event.target : null;
+    const panel = root.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
+    const view = root.current?.closest<HTMLElement>("[data-view]") ?? root.current;
+    const onRoot = target !== null && target === panel;
+    const inView = active && target !== null && (onRoot || view?.contains(target) === true);
     const inside = target !== null && root.current?.contains(target) === true;
     const named = inside ? target.closest<HTMLElement>("[data-stmt-word]")?.dataset.stmtWord : undefined;
     const word = STATEMENT_WORDS.find(candidate => candidate === named) ?? null;
     const action = statementKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
-      inField: target?.matches("textarea, input, select, [contenteditable]") ?? false, inDialog: target?.closest("[role=dialog], [data-popover]") != null,
+      inView, onRoot, inField: target?.matches("textarea, input, select, [contenteditable]") ?? false, inDialog: target?.closest("[role=dialog], dialog") != null,
       word, onVerb: inside && target.closest("[data-stmt-verb]") !== null, open, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }

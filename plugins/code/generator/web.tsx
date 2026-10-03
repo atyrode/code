@@ -170,7 +170,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
   const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
-    <StatementLine model={model} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
+    <StatementLine model={model} active={sheet === null} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
       announce={announce} onOpen={open} onKeys={() => setKeysOpen(true)} onRefresh={refresh} aside={options} />
     {listFailure === "beside" && listNotice("warn", "The model list is unavailable · the seats are the team already on the line.")}
     {listFailure === "instead" ? listNotice("error", "The model list is unavailable.")
