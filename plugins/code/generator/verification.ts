@@ -60,6 +60,17 @@ export function verificationState(provenance: VerificationProvenance | null, obs
 }
 
 /**
+ * The revision a stopped or cancelled verification's own initialization made, or null when it made
+ * none. Only a run that found the workspace without shared choices (`absent`) initializes, and first.
+ * Once its charge is answered that revision is the charge's (`charged`); before, it is the stop's
+ * evidence, since nothing else had been written yet. After the charge the evidence may name a later
+ * staged revision, which is never the initialization.
+ */
+export function ownInitialization(absent: boolean, charged: number | null, evidence: number | null): number | null {
+  return absent ? charged ?? evidence : null;
+}
+
+/**
  * The least time the Verify press stays "Checking models…" before its charge can be confirmed.
  * Longer than the usual double-click interval (500 ms by default on Windows, shorter elsewhere), so
  * the second click of a double-click on Verify lands on a busy control rather than on Confirm.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { VerificationProvenance } from "../code/contract.ts";
-import { autoReviewDue, nextLaunchStep, type GateFacts, type LaunchFacts } from "../code/generator/launch-step.ts";
-import { CHECKING_HOLD_MS, confirmsCharge, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
+import { autoReviewDue, draftStale, followInitialization, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
   providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
@@ -68,6 +68,36 @@ describe("the next launch step with verification", () => {
     expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "omp-changed")).step).toBe("verify");
     // Once current, the launch order is unchanged.
     expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
+  });
+});
+
+describe("a first verification that stops before it saves", () => {
+  // The bundled first-use draft, frozen while the workspace had no shared choices (revision 0).
+  const starter: DraftBase = { source: "starter", revision: 0, initialized: false, catalogDigest: null, draftDigest: null, baseSelection: null, metadataKey: "bundled" };
+  // The record an initialization makes: choices exist, nothing chosen or staged yet.
+  const initialized: SharedBase = { revision: 1, initialized: true, catalogDigest: null, draftDigest: null, selection: null, metadataKey: "bundled" };
+  const step = (draft: DraftBase | null, shared: SharedBase) => nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" },
+    localDraft: { source: "starter" }, record: null, stale: draft !== null && draftStale(draft, shared) }, "unverified"));
+
+  test("its own initialization offers Verify models again, whether it stopped before the charge or after", () => {
+    // Stopped at the inventory: the stop's evidence names the initialization.
+    expect(step(followInitialization(starter, 0, ownInitialization(true, null, 1)!), initialized).step).toBe("verify");
+    // Cancelled at the charge: the charge was made at the initialized revision.
+    expect(step(followInitialization(starter, 0, ownInitialization(true, 1, null)!), initialized).step).toBe("verify");
+    // Stopped after staging: the charge's revision is the initialization, never the later staged one.
+    expect(ownInitialization(true, 1, 3)).toBe(1);
+  });
+
+  test("a change by anyone else still reads as a conflict", () => {
+    // Initialized by another writer: no run of this panel reported it.
+    expect(step(starter, initialized)).toMatchObject({ step: "blocked", reason: { code: "conflict" } });
+    // A run on a workspace that already had choices initialized nothing, whatever its evidence says.
+    expect(ownInitialization(false, 4, 4)).toBeNull();
+    // Another write after this run's own initialization: a catalog staged at revision 2.
+    expect(step(followInitialization(starter, 0, 1), { ...initialized, revision: 2, draftDigest: "d".repeat(64) }))
+      .toMatchObject({ step: "blocked", reason: { code: "conflict" } });
+    // A report from another starting revision is not this draft's to follow.
+    expect(followInitialization(starter, 5, 6)).toBe(starter);
   });
 });
 

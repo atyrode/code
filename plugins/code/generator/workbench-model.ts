@@ -16,7 +16,7 @@ import { useAccountUsage } from "../usage-view.tsx";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, launchStatusText, nextLaunchStep,
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, launchStatusText, nextLaunchStep,
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
@@ -270,11 +270,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });
   }, [localReview, compiled, selection, initialSelection]);
-  const stale = dials !== null && configurationCurrent && (
-    dials.revision !== configuration.data!.revision || dials.initialized !== (configuration.data!.configuration !== null) ||
-    dials.catalogDigest !== (record?.active?.digest ?? null) || dials.draftDigest !== (record?.draft?.digest ?? null) ||
-    JSON.stringify(dials.baseSelection) !== JSON.stringify(record?.selection ?? null) ||
-    (dials.source === "starter" && metadataKey !== null && dials.metadataKey !== metadataKey));
+  const stale = dials !== null && configurationCurrent && draftStale(dials, {
+    revision: configuration.data!.revision, initialized: configuration.data!.configuration !== null,
+    catalogDigest: record?.active?.digest ?? null, draftDigest: record?.draft?.digest ?? null, selection: record?.selection ?? null, metadataKey,
+  });
   const unsaved = dials !== null || profile?.source !== "active";
   const draftSkills = skillDraft(skillCatalog.data, skillChoice);
   const skillProblems = draftSkills.problems;
@@ -288,10 +287,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
     },
-    // A stopped first verification leaves the choices it created and nothing else: the frozen first-use
-    // profile follows that exact CAS, as a save's own revision never revokes it. Another writer's change stays stale.
-    onInitialized: (from, to) => setDials(previous => previous && !previous.initialized && previous.revision === from
-      ? { ...previous, revision: to, initialized: true } : previous) });
+    // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
+    onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };

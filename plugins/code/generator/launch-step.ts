@@ -1,9 +1,47 @@
+import type { Selection } from "../../domain/contracts.ts";
 import type { ServiceGap } from "../../domain/routing.ts";
 import type { VerificationStatus } from "./verification.ts";
 
 /** Where the profile the controls show comes from: the bundled render-only preview, the shared
  * active catalog, or the shared staged one. */
 export type ProfileSource = "starter" | "active" | "draft";
+/** What a frozen local draft was made from: the shared record's revision, whether choices existed, its catalogs and selection. */
+export type DraftBase = {
+  source: ProfileSource;
+  revision: number;
+  initialized: boolean;
+  catalogDigest: string | null;
+  draftDigest: string | null;
+  baseSelection: Selection | null;
+  /** The bundled model list a first-use draft was derived from. */
+  metadataKey: string | null;
+};
+/** The shared record now: the observed revision and whether choices exist, and the record's catalogs and selection. */
+export type SharedBase = {
+  revision: number;
+  initialized: boolean;
+  catalogDigest: string | null;
+  draftDigest: string | null;
+  selection: Selection | null;
+  /** The bundled model list OMP serves now, null while it is not observed. */
+  metadataKey: string | null;
+};
+/** A draft no longer rests on the shared record: any write since it was made, or a first-use draft whose bundled list moved. */
+export function draftStale(draft: DraftBase, shared: SharedBase): boolean {
+  return draft.revision !== shared.revision || draft.initialized !== shared.initialized ||
+    draft.catalogDigest !== shared.catalogDigest || draft.draftDigest !== shared.draftDigest ||
+    JSON.stringify(draft.baseSelection) !== JSON.stringify(shared.selection) ||
+    (draft.source === "starter" && shared.metadataKey !== null && draft.metadataKey !== shared.metadataKey);
+}
+/**
+ * A first verification initializes an absent workspace (`from` → `to`) before anything else. When it
+ * then stops, the first-use draft follows that exact CAS, as a save's own revision never revokes its
+ * acknowledgement. Only a draft of the absent record at `from` follows; a write by anyone else still
+ * leaves it stale.
+ */
+export function followInitialization<T extends DraftBase>(draft: T | null, from: number, to: number): T | null {
+  return draft && !draft.initialized && draft.revision === from ? { ...draft, revision: to, initialized: true } : draft;
+}
 /** The facts `nextLaunchStep` reads. A `WorkbenchModel` satisfies it. */
 export type LaunchFacts = {
   configurationCurrent: boolean;

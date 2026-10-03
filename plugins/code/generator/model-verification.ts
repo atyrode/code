@@ -8,7 +8,7 @@ import { VerificationError, WorkflowError, type ChargeReview, type PendingVerifi
   type VerificationProgress, type VerificationStep } from "../workflow.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
-import { CHECKING_HOLD_MS, confirmsCharge, verificationState, type ConfirmActivation, type VerificationState } from "./verification.ts";
+import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type ConfirmActivation, type VerificationState } from "./verification.ts";
 
 export type ModelVerificationInput = {
   host: HostServices;
@@ -65,11 +65,12 @@ export type ModelVerification = VerificationState & {
 type Run = { phase: VerificationPhase; progress: VerificationProgress | null; charge: ChargeReview | null };
 /**
  * The run in flight: how to stop it, whether it still holds, when its Verify press started it, its
- * charge while unconfirmed, and the revision it started from with whether the workspace had choices.
+ * charge while unconfirmed, the revision it started from, whether the workspace had no choices then,
+ * and the revision its answered charge was made at.
  */
 type Session = {
   controller: AbortController; isCurrent: () => boolean; preparedAt: number; pending: PendingVerification | null;
-  from: number; absent: boolean; initialized: number | null;
+  from: number; absent: boolean; charged: number | null;
 };
 
 /**
@@ -109,9 +110,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     setFailure(reason instanceof VerificationError
       ? { step: reason.step, reason: codeOperationFailure(new WorkflowError(reason.reason)), cancelled: reason.reason.startsWith("code_verification_cancelled"), evidence: reason.evidence }
       : { step: "observe", reason: codeOperationFailure(reason), cancelled: false, evidence: null });
-    // A run on an absent workspace first initialized it: the charge carries that revision, and before the
-    // charge the stop's evidence does, since nothing else had been written yet.
-    const made = session.initialized ?? (session.absent && reason instanceof VerificationError ? reason.evidence?.revision ?? null : null);
+    const made = ownInitialization(session.absent, session.charged, reason instanceof VerificationError ? reason.evidence?.revision ?? null : null);
     if (made !== null) latest.current.onInitialized(session.from, made);
   }
   const progressTo = (session: Session) => (progress: VerificationProgress) => {
@@ -120,7 +119,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   async function prepare() {
     if (!canPrepare || !target) return;
     const started = { host, target }, controller = new AbortController();
-    const session: Session = { controller, pending: null, preparedAt: Date.now(), from: revision, absent: record === null, initialized: null, isCurrent: () => {
+    const session: Session = { controller, pending: null, preparedAt: Date.now(), from: revision, absent: record === null, charged: null, isCurrent: () => {
       const now = latest.current;
       return mounted.current && !controller.signal.aborted && now.host.client === started.host.client &&
         now.host.principal.id === started.host.principal.id && now.host.containerId === started.host.containerId &&
@@ -135,7 +134,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
         { signal: controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session) });
       if (!owns(session)) return;
       session.pending = pending;
-      if (session.absent) session.initialized = pending.charge.revision;
+      session.charged = pending.charge.revision;
       // A fast inventory must not put Confirm under the second click of a double-click on Verify:
       // "Checking models…" stays until the hold has passed, and a cancel meanwhile settles the run.
       const hold = session.preparedAt + CHECKING_HOLD_MS - Date.now();
@@ -173,7 +172,8 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
       active.current = null;
       setRun(null);
       setFailure({ step: "draft", reason: "Verification cancelled before any benchmark request.", cancelled: true, evidence: null });
-      if (session.initialized !== null) latest.current.onInitialized(session.from, session.initialized);
+      const made = ownInitialization(session.absent, session.charged, null);
+      if (made !== null) latest.current.onInitialized(session.from, made);
     }
   }
   return {
