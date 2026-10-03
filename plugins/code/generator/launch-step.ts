@@ -42,7 +42,7 @@ const blockerText: Readonly<Record<LaunchBlockerCode, string>> = {
   "read-only": "Edit access needed.",
   conflict: "Shared profile changed.",
   models: "Review your models.",
-  unavailable: "Runtime unavailable · profile and task are retained.",
+  unavailable: "Runtime unavailable · the team is kept.",
   sessions: "Sessions unavailable on this machine.",
   permissions: "Review native session permissions when you're ready to run.",
   skills: "Skill choices need attention.",
