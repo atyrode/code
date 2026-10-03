@@ -9,8 +9,8 @@ export function skillDraft(catalog: Catalog | null, choice: SkillChoice) {
   const selected: Entry[] = [];
   const problems: string[] = [];
   if (choice?.mode !== "select") return { selected, problems };
-  if (!catalog) return { selected, problems: ["The selected skill catalog is unavailable. Refresh it or clear the optional choices."] };
-  if (catalog.revision !== choice.expectedCatalogRevision) problems.push(`Skill catalog changed from revision ${choice.expectedCatalogRevision} to ${catalog.revision}. Clear and select again to review the current sources.`);
+  if (!catalog) return { selected, problems: ["The selected skill catalog is unavailable. Read skills again, or go back to default skills."] };
+  if (catalog.revision !== choice.expectedCatalogRevision) problems.push(`Skill catalog changed from revision ${choice.expectedCatalogRevision} to ${catalog.revision}. Go back to default skills and choose again to review the current sources.`);
   const ids = new Set(choice.skillIds);
   for (const id of choice.setIds) {
     const set = catalog.sets.find(entry => entry.id === id);

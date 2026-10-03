@@ -1,13 +1,16 @@
 import type { StatementWord } from "./statement-model.ts";
 
 /*
- * The statement's width forms, chosen by measurement. Every word's cell is as wide as its longest
- * value (and, in the ghosted row, its longest ghost with its redline glyph), so a value change
- * never moves a neighbour; a rare long ghost that also carries the `last` tag ellipsizes its text.
- * A form fits when its cells and the verb fit the panel; the
- * widest form that fits is taken, and a wider one only once it fits with room to spare, so a width
- * that hovers at a threshold (a scrollbar appearing, a panel being dragged) never flips the line
- * back and forth. Font sizes come from the type scale, never from a viewport threshold.
+ * The statement's width forms, chosen by measurement. Every column of every form is one value grid:
+ * a connector track ("thinking", "advisor", "on", right-aligned, or the lane mark's gutter) and a
+ * value track, both as wide as the widest in that column across its rows, so every value, ghost and
+ * drum option of a column starts on one edge. A value track holds its longest value (and, in the
+ * ghosted row, its longest ghost with its redline glyph), so a value change never moves a neighbour;
+ * a rare long ghost that also carries the `last` tag ellipsizes its text. A form fits when its
+ * columns and the verb fit the panel; the widest form that fits is taken, and a wider one only once
+ * it fits with room to spare, so a width that hovers at a threshold (a scrollbar appearing, a panel
+ * being dragged) never flips the line back and forth. Font sizes come from the type scale, never
+ * from a viewport threshold, and only ever step down as the room narrows.
  */
 
 export type StatementForm = "line" | "rows" | "stack" | "list";
@@ -17,10 +20,11 @@ export type FormChoice = { readonly form: StatementForm; readonly size: LineSize
 /**
  * Tried in order, widest first: the whole statement on one line; two rows on one grid with the verb
  * before the first; the verb on its own row above aligned pairs of word cells; one word per row.
+ * The size never grows on the way down, so narrowing the panel never makes the line larger.
  */
 export const FORM_CHOICES: readonly FormChoice[] = [
   { form: "line", size: 20 }, { form: "rows", size: 20 }, { form: "rows", size: 15 },
-  { form: "stack", size: 20 }, { form: "stack", size: 15 }, { form: "list", size: 15 },
+  { form: "stack", size: 15 }, { form: "list", size: 15 },
 ];
 export const FORM_ROWS: Readonly<Record<StatementForm, readonly (readonly StatementWord[])[]>> = {
   line: [["lane", "tier", "thinking", "advisor", "extras", "machine"]],
@@ -35,6 +39,13 @@ const GHOST_SIZE: Readonly<Record<LineSize, number>> = { 20: 15, 15: 13 };
 const VERB_SIZE = 15;
 /** Space between word cells, and between the verb and the first word: the 4px base, four times. */
 export const CELL_GAP = 16;
+/** Space between a connector and its value, on the 4px base: two steps at 20px, one at 15px. */
+export const CONNECTOR_GAP: Readonly<Record<LineSize, number>> = { 20: 8, 15: 4 };
+/** The lane mark's box and its gap to the lane text, in px at every size (styles.css `--stmt-mark`, `--stmt-mark-gap`). */
+export const MARK_PX = 18;
+export const MARK_GAP = 8;
+/** The room after the widest value of a column, before the next column's gap. */
+const VALUE_ROOM = 12;
 /** How much room a wider form needs beyond its own width before the line grows back into it. */
 export const FORM_HYSTERESIS_PX = 24;
 /** A long machine name is cut at this many ems on the line; the drum and the status line say it whole. */
@@ -51,35 +62,36 @@ export function ghostedWords(form: StatementForm): readonly StatementWord[] {
   return FORM_ROWS[form][0]!.filter(word => word === "lane" || word === "tier" || word === "thinking");
 }
 
-/** One word cell's width at a line size: connector, the widest value or ghost, the room after it. */
-export function slotWidth(word: StatementWord, text: SlotText, size: LineSize, ghosted: boolean, measure: TextMeasure): number {
-  const connector = text.connector ? measure(text.connector, size, 400) + 0.3 * size : 0;
-  // A lane mark is 0.9em wide (styles.css `stmt-lane-mark`) and sits 0.3em before its value.
-  const mark = text.marked ? 1.2 * size : 0;
+/**
+ * One word cell at a line size: its connector track (the connector and its gap, or the lane mark's
+ * gutter) and its value track (the widest value or ghost, and the room after it).
+ */
+export function cellWidths(word: StatementWord, text: SlotText, size: LineSize, ghosted: boolean, measure: TextMeasure): Column {
+  const connector = Math.max(text.connector ? measure(text.connector, size, 400) + CONNECTOR_GAP[size] : 0, text.marked ? MARK_PX + MARK_GAP : 0);
   let value = Math.max(0, ...text.labels.map(label => measure(label, size, 650)));
   if (word === "machine") value = Math.min(value, MACHINE_EM * size);
-  let inner = value + mark;
   if (ghosted) {
-    const ghost = GHOST_SIZE[size];
     // A ghost carries its value and the 6px redline glyph after a small gap. The `last` tag is not
     // reserved: on the rare ghost that is both the longest value and the last launch's, its text yields.
-    inner = Math.max(inner, Math.max(0, ...text.labels.map(label => measure(label, ghost, 450))) + (text.marked ? 1.2 * ghost : 0) + 10);
+    value = Math.max(value, Math.max(0, ...text.labels.map(label => measure(label, GHOST_SIZE[size], 450))) + 10);
   }
-  return Math.ceil(connector + inner + 12);
+  return { connector: Math.ceil(connector), value: Math.ceil(value + VALUE_ROOM) };
 }
 
-export type FormMeasure = { readonly columns: readonly number[]; readonly verb: number; readonly need: number };
+/** A column of the value grid: its connector track and its value track, in px. */
+export type Column = { readonly connector: number; readonly value: number };
+export type FormMeasure = { readonly columns: readonly Column[]; readonly verb: number; readonly need: number };
 
-/** The grid a form needs: each column as wide as its widest cell, the verb as wide as its widest label. */
+/** The grid a form needs: each column's tracks as wide as the widest in any of its rows, the verb as wide as its widest label. */
 export function measureForm(choice: FormChoice, texts: Readonly<Record<StatementWord, SlotText>>, verbLabels: readonly string[], measure: TextMeasure): FormMeasure {
   const rows = FORM_ROWS[choice.form];
   const ghosted = ghostedWords(choice.form);
   const verb = Math.ceil(Math.max(...verbLabels.map(label => measure(label, VERB_SIZE, 650))) + 24);
-  const columns = rows[0]!.map((_, index) => Math.max(...rows.map(row => {
-    const word = row[index];
-    return word ? slotWidth(word, texts[word], choice.size, ghosted.includes(word), measure) : 0;
-  })));
-  const words = columns.reduce((sum, width) => sum + width, 0) + CELL_GAP * (columns.length - 1);
+  const columns = rows[0]!.map((_, index) => {
+    const cells = rows.flatMap(row => row[index] ? [cellWidths(row[index]!, texts[row[index]!], choice.size, ghosted.includes(row[index]!), measure)] : []);
+    return { connector: Math.max(...cells.map(cell => cell.connector)), value: Math.max(...cells.map(cell => cell.value)) };
+  });
+  const words = columns.reduce((sum, column) => sum + column.connector + column.value, 0) + CELL_GAP * (columns.length - 1);
   if (choice.form === "list") return { columns, verb, need: 0 };
   return { columns, verb, need: VERB_INLINE[choice.form] ? verb + CELL_GAP + words : Math.max(verb, words) };
 }

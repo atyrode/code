@@ -1,10 +1,11 @@
 /*
  * The generator panel. Shared tokens and primitives come from the Code root stylesheet; this
  * sheet lays out the main view (the statement, the seat board, the earlier statements, the footer),
- * its popovers and the sheets. Precise, not rounded: 3px corners, no capsules, the type scale
- * 20 / 15 / 13 / 11.5 on a 4px base. Layout answers container queries on the `code` container (the
- * panel root), never the viewport, and every track is `minmax(0, …)` so nothing scrolls sideways.
- * Sections: panel · main view · popovers · sheets · statement · keys dialog · seat board ·
+ * its keys dialog and the sheets. Precise, not rounded: 3px corners only on the filled verb and
+ * dialogs, no capsules, the type scale 20 / 15 / 13 / 11.5 on a 4px base in px. Layout answers
+ * container queries on the `code` container (the panel root), never the viewport, and every track
+ * is `minmax(0, …)` so nothing scrolls sideways.
+ * Sections: panel · main view · session options · sheets · statement · keys dialog · seat board ·
  * earlier statements · container queries · motion.
  */
 
@@ -31,56 +32,100 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__view,
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__sheet-host { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; max-width: 100%; }
 
-/* ---------------------------------------------------------------- main view: sections, the session options verb, the footer */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__section { position: relative; min-width: 0; padding: 12px 16px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty { display: flex; align-items: center; min-height: 24px; margin: 0; color: var(--code-text-3); font-size: 0.74rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty-state { display: grid; justify-items: start; gap: 0.35rem; color: var(--code-text-2); font-size: 0.76rem; }
+/* ---------------------------------------------------------------- main view: one 24px gap between sections, the footer
+ * The view's sections stand exactly 24px apart and carry no block padding of their own, so the gap
+ * is the whole rhythm; inline they keep the panel's 16px (12px narrow). The footer is one
+ * left-aligned run, the facts then the ways out, under a rule inset like the run, so the line's own
+ * rules are the only edge-to-edge ones. While the statement is one line, the widest thing in the
+ * view, the run keeps to its measure (`--stmt-measure`, set on the view) instead of the panel's width.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__view { row-gap: 24px; padding-bottom: 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__section { position: relative; min-width: 0; padding: 0 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty { display: flex; align-items: center; min-height: 24px; margin: 0; color: var(--code-text-3); font-size: 13px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty-state { display: grid; justify-items: start; gap: 4px; padding-top: 32px; color: var(--code-text-2); font-size: 13px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty-state > p { margin: 0; }
-/* A quiet text verb: a word with a ground only on hover, pulled out by its padding so the text keeps its column. */
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link) {
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 12px;
+  max-width: var(--stmt-measure, none);
+  margin: 0 16px;
+  border-top: 1px solid var(--code-hairline);
+  padding-top: 8px;
+  color: var(--code-text-3);
+  font-size: 11.5px;
+  line-height: 20px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-facts { min-width: 0; overflow-wrap: anywhere; }
+/* A footer word is a control in text: brighter than the facts, brighter still under the pointer, never a ground. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   min-height: 24px;
-  margin: 0 -4px;
+  margin: 0;
   border: 0;
-  border-radius: 2px;
-  padding: 0 4px;
+  padding: 0;
   color: var(--code-text-2);
   background: none;
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link):hover { color: var(--code-text-bright); background: var(--code-hover); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link):focus-visible { outline: 2px solid var(--code-focus); outline-offset: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-summary { color: var(--code-text-bright); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer {
-  display: flex;
-  flex-wrap: wrap;
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-link:hover { border: 0; color: var(--code-text-bright); background: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-link:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-summary { color: var(--code-text-bright); }
+
+/* ---------------------------------------------------------------- session options: a sheet in the main view's grammar
+ * No boxes and no native controls: groups under lowercase heads 24px apart, notes in 13px text,
+ * on/off as the pool heads' switch (an 8px square, filled when on), a choice of two as pressed
+ * words, a skill's source opened in place by its own word.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options { display: grid; gap: 24px; min-width: 0; max-width: 44rem; padding: 16px; font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-lede { margin: 0; color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-group { display: grid; justify-items: start; gap: 4px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-head { margin: 0 0 4px; color: var(--code-text-2); font-size: 13px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-subhead { margin: 8px 0 0; color: var(--code-text-3); font-size: 11.5px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note { max-width: 40rem; margin: 0; color: var(--code-text-2); overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note[data-tone="meta"] { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note[data-tone="warn"] { color: var(--code-warn); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-switches, .plugin-atyrode_code_generator__options-skills) { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-switches { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); justify-self: stretch; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-skills > li { display: grid; justify-items: start; min-width: 0; }
+/* What a switch governs (its purpose, its source, the tools it opens) sits under its words, past the 8px square and its gap. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch ~ :is(p, button, dl, ul) { margin-left: 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-skill-title { color: var(--code-text-bright); font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; min-width: 0; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link) {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px 16px;
-  margin-top: 8px;
-  border-top: 1px solid var(--code-hairline);
-  padding: 8px 16px 12px;
-  color: var(--code-text-3);
-  font-size: 11.5px;
-  line-height: 20px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: var(--code-text-2);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-facts { min-width: 0; overflow-wrap: anywhere; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer-link .keycap { border-radius: 2px; padding: 0 4px; font-size: 11.5px; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link):hover:not([aria-disabled="true"]) { border: 0; color: var(--code-text-bright); background: none; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link):focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link)[aria-disabled="true"] { color: var(--code-text-3); cursor: not-allowed; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch > i { flex: none; width: 8px; height: 8px; box-shadow: inset 0 0 0 1.5px currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch[aria-checked="true"] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch[aria-checked="true"] > i { background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-choice[aria-pressed="true"] { border: 0; color: var(--code-text-bright); background: none; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-link { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 12px; margin: 4px 0 0; color: var(--code-text-3); font-size: 11.5px; line-height: 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-facts dd { margin: 0; min-width: 0; color: var(--code-text-2); overflow-wrap: anywhere; }
 
-/* ---------------------------------------------------------------- popovers */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pop-body { display: grid; gap: 0.5rem; padding: 0.45rem 0.5rem 0.55rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__prose { margin: 0; color: var(--code-text-2); font-size: 0.74rem; line-height: 1.45; white-space: normal; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-pop { width: min(32rem, calc(100% - 16px)); max-width: min(32rem, calc(100% - 16px)); }
-
-/* ---------------------------------------------------------------- views hosted in sheets and the session options popover
+/* ---------------------------------------------------------------- views hosted in sheets
  * Accounts, Models and Setup are not redesigned yet; sheets keep their original layout inside the
- * new frame until their own pass. The session options popover belongs to the main view, so its
- * hosted controls wear the primitives' skins here.
+ * new frame until their own pass.
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy {
   display: grid;
@@ -126,31 +171,6 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__job-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; padding-inline-start: 0.65rem; border-inline-start: 2px solid var(--code-accent); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__job-progress > :is(p, details) { flex-basis: 100%; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy .plugin-atyrode_code_generator__routing-review { padding-inline: 0; }
-/* The session options popover hosts the automation and skill controls in the main view's skins. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) { gap: 0.4rem; padding-block-start: 0.5rem; border-block-start-color: var(--code-hairline); font-size: 0.74rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop h3 { margin: 0; color: var(--code-text-3); font-size: 0.68rem; font-weight: 600; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop h4 { margin: 0; color: var(--code-text-2); font-size: 0.72rem; font-weight: 600; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop p { color: var(--code-text-2); font-size: 0.72rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__warning { color: var(--code-warn); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop fieldset { gap: 0.3rem; border: 1px solid var(--code-hairline); border-radius: 3px; padding: 0.4rem 0.5rem 0.45rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop legend { padding-inline: 0.25rem; color: var(--code-text-3); font-size: 0.68rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop label { color: var(--code-text-strong); font-size: 0.74rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop input:is([type="checkbox"], [type="radio"]) { margin: 0; accent-color: var(--code-accent); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__toolbar { gap: 0.15rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__toolbar > button {
-  height: 24px;
-  min-height: 24px;
-  border: 0;
-  border-radius: 3px;
-  padding: 0 0.4rem;
-  color: var(--code-text-2);
-  background: transparent;
-  font-size: 0.72rem;
-  font-weight: 400;
-}
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__toolbar > button:hover:not(:disabled) { border: 0; color: var(--code-text); background: var(--code-hover); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__toolbar > button:disabled { opacity: 0.45; color: var(--code-text-2); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy-pop .plugin-atyrode_code__details { color: var(--code-text-2); font-size: 0.7rem; }
 
 /* ---------------------------------------------------------------- the Models sheet's routing table: every role on one 24px line */
 /* A compact table: role, model and effort stay adjacent at every width and hug the section's left edge. */
@@ -190,14 +210,15 @@
 
 /* ---------------------------------------------------------------- main view, sheets and table: container queries, coarse pointers, motion */
 @container code (width < 40rem) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__section,
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer { padding-inline: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__section { padding-inline: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__footer { margin-inline: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__options { padding-inline: 12px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow { column-gap: 0.5rem; grid-template-columns: minmax(0, 11.5rem) minmax(0, 7rem) minmax(0, 3.75rem); }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__exclusions li { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
 }
 @media (pointer: coarse) {
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link) { min-width: 44px; min-height: 44px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__footer-link, .plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link) { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   /* A changed route keeps its glow as a still mark that simply ends, never a fade. */
@@ -205,59 +226,80 @@
 }
 
 /* ---------------------------------------------------------------- statement: the verb, six words, two status lines
- * statement.tsx and slot.tsx. One value grid between hairlines; ±1 ghosts on the first row only;
- * the drum opens below its word. Type scale 20 / 15 / 13 / 11.5 on the 4px base; one accent (the
- * verb, the open drum's selection, focus); machines never coloured; read-only in neutral grey. The
- * sizes statement-layout.ts measures come from `data-size` here, and nothing that appears on hover
- * or focus takes room: ghosts, ticks and the drum are positioned, the status lines have fixed heights.
+ * statement.tsx and slot.tsx. One value grid: every column is a connector track and a value track
+ * shared by all its rows (statement-layout.ts), so the values, ghosts and drum options of a column
+ * start on one edge, connectors sit right-aligned against it and the lane mark hangs into the
+ * connector track. ±1 ghosts on the first row only, set 8px apart from the next row; the line's
+ * rules start at the word field, never under the verb, and run to the panel's edge, the only rules
+ * that do. Type 20 / 15 / 13 / 11.5 on the 4px base in px; two weights, 400 and 600, which every
+ * system face has (the host sets `font-synthesis: none`); one accent (the filled verb, the open
+ * drum's current option, focus); machines never coloured; read-only in neutral grey. Ghosts are the
+ * floor grey and drum options text-2, a refused one a step dimmer, the current one bright. The sizes
+ * statement-layout.ts measures come from here (`--stmt-cgap`, `--stmt-mark`, `--stmt-mark-gap` are
+ * its CONNECTOR_GAP, MARK_PX and MARK_GAP), and nothing that appears on hover or focus takes room:
+ * ghosts, ticks, marks and the drum are positioned, the status lines have fixed heights.
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement {
   --stmt-fs: 20px;
   --stmt-gfs: 15px;
   --stmt-row: 26px;
   --stmt-gh: 20px;
+  --stmt-cgap: 8px;
+  --stmt-mark: 18px;
+  --stmt-mark-gap: 8px;
   --stmt-pad: 16px;
   position: relative;
   min-width: 0;
-  padding: 12px var(--stmt-pad) 0;
+  /* 32px above the line: in every form its first rule sits at least 12px from a neighbouring tile's titlebar rule (37px in the host). */
+  padding: 32px var(--stmt-pad) 0;
   color: var(--code-text-2);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 20px;
   overflow-wrap: normal;
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-size="15"] { --stmt-fs: 15px; --stmt-gfs: 13px; --stmt-row: 20px; --stmt-gh: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-size="15"] { --stmt-fs: 15px; --stmt-gfs: 13px; --stmt-row: 20px; --stmt-gh: 18px; --stmt-cgap: 4px; }
+/* At the 15px line the board's names step down to 13px, so the line stays one step above everything but the verb. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__view:has(.plugin-atyrode_code_generator__stmt-statement[data-size="15"]) :is(.plugin-atyrode_code_generator__seat-alias, .plugin-atyrode_code_generator__phead-name) { font-size: 13px; }
 /* Until the first measurement the words are laid out but not shown, so no frame paints a wrong form. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement:not([data-ready]) .plugin-atyrode_code_generator__stmt-row { visibility: hidden; }
 
-/* The rows: one grid per row, the verb's column first in the inline forms; a hairline above and below the line. */
+/* The rows: one grid per row, the verb's column first in the inline forms; a hairline above and below each value row. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-field { position: relative; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row { position: relative; display: grid; align-items: start; column-gap: 16px; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-ghosts] { padding-block: var(--stmt-gh); }
+/* The lower ghosts belong to their value row, so the next row stands 8px clear of them instead of framing them. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-ghosts] + .plugin-atyrode_code_generator__stmt-row { margin-top: 8px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row:not([data-ghosts]) + .plugin-atyrode_code_generator__stmt-row { margin-top: -1px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row::before {
   content: "";
   position: absolute;
   top: 0;
   right: calc(var(--stmt-pad) * -1);
-  left: calc(var(--stmt-pad) * -1);
+  left: 0;
   height: var(--stmt-row);
   box-sizing: border-box;
   border-block: 1px solid var(--code-line);
   pointer-events: none;
 }
+/* Beside the inline verb the rules start at the word field, so they never run under or across the verb. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement:is([data-form="line"], [data-form="rows"]) .plugin-atyrode_code_generator__stmt-row::before { left: calc(var(--stmt-verb) + 16px); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-ghosts]::before { top: var(--stmt-gh); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-empty]::before { content: none; }
+/* One word per row is still one statement: two rules frame the list, none run between its words. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-form="list"] .plugin-atyrode_code_generator__stmt-row::before { border-block-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-form="list"] .plugin-atyrode_code_generator__stmt-row:first-child::before { border-top-width: 1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-form="list"] .plugin-atyrode_code_generator__stmt-row:last-child::before { border-bottom-width: 1px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-empty { color: var(--code-text-3); line-height: var(--stmt-row); }
 
-/* The verb: one filled control in a fixed cell as wide as its widest label, so a new label moves nothing. */
+/* The verb: one control in a fixed cell as wide as its widest label, so a new label moves nothing; exactly a row tall. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-row { display: flex; align-items: center; margin-bottom: 8px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-cell { display: flex; align-items: center; min-width: 0; height: var(--stmt-row); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-row .plugin-atyrode_code_generator__stmt-verb-cell { height: auto; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb {
   position: relative;
   flex: none;
   width: var(--stmt-verb);
-  height: max(24px, calc(var(--stmt-row) + 2px));
-  min-height: 24px;
+  height: var(--stmt-row);
+  min-height: 0;
   margin: 0;
   overflow: hidden;
   border: 0;
@@ -267,15 +309,17 @@
   background: var(--code-accent);
   font: inherit;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb:hover:not([aria-disabled="true"]) { background: var(--code-accent-hover); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="waiting"] { color: var(--code-text-2); background: transparent; box-shadow: inset 0 0 0 1px var(--code-line); cursor: default; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="refused"] { color: var(--code-text-3); background: transparent; box-shadow: inset 0 0 0 1px var(--code-line); cursor: not-allowed; }
+/* Only a step that can run is filled: waiting on its Confirm or refused, the verb is its words alone, on the verb's own edge. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb:is([data-state="waiting"], [data-state="refused"]) { justify-content: flex-start; padding-inline: 0; background: transparent; text-align: left; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="waiting"] { color: var(--code-text-2); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="refused"] { color: var(--code-text-3); cursor: not-allowed; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="busy"] { color: var(--code-text-bright); background: var(--code-raised); cursor: progress; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="busy"]::after {
   content: "";
@@ -289,12 +333,12 @@
 }
 @keyframes plugin-atyrode_code_generator__stmt-run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
-/* A word: its connector, then the value with its ghosts and drum stacked on it; the tick track at its right edge. */
+/* A word: its column's two tracks, the connector right-aligned in the first, the value with its ghosts and drum in the second; the tick track at its right edge. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--stmt-conn, max-content) minmax(0, 1fr);
   align-items: center;
-  gap: 0.3em;
   min-width: 0;
   height: var(--stmt-row);
   border-radius: 2px;
@@ -302,39 +346,51 @@
   line-height: var(--stmt-row);
   touch-action: pan-y;
 }
+/* What leads an option's text in the drum, hung left of the word's edge: the lane mark, or the extras switch. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-stmt-word="lane"] { --stmt-lead: calc(var(--stmt-mark) + var(--stmt-mark-gap)); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-stmt-word="extras"] { --stmt-lead: 16px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot:focus { outline: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-open] { z-index: 30; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-connector { flex: none; color: var(--code-text-3); font-weight: 400; white-space: nowrap; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-stack { position: relative; display: flex; flex: 1 1 auto; align-items: center; min-width: 0; height: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-connector { grid-column: 1; justify-self: end; padding-right: var(--stmt-cgap); color: var(--code-text-3); font-weight: 400; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-stack { grid-column: 2; position: relative; display: flex; align-items: center; min-width: 0; height: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-value {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 0.3em;
   min-width: 0;
   max-width: 100%;
   color: var(--code-text-bright);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-stmt-word="machine"] .plugin-atyrode_code_generator__stmt-value { max-width: 8em; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[aria-disabled="true"] .plugin-atyrode_code_generator__stmt-value { cursor: default; }
+/* A word the unsaved edit changed carries a 4px grey square after it: placed, so marking it moves nothing. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-edited] .plugin-atyrode_code_generator__stmt-value::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 0.4em);
+  left: calc(100% + 3px);
+  width: 4px;
+  height: 4px;
+  background: var(--code-text-2);
+}
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-/* Ghosts: the ±1 neighbours, one type step below the line, in the floor grey (5.2:1). */
+/* Ghosts: the ±1 options, one type step below the line, in the floor grey (5.2:1). */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost {
   position: absolute;
   right: 0;
   left: 0;
   display: flex;
   align-items: center;
-  gap: 0.35em;
   height: var(--stmt-gh);
   color: var(--code-text-3);
   font-size: var(--stmt-gfs);
-  font-weight: 450;
+  font-weight: 400;
   line-height: var(--stmt-gh);
   white-space: nowrap;
   cursor: pointer;
@@ -343,16 +399,15 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-at="up"] { bottom: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-at="down"] { top: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost:hover { color: var(--code-text-bright); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off] { cursor: not-allowed; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off]:hover { color: var(--code-text-3); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-ghost[data-off], .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"]) > .plugin-atyrode_code_generator__stmt-text {
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-}
+/* Refused, an option is one step dimmer than its available neighbours (the primitives' refused opacity; an inactive control
+   has no contrast floor), never struck through: its reason is in its title and in the status line when pointed. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off],
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off]:hover { color: var(--code-text-3); opacity: 0.55; cursor: not-allowed; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-last {
   flex: none;
+  margin-left: 4px;
   border-left: 1px solid var(--code-line);
-  padding-left: 0.35em;
+  padding-left: 4px;
   color: var(--code-text-3);
   font-size: 11.5px;
   font-weight: 600;
@@ -363,6 +418,7 @@
   flex: none;
   width: 6px;
   height: 6px;
+  margin-left: 4px;
   background: repeating-linear-gradient(135deg, var(--code-attention) 0 1.5px, transparent 1.5px 3px);
   box-shadow: inset 0 0 0 1px var(--code-attention);
 }
@@ -370,10 +426,19 @@
   background: repeating-linear-gradient(135deg, var(--code-warn) 0 1.5px, transparent 1.5px 3px);
   box-shadow: inset 0 0 0 1px var(--code-warn);
 }
-/* A lane's mark is data: its family's square, the family it crosses to smaller when led, both for Mixed. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark { display: inline-flex; flex: none; align-items: flex-end; gap: 0.08em; width: 0.9em; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code__mark { width: 0.42em; height: 0.42em; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code_generator__stmt-cross { width: 0.26em; height: 0.26em; }
+/* A lane's mark is data: its family's square, the family it crosses to smaller when led, both for Mixed. Fixed px at every
+   size, hung left of the text, so the lane's words start on the column's edge like every other value. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 2px;
+  width: var(--stmt-mark);
+  margin: 0 var(--stmt-mark-gap) 0 calc(-1 * (var(--stmt-mark) + var(--stmt-mark-gap)));
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code__mark { width: 8px; height: 8px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code_generator__stmt-cross { width: 4px; height: 4px; }
 
 /* The tick track: where the value sits on its drum; on keyboard focus, and always when one word sits per row. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks {
@@ -390,8 +455,9 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks > i { display: block; width: 5px; height: 2px; background: var(--code-line); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks > i[data-on] { width: 8px; background: var(--code-text-2); }
 
-/* The drum. Closed, its options exist for assistive technology only. Open, a list below the line on the
-   panel ground, stacked above everything, slid only as far as the panel needs and never over the verb. */
+/* The drum. Closed, its options exist for assistive technology only. Open, it hangs from the line's lower rule on the panel
+   ground between two hairlines, its option text on the word's edge, stacked above everything, slid only as far as the
+   panel needs and never over the verb. The current option is bright with the accent's 2px edge; pointing brightens text. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-drum {
   position: absolute;
   top: 0;
@@ -404,18 +470,20 @@
   pointer-events: none;
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-open] .plugin-atyrode_code_generator__stmt-drum {
-  top: calc(100% + 2px);
+  top: calc(100% - 1px);
+  left: calc(-8px - var(--stmt-lead, 0px));
   z-index: 30;
   display: flex;
   flex-direction: column;
   width: max-content;
   height: auto;
-  min-width: 100%;
+  min-width: calc(100% + 8px + var(--stmt-lead, 0px));
   max-width: var(--stmt-drum-max, 80vw);
-  border-radius: 3px;
+  border-block: 1px solid var(--code-line);
+  border-radius: 0;
   padding: 4px 0;
   background: var(--code-panel);
-  box-shadow: 0 0 0 1px var(--code-line), 0 12px 28px rgb(0 0 0 / 45%);
+  box-shadow: none;
   clip-path: none;
   transform: translateX(var(--stmt-shift, 0px));
   pointer-events: auto;
@@ -423,26 +491,26 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option {
   display: flex;
   align-items: center;
-  gap: 0.4em;
   min-width: 0;
-  min-height: 26px;
-  padding: 0 16px 0 8px;
+  min-height: 24px;
+  padding: 0 16px 0 calc(8px + var(--stmt-lead, 0px));
   color: var(--code-text-2);
   font-size: 15px;
-  font-weight: 450;
-  line-height: 1.3;
+  font-weight: 400;
+  line-height: 20px;
   white-space: nowrap;
   cursor: pointer;
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option > .plugin-atyrode_code_generator__stmt-text { flex: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[data-current] { color: var(--code-text-bright); font-weight: 650; box-shadow: inset 2px 0 var(--code-accent); cursor: default; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option:not([aria-disabled="true"]):is(:hover, [data-cursor]) { color: var(--code-text-bright); background: var(--code-active); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option:not([aria-disabled="true"]):hover { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option:is([data-current], [data-cursor]) { color: var(--code-text-bright); box-shadow: inset 2px 0 var(--code-accent); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[data-current] { font-weight: 600; cursor: default; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"] { color: var(--code-text-3); cursor: not-allowed; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"][data-cursor] { box-shadow: inset 2px 0 var(--code-line); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-note {
   flex: 1 1 auto;
   min-width: 0;
-  margin-left: 0.8em;
+  margin-left: 16px;
   overflow: hidden;
   color: var(--code-text-2);
   font-size: 13px;
@@ -450,7 +518,7 @@
   text-overflow: ellipsis;
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"] .plugin-atyrode_code_generator__stmt-note { color: var(--code-text-3); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-box { flex: none; width: 0.5em; height: 0.5em; box-shadow: inset 0 0 0 1.5px currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-box { flex: none; width: 8px; height: 8px; margin: 0 8px 0 -16px; box-shadow: inset 0 0 0 1.5px currentColor; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-box[data-on] { background: currentColor; }
 /* While a drum is open the rest of the line dims and ignores the pointer. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-open] .plugin-atyrode_code_generator__stmt-slot:not([data-open]) :is(.plugin-atyrode_code_generator__stmt-value, .plugin-atyrode_code_generator__stmt-ghost, .plugin-atyrode_code_generator__stmt-connector) {
@@ -458,12 +526,11 @@
   pointer-events: none;
 }
 
-/* The status: two fixed lines; a long line ellipsizes and its title says it whole. The session options sit beside the first. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 20px 28px; column-gap: 16px; margin-top: 8px; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line { grid-column: 1; min-width: 0; overflow: hidden; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line + .plugin-atyrode_code_generator__stmt-line { line-height: 28px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-aside { grid-row: 1; grid-column: 2; display: flex; align-items: center; height: 20px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part + .plugin-atyrode_code_generator__stmt-part::before { content: "·"; padding: 0 0.4em; color: var(--code-text-3); font-weight: 400; }
+/* The status: two lines of fixed height; a long line ellipsizes and its title says it whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { display: grid; grid-template-columns: minmax(0, 1fr); margin-top: 8px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line { height: 20px; min-width: 0; overflow: hidden; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line + .plugin-atyrode_code_generator__stmt-line { height: 28px; line-height: 28px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part + .plugin-atyrode_code_generator__stmt-part::before { content: "·"; padding: 0 4px; color: var(--code-text-3); font-weight: 400; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part:is([data-tone="strong"], [data-tone="done"]) { color: var(--code-text-bright); font-weight: 600; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="busy"] { color: var(--code-text-bright); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="attention"] { color: var(--code-attention); }
@@ -478,7 +545,7 @@
   vertical-align: top;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin: 0 0 0 0.6em;
+  margin: 0 0 0 8px;
   border: 0;
   border-radius: 2px;
   padding: 0 2px;
@@ -508,7 +575,7 @@
   background: var(--code-accent);
   font: inherit;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   vertical-align: top;
   cursor: pointer;
 }
@@ -536,7 +603,7 @@
 }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog:focus { outline: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-title { margin: 0; color: var(--code-text-bright); font-size: 15px; font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-title { margin: 0; color: var(--code-text-bright); font-size: 15px; font-weight: 600; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-close { min-height: 24px; margin: 0; border: 0; padding: 0 4px; background: none; cursor: pointer; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-close:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 1px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-group + .plugin-atyrode_code_generator__keys-dialog-group { margin-top: 12px; }
@@ -550,19 +617,16 @@
 /* ---------------------------------------------------------------- statement: narrow panels, coarse pointers, motion */
 @container code (width < 40rem) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement { --stmt-pad: 12px; }
-  /* Narrow, the status lines keep the whole width and the session options take a row of their own under them. */
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { grid-template-columns: minmax(0, 1fr); grid-template-rows: 20px 28px 24px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-aside { grid-row: 3; grid-column: 1; height: 24px; }
+  /* Narrow, the first status line may take two lines, at a fixed height so pointing still moves nothing; breaks fall between words. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line:first-child { display: -webkit-box; height: 40px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 }
 @media (pointer: coarse) {
   /* Every form keeps 44px rows on a coarse pointer, the 15px line size included. */
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement,
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-size="15"] { --stmt-row: 44px; --stmt-gh: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option { min-height: 44px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb { height: 44px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { grid-template-rows: 44px 44px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line,
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line + .plugin-atyrode_code_generator__stmt-line { line-height: 44px; }
+  /* A status line is 44px only while it holds a control; a line of facts keeps its height. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status .plugin-atyrode_code_generator__stmt-line:has(button) { display: block; height: 44px; line-height: 44px; white-space: nowrap; }
   .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-confirm, .plugin-atyrode_code_generator__stmt-fix, .plugin-atyrode_code_generator__stmt-link) { min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-row { min-height: 44px; }
 }

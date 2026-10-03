@@ -1,19 +1,19 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
-import { KeyCap, prefersReducedMotion, ScrollRegion } from "@manifold/ui";
+import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { PermissionReview } from "../permission-review.tsx";
-import { Button, familyWord, LayerProvider, Menu, Notice, SheetFrame, since, useMenu } from "../ui.tsx";
+import { Button, familyWord, Notice, SheetFrame, since } from "../ui.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { useWorkbench } from "./workbench-model.ts";
-import { StatementLine, useAnnouncer, type StatementPlace, type TeamPreview } from "./statement.tsx";
+import { StatementLine, useAnnouncer, type TeamPreview } from "./statement.tsx";
 import { STATEMENT_KEY_HELP } from "./statement-keys.ts";
 import { teamWords } from "./statement-model.ts";
 import { SeatBoard, useBoardModel } from "./seat-board.tsx";
@@ -25,9 +25,10 @@ import { KeysDialog, type KeyGroup } from "./keys-dialog.tsx";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
-type Sheet = "accounts" | "models" | "setup";
+type Sheet = "accounts" | "models" | "setup" | "options";
+/** The sheets the footer names in its run, in order; session options follows with its summary, then the keys. */
 const SHEETS: readonly Sheet[] = ["accounts", "models", "setup"];
-const SHEET_TITLES: Readonly<Record<Sheet, string>> = { accounts: "Accounts", models: "Models", setup: "Setup" };
+const SHEET_TITLES: Readonly<Record<Sheet, string>> = { accounts: "Accounts", models: "Models", setup: "Setup", options: "Session options" };
 /** Exclusion reasons in plain words, for the last verification's details in Setup. */
 const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
   superseded: "Superseded by a newer model", unstable_id: "Unstable id", not_found: "Not found through your accounts",
@@ -35,14 +36,14 @@ const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
 };
 /** Every key the main view answers, grouped by the region that answers it. */
 const KEY_GROUPS: readonly KeyGroup[] = [
-  { title: "Statement", keys: STATEMENT_KEY_HELP },
-  { title: "Pools", keys: BOARD_KEY_HELP },
-  { title: "Sessions", keys: SESSIONS_KEY_HELP },
-  { title: "Recent teams", keys: EARLIER_KEY_HELP },
-  { title: "Panel", keys: [
+  { title: "statement", keys: STATEMENT_KEY_HELP },
+  { title: "pools", keys: BOARD_KEY_HELP },
+  { title: "sessions", keys: SESSIONS_KEY_HELP },
+  { title: "recent teams", keys: EARLIER_KEY_HELP },
+  { title: "panel", keys: [
     { keys: ["r"], text: "Read accounts, usage and machines again" },
     { keys: ["?"], text: "Show these keys" },
-    { keys: ["Esc"], text: "Back from Accounts, Models or Setup" },
+    { keys: ["Esc"], text: "Back from accounts, models, setup or session options" },
   ] },
 ];
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
@@ -85,7 +86,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const mainScroll = useRef(0);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
-  const optionsMenu = useMenu();
+  // The line's measured width while it is one line, the measure the footer's run (and anything else that should end with the line) keeps to.
+  const [measure, setMeasure] = useState<number | null>(null);
   // The roster is polled; the statement's options are recomputed only when it really changes.
   const machinesKey = JSON.stringify(machines);
   const roster = useMemo(() => machines, [machinesKey]);
@@ -132,16 +134,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
     // Native dialogs and form fields own Escape inside legacy sheet content.
-    if (event.key !== "Escape" || event.defaultPrevented || element.closest("dialog, [data-popover]") || element.matches("textarea, input, select")) return;
+    if (event.key !== "Escape" || event.defaultPrevented || element.closest("dialog") || element.matches("textarea, input, select")) return;
     event.preventDefault();
     closeSheet();
   }
 
-  // ------------------------------------------------------------ what the statement's fixes, `r` and the footer reach
-  function open(place: StatementPlace) {
-    if (place === "options") optionsMenu.toggle();
-    else openSheet(place);
-  }
+  // ------------------------------------------------------------ what `r` and the footer reach (the statement's fixes open sheets directly)
   function refresh() {
     actions.refresh();
     refreshMachines();
@@ -152,17 +150,20 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
 
   // ------------------------------------------------------------ session options: for one launch or resume, never saved
+  const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
   const optionsSummary = model.automation ? "restricted" : model.skillChoice?.mode === "disabled" ? "skills off"
-    : model.skillChoice?.mode === "select" ? `${model.skillChoice.skillIds.length + model.skillChoice.setIds.length} skills` : null;
-  const options = <button ref={optionsMenu.anchor} type="button" className={`${G}options-verb`} aria-haspopup="dialog" aria-expanded={optionsMenu.open}
-    aria-label={`Session options: ${optionsSummary ?? "ordinary session, default skills"}`} title="Skills and automation for the next launch or resume only"
-    onClick={optionsMenu.toggle}>session options{optionsSummary && <span className={`${G}options-summary`}> · {optionsSummary}</span>}</button>;
+    : model.skillChoice?.mode === "select" ? `${chosenSkills} ${chosenSkills === 1 ? "skill" : "skills"}` : null;
+  // The options wait while a step runs or a charge waits, as the team's words do, and need what a launch needs: write access and the machine.
+  const optionsGate = model.gate("edit-team");
+  const optionsRefusal = !optionsGate.open ? optionsGate.refusal.text : !writable ? "Edit access needed." : !available ? "The machine is unavailable."
+    : busy ? "Wait for the step in progress." : null;
 
   // ------------------------------------------------------------ the footer: where the facts come from, and the ways out
-  const verified = verification.provenance ? `models verified ${pastMoment(verification.provenance.benchmarkCompletedAt, usage.nowMs)}` : null;
-  const read = usage.view?.observedAt ? `accounts updated ${since(usage.nowMs - usage.view.observedAt)}` : null;
+  const verified = verification.provenance ? `models verified ${pastMoment(verification.provenance.benchmarkCompletedAt, usage.nowMs)}` : "models unverified";
+  // The read's age only while every pool's reading is current; a stale pool states its own age in its head, and the footer never contradicts it.
+  const read = usage.view?.observedAt && usage.current && pools.every(pool => pool.staleAgeMs === null) ? `usage read ${since(usage.nowMs - usage.view.observedAt)}` : null;
   // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
-  const staged = record?.active && record.draft ? "a staged catalog waits in Models" : null;
+  const staged = record?.active && record.draft ? "a staged catalog waits in models" : null;
   const facts = [verified, read, staged].filter(Boolean).join(" · ");
   // The bundled list's failure sits beside a team the model holds and replaces the board only when there is none.
   const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
@@ -172,39 +173,32 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     </Notice>
   </div>;
 
-  const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}>
+  const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}
+    style={measure === null ? undefined : { "--stmt-measure": `${measure}px` } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
     <StatementLine model={model} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
-      announce={announce} onOpen={open} onKeys={() => setKeysOpen(true)} onRefresh={refresh} aside={options} />
+      announce={announce} onOpen={openSheet} onKeys={() => setKeysOpen(true)} onRefresh={refresh} onMeasure={setMeasure} />
     {listFailure === "beside" && listNotice("warn", "The model list is unavailable · the seats are the team already on the line.")}
     {listFailure === "instead" ? listNotice("error", "The model list is unavailable.")
       : <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
     <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} setPreview={setPreview} rereads={rereads} announce={announce} />
+    {/* One left-aligned run on the line's measure: the facts, then the ways out, session options with its choice, the keys. */}
     <footer className={`${G}footer`}>
-      {facts && <span className={`${G}footer-facts`}>{facts}</span>}
-      <span className={`${G}footer-links`}>
-        <button type="button" className={`${G}footer-link`} title="Read accounts, usage and machines again (r)" onClick={refresh}>refresh</button>
-        {SHEETS.map(name => <button key={name} ref={element => { sheetLinks.current[name] = element; }} type="button" className={`${G}footer-link`}
-          onClick={() => openSheet(name)}>{SHEET_TITLES[name]}</button>)}
-        <button type="button" className={`${G}footer-link`} aria-haspopup="dialog" aria-expanded={keysOpen} aria-label="Keys" onClick={() => setKeysOpen(true)}>
-          keys <KeyCap label="?" />
-        </button>
-      </span>
+      <span className={`${G}footer-facts`}>{facts}</span>
+      <button type="button" className={`${G}footer-link`} title="Read accounts, usage and machines again (r)" onClick={refresh}>refresh</button>
+      {SHEETS.map(name => <button key={name} ref={element => { sheetLinks.current[name] = element; }} type="button" className={`${G}footer-link`}
+        onClick={() => openSheet(name)}>{name}</button>)}
+      <button ref={element => { sheetLinks.current.options = element; }} type="button" className={`${G}footer-link`}
+        aria-label={`Session options: ${optionsSummary ?? "ordinary session, default skills"}`} title="Skills and automation for the next launch or resume only"
+        onClick={() => openSheet("options")}>session options{optionsSummary && <span className={`${G}footer-summary`}> · {optionsSummary}</span>}</button>
+      <button type="button" className={`${G}footer-link`} aria-haspopup="dialog" aria-expanded={keysOpen} aria-label="Keys" onClick={() => setKeysOpen(true)}>keys ?</button>
     </footer>
-    <Menu menu={optionsMenu} role="dialog" label="Session options" align="end" className={`${G}options-pop`}>
-      <div className={`${G}pop-body ${G}legacy-pop`}>
-        <p className={`${G}prose`}>For the next launch or resume only. The workspace team stays as it is.</p>
-        <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} disabled={busy || !writable || !available} change={model.setAutomation} />
-        {model.automation && <p className="plugin-atyrode_code__warning">Restricted OMP tools; not an OS or network sandbox.</p>}
-        <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
-          reviewed={launchReview ? launchReview.native.skills : null} disabled={busy || !writable || !available} refresh={skillCatalog.refresh} change={model.setSkillChoice} />
-      </div>
-    </Menu>
   </div>;
 
   const sheetFrame = (name: Sheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name} onKeyDown={sheetKeys}>
     <SheetFrame name={SHEET_TITLES[name]} onBack={closeSheet} backRef={element => { backButtons.current[name] = element; }}>
-      <div className={`${G}legacy`}>{body}</div>
+      {/* Session options is in the main view's grammar; the other sheets keep their original layout until their own pass. */}
+      <div className={name === "options" ? `${G}options` : `${G}legacy`}>{body}</div>
     </SheetFrame>
   </div>;
 
@@ -238,6 +232,13 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         </>}
       </details>}
     </>)}
+    {sheetFrame("options", <>
+      <p className={`${G}options-lede`}>For the next launch or resume only; the workspace team stays as it is.</p>
+      {optionsRefusal && <p className={`${G}options-note`} role="status">{optionsRefusal}</p>}
+      <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} refusal={optionsRefusal} change={model.setAutomation} />
+      <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
+        reviewed={launchReview ? launchReview.native.skills : null} refusal={optionsRefusal} refresh={skillCatalog.refresh} change={model.setSkillChoice} />
+    </>)}
   </>;
 }
 
@@ -246,17 +247,16 @@ function Launcher({ host }: PanelProps) {
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   // The panel root takes focus when the panel opens (statement.tsx), so its keys work before anything is clicked.
   return <div className="plugin-atyrode_code plugin-atyrode_code_generator" tabIndex={-1}>
-    <LayerProvider value={layer}>
-      <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
-        {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
-          machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} layer={layer} />
-          : <div className={`${G}view`}>
-            <h1 className="plugin-atyrode_code__sr">Code</h1>
-            <div className={`${G}section`}><div className={`${G}empty-state`}><p>Open or create a workspace in Manifold to use Code here.</p></div></div>
-          </div>}
-      </ScrollRegion>
-      <div ref={setLayer} className={`${G}layer`} />
-    </LayerProvider>
+    <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
+      {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
+        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} layer={layer} />
+        : <div className={`${G}view`}>
+          <h1 className="plugin-atyrode_code__sr">Code</h1>
+          <div className={`${G}section`}><div className={`${G}empty-state`}><p>Open or create a workspace in Manifold to use Code here.</p></div></div>
+        </div>}
+    </ScrollRegion>
+    {/* The overlay layer: the keys dialog renders here, so the scroll region neither clips nor scrolls it. */}
+    <div ref={setLayer} className={`${G}layer`} />
   </div>;
 }
 export default { id: GENERATOR_PLUGIN_ID, panels: { [LAUNCHER_PANEL]: Launcher } } satisfies { id: string; panels: Record<string, ComponentType<PanelProps>> };

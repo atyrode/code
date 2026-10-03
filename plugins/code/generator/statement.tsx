@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type RefObject } from "react";
 import type { MachineSummary } from "@manifold/protocol";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
@@ -49,8 +49,8 @@ export type StatementProps = {
   readonly onKeys: () => void;
   /** `r`: read the accounts, usage, machines and the workspace team again. */
   readonly onRefresh: () => void;
-  /** A quiet control beside the status lines (the session options). */
-  readonly aside?: ReactNode;
+  /** The line's measured width while it is one line (the measure the content below keeps to), else null. */
+  readonly onMeasure?: (width: number | null) => void;
 };
 
 /** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */
@@ -104,7 +104,7 @@ function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonl
  * through the workbench model's gate; the line only names the step, shows what each option would do
  * and quota's verdict on it, and writes the consequence of whatever is pointed in the status lines.
  */
-export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, aside }: StatementProps) {
+export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, onMeasure }: StatementProps) {
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLDivElement>(null);
@@ -144,6 +144,8 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     return { lane: text("lane"), tier: text("tier"), thinking: text("thinking"), advisor: text("advisor"), extras: text("extras"), machine: text("machine") };
   }, [slots]);
   const layout = useStatementLayout(field, texts);
+  const measured = layout.measure && FORM_CHOICES[layout.choice]!.form === "line" ? layout.measure.need : null;
+  useEffect(() => onMeasure?.(measured), [measured]);
 
   const verb = verbView({
     step: model.step, verdict: model.verb, busy: model.busy, inFlight: model.inFlight, chaining: model.chaining, unsaved: model.unsaved,
@@ -372,7 +374,14 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     const right = frame.right - parseFloat(style.paddingRight);
     drum.style.setProperty("--stmt-shift", "0px");
     drum.style.setProperty("--stmt-drum-max", `${Math.max(0, right - left)}px`);
-    drum.style.setProperty("--stmt-shift", `${Math.round(drumShift(drum.getBoundingClientRect(), { left, right }))}px`);
+    // The options' words stay on the word's edge while they fit beside it: their notes give way first, and only words
+    // that cannot fit slide the drum left, as far as they need and never over the verb.
+    const natural = drum.getBoundingClientRect();
+    // Each option's words end where its note starts; the drum's 16px right padding follows the widest.
+    const words = 16 + Math.max(0, ...[...drum.querySelectorAll<HTMLElement>(`.${S}note`)].map(note => note.getBoundingClientRect().left - natural.left));
+    const shift = Math.round(drumShift({ left: natural.left, right: natural.left + words }, { left, right }));
+    drum.style.setProperty("--stmt-drum-max", `${Math.max(words, right - natural.left - shift)}px`);
+    drum.style.setProperty("--stmt-shift", `${shift}px`);
   }, [open, layout, slots]);
   // An open drum takes the next press: inside, it chooses; anywhere else in the panel it only closes.
   useEffect(() => {
@@ -413,7 +422,9 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   </div>;
   const rows = FORM_ROWS[choice.form];
   const ghosted = ghostedWords(choice.form);
-  const columns = choice.form === "list" ? "minmax(0, 1fr)" : layout.measure?.columns.map(width => `${width}px`).join(" ") ?? "";
+  // Each column is a connector track and a value track (the slot's own two); one word per row takes the whole width.
+  const columns = layout.measure?.columns ?? [];
+  const template = choice.form === "list" ? "minmax(0, 1fr)" : columns.map(column => `${column.connector + column.value}px`).join(" ");
   // Unmeasured (no team to show yet), the verb is as wide as its label.
   const style = (layout.measure ? { "--stmt-verb": `${layout.measure.verb}px` } : {}) as CSSProperties;
   return <section ref={root} className={`${S}statement`} data-form={choice.form} data-size={choice.size} data-open={open || undefined}
@@ -423,14 +434,15 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     <div ref={field} className={`${S}field`} role="group" aria-label="The team; change any word in place"
       onBlur={event => { if (open && !(event.relatedTarget instanceof Node && slotElement(open)?.contains(event.relatedTarget))) setOpen(null); }}>
       {slots ? rows.map((row, index) => <div key={index} className={`${S}row`} data-ghosts={(index === 0 && ghosted.length > 0) || undefined}
-        style={{ gridTemplateColumns: `${inline ? "var(--stmt-verb) " : ""}${columns}` }}>
+        style={{ gridTemplateColumns: `${inline ? "var(--stmt-verb) " : ""}${template}` }}>
         {inline && (index === 0 ? verbCell : <span aria-hidden="true" />)}
-        {row.map(word => <StatementSlot key={word} slot={slots[word]} id={`${id}-${word}`} ghosted={ghosted.includes(word)} listed={choice.form === "list"}
+        {row.map((word, column) => <StatementSlot key={word} slot={slots[word]} id={`${id}-${word}`} ghosted={ghosted.includes(word)} listed={choice.form === "list"}
+          connector={columns[choice.form === "list" ? 0 : column]?.connector ?? null}
           open={open === word} locked={word === "machine" ? !machineGate.open : !teamGate.open} cursor={cursor}
           motion={motion?.word === word ? motion.motion : null} onToggleOpen={() => toggleOpen(word)}
           onCommit={(option, via, from) => { commitOption(word, option, via, from); if (word !== "extras") setOpen(null); }}
           onPoint={option => point(word, option)} />)}
-      </div>) : <div className={`${S}row`} style={{ gridTemplateColumns: inline ? "max-content minmax(0, 1fr)" : "minmax(0, 1fr)" }}>
+      </div>) : <div className={`${S}row`} data-empty="" style={{ gridTemplateColumns: inline ? "max-content minmax(0, 1fr)" : "minmax(0, 1fr)" }}>
         {inline && verbCell}<span className={`${S}empty`}>{model.starterError ?? (reading ? "Reading the team" : "No team to show")}</span>
       </div>}
     </div>
@@ -441,7 +453,6 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
           onClick={event => model.actions.confirmCharge({ detail: event.detail, repeat: false }, charge)}
           onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>Confirm charge</button>}
         onCancel={verification.cancel} onFix={runFix} onPointFix={pointFix} />)}
-      {aside && <div className={`${S}aside`}>{aside}</div>}
     </div>
   </section>;
 }
