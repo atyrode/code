@@ -1,55 +1,22 @@
 import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { OmpSessionSummary } from "@atyrode/manifold-omp";
-import type { Lane, Selection } from "../../domain/contracts.ts";
-import { CAPABILITY_WORDS } from "./dial-space.ts";
+import type { Selection } from "../../domain/contracts.ts";
 import type { GateVerdict } from "./launch-step.ts";
 import { RECENT_TEAMS_LIMIT, type RecentTeam } from "./recent-teams.ts";
+import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords } from "./statement-model.ts";
 
 /*
  * Earlier statements as data: the teams and sessions under the line, each said in the line's own
- * words and only where it differs from the line. Pure, so the rendering, the digit order and the
- * row verdicts are tested without a panel.
+ * words (statement-model.ts `teamWords`) and only where it differs from the line. Pure, so the
+ * rendering, the digit order and the row verdicts are tested without a panel.
  */
 
 // ---------------------------------------------------------------- the line's words
 
-/** The statement's words, in reading order: verb · lane · tier · thinking · advisor · extras · "on" machine. */
-export type StatementWord = "lane" | "tier" | "thinking" | "advisor" | "extras" | "machine";
-export type TeamWord = Exclude<StatementWord, "machine">;
-/** What a team says on the line; the machine is the destination's name, which the caller adds. */
-export type TeamWords = Readonly<Record<TeamWord, string>>;
+/** The line's words, the machine's name included: what every row is compared with. */
 export type StatementWords = Readonly<Record<StatementWord, string>>;
 
 const TEAM_WORDS: readonly TeamWord[] = ["lane", "tier", "thinking", "advisor", "extras"];
-/** The switches the extras word gathers, in the line's order, each with the word it reads as when on. */
-const EXTRAS: readonly (readonly [string, (selection: Selection) => boolean])[] = [
-  ["spark", selection => selection.spark], ["fallbacks", selection => selection.fallback], ["priority", selection => selection.priority],
-  ["prewalk", selection => selection.prewalk], ["auto plans", selection => selection.planYolo], ["free only", selection => selection.budget === "free"],
-];
-
-export function extrasOn(selection: Selection): string[] {
-  return EXTRAS.flatMap(([word, on]) => on(selection) ? [word] : []);
-}
-
-function laneName(lane: Lane, familyWord: (family: string) => string): string {
-  if (lane.kind === "mixed") return "Mixed";
-  return lane.blend === "led" ? `${familyWord(lane.family)}-led` : `${familyWord(lane.family)} only`;
-}
-
-/**
- * A team in the line's words. `familyWord` is the panel's provider vocabulary (ui.tsx), passed in
- * so this module stays free of React.
- */
-export function teamWords(selection: Selection, familyWord: (family: string) => string): TeamWords {
-  const extras = extrasOn(selection);
-  return {
-    lane: laneName(selection.lane, familyWord),
-    tier: CAPABILITY_WORDS[selection.capability - 1]!,
-    thinking: selection.thinking === "xhigh" ? "x-high" : selection.thinking,
-    advisor: selection.advisor,
-    extras: extras.length === 0 ? "no extras" : extras.length === 1 ? extras[0]! : `${extras.length} extras`,
-  };
-}
 
 /** A word with the connector the line prints beside it (`high thinking`, `advisor off`), for a row that stands without the line. */
 export function phrase(word: TeamWord, text: string): string {
@@ -61,19 +28,7 @@ export function teamSentence(words: TeamWords): string {
   return TEAM_WORDS.map(word => phrase(word, words[word])).join(", ");
 }
 
-// ---------------------------------------------------------------- matching and differences
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-    .map(([key, entry]) => [key, canonical(entry)]));
-}
-
-/** Two selections are one team when every field agrees, whatever order their keys were written in. */
-export function sameTeam(left: Selection, right: Selection): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
+// ---------------------------------------------------------------- differences
 
 export type Difference = { word: TeamWord; text: string };
 /** The line a row is compared with: the words it shows, and the team behind them once there is one. */

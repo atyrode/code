@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { Selection } from "../domain/contracts.ts";
 import {
-  differences, machineReads, machineState, pastMoment, pinRecents, rowVerdict, sameTeam, sessionName, sessionRows, sessionsNote,
-  teamProvenance, teamWords, type SessionRead,
+  differences, machineReads, machineState, pastMoment, pinRecents, rowVerdict, sessionName, sessionRows, sessionsNote,
+  teamProvenance, type SessionRead,
 } from "../code/generator/earlier-model.ts";
+import { sameTeam, teamWords } from "../code/generator/statement-model.ts";
 import type { GateVerdict } from "../code/generator/launch-step.ts";
 import type { RecentTeam } from "../code/generator/recent-teams.ts";
 

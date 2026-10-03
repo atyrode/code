@@ -22,6 +22,9 @@ import type { VerificationStatus } from "./verification.ts";
 // ---------------------------------------------------------------- words
 
 export type StatementWord = "lane" | "tier" | "thinking" | "advisor" | "extras" | "machine";
+/** The words a team is made of; the machine is the destination, not part of the team. */
+export type TeamWord = Exclude<StatementWord, "machine">;
+export type TeamWords = Readonly<Record<TeamWord, string>>;
 /** Reading order, which is also the order ←/→ walk and every width form fills its rows in. */
 export const STATEMENT_WORDS: readonly StatementWord[] = ["lane", "tier", "thinking", "advisor", "extras", "machine"];
 type DialWord = "lane" | "tier" | "thinking" | "advisor";
@@ -61,25 +64,39 @@ function extraOn(selection: Selection, dial: MoreDial): boolean {
   const extra = EXTRAS.find(entry => entry.dial === dial)!;
   return SPECS[dial].get(selection) === extra.on;
 }
+/** The words of the switches that are on, in the extras word's order ("spark", "free only"). */
+export function extrasOn(selection: Selection): string[] {
+  return EXTRAS.flatMap(extra => extraOn(selection, extra.dial) ? [extra.word] : []);
+}
 /** "no extras", the one switch that is on, or how many are. */
 function extrasLabel(selection: Selection): string {
-  const on = EXTRAS.filter(extra => extraOn(selection, extra.dial));
-  return on.length === 0 ? "no extras" : on.length === 1 ? on[0]!.word : `${on.length} extras`;
+  const on = extrasOn(selection);
+  return on.length === 0 ? "no extras" : on.length === 1 ? on[0]! : `${on.length} extras`;
 }
 
-/** A team in the line's words. The machine is not part of a team: the caller adds its name. */
-export function teamWords(selection: Selection, familyWord: (family: string) => string): Readonly<Record<Exclude<StatementWord, "machine">, string>> {
+/**
+ * A team in the line's words, which the statement, the earlier statements and every control name
+ * share. The machine is not part of a team: the caller adds its name.
+ */
+export function teamWords(selection: Selection, familyWord: (family: string) => string): TeamWords {
   return {
     lane: laneLabel(selection.lane, familyWord), tier: CAPABILITY_LABELS[selection.capability - 1]!,
     thinking: thinkingWord(selection.thinking), advisor: selection.advisor, extras: extrasLabel(selection),
   };
 }
 
-/** Field by field, so two parses of one team compare equal whatever their key order. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, entry]) => [key, canonical(entry)]));
+}
+/**
+ * Two selections are one team when every field agrees, whatever order their keys were written in.
+ * Every field, including any the schema gains later, so a new switch can never make two teams compare equal.
+ */
 export function sameTeam(left: Selection, right: Selection): boolean {
-  return laneWord(left.lane) === laneWord(right.lane) && left.capability === right.capability && left.thinking === right.thinking &&
-    left.advisor === right.advisor && left.spark === right.spark && left.priority === right.priority && left.prewalk === right.prewalk &&
-    left.planYolo === right.planYolo && left.fallback === right.fallback && left.budget === right.budget;
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 /** Up to three roles by name, else the first two and how many more. */

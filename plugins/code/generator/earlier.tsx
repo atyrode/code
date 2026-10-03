@@ -11,9 +11,10 @@ import type { GateVerdict, WorkbenchIntent } from "./launch-step.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
-  differences, machineReads, machineState, phrase, pinRecents, rowVerdict, sameTeam, sessionName, sessionRows, sessionsNote,
-  teamProvenance, teamSentence, teamWords, type RowIntent, type RowVerdict, type SessionRead, type SessionRow, type StatementWords,
+  differences, machineReads, machineState, phrase, pinRecents, rowVerdict, sessionName, sessionRows, sessionsNote,
+  teamProvenance, teamSentence, type RowIntent, type RowVerdict, type SessionRead, type SessionRow, type StatementWords,
 } from "./earlier-model.ts";
+import { sameTeam, teamWords } from "./statement-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (earlier.css). */
 const G = "plugin-atyrode_code_generator__";
