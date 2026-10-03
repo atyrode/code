@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
 import { hueOf } from "../ui.tsx";
 import { CONNECTORS, WORD_NAMES, type LaneMark, type Slot, type SlotOption } from "./statement-model.ts";
@@ -15,6 +15,8 @@ export type SlotProps = {
   readonly id: string;
   /** ±1 ghosts at rest: the first row's lane, tier and thinking. */
   readonly ghosted: boolean;
+  /** The column's connector track in px (statement-layout.ts `measureForm`), shared by every row; null until measured. */
+  readonly connector: number | null;
   /** One word per row: the tick track always shows. */
   readonly listed: boolean;
   readonly open: boolean;
@@ -54,13 +56,15 @@ function RedlineGlyph({ option }: { option: SlotOption }) {
 }
 
 /**
- * One word of the statement: a listbox whose value is the word on the line. At rest the first
- * row shows its ±1 neighbours as ghosts, one type step smaller; pointing at a word shows no more
- * than those, and the full drum opens only on a click, a tap, Enter or Space, below the line. The
- * options are always in the document, hidden while closed, so the listbox reads the same open or
- * shut and the drum opening moves nothing.
+ * One word of the statement: a listbox whose value is the word on the line. The cell is two tracks
+ * of its column's value grid, the connector right-aligned in the first, so every value, ghost and
+ * drum option of the column starts on the second's edge; the lane mark hangs into the first. At
+ * rest the first row shows its ±1 neighbours as ghosts, one type step smaller; pointing at a word
+ * shows no more than those, and the full drum opens only on a click, a tap, Enter or Space, below
+ * the line. The options are always in the document, hidden while closed, so the listbox reads the
+ * same open or shut and the drum opening moves nothing.
  */
-export function StatementSlot({ slot, id, ghosted, listed, open, locked, cursor, motion, onToggleOpen, onCommit, onPoint }: SlotProps) {
+export function StatementSlot({ slot, id, ghosted, connector: track, listed, open, locked, cursor, motion, onToggleOpen, onCommit, onPoint }: SlotProps) {
   const value = useRef<HTMLSpanElement>(null);
   const { word, options, current } = slot;
   const extras = word === "extras";
@@ -87,9 +91,9 @@ export function StatementSlot({ slot, id, ghosted, listed, open, locked, cursor,
   return <div className={`${S}slot`} role="listbox" tabIndex={locked ? -1 : 0} aria-label={WORD_NAMES[word]} aria-disabled={locked || undefined}
     aria-multiselectable={extras || undefined} aria-activedescendant={active}
     data-stmt-word={word} data-open={open || undefined} data-ghosted={ghosted || undefined} data-listed={listed || undefined}
-    data-changed={slot.changed || undefined}>
+    data-changed={slot.changed || undefined} style={track === null ? undefined : { "--stmt-conn": `${track}px` } as CSSProperties}>
     {connector && <span className={`${S}connector`} aria-hidden="true">{connector}</span>}
-    {/* The value, its ghosts and its drum share one box after the connector, so ghosts and options line up with the value. */}
+    {/* The value, its ghosts and its drum share the value track, so ghosts and options line up with the value. */}
     <span className={`${S}stack`}>
       <span ref={value} className={`${S}value`} aria-hidden="true" title={slot.label} onClick={() => { if (!locked || open) onToggleOpen(); }}>
         {now && <Mark mark={now.mark} />}<span className={`${S}text`}>{slot.label}</span>

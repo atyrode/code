@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  CELL_GAP, chooseForm, drumShift, FORM_CHOICES, FORM_HYSTERESIS_PX, MACHINE_EM, measureForm, slotWidth, type SlotText, type TextMeasure,
+  CELL_GAP, cellWidths, chooseForm, CONNECTOR_GAP, drumShift, FORM_CHOICES, FORM_HYSTERESIS_PX, MACHINE_EM, MARK_GAP, MARK_PX, measureForm,
+  type SlotText, type TextMeasure,
 } from "../code/generator/statement-layout.ts";
 import type { StatementWord } from "../code/generator/statement-model.ts";
 
@@ -28,20 +29,35 @@ describe("the statement's form follows the room it has", () => {
     expect(chooseForm(630, needs, 1)).toBe(2);
   });
 
-  test("each column is as wide as its widest cell in any row, and the inline verb adds its own cell", () => {
+  test("narrowing the panel never makes the line larger", () => {
+    const needs = FORM_CHOICES.map(choice => measureForm(choice, texts, ["Launch anyway"], measure).need);
+    let previous: number | null = null;
+    let size = Infinity;
+    for (let width = 1600; width >= 100; width -= 4) {
+      previous = chooseForm(width, needs, previous);
+      expect(FORM_CHOICES[previous]!.size).toBeLessThanOrEqual(size);
+      size = FORM_CHOICES[previous]!.size;
+    }
+  });
+
+  test("every row shares one value grid: a column's connector track fits its widest connector, its value track its widest value", () => {
     const rows = measureForm({ form: "rows", size: 20 }, texts, ["Launch anyway"], measure);
-    // Row two's advisor cell is wider than row one's lane cell, so the first column takes it.
-    expect(rows.columns[0]).toBe(slotWidth("advisor", texts.advisor, 20, false, measure));
+    // Column one: the lane (no connector, but its mark's gutter) over the advisor ("advisor" and its gap); the wider sets both rows' value edge.
+    expect(rows.columns[0]!.connector).toBe(Math.ceil(Math.max(measure("advisor", 20, 400) + CONNECTOR_GAP[20], MARK_PX + MARK_GAP)));
+    expect(rows.columns[0]!.value).toBe(Math.max(cellWidths("lane", texts.lane, 20, true, measure).value, cellWidths("advisor", texts.advisor, 20, false, measure).value));
+    // Column three: "thinking" over "on", so "on" is right-aligned in the same, wider track and both values start on one edge.
+    expect(rows.columns[2]!.connector).toBe(cellWidths("thinking", texts.thinking, 20, true, measure).connector);
     const verb = Math.ceil("Launch anyway".length * 15 / 2 + 24);
-    expect(rows.need).toBe(verb + CELL_GAP + rows.columns.reduce((sum, width) => sum + width, 0) + CELL_GAP * 2);
+    const words = rows.columns.reduce((sum, column) => sum + column.connector + column.value, 0) + CELL_GAP * 2;
+    expect(rows.need).toBe(verb + CELL_GAP + words);
     const stack = measureForm({ form: "stack", size: 15 }, texts, ["Launch anyway"], measure);
-    expect(stack.need).toBe(Math.max(verb, stack.columns[0]! + stack.columns[1]! + CELL_GAP));
+    expect(stack.need).toBe(Math.max(verb, stack.columns[0]!.connector + stack.columns[0]!.value + stack.columns[1]!.connector + stack.columns[1]!.value + CELL_GAP));
     expect(measureForm(FORM_CHOICES.at(-1)!, texts, ["Launch"], measure).need).toBe(0);
   });
 
   test("a long machine name is cut at its em cap rather than widening the line", () => {
     const long = plain(["A machine with a very long name indeed"], "on");
-    expect(slotWidth("machine", long, 20, false, measure)).toBe(Math.ceil(measure("on", 20, 400) + 6 + MACHINE_EM * 20 + 12));
+    expect(cellWidths("machine", long, 20, false, measure)).toEqual({ connector: Math.ceil(measure("on", 20, 400) + CONNECTOR_GAP[20]), value: Math.ceil(MACHINE_EM * 20 + 12) });
   });
 });
 
