@@ -251,64 +251,92 @@ outcomes, failures, the charge, recalls and the reason a pressed refused control
 
 Under the statement, provider columns headed by their quota pools, with tier rows of
 model seats and each role on the seat that leads it. From 560 px of panel width the
-board is columns by tier rows; below it is a roster grouped by provider that says a
-pointed team as before → after ("default, task sol → astra"). Both draw one model.
-Quota comes only from the pools and role outcomes, seats only from the seat model, and
-both are recomputed when the catalog, the team or the reading changes.
+board is columns by tier rows; below it is a roster grouped by provider, and the first
+status line says a pointed team as moves of named seats ("default, task sol → astra").
+Both draw one model. Quota comes only from the pools and role outcomes, seats only from
+the seat model, and both are recomputed when the catalog, the team or the reading changes.
 
-A **pool head** is one line (provider, `×included` or `×included of total` accounts and
-the verdict), a track per reported quota window with one number (the highest present
-reading among included accounts, `–` when none is present), and one note line: the
-pressing reset, a pace forecast ("full ≈ 14:20 at this pace", a projection from one
-reading) and readings too old to judge. The verdict reads room, "N of M with room",
-tight, "blocked" or "maxed" until the reset time or "reset unknown", "none included" or
-"no account". Historical readings are said in neutral grey as "<age> old ·
-availability unknown", never as room. Accounts not yet read, or unavailable, are said
-once for the board ("accounts not read yet · capacity unknown, not zero"). A pool
-without windows shows its balance, or that no quota is reported.
+A **pool head** is a line (provider, `×included` or `×included of total` accounts and
+the verdict, which takes a second line wherever one cannot hold it, breaking only
+between facts), a track per reported quota window and a note. A track has a cell per
+included account, in one order for every window (present readings from the least to
+the most used, then history, then unread accounts, an account without that window held
+by an empty outline), and the pool's level: the mean used share of the present
+readings, `–` when none is present; each account's reading is in the track's title.
+History is drawn as an outline of the width it had, never as a level. The note says
+readings too old to judge first, then the pressing reset and a pace forecast ("5h full
+≈ 14:20", "7d full ≈ Mon 20:00"): the first moment every included account would be
+full at once at its pace, a projection from one reading, said only when every account
+is read fresh, each one with room is on pace to fill before its window resets, and none
+has reopened by then; never a moment already past. Times beyond today carry their
+weekday, from six days on their date. The verdict reads room, "N of M with room", tight,
+"blocked" or "maxed" until the reset time or "reset unknown", "none included" or "no
+account". Historical readings are said in neutral grey as "<age> old · availability
+unknown", never as room. Accounts not yet read, or unavailable, are said once for the
+board ("accounts not read yet · capacity unknown, not zero"). A pool without windows
+shows its balance, or that no quota is reported. A provider with no seated role, and
+none under a pointed team, has its tracks and verdict in grey, its numbers kept.
 
 A **seat** shows the model, its roles grouped by thinking level and what each meets:
-"→ model until 14:20" when its lead's pool is out and a fallback takes over, "no route
-until 14:20" (or "reset unknown"), "no <provider> account" when no included account
-serves its lead, its fallback chain ("then A › B"), and fallbacks the session would
-drop because no included account serves their provider. A model whose quota is metered
-apart says its own state. A provider with no seated role collapses to its pool head and
-one line of idle seats. Providers with balances that this catalog does not use are
-listed as "not in this catalog".
+"→ model until 14:20" when its lead's pool is out and the first fallback takes over
+(unless its pool is out too), "no route until 14:20" (or "reset unknown"), "no
+<provider> account" when no included account serves its lead, its fallback chain ("then
+A › B"), and fallbacks the session would drop because no included account serves their
+provider. A model whose quota is metered apart says its own state on a line of its own,
+in both forms, "own quota · unknown" when nothing current is read. A capability rung a
+provider has no model for says so ("no elite GPT model"). A provider with no seated role
+takes only the width its head needs, its seats one idle line in the head's note row. A
+pointed team marks the roles it would move or drop, and names its arrivals on the seat
+that receives them ("fable + reviewer, security-reviewer"); after a commit by keyboard
+the moved roles keep a brief afterglow, none under reduced motion. Providers with
+balances that this catalog does not use are listed as "not in this catalog".
 
-Pressing a pool head opens its accounts in place: the Manual pool and each preset, then
-each account with an in/out switch and its readings. Switches edit the saved choices
-through `changeAccounts` at the observed revision, one edit at a time, never retried.
-They wait while a step runs or a charge waits, are unavailable in a read-only workspace,
-and refuse to include an account while the account list is historical or its credential
-is disabled. While a preset is active, accounts change only by choosing another pool,
-because hand edits belong to Manual. A failed edit is said once beside the accounts.
+Pressing a pool head opens its accounts in place: the workspace pool (Manual and each
+preset), then each account with an in/out switch ("Include <who> in the workspace
+pool", a shared edit every member's next launch draws on) and its readings. Switches
+edit the saved choices through `changeAccounts` at the observed revision, one edit at a
+time, never retried. They wait while a step runs or a charge waits, are unavailable in
+a read-only workspace, and refuse to include an account while the account list is
+historical or its credential is disabled. While a preset is active, accounts change only
+by choosing another pool, because hand edits belong to Manual. A failed edit is said
+once beside the accounts.
 
 ### Earlier statements
 
 Below the board, two groups, each said only where it differs from the statement.
 
 **Sessions.** Running sessions (terminals that carry an OMP session reference on their
-own machine) are listed with **Open**. Saved sessions appear only after an explicit
-read of each permitted online machine (**Read <machine>**; failed reads offer **Read
-again**; offline machines are named once): the newest five, then **Show all**. A saved
-session has **Resume** and **Resume with this team**. Rows say no more than the title,
-else the folder, the machine and when; the note says "team not recorded" because no
-session records the team it ran with. Every row verb asks the one gate for its own
-session before it is pressed and again between its steps. A refused verb stays
-focusable and gives its reason, including that a saved session on another machine
-waits until that machine is chosen on the statement, since resuming runs on the
-statement's machine, and that a read-only workspace allows Open only.
+own machine) are listed with **Open**; while the terminal inventory is unread or failed,
+running is "unknown", never none. Saved sessions appear only after an explicit read of
+each permitted online machine (**Read <machine>**; a read machine says when it was read
+and offers **read again**, failed reads offer **read again**, offline machines are named
+once); the panel's refresh reads every machine already read again. Saved sessions
+take one row per folder and machine, showing its newest session; the folder's other
+sessions are in that row's drum, the statement's idiom: `↑`/`↓` on the session turn to
+a newer or older one, `↵`/`Space` open the list below it, `Esc` closes it, and the row
+says which it shows ("2 of 5 here"). A saved session has **Resume as saved** and
+**Resume with current team**. Rows say no more than the title, the machine, the folder
+and when; the note says "team not recorded" because no session records the team it ran
+with. Every row verb asks the one gate for its own session before it is pressed and
+again between its steps. A refused verb stays focusable and gives its reason, including
+that a saved session on another machine waits until that machine is chosen on the
+statement, since resuming runs on the statement's machine, and that a read-only
+workspace allows Open only.
 
 **Recent teams.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).
 The list is device-local, never shared, and grants nothing; it does not record the
 machine. A team keeps its digit for the panel's life: relaunching it keeps the digit, a
 new team takes the next free one. A row says only the words that differ from the
-statement, or "this team". Pressing it, or its digit, recalls the team through the edit
-gate; it launches nothing, and recalling the saved workspace team is a discard, not a
-local edit that happens to match. When the statement is the saved workspace team and no
-recent team says it already, the group says "Workspace team · saved <time> by <name>".
+statement, extras as changes ("no spark"), or "this team", and what recalling it would
+strand on today's pools ("12 no route until 16:55", each group with its own time). Under
+the pointer or focus a row previews its team in the status line and on the board. A team
+today's catalog cannot form is refused, its word dimmed with the reason in its title.
+Pressing a row, or its digit, recalls the team through the edit gate and announces what
+it strands; it launches nothing, and recalling the saved workspace team is a discard, not
+a local edit that happens to match. When the statement is the saved workspace team and no
+recent team says it already, the group says "Workspace team · workspace last changed
+<time> by <name>": every write to the workspace record stamps that time and name.
 
 ### The footer and session options
 
@@ -590,9 +618,10 @@ OMP's `{ harness: "atyrode.omp", machineId, sessionId }` reference.
   Native missing, incompatible or unavailable model/thinking state refuses before
   a replacement session or inference can be created.
 
-The earlier statements offer separate **Resume** (saved state) and **Resume with this
-team** actions on a listed saved session, and **Open** on a running one. Session
-options chosen in the popover apply to the resume. Resume with this team needs the
+The earlier statements offer separate **Resume as saved** (saved state) and **Resume
+with current team** (the statement's saved workspace team) actions on a listed saved
+session, and **Open** on a running one. Session options chosen in the popover apply to
+the resume. Resume with current team needs the
 saved, verified, reviewed team and a lead some included account serves; local
 unsaved edits cannot be resumed as a team, and a team that approves plans
 automatically refuses. The workflow refreshes

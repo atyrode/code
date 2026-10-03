@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { Selection } from "../domain/contracts.ts";
+import { compileCatalog } from "../domain/catalog.ts";
 import {
-  differences, machineReads, machineState, pastMoment, pinRecents, rowVerdict, sessionName, sessionRows, sessionsNote,
+  differences, formRecent, machineReads, machineState, pastMoment, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote,
   teamProvenance, type SessionRead,
 } from "../code/generator/earlier-model.ts";
 import { sameTeam, teamWords } from "../code/generator/statement-model.ts";
@@ -36,10 +37,10 @@ describe("earlier statements print only what differs from the line", () => {
       .toEqual([{ word: "lane", text: "Mixed" }, { word: "advisor", text: "review" }]);
   });
 
-  test("extras that differ are named, even where the line's count would read the same", () => {
+  test("extras are written as the change from the line's: switches added by name, dropped ones as no-, none at all as no extras", () => {
     const line = lineOf(team({ spark: true, fallback: true }));
-    expect(line.words.extras).toBe("2 extras");
-    expect(differences(team({ priority: true, prewalk: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority + prewalk" }]);
+    expect(differences(team({ fallback: true }), line, familyWord)).toEqual([{ word: "extras", text: "no spark" }]);
+    expect(differences(team({ priority: true, prewalk: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority, prewalk, no spark, no fallbacks" }]);
     expect(differences(team(), line, familyWord)).toEqual([{ word: "extras", text: "no extras" }]);
     expect(differences(team({ budget: "free" }), lineOf(team()), familyWord)).toEqual([{ word: "extras", text: "free only" }]);
   });
@@ -102,8 +103,8 @@ describe("sessions are grouped running then saved", () => {
     return { id, machineId, session: ref(machineId, `s-${id}`), name: "omp", createdAt: 0, status: "running", exitCode: null,
       cwd: `/work/${id}`, homeId: `home-${id}`, unplaced: false, ...changes };
   }
-  const read = (...sessions: { id: string; title: string | null; updatedAt: number }[]): SessionRead =>
-    ({ state: "read", sessions: sessions.map(session => ({ ...session, cwd: `/saved/${session.id}` })) });
+  const read = (...sessions: { id: string; title: string | null; updatedAt: number; cwd?: string }[]): SessionRead =>
+    ({ state: "read", sessions: sessions.map(session => ({ cwd: `/saved/${session.id}`, ...session })), at: 0, again: false });
 
   test("running rows are terminals carrying an OMP session on their own machine, newest first", () => {
     const rows = sessionRows([
@@ -137,6 +138,11 @@ describe("sessions are grouped running then saved", () => {
     expect(sessionsNote(3, 0, true)).toBe("3 running · team not recorded");
   });
 
+  test("an unread or failed terminal inventory is never none running", () => {
+    expect(sessionsNote(null, 0, false)).toBe("running unknown");
+    expect(sessionsNote(null, 2, false)).toBe("running unknown · 2 saved · team not recorded");
+  });
+
   test("Read is offered once per online permitted machine not yet read; offline ones are named, revoked ones are not", () => {
     const machines: MachineSummary[] = [
       { id: studio, name: "Studio", online: true }, { id: build, name: "Build box", online: true },
@@ -148,6 +154,26 @@ describe("sessions are grouped running then saved", () => {
     expect(result.failed.map(entry => [entry.machine.name, entry.error])).toEqual([["Build box", "refused"]]);
     expect(result.offline.map(machine => machine.name)).toEqual(["Travel laptop"]);
     expect(machineReads(machines, "The permitted machine list could not be read.", new Map()).unread).toEqual([]);
+  });
+
+  test("a read machine says when it was read; read again, it reads as reading while its last answer stays listed", () => {
+    const machines: MachineSummary[] = [{ id: studio, name: "Studio", online: true }];
+    const answer: SessionRead = { state: "read", sessions: [{ id: "a", title: "One", cwd: "/a", updatedAt: 3 }], at: 42, again: false };
+    expect(machineReads(machines, null, new Map([[studio, answer]])).read).toEqual([{ machine: machines[0]!, at: 42, sessions: 1 }]);
+    const again = new Map<string, SessionRead>([[studio, { ...answer, again: true }]]);
+    expect(machineReads(machines, null, again)).toMatchObject({ read: [], reading: [machines[0]] });
+    expect(sessionRows([], again, "atyrode.omp").saved.map(row => row.sessionId)).toEqual(["a"]);
+  });
+
+  test("saved sessions fold into one row per folder and machine, folders by their newest session, each newest first", () => {
+    const reads = new Map<string, SessionRead>([
+      [studio, read({ id: "a1", title: "A old", updatedAt: 1, cwd: "/code/a" }, { id: "a3", title: "A new", updatedAt: 7, cwd: "/code/a" })],
+      [build, read({ id: "b1", title: "B", updatedAt: 5, cwd: "/code/b" }, { id: "a2", title: "A elsewhere", updatedAt: 9, cwd: "/code/a" })],
+    ]);
+    const folders = savedFolders(sessionRows([], reads, "atyrode.omp").saved);
+    expect(folders.map(folder => [folder.machineId, folder.folder, folder.sessions.map(row => row.sessionId)])).toEqual([
+      [build, "/code/a", ["a2"]], [studio, "/code/a", ["a3", "a1"]], [build, "/code/b", ["b1"]],
+    ]);
   });
 });
 
@@ -197,10 +223,10 @@ describe("the line's provenance when no recent team says it", () => {
   const savedAt = new Date(2026, 9, 3, 14, 2).getTime();
   const record = { selection: team(), updatedBy: "ana-id", updatedAt: savedAt };
 
-  test("the saved workspace team names when and by whom", () => {
-    expect(teamProvenance(team(), [], record, "me", new Map([["ana-id", "ana"]]), now)).toBe("Workspace team · saved 14:02 by ana");
-    expect(teamProvenance(team(), [], { ...record, updatedBy: "me" }, "me", new Map(), now)).toBe("Workspace team · saved 14:02 by you");
-    expect(teamProvenance(team(), [], record, "me", new Map(), now)).toBe("Workspace team · saved 14:02 by another member");
+  test("the saved workspace team names when the workspace last changed and by whom", () => {
+    expect(teamProvenance(team(), [], record, "me", new Map([["ana-id", "ana"]]), now)).toContain("14:02 by ana");
+    expect(teamProvenance(team(), [], { ...record, updatedBy: "me" }, "me", new Map(), now)).toContain("14:02 by you");
+    expect(teamProvenance(team(), [], record, "me", new Map(), now)).toContain("14:02 by another member");
   });
 
   test("said nowhere when a recent team already reads as this team, or when the line is not the saved team", () => {
@@ -214,5 +240,27 @@ describe("the line's provenance when no recent team says it", () => {
     expect(pastMoment(new Date(2026, 9, 1, 9, 5).getTime(), now)).toBe("Thu 09:05");
     expect(pastMoment(new Date(2026, 8, 12, 9, 5).getTime(), now)).toBe("12 Sep");
     expect(pastMoment(new Date(2025, 11, 30, 9, 5).getTime(), now)).toBe("30 Dec 2025");
+  });
+});
+
+describe("a recent team on today's catalog", () => {
+  const model = (key: string, provider: string, tier: 1 | 2 | 3) => ({
+    key, provider, tier, id: `native-${key}`, api: "test-api", quotaBucket: null, inputCostPerMillion: 4, outputCostPerMillion: 12, tokensPerSecond: 30,
+    timeToFirstTokenMs: 100, contextWindow: 200_000, thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"] as Selection["thinking"][], images: true,
+  });
+  // No elite model on either side: an elite team cannot be formed here.
+  const catalog = compileCatalog({ schemaVersion: 1, models: [
+    model("o1", "openai-codex", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3),
+    model("a1", "anthropic", 1), model("a2", "anthropic", 2), model("a3", "anthropic", 3),
+  ] });
+
+  test("a team the catalog forms is recalled as it is, with its review to preview", () => {
+    const form = formRecent(catalog, team(), team({ thinking: "low" }), familyWord, 0);
+    expect(form.kind).toBe("formed");
+  });
+
+  test("a team it cannot form blames the word whose value has no route here, not the words beside it", () => {
+    const form = formRecent(catalog, team(), team({ capability: 4, thinking: "xhigh", lane: { kind: "provider", family: "openai", blend: "only" } }), familyWord, 0);
+    expect(form).toMatchObject({ kind: "refused", word: "tier" });
   });
 });

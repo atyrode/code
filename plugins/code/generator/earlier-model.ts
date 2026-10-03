@@ -1,9 +1,14 @@
 import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { OmpSessionSummary } from "@atyrode/manifold-omp";
-import type { Selection } from "../../domain/contracts.ts";
+import type { CompiledCatalog } from "../../domain/catalog.ts";
+import type { Route, Selection } from "../../domain/contracts.ts";
+import { providerPolicy } from "../../domain/providers.ts";
+import { roleOutcomes, type QuotaPool } from "../../domain/quota.ts";
+import type { Review } from "../../domain/routing.ts";
+import { previewSelection } from "./dial-space.ts";
 import type { GateVerdict } from "./launch-step.ts";
 import { RECENT_TEAMS_LIMIT, type RecentTeam } from "./recent-teams.ts";
-import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords } from "./statement-model.ts";
+import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords, type Vocabulary } from "./statement-model.ts";
 
 /*
  * Earlier statements as data: the teams and sessions under the line, each said in the line's own
@@ -37,8 +42,8 @@ export type LineTeam = { words: TeamWords; selection: Selection | null };
 /**
  * The words of `team` that differ from the line, in the line's order; empty when the row is the
  * line's team, which it then reads as "this team". Identity is decided on the selections, because
- * words can coincide for different teams ("2 extras" and "2 extras"); for the same reason a team
- * with two or more extras names them instead of counting them.
+ * words can coincide for different teams. Extras are written as the change from the line's: the
+ * switches the team adds by name, the ones it drops as "no spark", and "no extras" for none at all.
  */
 export function differences(team: Selection, line: LineTeam, familyWord: (family: string) => string): Difference[] {
   if (line.selection && sameTeam(team, line.selection)) return [];
@@ -46,9 +51,71 @@ export function differences(team: Selection, line: LineTeam, familyWord: (family
   const changed: Difference[] = TEAM_WORDS.filter(word => word !== "extras" && words[word] !== line.words[word])
     .map(word => ({ word, text: words[word] }));
   const on = extrasOn(team);
-  const extrasDiffer = line.selection ? on.join() !== extrasOn(line.selection).join() : words.extras !== line.words.extras;
-  if (extrasDiffer) changed.push({ word: "extras", text: on.length >= 2 ? on.join(" + ") : words.extras });
+  if (!line.selection) {
+    if (words.extras !== line.words.extras) changed.push({ word: "extras", text: words.extras });
+    return changed;
+  }
+  const lineOn = extrasOn(line.selection);
+  const added = on.filter(extra => !lineOn.includes(extra)), dropped = lineOn.filter(extra => !on.includes(extra));
+  if (added.length || dropped.length) {
+    changed.push({ word: "extras", text: on.length === 0 ? "no extras" : [...added, ...dropped.map(extra => `no ${extra}`)].join(", ") });
+  }
   return changed;
+}
+
+// ---------------------------------------------------------------- what a team would strand
+
+/**
+ * What a team would strand on the present pools, in a row's words: roles with no route grouped by
+ * when their own routes return, the soonest first, each group with its own time ("3 no route until
+ * 13:00 · 9 until 16:30"), then roles that no included account serves ("2 no Claude account").
+ * Null when every role has a route; a fallback that takes over strands nothing.
+ */
+export function strandsNote(catalog: CompiledCatalog, routes: readonly Route[], pools: readonly QuotaPool[], vocab: Vocabulary): string | null {
+  const waits = new Map<number | null, number>();
+  const unserved = new Map<string, number>();
+  for (const outcome of roleOutcomes(catalog, routes, pools)) {
+    if (outcome.kind === "no-route") waits.set(outcome.until, (waits.get(outcome.until) ?? 0) + 1);
+    if (outcome.kind === "no-account") {
+      const family = providerPolicy(outcome.provider).family;
+      unserved.set(family, (unserved.get(family) ?? 0) + 1);
+    }
+  }
+  // A reopening nobody reported comes last: it may be the latest of all.
+  const groups = [...waits].sort(([left], [right]) => (left ?? Number.POSITIVE_INFINITY) - (right ?? Number.POSITIVE_INFINITY));
+  const parts = [
+    ...groups.map(([until, count], index) => `${count}${index === 0 ? " no route" : ""} ${until === null ? "with no reset known" : `until ${vocab.time(until)}`}`),
+    ...[...unserved].map(([family, count]) => `${count} no ${vocab.account(family)} account`),
+  ];
+  return parts.length ? parts.join(" · ") : null;
+}
+
+// ---------------------------------------------------------------- a recent team on today's catalog
+
+/** The selection fields each word of a team sets. */
+const WORD_FIELDS: Readonly<Record<TeamWord, readonly (keyof Selection)[]>> = {
+  lane: ["lane"], tier: ["capability"], thinking: ["thinking"], advisor: ["advisor"],
+  extras: ["spark", "priority", "prewalk", "planYolo", "fallback", "budget"],
+};
+
+/** A recent team as the line's catalog forms it: its review, or the word the catalog has no route for and why, said in the row's words. */
+export type RecentForm = { readonly kind: "formed"; readonly review: Review } | { readonly kind: "refused"; readonly word: TeamWord; readonly reason: string };
+
+/**
+ * Whether the catalog forms a recent team exactly, as a recall requires (a team narrowed to fit is
+ * not the team that was launched), and when it does not, which word is to blame: the first whose
+ * value alone, set on the line's team, the catalog cannot form. A team refused only as a whole
+ * blames its first word that differs from the line.
+ */
+export function formRecent(catalog: CompiledCatalog, line: Selection, team: Selection, familyWord: (family: string) => string, nowMs: number): RecentForm {
+  const review = previewSelection(catalog, team, nowMs);
+  if (review) return { kind: "formed", review };
+  const words = teamWords(team, familyWord), lineWords = teamWords(line, familyWord);
+  const alone = (word: TeamWord) => ({ ...line, ...Object.fromEntries(WORD_FIELDS[word].map(field => [field, team[field]])) }) as Selection;
+  const word = TEAM_WORDS.find(candidate => !sameTeam(alone(candidate), line) && previewSelection(catalog, alone(candidate), nowMs) === null)
+    ?? TEAM_WORDS.find(candidate => words[candidate] !== lineWords[candidate]) ?? "lane";
+  const lead = team.lane.kind === "mixed" ? "openai" : team.lane.family;
+  return { kind: "refused", word, reason: word === "tier" ? `No ${words.tier} ${familyWord(lead)} model here` : `${phrase(word, words[word])} has no route here` };
 }
 
 // ---------------------------------------------------------------- digits
@@ -91,10 +158,13 @@ export type SessionRow = {
   /** When the terminal started, or when the saved transcript last changed. */
   at: number;
 };
-/** A machine's explicit saved-session read. */
+/**
+ * A machine's explicit saved-session read. A read keeps its answer and when it came (`at`); asked
+ * again, it keeps showing that answer, marked `again`, until the new one lands.
+ */
 export type SessionRead =
   | { state: "reading" }
-  | { state: "read"; sessions: readonly OmpSessionSummary[] }
+  | { state: "read"; sessions: readonly OmpSessionSummary[]; at: number; again: boolean }
   | { state: "failed"; error: string };
 
 /**
@@ -126,13 +196,31 @@ export function sessionName(row: SessionRow): string {
   return row.title || row.folder || `session ${row.sessionId.slice(0, 8)}`;
 }
 
+/** One folder's saved sessions on one machine, newest first: a single row whose drum holds the older ones. */
+export type SavedFolder = { readonly key: string; readonly machineId: string; readonly folder: string | null; readonly sessions: readonly SessionRow[] };
+
+/**
+ * Saved sessions as one row per folder and machine, the folders in the order of their newest
+ * session, so a machine with hundreds of transcripts stays one row per place it worked in and no
+ * session is hidden behind a count. Sessions without a folder share one row per machine.
+ */
+export function savedFolders(saved: readonly SessionRow[]): SavedFolder[] {
+  const folders = new Map<string, SessionRow[]>();
+  for (const row of [...saved].sort((left, right) => right.at - left.at)) {
+    const key = JSON.stringify([row.machineId, row.folder]);
+    folders.set(key, [...folders.get(key) ?? [], row]);
+  }
+  return [...folders].map(([key, sessions]) => ({ key, machineId: sessions[0]!.machineId, folder: sessions[0]!.folder, sessions }));
+}
+
 /**
  * The group's one note: counts, "team not recorded" once (today no session records the team it
  * ran with), and, where saved sessions are listed in a read-only workspace, that only Open works.
+ * `running` is null while the terminal inventory is unread or failed: running is then unknown, never none.
  */
-export function sessionsNote(running: number, saved: number, readOnly: boolean): string {
-  return [running ? `${running} running` : "none running", saved ? `${saved} saved` : null, running + saved ? "team not recorded" : null,
-    readOnly && saved ? "read-only: Open only" : null].filter(part => part !== null).join(" · ");
+export function sessionsNote(running: number | null, saved: number, readOnly: boolean): string {
+  return [running === null ? "running unknown" : running ? `${running} running` : "none running", saved ? `${saved} saved` : null,
+    (running ?? 0) + saved ? "team not recorded" : null, readOnly && saved ? "read-only: Open only" : null].filter(part => part !== null).join(" · ");
 }
 
 export type MachineState =
@@ -150,17 +238,18 @@ export function machineState(machineId: string, machines: readonly MachineSummar
 
 /**
  * Where an explicit read stands for each permitted machine: online ones not yet read offer a
- * Read control, reading and failed ones say so, offline ones are named once. Revoked machines
- * offer nothing. Nothing at all while the roster cannot be read.
+ * Read control; reading ones, a first read or one asked again, say so; read ones say when, with
+ * how many sessions they reported; failed ones say why; offline ones are named once. Revoked
+ * machines offer nothing. Nothing at all while the roster cannot be read.
  */
 export function machineReads(machines: readonly MachineSummary[] | null, rosterError: string | null, reads: ReadonlyMap<string, SessionRead>) {
   const permitted = rosterError === null ? machines ?? [] : [];
   const live = permitted.filter(machine => machine.online && !machine.revoked);
   return {
     unread: live.filter(machine => !reads.has(machine.id)),
-    reading: live.filter(machine => reads.get(machine.id)?.state === "reading"),
+    reading: live.filter(machine => { const read = reads.get(machine.id); return read?.state === "reading" || (read?.state === "read" && read.again); }),
+    read: live.flatMap(machine => { const read = reads.get(machine.id); return read?.state === "read" && !read.again ? [{ machine, at: read.at, sessions: read.sessions.length }] : []; }),
     failed: live.flatMap(machine => { const read = reads.get(machine.id); return read?.state === "failed" ? [{ machine, error: read.error }] : []; }),
-    empty: live.filter(machine => { const read = reads.get(machine.id); return read?.state === "read" && read.sessions.length === 0; }),
     offline: permitted.filter(machine => !machine.online && !machine.revoked),
   };
 }
@@ -216,14 +305,16 @@ export type SavedTeam = { selection: Selection | null; updatedBy: string; update
 
 /**
  * Where the line's team comes from, when no recent team says it already ("this team"): the
- * workspace team, with when and by whom it was saved. Null when a recent team matches the line,
- * when the line is not the saved team, or when there is none. `names` maps principal ids to the
- * names the panel can see; the viewer is "you", anyone else unseen is "another member".
+ * workspace team, with when and by whom the workspace record last changed. Every write to the
+ * record (an account switched, a catalog staged) stamps that time and name, so they are the
+ * record's, never a claim about who saved the team. Null when a recent team matches the line, when
+ * the line is not the saved team, or when there is none. `names` maps principal ids to the names
+ * the panel can see; the viewer is "you", anyone else unseen is "another member".
  */
 export function teamProvenance(line: Selection | null, recents: readonly RecentTeam[], saved: SavedTeam | null,
   viewer: string, names: ReadonlyMap<string, string>, now: number): string | null {
   if (!line || !saved?.selection || !sameTeam(line, saved.selection)) return null;
   if (recents.some(team => sameTeam(team.selection, line))) return null;
   const by = saved.updatedBy === viewer ? "you" : names.get(saved.updatedBy) ?? "another member";
-  return `Workspace team · saved ${pastMoment(saved.updatedAt, now)} by ${by}`;
+  return `Workspace team · workspace last changed ${pastMoment(saved.updatedAt, now)} by ${by}`;
 }
