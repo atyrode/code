@@ -5,12 +5,12 @@ import type { CompiledCatalog } from "../../domain/catalog.ts";
 import type { Lane, Selection } from "../../domain/contracts.ts";
 import type { Review } from "../../domain/routing.ts";
 import { accountWord, Button, capitalized, Check, familyWord, hueOf, middleId, ReadoutLine, SectionBand, SegmentMeter, withKey, type Readout } from "../ui.tsx";
-import { previewSelection } from "./workbench-model.ts";
+import { routeChanges } from "./consequences.ts";
+import { chooseOption, laneWord, MAIN_DIALS, MORE_DIALS, SPECS, type DialId, type MoreDial, type OptionRefusal } from "./dial-space.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const THINKING = ThinkingLevelSchema.options;
-type Thinking = (typeof THINKING)[number];
 type Route = Review["routes"][number];
 type Estimates = Review["estimates"];
 
@@ -39,25 +39,6 @@ const EFFORT_WORDS: Readonly<Record<string, string>> = { minimal: "Minimal", low
 /** A thinking level as the dials and the routing table both name it. */
 function effortWord(level: string): string {
   return EFFORT_WORDS[level] ?? capitalized(level);
-}
-
-// ---------------------------------------------------------------- route changes and consequences
-
-type RouteChange = { role: string; kind: "added" | "removed" | "changed" | "fallback"; from: Route | undefined; to: Route | undefined };
-/** What would differ between two reviews, role by role, in display order. */
-function routeChanges(before: readonly Route[], after: readonly Route[]): RouteChange[] {
-  const previous = new Map(before.map(route => [route.role, route]));
-  const next = new Map(after.map(route => [route.role, route]));
-  const roles = [...before.map(route => route.role), ...after.filter(route => !previous.has(route.role)).map(route => route.role)];
-  const changes: RouteChange[] = [];
-  for (const role of roles) {
-    const from = previous.get(role), to = next.get(role);
-    const kind = !from ? "added" : !to ? "removed"
-      : from.lead.key !== to.lead.key || from.lead.thinking !== to.lead.thinking ? "changed"
-      : JSON.stringify(from.fallback) !== JSON.stringify(to.fallback) ? "fallback" : null;
-    if (kind) changes.push({ role, kind, from, to });
-  }
-  return changes;
 }
 
 /** One sentence of consequence: which roles rise, fall or move provider, and how the estimates shift. */
@@ -94,33 +75,12 @@ function consequence(catalog: CompiledCatalog, before: Review, after: Review, ma
   return capitalized(parts.length ? parts.join("; ") : "no route changes");
 }
 
-// ---------------------------------------------------------------- dial definitions
+// ---------------------------------------------------------------- dial words
 
-export type DialId = "lane" | "model" | "thinking" | "advisor" | "budget" | "priority" | "spark" | "prewalk" | "plans" | "fallbacks";
-const MAIN_DIALS: readonly DialId[] = ["lane", "model", "thinking", "advisor"];
-type MoreDial = "budget" | "priority" | "spark" | "prewalk" | "plans" | "fallbacks";
-const MORE_DIALS: readonly MoreDial[] = ["budget", "priority", "spark", "prewalk", "plans", "fallbacks"];
-const CAPABILITY_WORDS = ["fast", "normal", "smart", "elite"] as const;
 const COST_WORDS = ["Lowest", "Lower", "Moderate", "Higher", "Highest"];
 const SPEED_WORDS = ["Slowest", "Slower", "Balanced", "Faster", "Fastest"];
 
-/** The lane's stable word (`gpt-led`), which map mode and the routing preview key on; never shown. */
-const LANE_KEYS: Readonly<Record<string, string>> = { openai: "gpt", anthropic: "claude" };
-const laneWord = (lane: Lane) => lane.kind === "mixed" ? "mixed" : `${LANE_KEYS[lane.family] ?? lane.family}-${lane.blend}`;
 const laneLabel = (lane: Lane) => lane.kind === "mixed" ? "Mixed" : lane.blend === "led" ? `${familyWord(lane.family)}-led` : `${familyWord(lane.family)} only`;
-/** A spectrum: the two providers `mixed` blends on either side of it, then every other provider. */
-function laneGroups(lanes: readonly Lane[]): Lane[][] {
-  const find = (family: string, blend: "only" | "led") => lanes.find(lane => lane.kind === "provider" && lane.family === family && lane.blend === blend);
-  const mixed = lanes.find(lane => lane.kind === "mixed");
-  const spectrum = mixed ? [find("openai", "only"), find("openai", "led"), mixed, find("anthropic", "led"), find("anthropic", "only")].filter((lane): lane is Lane => lane !== undefined) : [];
-  const used = new Set(spectrum);
-  const groups = spectrum.length ? [spectrum] : [];
-  for (const family of new Set(lanes.flatMap(lane => lane.kind === "provider" ? [lane.family] : []))) {
-    const group = [find(family, "led"), find(family, "only")].filter((lane): lane is Lane => lane !== undefined && !used.has(lane));
-    if (group.length) groups.push(group);
-  }
-  return groups;
-}
 function laneDescription(lane: Lane | undefined): string {
   if (!lane || lane.kind === "mixed") return "GPT leads the work; Claude plans and reviews; each backs up the other";
   if (lane.blend === "only") return `Every role stays on ${familyWord(lane.family)}; vision may borrow another provider`;
@@ -146,46 +106,6 @@ const SWITCHES: Readonly<Record<MoreDial, { label: string; short: string; on: st
   plans: { label: "Approve plans automatically", short: "Auto plans", on: "auto", off: "ask" },
   fallbacks: { label: "Fallback chains", short: "Fallbacks", on: "on", off: "off" },
 };
-
-/** A lane change keeps what the new lane can serve and steps the rest down, as choosing it by hand would. */
-function withLane(catalog: CompiledCatalog, selection: Selection, lane: Lane): Selection {
-  const probe = previewSelection(catalog, { ...selection, lane, capability: 1, spark: false, priority: false, budget: "any" });
-  if (!probe) return { ...selection, lane };
-  const { capabilities, spark, priority, budgets } = probe.available;
-  return {
-    ...selection, lane,
-    capability: capabilities.includes(selection.capability) ? selection.capability : capabilities.at(-1)!,
-    spark: selection.spark && spark, priority: selection.priority && priority,
-    budget: budgets.includes(selection.budget) ? selection.budget : "any",
-  };
-}
-
-type Spec = { label: string; words: (review: Review) => string[][]; get: (selection: Selection) => string; set: (catalog: CompiledCatalog, selection: Selection, word: string, review: Review) => Selection | null };
-const binary = (label: string, key: "priority" | "spark" | "prewalk" | "fallback"): Spec => ({
-  label, words: () => [["off", "on"]], get: selection => selection[key] ? "on" : "off", set: (_, selection, word) => ({ ...selection, [key]: word === "on" }),
-});
-const SPECS: Readonly<Record<DialId, Spec>> = {
-  lane: {
-    label: "Lane", words: review => laneGroups(review.available.lanes).map(group => group.map(laneWord)), get: selection => laneWord(selection.lane),
-    set: (catalog, selection, word, review) => { const lane = review.available.lanes.find(candidate => laneWord(candidate) === word); return lane ? withLane(catalog, selection, lane) : null; },
-  },
-  model: {
-    label: "Model", words: () => [[...CAPABILITY_WORDS]], get: selection => CAPABILITY_WORDS[selection.capability - 1]!,
-    set: (_, selection, word) => { const index = CAPABILITY_WORDS.indexOf(word as typeof CAPABILITY_WORDS[number]); return index < 0 ? null : { ...selection, capability: (index + 1) as Selection["capability"] }; },
-  },
-  thinking: { label: "Thinking", words: () => [[...THINKING]], get: selection => selection.thinking, set: (_, selection, word) => THINKING.includes(word as Thinking) ? { ...selection, thinking: word as Thinking } : null },
-  advisor: {
-    label: "Advisor", words: () => [["off", "glance", "review", "audit"]], get: selection => selection.advisor,
-    set: (_, selection, word) => word === "off" || word === "glance" || word === "review" || word === "audit" ? { ...selection, advisor: word } : null,
-  },
-  budget: { label: "Budget", words: () => [["any", "free"]], get: selection => selection.budget, set: (_, selection, word) => word === "any" || word === "free" ? { ...selection, budget: word } : null },
-  priority: binary("Priority", "priority"),
-  spark: binary("Spark", "spark"),
-  prewalk: binary("Prewalk", "prewalk"),
-  plans: { label: "Plans", words: () => [["ask", "auto"]], get: selection => selection.planYolo ? "auto" : "ask", set: (_, selection, word) => ({ ...selection, planYolo: word === "auto" }) },
-  fallbacks: binary("Fallbacks", "fallback"),
-};
-
 type OptionState = {
   word: string;
   ok: boolean;
@@ -228,28 +148,11 @@ export function useDialModel(catalog: CompiledCatalog | null, selection: Selecti
       const options = new Map<string, OptionState>();
       for (const word of words) {
         if (word === current) { options.set(word, { word, ok: true, reason: null, selection, review: null, consequence: "" }); continue; }
-        let candidate = spec.set(catalog, selection, word, base);
-        let review = candidate && previewSelection(catalog, candidate, now);
-        // A free budget a new lane cannot serve steps back to any, rather than refusing the lane.
-        if (!review && candidate && id === "lane" && candidate.budget === "free") {
-          candidate = { ...candidate, budget: "any" };
-          review = previewSelection(catalog, candidate, now);
-        }
-        let reason: string | null = null;
-        if (id === "budget" && word === "free" && starter) reason = base.available.budgets.includes("free") ? null : "No free route in the catalog";
-        else if (!review) {
-          const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
-          reason = id === "model" ? `No ${word} ${familyWord(lead)} model in the catalog`
-            : id === "spark" || id === "priority" ? `${spec.label} needs a GPT lane`
-            : id === "budget" ? "No free route in the catalog" : "Not in the catalog";
-        } else if (id === "lane" && families) {
-          const missing = missingFamily(catalog, review, families);
-          if (missing) reason = `Needs a ${accountWord(missing)} account`;
-        }
-        const previewable = review && !(id === "budget" && starter);
+        const choice = chooseOption(catalog, selection, base, id, word, { families, starter, nowMs: now });
+        const reason = choice.refusal && refusalText(id, word, selection, choice.refusal);
         options.set(word, {
-          word, ok: reason === null && candidate !== null, reason, selection: candidate, review: reason === null && previewable ? review : null,
-          consequence: reason === null && previewable ? consequence(catalog, base, review!, 8) : "",
+          word, ok: reason === null && choice.selection !== null, reason, selection: choice.selection, review: choice.review,
+          consequence: choice.review ? consequence(catalog, base, choice.review, 8) : "",
         });
       }
       const lanes = base.available.lanes;
@@ -265,6 +168,15 @@ export function useDialModel(catalog: CompiledCatalog | null, selection: Selecti
   }, [catalog, selection, base, families, starter]);
 }
 
+/** A refused option's reason, in the words its dial uses. */
+function refusalText(id: DialId, word: string, selection: Selection, refusal: OptionRefusal): string {
+  if (refusal.kind === "account") return `Needs a ${accountWord(refusal.family)} account`;
+  const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
+  return id === "model" ? `No ${word} ${familyWord(lead)} model in the catalog`
+    : id === "spark" || id === "priority" ? `${SPECS[id].label} needs a GPT lane`
+    : id === "budget" ? "No free route in the catalog" : "Not in the catalog";
+}
+
 /** The readout an option publishes: its description when chosen, its refusal when unavailable, else its consequence. */
 function optionReadout(dial: DialState, word: string): Readout {
   const state = dial.options.get(word);
@@ -272,14 +184,6 @@ function optionReadout(dial: DialState, word: string): Readout {
   if (word === dial.current || !state) return { label, text: dial.description(word) };
   if (!state.ok) return { label, text: state.reason ?? "Unavailable" };
   return { label, text: state.review ? state.consequence : dial.description(word) };
-}
-
-/**
- * The first family this review would route to (lead or fallback) with no included account, mirroring
- * the session door, which refuses a composition whose any routed provider lacks pool accounts.
- */
-export function missingFamily(catalog: CompiledCatalog, review: Review, families: ReadonlySet<string>): string | undefined {
-  return [...new Set(review.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => catalog.family(choice.key)))].find(family => !families.has(family));
 }
 
 // ---------------------------------------------------------------- generator section

@@ -20,7 +20,8 @@ import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { FleetSessions } from "./fleet.tsx";
-import { displayAliases, GeneratorPlaceholder, GeneratorZone, missingFamily, RoutingZone, useDialModel, type DialId, type LedgerView, type MapTarget } from "./dials.tsx";
+import { displayAliases, GeneratorPlaceholder, GeneratorZone, RoutingZone, useDialModel, type LedgerView, type MapTarget } from "./dials.tsx";
+import { missingFamily, type DialId } from "./dial-space.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
 

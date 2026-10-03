@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary, type ServiceReadArgs } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
-import { defaultSelection, reviewCatalog, type Review } from "../../domain/routing.ts";
+import { defaultSelection, type Review } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
@@ -13,6 +13,7 @@ import { operationReady } from "../permission-plan.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
 import { launchStatusText, saveGate, type LaunchFacts, type ProfileSource } from "./launch-step.ts";
+import { previewSelection } from "./dial-space.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 
 /** The suggest door's prompt limit (contract.ts `suggest` input); longer tasks are kept, never truncated. */
@@ -156,15 +157,6 @@ export type WorkbenchModel = {
   /** Whether the active catalog's verification holds, and the verify flow that renews it. */
   verification: ModelVerification;
 };
-
-/**
- * The local catalog review a hypothetical selection would produce, or null when the domain
- * refuses it. Pure apart from reading the clock when `nowMs` is omitted (time of day feeds the
- * estimates); performs no effects, so map-mode previews can call it on every hover.
- */
-export function previewSelection(compiled: CompiledCatalog, selection: Selection, nowMs = Date.now()): Review | null {
-  try { return reviewCatalog(compiled, selection, nowMs); } catch { return null; }
-}
 
 /** Owns the workbench's state, observations, safety checks and actions; presentation stays with the caller. */
 export function useWorkbench({ host, target, machine, rosterError, available }: WorkbenchInput): WorkbenchModel {
