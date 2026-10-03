@@ -349,7 +349,8 @@ export function StatementLine({ model, active, preview, setPreview, pools, machi
     const word = STATEMENT_WORDS.find(candidate => candidate === named) ?? null;
     const action = statementKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
-      inView, onRoot, inField: target?.matches("textarea, input, select, [contenteditable]") ?? false, inDialog: target?.closest("[role=dialog], dialog") != null,
+      inView, onRoot, inField: target?.matches("textarea, input, select, [contenteditable]") ?? false,
+      inDialog: target?.closest("[role=dialog], dialog, [data-popover]") != null,
       word, onVerb: inside && target.closest("[data-stmt-verb]") !== null, open, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }
