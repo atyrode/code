@@ -188,17 +188,25 @@ stays focusable, so a step changing its state never drops focus; pressing a refu
 announces the reason, and the status lines give the reason with a one-press fix where
 there is one (use another online machine, show the accounts, review a staged catalog in
 Models, retry a read, enable discovery or sessions in Setup, use the saved workspace
-team). A read-only workspace is stated in neutral grey: "Read-only workspace · changes
-stay a local preview". The label names the next step: **Verify models**, **Review**,
-**Save & review**, **Save & launch**, **Launch** or **Launch anyway** (some role has no
-route now), with **Checking…**, **Verifying…**, **Saving…**, **Reviewing…**,
-**Launching…** and **Resuming…** while one runs. An edited team saves first. **Save &
+team). A read-only workspace (no `containers:write`) is stated in neutral grey:
+"Read-only workspace · changes stay a local preview". Write access is the caps alone:
+without a canvas beside the panel, verifying, saving and account edits still work, and
+only launch and resume refuse, in neutral grey, "Open Code beside the workspace canvas to
+launch". The label names the next step: **Verify models**, **Review**, **Save**
+(no canvas to launch from), **Save & review**, **Save & launch**, **Launch**, **Launch
+anyway** (a role's pools are out; never for a lead no included account serves, which
+save, review and launch all refuse) or **Review in Models** (a staged-only workspace;
+the press opens Models), with **Checking…**, **Verifying…**, **Saving…**,
+**Reviewing…**, **Launching…** and **Resuming…** while one runs. Verify is refused up
+front when the account observation cannot be read or includes no account. An edited
+team saves first, and while it does the second status line says what the save changes
+("2 changes: thinking high → max, advisor glance → off") beside revert. **Save &
 launch** is offered when the projection rests on present readings (every lead's pool
 judged fresh and the served providers known), and the press then continues from the
 review to the launch only if the review shows the projected leads and the same
-providers in the account pool; otherwise it stops with "Stopped: the review differs
-from what was shown", and the next press launches with the reviewed pool. **Save &
-review** stops at the review so the pool is seen first.
+providers in the account pool; otherwise it stops and says what differs (roles' seats,
+providers that joined or left the pool) as a choice: launch with the reviewed pool or
+change a word first. **Save & review** stops at the review so the pool is seen first.
 
 **Verification and its charge.** **Verify models** runs OMP's inventory ("Checking
 which models your accounts can reach"), then states the charge: "Verifying spends N tiny
@@ -229,10 +237,13 @@ account serves, as the session door does; fallbacks it would drop are noted, nev
 refusal. Outcome and refusal lines clear whenever the team, machine or account pool
 changes.
 
-**Keys** act only from inside the panel, and keys Code consumes do not reach
-workspace-wide bindings. The panel takes focus when it opens, so they work at once.
-`Mod+↵` takes the verb's step from anywhere in the panel, typing included, but never
-on key repeat. Outside text fields and dialogs: `←` and `→` move between the verb and
+**Keys** act only from inside the panel's main view, and keys Code consumes do not reach
+workspace-wide bindings; none act behind a sheet, in a dialog or popover, or once another
+control handled the key. The panel takes focus when it opens: from there an arrow moves
+focus to the lane and `↵` takes the verb's step. `Mod+↵` takes the verb's step from
+anywhere in the main view, typing included, but never on key repeat. A keyboard change
+writes its consequence, or the reason it was refused, in the status lines until the next
+input. Outside text fields and dialogs: `←` and `→` move between the verb and
 the words in reading order; on a word `↑` and `↓` change it (up is more), `Home` and
 `End` jump to its ends, `↵` or `Space` open and close its options, `Backspace` returns
 it to the last launch (the machine is not recorded) and `Esc` closes the options
