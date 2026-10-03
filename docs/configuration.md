@@ -194,7 +194,8 @@ as the reason there is no team; a fix the second line offered moves up beside th
 
 **The verb.** One control whose `data-state` is `ready`, `busy`, `waiting` (a charge
 waits on its own Confirm) or `refused`. It is `aria-disabled` rather than disabled and
-stays focusable, so a step changing its state never drops focus; pressing a refused one
+stays focusable, so a step changing its state never drops focus, and a status fix that
+leaves the lines once pressed hands focus to the verb; pressing a refused one
 announces the reason, and the status lines give the reason with a one-press fix where
 there is one (use another online machine, show the accounts, review a staged catalog in
 Models, retry a read, enable discovery or sessions in Setup, use the saved workspace

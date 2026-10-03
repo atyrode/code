@@ -415,6 +415,17 @@ export function StatementLine({ model, active, preview, setPreview, pools, machi
     return () => { panel.removeEventListener("keydown", listener); panel.removeEventListener("pointerdown", pointer, true); };
   }, []);
 
+  // A status control that leaves the lines once pressed (a retry that clears its failure, a rescue taken) takes focus with
+  // it to the page, where the panel's keys no longer reach; focus then goes to the verb, the statement's fixed point.
+  const statusFocus = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const control = statusFocus.current;
+    if (!control || control.isConnected) return;
+    statusFocus.current = null;
+    const active = control.ownerDocument.activeElement;
+    if (!active || active === control.ownerDocument.body) verbButton.current?.focus({ preventScroll: true });
+  });
+
   // The wheel turns a word only on its open drum, or under keyboard focus after the pointer rests (wheel-turn.ts); never the
   // machine, whose turn would move the launch's destination under a scroll.
   useWheelTurn(field, { controls: "[data-stmt-word]:not([data-stmt-word=machine])", open: "[data-stmt-word][data-open]:not([data-stmt-word=machine])" },
@@ -510,7 +521,8 @@ export function StatementLine({ model, active, preview, setPreview, pools, machi
         {inline && verbCell}<span className={`${S}empty`}>{model.starterError ?? (reading ? "Reading the team" : "No team to show")}</span>
       </div>}
     </div>
-    <div className={`${S}status`}>
+    <div className={`${S}status`} onFocus={event => { statusFocus.current = event.target; }}
+      onBlur={event => { if (event.relatedTarget) statusFocus.current = null; }}>
       {lines.map((entry, index) => <StatusRow key={index} id={`${statusId}-${index + 1}`} line={entry}
         confirm={charge && <button type="button" className={`${S}confirm`} aria-label={`Confirm charge: ${charge.requests} ${charge.requests === 1 ? "request" : "requests"}`}
           aria-disabled={!verification.canConfirm || undefined}
