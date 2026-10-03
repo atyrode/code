@@ -39,7 +39,8 @@ const SEVERITY: Readonly<Record<RedlineReason, number>> = { "no-account": 4, blo
 /**
  * The worst pool these routes would lead on, with the roles leading there: an unserved one, then
  * blocked, maxed, tight; the first such pool in pool order on a tie. Fallbacks are not counted, as a
- * fallback spends only when its lead cannot. Null when every lead's pool is open, unknown or stale.
+ * fallback spends only when its lead cannot. Null when no lead's pool is any of those; a stale or
+ * unknown reading never draws a redline, because it says nothing current about the pool.
  */
 export function redline(catalog: CompiledCatalog, routes: readonly Route[], pools: readonly QuotaPool[]): Redline | null {
   const leading = new Map<string, string[]>();

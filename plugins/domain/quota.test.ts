@@ -122,6 +122,14 @@ describe("what each role runs, from its own chain and the pools", () => {
     expect(result.get("reviewer")).toEqual({ role: "reviewer", kind: "no-account", provider: "anthropic" });
   });
 
+  test("with no account signed in at all, every role says so, never that it leads", () => {
+    const empty: AccountsObservation = { scope, observedAt: now, status: "fresh", accounts: [] };
+    const view = projectUsage({ scope, observedAt: now, accounts: [] }, empty, initialAccountChoices(), now, { maxAgeMs: 5 * MINUTE, refreshStatus: "succeeded" });
+    const result = outcomes(selection(), { view, current: true, nowMs: now });
+    expect([...result.values()].every(outcome => outcome.kind === "no-account")).toBe(true);
+    expect(result.get("default")).toEqual({ role: "default", kind: "no-account", provider: "openai-codex" });
+  });
+
   test("no route waits for the earliest reopening, and says nothing when any pool in the chain has no reported reset", () => {
     const spent = [window(1, { resetsAt: null })];
     const result = outcomes(selection(), reading({ alice: spent, bob: spent, dave: spent }, { blocks: blocked }));

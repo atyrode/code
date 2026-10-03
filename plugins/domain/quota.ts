@@ -126,7 +126,10 @@ export function poolId(provider: string, bucket: string | null): string {
   return bucket === null ? provider : `${provider}:${bucket}`;
 }
 
-/** Included, enabled accounts: the ones a launch's pool would hold and the projection lets vote. */
+/**
+ * Included, enabled accounts, as the projection's bucket votes count them: a launch's pool less any
+ * credential a fresh usage report says the provider disabled, which could not serve the team anyway.
+ */
 function usableAccounts(group: UsageProvider | undefined): UsageAccount[] {
   return group?.accounts.filter(entry => entry.selected && !entry.account.disabled && entry.status !== "credential_disabled") ?? [];
 }
