@@ -656,14 +656,16 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__phead-verdict { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__phead-verdict[data-tone="warn"] { color: var(--code-warn); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__phead-verdict[data-tone="attention"] { color: var(--code-attention); }
+/* The note says the pressing reset, the pace and the readings too old to judge; it may take two lines, so the age is never the part cut. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__phead-note {
+  display: -webkit-box;
   min-width: 0;
   overflow: hidden;
   color: var(--code-text-2);
   font-size: 11.5px;
   line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* ---------------------------------------------------------------- tracks: a segment per account, one number in a 6ch column */
@@ -894,8 +896,7 @@
 @container code (width >= 1100px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid { grid-template-columns: max-content repeat(var(--board-columns), minmax(0, 18rem)); }
 }
-/* Columns under 760px cannot hold name, accounts and verdict on one line: every head gives the verdict a second line, still aligned,
-   and the note may take two. */
+/* Columns under 760px cannot hold name, accounts and verdict on one line: every head gives the verdict a second line, still aligned. */
 @container code (width < 760px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid > .plugin-atyrode_code_generator__phead { grid-template-rows: 38px var(--phead-rows,); }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid .plugin-atyrode_code_generator__phead-line {
@@ -908,12 +909,6 @@
   }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid .plugin-atyrode_code_generator__phead-count { line-height: 20px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid .plugin-atyrode_code_generator__phead-verdict { grid-column: 1 / -1; line-height: 18px; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__board-grid .plugin-atyrode_code_generator__phead-note {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    white-space: normal;
-  }
 }
 @container code (width < 320px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__roster-row { grid-template-columns: minmax(0, 1fr); }
