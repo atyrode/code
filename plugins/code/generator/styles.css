@@ -61,7 +61,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 4px 16px;
-  margin-top: auto;
+  margin-top: 8px;
   border-top: 1px solid var(--code-hairline);
   padding: 8px 16px 12px;
   color: var(--code-text-3);

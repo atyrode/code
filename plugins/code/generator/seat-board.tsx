@@ -50,7 +50,16 @@ export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardP
   const root = useRef<HTMLElement>(null);
   const [form, setForm] = useState<"grid" | "roster">("grid");
   const [open, setOpen] = useState<string | null>(null);
-  // The form follows the panel's width, measured before paint so the first frame is already the right one.
+  const aliases = useMemo(() => compiled ? displayAliases(compiled) : new Map<string, string>(), [compiled]);
+  const board = useMemo(() => {
+    if (!compiled || !review) return null;
+    // A team reviewed against another catalog has no seats here (`seatBoard` refuses it); the gate refuses it on its own.
+    try { return boardView({ catalog: compiled, review, preview: preview?.review ?? null, pools, outcomes, served, reading: usage }); }
+    catch (error) { if (error instanceof DomainError) return null; throw error; }
+  }, [compiled, review, preview?.key, pools, outcomes, served, usage.view, usage.current, usage.nowMs]);
+  const shown = compiled !== null && board !== null;
+  // The form follows the panel's width, measured before paint so the first frame is already the right one;
+  // the board is not mounted while the team is read, so it is measured again once it is.
   useLayoutEffect(() => {
     const panel = root.current?.closest<HTMLElement>(".plugin-atyrode_code") ?? root.current?.parentElement;
     if (!panel) return;
@@ -60,14 +69,7 @@ export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardP
     const observer = new ResizeObserver(entries => { for (const entry of entries) judge(entry.contentRect.width); });
     observer.observe(panel);
     return () => observer.disconnect();
-  }, []);
-  const aliases = useMemo(() => compiled ? displayAliases(compiled) : new Map<string, string>(), [compiled]);
-  const board = useMemo(() => {
-    if (!compiled || !review) return null;
-    // A team reviewed against another catalog has no seats here (`seatBoard` refuses it); the gate refuses it on its own.
-    try { return boardView({ catalog: compiled, review, preview: preview?.review ?? null, pools, outcomes, served, reading: usage }); }
-    catch (error) { if (error instanceof DomainError) return null; throw error; }
-  }, [compiled, review, preview?.key, pools, outcomes, served, usage.view, usage.current, usage.nowMs]);
+  }, [shown]);
   if (!compiled || !board) return null;
   const accountsGate = model.gate("edit-accounts");
   const quiet = board.reading === "unread" || board.reading === "unavailable";

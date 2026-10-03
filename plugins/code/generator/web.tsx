@@ -156,7 +156,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   // ------------------------------------------------------------ the footer: where the facts come from, and the ways out
   const verified = verification.provenance ? `models verified ${pastMoment(verification.provenance.benchmarkCompletedAt, usage.nowMs)}` : null;
   const read = usage.view?.observedAt ? `accounts updated ${since(usage.nowMs - usage.view.observedAt)}` : null;
-  const facts = [verified, read].filter(Boolean).join(" · ");
+  // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
+  const staged = record?.active && record.draft ? "a staged catalog waits in Models" : null;
+  const facts = [verified, read, staged].filter(Boolean).join(" · ");
   // With no stored catalog the team is derived from the bundled model list; without it there is nothing to show, and nothing else says why.
   const modelsUnavailable = (metadata.error || starterError) && !record?.active;
 
