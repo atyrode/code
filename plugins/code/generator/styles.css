@@ -1046,23 +1046,37 @@
 /* An empty list is a sentence, not a framed row. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { margin: 0; color: var(--code-text-3); overflow-wrap: anywhere; }
 
-/* A session: verb column, then its name (and, saved, "Resume with current team"), then machine, folder and age. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session {
-  display: grid;
-  grid-template-columns: 136px minmax(0, 1fr);
-  grid-template-areas: "verbs head" ". where";
-  align-items: baseline;
-  column-gap: 12px;
-  padding: 4px 0;
+/*
+ * Sessions, grouped under their machine's head: each row is folder, title (a folder's drum), when
+ * and its place among the folder's sessions, then the verbs. The rows share one grid (`subgrid`)
+ * sized to what they hold, so the verbs follow the content and never park at the panel's far edge.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] {
+  grid-template-columns: fit-content(14rem) fit-content(28rem) max-content max-content;
+  column-gap: 16px;
+  justify-content: start;
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { grid-area: verbs; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-dot { flex: none; align-self: center; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--code-text-3); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-dot[data-running] { background: var(--code-text-2); box-shadow: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head-line { grid-area: head; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] > li { grid-column: 1 / -1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session { display: grid; grid-template-columns: subgrid; align-items: baseline; padding: 4px 0; }
+/* A machine's head says it once, with its read; the first group sits under the section head without a rule. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li.plugin-atyrode_code_generator__earlier-machine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  border-top: 0;
+  padding: 12px 0 4px;
+  font-size: 11.5px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li.plugin-atyrode_code_generator__earlier-machine-head:first-child { padding-top: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-machine { min-width: 0; color: var(--code-text-2); font-size: 13px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-folder { min-width: 0; overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head-line { display: flex; align-items: baseline; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-name { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; color: var(--code-text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-name[data-path] { color: var(--code-text-2); font-weight: 400; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { grid-area: where; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; min-width: 0; color: var(--code-text-3); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-machine, .plugin-atyrode_code_generator__earlier-folder) { min-width: 0; overflow: hidden; color: var(--code-text-2); text-overflow: ellipsis; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { display: flex; align-items: baseline; gap: 0 4px; min-width: 0; color: var(--code-text-3); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+/* The verbs: resume in the text colour, the second verb quieter; both brighten under the pointer. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs > .plugin-atyrode_code_generator__earlier-with { flex: none; color: var(--code-text-3); white-space: nowrap; }
 
 /*
  * A folder's sessions as the statement's drum: the shown session is the value; open, the others
@@ -1147,18 +1161,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-marks { display: inline-flex; flex: none; align-self: center; gap: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-age { color: var(--code-text-3); font-size: 11.5px; white-space: nowrap; }
 
-@container code (width >= 760px) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session {
-    grid-template-columns: 136px minmax(0, 36rem) minmax(0, max-content);
-    grid-template-areas: "verbs head where";
-    justify-content: start;
-  }
-}
-/* Below 480px a session stacks: its verb, then its name, then where and when, each on the full width. */
+/* Narrow, a session takes two lines on the same shared grid: folder and title, then when and the verbs. */
 @container code (width < 480px) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session { grid-template-columns: minmax(0, 1fr); grid-template-areas: "verbs" "head" "where"; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] { grid-template-columns: fit-content(6rem) minmax(0, 1fr); column-gap: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { flex-wrap: wrap; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { column-gap: 8px; }
 }
 @media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word { align-items: center; min-height: 44px; }
   .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with) { align-items: center; min-width: 44px; min-height: 44px; }
   .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-team, .plugin-atyrode_code_generator__earlier-option) { min-height: 44px; align-items: center; }
 }

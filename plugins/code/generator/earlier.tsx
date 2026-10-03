@@ -14,7 +14,7 @@ import type { RecentTeam } from "./recent-teams.ts";
 import type { TeamPreview } from "./statement.tsx";
 import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
-  differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote,
+  differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote, sessionTitle,
   strandsNote, teamProvenance, teamSentence, type RecentForm, type RowIntent, type RowVerdict, type SavedFolder, type SessionRead, type SessionRow, type StatementWords,
 } from "./earlier-model.ts";
 import { sameTeam, teamWords, type Vocabulary } from "./statement-model.ts";
@@ -121,7 +121,7 @@ function SessionDrum({ id, folder, index, now, onChoose }: { id: string; folder:
   const [cursor, setCursor] = useState(index);
   const box = useRef<HTMLSpanElement>(null);
   const { sessions } = folder;
-  const name = sessionName(sessions[index]!);
+  const name = sessionTitle(sessions[index]!);
   useEffect(() => {
     if (!open) return;
     const document = box.current?.ownerDocument;
@@ -160,7 +160,7 @@ function SessionDrum({ id, folder, index, now, onChoose }: { id: string; folder:
     <span className={`${G}earlier-drum`}>{sessions.map((row, position) => <span key={row.sessionId} id={`${id}-${position}`} role="option"
       className={`${G}earlier-option`} aria-selected={position === index} data-current={position === index || undefined} data-cursor={(open && position === cursor) || undefined}
       onClick={event => { event.stopPropagation(); onChoose(position); setOpen(false); }}>
-      <span className={`${G}earlier-option-name`}>{sessionName(row)}</span>
+      <span className={`${G}earlier-option-name`}>{sessionTitle(row)}</span>
       <span className={`${G}earlier-age`}>{since(now - row.at)}</span>
     </span>)}</span>
   </span>;
@@ -240,7 +240,8 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     awaited.current = null;
     if (group.ownerDocument.activeElement !== group) return;
     const at = CSS.escape(machineId);
-    group.querySelector<HTMLElement>(`[data-machine-id="${at}"] [data-verb], [data-read="${at}"]`)?.focus({ preventScroll: true });
+    // The machine's first row verb, else its read again: the group head's own link comes first in the document, so the rows are asked first.
+    (group.querySelector<HTMLElement>(`[data-kind][data-machine-id="${at}"] [data-verb]`) ?? group.querySelector<HTMLElement>(`[data-read="${at}"]`))?.focus({ preventScroll: true });
   }, [reads]);
   // The panel's refresh reads every machine already read again, where it stands, without moving focus.
   const refreshed = useRef(rereads);
@@ -334,45 +335,68 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     announce(`Recalled team ${index + 1}${fate ? ` · ${fate}` : ""}.`);
   }
 
-  /** A running session, or a folder's shown session with the folder's others in its drum (`place`: the folder and its position in the list). */
+  /**
+   * A running session, or a folder's shown session with the folder's others in its drum (`place`:
+   * the folder and its position in the list). The folder is the row's key and comes first; the
+   * machine is said once, by the group's head, never per row.
+   */
   function sessionRow(row: SessionRow, place: { readonly folder: SavedFolder; readonly index: number } | null) {
     const name = sessionName(row);
     const busy = active === (row.kind === "running" ? `open:${row.terminalId}` : `resume:${row.sessionId}`);
     const group = place?.folder ?? null;
     const position = group ? group.sessions.indexOf(row) : -1;
     const where = group ? group.folder : row.folder;
+    const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
     return <li key={group?.key ?? row.terminalId ?? `${row.machineId}:${row.sessionId}`} className={`${G}earlier-session`} data-kind={row.kind}
       data-session-id={row.sessionId} data-machine-id={row.machineId} data-terminal-id={row.terminalId ?? undefined}
       data-folder-sessions={group && group.sessions.length > 1 ? group.sessions.length : undefined}>
-      <span className={`${G}earlier-verbs`}>
-        <span className={`${G}earlier-dot`} data-running={row.kind === "running" || undefined} aria-hidden="true" />
-        {row.kind === "running"
-          ? <Verb className={`${G}earlier-verb`} name={`Open ${name}`} verdict={verdict("open", row)} busy={busy} data-verb="open"
-            onPress={() => void open(row)} announce={announce}>{busy ? "Opening…" : "Open"}</Verb>
-          : <Verb className={`${G}earlier-verb`} name={`Resume ${name} as saved`} verdict={verdict("resume", row)} busy={busy} data-verb="resume"
-            onPress={() => resume(row, false)} announce={announce}>{busy && model.inFlight === "resume" ? "Resuming…" : "Resume as saved"}</Verb>}
-      </span>
+      <span className={`${G}earlier-folder`} title={where ?? undefined}>{where ? where.replace(/^\/home\/[^/]+(?=\/|$)/, "~") : "no folder"}</span>
       <span className={`${G}earlier-head-line`}>
         {place && group && group.sessions.length > 1
           ? <SessionDrum id={`${id}-folder-${place.index}`} folder={group} index={position} now={now}
             onChoose={index => setChosen(previous => new Map(previous).set(group.key, group.sessions[index]!.sessionId))} />
-          : <span className={`${G}earlier-name`} data-path={row.title ? undefined : ""} title={name}>{name}</span>}
-        {row.kind === "saved" && <Verb className={`${G}earlier-with`} name={`Resume ${name} with the current team`} verdict={verdict("resume-with-team", row)}
-          data-verb="resume-with-team" onPress={() => resume(row, true)} announce={announce}>Resume with current team</Verb>}
+          : <span className={`${G}earlier-name`} title={sessionTitle(row)}>{sessionTitle(row)}</span>}
       </span>
       <span className={`${G}earlier-where`}>
-        <span className={`${G}earlier-machine`}>{machineState(row.machineId, machines, rosterError).name ?? "Unknown machine"}</span>
-        {/* The folder is the row's place; said here once its title names the session. */}
-        {where && row.title && <><span className={`${G}earlier-sep`} aria-hidden="true">·</span>
-          <span className={`${G}earlier-folder`} title={where}>{where.split("/").filter(Boolean).at(-1) ?? where}</span></>}
-        <span className={`${G}earlier-sep`} aria-hidden="true">·</span>
+        {row.kind === "running" && <><span>running</span><span className={`${G}earlier-sep`} aria-hidden="true">·</span></>}
         <span title={`${row.kind === "running" ? "Started" : "Saved"} ${new Date(row.at).toLocaleString()}`}>{since(now - row.at)}</span>
         {group && group.sessions.length > 1 && <><span className={`${G}earlier-sep`} aria-hidden="true">·</span>
-          <span>{position + 1} of {group.sessions.length} here</span></>}
+          <span>{position === 0 ? "newest" : ordinal(position + 1)} of {group.sessions.length}</span></>}
+      </span>
+      <span className={`${G}earlier-verbs`}>
+        {row.kind === "running"
+          ? <Verb className={`${G}earlier-verb`} name={`Open ${name}`} verdict={verdict("open", row)} busy={busy} data-verb="open"
+            onPress={() => void open(row)} announce={announce}>{busy ? "opening…" : "open"}</Verb>
+          : <>
+            <Verb className={`${G}earlier-verb`} name={`Resume ${name} as saved`} verdict={verdict("resume", row)} busy={busy} data-verb="resume"
+              onPress={() => resume(row, false)} announce={announce}>{busy && model.inFlight === "resume" ? "resuming…" : "resume"}</Verb>
+            <Verb className={`${G}earlier-with`} name={`Resume ${name} with the current team`} verdict={verdict("resume-with-team", row)}
+              data-verb="resume-with-team" onPress={() => resume(row, true)} announce={announce}>with current team</Verb>
+          </>}
       </span>
     </li>;
   }
-  function folderRow(folder: SavedFolder, index: number) {
+  // One group per machine with rows, its head saying the machine once with its read; running sessions first, then folders, newest first.
+  const byMachine = new Map<string, { running: SessionRow[]; folders: { folder: SavedFolder; index: number }[] }>();
+  const machineGroup = (machineId: string) => byMachine.get(machineId) ?? byMachine.set(machineId, { running: [], folders: [] }).get(machineId)!;
+  for (const row of rows.running) machineGroup(row.machineId).running.push(row);
+  folders.forEach((folder, index) => machineGroup(folder.machineId).folders.push({ folder, index }));
+  function machineHead(machineId: string) {
+    const done = reading.read.find(entry => entry.machine.id === machineId);
+    const again = reading.reading.some(machine => machine.id === machineId);
+    const name = machineState(machineId, machines, rosterError).name ?? "Unknown machine";
+    return <li key={`machine:${machineId}`} className={`${G}earlier-machine-head`}>
+      <span className={`${G}earlier-machine`}>{name}</span>
+      {done && <span className={`${G}earlier-meta`} data-read-state="read" data-machine-id={machineId}>
+        <span className={`${G}earlier-sep`} aria-hidden="true">·</span> read {since(now - done.at)} <span className={`${G}earlier-sep`} aria-hidden="true">·</span>{" "}
+        <button type="button" className={`${G}earlier-link`} data-read={machineId} aria-label={`Read saved sessions on ${name} again`}
+          onClick={() => read(machineId, true)}>read again</button>
+      </span>}
+      {again && <span className={`${G}earlier-meta`} data-read-state="reading" data-machine-id={machineId}>
+        <span className={`${G}earlier-sep`} aria-hidden="true">·</span> reading again…</span>}
+    </li>;
+  }
+  function folderRow({ folder, index }: { folder: SavedFolder; index: number }) {
     const shown = folder.sessions.find(row => row.sessionId === chosen.get(folder.key)) ?? folder.sessions[0]!;
     return sessionRow(shown, { folder, index });
   }
@@ -415,9 +439,12 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
         {rosterError !== null ? <span className={`${G}earlier-meta`}>{rosterError}</span> : <>
           {reading.unread.map(machine => <button key={machine.id} type="button" className={`${G}earlier-link`} data-read={machine.id}
             aria-label={`Read saved sessions on ${machine.name}`} onClick={() => read(machine.id, true)}>Read {machine.name}</button>)}
-          {reading.reading.map(machine => <span key={machine.id} className={`${G}earlier-meta`} data-read-state="reading" data-machine-id={machine.id}>reading {machine.name}…</span>)}
-          {reading.read.map(({ machine, at, sessions: count }) => <span key={machine.id} className={`${G}earlier-meta`} data-read-state={count ? "read" : "empty"} data-machine-id={machine.id}>
-            {count ? machine.name : `nothing saved on ${machine.name}`} · read {since(now - at)} ·{" "}
+          {/* A machine with rows says its read in its group's head; here only those without rows. */}
+          {reading.reading.filter(machine => !byMachine.has(machine.id)).map(machine => <span key={machine.id} className={`${G}earlier-meta`}
+            data-read-state="reading" data-machine-id={machine.id}>reading {machine.name}…</span>)}
+          {reading.read.filter(({ machine }) => !byMachine.has(machine.id)).map(({ machine, at }) => <span key={machine.id} className={`${G}earlier-meta`}
+            data-read-state="empty" data-machine-id={machine.id}>
+            nothing saved on {machine.name} · read {since(now - at)} ·{" "}
             <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
               onClick={() => read(machine.id, true)}>read again</button>
           </span>)}
@@ -430,9 +457,8 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
         <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
           onClick={() => read(machine.id, true)}>read again</button>
       </p>)}
-      {rows.running.length + folders.length > 0 && <ul className={`${G}earlier-rows`}>
-        {rows.running.map(row => sessionRow(row, null))}
-        {folders.map(folderRow)}
+      {byMachine.size > 0 && <ul className={`${G}earlier-rows`} data-sessions="">
+        {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId), ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
       </ul>}
     </section>
     <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>
