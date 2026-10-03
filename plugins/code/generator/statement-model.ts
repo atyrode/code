@@ -857,6 +857,12 @@ function withListFailure([first, second]: [StatusLine, StatusLine], failure: Lis
   ])];
 }
 const REVERT: StatusAction = { kind: "fix", key: "revert", label: "revert", fix: { kind: "discard" } };
+/** What a press that saves the workspace team changes on it ("2 changes: thinking high → max, advisor glance → off"), or that it saves it. */
+function saveNote(facts: StatusFacts, tone: StatusTone): StatusPart {
+  const count = facts.edits.length;
+  return part(count ? `${count} ${count === 1 ? "change" : "changes"}: ${facts.edits.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`).join(", ")}`
+    : `${facts.verb.label} saves the workspace team`, tone);
+}
 
 /**
  * The line's team at rest: where its roles lead, then the one thing worth saying next (what the
@@ -868,11 +874,7 @@ function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   const first = line([part(team.counts.map(({ family, count }) => `${count} on ${vocab.family(family)}`).join(" · "))]);
   const actions = verb.saves ? [REVERT] : [];
   const notes: StatusPart[] = [];
-  if (verb.saves) {
-    const count = facts.edits.length;
-    notes.push(part(count ? `${count} ${count === 1 ? "change" : "changes"}: ${facts.edits.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`).join(", ")}`
-      : `${verb.label} saves the workspace team`));
-  }
+  if (verb.saves) notes.push(saveNote(facts, "plain"));
   for (const { pool, roles } of team.fallsBack) notes.push(part(`${pool ? outWord(pool, vocab) : "A pool is out"}: ${roleList(roles)} fall back`, "warn"));
   if (team.fallsBack.length === 0 && team.tight.length) notes.push(part(team.tight.map(pool => tightWord(pool, vocab)).join(" · "), "warn"));
   if (facts.reviewed) {
@@ -938,12 +940,14 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   if (facts.message) return [line([part(facts.message.text, "done")]), EMPTY];
   if (verb.label === "Verify models") return [line([part(facts.launchStatus)]), restLines(facts, vocab)[0]];
   if (facts.stop) {
-    const scope = verb.saves ? [part(`${verb.label} saves the workspace team`, "meta")] : [];
+    // A press that saves still says what it changes, and its revert stays beside the rescue.
+    const scope = verb.saves ? [saveNote(facts, "meta")] : [];
     const head = [part(stopHead(facts.stop, vocab), "attention"), part(`${roleList(facts.stop.roles)} ${facts.stop.roles.length === 1 ? "has" : "have"} no route`), ...scope];
-    const fix = facts.fix
-      ? line([], [{ kind: "fix", key: "rescue", label: `${facts.fix.label} ${facts.fix.result}`, fix: { kind: "team", selection: facts.fix.selection, review: facts.fix.review } }])
-      : line([part("no dial move gives every role a route", "meta")]);
-    return [line(head), fix];
+    const actions: StatusAction[] = [
+      ...facts.fix ? [{ kind: "fix", key: "rescue", label: `${facts.fix.label} ${facts.fix.result}`, fix: { kind: "team", selection: facts.fix.selection, review: facts.fix.review } } as const] : [],
+      ...verb.saves ? [REVERT] : [],
+    ];
+    return [line(head), line(facts.fix ? [] : [part("no dial move gives every role a route", "meta")], actions)];
   }
   return restLines(facts, vocab);
 }

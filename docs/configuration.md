@@ -209,8 +209,9 @@ save, review and launch all refuse) or **Review in Models** (a staged-only works
 the press opens Models), with **Checking…**, **Verifying…**, **Saving…**,
 **Reviewing…**, **Launching…** and **Resuming…** while one runs. Verify is refused up
 front when the account observation cannot be read or includes no account. An edited
-team saves first, and while it does the second status line says what the save changes
-("2 changes: thinking high → max, advisor glance → off") beside revert. **Save &
+team saves first, and while it does the status lines say what the save changes
+("2 changes: thinking high → max, advisor glance → off") beside revert, also beside the
+fix for roles with no route. **Save &
 launch** is offered when the projection rests on present readings (every lead's pool
 judged fresh and the served providers known), and the press then continues from the
 review to the launch only if the review shows the projected leads and the same

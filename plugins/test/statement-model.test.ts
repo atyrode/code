@@ -283,6 +283,19 @@ describe("the status lines, in precedence", () => {
     expect(statusLines(facts({ stop }), vocab)[1].actions).toEqual([]);
   });
 
+  test("a press that saves while roles have no route says what it changes, and revert stays beside the rescue", () => {
+    const saving = verbView({ step: { step: "save", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: true,
+      draft: true, phase: null, verification: "current", stranded: true, grounded: true, placeable: true, launching: false });
+    const stop = { roles: ["advisor"], waits: [] };
+    const fix = { label: "GPT only", result: "puts advisor on GPT", selection: team(), review: review() };
+    const edits = [{ word: "thinking" as const, from: "medium", to: "high" }];
+    const [first, second] = statusLines(facts({ verb: saving, stop, fix, edits }), vocab);
+    expect(first.parts.some(part => part.text.includes("medium → high"))).toBe(true);
+    expect(second.actions.map(action => action.kind === "fix" ? action.key : action.kind)).toEqual(["rescue", "revert"]);
+    // With no move that routes every role, revert is still a press away.
+    expect(statusLines(facts({ verb: saving, stop, edits }), vocab)[1].actions.map(action => action.kind === "fix" ? action.key : action.kind)).toEqual(["revert"]);
+  });
+
   test("a pointed option writes its consequence over the lines; a step in flight is not written over", () => {
     const option = slotOption({ value: "high", label: "high", note: "Raises default" });
     expect(statusLines(facts({ pointed: { kind: "option", word: "thinking", option } }), vocab)[0].parts[0]).toEqual({ text: "Thinking high", tone: "strong" });
