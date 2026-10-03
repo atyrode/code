@@ -14,6 +14,7 @@ import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
 import { launchStatusText, saveGate, type LaunchFacts, type ProfileSource } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
+import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 
 /** The suggest door's prompt limit (contract.ts `suggest` input); longer tasks are kept, never truncated. */
@@ -156,6 +157,8 @@ export type WorkbenchModel = {
   actions: WorkbenchActions;
   /** Whether the active catalog's verification holds, and the verify flow that renews it. */
   verification: ModelVerification;
+  /** Teams this browser launched in this workspace, newest first. Device-local and never shared (recent-teams.ts). */
+  recentTeams: readonly RecentTeam[];
 };
 
 /** Owns the workbench's state, observations, safety checks and actions; presentation stays with the caller. */
@@ -187,6 +190,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
+  const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
+  const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
   const pending = useRef(false);
   const mounted = useRef(false);
   const destination = useRef({ machineId: machineId, generation: 0 });
@@ -348,6 +353,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
         latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
+      const teams = rememberLaunch(browserTeamStorage(), recentKey, preview.composition.review.selection, Date.now());
+      if (mounted.current) setRecentTeams(teams);
       if (destinationCurrent()) { setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); setMessage({ text: "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.", failed: false }); }
     });
   }
@@ -420,6 +427,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       updateSelection, discardChanges, saveProfile, review, launch, resume,
       openSuggestion: () => setSuggesting(true), closeSuggestion, suggest, applySuggestion, refresh,
     },
-    verification,
+    verification, recentTeams,
   };
 }
