@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, servedRoutes } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routeService, servedRoutes } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -423,6 +423,24 @@ describe("a verified catalog and the accounts a launch meets", () => {
     // Exactly the served routes: neither the unpruned ones nor pruned ones without the rule that pruned them.
     expect(() => compileOmpOverlay(catalog, chosen, review.routes, serves)).toThrow("code_invalid_selection");
     expect(() => compileOmpOverlay(catalog, chosen, pruned)).toThrow("code_invalid_selection");
+    expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
+  });
+
+  test("judged beforehand, the door's rule refuses only an unserved lead and notes the fallbacks it drops", () => {
+    const catalog = compileCatalog({ schemaVersion: 1, models: [
+      model("o1", "openai", 1, { inputCostPerMillion: 1 }), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3, { inputCostPerMillion: 8 }),
+      model("spark", "openai-codex", 0, { images: false, inputCostPerMillion: 0.5 }),
+    ] });
+    const review = reviewCatalog(catalog, selection({ lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true }), daytime);
+    const withoutApi = (provider: string) => provider !== "openai";
+    const service = routeService(catalog, review.routes, withoutApi);
+    expect(service.lead).toBeNull();
+    const pruned = servedRoutes(catalog, review.routes, withoutApi);
+    expect(service.pruned).toEqual([{ provider: "openai", family: "openai",
+      roles: review.routes.filter((entry, index) => entry.fallback.length !== pruned[index]!.fallback.length).map(entry => entry.role) }]);
+    // Without codex every lead is unserved: the door refuses, and the judgement names the provider and the roles it leads.
+    const withoutCodex = routeService(catalog, review.routes, provider => provider !== "openai-codex");
+    expect(withoutCodex.lead).toEqual({ provider: "openai-codex", family: "openai", roles: review.routes.map(entry => entry.role) });
     expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
   });
 });

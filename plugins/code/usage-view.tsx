@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObjec
 import type { HostServices } from "@manifold/plugin";
 import type { AccountsObservation } from "@atyrode/manifold-omp";
 import type { AccountChoiceChange, AccountChoices } from "../domain/contracts.ts";
-import { accountSelectionDisabled } from "../domain/accounts.ts";
+import { accountSelectionDisabled, servedProviders } from "../domain/accounts.ts";
 import { blockCovers, windowLabel, windowState } from "../domain/quota.ts";
 import type { UsageView } from "../domain/usage.ts";
 import { ACCOUNTS_PLUGIN_ID } from "./contract.ts";
@@ -234,8 +234,9 @@ type UsageZoneProps = {
   onAccounts: () => void;
   /** Any change to the account observation revokes a reviewed launch (workbench `setAccountObservation`). */
   onObservation?: ((signature: string) => void) | undefined;
-  /** Families with at least one included account, from a fresh reading; null whenever that is not known. Must be stable. */
-  onFamilies?: ((families: ReadonlySet<string> | null) => void) | undefined;
+  /** The providers a launch's pool would serve (accounts.ts `servedProviders`), from the current account observation and saved
+   * choices; null whenever that is not known or the door would refuse the pool outright. Must be stable. */
+  onServed?: ((providers: ReadonlySet<string> | null) => void) | undefined;
   /** Receives this zone's refresh so a panel-level `r` key reaches it. */
   refresher?: RefObject<(() => void) | null> | undefined;
 };
@@ -247,7 +248,7 @@ export function UsageZone(props: UsageZoneProps) {
 
 const U = "plugin-atyrode_code__";
 
-function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFamilies, refresher }: UsageZoneProps) {
+function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onServed, refresher }: UsageZoneProps) {
   const now = Date.now();
   useMinuteTick();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
@@ -273,12 +274,14 @@ function WorkspaceUsageZone({ host, className, onAccounts, onObservation, onFami
   const observationKey = useMemo(() => JSON.stringify([configuration.error !== null, accounts.error !== null, usage.error !== null,
     accounts.data?.status, accounts.data?.scope, accounts.data?.accounts]), [configuration.error, accounts.error, usage.error, accounts.data]);
   useEffect(() => { onObservation?.(observationKey); }, [onObservation, observationKey]);
-  const familiesKey = useMemo(() => {
-    if (!value || cached || !value.providers.some(provider => provider.accounts.length)) return null;
-    return JSON.stringify(value.providers.filter(provider => provider.family !== null && provider.accounts.some(entry =>
-      entry.selected && !entry.account.disabled && entry.status !== "credential_disabled")).map(provider => provider.family).sort());
-  }, [value, cached]);
-  useEffect(() => { onFamilies?.(familiesKey === null ? null : new Set(JSON.parse(familiesKey) as string[])); }, [onFamilies, familiesKey]);
+  // The session door builds its pool from the account observation and the saved choices, not from usage
+  // readings, so neither does this; a fresh observation with nothing included is an empty set, never unknown.
+  const servedKey = useMemo(() => {
+    if (!accounts.data || !configuration.data?.configuration || accounts.error !== null || configuration.error !== null) return null;
+    const providers = servedProviders(accounts.data, configuration.data.configuration.accounts);
+    return providers === null ? null : JSON.stringify([...providers].sort());
+  }, [accounts.data, accounts.error, configuration.data, configuration.error]);
+  useEffect(() => { onServed?.(servedKey === null ? null : new Set(JSON.parse(servedKey) as string[])); }, [onServed, servedKey]);
   function refresh() { configuration.refresh(); accounts.refresh(); usage.refresh(); }
   useEffect(() => {
     if (!refresher) return;

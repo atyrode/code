@@ -132,12 +132,12 @@ type DialModel = { base: Review; dials: ReadonlyMap<DialId, DialState> };
  * Every option's would-be review, computed once per selection: availability, map-mode previews
  * and consequence text all read it. Pure domain computation; nothing here has an effect.
  *
- * `families` holds the families with at least one included account when that is known, so a lane
- * that would route to a family nobody can serve says so instead of failing at review. `starter`
- * suppresses budget previews, because a starter catalog is re-derived for a new budget and the
- * current catalog cannot say what that derivation would route.
+ * `served` holds the providers a launch's pool would serve when that is known, so an option whose
+ * roles would lead on a provider nobody serves says so instead of failing at review; fallbacks the
+ * door would drop are only noted. `starter` suppresses budget previews, because a starter catalog
+ * is re-derived for a new budget and the current catalog cannot say what that derivation would route.
  */
-export function useDialModel(catalog: CompiledCatalog | null, selection: Selection | null, base: Review | null, families: ReadonlySet<string> | null, starter: boolean): DialModel | null {
+export function useDialModel(catalog: CompiledCatalog | null, selection: Selection | null, base: Review | null, served: ReadonlySet<string> | null, starter: boolean): DialModel | null {
   return useMemo(() => {
     if (!catalog || !selection || !base) return null;
     const now = Date.now();
@@ -149,11 +149,12 @@ export function useDialModel(catalog: CompiledCatalog | null, selection: Selecti
       const options = new Map<string, OptionState>();
       for (const word of words) {
         if (word === current) { options.set(word, { word, ok: true, reason: null, selection, review: null, consequence: "" }); continue; }
-        const choice = chooseOption(catalog, selection, base, id, word, { families, starter, nowMs: now });
+        const choice = chooseOption(catalog, selection, base, id, word, { served, starter, nowMs: now });
         const reason = choice.refusal && refusalText(id, word, selection, choice.refusal);
+        const dropped = choice.pruned.map(gap => `fallbacks on ${accountWord(gap.family, gap.provider)} dropped: no account`);
         options.set(word, {
           word, ok: reason === null && choice.selection !== null, reason, selection: choice.selection, review: choice.review,
-          consequence: choice.review ? consequence(catalog, base, choice.review, 8) : "",
+          consequence: choice.review ? [consequence(catalog, base, choice.review, 8), ...dropped].join("; ") : "",
         });
       }
       const lanes = base.available.lanes;
@@ -166,7 +167,7 @@ export function useDialModel(catalog: CompiledCatalog | null, selection: Selecti
       });
     }
     return { base, dials };
-  }, [catalog, selection, base, families, starter]);
+  }, [catalog, selection, base, served, starter]);
 }
 
 /** A refused option's reason, in the words its dial uses. */

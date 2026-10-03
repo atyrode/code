@@ -185,3 +185,20 @@ export function selectedAccountPool(observation: AccountsObservation, choices: A
   if (!parsed.success) throw new DomainError("invalid_accounts");
   return parsed.data;
 }
+
+/**
+ * The providers a launch's pool would serve, exactly as the session door builds that pool
+ * (`selectedAccountPool`): included, enabled accounts of a fresh observation. Null when the door
+ * would refuse the pool outright (an observation that is not fresh, a saved exclusion that no
+ * longer resolves), which says nothing about any one provider. An empty set is a fresh observation
+ * with nothing included, which refuses every lead.
+ */
+export function servedProviders(observation: AccountsObservation, choices: AccountChoices): ReadonlySet<string> | null {
+  try {
+    const pool = selectedAccountPool(observation, choices);
+    return new Set(Object.keys(pool).filter(provider => pool[provider]!.length > 0));
+  } catch (error) {
+    if (error instanceof DomainError) return null;
+    throw error;
+  }
+}

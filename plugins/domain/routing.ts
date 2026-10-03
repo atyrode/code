@@ -312,6 +312,30 @@ export function servedRoutes(catalog: CompiledCatalog, routes: readonly Route[],
   });
 }
 
+/** A lead nobody serves, or the fallbacks on one provider nobody serves: who, where, and the provider's family. */
+export type ServiceGap = { readonly provider: string; readonly family: string; readonly roles: readonly string[] };
+
+/**
+ * The rule `servedRoutes` applies, judged without refusing, so a client can say beforehand what
+ * the session door will do. `lead`: the first provider that leads a route and that no included
+ * account serves, with every role it leads; the door refuses the whole composition for it
+ * (`account_unavailable`). `pruned`: per provider nobody serves, the roles that lose fallbacks
+ * there; the door drops those fallbacks and the launch goes on, so they are a note, never a refusal.
+ */
+export function routeService(catalog: CompiledCatalog, routes: readonly Route[], serves: (provider: string) => boolean): { lead: ServiceGap | null; pruned: ServiceGap[] } {
+  const gap = (provider: string, roles: string[]): ServiceGap => ({ provider, family: providerPolicy(provider).family, roles });
+  const unservedLeads = new Map<string, string[]>(), pruned = new Map<string, string[]>();
+  for (const route of routes) {
+    const lead = catalog.model(route.lead.key).provider;
+    if (!serves(lead)) unservedLeads.set(lead, [...unservedLeads.get(lead) ?? [], route.role]);
+    for (const provider of new Set(route.fallback.map(choice => catalog.model(choice.key).provider))) {
+      if (!serves(provider)) pruned.set(provider, [...pruned.get(provider) ?? [], route.role]);
+    }
+  }
+  const [first] = unservedLeads;
+  return { lead: first ? gap(...first) : null, pruned: [...pruned].map(([provider, roles]) => gap(provider, roles)) };
+}
+
 /**
  * Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. The
  * routes must be exactly the selection's, less precisely the fallbacks `serves` rules out.

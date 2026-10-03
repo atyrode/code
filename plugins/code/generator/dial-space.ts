@@ -1,7 +1,7 @@
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import type { Lane, Selection } from "../../domain/contracts.ts";
-import { reviewCatalog, type Review } from "../../domain/routing.ts";
+import { reviewCatalog, routeService, type Review, type ServiceGap } from "../../domain/routing.ts";
 
 /*
  * The dials as data: every dial, its words, and the selection choosing a word commits. Pure, so
@@ -84,31 +84,29 @@ export const SPECS: Readonly<Record<DialId, Spec>> = {
 };
 
 /**
- * The first family this review would route to (lead or fallback) with no included account, mirroring
- * the session door, which refuses a composition whose any routed provider lacks pool accounts.
+ * Why an option cannot be chosen: the catalog cannot form it, or one of its roles would lead on a
+ * provider no included account serves, which the session door refuses (`routeService`).
  */
-export function missingFamily(catalog: CompiledCatalog, review: Review, families: ReadonlySet<string>): string | undefined {
-  return [...new Set(review.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => catalog.family(choice.key)))].find(family => !families.has(family));
-}
-
-/** Why an option cannot be chosen: the catalog cannot form it, or it routes to a family no included account serves. */
-export type OptionRefusal = { kind: "catalog" } | { kind: "account"; family: string };
+export type OptionRefusal = { kind: "catalog" } | { kind: "account"; provider: string; family: string };
 export type OptionChoice = {
   /** The selection choosing the option commits; null when the dial has no such word. */
   selection: Selection | null;
   /** The review it produces; null when refused, or when it cannot be previewed (a starter's budget re-derives the catalog). */
   review: Review | null;
   refusal: OptionRefusal | null;
+  /** Fallbacks the door would drop for want of an account: a note on the option, never a reason to refuse it. */
+  pruned: readonly ServiceGap[];
 };
 /**
  * What choosing `word` on `dial` does from `selection`, exactly as the dial commits it. `base` is
- * the review the controls show, which names the lanes on offer. `families` holds the families with
- * at least one included account when that is known, so a lane routing to a family nobody serves is
- * refused instead of failing at review; `starter` marks a bundled catalog, which is re-derived for
+ * the review the controls show, which names the lanes on offer. `served` holds the providers a
+ * launch's pool would serve when that is known (accounts.ts `servedProviders`); an option is
+ * refused only where the session door would refuse it, a lead nobody serves, and fallbacks nobody
+ * serves are listed in `pruned` instead. `starter` marks a bundled catalog, which is re-derived for
  * a new budget, so the current catalog cannot preview a budget change.
  */
 export function chooseOption(catalog: CompiledCatalog, selection: Selection, base: Review, dial: DialId, word: string,
-  context: { families: ReadonlySet<string> | null; starter: boolean; nowMs: number }): OptionChoice {
+  context: { served: ReadonlySet<string> | null; starter: boolean; nowMs: number }): OptionChoice {
   let candidate = SPECS[dial].set(catalog, selection, word, base);
   let review = candidate && previewSelection(catalog, candidate, context.nowMs);
   // A free budget a new lane cannot serve steps back to any, rather than refusing the lane.
@@ -116,13 +114,12 @@ export function chooseOption(catalog: CompiledCatalog, selection: Selection, bas
     candidate = { ...candidate, budget: "any" };
     review = previewSelection(catalog, candidate, context.nowMs);
   }
+  const previewable = review !== null && !(dial === "budget" && context.starter);
+  const served = context.served;
+  const service = review !== null && previewable && served ? routeService(catalog, review.routes, provider => served.has(provider)) : null;
   let refusal: OptionRefusal | null = null;
   if (dial === "budget" && word === "free" && context.starter) refusal = base.available.budgets.includes("free") ? null : { kind: "catalog" };
   else if (!review) refusal = { kind: "catalog" };
-  else if (dial === "lane" && context.families) {
-    const missing = missingFamily(catalog, review, context.families);
-    if (missing) refusal = { kind: "account", family: missing };
-  }
-  const previewable = review !== null && !(dial === "budget" && context.starter);
-  return { selection: candidate, review: refusal === null && previewable ? review : null, refusal };
+  else if (service?.lead) refusal = { kind: "account", provider: service.lead.provider, family: service.lead.family };
+  return { selection: candidate, review: refusal === null && previewable ? review : null, refusal, pruned: refusal === null ? service?.pruned ?? [] : [] };
 }

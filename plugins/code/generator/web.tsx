@@ -4,7 +4,7 @@ import { keyCapLabel } from "@manifold/plugin/hooks";
 import type { MachineSummary } from "@manifold/protocol";
 import { ControlIcon, ItemIcon, KeyCap, prefersReducedMotion, ScrollRegion, Spinner } from "@manifold/ui";
 import { PROMPT_MAX_BYTES } from "@atyrode/manifold-omp";
-import { defaultSelection } from "../../domain/routing.ts";
+import { defaultSelection, routeService } from "../../domain/routing.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget } from "../machine-web.ts";
@@ -21,7 +21,7 @@ import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { FleetSessions } from "./fleet.tsx";
 import { displayAliases, GeneratorPlaceholder, GeneratorZone, RoutingZone, useDialModel, type LedgerView, type MapTarget } from "./dials.tsx";
-import { missingFamily, type DialId } from "./dial-space.ts";
+import type { DialId } from "./dial-space.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { autoReviewDue, AUTO_REVIEW_SETTLE_MS, nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
 import { panelShortcut } from "./panel-input.ts";
@@ -80,7 +80,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [visited, setVisited] = useState<readonly Sheet[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
   const [ledger, setLedger] = useState<LedgerView>({ fallbacks: false, ids: false, pinned: new Set() });
-  const [families, setFamilies] = useState<ReadonlySet<string> | null>(null);
+  const [served, setServed] = useState<ReadonlySet<string> | null>(null);
   const [stripDetails, setStripDetails] = useState(false);
   const [pendingReview, setPendingReview] = useState(false);
   const [inFlight, setInFlight] = useState<Action | null>(null);
@@ -103,12 +103,14 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const suggestMenu = useMenu(open => { if (open) actions.openSuggestion(); else actions.closeSuggestion(); });
 
   const aliases = useMemo(() => compiled ? displayAliases(compiled) : new Map<string, string>(), [compiled]);
-  const dialModel = useDialModel(compiled, selection, controlsReview, families, profile?.metadata != null);
+  const dialModel = useDialModel(compiled, selection, controlsReview, served, profile?.metadata != null);
   const mapOption = mapTarget ? dialModel?.dials.get(mapTarget.dial)?.options.get(mapTarget.word) : undefined;
   const previewReview = mapOption?.ok && mapOption.review ? mapOption.review : null;
   const step = nextLaunchStep(model);
-  // A fresh reading that shows no included account for a routed family would only fail at the session door; say so first.
-  const uncovered = (step.step === "review" || step.step === "launch") && families && compiled && review ? missingFamily(compiled, review, families) : undefined;
+  // A lead no included account serves is refused at the session door; say so first. Fallbacks it would drop are not a refusal.
+  const uncovered = (step.step === "review" || step.step === "launch") && served && compiled && review
+    ? routeService(compiled, review.routes, provider => served.has(provider)).lead ?? undefined : undefined;
+  const unservedLead = uncovered !== undefined;
   const loading = !profile && !document && !configuration.error && !starterError && !metadata.error;
   const machineName = machine?.name ?? null;
 
@@ -139,8 +141,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     if (message?.failed || stepCode === "save") { setPendingReview(false); return; }
     if (stepCode === "configuration") return;
     setPendingReview(false);
-    if (stepCode === "review" && !uncovered) reviewNow();
-  }, [pendingReview, busy, stepCode, message?.failed, uncovered]);
+    if (stepCode === "review" && !unservedLead) reviewNow();
+  }, [pendingReview, busy, stepCode, message?.failed, unservedLead]);
   useEffect(() => {
     const last = lastAction.current;
     if (!message || message.failed || !last) return;
@@ -283,10 +285,10 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
   // While the first observation is pending there is nothing to retry yet; say what is happening instead.
   const blocked: Blocked | null = step.step === "blocked" ? (loading ? { text: "Reading the profile" } : blocker(step.reason))
-    : uncovered ? { text: `No ${accountWord(uncovered)} account included`, action: { label: "Accounts", run: () => openSheet("accounts") } } : null;
+    : uncovered ? { text: `No ${accountWord(uncovered.family, uncovered.provider)} account included`, action: { label: "Accounts", run: () => openSheet("accounts") } } : null;
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
   // The saved team reviews itself once its inputs settle, so Launch is one press; an edit never does (launch-step.ts).
-  const autoReview = autoReviewDue(model, { busy: busy || pendingReview || verifyRunning || inFlight !== null, uncovered: uncovered !== undefined,
+  const autoReview = autoReviewDue(model, { busy: busy || pendingReview || verifyRunning || inFlight !== null, uncovered: unservedLead,
     scope: model.reviewScope, attempted: reviewAttempt.current });
   useEffect(() => {
     if (!autoReview) return;
@@ -417,7 +419,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         empty={loading ? "loading" : configuration.error && !profile ? "failed" : "incomplete"}
         line={verificationLine} />
     </div>
-    <UsageZone host={host} className={`${G}section ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onFamilies={setFamilies} refresher={usageRefresh} />
+    <UsageZone host={host} className={`${G}section ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onServed={setServed} refresher={usageRefresh} />
     <div className={`${G}dock`} data-zone="composer">
       {verification.phase === "charge" && verification.charge && <Notice className={`${G}dock-note`} actions={<>
         <Button data-action="atyrode.code.verifyModels" onClick={event => void verification.confirm({ detail: event.detail, repeat: false })}

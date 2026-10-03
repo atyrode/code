@@ -60,7 +60,8 @@ export function redline(catalog: CompiledCatalog, routes: readonly Route[], pool
   return worst;
 }
 
-export type OptionContext = { readonly families: ReadonlySet<string> | null; readonly starter: boolean; readonly nowMs: number };
+/** `served`: the providers a launch's pool would serve, when known (accounts.ts `servedProviders`). */
+export type OptionContext = { readonly served: ReadonlySet<string> | null; readonly starter: boolean; readonly nowMs: number };
 export type OptionConsequence = { readonly review: Review; readonly moves: readonly RoleMove[]; readonly redline: Redline | null };
 
 /**

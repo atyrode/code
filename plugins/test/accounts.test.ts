@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AccountReference, AccountsObservation } from "@atyrode/manifold-omp";
 import { accountSelectionDisabled, checkedAccountsObservation, disabledAccountReferences, initialAccountChoices,
-  reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
+  reduceAccountChoices, selectedAccountPool, servedProviders } from "../domain/accounts.ts";
 import { DomainError } from "../domain/contracts.ts";
 
 const scope = "machine-a/broker-grant-1";
@@ -182,5 +182,23 @@ describe("Code account selection over explicit OMP observations", () => {
     expectCode(() => selectedAccountPool({ scope, status: "unavailable", observedAt: null, accounts: [] }, initialAccountChoices()), "account_unavailable");
     expectCode(() => selectedAccountPool({ ...snapshot, status: "stale" }, initialAccountChoices()), "account_unavailable");
     expectCode(() => selectedAccountPool({ ...snapshot, observedAt: null }, initialAccountChoices()), "invalid_accounts");
+  });
+});
+
+describe("the providers a launch's pool would serve", () => {
+  test("exactly the session door's pool: excluded and disabled credentials serve nothing, per provider not per family", () => {
+    const without = (reference: AccountReference) => reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference, enabled: false });
+    expect([...servedProviders(snapshot, initialAccountChoices())!].sort()).toEqual(["anthropic", "openai", "openai-codex"]);
+    expect([...servedProviders(snapshot, without(alice))!].sort()).toEqual(["openai", "openai-codex"]);
+    // Both API-key slots must go before the openai provider stops serving; its codex sibling is another provider.
+    const disabled = { ...snapshot, accounts: snapshot.accounts.map(account => account.reference.provider === "openai" ? { ...account, disabled: true } : account) };
+    expect([...servedProviders(disabled, initialAccountChoices())!].sort()).toEqual(["anthropic", "openai-codex"]);
+  });
+
+  test("a fresh observation with nothing included serves nothing; a pool the door would refuse outright is unknown", () => {
+    expect(servedProviders({ ...snapshot, accounts: [] }, initialAccountChoices())).toEqual(new Set());
+    expect(servedProviders({ ...snapshot, status: "stale" }, initialAccountChoices())).toBeNull();
+    const gone: AccountReference = { kind: "identity", scope, provider: "anthropic", identityKey: "email:gone@example.test" };
+    expect(servedProviders(snapshot, reduceAccountChoices(initialAccountChoices(), { kind: "set-account", reference: gone, enabled: false }))).toBeNull();
   });
 });

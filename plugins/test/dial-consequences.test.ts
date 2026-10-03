@@ -7,6 +7,7 @@ import { quotaPools, type QuotaPool } from "../domain/quota.ts";
 import { reviewCatalog, type Review } from "../domain/routing.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, seatRole, type OptionContext } from "../code/generator/consequences.ts";
+import { chooseOption } from "../code/generator/dial-space.ts";
 
 const scope = "machine/broker-scope";
 const now = Date.UTC(2026, 9, 3, 12);
@@ -34,7 +35,7 @@ function review(changes: Partial<Selection> = {}): Review {
     priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any", ...changes,
   }, now);
 }
-const known: OptionContext = { families: null, starter: false, nowMs: now };
+const known: OptionContext = { served: null, starter: false, nowMs: now };
 
 /** Pools from a real projection: one Codex and one Claude account, both quiet unless told otherwise. */
 function pools(options: { claudeBlockedUntil?: number; codexUsed?: number; claudeExcluded?: boolean } = {}): QuotaPool[] {
@@ -80,7 +81,7 @@ describe("what an option would do before it is chosen", () => {
     const unserved = pools({ claudeExcluded: true, codexUsed: 0.85 });
     expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, pools: unserved })?.redline)
       .toMatchObject({ reason: "no-account", pool: { id: "anthropic:claude" }, roles: ["reviewer", "security-reviewer"] });
-    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, families: new Set(["openai"]), pools: unserved })).toBeNull();
+    expect(optionConsequence(catalog, review(), "lane", "gpt-led", { ...known, served: new Set(["openai-codex"]), pools: unserved })).toBeNull();
   });
 });
 
@@ -105,7 +106,38 @@ describe("the smallest dial move that seats a role on a model", () => {
     // DeepSeek-led keeps reviews on GPT where DeepSeek only would move them too.
     expect(seatRole(catalog, review(), "default", "d1", known, 1)?.moves).toEqual([{ dial: "lane", word: "deepseek-led" }]);
     expect(seatRole(catalog, review(), "default", "nowhere", known)).toBeNull();
-    // With no Claude account in the reading, every lane that would put reviews on Claude is refused, so none seats them there.
-    expect(seatRole(catalog, review(), "reviewer", "a3", { ...known, families: new Set(["openai", "deepseek"]) })).toBeNull();
+    // With no Claude account, every lane that would have reviews lead on Claude is refused, so none seats them there.
+    expect(seatRole(catalog, review(), "reviewer", "a3", { ...known, served: new Set(["openai-codex", "deepseek"]) })).toBeNull();
+  });
+});
+
+describe("which options the session door would accept", () => {
+  // The API-key tier-1 GPT model is served by no account here; Codex and Claude are.
+  const mixedProviders = compileCatalog({ schemaVersion: 1, models: [
+    model("o1", "openai", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3),
+    model("a1", "anthropic", 1), model("a2", "anthropic", 2), model("a3", "anthropic", 3),
+  ] });
+  const base = reviewCatalog(mixedProviders, {
+    lane: claudeOnly, capability: 1, thinking: "medium", advisor: "off", spark: false,
+    priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any",
+  }, now);
+  const served: OptionContext = { ...known, served: new Set(["anthropic", "openai-codex"]) };
+
+  test("a lane whose only unserved model is a fallback is offered, with the fallbacks it would lose noted", () => {
+    // Claude-led at Fast: o1 appears only in fallback chains, so the door prunes it and launches.
+    const led = chooseOption(mixedProviders, base.selection, base, "lane", "claude-led", served);
+    expect(led.refusal).toBeNull();
+    expect(led.review?.routes.some(route => route.lead.key === "o1")).toBe(false);
+    expect(led.pruned).toEqual([{ provider: "openai", family: "openai",
+      roles: led.review!.routes.filter(route => route.fallback.some(choice => choice.key === "o1")).map(route => route.role) }]);
+    expect(led.pruned[0]!.roles.length).toBeGreaterThan(0);
+  });
+
+  test("an option that would lead on an unserved provider is refused by name, though its family is served", () => {
+    // GPT-led at Fast leads default on o1; Codex accounts serve the family, not the API-key provider.
+    expect(chooseOption(mixedProviders, base.selection, base, "lane", "gpt-led", served).refusal)
+      .toEqual({ kind: "account", provider: "openai", family: "openai" });
+    // Without knowing the pool, nothing is refused or noted on the reading's behalf.
+    expect(chooseOption(mixedProviders, base.selection, base, "lane", "gpt-led", known)).toMatchObject({ refusal: null, pruned: [] });
   });
 });
