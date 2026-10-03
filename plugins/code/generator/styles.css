@@ -197,7 +197,7 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
 }
 @media (pointer: coarse) {
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link) { min-height: 44px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-verb, .plugin-atyrode_code_generator__footer-link) { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   /* A changed route keeps its glow as a still mark that simply ends, never a fade. */
@@ -555,7 +555,9 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-aside { grid-row: 3; grid-column: 1; height: 24px; }
 }
 @media (pointer: coarse) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement { --stmt-row: 44px; --stmt-gh: 44px; }
+  /* Every form keeps 44px rows on a coarse pointer, the 15px line size included. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement,
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-size="15"] { --stmt-row: 44px; --stmt-gh: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option { min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb { height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { grid-template-rows: 44px 44px; }
