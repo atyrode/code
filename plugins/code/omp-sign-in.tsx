@@ -53,7 +53,9 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
     }
   }
   async function openOmp() {
-    if (!state?.canSignIn || !state.revision || !host.containerId) return;
+    // Write access is the caps alone; placing the terminal also needs a container view mounted beside this panel.
+    const authoring = host.authoring;
+    if (!state?.canSignIn || !state.revision || !host.containerId || !authoring) return;
     const containerId = host.containerId;
     await perform(async stillCurrent => {
       const prepared = await codeWorkflow(host).prepareSignIn(containerId, state.revision!);
@@ -65,7 +67,7 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
         setMessage({ text: "OMP’s broker owner is unavailable. No other machine was used.", detail: "OMP’s broker owner is not currently available in your permitted machine list. Review native placement and access; no other machine was used." });
         return;
       }
-      const terminal = await host.authoring!.createTerminal(owner, prepared.runtime);
+      const terminal = await authoring.createTerminal(owner, prepared.runtime);
       if (!stillCurrent()) return;
       if (terminal !== null) setOpened(true);
       setMessage({
@@ -88,10 +90,11 @@ function ScopedOmpSignIn({ host, onContinue, showAccounts = true, activeView }: 
       : "An instance service owner must be set up before signing in."}</p>}
     {!canManageRuntime && writable && host.containerId && <p role="status">Accounts remain viewable. An instance owner can review the runtime and open sign-in.</p>}
     {host.containerId && !writable && <p role="status">Read-only workspace. An instance owner needs an editable workspace to open sign-in.</p>}
+    {state?.canSignIn && host.containerId && writable && !host.authoring && <p role="status">Open Code beside the workspace canvas to place the sign-in terminal.</p>}
     {!host.containerId && <p role="status">Open a workspace to place an OMP sign-in terminal.</p>}
     {canManageRuntime && setup.error && <p role="status" className="plugin-atyrode_code__warning">Sign-in setup could not be read. See sign-in setup and permissions.</p>}
     <div className="plugin-atyrode_code__account-toolbar">
-      {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} data-action="atyrode.omp.accounts.prepareSignIn" disabled={busy || !writable || !host.containerId} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
+      {state?.canSignIn && <button type="button" className={onContinue && canContinue ? undefined : "plugin-atyrode_code__primary-action"} data-action="atyrode.omp.accounts.prepareSignIn" disabled={busy || !writable || !host.containerId || !host.authoring} onClick={() => void openOmp()}>{busy ? "Opening OMP…" : opened ? "Open another OMP terminal" : "Open OMP to sign in"}</button>}
       {canManageRuntime && <PermissionReview host={host} intent="accounts" label={state?.canReview && !state.canSignIn ? "Review shared runtime" : "Review sign-in permissions"} onReady={refresh} />}
     </div>
     {message && <div>

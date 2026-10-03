@@ -35,7 +35,7 @@ describe("whether a recorded verification still holds", () => {
 
 /** A verified, saved, launchable workbench; each test changes only what it is about. */
 function facts(changes: Partial<LaunchFacts> = {}, status: VerificationStatus = "current", ready = true): LaunchFacts {
-  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, available: true, launchReady: true, previewCurrent: false,
+  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
     queries: { setup: { error: null } }, verification: { status, ready }, ...changes };
 }

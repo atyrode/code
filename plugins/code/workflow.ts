@@ -15,6 +15,53 @@ import { DomainError, type AccountChoices, type Selection } from "../domain/cont
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
 export class WorkflowError extends Error {}
+/** Refusal tokens in a person's words. A token missing here is still never shown raw (`failureWords`). */
+const messages: Readonly<Record<string, string>> = {
+  code_stale_preferences: "The workspace team changed. Read it again before saving your edit.",
+  code_composition_changed: "The workspace team, account pool or OMP defaults changed. Review the session again before launching.",
+  code_configuration_missing: "This workspace has no Code choices yet.",
+  code_catalog_missing: "No model list is in use yet. Review one in Models.",
+  code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
+  code_accounts_changed: "The accounts changed. Read them again before continuing.",
+  code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
+  code_invalid_selection: "This team cannot be formed from the current models.",
+  code_budget_unsatisfiable: "No free route serves this team.",
+  code_invalid_catalog: "The model list could not be used.",
+  code_preview_changed: "The reviewed model list changed. Review it again.",
+  code_starter_candidate_limit: "The bundled model list is too large to verify at once.",
+  code_verification_cancelled: "Verification cancelled.",
+  code_verification_changed: "The machine, workspace or edit access changed, so the verification stopped.",
+  code_verification_confirmed: "That charge was already confirmed.",
+  code_operation_unavailable: "The Code action could not be completed.",
+  code_scope_refused: "Your current authority does not cover this container.",
+  code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
+  code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
+  code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
+  code_destination_changed: "The destination changed. Review the current machine before continuing.",
+  omp_review_changed: "OMP's review changed. Review again.",
+  omp_result_unavailable: "OMP's result is unavailable.",
+  omp_defaults_changed: "OMP defaults changed. Review again.",
+  omp_session_unavailable: "That saved session is no longer on the machine.",
+  omp_session_binding_changed: "That saved session moved or changed. Read the machine again.",
+  omp_resume_plan_unsupported: "Resuming with the current team cannot approve plans automatically.",
+};
+/** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
+const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;
+/** A refusal token (`code_account_unavailable`), and the detail for a person that may follow it. */
+const REFUSAL_TOKEN = /^((?:code|omp)_[a-z0-9_]+)(?:[:;] ([^]*))?$/;
+/**
+ * A workflow failure in a person's words. A refused door's message loses the door name it was
+ * reported under, and its refusal token becomes words: the known ones from `messages`, any other as
+ * who refused, so no raw token reaches a person. A detail written for a person after the token stays.
+ */
+export function failureWords(message: string): string {
+  const denial = DOOR_DENIAL.exec(message)?.[1] ?? message;
+  const refusal = REFUSAL_TOKEN.exec(denial);
+  if (!refusal) return denial;
+  const [, token, detail] = refusal;
+  const words = messages[token!] ?? (token!.startsWith("omp_") ? "OMP refused the step." : "Code refused the step.");
+  return detail ? `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}` : words;
+}
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. */
 export type VerificationStep = "observe" | "initialize" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote" | "select";
