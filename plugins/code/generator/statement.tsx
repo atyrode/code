@@ -391,16 +391,18 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   }, [open]);
 
   // ------------------------------------------------------------ announcements: the charge, outcomes and failures, once each
-  const seen = useRef({ outcome: model.outcome, message: model.message, charge });
+  // A verification that stopped is a refusal like any other, so it is said as the status line says it.
+  const seen = useRef({ outcome: model.outcome, message: model.message, charge, failure: verification.failure });
   useEffect(() => {
     const last = seen.current;
     if (model.outcome && model.outcome !== last.outcome) announce(`${model.outcome.kind === "launched" ? "Launched" : "Resumed"} on ${model.outcome.machine}`);
     else if (model.message?.failed && model.message !== last.message) announce(model.message.text);
+    else if (stoppedVerifying && verification.failure !== last.failure) announce(stoppedVerifying.text);
     if (charge && charge !== last.charge) {
       announce(charge.requests > 0 ? `Verifying spends ${charge.requests} tiny requests. Confirm charge is the next control.` : "Nothing to verify through these accounts.");
     }
-    seen.current = { outcome: model.outcome, message: model.message, charge };
-  }, [model.outcome, model.message, charge]);
+    seen.current = { outcome: model.outcome, message: model.message, charge, failure: verification.failure };
+  }, [model.outcome, model.message, charge, verification.failure]);
 
   // ------------------------------------------------------------ render
   const statusId = `${id}-status`;
