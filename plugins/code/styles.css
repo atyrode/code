@@ -26,11 +26,13 @@
   --code-text-2: #adb5bd;
   --code-text-3: #868e96;
   --code-text-bright: #f1f3f5;
-  /* Accent: the one colour that means "selected / yours" */
+  /* Accent: the one colour that means "selected / yours". Text on the accent is white: #edf2ff on
+     #4263eb is 4.45:1, under AA; white is 4.98:1, and 5.67:1 on the darker hover ground. */
   --code-accent: #4263eb;
+  --code-accent-hover: #3b5bdb;
   --code-focus: #4c6ef5;
   --code-accent-text: #748ffc;
-  --code-on-accent: #edf2ff;
+  --code-on-accent: #ffffff;
   --code-selected: rgb(66 99 235 / 22%);
   --code-selected-row: rgb(66 99 235 / 14%);
   --code-afterglow: rgb(76 110 245 / 22%);
@@ -160,8 +162,8 @@
 }
 .plugin-atyrode_code .plugin-atyrode_code__primary-action:hover:not(:disabled) {
   color: var(--code-on-accent);
-  background: var(--code-focus);
-  border-color: var(--code-focus);
+  background: var(--code-accent-hover);
+  border-color: var(--code-accent-hover);
 }
 .plugin-atyrode_code .plugin-atyrode_code__primary-action:disabled {
   color: var(--code-muted);
@@ -758,7 +760,7 @@
   cursor: pointer;
   transition: background-color var(--code-fast) ease, border-color var(--code-fast) ease;
 }
-.plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--code-focus); color: var(--code-on-accent); background: var(--code-focus); }
+.plugin-atyrode_code .plugin-atyrode_code__primary:hover:not(:disabled, [aria-disabled="true"]) { border-color: var(--code-accent-hover); color: var(--code-on-accent); background: var(--code-accent-hover); }
 .plugin-atyrode_code .plugin-atyrode_code__primary:focus-visible { border-color: var(--code-accent-text); outline: none; box-shadow: 0 0 0 3px var(--code-focus-ring); }
 .plugin-atyrode_code .plugin-atyrode_code__primary:disabled { border-color: var(--code-line); color: var(--code-text-3); background: var(--code-raised); cursor: default; }
 .plugin-atyrode_code .plugin-atyrode_code__primary[aria-busy="true"] { cursor: progress; }
