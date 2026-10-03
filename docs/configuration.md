@@ -109,7 +109,7 @@ revision and account-independent configuration digests. Existing active policy
 wins, including historical catalogs without recorded registry provenance. A saved
 staged catalog is an explicit preview, not an active profile or a bundled fallback.
 An unresolved catalog keeps Models repair reachable; the main view then says the
-model list is unavailable, with Retry and Models.
+model list is unavailable, with Retry and Models, whatever else its status lines say.
 
 The starter is render-only. Nothing writes it as the workspace's catalog except a
 model verification, `workflow.verifyModels(target, { expectedRevision, budget })`:
@@ -188,7 +188,9 @@ fix, the verb's refusal and its fix, a review that differs from what was shown, 
 failure, the last outcome, a verification still to do, roles with no route and the one
 change of a word that routes them, and at rest where the team's roles lead ("7 on Codex · 6 on
 Claude"), whether any reading is not current, the press's scope, pools that are out or
-tight and the reviewed pool.
+tight and the reviewed pool. From the verb's refusal on, a model list that cannot be read
+holds the second line with its Retry and Models, beside the seats the line still holds or
+as the reason there is no team; a fix the second line offered moves up beside the first.
 
 **The verb.** One control whose `data-state` is `ready`, `busy`, `waiting` (a charge
 waits on its own Confirm) or `refused`. It is `aria-disabled` rather than disabled and

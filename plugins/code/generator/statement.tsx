@@ -5,7 +5,7 @@ import type { QuotaPool } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
 import type { VerificationStep } from "../workflow.ts";
 import { clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
-import { movesText } from "./board-model.ts";
+import { movesText, type ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
 import { strandsNote } from "./earlier-model.ts";
@@ -65,8 +65,8 @@ export type StatementProps = {
   readonly onRefresh: () => void;
   /** The line's measured width while it is one line (the measure the content below keeps to), else null. */
   readonly onMeasure?: (width: number | null) => void;
-  /** The bundled model list could not be read; the status lines say so beside the seats already on the line. */
-  readonly listFailure: boolean;
+  /** The bundled model list could not be read: beside the seats already on the line, or instead of any team. The status lines say so. */
+  readonly listFailure: ListFailure;
 };
 
 /** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */

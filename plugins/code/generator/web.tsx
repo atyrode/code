@@ -165,15 +165,15 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
   const staged = record?.active && record.draft ? "a staged catalog waits in models" : null;
   const facts = [verified, read, staged].filter(Boolean).join(" · ");
-  // The bundled list's failure is said in the status lines, with its retry and Models; the seats of a team the model holds stay, and
-  // with no team to seat there is no board.
+  // The bundled list's failure is said in the status lines, with its retry and Models, whatever else they say; the seats of a team
+  // the model holds stay, and with no team to seat there is no board.
   const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
 
   const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}
     style={measure === null ? undefined : { "--stmt-measure": `${measure}px` } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
     <StatementLine model={model} active={sheet === null} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
-      announce={announce} onOpen={openSheet} onKeys={() => setKeysOpen(true)} onRefresh={refresh} listFailure={listFailure !== "none"} onMeasure={setMeasure} />
+      announce={announce} onOpen={openSheet} onKeys={() => setKeysOpen(true)} onRefresh={refresh} listFailure={listFailure} onMeasure={setMeasure} />
     {listFailure !== "instead" && <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
     <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} setPreview={setPreview} rereads={rereads} announce={announce} />
     {/* One left-aligned run on the line's measure: the facts, then the ways out, session options with its choice, the keys. */}

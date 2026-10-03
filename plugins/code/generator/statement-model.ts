@@ -5,7 +5,7 @@ import type { Lane, ModelChoice, Route, Selection } from "../../domain/contracts
 import { familyPolicy, providerPolicy } from "../../domain/providers.ts";
 import { modelBucket, poolId, roleOutcomes, type QuotaPool, type RoleOutcome } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
-import { movesText } from "./board-model.ts";
+import { movesText, type ListFailure } from "./board-model.ts";
 import { optionConsequence, redline, routeChanges, type DialMove, type OptionContext, type Redline, type Rescue, type RoleMove } from "./consequences.ts";
 import { chooseOption, laneWord, SPECS, type DialId, type MoreDial, type OptionRefusal } from "./dial-space.ts";
 import type { GateRefusal, GateVerdict, LaunchStep, ProfileSource } from "./launch-step.ts";
@@ -765,8 +765,8 @@ export type StatusFacts = {
   readonly laneFix: SlotOption | null;
   /** No included account serves anything (the pool is known and empty). */
   readonly nobodyServes: boolean;
-  /** The bundled model list could not be read; the seats are still the team already on the line. */
-  readonly listFailure: boolean;
+  /** The bundled model list could not be read: the seats beside it are still the team on the line, or instead there is no team. */
+  readonly listFailure: ListFailure;
   readonly pointed: Pointed | null;
   /** The pointed team's moves seat by seat, written in place of its sentence while the board is a roster, which does not draw them. */
   readonly moves: string | null;
@@ -842,11 +842,20 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   }
 }
 
-/** The failed model list, in place of the second line at rest: the seats stay, with the read again and Models one press away. */
-const LIST_FAILURE = line([part("Model list unavailable · the seats are the team on the line", "warn")], [
-  { kind: "fix", key: "list-retry", label: "retry", fix: { kind: "refresh" } },
-  { kind: "fix", key: "list-models", label: "Models", fix: { kind: "open", place: "models" } },
-]);
+/**
+ * The failed model list holds the second line while it fails, whatever else the lines say: beside the
+ * seats the line still holds, or as the reason there is no team, with the read again and Models one
+ * press away. Whatever the second line offered a press for moves up beside the first, so a refusal's
+ * fix, the rescue and the revert stay one press away; words with nothing to press give way.
+ */
+function withListFailure([first, second]: [StatusLine, StatusLine], failure: ListFailure): [StatusLine, StatusLine] {
+  if (failure === "none") return [first, second];
+  const kept = second.actions.length ? line([...first.parts, ...second.parts], [...first.actions, ...second.actions]) : first;
+  return [kept, line([part(failure === "beside" ? "Model list unavailable · the seats are the team on the line" : "Model list unavailable · no team can be formed without it", "warn")], [
+    { kind: "fix", key: "list-retry", label: "retry", fix: { kind: "refresh" } },
+    { kind: "fix", key: "list-models", label: "Models", fix: { kind: "open", place: "models" } },
+  ])];
+}
 const REVERT: StatusAction = { kind: "fix", key: "revert", label: "revert", fix: { kind: "discard" } };
 
 /**
@@ -858,7 +867,6 @@ function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   const { team, verb } = facts;
   const first = line([part(team.counts.map(({ family, count }) => `${count} on ${vocab.family(family)}`).join(" · "))]);
   const actions = verb.saves ? [REVERT] : [];
-  if (facts.listFailure) return [first, line(LIST_FAILURE.parts, [...LIST_FAILURE.actions, ...actions])];
   const notes: StatusPart[] = [];
   if (verb.saves) {
     const count = facts.edits.length;
@@ -879,7 +887,7 @@ function restLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
  * a step in flight, the pointed option or team, the verb's refusal with its fix, a staged model list
  * the verb opens, a review that differs from the projection, a failure, the outcome of the last
  * step, the verification still to do, roles with no route and the fix that routes them, and at rest
- * the team's own consequence.
+ * the team's own consequence. From the verb's refusal on, a failed model list takes the second line.
  */
 export function statusLines(facts: StatusFacts, vocab: Vocabulary): readonly [StatusLine, StatusLine] {
   const cancel: StatusAction = { kind: "cancel" };
@@ -904,7 +912,7 @@ export function statusLines(facts: StatusFacts, vocab: Vocabulary): readonly [St
       : facts.inFlight === "resume" ? `Resuming on ${where}` : "Working";
     return [line([part(text, "busy")]), EMPTY];
   }
-  const base = baseLines(facts, vocab);
+  const base = withListFailure(baseLines(facts, vocab), facts.listFailure);
   const pointed = facts.pointed;
   if (!pointed) return base;
   // While the board is a roster, the pointed team's moves are said here seat by seat; in columns the board draws them.
@@ -928,7 +936,7 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
   if (facts.outcome) return [line([part(`${facts.outcome.kind === "launched" ? "Launched" : "Resumed"} on ${facts.outcome.machine}`, "done")]), EMPTY];
   if (facts.message) return [line([part(facts.message.text, "done")]), EMPTY];
-  if (verb.label === "Verify models") return [line([part(facts.launchStatus)]), facts.listFailure ? LIST_FAILURE : restLines(facts, vocab)[0]];
+  if (verb.label === "Verify models") return [line([part(facts.launchStatus)]), restLines(facts, vocab)[0]];
   if (facts.stop) {
     const scope = verb.saves ? [part(`${verb.label} saves the workspace team`, "meta")] : [];
     const head = [part(stopHead(facts.stop, vocab), "attention"), part(`${roleList(facts.stop.roles)} ${facts.stop.roles.length === 1 ? "has" : "have"} no route`), ...scope];

@@ -10,7 +10,7 @@ import { optionConsequence, rescue } from "../code/generator/consequences.ts";
 import type { GateRefusal, LaunchStep } from "../code/generator/launch-step.ts";
 import {
   causalRedline, commitKind, fixView, grounded, lastLaunchTeam, projectionOf, reviewMatches, statementSlots, statusLines, stepOption, verbView,
-  type Slot, type SlotOption, type StatementContext, type StatusFacts, type VerbFacts, type Vocabulary,
+  type Slot, type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
 } from "../code/generator/statement-model.ts";
 
 const scope = "machine/broker-scope";
@@ -230,7 +230,7 @@ describe("the status lines, in precedence", () => {
     verb: ready, phase: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
     launchStatus: "Ready to open a terminal.", stop: null, fix: null, team: { counts: [{ family: "openai", count: 12 }], fallsBack: [], tight: [], unread: false },
-    edits: [], reviewed: null, differs: null, laneFix: null, nobodyServes: false, listFailure: false, pointed: null, moves: null, ...changes,
+    edits: [], reviewed: null, differs: null, laneFix: null, nobodyServes: false, listFailure: "none", pointed: null, moves: null, ...changes,
   });
   const actions = (line: { actions: readonly { kind: string }[] }) => line.actions.map(action => action.kind);
 
@@ -288,5 +288,27 @@ describe("the status lines, in precedence", () => {
     expect(statusLines(facts({ pointed: { kind: "option", word: "thinking", option } }), vocab)[0].parts[0]).toEqual({ text: "Thinking high", tone: "strong" });
     expect(statusLines(facts({ busy: true, inFlight: "launch", pointed: { kind: "option", word: "thinking", option } }), vocab)[0].parts)
       .toEqual([{ text: "Opening a terminal on Studio", tone: "busy" }]);
+  });
+
+  test("a failed model list is stated with its fixes whatever the verb says, and the verb's own fix stays a press away", () => {
+    const keys = (line: StatusLine) => line.actions.map(action => action.kind === "fix" ? action.key : action.kind);
+    const listFixes = ["list-retry", "list-models"];
+    // A refused verb with no team to seat: the refusal and its fix, and the list failure with its fixes.
+    const unreadable = { ...ready, state: "refused" as const, refusal: { code: "accounts" as const, text: "" } };
+    const [refusal, failure] = statusLines(facts({ verb: unreadable, listFailure: "instead" }), vocab);
+    expect(refusal.parts[0]!.tone).toBe("attention");
+    expect(keys(refusal)).toEqual(["refresh"]);
+    expect(failure.parts[0]!.tone).toBe("warn");
+    expect(keys(failure)).toEqual(listFixes);
+    // A team beside the failure with roles that have no route: the rescue moves up beside its stop.
+    const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
+    const [stop, beside] = statusLines(facts({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }), vocab);
+    expect(keys(stop)).toEqual(["rescue"]);
+    expect(keys(beside)).toEqual(listFixes);
+    // Beside the verification still to do, as at rest.
+    const verify = verbView({ step: { step: "verify", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
+      draft: false, phase: null, verification: "unverified", stranded: false, grounded: true, placeable: true, launching: false });
+    expect(keys(statusLines(facts({ verb: verify, listFailure: "beside" }), vocab)[1])).toEqual(listFixes);
+    expect(keys(statusLines(facts({ listFailure: "beside" }), vocab)[1])).toEqual(listFixes);
   });
 });
