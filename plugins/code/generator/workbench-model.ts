@@ -287,7 +287,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
-    } });
+    },
+    // A stopped first verification leaves the choices it created and nothing else: the frozen first-use
+    // profile follows that exact CAS, as a save's own revision never revokes it. Another writer's change stays stale.
+    onInitialized: (from, to) => setDials(previous => previous && !previous.initialized && previous.revision === from
+      ? { ...previous, revision: to, initialized: true } : previous) });
   const authority = useRef({ client: host.client, authoring: host.authoring, writable, epoch: 0 });
   if (authority.current.client !== host.client || authority.current.authoring !== host.authoring || authority.current.writable !== writable)
     authority.current = { client: host.client, authoring: host.authoring, writable, epoch: authority.current.epoch + 1 };
