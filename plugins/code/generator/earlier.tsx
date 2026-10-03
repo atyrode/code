@@ -21,8 +21,8 @@ import { sameTeam, teamWords, type Vocabulary } from "./statement-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
-/** The keys the panel's keys dialog lists for the recent teams; the digits are decided with the statement's keys (statement-keys.ts). */
-export const EARLIER_KEY_HELP: readonly KeyHelp[] = [{ keys: ["1–9"], text: "Recall the recent team with that number" }];
+/** The keys the panel's keys dialog lists for the recent profiles; the digits are decided with the statement's keys (statement-keys.ts). */
+export const EARLIER_KEY_HELP: readonly KeyHelp[] = [{ keys: ["1–9"], text: "Recall the recent profile with that number" }];
 /** The keys a folder's saved sessions answer on their drum (`SessionDrum`). */
 export const SESSIONS_KEY_HELP: readonly KeyHelp[] = [
   { keys: ["↑", "↓"], text: "On a folder's session: the newer or the older one" },
@@ -40,13 +40,13 @@ export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "select
 export type EarlierProps = {
   host: HostServices;
   model: EarlierModel;
-  /** The statement's current words, which every row is compared with. */
+  /** The statement's current settings, which every row is compared with. */
   line: StatementWords;
-  /** The recent teams in digit order (`usePinnedRecents`), shared with the statement's digit keys. */
+  /** The recent profiles in digit order (`usePinnedRecents`), shared with the statement's digit keys. */
   recents: readonly RecentTeam[];
-  /** `quotaPools` over the present usage reading, which a recent team's fate is judged on. */
+  /** `quotaPools` over the present usage reading, which a recent profile's fate is judged on. */
   pools: readonly QuotaPool[];
-  /** The panel's pointed team: a recent row under the pointer or focus previews here, as `team:<digit>`, and clears only its own. */
+  /** The panel's pointed profile: a recent row under the pointer or focus previews here, as `team:<digit>`, and clears only its own. */
   setPreview: Dispatch<SetStateAction<TeamPreview | null>>;
   /** Bumped by the panel's refresh, which reads every machine already read again. */
   rereads: number;
@@ -55,9 +55,9 @@ export type EarlierProps = {
 };
 
 /**
- * The browser's recent teams, pinned to their digits for the panel's life (earlier-model.ts
+ * The browser's recent profiles, pinned to their digits for the panel's life (earlier-model.ts
  * `pinRecents`). Call it once per panel and hand the list to both the statement and the earlier
- * statements, so a digit means the same team in both.
+ * statements, so a digit means the same profile in both.
  */
 export function usePinnedRecents(teams: readonly RecentTeam[]): readonly RecentTeam[] {
   const [pinned, setPinned] = useState(() => ({ source: teams, list: pinRecents([], teams) }));
@@ -167,8 +167,8 @@ function SessionDrum({ id, folder, index, now, onChoose }: { id: string; folder:
 }
 
 /**
- * EARLIER STATEMENTS: the sessions running or saved on the permitted machines, and the teams this
- * browser launched, each said only where it differs from the line. Every verb asks the workbench's
+ * EARLIER STATEMENTS: the sessions running or saved on the permitted machines, and the profiles this
+ * browser launched, each said only where it differs from the statement. Every verb asks the workbench's
  * one gate (launch-step.ts `actionGate`) through the model, before it starts and again between its
  * steps; a refused one does nothing and says why.
  */
@@ -300,12 +300,12 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     void finishResume(pending.withTeam);
   }, [pending, model.savedSessionId]);
 
-  // ------------------------------------------------------------ recent teams on today's catalog and pools
+  // ------------------------------------------------------------ recent profiles on today's catalog and pools
   const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, time: at => when(at, Date.now()) }), []);
   const { compiled, selection, profile } = model;
   const forms = useMemo(() => recents.map((team): RecentForm | null => {
     if (!compiled || !selection) return null;
-    // A bundled starter derives another catalog for another budget, which the board cannot draw: such a team is recalled as it is, unpreviewed.
+    // A bundled starter derives another catalog for another budget, which the board cannot draw: such a profile is recalled as it is, unpreviewed.
     if (profile?.metadata && team.selection.budget !== profile.selection.budget) return null;
     return formRecent(compiled, selection, team.selection, familyWord, Date.now());
   }), [recents, compiled, selection, profile]);
@@ -319,7 +319,7 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     const form = shownIndex === null ? null : forms[shownIndex];
     const here = team && selection ? sameTeam(team.selection, selection) : false;
     if (team && form?.kind === "formed" && !here) {
-      setPreview({ key: `team:${shownIndex! + 1}`, selection: team.selection, review: form.review, label: `Team ${shownIndex! + 1}` });
+      setPreview({ key: `team:${shownIndex! + 1}`, selection: team.selection, review: form.review, label: `Profile ${shownIndex! + 1}` });
     } else setPreview(previous => previous?.key.startsWith("team:") ? null : previous);
   }, [shownIndex, recents, forms, selection]);
   useEffect(() => () => setPreview(previous => previous?.key.startsWith("team:") ? null : previous), []);
@@ -328,11 +328,11 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
   }
 
   function recall(team: RecentTeam, index: number) {
-    // Back to the saved team is a discard, not a local edit that happens to match it.
+    // Back to the saved profile is a discard, not a local edit that happens to match it.
     if (model.localDraft && model.record?.selection && sameTeam(team.selection, model.record.selection)) model.actions.discardChanges();
     else model.actions.recallTeam(team);
     const fate = fates[index];
-    announce(`Recalled team ${index + 1}${fate ? ` · ${fate}` : ""}.`);
+    announce(`Recalled profile ${index + 1}${fate ? ` · ${fate}` : ""}.`);
   }
 
   /**
@@ -370,8 +370,8 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
           : <>
             <Verb className={`${G}earlier-verb`} name={`Resume ${name} as saved`} verdict={verdict("resume", row)} busy={busy} data-verb="resume"
               onPress={() => resume(row, false)} announce={announce}>{busy && model.inFlight === "resume" ? "resuming…" : "resume"}</Verb>
-            <Verb className={`${G}earlier-with`} name={`Resume ${name} with the current team`} verdict={verdict("resume-with-team", row)}
-              data-verb="resume-with-team" onPress={() => resume(row, true)} announce={announce}>with current team</Verb>
+            <Verb className={`${G}earlier-with`} name={`Resume ${name} with the current profile`} verdict={verdict("resume-with-team", row)}
+              data-verb="resume-with-team" onPress={() => resume(row, true)} announce={announce}>with current profile</Verb>
           </>}
       </span>
     </li>;
@@ -409,15 +409,15 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     const form = forms[index] ?? null;
     const refused = form?.kind === "refused" ? form : null;
     const fate = fates[index] ?? null;
-    const allowed: RowVerdict = here ? { open: false, reason: "Already on the line." } : refused ? { open: false, reason: `${refused.reason}; nothing to recall.` }
+    const allowed: RowVerdict = here ? { open: false, reason: "Already the profile above." } : refused ? { open: false, reason: `${refused.reason}; nothing to recall.` }
       : recallGate.open ? recallGate : { open: false, reason: recallGate.refusal.text };
     return <li key={digit}>
-      <Verb className={`${G}earlier-team`} name={`Recall team ${digit}: ${teamSentence(teamWords(team.selection, familyWord))}${fate ? `; ${fate}` : ""}`}
-        subject={`Recall team ${digit}`} verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
+      <Verb className={`${G}earlier-team`} name={`Recall profile ${digit}: ${teamSentence(teamWords(team.selection, familyWord))}${fate ? `; ${fate}` : ""}`}
+        subject={`Recall profile ${digit}`} verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
         onPoint={(via, on) => point(index, via, on)} onPress={() => recall(team, index)} announce={announce}>
         <span className={`${G}earlier-digit`} aria-hidden="true">{digit}</span>
         <span className={`${G}earlier-words`}>
-          {here ? <span className={`${G}earlier-word`} data-same="">this team</span> : changed.map((difference, position) => <Fragment key={difference.word}>
+          {here ? <span className={`${G}earlier-word`} data-same="">this profile</span> : changed.map((difference, position) => <Fragment key={difference.word}>
             {position > 0 && <span className={`${G}earlier-sep`} aria-hidden="true">·</span>}
             <span className={`${G}earlier-word`} data-off={refused?.word === difference.word || undefined} title={refused?.word === difference.word ? refused.reason : undefined}>
               {difference.word === "lane" && <LaneMark lane={team.selection.lane} />}{phrase(difference.word, difference.text)}</span>
@@ -463,10 +463,10 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     </section>
     <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>
       <div className={`${G}earlier-head`}>
-        <h2 id={`${id}-recent`} className={`${G}earlier-title`}>recent teams</h2>
+        <h2 id={`${id}-recent`} className={`${G}earlier-title`}>recent profiles</h2>
         <span className={`${G}earlier-meta`}>this device{recents.length ? ` · 1–${recents.length} recall` : ""}</span>
       </div>
-      {recents.length === 0 && <p className={`${G}earlier-empty`}>Nothing launched from this browser yet; each team you launch is kept here, recalled by its digit.</p>}
+      {recents.length === 0 && <p className={`${G}earlier-empty`}>Nothing launched from this browser yet; each profile you launch is kept here, recalled by its digit.</p>}
       {provenance && <p className={`${G}earlier-note`}>{provenance}</p>}
       {recents.length > 0 && <ol className={`${G}earlier-rows`}>{recents.map(recentRow)}</ol>}
     </section>

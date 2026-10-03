@@ -11,24 +11,24 @@ import { RECENT_TEAMS_LIMIT, type RecentTeam } from "./recent-teams.ts";
 import { extrasOn, sameTeam, teamWords, type StatementWord, type TeamWord, type TeamWords, type Vocabulary } from "./statement-model.ts";
 
 /*
- * Earlier statements as data: the teams and sessions under the line, each said in the line's own
- * words (statement-model.ts `teamWords`) and only where it differs from the line. Pure, so the
- * rendering, the digit order and the row verdicts are tested without a panel.
+ * Earlier statements as data: the profiles and sessions under the settings, each said in the
+ * settings' own words (statement-model.ts `teamWords`) and only where it differs from them. Pure,
+ * so the rendering, the digit order and the row verdicts are tested without a panel.
  */
 
-// ---------------------------------------------------------------- the line's words
+// ---------------------------------------------------------------- the statement's words
 
-/** The line's words, the machine's name included: what every row is compared with. */
+/** The statement's settings in words, the machine's name included: what every row is compared with. */
 export type StatementWords = Readonly<Record<StatementWord, string>>;
 
 const TEAM_WORDS: readonly TeamWord[] = ["lane", "tier", "thinking", "advisor", "extras"];
 
-/** A word with the connector the line prints beside it (`high thinking`, `advisor off`), for a row that stands without the line. */
+/** A setting's value with the word that names it (`high thinking`, `advisor off`), for a row that stands without the settings beside it. */
 export function phrase(word: TeamWord, text: string): string {
   return word === "thinking" ? `${text} thinking` : word === "advisor" ? `advisor ${text}` : text;
 }
 
-/** A whole team in one phrase, for a control's name: `GPT only, elite, x-high thinking, advisor off, no extras`. */
+/** A whole profile in one phrase, for a control's name: `GPT only, elite, x-high thinking, advisor off, no extras`. */
 export function teamSentence(words: TeamWords): string {
   return TEAM_WORDS.map(word => phrase(word, words[word])).join(", ");
 }
@@ -36,14 +36,15 @@ export function teamSentence(words: TeamWords): string {
 // ---------------------------------------------------------------- differences
 
 export type Difference = { word: TeamWord; text: string };
-/** The line a row is compared with: the words it shows, and the team behind them once there is one. */
+/** The settings a row is compared with: their words, and the profile behind them once there is one. */
 export type LineTeam = { words: TeamWords; selection: Selection | null };
 
 /**
- * The words of `team` that differ from the line, in the line's order; empty when the row is the
- * line's team, which it then reads as "this team". Identity is decided on the selections, because
- * words can coincide for different teams. Extras are written as the change from the line's: the
- * switches the team adds by name, the ones it drops as "no spark", and "no extras" for none at all.
+ * The words of `team` that differ from the statement's, in reading order; empty when the row is the
+ * shown profile, which it then reads as "this profile". Identity is decided on the selections,
+ * because words can coincide for different profiles. Extras are written as the change from the
+ * statement's: the switches the profile adds by name, the ones it drops as "no spark", and "no
+ * extras" for none at all.
  */
 export function differences(team: Selection, line: LineTeam, familyWord: (family: string) => string): Difference[] {
   if (line.selection && sameTeam(team, line.selection)) return [];
@@ -220,13 +221,13 @@ export function savedFolders(saved: readonly SessionRow[]): SavedFolder[] {
 }
 
 /**
- * The group's one note: counts, "team not recorded" once (today no session records the team it
+ * The group's one note: counts, "profile not recorded" once (today no session records the profile it
  * ran with), and, where saved sessions are listed in a read-only workspace, that only Open works.
  * `running` is null while the terminal inventory is unread or failed: running is then unknown, never none.
  */
 export function sessionsNote(running: number | null, saved: number, readOnly: boolean): string {
   return [running === null ? "running unknown" : running ? `${running} running` : "none running", saved ? `${saved} saved` : null,
-    (running ?? 0) + saved ? "team not recorded" : null, readOnly && saved ? "read-only: Open only" : null].filter(part => part !== null).join(" · ");
+    (running ?? 0) + saved ? "profile not recorded" : null, readOnly && saved ? "read-only: Open only" : null].filter(part => part !== null).join(" · ");
 }
 
 export type MachineState =
@@ -310,11 +311,11 @@ export function pastMoment(at: number, now: number): string {
 export type SavedTeam = { selection: Selection | null; updatedBy: string; updatedAt: number };
 
 /**
- * Where the line's team comes from, when no recent team says it already ("this team"): the
- * workspace team, with when and by whom the workspace record last changed. Every write to the
+ * Where the shown profile comes from, when no recent profile says it already ("this profile"): the
+ * workspace profile, with when and by whom the workspace record last changed. Every write to the
  * record (an account switched, a catalog staged) stamps that time and name, so they are the
- * record's, never a claim about who saved the team. Null when a recent team matches the line, when
- * the line is not the saved team, or when there is none. `names` maps principal ids to the names
+ * record's, never a claim about who saved the profile. Null when a recent profile matches the shown
+ * one, when the shown profile is not the saved one, or when there is none. `names` maps principal ids to the names
  * the panel can see; the viewer is "you", anyone else unseen is "another member".
  */
 export function teamProvenance(line: Selection | null, recents: readonly RecentTeam[], saved: SavedTeam | null,
@@ -322,5 +323,5 @@ export function teamProvenance(line: Selection | null, recents: readonly RecentT
   if (!line || !saved?.selection || !sameTeam(line, saved.selection)) return null;
   if (recents.some(team => sameTeam(team.selection, line))) return null;
   const by = saved.updatedBy === viewer ? "you" : names.get(saved.updatedBy) ?? "another member";
-  return `Workspace team · last change to the workspace ${pastMoment(saved.updatedAt, now)} by ${by}`;
+  return `Workspace profile · last change to the workspace ${pastMoment(saved.updatedAt, now)} by ${by}`;
 }

@@ -17,15 +17,15 @@ export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
 export class WorkflowError extends Error {}
 /** Refusal tokens in a person's words. A token missing here is still never shown raw (`failureWords`). */
 const messages: Readonly<Record<string, string>> = {
-  code_stale_preferences: "The workspace team changed. Read it again before saving your edit.",
-  code_composition_changed: "The workspace team, account pool or OMP defaults changed. Review the session again before launching.",
+  code_stale_preferences: "The workspace profile changed. Read it again before saving your edit.",
+  code_composition_changed: "The workspace profile, account pool or OMP defaults changed. Review the session again before launching.",
   code_configuration_missing: "This workspace has no Code choices yet.",
   code_catalog_missing: "No model list is in use yet. Review one in Models.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
-  code_invalid_selection: "This team cannot be formed from the current models.",
-  code_budget_unsatisfiable: "No free route serves this team.",
+  code_invalid_selection: "This profile cannot be formed from the current models.",
+  code_budget_unsatisfiable: "No free route serves this profile.",
   code_invalid_catalog: "The model list could not be used.",
   code_preview_changed: "The reviewed model list changed. Review it again.",
   code_starter_candidate_limit: "The bundled model list is too large to verify at once.",
@@ -43,7 +43,7 @@ const messages: Readonly<Record<string, string>> = {
   omp_defaults_changed: "OMP defaults changed. Review again.",
   omp_session_unavailable: "That saved session is no longer on the machine.",
   omp_session_binding_changed: "That saved session moved or changed. Read the machine again.",
-  omp_resume_plan_unsupported: "Resuming with the current team cannot approve plans automatically.",
+  omp_resume_plan_unsupported: "Resuming with the current profile cannot approve plans automatically.",
 };
 /** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
 const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;

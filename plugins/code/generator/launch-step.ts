@@ -92,21 +92,21 @@ export type LaunchStep =
   | { step: "verify" | "save" | "review" | "launch"; reason: null }
   | { step: "blocked"; reason: LaunchBlocker };
 
-/** Each blocker in the main view's words: the team, the model list, the machine; never Code's internal nouns. */
+/** Each blocker in the main view's words: the profile, the model list, the machine; never Code's internal nouns. */
 const blockerText: Readonly<Record<LaunchBlockerCode, string>> = {
-  configuration: "The workspace team needs a fresh read.",
+  configuration: "The workspace profile needs a fresh read.",
   staged: "A staged model list waits in Models.",
   verifying: "Verifying models with your accounts…",
   "verify-status": "Verification readiness is unknown on this machine.",
   "verify-permissions": "Discovery is not enabled on this machine.",
-  unsaved: "Save the team on the line first.",
+  unsaved: "Save the profile first.",
   "read-only": "Edit access needed.",
   placement: "Open Code beside the workspace canvas to launch or resume.",
-  conflict: "The workspace team changed elsewhere.",
+  conflict: "The workspace profile changed elsewhere.",
   accounts: "Accounts are not readable.",
   "no-accounts": "No account is included.",
   models: "Review your models.",
-  unavailable: "The machine is unavailable; the team is kept.",
+  unavailable: "The machine is unavailable; the profile is kept.",
   sessions: "Sessions are unavailable on this machine.",
   permissions: "Sessions are not enabled on this machine.",
   skills: "Skill choices need attention.",
@@ -247,9 +247,9 @@ const refusalText: Readonly<Record<Exclude<GateRefusalCode, LaunchBlockerCode | 
   running: "Wait for the step in progress.",
   charge: "Confirm or cancel the verification charge first.",
   "no-charge": "Nothing to verify through these accounts.",
-  "no-account": "No included account serves a provider this team leads on.",
+  "no-account": "No included account serves a provider this profile leads on.",
   "no-session": "Choose a saved session to resume.",
-  plans: "Resuming with the current team cannot approve plans automatically.",
+  plans: "Resuming with the current profile cannot approve plans automatically.",
   verified: "Models are verified with the present accounts and OMP.",
 };
 function refuse(code: Exclude<GateRefusalCode, LaunchBlockerCode | "not-next">, gap?: ServiceGap): GateVerdict {

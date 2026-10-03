@@ -131,16 +131,16 @@ describe("sessions are grouped running then saved", () => {
     expect(sessionName(sessionRows([terminal("unread", studio)], new Map(), "atyrode.omp").running[0]!)).toBe("/work/unread");
   });
 
-  test("the group says its counts and that no team was recorded, once; read-only says Open only where Resume would show", () => {
-    expect(sessionsNote(3, 2, false)).toBe("3 running · 2 saved · team not recorded");
+  test("the group says its counts and that no profile was recorded, once; read-only says Open only where Resume would show", () => {
+    expect(sessionsNote(3, 2, false)).toBe("3 running · 2 saved · profile not recorded");
     expect(sessionsNote(0, 0, false)).toBe("none running");
-    expect(sessionsNote(1, 2, true)).toBe("1 running · 2 saved · team not recorded · read-only: Open only");
-    expect(sessionsNote(3, 0, true)).toBe("3 running · team not recorded");
+    expect(sessionsNote(1, 2, true)).toBe("1 running · 2 saved · profile not recorded · read-only: Open only");
+    expect(sessionsNote(3, 0, true)).toBe("3 running · profile not recorded");
   });
 
   test("an unread or failed terminal inventory is never none running", () => {
     expect(sessionsNote(null, 0, false)).toBe("running unknown");
-    expect(sessionsNote(null, 2, false)).toBe("running unknown · 2 saved · team not recorded");
+    expect(sessionsNote(null, 2, false)).toBe("running unknown · 2 saved · profile not recorded");
   });
 
   test("Read is offered once per online permitted machine not yet read; offline ones are named, revoked ones are not", () => {

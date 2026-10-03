@@ -28,9 +28,9 @@ export function Automation({ choice, reviewed, refusal, change }: {
       </li>)}
     </ul>}
     {choice && <p className={`${G}options-note`} data-tone="warn">Restricted OMP tools; not an OS or network sandbox.</p>}
-    {choice && <p className={`${G}options-note`}>Task delegation and ambient skills are off; only deliberately selected sealed skills can load. Set advisor, prewalk and fallbacks to off and plans to ask first, then save the team before reviewing.</p>}
+    {choice && <p className={`${G}options-note`}>Task delegation and ambient skills are off; only deliberately selected sealed skills can load. Set advisor, prewalk and fallbacks to off and plans to ask first, then save the profile before reviewing.</p>}
     <p className={`${G}options-note`} data-tone="meta">{choice ? "" : "Tool limits are not an OS or network sandbox. "}Allowed bash can execute programs, including another OMP process, under the separately granted native authority. Disabling OMP task delegation does not prohibit shell subprocesses. File tools retain their native authority; skills grant none.</p>
-    <p className={`${G}options-note`} data-tone="meta">Resume does not restore historical restrictions; choose restricted automation again when needed. Saved-state resume uses OMP defaults and refuses if advisor, prewalk or fallbacks remain on. Restricting changes neither the team nor the defaults.</p>
+    <p className={`${G}options-note`} data-tone="meta">Resume does not restore historical restrictions; choose restricted automation again when needed. Saved-state resume uses OMP defaults and refuses if advisor, prewalk or fallbacks remain on. Restricting changes neither the profile nor the defaults.</p>
     {reviewed && <p className={`${G}options-note`} role="status" data-effective-automation={reviewed.mode}>
       {reviewed.mode === "restricted"
         ? `Reviewed natively: restricted · tools ${reviewed.toolNames.join(", ") || "none"} · OMP task delegation ${reviewed.delegation} · ambient discovery suppressed`

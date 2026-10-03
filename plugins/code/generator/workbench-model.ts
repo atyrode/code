@@ -325,7 +325,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     configurationCurrent, selection, ompVersion: metadata.data?.ompVersion ?? null, setup: setup.data, writable, available,
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      setMessage({ text: "Models verified with your accounts, and the team saved for the workspace.", failed: false });
+      setMessage({ text: "Models verified with your accounts, and the profile saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
     onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });
@@ -411,7 +411,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     let formed: Review | null = null;
     try { formed = previewSelection(compileCatalog(document), team.selection); } catch { /* A catalog that does not compile forms no team. */ }
     // Recalled exactly or not at all: a team quietly narrowed to the current catalog is not the team that was launched.
-    if (!formed) { setMessage({ text: "That team cannot be formed from the current models; nothing changed.", failed: true }); return; }
+    if (!formed) { setMessage({ text: "That profile cannot be formed from the current models; nothing changed.", failed: true }); return; }
     applySelection(document, team.selection);
   }
   function discardChanges() {
@@ -427,7 +427,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       });
       if (!policyCurrent()) throw new WorkflowError("The workspace changed while saving. Nothing was retried.");
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      setMessage({ text: "The team is saved for the workspace.", failed: false });
+      setMessage({ text: "The profile is saved for the workspace.", failed: false });
     });
   }
   const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
