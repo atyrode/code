@@ -26,9 +26,10 @@ export const ReviewSchema = z.strictObject({
 });
 export type Review = z.infer<typeof ReviewSchema>;
 
-const roles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic",
+/** The roles Code routes, in its order. Advisor is omitted while the advisor is off. */
+export const ROLES = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic",
   "advisor", "vision", "smol", "tiny", "commit"] as const;
-type Role = typeof roles[number];
+type Role = typeof ROLES[number];
 const agentRoles: Partial<Record<Role, true>> = { task: true, reviewer: true, "security-reviewer": true, scout: true, sonic: true };
 const deliberative: Partial<Record<Role, true>> = { plan: true, slow: true, reviewer: true, "security-reviewer": true };
 const utilityCaps: Partial<Record<Role, readonly number[]>> = {
@@ -157,7 +158,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
    */
   const admits = (key: string): boolean => admittedBy(selection.budget, catalog.model(key));
   const routes: Route[] = [];
-  for (const role of roles) {
+  for (const role of ROLES) {
     let lead: string;
     let level = thinking;
     let fallbacks: (string | undefined)[] = [];
