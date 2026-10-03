@@ -3,15 +3,21 @@ import type { MachineSummary } from "@manifold/protocol";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
+import type { VerificationStep } from "../workflow.ts";
 import { accountWord, clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
+import { movesText } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
+import { previewSelection } from "./dial-space.ts";
+import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
+import { useRosterForm } from "./seat-board.tsx";
 import { StatementSlot, type SlotMotion } from "./slot.tsx";
 import { statementKey, type StatementKeyAction } from "./statement-keys.ts";
 import { chooseForm, drumShift, FORM_CHOICES, FORM_ROWS, ghostedWords, measureForm, VERB_INLINE, type FormMeasure, type SlotText, type TextMeasure } from "./statement-layout.ts";
 import {
-  changeSentence, commitKind, CONNECTORS, edgeOption, fixView, grounded, lastLaunchTeam, laneFix, poolCounts, projectionOf, reviewMatches,
-  roleList, sameTeam, standstill, STATEMENT_WORDS, statementSlots, statusLines, stepOption, teamChange, teamFacts, VERB_LABELS, verbView, WORD_NAMES,
+  changeSentence, commitKind, CONNECTORS, edgeOption, EXTRAS_LABELS, fixView, grounded, lastLaunchTeam, laneFix, poolCounts, projectionOf, reviewDifferences,
+  reviewMatches, roleList, sameTeam, standstill, STATEMENT_WORDS, statementSlots, statusLines, stepOption, teamChange, teamEdits, teamFacts, VERB_LABELS,
+  verbView, WORD_NAMES,
   type Pointed, type Projection, type Slot, type SlotOption, type StatementContext, type StatementWord, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import { useWheelTurn } from "./wheel-turn.ts";
@@ -21,6 +27,12 @@ import type { WorkbenchModel } from "./workbench-model.ts";
 const S = "plugin-atyrode_code_generator__stmt-";
 const PANEL_ROOT = ".plugin-atyrode_code_generator";
 const HOUR = 3_600_000;
+/** Where a verification stopped, in the line's words rather than the workflow's step names. */
+const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
+  observe: "reading the accounts", initialize: "setting up the workspace", inventory: "checking models", draft: "preparing the charge",
+  benchmark: "measuring models", derive: "building the model list", stage: "saving the model list", review: "reviewing the model list",
+  promote: "putting the model list in use", select: "saving the team",
+};
 
 /**
  * The team the board and the status line show instead of the line's while something is pointed:
@@ -33,6 +45,8 @@ export type StatementPlace = "models" | "setup" | "options" | "accounts";
 
 export type StatementProps = {
   readonly model: WorkbenchModel;
+  /** The main view shows: no sheet covers it. Its keys act only then. */
+  readonly active: boolean;
   readonly preview: TeamPreview | null;
   readonly setPreview: (preview: TeamPreview | null) => void;
   /** `quotaPools` over the present usage reading. */
@@ -51,6 +65,8 @@ export type StatementProps = {
   readonly onRefresh: () => void;
   /** The line's measured width while it is one line (the measure the content below keeps to), else null. */
   readonly onMeasure?: (width: number | null) => void;
+  /** The bundled model list could not be read; the status lines say so beside the seats already on the line. */
+  readonly listFailure: boolean;
 };
 
 /** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */
@@ -104,7 +120,7 @@ function useStatementLayout(field: RefObject<HTMLElement | null>, texts: Readonl
  * through the workbench model's gate; the line only names the step, shows what each option would do
  * and quota's verdict on it, and writes the consequence of whatever is pointed in the status lines.
  */
-export function StatementLine({ model, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, onMeasure }: StatementProps) {
+export function StatementLine({ model, active, preview, setPreview, pools, machines, selectMachine, recents, announce, onOpen, onKeys, onRefresh, listFailure, onMeasure }: StatementProps) {
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLDivElement>(null);
@@ -114,8 +130,12 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   const [pointedAt, setPointedAt] = useState<{ readonly word: StatementWord; readonly value: string } | "fix" | null>(null);
   const [motion, setMotion] = useState<{ readonly word: StatementWord; readonly motion: SlotMotion } | null>(null);
   const [launching, setLaunching] = useState(false);
-  const [stopped, setStopped] = useState<object | null>(null);
-  const chain = useRef<Projection | null>(null);
+  // A Save & launch press that stopped at its review: the review, and what it shows unlike the projection.
+  const [stopped, setStopped] = useState<{ readonly review: object; readonly differs: readonly string[] } | null>(null);
+  // The keyboard's last commit or refused step, said in the status lines until the next input (pointing says its own).
+  const [said, setSaid] = useState<Pointed | null>(null);
+  const chain = useRef<{ readonly projection: Projection; readonly review: Review } | null>(null);
+  const roster = useRosterForm(root);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
   const starter = model.profile?.metadata != null;
@@ -125,9 +145,12 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   const reading = !model.profile && !model.document && model.queries.configuration.error === null && model.queries.metadata.error === null;
   const teamGate = model.gate("edit-team"), machineGate = model.gate("edit-machine");
   const vocab = useMemo<Vocabulary>(() => ({ family: familyWord, account: accountWord, time: at => at - Date.now() > 20 * HOUR ? clock(at) : hhmm(at) }), []);
+  // The saved workspace team, while the line holds an unsaved edit of it: what the verb's save would change.
+  const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
+  const rosterError = model.rosterError !== null;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, lastLaunch, machines, machineId: model.machineId,
-  } : null, [catalog, selection, controlsReview, served, starter, pools, lastLaunch, machines, model.machineId]);
+    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, lastLaunch, saved, machines, rosterError, machineId: model.machineId,
+  } : null, [catalog, selection, controlsReview, served, starter, pools, lastLaunch, saved, machines, rosterError, model.machineId]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   const quota = useMemo(() => {
     if (!catalog || !shown) return null;
@@ -139,7 +162,7 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     if (!slots) return null;
     const text = (word: StatementWord): SlotText => ({
       connector: CONNECTORS[word] ?? null, marked: word === "lane",
-      labels: word === "extras" ? ["no extras", "6 extras", ...slots.extras.options.map(option => option.label)] : slots[word].options.map(option => option.label),
+      labels: word === "extras" ? EXTRAS_LABELS : slots[word].options.map(option => option.label),
     });
     return { lane: text("lane"), tier: text("tier"), thinking: text("thinking"), advisor: text("advisor"), extras: text("extras"), machine: text("machine") };
   }, [slots]);
@@ -149,8 +172,10 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
 
   const verb = verbView({
     step: model.step, verdict: model.verb, busy: model.busy, inFlight: model.inFlight, chaining: model.chaining, unsaved: model.unsaved,
-    draft: model.localDraft !== null, phase: verification.phase, verification: verification.status, stranded: quota?.stop != null,
-    grounded: quota?.grounded ?? false, launching,
+    draft: model.localDraft !== null, phase: verification.phase, verification: verification.status,
+    // Launch anyway is for roles whose pools are out; a lead no account serves is the door's refusal, never "anyway".
+    stranded: quota?.stop?.waits.some(pool => pool.verdict.kind === "blocked" || pool.verdict.kind === "maxed") ?? false,
+    grounded: quota?.grounded ?? false, placeable: model.placeable, launching,
   });
 
   // ------------------------------------------------------------ pointing: the status lines and the board show what a choice would do
@@ -180,8 +205,10 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
       const change = teamChange(catalog, shown, preview.review, pools, familyWord);
       return { kind: "team", label: preview.label ?? "This team", sentence: change.sentence, quota: change.quota };
     }
-    return null;
-  }, [pointedAt, quota, catalog, shown, slots, preview, pools]);
+    return said;
+  }, [pointedAt, quota, catalog, shown, slots, preview, pools, said]);
+  // The pointed team's moves, seat by seat, which the roster does not draw: an option, the fix and a recent team all point through the preview.
+  const moves = roster && catalog && shown && preview ? movesText(catalog, shown, preview.review) || null : null;
 
   // ------------------------------------------------------------ the status lines
   const machine = machines?.find(entry => entry.id === model.machineId) ?? null;
@@ -194,40 +221,45 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   } : null;
   // A verification that stopped says so until the next one starts; the verb, Verify models again, is its retry.
   const stoppedVerifying = verification.failure && verification.phase === null ? {
-    text: verification.failure.cancelled ? "Verification cancelled" : `Verification stopped at ${verification.failure.step}: ${verification.failure.reason}`,
+    text: verification.failure.cancelled ? "Verification cancelled" : `Verification stopped while ${STEP_WORDS[verification.failure.step]}: ${verification.failure.reason}`,
     failed: !verification.failure.cancelled,
   } : null;
   const lines = statusLines({
     verb, phase: verification.phase, progress, charge, inFlight: model.inFlight, busy: model.busy, chaining: model.chaining, launching,
-    machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, otherMachine: other && { id: other.id, name: other.name },
+    machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, machineChosen: model.machineId !== "",
+    rosterUnread: rosterError, otherMachine: other && { id: other.id, name: other.name },
     message: model.message ?? stoppedVerifying, outcome: model.outcome, launchStatus: model.launchStatus, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
-    team: quota?.team ?? { counts: [], fallsBack: null, tight: [], unread: false }, reviewed, differs: stopped !== null && stopped === model.launchReview,
+    team: quota?.team ?? { counts: [], fallsBack: [], tight: [], unread: false }, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [],
+    reviewed, differs: stopped !== null && stopped.review === model.launchReview ? stopped.differs : null,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
-    nobodyServes: served !== null && served.size === 0, pointed,
+    nobodyServes: served !== null && served.size === 0, listFailure, pointed, moves,
   }, vocab);
 
   // ------------------------------------------------------------ the verb, and Save & launch as one gesture
   function press() {
+    if (verb.opens) { onOpen(verb.opens); return; }
     if (verb.state !== "ready") {
       if (verb.refusal) announce(`${verb.label}: ${verb.refusal.text}`);
       return;
     }
     setStopped(null);
-    if (verb.launches && shown) { chain.current = projectionOf(shown, served); setLaunching(true); }
+    if (verb.launches && shown) { chain.current = { projection: projectionOf(shown, served), review: shown }; setLaunching(true); }
     model.actions.next();
   }
   // A Save & launch press goes on from its review to the launch only when the review shows what was
-  // projected; `next` asks the gate again before launching. A chain that ends anywhere else stops.
+  // projected; `next` asks the gate again before launching. A chain that ends anywhere else stops,
+  // and a review that differs is said as what differs, for the person to choose.
   useLayoutEffect(() => {
     const projected = chain.current;
     if (!projected || model.busy || model.chaining) return;
     chain.current = null;
     setLaunching(false);
     const review = model.launchReview;
-    if (model.step.step !== "launch" || !review) return;
-    if (reviewMatches(projected, review.composition)) { model.actions.next(); return; }
-    setStopped(review);
-    announce("Stopped: the review differs from what was shown");
+    if (model.step.step !== "launch" || !review || !catalog) return;
+    if (reviewMatches(projected.projection, review.composition)) { model.actions.next(); return; }
+    const differs = reviewDifferences(catalog, projected.review, projected.projection.providers, review.composition, vocab);
+    setStopped({ review, differs });
+    announce(`The review differs: ${differs.join("; ")}. Launch to use the reviewed pool, or change a word first.`);
   });
 
   // ------------------------------------------------------------ commits, all through the edit gates
@@ -251,12 +283,22 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
       return;
     }
     if (!option.selection) return;
+    const name = word === "extras" ? `${option.label} ${option.on ? "off" : "on"}` : `${WORD_NAMES[word]} ${option.label}`;
     const stop = option.quota?.kind === "strands" ? `; ${roleList(option.quota.stop.roles)} would have no route` : "";
-    commitTeam(option.selection, word, via, from, `${word === "extras" ? `${option.label} ${option.on ? "off" : "on"}` : `${WORD_NAMES[word]} ${option.label}`}${stop}`);
+    // A keyboard commit says what it did where a pointer would have read it before choosing: in the status lines, until the next input.
+    if (via === "keyboard" && teamGate.open) setSaid({ kind: "option", word, option });
+    commitTeam(option.selection, word, via, from, `${name}${option.note ? `: ${option.note}` : ""}${stop}`);
+  }
+  /** A keyboard step that nothing can take says why, in the status lines and aloud, rather than doing nothing. */
+  function refuseStep(word: StatementWord, option: SlotOption) {
+    setSaid({ kind: "option", word, option });
+    announce(`${WORD_NAMES[word]} ${option.label}: ${option.reason ?? option.note}`);
   }
   function stepWord(slot: Slot, more: boolean, via: "pointer" | "keyboard") {
     const option = stepOption(slot, more);
-    if (option) commitOption(slot.word, option, via, more ? -1 : 1);
+    if (option) { commitOption(slot.word, option, via, more ? -1 : 1); return; }
+    const next = slot.current >= 0 ? slot.options[slot.current + (more ? -1 : 1)] : undefined;
+    if (via === "keyboard" && next && !next.available) refuseStep(slot.word, next);
   }
   function recall(index: number) {
     const team = recents[index];
@@ -266,7 +308,9 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     if (commitKind(team.selection, selection, model.record?.selection ?? null, model.localDraft?.source ?? null) === "discard") model.actions.discardChanges();
     else model.actions.recallTeam(team);
     clearPointed();
-    announce(`Recent team ${index + 1}`);
+    const formed = catalog && previewSelection(catalog, team.selection);
+    const strands = formed && strandsNote(catalog, formed.routes, pools, vocab);
+    announce(`Recent team ${index + 1}${strands ? ` · ${strands}` : ""}`);
   }
   function runFix(action: Extract<StatusAction, { kind: "fix" }>) {
     const fix: StatusFix = action.fix;
@@ -276,7 +320,8 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
         if (machineGate.open) { selectMachine(fix.machineId); announce(action.label); } else announce(machineGate.refusal.text);
         return;
       case "open": onOpen(fix.place, fix.family); return;
-      case "refresh": model.actions.refresh(); return;
+      // A re-read reads everything the line stands on, the machine list included.
+      case "refresh": onRefresh(); return;
       case "discard": model.actions.discardChanges(); return;
     }
   }
@@ -292,13 +337,19 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
   // ------------------------------------------------------------ keys: panel-local, decided by statementKey
   const keys = useRef<(event: KeyboardEvent) => void>(() => {});
   keys.current = event => {
+    // The keyboard's last word is said until the next input; a commit by this very key says its own.
+    setSaid(null);
     const target = event.target instanceof HTMLElement ? event.target : null;
+    const panel = root.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
+    const view = root.current?.closest<HTMLElement>("[data-view]") ?? root.current;
+    const onRoot = target !== null && target === panel;
+    const inView = active && target !== null && (onRoot || view?.contains(target) === true);
     const inside = target !== null && root.current?.contains(target) === true;
     const named = inside ? target.closest<HTMLElement>("[data-stmt-word]")?.dataset.stmtWord : undefined;
     const word = STATEMENT_WORDS.find(candidate => candidate === named) ?? null;
     const action = statementKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
-      inField: target?.matches("textarea, input, select, [contenteditable]") ?? false, inDialog: target?.closest("[role=dialog], [data-popover]") != null,
+      inView, onRoot, inField: target?.matches("textarea, input, select, [contenteditable]") ?? false, inDialog: target?.closest("[role=dialog], dialog") != null,
       word, onVerb: inside && target.closest("[data-stmt-verb]") !== null, open, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }
@@ -335,8 +386,17 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
         if (!context) return true;
         if (action.word === "machine") { announce("The last launch's machine is not recorded"); return true; }
         if (!lastLaunch) { announce("Nothing has been launched from this browser yet"); return true; }
-        const team = lastLaunchTeam(action.word, slots[action.word], context);
-        if (team) commitTeam(team, action.word, "keyboard", 1, `${WORD_NAMES[action.word]} back to the last launch`);
+        const slot = slots[action.word];
+        const team = lastLaunchTeam(action.word, slot, context);
+        const last = action.word === "extras" ? undefined : slot.options.find(option => option.last);
+        if (team) {
+          if (last && teamGate.open) setSaid({ kind: "option", word: action.word, option: last });
+          commitTeam(team, action.word, "keyboard", 1, `${WORD_NAMES[action.word]} back to the last launch${last?.note ? `: ${last.note}` : ""}`);
+        } else if (slot.changed) {
+          // The last launch's value is refused now: say why rather than doing nothing.
+          if (last && !last.available) refuseStep(action.word, last);
+          else announce(`${WORD_NAMES[action.word]}: the last launch's switches cannot all be set now`);
+        }
         return true;
       }
     }
@@ -346,20 +406,24 @@ export function StatementLine({ model, preview, setPreview, pools, machines, sel
     const panel = scope?.closest<HTMLElement>(PANEL_ROOT) ?? scope;
     if (!panel) return;
     const listener = (event: KeyboardEvent) => keys.current(event);
+    const pointer = () => setSaid(null);
     panel.addEventListener("keydown", listener);
+    panel.addEventListener("pointerdown", pointer, true);
     // The panel root takes focus when the panel opens, so its keys work at once; never from another control.
     const active = panel.ownerDocument.activeElement;
     if (panel.hasAttribute("tabindex") && (!active || active === panel.ownerDocument.body)) panel.focus({ preventScroll: true });
-    return () => panel.removeEventListener("keydown", listener);
+    return () => { panel.removeEventListener("keydown", listener); panel.removeEventListener("pointerdown", pointer, true); };
   }, []);
 
-  // The wheel turns a word only on its open drum, or under keyboard focus after the pointer rests (wheel-turn.ts).
-  useWheelTurn(field, { controls: "[data-stmt-word]", open: "[data-stmt-word][data-open]" }, !teamGate.open, (control, step) => {
-    const word = STATEMENT_WORDS.find(candidate => candidate === control.dataset.stmtWord);
-    if (!word || !slots) return;
-    if (word === "extras") setCursor(current => Math.max(0, Math.min(slots.extras.options.length - 1, current - step)));
-    else stepWord(slots[word], step > 0, "keyboard");
-  });
+  // The wheel turns a word only on its open drum, or under keyboard focus after the pointer rests (wheel-turn.ts); never the
+  // machine, whose turn would move the launch's destination under a scroll.
+  useWheelTurn(field, { controls: "[data-stmt-word]:not([data-stmt-word=machine])", open: "[data-stmt-word][data-open]:not([data-stmt-word=machine])" },
+    !teamGate.open, (control, step) => {
+      const word = STATEMENT_WORDS.find(candidate => candidate === control.dataset.stmtWord);
+      if (!word || word === "machine" || !slots) return;
+      if (word === "extras") setCursor(current => Math.max(0, Math.min(slots.extras.options.length - 1, current - step)));
+      else stepWord(slots[word], step > 0, "keyboard");
+    });
 
   // ------------------------------------------------------------ the open drum: below the line, inside the panel, never over the verb
   const choice = FORM_CHOICES[layout.choice]!;

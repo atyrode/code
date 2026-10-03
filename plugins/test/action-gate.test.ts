@@ -4,13 +4,13 @@ import type { VerificationStatus } from "../code/generator/verification.ts";
 
 /** A verified, saved, launchable workbench with a saved session chosen and nothing in flight; each test changes only what it is about. */
 function facts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "current"): GateFacts {
-  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, available: true, launchReady: true, previewCurrent: false,
+  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
     queries: { setup: { error: null } }, verification: { status, ready: true },
     running: false, charge: null, unservedLead: null, savedSessionId: "session-1", planYolo: false, ...changes };
 }
 const every: readonly WorkbenchIntent[] = ["verify", "confirm", "save", "review", "launch", "resume", "resume-with-team", "open",
-  "edit-team", "edit-machine", "edit-accounts"];
+  "edit-team", "edit-options", "edit-machine", "edit-accounts"];
 const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer", "security-reviewer"] };
 const code = (verdict: GateVerdict) => verdict.open ? "open" : verdict.refusal.code;
 
@@ -19,17 +19,17 @@ describe("one gate for every action", () => {
     for (const intent of every) expect(code(actionGate(facts({ running: true, previewCurrent: true }), intent))).toBe("running");
   });
 
-  test("while a charge waits only its Confirm proceeds; edits of the team, machine and accounts wait with it", () => {
+  test("while a charge waits only its Confirm proceeds; edits of the team, session options, machine and accounts wait with it", () => {
     const waiting = facts({ charge: { requests: 19 } }, "unverified");
     for (const intent of every) expect(code(actionGate(waiting, intent))).toBe(intent === "confirm" ? "open" : "charge");
     expect(code(actionGate(facts({ charge: { requests: 0 } }, "unverified"), "confirm"))).toBe("no-charge");
     expect(code(actionGate(facts({}, "unverified"), "confirm"))).toBe("not-next");
   });
 
-  test("review and launch refuse a lead no included account serves, naming it; a save does not", () => {
+  test("save, review and launch refuse a lead no included account serves, naming it, so a team the door refuses is never saved on the way", () => {
     expect(actionGate(facts({ unservedLead: claude }), "review")).toEqual({ open: false, refusal: expect.objectContaining({ code: "no-account", gap: claude }) });
     expect(code(actionGate(facts({ unservedLead: claude, previewCurrent: true }), "launch"))).toBe("no-account");
-    expect(code(actionGate(facts({ unservedLead: claude, unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
+    expect(code(actionGate(facts({ unservedLead: claude, unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("no-account");
     expect(code(actionGate(facts({ unservedLead: claude }), "resume-with-team"))).toBe("no-account");
     // Resuming saved state keeps the session's own models, so the team's lead is not its concern.
     expect(code(actionGate(facts({ unservedLead: claude }), "resume"))).toBe("open");
@@ -77,5 +77,21 @@ describe("one gate for every action", () => {
     expect(code(actionGate(readOnly, "edit-machine"))).toBe("open");
     expect(code(actionGate(readOnly, "open"))).toBe("open");
     expect(code(actionGate(readOnly, "edit-accounts"))).toBe("read-only");
+  });
+
+  test("with no canvas beside the panel, writes stay open and only what places a terminal refuses, for that reason", () => {
+    const panelAlone = (changes: Partial<GateFacts> = {}, status: VerificationStatus = "current") => facts({ placeable: false, ...changes }, status);
+    expect(code(actionGate(panelAlone({}, "unverified"), "verify"))).toBe("open");
+    expect(code(actionGate(panelAlone({ unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
+    expect(code(actionGate(panelAlone(), "edit-accounts"))).toBe("open");
+    for (const intent of ["review", "resume", "resume-with-team"] as const) expect(code(actionGate(panelAlone(), intent))).toBe("placement");
+    expect(code(actionGate(panelAlone({ previewCurrent: true }), "launch"))).toBe("placement");
+    // A writer without a canvas is never told the workspace is read-only.
+    for (const intent of every) expect(code(actionGate(panelAlone(), intent))).not.toBe("read-only");
+  });
+
+  test("verify is refused up front when the pool it would compose cannot be read or holds no account", () => {
+    expect(code(actionGate(facts({ accounts: "unreadable" }, "unverified"), "verify"))).toBe("accounts");
+    expect(code(actionGate(facts({ accounts: "none" }, "accounts-changed"), "verify"))).toBe("no-accounts");
   });
 });

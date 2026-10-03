@@ -8,7 +8,7 @@ import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import type { ChargeReview, SessionReview } from "../workflow.ts";
+import { WorkflowError, type ChargeReview, type SessionReview } from "../workflow.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
 import { useMinuteTick } from "../ui.tsx";
@@ -16,8 +16,8 @@ import { useAccountUsage } from "../usage-view.tsx";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, launchStatusText, nextLaunchStep,
-  type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type WorkbenchIntent } from "./launch-step.ts";
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep,
+  type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
@@ -94,6 +94,8 @@ export type WorkbenchModel = {
   /** Shared workspace policy: an acknowledged save receipt until a read catches up with it, else the observation. */
   record: Configuration | null;
   machineId: string;
+  /** Why the machine list could not be read, while it cannot; the roster shown is then the last one read. */
+  rosterError: string | null;
   document: CatalogDocument | null;
   /** Why the bundled preview could not be derived, if it could not. */
   starterError: string | null;
@@ -113,7 +115,11 @@ export type WorkbenchModel = {
   unsaved: boolean;
   stale: boolean;
   writable: boolean;
+  /** A container view is mounted beside the panel, so a launch or resume can place its terminal. */
+  placeable: boolean;
   available: boolean;
+  /** Whether a verification could compose its pool from the account observation (launch-step.ts `LaunchFacts`). */
+  accounts: GateFacts["accounts"];
   /** Native session launch permission is ready on the destination. */
   launchReady: boolean;
   previewCurrent: boolean;
@@ -270,14 +276,28 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });
   }, [localReview, compiled, selection, initialSelection]);
-  const stale = dials !== null && configurationCurrent && draftStale(dials, {
+  const shared: SharedBase | null = configurationCurrent ? {
     revision: configuration.data!.revision, initialized: configuration.data!.configuration !== null,
     catalogDigest: record?.active?.digest ?? null, draftDigest: record?.draft?.digest ?? null, selection: record?.selection ?? null, metadataKey,
+  } : null;
+  const stale = dials !== null && shared !== null && draftStale(dials, shared);
+  // A write that leaves the draft's selection and catalogs as they were (an account edit, this panel's
+  // own or anyone's) moves its base forward rather than reading as someone else's team.
+  useLayoutEffect(() => {
+    if (dials === null || shared === null) return;
+    if (followRecord(dials, shared) !== dials) setDials(previous => previous && followRecord(previous, shared));
   });
   const unsaved = dials !== null || profile?.source !== "active";
   const draftSkills = skillDraft(skillCatalog.data, skillChoice);
   const skillProblems = draftSkills.problems;
   const writable = canWriteCodeWorkspace(host);
+  const placeable = host.authoring !== null;
+  // The pool a verification composes (`composeProbe`): a failed or historical observation, or saved
+  // choices that no longer resolve, refuse it outright, and a fresh one with nothing included composes
+  // nothing. A first read still out judges neither way; the run reads the accounts itself.
+  const accountState: GateFacts["accounts"] = accounts.error !== null || (accounts.data !== null && accounts.data.status !== "fresh") ? "unreadable"
+    : accounts.data === null || !configuration.data?.configuration ? "usable"
+    : served === null ? "unreadable" : served.size === 0 ? "none" : "usable";
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
@@ -285,7 +305,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     configurationCurrent, selection, ompVersion: metadata.data?.ompVersion ?? null, setup: setup.data, writable, available,
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      setMessage({ text: "Models verified with your accounts and the profile saved. Review the launch when you're ready.", failed: false });
+      setMessage({ text: "Models verified with your accounts, and the team saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
     onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });
@@ -326,8 +346,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // The session door's rule on the team the verb acts on: a lead nobody serves refuses, fallbacks are pruned.
   const unservedLead = served && compiled && shownReview ? routeService(compiled, shownReview.routes, provider => served.has(provider)).lead : null;
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
-  const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, available, launchReady,
-    previewCurrent, localReview, skillProblems, queries: { setup }, verification,
+  const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, placeable, available, accounts: accountState,
+    launchReady, previewCurrent, localReview, skillProblems, queries: { setup }, verification,
     running: busy || chaining || verifyRunning, charge: verification.phase === "charge" ? verification.charge : null,
     unservedLead, savedSessionId, planYolo: record?.selection?.planYolo ?? false };
   // A chain's later steps ask the gate again on the facts of the latest render, its own step set aside.
@@ -371,7 +391,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     let formed: Review | null = null;
     try { formed = previewSelection(compileCatalog(document), team.selection); } catch { /* A catalog that does not compile forms no team. */ }
     // Recalled exactly or not at all: a team quietly narrowed to the current catalog is not the team that was launched.
-    if (!formed) { setMessage({ text: "That team is not in the current catalog; nothing changed.", failed: true }); return; }
+    if (!formed) { setMessage({ text: "That team cannot be formed from the current models; nothing changed.", failed: true }); return; }
     applySelection(document, team.selection);
   }
   function discardChanges() {
@@ -385,9 +405,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       const saved = await codeWorkflow(host, policyCurrent).code("select", {
         containerId: host.containerId!, expectedRevision: profile.revision, selection: profile.selection,
       });
-      if (!policyCurrent()) throw new Error("Profile confirmation changed. Observe the shared result before trying again.");
+      if (!policyCurrent()) throw new WorkflowError("The workspace changed while saving. Nothing was retried.");
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      setMessage({ text: "Profile saved. Review the launch when you're ready.", failed: false });
+      setMessage({ text: "The team is saved for the workspace.", failed: false });
     });
   }
   const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
@@ -423,11 +443,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
         const prepared = await codeWorkflow(host).prepareSession(reviewed);
         // Asked again on the latest facts: a team, machine, pool or authority change while preparing stops the launch here.
         const verdict = stillOpen("launch");
-        if (!verdict.open) throw new Error(`Nothing was opened: ${verdict.refusal.text}`);
+        if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
         const latest = current.current;
         if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
-          latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination changed");
-        if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
+          latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new WorkflowError("Nothing was opened: the destination changed.");
+        if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
         const teams = rememberLaunch(browserTeamStorage(), recentKey, reviewed.composition.review.selection, Date.now());
         if (mounted.current) setRecentTeams(teams);
         if (destinationCurrent()) {
@@ -487,13 +507,13 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
         return;
       }
       const verdict = stillOpen(intent);
-      if (!verdict.open) throw new Error(`Nothing was opened: ${verdict.refusal.text}`);
+      if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
       const prepared = result.prepared;
       const latest = current.current;
       if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || latest.host.principal.id !== host.principal.id ||
         prepared.machineId !== latest.target?.machineId || prepared.sessionId !== savedSessionId || latest.machine?.id !== prepared.machineId ||
-        !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new Error("Destination or session choices changed");
-      if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new Error("Terminal placement refused");
+        !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new WorkflowError("Nothing was opened: the destination or session choices changed.");
+      if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
       if (destinationCurrent()) {
         setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
         setMessage({ text: "Saved session opened in OMP. Per-session choices were cleared.", failed: false });
@@ -513,8 +533,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (mounted.current) { setAccountsPending(false); configuration.refresh(); accounts.refresh(); reading.refresh(); }
     }
   }
-  function changeSkillChoice(value: SkillChoice) { setSkillChoice(value); setPreview(null); setMessage(null); }
-  function changeAutomation(value: AutomationChoice) { setAutomation(value); setPreview(null); setMessage(null); }
+  // Session options are part of a review's scope: changing them mid-chain would end a Save & launch with no line.
+  function changeSkillChoice(value: SkillChoice) { if (allowed("edit-options")) { setSkillChoice(value); setPreview(null); setMessage(null); } }
+  function changeAutomation(value: AutomationChoice) { if (allowed("edit-options")) { setAutomation(value); setPreview(null); setMessage(null); } }
   // Outcome and refusal lines describe a premise: the team, the machine and the account pool. Any change to
   // one of them clears them, unless the change came with the line itself (a verification saving its team).
   const premise = JSON.stringify([selection, machineId, record?.accounts ?? null, accountObservation, served ? [...served].sort() : null]);
@@ -537,9 +558,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   };
   return {
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
-    observed, record, machineId, document, starterError: starter.error, compiled, selection,
+    observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
-    configurationCurrent, unsaved, stale, writable, available, launchReady, previewCurrent, busy, inFlight, chaining,
+    configurationCurrent, unsaved, stale, writable, placeable, available, accounts: accountState, launchReady, previewCurrent, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
     step, verb, served, unservedLead, outcome, usage,
