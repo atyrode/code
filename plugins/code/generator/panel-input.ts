@@ -36,7 +36,7 @@ export function wheelScrolled(rest: WheelRest, nowMs: number): WheelRest {
 export type WheelInput = {
   /** The event is over an open drum or menu, in the region allowed to turn. */
   readonly open: boolean;
-  /** The event is over a control holding focus the keyboard gave it (`:focus-visible`); focus from a click never counts. */
+  /** The event is over a control holding focus the keyboard gave it, judged as focus arrives; focus from a click never counts, even once a key shows its ring. */
   readonly keyboardFocused: boolean;
   /** How long the pointer has rested on that control: since it moved onto it, reset whenever the panel scrolls under it. */
   readonly restedMs: number;
