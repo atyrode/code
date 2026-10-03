@@ -632,8 +632,8 @@
 .plugin-atyrode_code__permission-dialog section > button { justify-self: start; }
 
 /* ---------------------------------------------------------------- primitives (ui.tsx)
- * Precise, not rounded: radius 0 for rules, marks and tags; 3px for inputs, buttons, menus and
- * popovers. Only inputs have visible edges. Each state sets every property the Phase 2 element
+ * Precise, not rounded: radius 0 for rules, marks and tags; 3px for inputs and buttons. Only
+ * inputs have visible edges. Each state sets every property the Phase 2 element
  * defaults touch, so a primitive never inherits their hover or pressed paint.
  */
 .plugin-atyrode_code .plugin-atyrode_code__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -792,27 +792,6 @@
   word-break: break-all;
 }
 
-/* Popovers live in the panel's overlay layer. */
-.plugin-atyrode_code .plugin-atyrode_code__pop {
-  position: absolute;
-  z-index: 20;
-  min-width: 11rem;
-  max-width: min(28rem, calc(100% - 16px));
-  overflow: auto;
-  border: 1px solid var(--code-line);
-  border-radius: 3px;
-  padding: 0.2rem;
-  color: var(--code-text);
-  background: var(--code-card);
-  box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 45%);
-  font-size: 0.74rem;
-  line-height: 1.4;
-  overflow-wrap: normal;
-  pointer-events: auto;
-  animation: plugin-atyrode_code__pop var(--code-fast) ease both;
-}
-.plugin-atyrode_code .plugin-atyrode_code__pop:focus-visible { outline: none; }
-
 /* ---------------------------------------------------------------- sheet frame: Back to Code, the sheet's title, its actions */
 .plugin-atyrode_code .plugin-atyrode_code__sheet { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; }
 .plugin-atyrode_code .plugin-atyrode_code__sheet-head {
@@ -845,8 +824,6 @@
 }
 
 /* ---------------------------------------------------------------- motion */
-@keyframes plugin-atyrode_code__pop { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .plugin-atyrode_code .plugin-atyrode_code__pop { animation: none; }
   .plugin-atyrode_code :is(.plugin-atyrode_code__button, .plugin-atyrode_code__disclosure > summary > .mf-icon) { transition: none; }
 }
