@@ -64,10 +64,12 @@ files, service state, credentials or backups.
   Neither path grants account authority or supplies credentials.
 - The first workbench derives a frozen local starter from OMP's passive bundled
   SDK model metadata after a successful absent or initialized-empty configuration
-  read. The complete role ledger and controls need no account or runtime setup.
-  Explicit Save profile adopts catalog and selection in one exact CAS, preserving
-  accounts; stored active policy wins and unrecorded historical provenance stays
-  unknown. Read-only native panels remain locally explorable, not writable.
+  read. The statement and the seat board need no account or runtime setup. The
+  starter is render-only: saving it is the model verification (OMP inventory
+  through the saved account pool, a charge the operator confirms, per-provider
+  benchmarks, then the derived catalog staged, reviewed, promoted and saved with
+  the selection). Stored active policy wins and unrecorded historical provenance
+  stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
 - Pure catalog/preferences actions need no machine process or selected account.
