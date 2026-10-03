@@ -17,6 +17,8 @@ import { compileCatalog } from "../domain/catalog.ts";
 import { catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
+import { recentTeamsKey } from "../code/generator/recent-teams.ts";
+import { teamWords } from "../code/generator/statement-model.ts";
 import {
   BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, ResumeSessionInputSchema,
   actionSchemas as ompActionSchemas, type InventoryReceipt, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult,
@@ -39,10 +41,14 @@ Proves Code's main view (statement line, seat board, earlier statements, footer 
 Chromium identities: render-only bundled-metadata starter composition, retained conflicted drafts,
 permission choices, writer/viewer authority and container-shared choices across two destinations,
 and the browser-provable acceptance of the main view: no horizontal overflow and no intersecting
-text from 170 to 1440px, zero hover/focus layout shift, panel-local keys, the wheel rules, focus
-kept through the gate and reduced motion. Separate synthetic RPC responses exercise the verification
-charge, folder-only readiness, and launch/resume review invalidation and refusal; the spend,
-preparation and execution they lead to are refused, never native execution or consent success.
+text from 170 to 1440px, zero hover/focus layout shift, panel-local keys that never act from a
+sheet, dialog or popover, arrival keys, the wheel rules, focus kept through the gate and reduced
+motion. Also: an unsaved edit kept across a reload, own account edits that never conflict with it
+while a foreign team write does, a save refused for a lead no account serves, a writer without a
+canvas who saves but is told why launching waits, and saved sessions folded per folder into a
+drum. Separate synthetic RPC responses exercise the verification charge, folder-only readiness,
+and launch/resume review invalidation and refusal; the spend, preparation and execution they lead
+to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
   console.log(HELP);
@@ -257,15 +263,17 @@ const confirmCharge = element(`${generator} .${G}stmt-confirm`);
 const liveRegion = element(`${generator} div.plugin-atyrode_code__sr[role="status"][aria-live="polite"]`);
 const statusText = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-line`)})].map(line => line.textContent).join(' | ')`;
 const visibleSheet = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}sheet-host`)})].find(el => !el.hidden)`;
-const sessionOptions = element(`${generator} .${G}options-verb`);
-const optionsDialog = element(`${generator} [role="dialog"][aria-label="Session options"]`);
+// Session options is a sheet like Accounts, Models and Setup, opened from its link in the footer's run.
+const sessionOptions = footerLink("session options");
 const skillsSection = element(`${generator} [aria-label="Optional skills"]`);
+const keysDialog = element(`${generator} .${G}keys-dialog`);
 const profileExport = element(`${generator} textarea[data-profile-export]`);
 const board = element(`${generator} .${G}board`);
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
 const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
 type Word = "lane" | "tier" | "thinking" | "advisor" | "extras" | "machine";
-const READING_ORDER: readonly (Word | "verb")[] = ["verb", "lane", "tier", "thinking", "advisor", "extras", "machine"];
+const WORDS: readonly Word[] = ["lane", "tier", "thinking", "advisor", "extras", "machine"];
+const READING_ORDER: readonly (Word | "verb")[] = ["verb", ...WORDS];
 
 function slot(word: Word): string {
   return element(`${generator} [data-stmt-word="${word}"]`);
@@ -273,11 +281,17 @@ function slot(word: Word): string {
 function wordValue(word: Word): string {
   return `${slot(word)}?.querySelector('.${G}stmt-value')?.textContent.trim()`;
 }
+/** The six words on the line, as one string: whatever a key or a press changed shows here. */
+const lineWords = `[${WORDS.map(word => wordValue(word)).join(", ")}].join(' / ')`;
 function option(word: Word, label: string): string {
   return `[...(${slot(word)}?.querySelectorAll('[role="option"]') ?? [])].find(el => el.querySelector('.${G}stmt-text')?.textContent.trim() === ${JSON.stringify(label)})`;
 }
 function statusFix(label: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-fix`)})].find(el => el.textContent.trim() === ${JSON.stringify(label)})`;
+}
+/** The second status line names a failed model list, with what that means here, and offers the list's own retry and Models. */
+function listFailureSaid(meaning: "no team can be formed without it" | "the seats are the team on the line"): string {
+  return `!!document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-line`)})[1]?.textContent.startsWith(${JSON.stringify(`Model list unavailable · ${meaning}`)}) && !!${statusFix("retry")} && !!${statusFix("Models")}`;
 }
 function footerLink(name: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}footer-link`)})].find(el => el.textContent.trim().startsWith(${JSON.stringify(name)}))`;
@@ -362,7 +376,9 @@ async function focusStatement(browser: BrowserInstance, target: Word | "verb"): 
   await until(browser, `keyboard focus on ${target}`, `document.activeElement === ${target === "verb" ? verb : slot(target)} && document.activeElement.matches(':focus-visible')`);
 }
 
-async function openSheet(browser: BrowserInstance, name: "Accounts" | "Models" | "Setup"): Promise<void> {
+/** The footer's ways out of the main view, by the link's own (lowercase) words. */
+type SheetLink = "accounts" | "models" | "setup" | "session options";
+async function openSheet(browser: BrowserInstance, name: SheetLink): Promise<void> {
   await click(browser, footerLink(name));
   await until(browser, `${name} opens over the main view`, `${element(mainView)}?.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Back to Code"]')`);
 }
@@ -371,19 +387,30 @@ async function closeSheet(browser: BrowserInstance): Promise<void> {
   await until(browser, "the main view returns", `${element(mainView)}?.hidden === false`);
 }
 async function openOptions(browser: BrowserInstance): Promise<void> {
-  if (!await browser.evaluate<boolean>(`${optionsDialog} !== null`)) await click(browser, sessionOptions);
-  await until(browser, "session options open", `${optionsDialog} !== null && ${skillsSection} !== null`);
+  if (!await browser.evaluate<boolean>(`!!${visibleSheet}?.contains(${skillsSection})`)) await openSheet(browser, "session options");
+  await until(browser, "session options open", `!!${visibleSheet}?.contains(${skillsSection})`);
 }
+/** Esc from the control last used in the sheet closes it, and focus goes back to the link that opened it. */
 async function closeOptions(browser: BrowserInstance): Promise<void> {
-  await click(browser, `${optionsDialog}.querySelector('p')`);
+  assert.equal(await browser.evaluate(`!!${visibleSheet}?.contains(document.activeElement)`), true, "Session options keep focus while they are open");
   await key(browser, "Escape", 27);
-  await until(browser, "session options close", `${optionsDialog} === null`);
+  await until(browser, "Esc closes session options and gives focus back to their link", `${element(mainView)}?.hidden === false && document.activeElement === ${sessionOptions}`);
 }
-function skillControl(label: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} [aria-label="Optional skills"] label`)})].find(el => el.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('input')`;
+/** A session option's switch (a set, a skill, restricted automation or a tool), by its words. */
+function optionSwitch(group: "Optional skills" | "Automation policy", label: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`${generator} [aria-label="${group}"] [role="switch"]`)})].find(el => el.textContent.trim() === ${JSON.stringify(label)})`;
 }
-function automationControl(label: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}automation label`)})].find(el => el.textContent.trim() === ${JSON.stringify(label)})?.querySelector('input')`;
+/** Turns a switch on or off by a real press, unless it already is. */
+async function turn(browser: BrowserInstance, control: string, on: boolean): Promise<void> {
+  if (await browser.evaluate<boolean>(`${control}?.getAttribute('aria-checked') !== '${on}'`)) await click(browser, control);
+  await until(browser, `the switch turns ${on ? "on" : "off"}`, `${control}?.getAttribute('aria-checked') === '${on}'`);
+}
+/** Waits until the panel has read the record at `revision`, as Setup's profile details state it (opening a sheet reads again). */
+async function panelReads(browser: BrowserInstance, revision: number): Promise<void> {
+  await openSheet(browser, "setup");
+  await until(browser, `the panel reads revision ${revision}`,
+    `[...document.querySelectorAll('${generator} .${G}setup-facts dt')].find(el => el.textContent === 'Shared revision')?.nextElementSibling?.textContent === '${revision}'`);
+  await closeSheet(browser);
 }
 
 type Configuration = NonNullable<ActionResult<"readConfiguration">["configuration"]>;
@@ -566,17 +593,25 @@ type StarterDraft = { baseRevision: number; metadata: ModelCatalogSnapshot; sele
 async function readStarterDraft(browser: BrowserInstance): Promise<StarterDraft> {
   // The export lives in Setup → Profile & source details; a visited sheet stays mounted while hidden.
   if (!await browser.evaluate<boolean>(`${profileExport} instanceof HTMLTextAreaElement`)) {
-    await openSheet(browser, "Setup");
+    await openSheet(browser, "setup");
     await closeSheet(browser);
   }
   await until(browser, "local starter material remains exportable", `${profileExport} instanceof HTMLTextAreaElement && !!${profileExport}.value`);
   return JSON.parse(await browser.evaluate<string>(`${profileExport}.value`)) as StarterDraft;
 }
+/**
+ * A team this browser launched in the workspace before, as the panel keeps it (recent-teams.ts):
+ * device-local, per principal and workspace, read when the panel mounts. It gives the digits a team
+ * to recall without a launch, which the fixture refuses.
+ */
+async function rememberTeam(browser: BrowserInstance, principalId: string, containerId: string, selection: Selection): Promise<void> {
+  await browser.evaluate(`localStorage.setItem(${JSON.stringify(recentTeamsKey(principalId, containerId))}, ${JSON.stringify(JSON.stringify([{ selection, launchedAt: Date.now() - 60_000 }]))})`);
+}
 
 async function usableStarter(browser: BrowserInstance): Promise<void> {
   await until(browser, "the bundled preview is on the line", `['lane','tier','thinking','advisor','extras','machine'].every(word =>
     document.querySelector('${generator} [data-stmt-word="' + word + '"]'))`);
-  // A bundled preview is saved only by the verification that replaces it; the fixture has no discovery, so that is refused.
+  // A bundled preview is saved only by the verification that replaces it; the fixture reads no accounts and has no discovery, so that is refused.
   await until(browser, "the starter's only step is a refused verification", verbIs("Verify models", "refused"));
   for (const word of ["lane", "tier", "thinking", "advisor", "extras", "machine"] as const) {
     assert.equal(await browser.evaluate(`${slot(word)}.tabIndex === 0 && !${slot(word)}.hasAttribute('aria-disabled')`), true,
@@ -742,25 +777,55 @@ async function zeroShift(browser: BrowserInstance, label: string): Promise<void>
 /**
  * The browser-provable acceptance of the main view on a bundled preview, which keeps every effect
  * local: panel-local keys, the keys dialog, keyboard edits, wheel rules, touch, reduced motion,
- * zero hover/focus shift and width geometry. Leaves the team as it found it.
+ * zero hover/focus shift and width geometry. `recent` is the browser's one recent team, which the
+ * digit 1 recalls. Leaves the team as it found it.
  */
-async function acceptanceScenario(browser: BrowserInstance, label: string): Promise<void> {
+async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection): Promise<void> {
   const before = await readStarterDraft(browser);
   const thinking = await browser.evaluate<string>(wordValue("thinking"));
+  const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
 
   // Keys are panel-local: the same keys pressed in another panel never reach the statement.
   await click(browser, element(".react-flow .react-flow__pane"));
   for (const [name, code] of [["?", 191], ["1", 49], ["ArrowUp", 38], ["r", 82]] as const) await key(browser, name, code);
-  assert.equal(await browser.evaluate(`${element(`${generator} .${G}keys-dialog`)} === null`), true, "A key pressed outside the panel never opens its keys");
+  assert.equal(await browser.evaluate(`${keysDialog} === null`), true, "A key pressed outside the panel never opens its keys");
   assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed outside the panel never edit its team");
+
+  // Behind a sheet the panel's keys do nothing, even with the panel root itself focused: not ↵ or Mod+↵ (the verb's
+  // step, here a refusal it would say aloud), not a digit, not ?.
+  await openSheet(browser, "session options");
+  await click(browser, element(`${generator} .${G}options-lede`));
+  assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on a sheet's text leaves focus on the panel root behind it");
+  for (const [name, code, modifiers] of [["1", 49, 0], ["?", 191, 0], ["Enter", 13, 0], ["Enter", 13, CTRL]] as const) await key(browser, name, code, { modifiers });
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`({ keys: ${keysDialog} !== null, sheet: ${element(mainView)}.hidden, said: ${liveRegion}.textContent })`),
+    { keys: false, sheet: true, said: quiet }, "No panel key acts behind a sheet: no keys dialog, no step, nothing said");
+  await closeSheet(browser);
+  assert.deepEqual(await readStarterDraft(browser), before, "No panel key behind a sheet recalls or edits the team");
+
   await focusStatement(browser, "thinking");
   await key(browser, "?", 191);
-  await until(browser, "? opens the keys dialog in the panel's layer and gives it focus",
-    `document.activeElement === ${element(`${generator} .${G}layer .${G}keys-dialog`)}`);
+  await until(browser, "? opens the keys dialog in the panel's layer and gives it focus", `document.activeElement === ${element(`${generator} .${G}layer .${G}keys-dialog`)}`);
+  assert.deepEqual(await browser.evaluate(`[...${keysDialog}.querySelectorAll('section')].map(group => group.getAttribute('aria-label'))`),
+    ["statement", "pools", "sessions", "recent teams", "panel"], "The keys dialog lists the keys of every region that answers them");
+  // With the dialog itself focused (its close button would take ↵ as a press), the panel's keys do nothing either.
+  for (const [name, code, modifiers] of [["1", 49, 0], ["Enter", 13, CTRL]] as const) await key(browser, name, code, { modifiers });
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`({ focused: document.activeElement === ${keysDialog}, said: ${liveRegion}.textContent })`),
+    { focused: true, said: quiet }, "A digit or Mod+↵ in the keys dialog neither recalls a team nor takes a step");
   for (const modifiers of [0, 0, 0, SHIFT, SHIFT]) await key(browser, "Tab", 9, { modifiers });
   assert.equal(await browser.evaluate(`!!document.activeElement?.closest('.${G}keys-dialog')`), true, "Tab and Shift+Tab stay inside the open keys dialog");
   await key(browser, "Escape", 27);
-  await until(browser, "Esc closes the keys and returns focus to the word", `${element(`${generator} .${G}keys-dialog`)} === null && document.activeElement === ${slot("thinking")}`);
+  await until(browser, "Esc closes the keys and returns focus to the word", `${keysDialog} === null && document.activeElement === ${slot("thinking")}`);
+  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed in the keys dialog never edit the team");
+
+  // In the main view the digit recalls the recent team; choosing the word back returns the exact team.
+  await key(browser, "1", 49);
+  await until(browser, "1 recalls the recent team and says so", `${wordValue("advisor")} === ${JSON.stringify(recent.advisor)} && ${liveRegion}.textContent.startsWith('Recent team 1')`);
+  await choose(browser, "advisor", before.selection.advisor);
+  await until(browser, "the advisor is back", `${wordValue("advisor")} === ${JSON.stringify(before.selection.advisor)} && ${slot("advisor")}.dataset.open !== 'true'`);
+  assert.deepEqual(await readStarterDraft(browser), before, "Recalling a team and choosing its word back returns the exact team");
+  await focusStatement(browser, "thinking");
 
   // Keyboard edits: ↑ is more, Home and End reach the drum's ends, each word is one tab stop.
   const available = await browser.evaluate<string[]>(`[...${slot("thinking")}.querySelectorAll('[role="option"]:not([aria-disabled])')].map(el => el.querySelector('.${G}stmt-text').textContent.trim())`);
@@ -775,9 +840,35 @@ async function acceptanceScenario(browser: BrowserInstance, label: string): Prom
     const el = document.activeElement, style = getComputedStyle(el);
     return el.matches(':focus-visible') && ((style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) || style.boxShadow !== 'none');
   })()`), true, "Keyboard edits keep a visible focus indicator");
+  // A keyboard commit says what it did in the first status line, where a pointer reads it before choosing.
+  const firstLine = element(`${generator} .${G}stmt-line`);
+  assert.equal(await browser.evaluate(`${firstLine}.querySelector('[data-tone="strong"]')?.textContent`), `Thinking ${available.at(-2)}`,
+    "A keyboard commit names itself in the first status line");
   await choose(browser, "thinking", thinking);
   await until(browser, "the thinking word is back", `${wordValue("thinking")} === ${JSON.stringify(thinking)} && ${slot("thinking")}.dataset.open !== 'true'`);
   assert.deepEqual(await readStarterDraft(browser), before, "Keyboard round trips return the exact team");
+
+  // A step only a refused option could take does nothing and says why, in the first status line and aloud, until the next key.
+  await focusStatement(browser, "tier");
+  const tier = await browser.evaluate<string>(wordValue("tier"));
+  const refusedTier = await browser.evaluate<string | null>(`(() => {
+    const options = [...${slot("tier")}.querySelectorAll('[role="option"]')];
+    const top = options.findIndex(el => !el.hasAttribute('aria-disabled'));
+    return top > 0 ? options[top - 1].querySelector('.${G}stmt-text').textContent.trim() : null;
+  })()`);
+  assert(refusedTier, "The bundled starter refuses the tier above its most capable available one");
+  await key(browser, "Home", 36);
+  await key(browser, "ArrowUp", 38);
+  await until(browser, "a refused step names the refused option and its reason in the first status line",
+    `${firstLine}.querySelector('[data-tone="strong"]')?.textContent === ${JSON.stringify(`Tier ${refusedTier}`)} && !!${firstLine}.querySelector('[data-tone="attention"]')?.textContent`);
+  const reason = await browser.evaluate<string>(`${firstLine}.querySelector('[data-tone="attention"]').textContent`);
+  await until(browser, "a refused step says its reason aloud", `${liveRegion}.textContent === ${JSON.stringify(`Tier ${refusedTier}: ${reason}`)}`);
+  assert.notEqual(await browser.evaluate(wordValue("tier")), refusedTier, "A refused step leaves the word where it was");
+  await key(browser, "Escape", 27);
+  await until(browser, "the next key clears what the refused step said", `!${firstLine}.textContent.includes(${JSON.stringify(`Tier ${refusedTier}`)})`);
+  if (await browser.evaluate<string>(wordValue("tier")) !== tier) await choose(browser, "tier", tier);
+  await until(browser, "the tier is back", `${wordValue("tier")} === ${JSON.stringify(tier)} && ${slot("tier")}.dataset.open !== 'true'`);
+  assert.deepEqual(await readStarterDraft(browser), before, "A refused step and Home return the exact team");
 
   // The wheel turns a word only on its open drum, or under keyboard focus after the pointer rests;
   // never after a click focused it, and never while the panel scrolls (spec §2).
@@ -849,10 +940,10 @@ async function acceptanceScenario(browser: BrowserInstance, label: string): Prom
     await settle(browser);
     if (await browser.evaluate<boolean>(`${slot("lane")}.dataset.open === 'true'`)) await key(browser, "Escape", 27);
     assert.deepEqual(await readStarterDraft(browser), before, "A touch scroll across the statement never edits the team");
-    // Every width form keeps 44px touch targets: the words, the verb, session options and the footer links.
+    // Every width form keeps 44px touch targets: the words, the verb and the footer's links, session options among them.
     for (const width of [1280, 860, 390, 240]) {
       await panelWidth(browser, width);
-      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${mainView} :is([data-stmt-word], [data-stmt-verb], .${G}options-verb, .${G}footer-link)`)})]
+      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${mainView} :is([data-stmt-word], [data-stmt-verb], .${G}footer-link)`)})]
         .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 44 || (!el.matches('[data-stmt-word]') && rect.width < 44); })
         .map(el => (el.dataset.stmtWord ?? el.textContent.trim()) + ' ' + Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height))`);
       assert.deepEqual(small, [], `Touch targets are at least 44px in the ${await browser.evaluate<string>(`${element(`${generator} .${G}stmt-statement`)}.dataset.form`)} form at ${width}px`);
@@ -877,7 +968,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string): Prom
   await key(browser, "ArrowDown", 40);
   assert.equal(await browser.evaluate(running), 0, "Reduced motion: a keyboard commit does not animate");
   await until(browser, "the thinking returns", `${wordValue("thinking")} === ${JSON.stringify(thinking)}`);
-  await openSheet(browser, "Models");
+  await openSheet(browser, "models");
   assert.equal(await browser.evaluate(running), 0, "Reduced motion: a sheet does not slide in");
   await closeSheet(browser);
   assert.deepEqual(await readStarterDraft(browser), before, "Motion checks return the exact team");
@@ -923,6 +1014,14 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       const initialDraft = await readStarterDraft(browser);
       assert.equal(initialDraft.baseRevision, base.revision);
       assert.deepEqual(initialDraft.metadata, metadata, "Local routes are based on the exact real OMP metadata response");
+      // The first workspace has one recent team, which the panel reads as it mounts.
+      const recent = { ...initialDraft.selection, thinking: "high", advisor: "off" } satisfies Selection;
+      if (!initialized) {
+        await rememberTeam(browser, writer.principal.id, workspace.id, recent);
+        await openGenerator(browser, server, workspace.id);
+        await usableStarter(browser);
+        assert.deepEqual(await readStarterDraft(browser), initialDraft, "An untouched preview is the same after a reload");
+      }
       await choose(browser, "thinking", "high");
       await until(browser, "a pointer commit puts high thinking on the line", `${wordValue("thinking")} === 'high'`);
       await choose(browser, "advisor", "audit");
@@ -933,12 +1032,16 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       assert.notDeepEqual(chosen.selection, initialDraft.selection, "The first explicit choice is a nondefault selection");
       assert.equal(chosen.selection.thinking, "high");
       assert.equal(chosen.selection.advisor, "audit");
-      for (const view of ["Accounts", "Models", "Setup"] as const) {
+      for (const view of ["accounts", "models", "setup"] as const) {
         await openSheet(browser, view);
         await closeSheet(browser);
       }
       assert.deepEqual(await readStarterDraft(browser), chosen, "Sheets do not regenerate or rebase starter choices");
-      if (!initialized) await acceptanceScenario(browser, "bundled starter");
+      // The unsaved choices are kept in this tab: a reload brings them back on the same bundled list.
+      await openGenerator(browser, server, workspace.id);
+      await usableStarter(browser);
+      assert.deepEqual(await readStarterDraft(browser), chosen, "A reload keeps the unsaved starter choices");
+      if (!initialized) await acceptanceScenario(browser, "bundled starter", recent);
       assert.deepEqual(await readConfiguration(server, writer, target), base,
         "Mount, words, keys, wheel, touch, resizing and sheets never initialize or mutate policy");
       assert.deepEqual(trace.requests.slice(start).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|select|adoptStarterProfile|changeAccounts)$/.test(request.name)), []);
@@ -988,7 +1091,7 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   // initialization, it is a change made elsewhere, and the line says so and offers theirs.
   await until(browser, "a revision-zero preview refuses to attach to a competing initializer",
     `${verbIs("Verify models", "refused")} && !!${statusFix("use theirs")} && (${statusText}).includes('changed elsewhere')`);
-  for (const view of ["Models", "Accounts"] as const) {
+  for (const view of ["models", "accounts"] as const) {
     await openSheet(browser, view);
     await closeSheet(browser);
   }
@@ -1023,10 +1126,9 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       const workspace = await createContainer(server, `Unavailable starter ${observation}`, "canvas");
       const target = { containerId: workspace.id };
       const metadataFails = observation === "atyrode.omp.readModelCatalog";
-      // The model list's own Retry, or the statement's fix for an unread workspace: each re-reads only what failed.
-      const retry = metadataFails
-        ? `[...document.querySelectorAll(${JSON.stringify(`${mainView} .plugin-atyrode_code__note button`)})].find(el => el.textContent.trim() === 'Retry')`
-        : statusFix("retry");
+      // An unread workspace is the verb's refusal and its retry. A failed model list holds the second line with its own
+      // retry and Models, whatever else the verb is refused for, and the refusal's fix moves up beside its words.
+      const retry = statusFix("retry");
       await openGenerator(browser, server, workspace.id);
       await waitFor(() => held.size > 0, timeout, 50);
       await until(browser, "the line says the team is still being read", `${element(`${generator} .${G}stmt-empty`)}?.textContent === 'Reading the team'`);
@@ -1037,6 +1139,13 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       for (const release of [...held]) release();
       await control(browser, "a failed prerequisite offers an explicit retry", retry, false);
       assert(failed > 0);
+      if (metadataFails) {
+        await until(browser, "with no team to seat, the second line names the failed model list as the reason, with its retry and Models",
+          `${listFailureSaid("no team can be formed without it")} && !!${statusFix("refresh")}`);
+        await click(browser, statusFix("Models"));
+        await until(browser, "the Models fix opens Models", `${element(mainView)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+        await closeSheet(browser);
+      }
       assert.equal(await browser.evaluate(`${verb}.dataset.state !== 'ready'`), true, "An unavailable observation is not an empty configuration");
       assert.equal(await browser.evaluate(`${board} === null`), true);
       assert.deepEqual(await readConfiguration(server, writer, target), { configuration: null, legacyMachineId: null, revision: 0 });
@@ -1048,10 +1157,14 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       const frozen = await readStarterDraft(browser);
       const seats = await seatedRoles(browser);
       fail = true;
+      const failures = failed;
       // Opening a sheet re-reads every observation; this one now fails.
-      await openSheet(browser, "Models");
+      await openSheet(browser, "models");
       await closeSheet(browser);
+      await waitFor(() => failed > failures, timeout, 50);
       await control(browser, "later observation failure remains separately retryable", retry, false);
+      if (metadataFails) await until(browser, "beside the retained team, the second line names the failed model list with its retry and Models",
+        `${listFailureSaid("the seats are the team on the line")} && !!${statusFix("refresh")}`);
       assert.deepEqual(await readStarterDraft(browser), frozen, "Observation failure retains the original document, metadata and selected policy");
       assert.equal(await browser.evaluate(wordValue("thinking")), "max", "The retained team stays on the line");
       assert.deepEqual(await seatedRoles(browser), seats, "Retained seats remain inspectable when current observations fail");
@@ -1097,6 +1210,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     row("claude-opus-5", 5, ["low", "medium", "high", "xhigh", "max"]) ] };
   const charge = inventoryDraft(inventory, "any").benchmark.candidates;
   const started: Record<string, unknown>[] = [], benchmarks: Record<string, unknown>[] = [], cancels: unknown[] = [];
+  let listFails = true;
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
   await arrangeWorkbench(server, writer);
@@ -1108,6 +1222,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
           operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
         return { ok: true, result };
       }
+      case "atyrode.omp.readModelCatalog": return listFails ? refused("synthetic_model_list_failure") : undefined;
       case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts([1]) };
       case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage([1]) };
       case "atyrode.omp.startInventory": {
@@ -1134,8 +1249,27 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     }
   });
   try {
+    // The model list fails at first. Verify needs no list, so it stays the step; with no team to seat there is no board,
+    // and the second status line names the failure with the list's own retry and Models.
+    await openGenerator(browser, server, workspace.id);
+    await until(browser, "beside a ready Verify the second line names the failed model list with its retry and Models",
+      `${verbIs("Verify models", "ready")} && ${listFailureSaid("no team can be formed without it")}`);
+    assert.equal(await browser.evaluate(`${board} === null`), true, "With no team to seat there is no board");
+    listFails = false;
+    await click(browser, statusFix("retry"));
+    await until(browser, "the list's retry reads it again and seats the bundled team", `${board} !== null && !${statusFix("retry")}`);
+    // One provider word per glance: the team's counts name each family as the lane does, never an account or provider id.
+    assert.match(await browser.evaluate<string>(`document.querySelectorAll('${generator} .${G}stmt-line')[1].textContent`),
+      /^\d+ on (GPT|Claude|DeepSeek)( · \d+ on (GPT|Claude|DeepSeek))*$/, "The team's counts use family words");
+
+    // On arrival the panel root has focus, so its keys work at once: an arrow gives the lane focus and changes nothing.
     await openGenerator(browser, server, workspace.id);
     await until(browser, "with discovery ready the first step is to verify", verbIs("Verify models", "ready"));
+    await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
+    const arrived = await browser.evaluate<string>(lineWords);
+    await key(browser, "ArrowDown", 40);
+    await until(browser, "an arrow on arrival gives the lane focus", `document.activeElement === ${slot("lane")}`);
+    assert.equal(await browser.evaluate(lineWords), arrived, "An arrow on arrival changes no word");
 
     // A double-click on Verify starts one verification; its second click lands on a busy verb, never on Confirm.
     const point = await pointOf(browser, verb);
@@ -1153,6 +1287,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
       "Confirm is bound to the exact charge shown");
     assert(await browser.evaluate<number>(`${confirmCharge}.getBoundingClientRect().height`) >= 28, "Confirm charge is at least 28px tall");
     await until(browser, "the charge is announced", `${liveRegion}?.textContent.includes(${JSON.stringify(String(charge.length))})`);
+    assert.equal(await browser.evaluate(`(${statusText}).includes(${JSON.stringify(`Claude ${charge.length}`)})`), true, "The charge names its provider by family");
 
     // While the charge waits, no team, machine or account edit may start: the words leave the Tab order.
     for (const word of ["lane", "tier", "thinking", "advisor", "extras", "machine"] as const) {
@@ -1195,16 +1330,51 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(prepared.configuration?.active, null, "Preparing a charge promotes nothing");
     assert.equal(prepared.configuration?.draft, null, "Preparing a charge stages nothing");
 
+    // The panel's keys never act from the keys dialog, nor from behind a sheet with the panel root focused: not Mod+↵, not ↵.
+    await focusStatement(browser, "lane");
+    await key(browser, "?", 191);
+    await until(browser, "the keys dialog has focus", `document.activeElement === ${keysDialog}`);
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await Bun.sleep(300);
+    assert.equal(started.length, 1, "Mod+↵ in the keys dialog takes no step");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes the keys", `${keysDialog} === null`);
+    await openSheet(browser, "session options");
+    await click(browser, element(`${generator} .${G}options-lede`));
+    assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on a sheet's text leaves focus on the panel root");
+    await key(browser, "Enter", 13);
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await Bun.sleep(300);
+    assert.equal(started.length, 1, "Neither ↵ nor Mod+↵ behind a sheet takes the verb's step");
+    assert.equal(await browser.evaluate(`${element(mainView)}.hidden`), true, "The sheet stays open");
+    await closeSheet(browser);
+
+    // On arrival a plain ↵ at the panel root takes the verb's step through the same gate as Mod+↵: it prepares the
+    // charge, and pressed again while the charge waits it never confirms it.
+    await openGenerator(browser, server, workspace.id);
+    await until(browser, "the reopened panel offers Verify", verifyAgain);
+    await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
+    await key(browser, "Enter", 13);
+    await until(browser, "↵ on arrival prepares a charge", `${verbIs("Verify models", "waiting")} && ${confirmCharge} !== null`);
+    assert.equal(started.length, 2, "↵ on arrival takes exactly one step");
+    assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "The step leaves focus on the panel root");
+    await key(browser, "Enter", 13);
+    await Bun.sleep(300);
+    assert.equal(benchmarks.length, 0, "↵ at the panel root never confirms a waiting charge");
+    assert.equal(await browser.evaluate(`${confirmCharge} !== null`), true, "The charge still waits");
+    await click(browser, cancel);
+    await until(browser, "the cancelled charge offers Verify again", verifyAgain);
+
     // Mod+↵ takes the verb's step from a word and runs from the initialized revision (a run from the
     // stale one would refuse before its inventory); holding it takes no other step; one deliberate
     // press spends the charge once.
     await focusStatement(browser, "lane");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await until(browser, "Mod+↵ prepares a charge from revision 1", `${verbIs("Verify models", "waiting")} && ${confirmCharge} !== null`);
-    assert.equal(started.length, 2);
+    assert.equal(started.length, 3);
     await key(browser, "Enter", 13, { modifiers: CTRL, autoRepeat: true });
     await Bun.sleep(300);
-    assert.equal(started.length, 2, "A held Mod+↵ never takes another step");
+    assert.equal(started.length, 3, "A held Mod+↵ never takes another step");
     assert.equal(benchmarks.length, 0);
     await click(browser, confirmCharge);
     await waitFor(() => benchmarks.length === 1, timeout, 50);
@@ -1212,7 +1382,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(benchmarks.length, 1, "One press spends once");
     assert(await browser.evaluate<boolean>(`[...document.querySelectorAll('${generator} .${G}stmt-part[data-tone="attention"]')].length > 0`),
       "The stopped verification says so on the line");
-    assert.deepEqual(await readConfiguration(server, writer, target), prepared, "Neither the second run nor its refused benchmark initializes, stages, promotes or saves anything");
+    assert.deepEqual(await readConfiguration(server, writer, target), prepared, "Neither the later runs nor the refused benchmark initialize, stage, promote or save anything");
     assert.deepEqual(cancels, [], "A spend refused at its start leaves no native job to cancel");
 
     // An include switch in a pool's accounts saves the choice, and keeps keyboard focus through the re-read it causes.
@@ -1316,7 +1486,9 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     if (request?.url?.endsWith("/api/actions/atyrode.code.readConfiguration") && request.postData) reads.push(JSON.parse(request.postData));
   });
   await browser.send("Network.enable", {});
-  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts() } : undefined);
+  // The passive account observation the browser sees; one check below reads a Claude account as disabled.
+  let observed = fixtureAccounts();
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observed } : undefined);
   try {
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await openGenerator(browser, server, first.containerId);
@@ -1328,24 +1500,23 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       "Configured seats use the saved catalog, never bundled starter metadata");
 
     // Session options: one launch's skill choices, kept across sheets and refreshes, never saved.
-    assert.equal(await browser.evaluate(`${workspaceButton("Disable all skills")} === undefined`), true, "Closed session options leave no skill control to point at");
+    assert.equal(await browser.evaluate(`${workspaceButton("all skills off")} === undefined`), true, "Closed session options leave no skill control to point at");
     const skillCatalog = await callAction(server, writer.token, "atyrode.omp.readSkillCatalog", first);
     assert(skillCatalog.ok, "The real destination exposes its authorized empty optional catalog");
     assert.deepEqual((skillCatalog.result as OmpResult<"readSkillCatalog">).skills, [], "The offline fixture publishes no unreviewed skill source");
     await openOptions(browser);
     await until(browser, "ordinary loading starts with zero optional choices", `${skillsSection}?.dataset.mode === 'preserve'`);
-    await click(browser, workspaceButton("Disable all skills"));
+    await click(browser, workspaceButton("all skills off"));
     await until(browser, "disable-all is a distinct launch choice", `${skillsSection}?.dataset.mode === 'disabled'`);
-    await click(browser, workspaceButton("Refresh skill catalog"));
+    await click(browser, workspaceButton("read skills again"));
     await closeOptions(browser);
-    assert.equal(await browser.evaluate(`document.activeElement === ${sessionOptions}`), true, "Closing session options returns focus to its verb");
-    await openSheet(browser, "Accounts");
+    await openSheet(browser, "accounts");
     await closeSheet(browser);
     await openOptions(browser);
     assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "disabled", "Unrelated navigation and refresh preserve the ephemeral skill choice");
-    await click(browser, workspaceButton("Clear optional choices"));
-    assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "preserve", "Clearing optional choices restores ordinary loading instead of disabling it");
-    await click(browser, workspaceButton("Disable all skills"));
+    await click(browser, workspaceButton("default skills"));
+    assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "preserve", "Default skills restores ordinary loading instead of disabling it");
+    await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
     assert.equal(await browser.evaluate(`${sessionOptions}.getAttribute('aria-label').includes('skills off')`), true, "The closed session options still say their choice");
 
@@ -1363,9 +1534,46 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the extras without undoing them", `${slot("extras")}.dataset.open !== 'true' && ${option("extras", "auto plans")}.getAttribute('aria-selected') === 'true'`);
     await until(browser, "an edited verified team saves before its review", `${verbIs("Save & review", "ready")} && !!${statusFix("revert")}`);
+    assert.equal(await browser.evaluate(wordValue("extras")), teamWords({ ...initial.selection!, planYolo: true }, family => family).extras,
+      "The extras word names the switches that are on");
+    assert.deepEqual(await browser.evaluate(`${JSON.stringify(WORDS)}.filter(word => document.querySelector('${generator} [data-stmt-word="' + word + '"]').dataset.edited === 'true')`),
+      ["tier", "thinking", "extras"], "Exactly the edited words carry the edited mark");
+    const edits = await browser.evaluate<string>(lineWords);
+
+    // The edit rests on the saved team, not on the record's revision: the writer's own account edits (a preset made and
+    // removed, which leaves the pool as it was) move the record on, and the edit stays ready to save, never a conflict.
+    let revision = (await readConfiguration(server, writer, first)).revision;
+    const spare = { id: "browser-spare-pool", name: "Spare pool", disabled: [] };
+    for (const change of [{ kind: "create-preset", preset: spare }, { kind: "delete-preset", id: spare.id }]) {
+      const changed = await callAction(server, writer.token, "atyrode.code.changeAccounts", { containerId: first.containerId, expectedRevision: revision, change });
+      assert(changed.ok, "The writer edits the workspace's account presets beside the unsaved team");
+      revision = (changed.result as Configuration).revision;
+    }
+    await panelReads(browser, revision);
+    await until(browser, "own account edits leave the word edit ready to save, without a conflict",
+      `${verbIs("Save & review", "ready")} && !!${statusFix("revert")} && !${statusFix("use theirs")} && ${lineWords} === ${JSON.stringify(edits)}`);
+
+    // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
+    // Claude account as disabled (a GPT one stays) while the verification it stands on is not observed again: the save
+    // is refused with the family named, and neither a press nor Mod+↵ writes.
+    const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+      type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+    observed = { ...fixtureAccounts(), accounts: [...fixtureAccounts().accounts.map(account => account.credentialId === 1 ? { ...account, disabled: true } : account), gpt] };
+    await focusStatement(browser, "verb");
+    await key(browser, "r", 82);
+    await until(browser, "a lead no account serves refuses the save and names its family",
+      `${verbIs("Save & review", "refused")} && (${statusText}).includes('No Claude account included') && !!${statusFix("show Claude accounts")}`);
+    await key(browser, "Enter", 13);
+    await until(browser, "the refused press says why", `${liveRegion}.textContent.startsWith('Save & review: ')`);
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await Bun.sleep(300);
+    assert.equal((await readConfiguration(server, writer, first)).revision, revision, "A save refused for an unserved lead writes nothing");
+    observed = fixtureAccounts();
+    await key(browser, "r", 82);
+    await until(browser, "with the Claude account back the save is ready again", `${verbIs("Save & review", "ready")} && ${lineWords} === ${JSON.stringify(edits)}`);
 
     // Unsaved catalog and account drafts in their sheets.
-    await openSheet(browser, "Models");
+    await openSheet(browser, "models");
     await click(browser, workspaceButton("Edit or import models"));
     const catalog = `${generator} [aria-label="Model catalog"]`;
     const pricingSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'Pricing')`;
@@ -1384,7 +1592,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await click(browser, importField);
     await browser.typeText(importDraft);
     await closeSheet(browser);
-    await openSheet(browser, "Accounts");
+    await openSheet(browser, "accounts");
     await until(browser, "the passive account observation settles before the editor gesture",
       `[...document.querySelectorAll('${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-observation, ${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-notice[role="status"]')].some(el => el.getClientRects().length)`);
     await control(browser, "shared saved account pool is editable", workspaceButton("Edit pool"), false);
@@ -1399,14 +1607,14 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
 
     // The second destination: the drafts and the edited team stay; the ad-hoc skill choice does not.
     await chooseMachine(browser, secondName);
-    await openSheet(browser, "Models");
+    await openSheet(browser, "models");
     assert.equal(await browser.evaluate(`${importField}.value`), importDraft, "Unparsed JSON import stays local across machines");
     assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Advanced catalog values survive navigation and destination changes");
     await closeSheet(browser);
     await openOptions(browser);
     await until(browser, "a new destination clears ad-hoc skill choices before they can be reused", `${skillsSection}.dataset.mode === 'preserve'`);
     await closeOptions(browser);
-    await openSheet(browser, "Accounts");
+    await openSheet(browser, "accounts");
     assert.equal(await browser.evaluate(`${accountDraft}.value`), accountDraftName, "Visited account editor retains its unsaved preset across destinations");
     assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code__account-exclusions`)}.textContent.includes(${JSON.stringify(exclusion.scope)})`), true,
       "The account draft keeps its nonempty unobserved exclusion instead of importing another machine’s pool");
@@ -1417,9 +1625,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
 
     // Save from the second destination: the press saves, and its review stops where this machine has no permission.
     await until(browser, "the edited team can be saved from the second destination", verbIs("Save & review", "ready"));
+    const unsaved = (await readConfiguration(server, viewer, second)).revision;
     await focusStatement(browser, "verb");
     await key(browser, "Enter", 13);
-    await waitFor(async () => (await readConfiguration(server, viewer, second)).revision === initial.revision + 1, timeout, 50);
+    await waitFor(async () => (await readConfiguration(server, viewer, second)).revision === unsaved + 1, timeout, 50);
     await until(browser, "the saved team's review stops at this machine's missing permission", verbIs("Launch", "refused"));
     assert.equal(await browser.evaluate(`document.activeElement === ${verb}`), true, "The verb keeps focus from Save through its refusal");
     const saved = await readConfiguration(server, viewer, second);
@@ -1430,7 +1639,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.deepEqual(saved.configuration?.active, initial.active, "Saving the team leaves the verified catalog as it is");
     await chooseMachine(browser, machineName);
     assert.equal(await browser.evaluate(wordValue("thinking")), localThinking, "Saved choices remain identical when returning to the first destination");
-    await openSheet(browser, "Models");
+    await openSheet(browser, "models");
     assert.equal(await browser.evaluate(`${importField}.value`), importDraft);
     await closeSheet(browser);
     assert(reads.length > 0 && reads.every(input => input.containerId === first.containerId && Object.keys(input).length === 1),
@@ -1444,12 +1653,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       const tap = await pointOf(browser, sessionOptions);
       await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [tap] });
       await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      await until(browser, "touch opens the session options", `${optionsDialog} !== null`);
-      await click(browser, workspaceButton("Disable all skills"));
+      await until(browser, "touch opens the session options", `!!${visibleSheet}?.contains(${skillsSection})`);
+      await click(browser, workspaceButton("all skills off"));
       await key(browser, "Tab", 9);
       assert.equal(await browser.evaluate(`document.activeElement?.closest('[aria-label="Optional skills"]') === ${skillsSection} && !document.activeElement.matches(':disabled')`), true,
         "Skill controls remain keyboard reachable at a narrow viewport");
-      await click(browser, workspaceButton("Clear optional choices"));
+      await click(browser, workspaceButton("default skills"));
       await closeOptions(browser);
       await focusStatement(browser, "machine");
       assert.equal(await browser.evaluate(wordValue("thinking")), localThinking, "Responsive layout keeps the same team");
@@ -1457,6 +1666,34 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
       await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
     }
+
+    // An unsaved edit is kept across a reload. A foreign write of the team it rests on, made while the panel was away,
+    // brings it back as a conflict: the edit stays on show, nothing is rebased, and theirs is one press away.
+    await focusStatement(browser, "thinking");
+    await key(browser, "ArrowDown", 40);
+    await until(browser, "↓ lowers the saved thinking", `${wordValue("thinking")} !== ${JSON.stringify(localThinking)} && ${verbIs("Save & review", "ready")}`);
+    const kept = await browser.evaluate<string>(lineWords);
+    await openGenerator(browser, server, first.containerId);
+    await chooseMachine(browser, machineName);
+    await until(browser, "the edited word survives a reload, still ready to save",
+      `${lineWords} === ${JSON.stringify(kept)} && ${verbIs("Save & review", "ready")} && !!${statusFix("revert")} && ${slot("thinking")}.dataset.edited === 'true'`);
+    await browser.goto("about:blank");
+    const current = await readConfiguration(server, writer, first);
+    const ours = current.configuration!.selection!;
+    const theirs = { ...ours, advisor: ours.advisor === "audit" ? "review" : "audit" } satisfies Selection;
+    const foreign = await callAction(server, writer.token, "atyrode.code.select", { containerId: first.containerId, expectedRevision: current.revision, selection: theirs });
+    assert(foreign.ok, "The team is changed elsewhere while the panel is away");
+    await openGenerator(browser, server, first.containerId);
+    await chooseMachine(browser, machineName);
+    await until(browser, "the kept edit comes back as a conflict with the write made meanwhile",
+      `${verb}.dataset.state === 'refused' && !!${statusFix("use theirs")} && (${statusText}).includes('changed elsewhere') && ${lineWords} === ${JSON.stringify(kept)}`);
+    assert.equal((await readConfiguration(server, writer, first)).revision, (foreign.result as Configuration).revision, "A kept edit in conflict writes nothing");
+    await click(browser, statusFix("use theirs"));
+    await until(browser, "theirs replaces the kept edit",
+      `${wordValue("thinking")} === ${JSON.stringify(localThinking)} && ${wordValue("advisor")} === ${JSON.stringify(theirs.advisor)} && !${statusFix("revert")} && !${statusFix("use theirs")}`);
+    const restored = await callAction(server, writer.token, "atyrode.code.select", { containerId: first.containerId, expectedRevision: (foreign.result as Configuration).revision, selection: ours });
+    assert(restored.ok);
+    await until(browser, "the line follows the record back", `${wordValue("advisor")} === ${JSON.stringify(ours.advisor)}`);
     fixture.check();
   } finally {
     offReads();
@@ -1464,6 +1701,51 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
+}
+
+/**
+ * A writer whose Code panel has no workspace canvas beside it: container writes need only the
+ * writer's authority, so the team still saves from here, while a launch, which places a terminal on
+ * the canvas, waits for one and says so. Such a writer is never told the workspace is read-only.
+ */
+async function canvaslessWriterScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, target: Target): Promise<void> {
+  const before = await readConfiguration(server, writer, target);
+  const arranged = await callAction(server, writer.token, "core.space.setLayout", { layout: {
+    root: { id: "root", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "atyrode.code.generator.launcher" } },
+  } });
+  assert(arranged.ok);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts() } : undefined);
+  const readOnly = `/read-only/i.test(${element(generator)}.textContent)`;
+  try {
+    await openGenerator(browser, server, target.containerId);
+    assert.equal(await browser.evaluate(`${element(".react-flow")} === null`), true, "No workspace canvas is mounted beside the panel");
+    await chooseMachine(browser, machineName);
+    await until(browser, "without a canvas only the launch is refused, in neutral words that say what it needs",
+      `${verbIs("Launch", "refused")} && (${statusText}).includes('Open Code beside the workspace canvas to launch') && !!document.querySelector('${generator} .${G}stmt-part[data-tone="neutral"]')`);
+    assert.equal(await browser.evaluate(readOnly), false, "A writer without a canvas is never told the workspace is read-only");
+    const thinking = await browser.evaluate<string>(wordValue("thinking"));
+    await focusStatement(browser, "thinking");
+    await key(browser, "ArrowDown", 40);
+    await until(browser, "an edit offers Save, with no launch to chain", verbIs("Save", "ready"));
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
+    await until(browser, "after the save only the launch waits for a canvas", verbIs("Launch", "refused"));
+    assert.notEqual((await readConfiguration(server, writer, target)).configuration?.selection?.thinking, before.configuration?.selection?.thinking, "Save wrote the edit");
+    await key(browser, "ArrowUp", 38);
+    await until(browser, "the edit back is another Save", `${verbIs("Save", "ready")} && ${wordValue("thinking")} === ${JSON.stringify(thinking)}`);
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 2, timeout, 50);
+    await until(browser, "the team is saved back", verbIs("Launch", "refused"));
+    assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, before.configuration?.selection, "Saving back restores the exact team");
+    assert.equal(await browser.evaluate(readOnly), false, "Nothing a canvas-less writer did is called read-only");
+    assert.deepEqual(trace.requests.filter(request => /^(atyrode\.omp\.(reviewSession|prepareSession|resumeSession)|core\.terminals\.create)$/.test(request.name)), [],
+      "Without a canvas nothing is reviewed for launch, prepared or placed");
+    fixture.check();
+  } finally {
+    await fixture.stop();
+    trace.stop();
+  }
 }
 
 // ---------------------------------------------------------------- staged catalogs, manual catalogs, recovery
@@ -1482,11 +1764,12 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: textOnly });
   assert(staged.ok, staged.ok ? "" : staged.denial.message);
   await openGenerator(browser, server, workspace.id);
-  await until(browser, "a staged-only workspace's step is to review it in Models", `${verb}.dataset.state === 'refused' && !!${statusFix("review in Models")}`);
+  // The verb's one place to send the person: a staged-only workspace is reviewed in Models, a press away and never refused.
+  await until(browser, "a staged-only workspace's verb is its review in Models", verbIs("Review in Models", "ready"));
   const metadataKeys = new Set(document.models.map(model => model.key));
   assert((await seatedRoles(browser)).every(entry => !metadataKeys.has(entry.alias)), "An unresolved saved catalog is never silently replaced by bundled starter seats");
-  await click(browser, statusFix("review in Models"));
-  await until(browser, "the fix opens Models", `${element(mainView)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+  await click(browser, verb);
+  await until(browser, "the verb opens Models", `${element(mainView)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
   assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.draft?.document, textOnly);
   await closeSheet(browser);
 
@@ -1505,7 +1788,8 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   const second = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...waitingTarget, expectedRevision: (active.result as Configuration).revision, document: textOnly });
   assert(second.ok);
   await openGenerator(browser, server, waiting.id);
-  await until(browser, "the footer says a staged catalog waits", `${element(`${generator} .${G}footer-facts`)}?.textContent.includes('staged catalog waits in Models')`);
+  await until(browser, "the footer says a staged catalog waits", `${element(`${generator} .${G}footer-facts`)}?.textContent.includes('staged catalog waits in models')`);
+  assert.equal(await browser.evaluate(`${verb}.textContent !== 'Review in Models'`), true, "Beside an active catalog the verb never sends the person to a staged one");
   assert.deepEqual(await seatedRoles(browser), expectedSeats(document, (active.result as Configuration).selection ?? selection),
     "The active catalog, not the staged one, seats the team");
 }
@@ -1526,7 +1810,7 @@ async function manualCatalogScenario(browser: BrowserInstance, server: TestServe
     const target = { containerId: workspace.id };
     await openGenerator(browser, server, workspace.id);
     await usableStarter(browser);
-    await openSheet(browser, "Models");
+    await openSheet(browser, "models");
     await click(browser, workspaceButton("Edit or import models"));
     await click(browser, importSummary);
     await click(browser, importField);
@@ -1557,10 +1841,11 @@ async function manualCatalogScenario(browser: BrowserInstance, server: TestServe
     await assertRoles(browser, true);
     assert((await seatedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
       "The saved draft's own models seat its preview, not regenerated bundled choices");
-    await until(browser, "a staged catalog's step is its review in Models", `${verb}.dataset.state === 'refused' && !!${statusFix("review in Models")}`);
+    await until(browser, "a staged catalog's verb is its review in Models", verbIs("Review in Models", "ready"));
     assert.deepEqual(await readConfiguration(server, writer, target), staged, "Opening an existing draft does not stage, promote or overwrite it");
-    await click(browser, statusFix("review in Models"));
-    await until(browser, "the fix opens Models", `${element(mainView)}.hidden === true`);
+    await focusStatement(browser, "verb");
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await until(browser, "Mod+↵ takes the verb's step: it opens Models", `${element(mainView)}.hidden === true`);
     await click(browser, element(`${generator} [aria-label="Model catalog"] [data-action="atyrode.code.reviewCatalog"]`));
     await control(browser, "saved manual changes retain their existing review path", workspaceButton("Use this catalog"), false);
     await click(browser, workspaceButton("Use this catalog"));
@@ -1602,7 +1887,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
   });
   try {
     const modal = "dialog.plugin-atyrode_code__permission-dialog:modal";
-    for (const destinationView of ["Accounts", "Models"] as const) {
+    for (const destinationView of ["accounts", "models"] as const) {
       holdConfiguration = true;
       await openGenerator(browser, server, firstUse.containerId);
       await waitFor(() => held.size > 0, timeout, 50);
@@ -1616,7 +1901,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await click(browser, `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
       await until(browser, "the sheet returns focus to the link that opened it", `${element(mainView)}.hidden === false && document.activeElement === ${footerLink(destinationView)}`);
       await key(browser, "Tab", 9);
-      const next = destinationView === "Accounts" ? "Models" : "Setup";
+      const next = destinationView === "accounts" ? "models" : "setup";
       assert.equal(await browser.evaluate(`document.activeElement === ${footerLink(next)}`), true, "Keyboard navigation still walks the footer after the absent read");
       await key(browser, "Enter", 13);
       await until(browser, `keyboard opens ${next}`, `${element(mainView)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
@@ -1624,7 +1909,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await until(browser, "Esc returns from the sheet to its link", `${element(mainView)}.hidden === false && document.activeElement === ${footerLink(next)}`);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
-      await openSheet(browser, "Setup");
+      await openSheet(browser, "setup");
       await click(browser, workspaceButton("Machine"));
       await click(browser, workspaceButton("Choose capabilities to review"));
       await until(browser, "explicit capability review opens from its trigger", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
@@ -1636,7 +1921,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose capabilities to review")}`), true,
         "Escape returns focus to the visible permission trigger");
       await closeSheet(browser);
-      await openSheet(browser, "Models");
+      await openSheet(browser, "models");
       await closeSheet(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "Revisiting does not repeat an automatic first-use modal");
     }
@@ -1785,7 +2070,7 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
     await arrangeWorkbench(server, writer);
     await openGenerator(browser, server, target.containerId);
     await chooseMachine(browser, machineName);
-    await openSheet(browser, "Setup");
+    await openSheet(browser, "setup");
     await click(browser, workspaceButton("Folders"));
     const onboarding = element(`${generator} [aria-label="Code setup"]`);
     // Setup re-reads the destination through its own Refresh status, inside the runtime diagnostics.
@@ -1855,6 +2140,13 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   let sessionVisible = true, secondReadFails = false, terminalInventoryFailed = false, firstReads = 0;
   const resumedInputs: Record<string, unknown>[] = [];
   const savedSessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
+  // The first machine keeps twelve sessions in one folder, the newest of them the one resumed below, and one in another
+  // folder: one row per folder, with the folder's older sessions in its row's drum.
+  const listedAt = Date.now();
+  const folderSessions = [{ id: savedSessionId, title: "Synthetic saved work", cwd: "/workspace", updatedAt: listedAt - 60_000 },
+    ...Array.from({ length: 11 }, (_, index) => ({ id: `7ab82ad4-8c9e-4166-8130-4720000000${index + 10}`, title: `Earlier work ${index + 1}`,
+      cwd: "/workspace", updatedAt: listedAt - (index + 2) * 3_600_000 }))];
+  const otherFolder = { id: "7ab82ad4-8c9e-4166-8130-472000000099", title: "Other folder work", cwd: "/workspace/other", updatedAt: listedAt - 30 * 3_600_000 };
   const fleetMachines = (await ownerAction(server, "core.machines.list", {}) as { machines: MachineSummary[] }).machines;
   const realTerminals = await ownerAction(server, "core.terminals.listAll", {});
   const terminalBase: TerminalSummary = { id: "synthetic-legacy", machineId: first.machineId, name: "Synthetic saved work",
@@ -1911,7 +2203,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
         if (input.machineId === first.machineId) firstReads++;
         if (holdNextList && input.machineId === first.machineId) { holdNextList = false; await heldList.wait(); }
         if (input.machineId === second.machineId && secondReadFails) return refused("synthetic_inventory_failed");
-        return { ok: true, result: sessionVisible ? [{ id: savedSessionId, title: "Synthetic saved work", cwd: "/workspace", updatedAt: 1000 }] : [] };
+        if (!sessionVisible) return { ok: true, result: [] };
+        return { ok: true, result: input.machineId === first.machineId ? [...folderSessions, otherFolder] : [folderSessions[0]] };
       }
       case "atyrode.omp.resumeSession":
         resumedInputs.push(input);
@@ -1926,6 +2219,9 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   const reviewsFor = (count: number) => async () => reviews.length >= count;
   try {
     await arrangeWorkbench(server, writer);
+    // One recent team, so a digit pressed where the panel's keys must not act would recall it.
+    const savedAdvisor = saved.configuration.selection.advisor;
+    await rememberTeam(browser, writer.principal.id, first.containerId, { ...saved.configuration.selection, advisor: savedAdvisor === "off" ? "glance" : "off" });
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, machineName);
 
@@ -1934,14 +2230,15 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(reviews.length, 1, "One automatic review of the settled saved team");
     assert.equal(reviews[0]!.skills, undefined, "An ordinary launch carries no skill choice");
     assert(await browser.evaluate<boolean>(`(${statusText}).includes(${JSON.stringify(machineName)})`), "The line says where the team was reviewed");
+    assert.match(await browser.evaluate<string>(`${element(`${generator} .${G}stmt-line`)}.textContent`), /^\d+ on Claude$/, "The team's count names its family");
 
     // Skills: a set and an individual choice review as one effective selection.
     await openOptions(browser);
-    await click(browser, skillControl("Reviewed pair"));
-    await click(browser, skillControl("Alpha"));
+    await click(browser, optionSwitch("Optional skills", "Reviewed pair"));
+    await click(browser, optionSwitch("Optional skills", "Alpha"));
     await waitFor(reviewsFor(2), timeout, 50);
     await until(browser, "overlapping skill selection is native-reviewed", `${verbIs("Launch", "ready")} && document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li').length > 0`);
-    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li strong')].map(el => el.textContent)`),
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li .${G}options-skill-title')].map(el => el.textContent)`),
       ["Alpha", "Gamma"], "A set and individual choice render one effective selection without duplicates");
     await closeOptions(browser);
     await focusStatement(browser, "verb");
@@ -1963,26 +2260,27 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
 
     // A declared conflict, a stale catalog and a cleared choice; disable-all reviews as such.
     await openOptions(browser);
-    await click(browser, skillControl("Beta"));
+    await click(browser, optionSwitch("Optional skills", "Beta"));
     await until(browser, "a declared skill conflict refuses the step", `${verb}.dataset.state === 'refused' && !!${statusFix("open options")}`);
-    await click(browser, skillControl("Beta"));
+    await click(browser, optionSwitch("Optional skills", "Beta"));
     await until(browser, "resolving the conflict restores the step", `${verb}.dataset.state === 'ready'`);
     skillCatalog.revision++;
-    await click(browser, workspaceButton("Refresh skill catalog"));
+    await click(browser, workspaceButton("read skills again"));
     await until(browser, "a stale catalog cannot silently rebase the selection", `${verb}.dataset.state === 'refused'`);
-    await click(browser, workspaceButton("Clear optional choices"));
+    await click(browser, workspaceButton("default skills"));
     await until(browser, "a cleared choice can be reviewed again", `${verb}.dataset.state === 'ready'`);
     const beforeDisable = reviews.length;
-    await click(browser, workspaceButton("Disable all skills"));
+    await click(browser, workspaceButton("all skills off"));
     await waitFor(reviewsFor(beforeDisable + 1), timeout, 50);
     await until(browser, "disable-all is reviewed", verbIs("Launch", "ready"));
     assert.deepEqual(reviews.at(-1)!.skills, { mode: "disabled" }, "The actual browser sends disable-all through the ordinary workflow");
 
     // Restricted automation reviews as such and suppresses ambient skills; any tool change needs a new review.
-    await click(browser, automationControl("Restricted automation"));
-    await click(browser, automationControl("read"));
+    const restricted = optionSwitch("Automation policy", "restricted automation"), readTool = optionSwitch("Automation policy", "read");
+    await turn(browser, restricted, true);
+    await turn(browser, readTool, true);
     const beforeRestricted = reviews.length;
-    await click(browser, workspaceButton("Clear optional choices"));
+    await click(browser, workspaceButton("default skills"));
     await waitFor(async () => reviews.length > beforeRestricted && JSON.stringify(reviews.at(-1)!.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
     await until(browser, "native restricted policy is rendered", `${element(`${generator} [data-effective-automation]`)}?.dataset.effectiveAutomation === 'restricted'`);
     assert.equal(reviews.at(-1)!.skills, undefined, "Restricted review suppresses ambient defaults even without an explicit skill choice");
@@ -1991,10 +2289,10 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "restricted preparation refusal is visible", `${failureLine} && ${verbIs("Review", "ready")}`);
     await openOptions(browser);
     const beforeTool = reviews.length;
-    await click(browser, automationControl("read"));
+    await turn(browser, readTool, false);
     await waitFor(reviewsFor(beforeTool + 1), timeout, 50);
     assert.deepEqual((reviews.at(-1)!.automation as { toolNames: string[] }).toolNames, [], "A tool change is reviewed again, never launched on the old review");
-    await click(browser, automationControl("Ordinary session"));
+    await turn(browser, restricted, false);
     await closeOptions(browser);
     await until(browser, "the ordinary session is reviewed", verbIs("Launch", "ready"));
 
@@ -2012,7 +2310,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     // While a review is in flight no team or machine edit lands, and the focused word keeps focus.
     holdNextReview = true;
     await openOptions(browser);
-    await click(browser, workspaceButton("Disable all skills"));
+    await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
     await waitFor(() => heldReview.held, timeout, 50);
     await until(browser, "the verb says the review runs", verbIs("Reviewing…", "busy"));
@@ -2032,8 +2330,10 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await click(browser, verb);
     await until(browser, "launch refusal is shown and consumes its review", `${failureLine} && ${verbIs("Review", "ready")}`);
     await openOptions(browser);
-    await click(browser, workspaceButton("Clear optional choices"));
+    await click(browser, workspaceButton("default skills"));
     await closeOptions(browser);
+    // The cleared choice is reviewed on its own, so no review is still due when the steps below are counted.
+    await until(browser, "the cleared choice is reviewed", verbIs("Launch", "ready"));
 
     // Earlier statements: saved sessions are read per machine; only an exact terminal correlation is a running row.
     // A Read button goes as its read starts; focus follows the read to the machine's first row verb, never out of the panel.
@@ -2042,6 +2342,45 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await key(browser, "Enter", 13);
     await until(browser, "the first machine's saved session is listed and its Resume takes focus",
       `${savedRow(first.machineId)} !== null && document.activeElement === ${rowVerb(first.machineId, "resume")}`);
+
+    // One row per folder, each showing its newest session; the folder's older sessions are in that row's drum, never behind a count.
+    const firstRows = `[...document.querySelectorAll('${generator} [data-kind="saved"][data-machine-id="${first.machineId}"]')]`;
+    assert.deepEqual(await browser.evaluate(`${firstRows}.map(row => row.dataset.sessionId)`), [savedSessionId, otherFolder.id], "One row per folder, each showing its newest session");
+    assert.equal(await browser.evaluate(`${savedRow(first.machineId)}.querySelectorAll('[role="option"]').length`), folderSessions.length, "Every session of the folder is in its row's drum");
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Earlier statements"] button')].some(el => /\\b(show|more)\\b/i.test(el.textContent))`), false,
+      "No count toggle hides saved sessions");
+    // The machine is said once, by its group's head, with its read's age and a quiet read again.
+    const firstRead = element(`${generator} [data-read-state="read"][data-machine-id="${first.machineId}"]`);
+    assert.deepEqual(await browser.evaluate(`({ heads: [...document.querySelectorAll('${generator} .${G}earlier-machine')].filter(el => el.textContent === ${JSON.stringify(machineName)}).length,
+      named: ${firstRead}?.closest('li')?.querySelector('.${G}earlier-machine')?.textContent, age: / read \\S/.test(${firstRead}?.textContent ?? ''),
+      again: ${firstRead}?.querySelector('[data-read="${first.machineId}"]')?.textContent })`),
+      { heads: 1, named: machineName, age: true, again: "read again" }, "A read machine's head names it once, with its read's age and read again");
+    assert.match(await browser.evaluate<string>(`${rowVerb(first.machineId, "resume")}.getAttribute('aria-label')`), /^Resume .+ as saved$/, "Resume names its session and that it resumes as saved");
+    assert.match(await browser.evaluate<string>(`${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label')`), /^Resume .+ with the current team$/,
+      "The other resume names its session and the current team");
+
+    // The drum answers the statement's keys: ↓/↑ turn the shown session and ↵ opens the folder's list, which then owns its keys:
+    // from it a digit recalls no team and Mod+↵ takes no step.
+    const folderRow = `${firstRows}[0]`;
+    const drum = `${folderRow}?.querySelector('[role="listbox"]')`;
+    await tabTo(browser, "the folder's session drum", drum, true);
+    await key(browser, "ArrowDown", 40);
+    await until(browser, "↓ shows the folder's next older session", `${folderRow}?.dataset.sessionId === ${JSON.stringify(folderSessions[1]!.id)} && document.activeElement === ${drum}`);
+    await key(browser, "ArrowUp", 38);
+    await until(browser, "↑ shows the newest again", `${folderRow}?.dataset.sessionId === ${JSON.stringify(savedSessionId)} && document.activeElement === ${drum}`);
+    await key(browser, "Enter", 13);
+    await until(browser, "↵ opens the folder's sessions as a popover", `${drum}?.dataset.open === 'true' && ${drum}.dataset.popover !== undefined`);
+    const team = await browser.evaluate<string>(lineWords), steps = { prepares: prepareRequests, reviews: reviews.length };
+    await key(browser, "1", 49);
+    await Bun.sleep(300);
+    assert.equal(await browser.evaluate(lineWords), team, "A digit pressed in the open session drum recalls no team");
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await Bun.sleep(300);
+    assert.deepEqual({ prepares: prepareRequests, reviews: reviews.length }, steps, "Mod+↵ in the open session drum takes no step");
+    assert.equal(await browser.evaluate(lineWords), team);
+    if (await browser.evaluate<boolean>(`${drum}?.dataset.open === 'true'`)) await key(browser, "Escape", 27);
+    await until(browser, "the drum closes on the newest session", `${drum}?.dataset.open !== 'true' && ${folderRow}?.dataset.sessionId === ${JSON.stringify(savedSessionId)}`);
+
     // A per-machine read failure is said and offers Read again, never shown as an empty machine.
     secondReadFails = true;
     await click(browser, element(`${generator} [data-read="${second.machineId}"]`));
@@ -2049,10 +2388,22 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       `${element(`${generator} [data-read-state="failed"][data-machine-id="${second.machineId}"]`)} !== null && ${element(`${generator} [data-read-state="empty"][data-machine-id="${second.machineId}"]`)} === null`);
     secondReadFails = false;
     await click(browser, element(`${generator} [data-read-state="failed"][data-machine-id="${second.machineId}"] [data-read]`));
-    await until(browser, "reading again recovers", `${element(`${generator} [data-read-state][data-machine-id="${second.machineId}"]`)} === null`);
+    await until(browser, "reading again recovers", `${element(`${generator} [data-read-state="read"][data-machine-id="${second.machineId}"]`)} !== null && ${element(`${generator} [data-read-state="failed"][data-machine-id="${second.machineId}"]`)} === null`);
     await until(browser, "the exact correlated terminal is a running row", `${runningRow("synthetic-second")} !== null`);
     assert.equal(await browser.evaluate(`${runningRow("synthetic-legacy")} === null`), true, "Legacy name/header similarity does not fabricate a running session");
     assert.equal(await browser.evaluate(`${savedRow(second.machineId)} === null`), true, "A running session is not also offered as saved");
+
+    // The panel's refresh reads every machine already read again; a machine read again keeps its rows on show meanwhile.
+    const readsBefore = firstReads;
+    holdNextList = true;
+    await focusStatement(browser, "machine");
+    await key(browser, "r", 82);
+    await waitFor(() => heldList.held, timeout, 50);
+    assert(firstReads > readsBefore, "The refresh reads the machine again");
+    await until(browser, "a machine read again keeps its rows while it reads",
+      `${element(`${generator} [data-read-state="reading"][data-machine-id="${first.machineId}"]`)} !== null && ${savedRow(first.machineId)} !== null`);
+    heldList.release();
+    await until(browser, "the read again lands", `${firstRead} !== null && ${savedRow(first.machineId)} !== null`);
     await click(browser, rowVerb(first.machineId, "resume"));
     await waitFor(() => resumedInputs.length === 1, timeout, 50);
     await until(browser, "saved-state refusal is visible", failureLine);
@@ -2060,7 +2411,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "automatic plans refuse resuming with this team before native resume",
       `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') === 'true'`);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
-    await until(browser, "the refused row verb says why", `${liveRegion}.textContent.includes('Resume with this team')`);
+    await until(browser, "the refused row verb says what and why", `${liveRegion}.textContent.startsWith(${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label') + ' · ')`);
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
 
@@ -2083,8 +2434,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     saved = supported;
     await until(browser, "Save & review goes on to its review", verbIs("Launch", "ready"));
     await openOptions(browser);
-    await click(browser, automationControl("Restricted automation"));
-    await click(browser, automationControl("read"));
+    await turn(browser, restricted, true);
+    await turn(browser, readTool, true);
     await closeOptions(browser);
     await until(browser, "resuming with this team is allowed", `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') !== 'true'`);
     await waitFor(async () => JSON.stringify(reviews.at(-1)?.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
@@ -2420,6 +2771,8 @@ async function run(): Promise<void> {
     assert.deepEqual((await readConfiguration(server, writer, secondTarget)).configuration?.accounts, activated.configuration?.accounts);
     phase = "real shared workbench drafts across destinations";
     await sharedWorkbenchScenario(writerBrowser, viewerBrowser, server, writer, viewer, target, secondTarget);
+    phase = "a writer without a canvas saves and is told why launching waits";
+    await canvaslessWriterScenario(writerBrowser, server, writer, target);
 
     phase = "initial capability checklist without native approval";
     const firstUse = await createContainer(server, "Code first-use permissions", "canvas");
@@ -2428,9 +2781,8 @@ async function run(): Promise<void> {
     await usableStarter(writerBrowser);
     assert.equal(await writerBrowser.evaluate(`${element(permissionDialog)} === null`), true,
       "Bundled starter does not open a permission dialog");
-    // The starter's one-press fix opens Setup, where enabling discovery is an explicit review.
-    await click(writerBrowser, statusFix("enable in Setup"));
-    await until(writerBrowser, "the fix opens Setup", `${element(mainView)}.hidden === true`);
+    // Enabling discovery is an explicit review in Setup; the first-use line's own fix is to read the accounts again.
+    await openSheet(writerBrowser, "setup");
     await click(writerBrowser, workspaceButton("Machine"));
     const firstUseReview = workspaceButton("Choose capabilities to review");
     await until(writerBrowser, "first-use review remains an explicit choice", `${firstUseReview}?.getClientRects().length > 0 && ${element(permissionDialog)} === null`);
@@ -2479,7 +2831,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view refuses every write. Genuine pinned OMP metadata yields an editable render-only starter whose seat board is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence. The verification charge is never confirmed by a double-click, a second click or key repeat, waits as the next Tab stop with every edit locked, and a refused spend saves nothing. Manual Models import, staging, staged-catalog review and exact promotion remain reachable. Team, catalog and account drafts survive destinations and sheets, and the save keeps pools and exclusions. From 170 to 1440px nothing overflows or overlaps; pointing and focus shift nothing; keys stay panel-local; the wheel turns only open drums or keyboard-focused words at rest; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and earlier-statement correlations stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view refuses every write. Genuine pinned OMP metadata yields an editable render-only starter whose seat board is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the verb says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop with every edit locked, and a refused spend saves nothing. Manual Models import, staging and exact promotion remain reachable, and a staged-only workspace's verb opens Models. Team, catalog and account drafts survive destinations, sheets and a reload; own account edits never conflict with an unsaved edit while a foreign team write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px nothing overflows or overlaps; pointing and focus shift nothing; keys stay panel-local and never act from a sheet, dialog or popover; arrival keys reach the lane or take the verb's step; a refused keyboard step says why; the wheel turns only open drums or keyboard-focused words at rest; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and earlier-statement correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();
