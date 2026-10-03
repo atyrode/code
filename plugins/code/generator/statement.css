@@ -1,0 +1,358 @@
+/* ---------------------------------------------------------------- statement: the verb, six words, two status lines
+ * statement.tsx and slot.tsx. One value grid between hairlines; ±1 ghosts on the first row only;
+ * the drum opens below its word. Type scale 20 / 15 / 13 / 11.5 on the 4px base; one accent (the
+ * verb, the open drum's selection, focus); machines never coloured; read-only in neutral grey. The
+ * sizes statement-layout.ts measures come from `data-size` here, and nothing that appears on hover
+ * or focus takes room: ghosts, ticks and the drum are positioned, the status lines have fixed heights.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement {
+  --stmt-fs: 20px;
+  --stmt-gfs: 15px;
+  --stmt-row: 26px;
+  --stmt-gh: 20px;
+  --stmt-pad: 16px;
+  position: relative;
+  min-width: 0;
+  padding: 12px var(--stmt-pad) 0;
+  color: var(--code-text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: normal;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-size="15"] { --stmt-fs: 15px; --stmt-gfs: 13px; --stmt-row: 20px; --stmt-gh: 18px; }
+/* Until the first measurement the words are laid out but not shown, so no frame paints a wrong form. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement:not([data-ready]) .plugin-atyrode_code_generator__stmt-row { visibility: hidden; }
+
+/* The rows: one grid per row, the verb's column first in the inline forms; a hairline above and below the line. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-field { position: relative; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row { position: relative; display: grid; align-items: start; column-gap: 16px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-ghosts] { padding-block: var(--stmt-gh); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row:not([data-ghosts]) + .plugin-atyrode_code_generator__stmt-row { margin-top: -1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: calc(var(--stmt-pad) * -1);
+  left: calc(var(--stmt-pad) * -1);
+  height: var(--stmt-row);
+  box-sizing: border-box;
+  border-block: 1px solid var(--code-line);
+  pointer-events: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-row[data-ghosts]::before { top: var(--stmt-gh); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-empty { color: var(--code-text-3); line-height: var(--stmt-row); }
+
+/* The verb: one filled control in a fixed cell as wide as its widest label, so a new label moves nothing. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-row { display: flex; align-items: center; margin-bottom: 8px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-cell { display: flex; align-items: center; min-width: 0; height: var(--stmt-row); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb-row .plugin-atyrode_code_generator__stmt-verb-cell { height: auto; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb {
+  position: relative;
+  flex: none;
+  width: var(--stmt-verb);
+  height: max(24px, calc(var(--stmt-row) + 2px));
+  min-height: 24px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  padding: 0 12px;
+  color: var(--code-on-accent);
+  background: var(--code-accent);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb:hover:not([aria-disabled="true"]) { background: var(--code-accent-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="waiting"] { color: var(--code-text-2); background: transparent; box-shadow: inset 0 0 0 1px var(--code-line); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="refused"] { color: var(--code-text-3); background: transparent; box-shadow: inset 0 0 0 1px var(--code-line); cursor: not-allowed; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="busy"] { color: var(--code-text-bright); background: var(--code-raised); cursor: progress; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="busy"]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  height: 2px;
+  background: var(--code-accent-text);
+  animation: plugin-atyrode_code_generator__stmt-run 900ms cubic-bezier(.23, 1, .32, 1) infinite;
+}
+@keyframes plugin-atyrode_code_generator__stmt-run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+/* A word: its connector, then the value with its ghosts and drum stacked on it; the tick track at its right edge. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  min-width: 0;
+  height: var(--stmt-row);
+  border-radius: 2px;
+  font-size: var(--stmt-fs);
+  line-height: var(--stmt-row);
+  touch-action: pan-y;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-open] { z-index: 30; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-connector { flex: none; color: var(--code-text-3); font-weight: 400; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-stack { position: relative; display: flex; flex: 1 1 auto; align-items: center; min-width: 0; height: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-value {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--code-text-bright);
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-stmt-word="machine"] .plugin-atyrode_code_generator__stmt-value { max-width: 8em; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[aria-disabled="true"] .plugin-atyrode_code_generator__stmt-value { cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Ghosts: the ±1 neighbours, one type step below the line, in the floor grey (5.2:1). */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  height: var(--stmt-gh);
+  color: var(--code-text-3);
+  font-size: var(--stmt-gfs);
+  font-weight: 450;
+  line-height: var(--stmt-gh);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-at="up"] { bottom: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-at="down"] { top: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost:hover { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off] { cursor: not-allowed; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ghost[data-off]:hover { color: var(--code-text-3); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-ghost[data-off], .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"]) > .plugin-atyrode_code_generator__stmt-text {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-last {
+  flex: none;
+  border-left: 1px solid var(--code-line);
+  padding-left: 0.35em;
+  color: var(--code-text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+/* The redline: a 6px hatched mark beside an option whose choice is the cause; never a line, never on the value. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-redline {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: repeating-linear-gradient(135deg, var(--code-attention) 0 1.5px, transparent 1.5px 3px);
+  box-shadow: inset 0 0 0 1px var(--code-attention);
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-redline[data-reason="tight"] {
+  background: repeating-linear-gradient(135deg, var(--code-warn) 0 1.5px, transparent 1.5px 3px);
+  box-shadow: inset 0 0 0 1px var(--code-warn);
+}
+/* A lane's mark is data: its family's square, the family it crosses to smaller when led, both for Mixed. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark { display: inline-flex; flex: none; align-items: flex-end; gap: 0.08em; width: 0.9em; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code__mark { width: 0.42em; height: 0.42em; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-lane-mark .plugin-atyrode_code_generator__stmt-cross { width: 0.26em; height: 0.26em; }
+
+/* The tick track: where the value sits on its drum; on keyboard focus, and always when one word sits per row. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-slot:focus-visible, .plugin-atyrode_code_generator__stmt-slot[data-listed]) .plugin-atyrode_code_generator__stmt-ticks { display: flex; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks > i { display: block; width: 5px; height: 2px; background: var(--code-line); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-ticks > i[data-on] { width: 8px; background: var(--code-text-2); }
+
+/* The drum. Closed, its options exist for assistive technology only. Open, a list below the line on the
+   panel ground, stacked above everything, slid only as far as the panel needs and never over the verb. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-drum {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-slot[data-open] .plugin-atyrode_code_generator__stmt-drum {
+  top: calc(100% + 2px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  height: auto;
+  min-width: 100%;
+  max-width: var(--stmt-drum-max, 80vw);
+  border-radius: 3px;
+  padding: 4px 0;
+  background: var(--code-panel);
+  box-shadow: 0 0 0 1px var(--code-line), 0 12px 28px rgb(0 0 0 / 45%);
+  clip-path: none;
+  transform: translateX(var(--stmt-shift, 0px));
+  pointer-events: auto;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 16px 0 8px;
+  color: var(--code-text-2);
+  font-size: 15px;
+  font-weight: 450;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option > .plugin-atyrode_code_generator__stmt-text { flex: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[data-current] { color: var(--code-text-bright); font-weight: 650; box-shadow: inset 2px 0 var(--code-accent); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option:not([aria-disabled="true"]):is(:hover, [data-cursor]) { color: var(--code-text-bright); background: var(--code-active); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"] { color: var(--code-text-3); cursor: not-allowed; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"][data-cursor] { box-shadow: inset 2px 0 var(--code-line); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 0.8em;
+  overflow: hidden;
+  color: var(--code-text-2);
+  font-size: 13px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option[aria-disabled="true"] .plugin-atyrode_code_generator__stmt-note { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-box { flex: none; width: 0.5em; height: 0.5em; box-shadow: inset 0 0 0 1.5px currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-box[data-on] { background: currentColor; }
+/* While a drum is open the rest of the line dims and ignores the pointer. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement[data-open] .plugin-atyrode_code_generator__stmt-slot:not([data-open]) :is(.plugin-atyrode_code_generator__stmt-value, .plugin-atyrode_code_generator__stmt-ghost, .plugin-atyrode_code_generator__stmt-connector) {
+  color: var(--code-text-3);
+  pointer-events: none;
+}
+
+/* The status: two fixed lines; a long line ellipsizes and its title says it whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { display: grid; grid-template-rows: 20px 28px; margin-top: 8px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line { min-width: 0; overflow: hidden; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line + .plugin-atyrode_code_generator__stmt-line { line-height: 28px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part + .plugin-atyrode_code_generator__stmt-part::before { content: "·"; padding: 0 0.4em; color: var(--code-text-3); font-weight: 400; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part:is([data-tone="strong"], [data-tone="done"]) { color: var(--code-text-bright); font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="busy"] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="attention"] { color: var(--code-attention); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="warn"] { color: var(--code-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="neutral"] { color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-part[data-tone="meta"] { color: var(--code-text-3); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-fix, .plugin-atyrode_code_generator__stmt-link) {
+  display: inline-block;
+  max-width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  vertical-align: top;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 0 0 0.6em;
+  border: 0;
+  border-radius: 2px;
+  padding: 0 2px;
+  color: var(--code-text-bright);
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-fix, .plugin-atyrode_code_generator__stmt-link):first-child { margin-left: 0; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-fix, .plugin-atyrode_code_generator__stmt-link):hover { background: var(--code-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-fix::before { content: "→ "; color: var(--code-text-3); font-weight: 400; }
+/* Status lines clip their overflow, so focus inside them is drawn inset. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line :focus-visible { outline: 2px solid var(--code-focus); outline-offset: -2px; }
+/* Confirm charge: the verb's weight and accent, at least 28px tall, the next Tab stop after the verb. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-confirm {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  min-height: 28px;
+  margin: 0 12px 0 0;
+  border: 0;
+  border-radius: 3px;
+  padding: 0 12px;
+  color: var(--code-on-accent);
+  background: var(--code-accent);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  vertical-align: top;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-confirm:hover:not([aria-disabled="true"]) { background: var(--code-accent-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-confirm[aria-disabled="true"] { cursor: progress; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line .plugin-atyrode_code_generator__stmt-confirm:focus-visible { outline: 2px solid var(--code-on-accent); outline-offset: -4px; }
+
+/* ---------------------------------------------------------------- keys dialog (keys-dialog.tsx) */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 40;
+  width: min(26rem, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  border-radius: 3px;
+  padding: 12px;
+  color: var(--code-text-2);
+  background: var(--code-raised);
+  box-shadow: 0 0 0 1px var(--code-line), 0 12px 28px rgb(0 0 0 / 45%);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-title { margin: 0; color: var(--code-text-bright); font-size: 15px; font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-close { min-height: 24px; margin: 0; border: 0; padding: 0 4px; background: none; cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-close:focus-visible { outline: 2px solid var(--code-focus); outline-offset: 1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-group + .plugin-atyrode_code_generator__keys-dialog-group { margin-top: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-group-title { margin: 0 0 4px; color: var(--code-text-3); font-size: 11.5px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog dl { display: grid; gap: 4px; margin: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); align-items: center; gap: 8px; min-height: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-row dt { display: flex; flex-wrap: wrap; gap: 4px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-row dd { margin: 0; color: var(--code-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog .keycap { border-radius: 2px; padding: 1px 6px; font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- statement: narrow panels, coarse pointers, motion */
+@container code (width < 40rem) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement { --stmt-pad: 12px; }
+}
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-statement { --stmt-row: 44px; --stmt-gh: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-option { min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb { height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-status { grid-template-rows: 44px 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line,
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-line + .plugin-atyrode_code_generator__stmt-line { line-height: 44px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__stmt-confirm, .plugin-atyrode_code_generator__stmt-fix, .plugin-atyrode_code_generator__stmt-link) { min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-dialog-row { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stmt-verb[data-state="busy"]::after { animation: none; }
+}
