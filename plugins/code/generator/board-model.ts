@@ -25,6 +25,20 @@ export function effortWord(level: string): string {
   return EFFORT_WORDS[level] ?? level;
 }
 
+const DAY_MS = 86_400_000;
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/**
+ * A moment ahead as the board says it: the clock time when it falls today, the weekday from
+ * tomorrow, as a forecast or reset past midnight is not today's, and the date from six days on,
+ * where a weekday would read as this one.
+ */
+export function when(at: number, nowMs: number): string {
+  const date = new Date(at);
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.toDateString() === new Date(nowMs).toDateString()) return time;
+  return at - nowMs < 6 * DAY_MS ? `${WEEKDAYS[date.getDay()]} ${time}` : `${date.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${time}`;
+}
+
 type UsageProvider = UsageView["providers"][number];
 type UsageAccount = UsageProvider["accounts"][number];
 type AccountReference = UsageAccount["account"]["reference"];
@@ -84,17 +98,29 @@ export type HeadVerdict =
   | { readonly kind: "blocked" | "maxed"; readonly until: number | null }
   | { readonly kind: "stale"; readonly ageMs: number | null }
   | { readonly kind: "none"; readonly signedIn: number };
-/** One account's window: `used` 0..1, `elapsed` the window's elapsed share at the clock, `fresh` whether it is a present reading. */
+/**
+ * One account's window in a track: `used` 0..1, `elapsed` the window's elapsed share at the clock,
+ * `fresh` whether it is a present reading. `absent`: an included account with no window of this
+ * kind, drawn as an empty outline so every track of the pool lists the same accounts in one order.
+ */
 export type TrackSegment = {
   readonly credentialId: number;
+  readonly who: string;
   readonly used: number | null;
   readonly level: WindowState["level"];
   readonly word: WindowState["word"];
   readonly elapsed: number | null;
   readonly fresh: boolean;
+  readonly absent: boolean;
 };
-/** One window across a pool's accounts, and its one number: the highest present reading, null when none is present. */
-export type PoolTrack = { readonly label: string; readonly segments: readonly TrackSegment[]; readonly percent: number | null };
+/**
+ * One window across a pool's included accounts and the pool's level in it: the mean used share of
+ * the present readings, as a percentage; null when none is present. The level says how full the
+ * pool is, which the verdict's "N of M with room" judges; no single account speaks for the pool.
+ */
+export type PoolTrack = { readonly label: string; readonly segments: readonly TrackSegment[]; readonly level: number | null };
+/** When the pool would be full at its accounts' pace so far, in the window that fills it last. */
+export type PoolForecast = { readonly label: string; readonly at: number };
 export type PoolHead = {
   readonly family: string;
   /** The column's head pool: its provider's base bucket, else its first unmetered provider. */
@@ -108,8 +134,8 @@ export type PoolHead = {
   readonly balances: readonly Balance[];
   /** An unmetered pool served by accounts that report no balance: said as such, never as zero. */
   readonly unreported: boolean;
-  /** When the earliest window would be full at its pace so far; only where `paceForecast` allows one. */
-  readonly forecast: number | null;
+  /** When the last account with room would fill at its pace, while every other is still full (`poolForecast`). */
+  readonly forecast: PoolForecast | null;
   /** The soonest reset of a present window near its limit, while the pool is not already out. */
   readonly reset: { readonly label: string; readonly at: number } | null;
   /** Readings left out of the judgement for their age, said once for the pool; never beside a `stale` verdict, which says it. */
@@ -130,20 +156,65 @@ function headVerdict(pool: QuotaPool | null, signedIn: number): HeadVerdict {
   }
 }
 
-function tracksOf(pool: QuotaPool, current: boolean, nowMs: number): PoolTrack[] {
+/** What an account is called wherever the board names it: its email, else its key or identity. */
+function accountName(entry: UsageAccount): string {
+  return entry.account.email ?? (entry.account.type === "api_key" ? `API key ${entry.account.credentialId}` : entry.account.identityKey ?? `OAuth ${entry.account.credentialId}`);
+}
+
+function tracksOf(pool: QuotaPool, group: UsageProvider | undefined, current: boolean, nowMs: number): PoolTrack[] {
   // Shorter windows first (5h before 7d), so the rows read alike in every column.
   const labels = [...new Map(pool.windows.map(window => [window.label, window.durationMs ?? Number.POSITIVE_INFINITY]))]
     .sort(([, left], [, right]) => left - right).map(([label]) => label);
+  const names = new Map(group?.accounts.map(entry => [entry.account.credentialId, accountName(entry)]) ?? []);
+  // One account order for every track, so an account's 5h and 7d cells stand one above the other:
+  // present readings from the least to the most used, so colour runs grey → yellow → pink, then
+  // history, then accounts nothing was read for.
+  const rank = (credentialId: number): [number, number] => {
+    const windows = pool.windows.filter(window => window.credentialId === credentialId);
+    const present = windows.flatMap(window => current && window.status === "fresh" && window.state.percent !== null ? [window.state.percent] : []);
+    if (present.length) return [0, Math.max(...present)];
+    return [windows.some(window => window.state.percent !== null) ? 1 : 2, 0];
+  };
+  const order = pool.standings.map(account => ({ id: account.credentialId, rank: rank(account.credentialId) }))
+    .sort((left, right) => left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1] || left.id - right.id).map(entry => entry.id);
   return labels.map(label => {
-    const segments = pool.windows.filter(window => window.label === label).map((window): TrackSegment => {
-      const used = window.state.percent === null ? null : Math.min(1, window.state.percent / 100);
-      const elapsed = window.resetsAt !== null && window.durationMs !== null && window.durationMs > 0 && window.resetsAt > nowMs
-        ? Math.max(0, Math.min(1, 1 - (window.resetsAt - nowMs) / window.durationMs)) : null;
-      return { credentialId: window.credentialId, used, level: window.state.level, word: window.state.word, elapsed, fresh: current && window.status === "fresh" };
+    const segments = order.flatMap((credentialId): TrackSegment[] => {
+      const who = names.get(credentialId) ?? `account ${credentialId}`;
+      const windows = pool.windows.filter(window => window.credentialId === credentialId && window.label === label);
+      if (!windows.length) return [{ credentialId, who, used: null, level: "unknown", word: "", elapsed: null, fresh: false, absent: true }];
+      return windows.map(window => {
+        const used = window.state.percent === null ? null : Math.min(1, window.state.percent / 100);
+        const elapsed = window.resetsAt !== null && window.durationMs !== null && window.durationMs > 0 && window.resetsAt > nowMs
+          ? Math.max(0, Math.min(1, 1 - (window.resetsAt - nowMs) / window.durationMs)) : null;
+        return { credentialId, who, used, level: window.state.level, word: window.state.word, elapsed, fresh: current && window.status === "fresh", absent: false };
+      });
     });
     const present = segments.flatMap(segment => segment.fresh && segment.used !== null ? [segment.used] : []);
-    return { label, segments, percent: present.length ? Math.max(...present) * 100 : null };
+    return { label, segments, level: present.length ? present.reduce((sum, used) => sum + used, 0) / present.length * 100 : null };
   });
+}
+
+/**
+ * When the pool would be full: the first moment every included account is full at once, an
+ * account being full from a window's projected fill (`paceForecast`) until that window resets, or
+ * while it is out until it reopens. Null when the reading is not current, when any account is
+ * history or unread (it may have room), when every account is already out (the verdict says when
+ * it reopens), or when some account with room is not on pace to fill before its window resets or
+ * reopens before the last one fills, since the pool then always has an account with room.
+ */
+function poolForecast(pool: QuotaPool, current: boolean): PoolForecast | null {
+  if (!current || pool.bucket === null || pool.standings.length === 0) return null;
+  if (pool.standings.some(account => account.standing === "stale" || account.standing === "unknown")) return null;
+  const spans = pool.standings.map(account => pool.windows.filter(window => window.credentialId === account.credentialId).flatMap(window => {
+    const reopens = window.resetsAt ?? Number.POSITIVE_INFINITY;
+    if (window.state.word === "blocked") return [{ label: window.label, from: Number.NEGATIVE_INFINITY, to: window.state.until ?? Number.POSITIVE_INFINITY }];
+    if (window.state.word === "maxed" && window.status === "fresh") return [{ label: window.label, from: Number.NEGATIVE_INFINITY, to: reopens }];
+    return window.forecast?.kind === "full" ? [{ label: window.label, from: window.forecast.at, to: reopens }] : [];
+  }));
+  if (spans.some(list => list.length === 0)) return null;
+  const fills = spans.flat().filter(span => Number.isFinite(span.from)).sort((left, right) => left.from - right.from);
+  const full = fills.find(fill => spans.every(list => list.some(span => span.from <= fill.from && fill.from < span.to)));
+  return full ? { label: full.label, at: full.from } : null;
 }
 
 /** The head of one provider column, from its pools and the reading. */
@@ -153,9 +224,8 @@ export function poolHead(family: string, pools: readonly QuotaPool[], reading: Q
   const total = group?.accounts.length ?? 0;
   const current = readingCurrent(reading);
   const verdict = headVerdict(pool, total);
-  const tracks = pool ? tracksOf(pool, current, reading.nowMs) : [];
+  const tracks = pool ? tracksOf(pool, group, current, reading.nowMs) : [];
   const balances = pool?.bucket === null ? group?.accounts.filter(entry => entry.selected && !entry.account.disabled && entry.balance !== null).map(entry => entry.balance!) ?? [] : [];
-  const forecasts = pool?.windows.flatMap(window => window.forecast?.kind === "full" ? [window.forecast.at] : []) ?? [];
   // The reset that matters while the pool still serves: the soonest of a present window near or at its limit.
   const open = verdict.kind === "room" || verdict.kind === "thin" || verdict.kind === "tight";
   const pressing = open && pool ? pool.windows.filter(window => current && window.status === "fresh" &&
@@ -166,7 +236,7 @@ export function poolHead(family: string, pools: readonly QuotaPool[], reading: Q
   return {
     family, pool, included: pool?.accounts ?? 0, total, verdict, tracks, balances,
     unreported: pool?.bucket === null && pool.accounts > 0 && balances.length === 0 && reading.view !== null && reading.view.accountsStatus !== "unavailable",
-    forecast: forecasts.length ? Math.min(...forecasts) : null,
+    forecast: pool ? poolForecast(pool, current) : null,
     reset: pressing ? { label: pressing.label, at: pressing.resetsAt! } : null,
     stale: verdict.kind !== "stale" && staleAge !== null && staleCount > 0 ? { count: staleCount, ageMs: staleAge } : null,
   };
@@ -202,7 +272,7 @@ export function accountRows(family: string, reading: QuotaReading): AccountRow[]
     const maxed = history ? undefined : windows.find(({ window, state }) => state.word === "maxed" && window.status === "fresh");
     return {
       key: JSON.stringify(entry.account.reference), provider: group.provider, reference: entry.account.reference,
-      who: entry.account.email ?? (entry.account.type === "api_key" ? `API key ${entry.account.credentialId}` : entry.account.identityKey ?? `OAuth ${entry.account.credentialId}`),
+      who: accountName(entry),
       included: entry.selected, disabled: entry.account.disabled || entry.status === "credential_disabled",
       windows: windows.map(({ label, state }) => ({ label, percent: state.percent })),
       stop: blocked.length ? { word: "blocked", until: Math.max(...blocked) } : maxed ? { word: "maxed", until: maxed.window.resetsAt } : null,
@@ -256,10 +326,12 @@ export type BoardColumn = {
   readonly seated: readonly BoardSeat[];
   /** Seats without roles, strongest first, Spark after the fast rung: the bench line. */
   readonly bench: readonly BoardSeat[];
-  /** No role sits in this column: it shows its pool head and one bench line. */
+  /** No role sits in this column: it shows its pool head with its seats as one idle line in the head's note row. */
   readonly collapsed: boolean;
+  /** No role sits here and none would under the pointed team: the head is told in grey, its numbers kept. */
+  readonly idle: boolean;
 };
-/** The pointed team in words for the roster, grouped by where roles go. */
+/** The pointed team's moves, grouped by where roles go: what the seats mark and `movesText` says. */
 export type BoardMove =
   | { readonly kind: "move"; readonly roles: readonly string[]; readonly from: string; readonly to: string }
   | { readonly kind: "add"; readonly roles: readonly string[]; readonly to: string }
@@ -274,7 +346,10 @@ export type BoardView = {
   /** The team's capability rung, for the rail to mark. */
   readonly capability: number;
   readonly columns: readonly BoardColumn[];
-  /** What every head reserves in columns, so tracks align: as many track rows as the most any head has, and a note row when any has a note. */
+  /**
+   * What every head reserves in columns, so tracks align: as many track rows as the most any head
+   * has, and a note row when any head has a note or a collapsed column puts its idle seats there.
+   */
   readonly headRows: { readonly tracks: number; readonly note: boolean };
   readonly moves: readonly BoardMove[];
   readonly outside: readonly OutsideProvider[];
@@ -406,7 +481,9 @@ export function boardView({ catalog, review, preview, pools, outcomes, served, r
     });
     const seats = cells.filter((cell): cell is BoardSeat => cell !== null);
     const seated = seats.filter(seat => seat.lines.length > 0).sort(strongestFirst);
-    return { family: column.family, head, cells, seated, bench: seats.filter(seat => seat.lines.length === 0).sort(strongestFirst), collapsed: seated.length === 0 };
+    const collapsed = seated.length === 0;
+    return { family: column.family, head, cells, seated, bench: seats.filter(seat => seat.lines.length === 0).sort(strongestFirst), collapsed,
+      idle: collapsed && !seats.some(seat => seat.arriving.length > 0) };
   });
 
   const view = reading.view;
@@ -418,7 +495,7 @@ export function boardView({ catalog, review, preview, pools, outcomes, served, r
     columns, moves, outside,
     headRows: {
       tracks: Math.max(0, ...columns.map(({ head }) => head.tracks.length || (head.balances.length || head.unreported ? 1 : 0))),
-      note: columns.some(({ head }) => head.reset !== null || head.forecast !== null || head.stale !== null),
+      note: columns.some(({ head, collapsed }) => collapsed || head.reset !== null || head.forecast !== null || head.stale !== null),
     },
     reading: view === null ? "unread" : view.accountsStatus === "unavailable" ? "unavailable" : readingCurrent(reading) ? "present" : "history",
   };

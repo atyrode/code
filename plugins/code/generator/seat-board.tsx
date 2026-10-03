@@ -1,13 +1,15 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
+import { prefersReducedMotion } from "@manifold/ui";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
 import { DomainError } from "../../domain/contracts.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import { quotaPools, roleOutcomes, type QuotaPool, type RoleOutcome } from "../../domain/quota.ts";
-import { accountWord, ago, hueOf } from "../ui.tsx";
+import type { Review } from "../../domain/routing.ts";
+import { accountWord, ago, familyWord, hueOf } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
-import { boardView, effortWord, ROSTER_BELOW_PX, type BoardPreview, type BoardSeat, type BoardUsage, type BoardView, type SeatLine } from "./board-model.ts";
-import { balanceText, PoolHead, when } from "./pool-head.tsx";
+import { boardView, effortWord, ROSTER_BELOW_PX, when, type BoardColumn, type BoardPreview, type BoardSeat, type BoardUsage, type SeatLine } from "./board-model.ts";
+import { balanceText, headRowCount, Parts, PoolHead } from "./pool-head.tsx";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -51,10 +53,43 @@ export function useRosterForm(from: RefObject<HTMLElement | null>, remeasure?: u
   return roster;
 }
 
+/**
+ * A keyboard commit draws no flight, so the roles it moved keep a brief afterglow on their new
+ * seats; a commit by pointer, and any commit under reduced motion, leave none. The last input
+ * decides which it was, read on the document because the key that commits lands on the statement.
+ */
+function useAfterglow(root: RefObject<HTMLElement | null>, review: Review | null, mounted: boolean) {
+  const keyboard = useRef(false);
+  const leads = useRef<ReadonlyMap<string, string> | null>(null);
+  useEffect(() => {
+    const document = root.current?.ownerDocument;
+    if (!document) return;
+    const key = () => { keyboard.current = true; };
+    const point = () => { keyboard.current = false; };
+    document.addEventListener("keydown", key, true);
+    document.addEventListener("pointerdown", point, true);
+    return () => { document.removeEventListener("keydown", key, true); document.removeEventListener("pointerdown", point, true); };
+  }, [mounted]);
+  useLayoutEffect(() => {
+    const now = new Map(review?.routes.map(route => [route.role, route.lead.key]) ?? []);
+    const before = leads.current;
+    leads.current = now;
+    const box = root.current;
+    if (!before || !box || !keyboard.current || prefersReducedMotion()) return;
+    for (const [role, key] of now) {
+      if (before.get(role) === key) continue;
+      for (const element of box.querySelectorAll<HTMLElement>(`[data-role="${CSS.escape(role)}"]`)) {
+        element.animate([{ backgroundColor: "var(--code-afterglow)", color: "var(--code-text-bright)" }, { backgroundColor: "transparent" }],
+          { duration: 900, easing: "cubic-bezier(.23, 1, .32, 1)" });
+      }
+    }
+  }, [review]);
+}
+
 type SeatBoardProps = {
   model: Pick<WorkbenchModel, "compiled" | "review" | "served" | "gate">;
   usage: BoardUsage;
-  /** The pointed team (a ghost, a drum option, the fix line), drawn as moves without being chosen. */
+  /** The pointed team (a ghost, a drum option, the fix line, a recent team), drawn as moves without being chosen. */
   preview: BoardPreview | null;
   pools: readonly QuotaPool[];
   outcomes: readonly RoleOutcome[];
@@ -79,41 +114,56 @@ export function SeatBoard({ model, usage, preview, pools, outcomes }: SeatBoardP
   const shown = compiled !== null && board !== null;
   // The board is not mounted while the team is read, so its form is measured again once it is.
   const form = useRosterForm(root, shown) ? "roster" : "grid";
+  useAfterglow(root, shown ? review : null, shown);
   if (!compiled || !board) return null;
   const accountsGate = model.gate("edit-accounts");
   const quiet = board.reading === "unread" || board.reading === "unavailable";
   const notice = board.reading === "unread" ? "accounts not read yet · capacity unknown, not zero"
     : board.reading === "unavailable" ? "accounts unavailable · capacity unknown, not zero" : null;
-  const headOf = (column: BoardView["columns"][number], style?: CSSProperties) => <PoolHead head={column.head} usage={usage} accountsGate={accountsGate}
-    rows={form === "grid" ? board.headRows : null} quiet={quiet} open={open === column.family} style={style}
-    onToggle={() => setOpen(previous => previous === column.family ? null : column.family)} />;
   const draw = { compiled, aliases, nowMs: usage.nowMs, rungs: board.rungs, tiers: board.tiers };
+  const headOf = (column: BoardColumn, grid: { column: number; rows: typeof board.headRows } | null) => <PoolHead head={column.head} usage={usage}
+    accountsGate={accountsGate} grid={grid} quiet={quiet} idle={column.idle} open={open === column.family}
+    seats={grid && column.collapsed ? <Bench seats={column.bench} draw={draw} /> : undefined}
+    onToggle={() => setOpen(previous => previous === column.family ? null : column.family)} />;
+  // The heads take the first rows, as many as the most any head reserves; the tier rows follow.
+  const first = headRowCount(board.headRows) + 1;
+  // A provider that serves nothing takes only the width its head needs; the seated ones share the rest, capped from 1100px.
+  const template = (seated: string) => `max-content ${board.columns.map(column => column.collapsed ? "max-content" : seated).join(" ")}`;
   return <section ref={root} className={`${G}section ${G}board`} data-form={form} aria-labelledby={`${G}board-title`}>
     <h2 id={`${G}board-title`} className="plugin-atyrode_code__sr">Seats</h2>
     {notice && <p className={`${G}board-line`} title={notice}>{notice}</p>}
-    {form === "grid" ? <div className={`${G}board-grid`} style={{ "--board-columns": board.columns.length } as CSSProperties}>
+    {form === "grid" ? <div className={`${G}board-grid`}
+      style={{ "--board-template": template("minmax(0, 1fr)"), "--board-template-wide": template("minmax(0, 18rem)") } as CSSProperties}>
       {board.rungs.map((rung, index) => <div key={rung} className={`${G}rung`} data-current={board.tiers[index] === board.capability || undefined}
-        aria-hidden="true" style={{ gridRow: index + 2 }}>{rung}</div>)}
+        aria-hidden="true" style={{ gridRow: first + index }}>{rung}</div>)}
       {board.columns.map((column, index) => <Fragment key={column.family}>
-        {headOf(column, { gridRow: 1, gridColumn: index + 2 })}
-        {column.collapsed ? <Bench seats={column.bench} label="idle" draw={draw} style={{ gridRow: `2 / span ${board.tiers.length}`, gridColumn: index + 2 }} />
-          : column.cells.map((seat, row) => seat && <Seat key={seat.key} seat={seat} draw={draw} style={{ gridRow: row + 2, gridColumn: index + 2 }} />)}
+        {headOf(column, { column: index + 2, rows: board.headRows })}
+        {column.collapsed ? <Arrivals column={column} draw={draw} style={{ gridRow: `${first} / span ${board.tiers.length}`, gridColumn: index + 2 }} />
+          : column.cells.map((seat, row) => {
+            const style = { gridRow: first + row, gridColumn: index + 2 };
+            if (seat) return <Seat key={seat.key} seat={seat} draw={draw} style={style} />;
+            // A capability rung this provider has no model for says so; a special rung (Spark) belongs to its own provider only.
+            const tier = board.tiers[row]!;
+            return tier >= 1 ? <div key={`empty:${tier}`} className={`${G}seat-empty`} style={style}>no {board.rungs[row]} {familyWord(column.family)} model</div> : null;
+          })}
       </Fragment>)}
     </div> : <div className={`${G}roster`}>
       {board.columns.map(column => <div key={column.family} className={`${G}roster-block`} data-fam={hueOf(column.family)}>
-        {headOf(column)}
+        {headOf(column, null)}
         {column.seated.map(seat => {
           const alias = aliases.get(seat.key) ?? seat.key, rung = draw.rungs[draw.tiers.indexOf(seat.tier)];
+          const note = ownNote(seat, draw.nowMs);
           return <div key={seat.key} className={`${G}roster-row`} role="group" aria-label={seatName(seat, draw)} data-stranded={seat.stranded || undefined}>
             <span className={`${G}roster-model`} aria-hidden="true">
               <span className={`${G}seat-alias`} title={compiled.model(seat.key).id}>{alias}</span>
               {/* Spark's seat is its own rung's name: said once. */}
               {rung !== alias && <span className={`${G}roster-rung`}>{rung}</span>}
             </span>
+            {note && <span className={`${G}seat-note`}><Parts parts={note} /></span>}
             <Lines seat={seat} draw={draw} />
           </div>;
         })}
-        {column.bench.length > 0 && <Bench seats={column.bench} label={column.collapsed ? "idle" : "bench"} draw={draw} />}
+        {column.bench.length > 0 && <Bench seats={column.bench} draw={draw} />}
       </div>)}
     </div>}
     {board.outside.length > 0 && <p className={`${G}board-outside`}>{board.outside.map(entry =>
@@ -127,26 +177,50 @@ function seatName(seat: BoardSeat, draw: Draw): string {
   return `${draw.aliases.get(seat.key) ?? seat.key}, ${draw.rungs[draw.tiers.indexOf(seat.tier)]}${seat.lines.length ? "" : ", idle"}`;
 }
 
-/** A seat in its column: the model in its provider's hue, its pool's own state when it meters apart, the arrivals slot, its role lines. */
+/**
+ * The state of the pool a seat draws on when it meters apart from its column's head (Spark's own
+ * quota), idle or not, so it never appears under a pointer. Its level is the mean of its present
+ * readings, as a head's is; an unread or unreported reading is unknown, never blamed on the provider.
+ */
+function ownNote(seat: BoardSeat, nowMs: number): readonly string[] | null {
+  const own = seat.own;
+  if (!own) return null;
+  const { verdict } = own;
+  if (verdict.kind === "blocked" || verdict.kind === "maxed") return ["own quota", verdict.until === null ? verdict.kind : `${verdict.kind} until ${when(verdict.until, nowMs)}`];
+  if (verdict.kind === "stale") return ["own quota", verdict.ageMs === null ? "age unknown" : `${ago(verdict.ageMs)} old`];
+  if (verdict.kind === "tight" || verdict.kind === "unknown") return ["own quota", verdict.kind];
+  if (verdict.kind === "none") return ["own quota", "no account"];
+  const present = own.windows.flatMap(window => window.status === "fresh" && window.state.percent !== null ? [Math.min(100, window.state.percent)] : []);
+  return ["own quota", present.length ? `${Math.round(present.reduce((sum, used) => sum + used, 0) / present.length)}%` : "unknown"];
+}
+
+/** A seat in its column: the model in its provider's hue, the arrivals slot, its pool's own state when it meters apart, its role lines. */
 function Seat({ seat, draw, style }: { seat: BoardSeat; draw: Draw; style: CSSProperties }) {
-  // An idle seat's own pool is said only when a pointed team would seat roles on it.
-  const own = seat.lines.length || seat.arriving.length ? seat.own : null;
-  const present = own?.windows.flatMap(window => window.status === "fresh" && window.state.percent !== null ? [window.state.percent] : []) ?? [];
-  const ownNote = !own ? null : own.verdict.kind === "blocked" || own.verdict.kind === "maxed"
-    ? `own quota · ${own.verdict.kind}${own.verdict.until === null ? "" : ` until ${when(own.verdict.until, draw.nowMs)}`}`
-    : own.verdict.kind === "stale" ? `own quota · ${own.verdict.ageMs === null ? "age unknown" : `${ago(own.verdict.ageMs)} old`}`
-    : own.verdict.kind === "tight" ? "own quota · tight" : own.verdict.kind === "none" ? "own quota · no account"
-    : present.length ? `own quota · ${Math.round(Math.max(...present))}%` : "own quota · not reported";
+  const note = ownNote(seat, draw.nowMs);
   return <div className={`${G}seat`} data-fam={hueOf(seat.family)} data-idle={seat.lines.length ? undefined : ""} data-stranded={seat.stranded || undefined}
     data-arrive={seat.arriving.length ? seat.arrivingStranded ? "stop" : "go" : undefined} role="group" aria-label={seatName(seat, draw)} style={style}>
     <div className={`${G}seat-head`}>
       <span className={`${G}seat-alias`} aria-hidden="true" title={draw.compiled.model(seat.key).id}>{draw.aliases.get(seat.key) ?? seat.key}</span>
-      {ownNote && <span className={`${G}seat-note`}>{ownNote}</span>}
       {/* Reserved geometry: one line whether a pointed team brings roles here or not. */}
-      <span className={`${G}seat-arrive`}>{seat.arriving.length ? `+ ${seat.arriving.join(" ")}` : ""}</span>
+      <span className={`${G}seat-arrive`}>{seat.arriving.length ? `+ ${seat.arriving.join(", ")}` : ""}</span>
     </div>
+    {note && <div className={`${G}seat-note`}><Parts parts={note} /></div>}
     {seat.lines.length > 0 && <Lines seat={seat} draw={draw} />}
   </div>;
+}
+
+/**
+ * Where a pointed team would seat roles in a column that has none: each arriving seat with its
+ * roles, at the top of the column's empty body. Size-contained, so it fills the space the other
+ * columns' seats already make and pointing never moves anything.
+ */
+function Arrivals({ column, draw, style }: { column: BoardColumn; draw: Draw; style: CSSProperties }) {
+  const arriving = column.bench.filter(seat => seat.arriving.length > 0);
+  if (!arriving.length) return null;
+  return <div className={`${G}board-arrivals`} style={style} aria-hidden="true">{arriving.map(seat =>
+    <p key={seat.key} className={`${G}board-arrival`} data-fam={hueOf(seat.family)} data-arrive={seat.arrivingStranded ? "stop" : "go"}>
+      <span className={`${G}seat-alias`}>{draw.aliases.get(seat.key) ?? seat.key}</span> + {seat.arriving.join(", ")}
+    </p>)}</div>;
 }
 
 /** Pips | content: fates and chains sit in the roles' column, so they align with the roles they describe. */
@@ -156,7 +230,7 @@ function Lines({ seat, draw }: { seat: BoardSeat; draw: Draw }) {
       <i key={level} data-on={step <= THINKING.indexOf(line.thinking) || undefined} />)}</span>
     <ul className={`${G}roles`} data-level={line.thinking} data-stranded={line.fate?.kind === "no-route" || line.fate?.kind === "no-account" || undefined}
       aria-label={`${effortWord(line.thinking)} thinking`}>
-      {line.roles.map(({ role, change }) => <li key={role} data-main={role === "default" || undefined} data-change={change ?? undefined}>{role}</li>)}
+      {line.roles.map(({ role, change }) => <li key={role} data-role={role} data-main={role === "default" || undefined} data-change={change ?? undefined}>{role}</li>)}
     </ul>
     <LineFate line={line} draw={draw} />
   </Fragment>)}</div>;
@@ -166,7 +240,7 @@ function LineFate({ line, draw }: { line: SeatLine; draw: Draw }) {
   const alias = (key: string) => <span className={`${G}chain-alias`} data-fam={hueOf(draw.compiled.family(key))}>{draw.aliases.get(key) ?? key}</span>;
   const { fate } = line;
   if (fate?.kind === "falls-back") {
-    return <span className={`${G}fate`} data-kind={fate.kind} title="Its lead's pool is out: the first fallback with room takes over until it reopens">
+    return <span className={`${G}fate`} data-kind={fate.kind} title="Its lead's pool is out: the first fallback takes over unless its pool is out too">
       → {alias(fate.model.key)} {fate.until === null ? "· reset unknown" : `until ${when(fate.until, draw.nowMs)}`}</span>;
   }
   if (fate?.kind === "no-route") {
@@ -188,11 +262,11 @@ function LineFate({ line, draw }: { line: SeatLine; draw: Draw }) {
   </span>;
 }
 
-/** Seats nobody sits on, as one line: a provider with no seated role is its pool head and this line. Arrivals mark by colour only, so it never rewraps. */
-function Bench({ seats, label, draw, style }: { seats: readonly BoardSeat[]; label: string; draw: Draw; style?: CSSProperties }) {
-  return <div className={`${G}bench`} style={style}>
-    <span className={`${G}bench-label`} aria-hidden="true">{label}</span>
-    <ul aria-label={`${label} seats`}>{seats.map(seat => <li key={seat.key} className={`${G}bench-seat`} data-fam={hueOf(seat.family)}
+/** Seats nobody sits on, as one idle line. A seat a pointed team would fill takes its hue (attention when the roles would be stranded there). */
+function Bench({ seats, draw }: { seats: readonly BoardSeat[]; draw: Draw }) {
+  return <div className={`${G}bench`}>
+    <span className={`${G}bench-label`} aria-hidden="true">idle</span>
+    <ul aria-label="idle seats">{seats.map(seat => <li key={seat.key} className={`${G}bench-seat`} data-fam={hueOf(seat.family)}
       data-arrive={seat.arriving.length ? seat.arrivingStranded ? "stop" : "go" : undefined} title={draw.compiled.model(seat.key).id}
       aria-label={seat.arriving.length ? `${draw.aliases.get(seat.key) ?? seat.key}, ${seat.arriving.join(", ")} would move here` : undefined}>
       {draw.aliases.get(seat.key) ?? seat.key}</li>)}</ul>
