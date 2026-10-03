@@ -323,8 +323,9 @@ export function GeneratorZone({ model, disabled, onChange, estimates, previewEst
     onChange(state.selection);
   }
   const scrub = useScrub(disabled, (dial, word) => commit(dial, word, true));
-  // The panel-wide wheel rule (wheel-turn.ts): only a focused dial turns, and only while the whole panel rests.
-  useWheelTurn(zone, "[data-dial-group]", disabled, (control, step) => {
+  // The panel-wide wheel rule (wheel-turn.ts): a dial turns only under keyboard focus with the pointer
+  // rested on it, and only while the whole panel rests; a dial just clicked lets the wheel scroll.
+  useWheelTurn(zone, { controls: "[data-dial-group]" }, disabled, (control, step) => {
     // The group's attribute is written from its dial's id; an unknown value finds no dial and turns nothing.
     const id = control.dataset.dialGroup as DialId;
     const dial = model.dials.get(id);

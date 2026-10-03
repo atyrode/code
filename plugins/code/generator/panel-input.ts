@@ -42,7 +42,11 @@ export function panelShortcut(press: PanelKey): PanelShortcut | null {
   return BARE_KEYS[press.key] ?? null;
 }
 
-/** How long the whole panel must have been still, from scrolling and from wheel events left to scroll, before a wheel turns a control. */
+/**
+ * How long the whole panel must have been still, from scrolling and from wheel events left to
+ * scroll, before a wheel turns anything; and how long the pointer must have rested on a keyboard-
+ * focused control before the wheel turns it.
+ */
 export const WHEEL_REST_MS = 300;
 /** Wheel travel per step: one mouse notch is usually 100 px; a trackpad gathers its small deltas into steps. */
 export const WHEEL_STEP_PX = 40;
@@ -67,8 +71,12 @@ export function wheelScrolled(rest: WheelRest, nowMs: number): WheelRest {
 }
 
 export type WheelInput = {
-  /** The event is over a turnable control that holds focus, in the region allowed to turn. */
-  readonly focusedControl: boolean;
+  /** The event is over an open drum or menu, in the region allowed to turn. */
+  readonly open: boolean;
+  /** The event is over a control holding focus the keyboard gave it (`:focus-visible`); focus from a click never counts. */
+  readonly keyboardFocused: boolean;
+  /** How long the pointer has rested on that control: since it moved onto it, reset whenever the panel scrolls under it. */
+  readonly restedMs: number;
   /** Ctrl or Cmd is held: the browser's zoom gesture. */
   readonly zoom: boolean;
   /** `wheelTravel` of the event. */
@@ -77,15 +85,18 @@ export type WheelInput = {
 };
 
 /**
- * One wheel event anywhere in the panel. It is taken only over a focused control while the panel
- * has been still for `WHEEL_REST_MS`, and then turns one step (+1 next, -1 previous) once a notch
- * of travel has gathered. Every other event is left to scroll and renews the rest wherever in the
- * panel it lands, so a scroll gesture that drifts onto a focused control keeps scrolling, even at a
- * scroll boundary where nothing moves and no scroll event fires.
+ * One wheel event anywhere in the panel. It is taken only while the panel has been still for
+ * `WHEEL_REST_MS`, and only over an open drum or menu, or over a control the keyboard focused that
+ * the pointer has rested on for `WHEEL_REST_MS`: a word just clicked holds focus, but the wheel
+ * over it scrolls, its first notch included. A taken event turns one step (+1 next, -1 previous)
+ * once a notch of travel has gathered. Every other event is left to scroll and renews the rest
+ * wherever in the panel it lands, so a scroll gesture that drifts onto a control keeps scrolling,
+ * even at a scroll boundary where nothing moves and no scroll event fires.
  */
 export function panelWheel(rest: WheelRest, input: WheelInput): { rest: WheelRest; take: boolean; step: -1 | 0 | 1 } {
   const { nowMs, travel } = input;
-  if (!input.focusedControl || input.zoom || nowMs - rest.scrolledAt < WHEEL_REST_MS || nowMs - rest.passedAt < WHEEL_REST_MS) {
+  const engaged = input.open || (input.keyboardFocused && input.restedMs >= WHEEL_REST_MS);
+  if (!engaged || input.zoom || nowMs - rest.scrolledAt < WHEEL_REST_MS || nowMs - rest.passedAt < WHEEL_REST_MS) {
     return { rest: { ...rest, passedAt: nowMs, travel: 0 }, take: false, step: 0 };
   }
   const gathered = (nowMs - rest.turnedAt > WHEEL_IDLE_MS || Math.sign(rest.travel) !== Math.sign(travel) ? 0 : rest.travel) + travel;

@@ -165,9 +165,11 @@ scope: a refused review or launch waits for an explicit Review or a changed inpu
 Verify models stays "Checking models…" for at least 700 ms, and Confirm spends only
 on a deliberate single press, never the second click of a double-click or a held
 key. Keys act only from inside the panel, and keys Code consumes do not reach
-workspace-wide bindings. The mouse wheel turns a dial only while that dial holds
-focus and the whole panel has been still for 300 ms, with no scrolling and no wheel
-left to scroll anywhere in it; otherwise it scrolls. Each
+workspace-wide bindings. The mouse wheel turns a dial only when the keyboard
+focused it and the pointer has rested on it for 300 ms (focus from a click never
+counts, so the wheel over a just-clicked dial scrolls), and only while the whole
+panel has been still for 300 ms, with no scrolling and no wheel left to scroll
+anywhere in it; otherwise it scrolls. Each
 successful launch records its team in this browser's local storage per principal
 and workspace (newest first, nine at most); that list is device-local, never
 shared, and grants nothing.

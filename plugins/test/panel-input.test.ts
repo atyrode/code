@@ -42,29 +42,40 @@ describe("the panel's keys", () => {
 });
 
 describe("the wheel in the panel", () => {
+  /** A keyboard-focused control the pointer has rested on: the one state, besides an open drum, that turns. */
+  const engaged = { open: false, keyboardFocused: true, restedMs: WHEEL_REST_MS, zoom: false, travel: 100 };
   /** Feeds wheel events through one panel-wide rest tracker, as the panel root's listener does. */
   function wheel(events: readonly (Partial<WheelInput> & { nowMs: number })[], start: WheelRest = WHEEL_STILL) {
     let rest = start;
     return events.map(event => {
-      const result = panelWheel(rest, { focusedControl: true, zoom: false, travel: 100, ...event });
+      const result = panelWheel(rest, { ...engaged, ...event });
       rest = result.rest;
       return result;
     });
   }
 
-  test("turns a focused control only once the whole panel has rested from scrolling", () => {
-    expect(wheel([{ nowMs: 1_000 }])[0]).toMatchObject({ take: true, step: 1 });
-    expect(wheel([{ nowMs: 1_000, focusedControl: false }])[0]).toMatchObject({ take: false, step: 0 });
-    expect(wheel([{ nowMs: 1_000, zoom: true }])[0]).toMatchObject({ take: false, step: 0 });
-    const scrolled = wheelScrolled(WHEEL_STILL, 1_000);
-    expect(wheel([{ nowMs: 1_000 + WHEEL_REST_MS - 1 }], scrolled)[0]?.take).toBe(false);
-    expect(wheel([{ nowMs: 1_000 + WHEEL_REST_MS }], scrolled)[0]).toMatchObject({ take: true, step: 1 });
+  test("a word just clicked keeps focus, but the wheel over it scrolls, from its first notch on", () => {
+    // Click focus is not keyboard focus, however long the pointer stays.
+    const clicked = Array.from({ length: 4 }, (_, index) => ({ nowMs: 5_000 + index * 120, keyboardFocused: false, restedMs: 5_000 }));
+    expect(wheel(clicked).every(result => !result.take && result.step === 0)).toBe(true);
+    // The same word focused by the keyboard turns once the pointer has rested on it, and not before.
+    expect(wheel([{ nowMs: 5_000, restedMs: WHEEL_REST_MS - 1 }])[0]).toMatchObject({ take: false, step: 0 });
+    expect(wheel([{ nowMs: 5_000 }])[0]).toMatchObject({ take: true, step: 1 });
   });
 
-  test("a gesture that begins outside the dials and drifts onto a focused dial keeps scrolling, even where nothing scrolls", () => {
+  test("an open drum turns without a rest or keyboard focus, but never while the panel scrolls", () => {
+    expect(wheel([{ nowMs: 5_000, open: true, keyboardFocused: false, restedMs: 0 }])[0]).toMatchObject({ take: true, step: 1 });
+    const scrolled = wheelScrolled(WHEEL_STILL, 5_000);
+    expect(wheel([{ nowMs: 5_000 + WHEEL_REST_MS - 1, open: true }], scrolled)[0]?.take).toBe(false);
+    expect(wheel([{ nowMs: 5_000 + WHEEL_REST_MS, open: true }], scrolled)[0]).toMatchObject({ take: true, step: 1 });
+    expect(wheel([{ nowMs: 5_000, zoom: true, open: true }])[0]).toMatchObject({ take: false, step: 0 });
+    expect(wheel([{ nowMs: 5_000, open: false, keyboardFocused: false }])[0]).toMatchObject({ take: false, step: 0 });
+  });
+
+  test("a gesture that begins outside the dials and drifts onto an engaged dial keeps scrolling, even where nothing scrolls", () => {
     // At a scroll boundary no scroll event fires: only the wheel events themselves, first over the
-    // masthead or the routing table, then over the focused dial, sixteen milliseconds apart.
-    const outside = Array.from({ length: 4 }, (_, index) => ({ nowMs: 1_000 + index * 16, focusedControl: false }));
+    // masthead or the routing table, then over the dial, sixteen milliseconds apart.
+    const outside = Array.from({ length: 4 }, (_, index) => ({ nowMs: 1_000 + index * 16, keyboardFocused: false, restedMs: 0 }));
     const onDial = Array.from({ length: 30 }, (_, index) => ({ nowMs: 1_064 + index * 16 }));
     const results = wheel([...outside, ...onDial]);
     expect(results.every(result => !result.take && result.step === 0)).toBe(true);
@@ -86,7 +97,7 @@ describe("the wheel in the panel", () => {
     expect(trackpad.every(result => result.take)).toBe(true);
     expect(trackpad.reduce((steps, result) => steps + result.step, 0)).toBe(Math.floor(80 / WHEEL_STEP_PX));
     const partial = wheel([{ nowMs: 1_000, travel: WHEEL_STEP_PX - 1 }]);
-    const after = (nowMs: number, travel: number) => panelWheel(partial[0]!.rest, { focusedControl: true, zoom: false, travel, nowMs }).step;
+    const after = (nowMs: number, travel: number) => panelWheel(partial[0]!.rest, { ...engaged, travel, nowMs }).step;
     expect(after(1_000 + WHEEL_IDLE_MS + 1, 2)).toBe(0);
     expect(after(1_000 + WHEEL_IDLE_MS - 1, 2)).toBe(1);
     // Reversing direction starts over rather than cancelling travel already gathered.
