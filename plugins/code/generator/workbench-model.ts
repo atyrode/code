@@ -159,6 +159,8 @@ export type WorkbenchModel = {
   verification: ModelVerification;
   /** Teams this browser launched in this workspace, newest first. Device-local and never shared (recent-teams.ts). */
   recentTeams: readonly RecentTeam[];
+  /** Changes whenever an input a launch review depends on changes, which revokes a review made in an earlier scope. */
+  reviewScope: number;
 };
 
 /** Owns the workbench's state, observations, safety checks and actions; presentation stays with the caller. */
@@ -427,6 +429,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       updateSelection, discardChanges, saveProfile, review, launch, resume,
       openSuggestion: () => setSuggesting(true), closeSuggestion, suggest, applySuggestion, refresh,
     },
-    verification, recentTeams,
+    verification, recentTeams, reviewScope: reviewEpoch,
   };
 }

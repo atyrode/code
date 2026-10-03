@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { VerificationProvenance } from "../code/contract.ts";
-import { nextLaunchStep, type LaunchFacts } from "../code/generator/launch-step.ts";
-import { verificationState, type VerificationStatus } from "../code/generator/verification.ts";
+import { autoReviewDue, nextLaunchStep, type AutoReviewContext, type LaunchFacts } from "../code/generator/launch-step.ts";
+import { CHECKING_HOLD_MS, confirmsCharge, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
   providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
@@ -68,5 +68,46 @@ describe("the next launch step with verification", () => {
     expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "omp-changed")).step).toBe("verify");
     // Once current, the launch order is unchanged.
     expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
+  });
+});
+
+describe("confirming the verification charge", () => {
+  const preparedAt = 10_000;
+  test("the second click of a double-click on Verify never spends, however long the inventory took", () => {
+    expect(confirmsCharge({ detail: 2, repeat: false }, preparedAt, preparedAt + 250)).toBe(false);
+    expect(confirmsCharge({ detail: 2, repeat: false }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
+    expect(confirmsCharge({ detail: 3, repeat: false }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
+  });
+
+  test("a single press confirms only once the checking hold has passed, and a held key never does", () => {
+    expect(confirmsCharge({ detail: 1, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS - 1)).toBe(false);
+    expect(confirmsCharge({ detail: 1, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS)).toBe(true);
+    expect(confirmsCharge({ detail: 0, repeat: false }, preparedAt, preparedAt + CHECKING_HOLD_MS)).toBe(true);
+    expect(confirmsCharge({ detail: 0, repeat: true }, preparedAt, preparedAt + 10 * CHECKING_HOLD_MS)).toBe(false);
+    // Longer than the 500 ms double-click interval Windows uses by default.
+    expect(CHECKING_HOLD_MS).toBeGreaterThan(500);
+  });
+});
+
+describe("reviewing the saved team when its inputs settle", () => {
+  const settled: AutoReviewContext = { busy: false, uncovered: false, scope: 4, attempted: null };
+  test("only the saved, verified team with every launch precondition reviews by itself", () => {
+    expect(autoReviewDue(facts(), settled)).toBe(true);
+    expect(autoReviewDue(facts({ unsaved: true, localDraft: { source: "active" } }), settled)).toBe(false);
+    expect(autoReviewDue(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), settled)).toBe(false);
+    expect(autoReviewDue(facts({ profile: { source: "draft" } }), settled)).toBe(false);
+    expect(autoReviewDue(facts({}, "accounts-changed"), settled)).toBe(false);
+    expect(autoReviewDue(facts({ writable: false }), settled)).toBe(false);
+    expect(autoReviewDue(facts({ launchReady: false }), settled)).toBe(false);
+    expect(autoReviewDue(facts({ previewCurrent: true }), settled)).toBe(false);
+  });
+
+  test("never while busy or with an unserved family, and once per scope until an input changes", () => {
+    expect(autoReviewDue(facts(), { ...settled, busy: true })).toBe(false);
+    expect(autoReviewDue(facts(), { ...settled, uncovered: true })).toBe(false);
+    // A refused review or launch in this scope waits for an explicit Review...
+    expect(autoReviewDue(facts(), { ...settled, attempted: 4 })).toBe(false);
+    // ...and a changed input opens a new scope, which reviews again.
+    expect(autoReviewDue(facts(), { ...settled, scope: 5, attempted: 4 })).toBe(true);
   });
 });

@@ -58,3 +58,21 @@ export function verificationState(provenance: VerificationProvenance | null, obs
   const accountsChanged = changes.providersAdded.length > 0 || changes.providersRemoved.length > 0 || changes.identitiesChanged;
   return { status: changes.ompVersion ? "omp-changed" : accountsChanged ? "accounts-changed" : "current", changes, observed };
 }
+
+/**
+ * The least time the Verify press stays "Checking models…" before its charge can be confirmed.
+ * Longer than the usual double-click interval (500 ms by default on Windows, shorter elsewhere), so
+ * the second click of a double-click on Verify lands on a busy control rather than on Confirm.
+ */
+export const CHECKING_HOLD_MS = 700;
+/** How a Confirm was activated: `detail` is the pointer's click count, 0 from the keyboard; `repeat` is a held key. */
+export type ConfirmActivation = { readonly detail: number; readonly repeat: boolean };
+
+/**
+ * Whether this activation may spend the shown charge. Only a deliberate single press counts: never
+ * the second click of a multi-click, never key repeat, and never before the checking hold has
+ * passed since the Verify press that prepared the charge.
+ */
+export function confirmsCharge(activation: ConfirmActivation, preparedAt: number, nowMs: number): boolean {
+  return activation.detail <= 1 && !activation.repeat && nowMs - preparedAt >= CHECKING_HOLD_MS;
+}

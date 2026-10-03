@@ -157,6 +157,20 @@ disclosed controls remain mounted, preserving profile, task, catalog, account an
 per-session drafts across empty-to-active transitions. Destination changes still
 invalidate native reviews and clear destination-specific session choices.
 
+Once the saved, verified team meets every launch precondition and its review inputs
+(prompt, options, accounts, revisions, destination) have held still briefly, the
+workbench requests the launch review itself, so Launch is one press. It never does
+so for an unsaved edit, a starter or a staged catalog, and at most once per review
+scope: a refused review or launch waits for an explicit Review or a changed input.
+Verify models stays "Checking models…" for at least 700 ms, and Confirm spends only
+on a deliberate single press, never the second click of a double-click or a held
+key. Keys act only from inside the panel, and keys Code consumes do not reach
+workspace-wide bindings. The mouse wheel turns a dial only while that dial holds
+focus and the panel has not scrolled for 300 ms; otherwise it scrolls. Each
+successful launch records its team in this browser's local storage per principal
+and workspace (newest first, nine at most); that list is device-local, never
+shared, and grants nothing.
+
 ## Ordinary Code/OMP workflow
 
 `createCodeWorkflowClient(dispatch)` is React-free and uses the same ordinary

@@ -8,7 +8,7 @@ import { VerificationError, WorkflowError, type ChargeReview, type PendingVerifi
   type VerificationProgress, type VerificationStep } from "../workflow.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
-import { verificationState, type VerificationState } from "./verification.ts";
+import { CHECKING_HOLD_MS, confirmsCharge, verificationState, type ConfirmActivation, type VerificationState } from "./verification.ts";
 
 export type ModelVerificationInput = {
   host: HostServices;
@@ -49,14 +49,15 @@ export type ModelVerification = VerificationState & {
   canConfirm: boolean;
   /** Initialize if needed and run OMP's inventory, ending at the charge. Spends no benchmark request. */
   prepare: () => Promise<void>;
-  /** Spend the reviewed charge: benchmark per provider, derive, stage, review, promote, save the selection. */
-  confirm: () => Promise<void>;
+  /** Spend the reviewed charge: benchmark per provider, derive, stage, review, promote, save the selection.
+   * Ignored unless the activation is a deliberate single press after the checking hold (`confirmsCharge`). */
+  confirm: (activation: ConfirmActivation) => Promise<void>;
   /** Stop: a pending charge is discarded, and the probe job in flight is cancelled at its native owner. */
   cancel: () => void;
 };
 type Run = { phase: VerificationPhase; progress: VerificationProgress | null; charge: ChargeReview | null };
-/** The run in flight: how to stop it, whether it still holds, and its charge while unconfirmed. */
-type Session = { controller: AbortController; isCurrent: () => boolean; pending: PendingVerification | null };
+/** The run in flight: how to stop it, whether it still holds, when its Verify press started it, and its charge while unconfirmed. */
+type Session = { controller: AbortController; isCurrent: () => boolean; preparedAt: number; pending: PendingVerification | null };
 
 /**
  * The first-use and re-verification flow of `createCodeWorkflowClient().verifyModels`, for the
@@ -102,7 +103,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   async function prepare() {
     if (!canPrepare || !target) return;
     const started = { host, target }, controller = new AbortController();
-    const session: Session = { controller, pending: null, isCurrent: () => {
+    const session: Session = { controller, pending: null, preparedAt: Date.now(), isCurrent: () => {
       const now = latest.current;
       return mounted.current && !controller.signal.aborted && now.host.client === started.host.client &&
         now.host.principal.id === started.host.principal.id && now.host.containerId === started.host.containerId &&
@@ -117,12 +118,22 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
         { signal: controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session) });
       if (!owns(session)) return;
       session.pending = pending;
+      // A fast inventory must not put Confirm under the second click of a double-click on Verify:
+      // "Checking models…" stays until the hold has passed, and a cancel meanwhile settles the run.
+      const hold = session.preparedAt + CHECKING_HOLD_MS - Date.now();
+      if (hold > 0) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        const timer = setTimeout(resolve, hold);
+        controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+        await promise;
+      }
+      if (!owns(session) || controller.signal.aborted) return;
       setRun(previous => ({ phase: "charge", progress: previous?.progress ?? null, charge: pending.charge }));
     } catch (reason) { stopped(session, reason); }
   }
-  async function confirm() {
+  async function confirm(activation: ConfirmActivation) {
     const session = active.current, pending = session?.pending;
-    if (!session || !pending || run?.phase !== "charge") return;
+    if (!session || !pending || run?.phase !== "charge" || !confirmsCharge(activation, session.preparedAt, Date.now())) return;
     session.pending = null;
     setRun(previous => previous && { ...previous, phase: "benchmark" });
     try {

@@ -142,3 +142,26 @@ export function launchStatusText(facts: LaunchFacts): string {
   const gate = launchGate(facts);
   return gate ? blockerText[gate] : facts.previewCurrent ? "Ready to open a terminal." : "Review before opening a terminal.";
 }
+
+/** How long a saved team's inputs must hold still before Code reviews its launch on its own. */
+export const AUTO_REVIEW_SETTLE_MS = 800;
+/** What the caller knows beyond the facts: something in flight, a routed family with no included account, and review scopes. */
+export type AutoReviewContext = {
+  busy: boolean;
+  uncovered: boolean;
+  /** The current review scope (`WorkbenchModel.reviewScope`). */
+  scope: number;
+  /** The scope of the last review or launch attempt, explicit or automatic; null before any. */
+  attempted: number | null;
+};
+
+/**
+ * Whether Code should review the launch now, without a press: only where the primary would offer
+ * `review`, which needs the saved, verified team and every launch precondition, so an unsaved edit,
+ * a starter or a staged catalog never reviews by itself. Never while anything is in flight or a
+ * routed family has no included account, and once per review scope: a refused review or launch
+ * waits for an explicit Review or a changed input, as a refused launch must.
+ */
+export function autoReviewDue(facts: LaunchFacts, context: AutoReviewContext): boolean {
+  return !context.busy && !context.uncovered && context.scope !== context.attempted && nextLaunchStep(facts).step === "review";
+}

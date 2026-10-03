@@ -23,7 +23,9 @@ import { FleetSessions } from "./fleet.tsx";
 import { displayAliases, GeneratorPlaceholder, GeneratorZone, RoutingZone, useDialModel, type LedgerView, type MapTarget } from "./dials.tsx";
 import { missingFamily, type DialId } from "./dial-space.ts";
 import { useWorkbench } from "./workbench-model.ts";
-import { nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
+import { autoReviewDue, AUTO_REVIEW_SETTLE_MS, nextLaunchStep, type LaunchBlocker } from "./launch-step.ts";
+import { panelShortcut } from "./panel-input.ts";
+import type { ConfirmActivation } from "./verification.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -85,6 +87,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [outcome, setOutcome] = useState<{ kind: "Launched" | "Resumed"; machine: string } | null>(null);
   const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
   const lastAction = useRef<{ action: Action; machine: string } | null>(null);
+  const reviewAttempt = useRef<number | null>(null);
   const view = useRef<HTMLDivElement>(null);
   const task = useRef<HTMLTextAreaElement>(null);
   const backButtons = useRef<Partial<Record<Sheet, HTMLButtonElement | null>>>({});
@@ -115,13 +118,19 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     setInFlight(action); setOutcome(null);
     try { await work(); } finally { setInFlight(null); }
   }
-  function primary() {
+  /** The next step. `activation` says how the press arrived, so a charge is only spent by a deliberate single press. */
+  function primary(activation: ConfirmActivation) {
     if (busy || blocked !== null) return;
     // Verification spends only on an explicit confirm of the charge it showed; the first press only prepares it.
-    if (step.step === "verify") { if (verification.canConfirm) void verification.confirm(); else if (verification.canPrepare) void verification.prepare(); }
+    if (step.step === "verify") { if (verification.canConfirm) void verification.confirm(activation); else if (verification.canPrepare) void verification.prepare(); }
     else if (step.step === "save") { setPendingReview(true); void run("save", actions.saveProfile); }
-    else if (step.step === "review") void run("review", actions.review);
+    else if (step.step === "review") reviewNow();
     else void run("launch", actions.launch);
+  }
+  /** Review in the current scope and remember it, so a refused review or launch is not retried by itself. */
+  function reviewNow() {
+    reviewAttempt.current = model.reviewScope;
+    void run("review", actions.review);
   }
   // `Save & review` is one gesture: the review follows once the saved revision is observed, never before.
   const stepCode = step.step === "blocked" ? step.reason.code : step.step;
@@ -130,7 +139,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     if (message?.failed || stepCode === "save") { setPendingReview(false); return; }
     if (stepCode === "configuration") return;
     setPendingReview(false);
-    if (stepCode === "review" && !uncovered) void run("review", actions.review);
+    if (stepCode === "review" && !uncovered) reviewNow();
   }, [pendingReview, busy, stepCode, message?.failed, uncovered]);
   useEffect(() => {
     const last = lastAction.current;
@@ -216,26 +225,29 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     keysMenu.anchor.current = moreMenu.anchor.current;
     keysMenu.toggle();
   }
+  /** Keys act only when they come from inside this panel, and a key Code consumes does not go on to another plugin's binding (panel-input.ts). */
   function shortcuts(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); primary(); return; }
-    if (event.defaultPrevented || element.closest("[data-popover]")) return;
-    if (event.key === "Escape") {
-      if (element === task.current) { event.preventDefault(); task.current.blur(); focusGenerator(); }
-      else if (ledger.pinned.size) setLedger(previous => ({ ...previous, pinned: new Set() }));
-      return;
+    const shortcut = panelShortcut({
+      key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
+      inPanel: event.currentTarget.closest(".plugin-atyrode_code_generator")?.contains(element) ?? false,
+      inField: element.matches("textarea, input, select, [contenteditable]"), inPopover: element.closest("[data-popover]") !== null,
+      inTask: element === task.current, pinned: ledger.pinned.size > 0,
+    });
+    if (!shortcut) return;
+    event.preventDefault();
+    event.stopPropagation();
+    switch (shortcut) {
+      case "next-step": primary({ detail: 0, repeat: false }); return;
+      case "leave-task": task.current?.blur(); focusGenerator(); return;
+      case "unpin": setLedger(previous => ({ ...previous, pinned: new Set() })); return;
+      case "task": task.current?.focus(); return;
+      case "defaults": restoreDefaults(); return;
+      case "fallbacks": if (review) toggleLedger("fallbacks"); return;
+      case "ids": if (review) toggleLedger("ids"); return;
+      case "refresh": usageRefresh.current?.(); return;
+      case "keys": openKeys(); return;
     }
-    if (element.matches("textarea, input, select, [contenteditable]") || event.ctrlKey || event.metaKey || event.altKey) return;
-    const handled: Record<string, () => void> = {
-      "/": () => task.current?.focus(),
-      d: restoreDefaults,
-      f: () => { if (review) toggleLedger("fallbacks"); },
-      i: () => { if (review) toggleLedger("ids"); },
-      r: () => usageRefresh.current?.(),
-      "?": openKeys,
-    };
-    const handler = handled[event.key];
-    if (handler) { event.preventDefault(); handler(); }
   }
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
@@ -273,6 +285,14 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const blocked: Blocked | null = step.step === "blocked" ? (loading ? { text: "Reading the profile" } : blocker(step.reason))
     : uncovered ? { text: `No ${accountWord(uncovered)} account included`, action: { label: "Accounts", run: () => openSheet("accounts") } } : null;
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
+  // The saved team reviews itself once its inputs settle, so Launch is one press; an edit never does (launch-step.ts).
+  const autoReview = autoReviewDue(model, { busy: busy || pendingReview || verifyRunning || inFlight !== null, uncovered: uncovered !== undefined,
+    scope: model.reviewScope, attempted: reviewAttempt.current });
+  useEffect(() => {
+    if (!autoReview) return;
+    const timer = window.setTimeout(reviewNow, AUTO_REVIEW_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [autoReview, model.reviewScope]);
   const nextLabel = verifyRunning ? (verification.phase === "inventory" ? "Checking models…" : "Verifying…")
     : busy && inFlight ? { save: "Saving…", review: "Reviewing…", launch: "Launching…", resume: "Resuming…" }[inFlight]
     : busy ? "Working…" : pendingReview ? "Reviewing…"
@@ -400,7 +420,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     <UsageZone host={host} className={`${G}section ${G}usage`} onAccounts={() => openSheet("accounts")} onObservation={setAccountObservation} onFamilies={setFamilies} refresher={usageRefresh} />
     <div className={`${G}dock`} data-zone="composer">
       {verification.phase === "charge" && verification.charge && <Notice className={`${G}dock-note`} actions={<>
-        <Button data-action="atyrode.code.verifyModels" onClick={() => void verification.confirm()}>Confirm</Button>
+        <Button data-action="atyrode.code.verifyModels" onClick={event => void verification.confirm({ detail: event.detail, repeat: false })}
+          onKeyDown={event => { if (event.repeat && event.key === "Enter") event.preventDefault(); }}>Confirm</Button>
         <Button onClick={verification.cancel}>Cancel</Button>
       </>}>
         <span className={`${G}facts`}><strong>Verify models</strong>{verification.charge.providers.map(entry => <ProviderCount key={entry.provider}
@@ -439,7 +460,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           value={prompt} onChange={event => { setOutcome(null); setPrompt(event.target.value); }} />
         <IconButton icon="settings" label="Launch options" buttonRef={optionsMenu.anchor} aria-haspopup="dialog" aria-expanded={optionsMenu.open} onClick={optionsMenu.toggle}
           title={`Launch options for this session only: ${optionsSummary ?? "ordinary session, default skills"}`} />
-        <PrimaryButton className={`${G}primary`} disabled={blocked !== null && !busy && !verifyRunning} busy={busy || pendingReview || verifyRunning} onClick={primary}
+        <PrimaryButton className={`${G}primary`} disabled={blocked !== null && !busy && !verifyRunning} busy={busy || pendingReview || verifyRunning}
+          onClick={event => primary({ detail: event.detail, repeat: false })}
           data-action={step.step === "launch" ? "atyrode.omp.prepareSession" : step.step === "save" ? "atyrode.code.select" : "atyrode.omp.reviewSession"}
           title={withKey(nextTitle, LAUNCH_STROKE)}>{nextLabel}</PrimaryButton>
       </div>
