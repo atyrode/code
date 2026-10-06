@@ -152,7 +152,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const machineOptions = slots?.machine.options ?? [];
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
   const rows = useMemo(() => slots && catalog && controlsReview && aliases
-    ? generatorRows({ slots, catalog, controls: controlsReview, shown: shown ?? controlsReview, aliases, connected }) : null,
+    ? generatorRows({ slots, catalog, shown: shown ?? controlsReview, aliases, connected, familyWord }) : null,
   [slots, catalog, controlsReview, shown, aliases, connected]);
   const quota = useMemo(() => {
     if (!catalog || !shown) return null;
@@ -215,7 +215,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   function wordSaid(row: GeneratorRow, word: RowWord): Said {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
     const lead = word.sub !== null ? [word.sub] : [];
-    if (!word.available) return { value, text: [...lead, word.reason ?? ""].filter(Boolean).join(" · "), warn: true, color: null };
+    if (!word.available) return { value, text: [...lead, word.reason ?? "", word.verifies ? "a press verifies models, which finds them" : ""].filter(Boolean).join(" · "), warn: true, color: null };
     const strain = quotaParts(word.quota, vocab);
     return {
       value, text: [...lead, word.says, ...strain.map(entry => entry.text)].filter(Boolean).join(" · "),
@@ -282,9 +282,17 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       if (!teamGate.open) refuse(teamGate.refusal.text, row.kind === "switch" ? `${row.label} ${word.text}` : word.text);
       return;
     }
-    if (via === "scrub") setScrub(current => current && { ...current, refused: word });
-    else say(wordSaid(row, word));
-    if (via !== "scrub") announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
+    if (via === "scrub") { setScrub(current => current && { ...current, refused: word }); return; }
+    // A lane whose family the model list lacks is one verification away: a press starts it, through its own gate (it spends nothing before Confirm charge).
+    const verify = model.gate("verify");
+    if (word.verifies && verify.open) {
+      model.actions.verify();
+      say({ value: "verify models", text: `finds the models your accounts reach · ${word.reason ?? ""}`, warn: false, color: null });
+      announce(`Verifying models: ${word.reason ?? ""}`);
+      return;
+    }
+    say(wordSaid(row, word));
+    announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
   }
   // ------------------------------------------------------------ the machine the launch runs on, through the machine gate
   const picker = useRef<MachinePickerHandle | null>(null);

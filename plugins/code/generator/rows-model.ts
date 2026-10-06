@@ -1,7 +1,9 @@
 import type { CompiledCatalog } from "../../domain/catalog.ts";
+import type { Lane } from "../../domain/contracts.ts";
+import { familyPolicy } from "../../domain/providers.ts";
 import type { Review } from "../../domain/routing.ts";
-import { SPECS } from "./dial-space.ts";
-import type { LaneMark, QuotaNote, Slot, SlotOption, StatementWord } from "./statement-model.ts";
+import { laneGroups, laneWord } from "./dial-space.ts";
+import { laneLabel, type LaneMark, type QuotaNote, type Slot, type SlotOption, type StatementWord } from "./statement-model.ts";
 
 /*
  * The generator's rows as data: one row per dial and per extra, each a line of plain option words
@@ -39,22 +41,24 @@ export type RowWord = {
   readonly quiet: boolean;
   /** The first lane of another provider's group, which starts its own line when the row wraps. */
   readonly gap: boolean;
+  /** Refused because the model list has no model of a family someone has signed in for: verifying models is what finds them. */
+  readonly verifies: boolean;
 };
 export type GeneratorRow = { readonly id: RowId; readonly word: Exclude<StatementWord, "machine">; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[] };
 
 export type RowsInput = {
   readonly slots: Readonly<Record<StatementWord, Slot>>;
   readonly catalog: CompiledCatalog;
-  /** The review the controls show, which names the lanes on offer (`controlsReview`). */
-  readonly controls: Review;
   /** The review the routing shows, whose default role names the chosen tier's model. */
   readonly shown: Review;
   readonly aliases: ReadonlyMap<string, string>;
   /** Families with at least one signed-in account, included or not; null when the reading cannot say. */
   readonly connected: ReadonlySet<string> | null;
+  /** How the panel names a family (`Claude`). */
+  readonly familyWord: (family: string) => string;
 };
 
-const NO_WORD = { sub: null, reason: null, quota: null, option: null, gap: false } as const;
+const NO_WORD = { sub: null, reason: null, quota: null, option: null, gap: false, verifies: false } as const;
 
 function laneFamilies(mark: LaneMark | null): readonly string[] {
   return mark === null ? [] : mark.kind === "mixed" ? ["openai", "anthropic"] : [mark.family];
@@ -69,19 +73,42 @@ function dialWord(option: SlotOption, text: string, name: string, tone: WordTone
   };
 }
 
+/** Every lane a set of families could form: each family alone and led, and Mixed over GPT and Claude. */
+function lanesOf(families: readonly string[]): Lane[] {
+  const lanes: Lane[] = families.flatMap(family => [{ kind: "provider", family, blend: "only" } as const,
+    ...familyPolicy(family).crossTo !== null ? [{ kind: "provider", family, blend: "led" } as const] : []]);
+  return families.includes("openai") && families.includes("anthropic") ? [...lanes, { kind: "mixed" }] : lanes;
+}
+/** The families a lane leads on: both of Mixed's, a led lane's own and the one it crosses to. */
+const familiesOf = (lane: Lane): string[] => lane.kind === "mixed" ? ["openai", "anthropic"]
+  : lane.blend === "led" ? [lane.family, ...familyPolicy(lane.family).crossTo !== null ? [familyPolicy(lane.family).crossTo!] : []] : [lane.family];
+
 /**
  * Lanes in their spectrum, then each other provider's group. A lane is hidden only while its
  * family has no signed-in account at all, unless it is the lane in use; a family whose accounts
- * are all excluded stays, refused with the domain's reason.
+ * are all excluded stays, refused with the domain's reason. A lane the model list cannot form
+ * because it has no model of a family someone has signed in for stays too, struck with that
+ * reason, so a short lane row explains itself; verifying models is what finds them.
  */
-function laneRow({ slots, controls, connected }: RowsInput): GeneratorRow {
-  const group = new Map(SPECS.lane.words(controls).flatMap((words, index) => words.map(word => [word, index] as const)));
-  const shown = slots.lane.options.filter(option => option.current || connected === null || laneFamilies(option.mark).every(family => connected.has(family)));
-  const words = shown.map((option, index): RowWord => {
-    const tone: WordTone = option.mark?.kind === "mixed" ? { kind: "mixed" } : option.mark ? { kind: "family", family: option.mark.family } : { kind: "accent" };
-    const gap = index > 0 && group.get(option.value) !== group.get(shown[index - 1]!.value);
-    return { ...dialWord(option, option.value, option.label, tone, false), gap };
-  });
+function laneRow({ slots, catalog, connected, familyWord }: RowsInput): GeneratorRow {
+  const listed = new Set(catalog.families);
+  const missing = connected === null ? [] : [...connected].filter(family => !listed.has(family));
+  const groups = laneGroups(lanesOf([...catalog.families, ...missing]));
+  const entries = groups.flatMap((lanes, group) => lanes.flatMap((lane): { word: RowWord; group: number }[] => {
+    const option = slots.lane.options.find(candidate => candidate.value === laneWord(lane));
+    const mark: LaneMark = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "provider", family: lane.family, cross: null };
+    const tone: WordTone = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "family", family: lane.family };
+    if (option) {
+      if (!option.current && connected !== null && !laneFamilies(option.mark ?? mark).every(family => connected.has(family))) return [];
+      return [{ word: dialWord(option, option.value, option.label, tone, false), group }];
+    }
+    const absent = familiesOf(lane).find(family => missing.includes(family));
+    if (!absent) return [];
+    const reason = `No ${familyWord(absent)} models in your model list`;
+    return [{ group, word: { ...NO_WORD, key: laneWord(lane), text: laneWord(lane), name: laneLabel(lane, familyWord), selected: false, available: false,
+      reason, says: reason, tone, quiet: false, verifies: true } }];
+  }));
+  const words = entries.map(({ word, group }, index) => ({ ...word, gap: index > 0 && entries[index - 1]!.group !== group }));
   return { id: "lane", word: "lane", label: "lane", kind: "lane", words };
 }
 

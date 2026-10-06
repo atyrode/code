@@ -49,7 +49,8 @@ export type Vocabulary = {
 export function thinkingWord(level: string): string {
   return level === "xhigh" ? "x-high" : level;
 }
-function laneLabel(lane: Lane, familyWord: (family: string) => string): string {
+/** A lane in the panel's words: `GPT-led`, `Claude only`, `Mixed`. */
+export function laneLabel(lane: Lane, familyWord: (family: string) => string): string {
   if (lane.kind === "mixed") return "Mixed";
   return lane.blend === "led" ? `${familyWord(lane.family)}-led` : `${familyWord(lane.family)} only`;
 }
