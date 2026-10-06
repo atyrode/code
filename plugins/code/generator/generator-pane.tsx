@@ -20,7 +20,7 @@ import { Profile, rippleTeam } from "./routing-pane.tsx";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
-  reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
+  machineSlot, reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
   type EstimateReadout, type Projection, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
@@ -145,7 +145,6 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const keyTimer = useRef(0), scrubTimer = useRef(0);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
-  const starter = model.profile?.metadata != null;
   // Nothing to show yet because the first reads are still out, rather than because one failed.
   const reading = !model.profile && !model.document && model.queries.configuration.error === null && model.queries.metadata.error === null;
   const teamGate = model.gate("edit-team"), machineGate = model.gate("edit-machine");
@@ -154,10 +153,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
-  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId, presence]);
+    catalog, selection, review: controlsReview, served, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, served, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
-  const machineOptions = slots?.machine.options ?? [];
+  // The machine is chosen from the roster alone: a profile that cannot be formed (a first use whose bundled list failed) still has somewhere to run.
+  const machineOptions = useMemo(() => machineSlot({ machines, rosterError, machineId: model.machineId, omp: presence }).options,
+    [machines, rosterError, model.machineId, presence]);
   const sheetExtras = useMemo(() => slots?.extras.options.filter(extra => !ROW_EXTRAS.includes(extra.value)) ?? [], [slots]);
   useEffect(() => onExtras(sheetExtras), [sheetExtras]);
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
@@ -167,9 +168,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const quota = useMemo(() => {
     if (!catalog || !shown) return null;
     const stop = standstill(catalog, shown.routes, pools);
-    const found = stop ? rescue(catalog, shown, pools, { served, starter, nowMs: Date.now() }) : null;
+    const found = stop ? rescue(catalog, shown, pools, { served, nowMs: Date.now() }) : null;
     return { stop, fix: found && fixView(found, catalog, pools, vocab), grounded: grounded(catalog, shown.routes, pools, served) };
-  }, [catalog, shown, pools, served, starter, vocab]);
+  }, [catalog, shown, pools, served, vocab]);
   const estimates = useMemo(() => catalog && shown ? estimateReadouts(catalog, shown) : null, [catalog, shown]);
   const groups = useMemo(() => profile && ledger ? profileGroups(ledger) : null, [profile, ledger]);
 
@@ -515,9 +516,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
               </span>
               <span className={`${G}launch-label`}>{verb.label.toLowerCase()}<i className={`${G}launch-charge`} aria-hidden="true" /></span>
             </button>
-            {slots && <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
+            <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
               onRefuse={refuseMachine} onLocked={() => { if (!machineGate.open) refuse(machineGate.refusal.text, "machine"); }} handle={picker}
-              onPoint={option => setHovered(current => option ? { kind: "machine", value: option.value } : current?.kind === "machine" ? null : current)} />}
+              onPoint={option => setHovered(current => option ? { kind: "machine", value: option.value } : current?.kind === "machine" ? null : current)} />
           </span>
           <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
             onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>

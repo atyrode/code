@@ -102,8 +102,12 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
     const reported = provider.accounts.filter(entry => entry.freshness !== "unknown");
     const allHistory = reported.length > 0 && reported.every(history);
     const observed = reported.flatMap(entry => entry.observedAt === null ? [] : [entry.observedAt]);
+    // A metered provider's window outside its bucket meters a quota of its own (Spark's, retired) that Code spends none of:
+    // it is no row of the account's usage, where it would read as a second, indistinguishable 5h, maxed or not.
+    const metered = providerPolicy(provider.provider).meteredProviders.includes(provider.provider);
     const accounts = provider.accounts.map((entry): UsageAccountRow => {
-      const states = entry.windows.map(window => ({ window, state: windowState(entry, window, provider.provider) }));
+      const windows = metered ? entry.windows.filter(window => window.bucket !== null) : entry.windows;
+      const states = windows.map(window => ({ window, state: windowState(entry, window, provider.provider) }));
       const shown = states.filter(({ state }) => entry.balance === null || state.level !== "unknown");
       return {
         key: JSON.stringify([entry.account.reference, entry.account.credentialId]), reference: entry.account.reference, who: accountName(entry),
@@ -115,7 +119,7 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
           percent: state.percent, level: state.level, word: state.word, until: state.until, resetsAt: window.resetsAt,
         })),
         balance: entry.balance,
-        unreported: entry.balance === null && entry.windows.length === 0,
+        unreported: entry.balance === null && windows.length === 0,
         blocks: entry.account.blocks.filter(block => !entry.windows.some(window => blockCovers(block, window, provider.provider)))
           .map(block => ({ scope: block.scope, until: block.until })),
       };

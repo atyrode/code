@@ -220,6 +220,26 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
   expect((await failing.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
 });
 
+test("a status read that fails while a probe runs cancels the probe, and a cancellation that fails is named", async () => {
+  const unread = verificationFixture();
+  const pending = await unread.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  unread.states.set("benchmark-1", ["started"]);
+  unread.hooks["engine.jobs.status"] = () => { throw new Error("engine_job_status_unavailable"); };
+  const stopped = await stopOf(pending.confirm(preview));
+  expect([stopped.step, stopped.reason]).toEqual(["benchmark", "engine_job_status_unavailable"]);
+  expect(unread.cancelled).toEqual(["benchmark-1"]);
+  // The cancellation is attempted even when it then fails, and the error keeps both what stopped the wait and that the job runs on.
+  const stuck = verificationFixture();
+  const again = await stuck.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  stuck.states.set("benchmark-1", ["started"]);
+  stuck.hooks["engine.jobs.status"] = () => { throw new Error("engine_job_status_unavailable"); };
+  stuck.hooks["engine.jobs.cancel"] = () => { throw new Error("timeout"); };
+  const left = await stopOf(again.confirm(preview));
+  expect(left.reason).toBe("engine_job_status_unavailable; job benchmark-1 was not cancelled: timeout");
+  expect(stuck.cancelled).toEqual(["benchmark-1"]);
+  expect(left.evidence.benchmarkJobIds).toEqual(["benchmark-1"]);
+});
+
 test("a derivation or selection the verified catalog cannot serve stops before anything is staged", async () => {
   const blocked = verificationFixture();
   blocked.verdicts["claude-sonnet-5"] = "not_found"; blocked.verdicts["claude-opus-5"] = "client_blocked";

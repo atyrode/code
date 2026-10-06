@@ -56,24 +56,26 @@ export function laneLabel(lane: Lane, familyWord: (family: string) => string): s
 }
 const CAPABILITY_LABELS = ["fast", "normal", "smart", "elite"] as const;
 
+type Extra = { readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } };
 /**
- * The profile's switches, in the order the panel lists them, with the dial words that mean on and
- * off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`). The budget
- * is the domain's default and no control of the panel's.
+ * The profile's switches, with the dial words that mean on and off and what turning each on or off
+ * does to a session (routing.ts `compileOmpOverlay`). Keyed by every switch dial, so every move a
+ * fix can make has its words.
  */
-const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } }[] = [
-  { dial: "fallbacks", word: "fallbacks", on: "on", off: "off",
+const EXTRA: Readonly<Record<MoreDial, Extra>> = {
+  fallbacks: { word: "fallbacks", on: "on", off: "off",
     does: { on: "A role whose model is out falls back along its chain", off: "A role whose model is out waits for it" } },
-  { dial: "priority", word: "priority", on: "on", off: "off",
+  priority: { word: "priority", on: "on", off: "off",
     does: { on: "Requests ask for priority service: faster, at a higher rate", off: "Requests use ordinary service" } },
-  { dial: "prewalk", word: "prewalk", on: "on", off: "off",
+  prewalk: { word: "prewalk", on: "on", off: "off",
     does: { on: "Tasks and subagents start with OMP's prewalk", off: "Tasks and subagents start without a prewalk" } },
-  { dial: "plans", word: "auto plans", on: "auto", off: "ask",
+  plans: { word: "auto plans", on: "auto", off: "ask",
     does: { on: "Plans are approved without asking you", off: "Plans wait for your approval" } },
-];
+};
+/** The switches in the order the panel lists them. */
+const EXTRAS = (["fallbacks", "priority", "prewalk", "plans"] as const satisfies readonly MoreDial[]).map(dial => ({ dial, ...EXTRA[dial] }));
 function extraOn(selection: Selection, dial: MoreDial): boolean {
-  const extra = EXTRAS.find(entry => entry.dial === dial)!;
-  return SPECS[dial].get(selection) === extra.on;
+  return SPECS[dial].get(selection) === EXTRA[dial].on;
 }
 /** The words of the switches that are on, in the extras setting's order ("fallbacks", "priority"). */
 export function extrasOn(selection: Selection): string[] {
@@ -362,7 +364,10 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
   return { word: "extras", options, current: -1 };
 }
 
-function machineSlot(context: StatementContext): Slot {
+/** What the machine setting is read from: the roster alone, so the machine can be chosen while no catalog forms. */
+export type MachineContext = Pick<StatementContext, "machines" | "rosterError" | "machineId" | "omp">;
+/** The machine setting: every machine in the roster, and the destination even where the roster does not list it. */
+export function machineSlot(context: MachineContext): Slot {
   const { machines, machineId, rosterError, omp } = context;
   const options = (machines ?? []).map((machine): SlotOption => {
     const current = machine.id === machineId;
@@ -402,14 +407,18 @@ export function commitKind(next: Selection, current: Selection, saved: Selection
 
 // ---------------------------------------------------------------- the fix for roles with no route
 
+/** A fix's move in the panel's words; every dial the search can move is a control here, so every move has them. */
 function moveLabel(move: DialMove, review: Review, vocab: Vocabulary): string {
-  const word = (Object.keys(DIAL_OF) as DialWord[]).find(key => DIAL_OF[key] === move.dial);
-  if (word === "lane") return optionLabel("lane", move.word, review, vocab);
-  if (word === "tier") return move.word;
-  if (word === "thinking") return `${thinkingWord(move.word)} thinking`;
-  if (word === "advisor") return `advisor ${move.word}`;
-  const extra = EXTRAS.find(entry => entry.dial === move.dial)!;
-  return move.word === extra.on ? extra.word : `no ${extra.word}`;
+  switch (move.dial) {
+    case "lane": return optionLabel("lane", move.word, review, vocab);
+    case "model": return move.word;
+    case "thinking": return `${thinkingWord(move.word)} thinking`;
+    case "advisor": return `advisor ${move.word}`;
+    default: {
+      const extra = EXTRA[move.dial];
+      return move.word === extra.on ? extra.word : `no ${extra.word}`;
+    }
+  }
 }
 /** A pool in the panel's provider words: its family ("GPT"). */
 function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {

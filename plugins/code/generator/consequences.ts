@@ -61,13 +61,12 @@ export function redline(catalog: CompiledCatalog, routes: readonly Route[], pool
 }
 
 /** `served`: the providers a launch's pool would serve, when known (accounts.ts `servedProviders`). */
-export type OptionContext = { readonly served: ReadonlySet<string> | null; readonly starter: boolean; readonly nowMs: number };
+export type OptionContext = { readonly served: ReadonlySet<string> | null; readonly nowMs: number };
 export type OptionConsequence = { readonly review: Review; readonly moves: readonly RoleMove[]; readonly redline: Redline | null };
 
 /**
  * For the current review and one option of any dial: the roles that would move and the redline the
- * option would carry. Null when the dial refuses the option (its refusal is the dial's to say) or
- * cannot preview it, as with a bundled starter's budget.
+ * option would carry. Null when the dial refuses the option (its refusal is the dial's to say).
  */
 export function optionConsequence(catalog: CompiledCatalog, current: Review, dial: DialId, word: string,
   context: OptionContext & { readonly pools: readonly QuotaPool[] }): OptionConsequence | null {

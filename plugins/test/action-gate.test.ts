@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { actionGate, type GateFacts, type GateVerdict, type WorkbenchIntent } from "../code/generator/launch-step.ts";
+import { actionGate, resumeTeam, type GateFacts, type GateVerdict, type WorkbenchIntent } from "../code/generator/launch-step.ts";
+import type { Configuration } from "../code/contract.ts";
 import type { VerificationStatus } from "../code/generator/verification.ts";
 
 /** A verified, saved, launchable workbench with a saved session chosen and nothing in flight; each test changes only what it is about. */
@@ -69,6 +70,15 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({}, "unverified"), "resume-with-team"))).toBe("not-next");
     expect(code(actionGate(facts({ localReview: null }), "resume-with-team"))).toBe("models");
     expect(code(actionGate(facts({ planYolo: true }), "resume-with-team"))).toBe("plans");
+  });
+
+  test("a plain resume needs no Code configuration; only a resume with the team sends the saved profile", () => {
+    const target = { containerId: "workspace-1", machineId: "studio" };
+    // A workspace whose Code choices were never initialized has no record, and still reopens a saved session as it was.
+    expect(code(actionGate(facts({ configurationCurrent: false, record: null, profile: null }), "resume"))).toBe("open");
+    expect(resumeTeam(false, target, null)).toEqual({});
+    expect(resumeTeam(true, target, null)).toBeNull();
+    expect(resumeTeam(true, target, { revision: 7 } as Configuration)).toEqual({ profile: { target, expectedRevision: 7 } });
   });
 
   test("edits: the team and machine move in a read-only workspace as a local preview; accounts need write access", () => {

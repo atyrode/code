@@ -292,6 +292,24 @@ export function rowVerdict(intent: RowIntent, gate: GateVerdict, machine: Machin
   return { open: true };
 }
 
+// ---------------------------------------------------------------- what the view's last verb came to
+
+/** A line of the sessions view's own: what its last verb came to, warm when it failed or was refused. */
+export type SessionSaid = { readonly text: string; readonly failed: boolean };
+/**
+ * The view's last verb: a refusal or failure it said itself, or a resume the workbench model
+ * carries out, whose words are the model's message once that resume has set one. `before` is the
+ * message standing when the resume was pressed, so an older message is never taken for its answer.
+ */
+export type SessionPress = { readonly kind: "said"; readonly said: SessionSaid } | { readonly kind: "resume"; readonly before: SessionSaid | null };
+
+/** What the sessions view says of its last verb: nothing while a resume runs or before it answers. */
+export function sessionSaid(press: SessionPress | null, message: SessionSaid | null, resuming: boolean): SessionSaid | null {
+  if (press === null) return null;
+  if (press.kind === "said") return press.said;
+  return resuming || message === press.before ? null : message;
+}
+
 // ---------------------------------------------------------------- provenance
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

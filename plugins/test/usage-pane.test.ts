@@ -55,6 +55,14 @@ describe("the usage pane and the accounts view read the projection as it stands"
     expect(codex!.accounts.map(row => [row.who, row.included])).toEqual([["alice@example.test", false], ["bob@example.test", true]]);
   });
 
+  test("a window metering a quota of its own is no row of the account's usage; a provider Code does not meter keeps its windows", () => {
+    const accounts = observation([alice, erin]);
+    const value = reading(accounts, [report(alice, [window(0.4), window(1, { tier: "codex-spark" })]), report(erin, [window(0.3)])]);
+    const [codex, deepseek] = groups(usageState(value, initialAccountChoices()));
+    expect(codex!.accounts[0]!.windows.map(row => [row.label, row.percent, row.level])).toEqual([["5h", 40, "ok"]]);
+    expect(deepseek!.accounts[0]!.windows.map(row => row.percent)).toEqual([30]);
+  });
+
   test("providers come in the panel's family order, a family's own provider first, whatever order the reading lists them", () => {
     const accounts = observation([frank, erin, carol, grace, alice]);
     const value = reading(accounts, [report(alice, [window(0.1)]), report(carol, [window(0.1)])]);

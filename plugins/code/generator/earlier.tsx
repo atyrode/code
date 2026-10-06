@@ -12,8 +12,9 @@ import { when } from "./board-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
-  differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote, sessionTitle,
-  strandsNote, teamProvenance, teamSentence, type RecentForm, type RowIntent, type RowVerdict, type SavedFolder, type SessionRead, type SessionRow, type StatementWords,
+  differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionSaid, sessionsNote, sessionTitle,
+  strandsNote, teamProvenance, teamSentence, type RecentForm, type RowIntent, type RowVerdict, type SavedFolder, type SessionPress, type SessionRead, type SessionRow,
+  type StatementWords,
 } from "./earlier-model.ts";
 import { teamWords, type Vocabulary } from "./statement-model.ts";
 
@@ -24,7 +25,7 @@ const G = "plugin-atyrode_code_generator__";
  * The part of the workbench the earlier statements read and act through; a `WorkbenchModel`
  * satisfies it. A row's Resume asks `gate` with its own session, so its refusal shows before it is pressed.
  */
-export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "machineId" | "record" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "gate"> & {
+export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "machineId" | "record" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "message" | "gate"> & {
   actions: Pick<WorkbenchActions, "resume">;
 };
 export type EarlierProps = {
@@ -81,7 +82,7 @@ function LaneMark({ lane }: { lane: Lane }) {
 
 /**
  * A row's verb, named with its object. Always focusable: a refused one is `aria-disabled`, carries
- * its reason as its description and tooltip, and says it in the live region when pressed.
+ * its reason as its description and tooltip, and says it when pressed (`say`: the view's line and the live region).
  */
 function Verb({ className, name, subject, verdict, busy = false, onPress, announce, children, ...data }: {
   className: string; name: string; subject?: string; verdict: RowVerdict; busy?: boolean; onPress: () => void;
@@ -172,6 +173,13 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
   const [chosen, setChosen] = useState<ReadonlyMap<string, string>>(new Map());
   const [active, setActive] = useState<string | null>(null);
   const [pending, setPending] = useState<{ sessionId: string; withTeam: boolean } | null>(null);
+  // What the view's last verb came to, said on the view's own line: the generator's line, where the model's words land, is hidden behind it.
+  const [press, setPress] = useState<SessionPress | null>(null);
+  const said = sessionSaid(press, model.message, model.inFlight === "resume");
+  function say(text: string) {
+    if (mounted.current) setPress({ kind: "said", said: { text, failed: true } });
+    announce(text);
+  }
   const latest = useRef(model);
   latest.current = model;
   const mounted = useRef(true);
@@ -255,13 +263,14 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
       if (!again.open) throw new WorkflowError(`Nothing was opened: ${again.reason}`);
       if (mounted.current) host.navigate(formatManifoldUri({ kind: "terminal", terminalId }));
     } catch (reason) {
-      announce(codeOperationFailure(reason));
+      say(codeOperationFailure(reason));
     } finally {
       settle();
       terminals.refresh();
     }
   }
   async function finishResume(withTeam: boolean) {
+    setPress({ kind: "resume", before: latest.current.message });
     try { await latest.current.actions.resume(withTeam); }
     finally {
       // Whatever came of it, no session stays chosen behind the rows: the next Resume names its own.
@@ -281,9 +290,9 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     if (!pending) return;
     setPending(null);
     // The choice landed, unless the destination changed under it and cleared it.
-    if (model.savedSessionId !== pending.sessionId) { settle(); announce("The line's machine changed. Nothing was resumed."); return; }
+    if (model.savedSessionId !== pending.sessionId) { settle(); say("The line's machine changed. Nothing was resumed."); return; }
     const again = model.gate(pending.withTeam ? "resume-with-team" : "resume");
-    if (!again.open) { model.setSavedSessionId(""); settle(); announce(`Nothing was resumed: ${again.refusal.text}`); return; }
+    if (!again.open) { model.setSavedSessionId(""); settle(); say(`Nothing was resumed: ${again.refusal.text}`); return; }
     void finishResume(pending.withTeam);
   }, [pending, model.savedSessionId]);
 
@@ -329,12 +338,12 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
       <span className={`${G}earlier-verbs`}>
         {row.kind === "running"
           ? <Verb className={`${G}earlier-verb`} name={`Open ${name}`} verdict={verdict("open", row)} busy={busy} data-verb="open"
-            onPress={() => void open(row)} announce={announce}>{busy ? "opening…" : "open"}</Verb>
+            onPress={() => void open(row)} announce={say}>{busy ? "opening…" : "open"}</Verb>
           : <>
             <Verb className={`${G}earlier-verb`} name={`Resume ${name} as saved`} verdict={verdict("resume", row)} busy={busy} data-verb="resume"
-              onPress={() => resume(row, false)} announce={announce}>{busy && model.inFlight === "resume" ? "resuming…" : "resume"}</Verb>
+              onPress={() => resume(row, false)} announce={say}>{busy && model.inFlight === "resume" ? "resuming…" : "resume"}</Verb>
             <Verb className={`${G}earlier-with`} name={`Resume ${name} with the current profile`} verdict={verdict("resume-with-team", row)}
-              data-verb="resume-with-team" onPress={() => resume(row, true)} announce={announce}>with current profile</Verb>
+              data-verb="resume-with-team" onPress={() => resume(row, true)} announce={say}>with current profile</Verb>
           </>}
       </span>
     </li>;
@@ -377,7 +386,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     return <li key={digit}>
       <Verb className={`${G}earlier-team`} name={`Recall profile ${digit}: ${teamSentence(teamWords(team.selection, familyWord))}${fate ? `; ${fate}` : ""}`}
         subject={`Recall profile ${digit}`} verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
-        onPress={() => onRecall(index)} announce={announce}>
+        onPress={() => onRecall(index)} announce={say}>
         <span className={`${G}earlier-digit`} aria-hidden="true">{digit}</span>
         <span className={`${G}earlier-words`}>
           {here ? <span className={`${G}earlier-word`} data-same="">this profile</span> : changed.map((difference, position) => <Fragment key={difference.word}>
@@ -393,8 +402,9 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     </li>;
   }
 
-  // The view's own head names it; each group heads only what it says of itself.
+  // The view's own head names it; each group heads only what it says of itself. The line keeps its room when empty, so a press never moves a row.
   return <>
+    <p className={`${G}earlier-said`} data-session-said="" data-tone={said?.failed ? "warn" : undefined}>{said?.text}</p>
     {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
     <div ref={sessions} className={`${G}earlier-group`} role="group" aria-label="sessions on your machines" tabIndex={-1}>
       <div className={`${G}earlier-head`}>
