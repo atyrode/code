@@ -1203,8 +1203,9 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       for (const model of document.models) {
         const source = metadata.models.find(row => row.provider === model.provider && row.id === model.id);
         assert(source, "Every previewed catalog row comes from the actual pinned OMP response");
-        assert(source.quotaTier === null || source.quotaTier === "chat" || (source.quotaTier === "spark" && model.tier === 0),
-          "Special and unknown quota tiers cannot become ordinary preview rungs; Spark is only the off-ladder tier 0");
+        // Code spends no separate quota, so a model that draws one (any class but chat) is never part of the starter.
+        assert(source.quotaTier === null || source.quotaTier === "chat", "A separate-quota model never enters the bundled starter");
+        assert(model.tier >= 1, "Every derived starter model sits on an ordinary rung, never an off-ladder tier 0");
         assert.equal(model.tokensPerSecond, null, "Bundled metadata does not invent measured speed");
         assert.equal(model.timeToFirstTokenMs, null, "Bundled metadata does not invent measured latency");
       }
