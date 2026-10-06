@@ -77,10 +77,13 @@ files, service state, credentials or backups.
   model has measured throughput. The usage pane reads again every five minutes
   (Code's own cadence, since the host's feeds read again only on events while their
   channel is live); it draws reported windows, balances and blocks, not reset credits,
-  which appear in the manage view's readings. Presets are created, edited and
-  deleted, and sign-in and credential actions run, only in the manage view, which
-  keeps the Code accounts panel's own controls; the accounts view activates a preset
-  and switches accounts.
+  which appear in the manage view's readings. The accounts view only switches
+  accounts; the pool, presets, sign-in and credential actions are in Manage accounts,
+  which keeps the Code accounts panel's own controls. Spark is retired: models that
+  draw a quota of their own are left off the ladder, a stored Spark flag reads as off
+  and no control, route or usage bucket exists for it. A machine on which OMP is not
+  installed is never a default destination and is refused in the machine list; where OMP answers is
+  read for every online machine and says nothing about its permissions or accounts.
 - Pure catalog/preferences actions need no machine process or selected account.
   `composeProbe` and `composeSession` consume typed caller-supplied OMP
   observations but do not attest them; OMP rechecks concrete account slots before
