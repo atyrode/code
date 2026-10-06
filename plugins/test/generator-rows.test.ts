@@ -26,7 +26,7 @@ const vocab: Vocabulary = { family: family => ({ openai: "GPT", anthropic: "Clau
 
 function rows(selection: Selection, connected: ReadonlySet<string> | null = null): GeneratorRow[] {
   const review = reviewCatalog(catalog, selection, now);
-  const slots = statementSlots({ catalog, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio" }, vocab);
+  const slots = statementSlots({ catalog, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
   return generatorRows({ slots, catalog, controls: review, shown: review, aliases: displayAliases(catalog), connected });
 }
 const row = (list: readonly GeneratorRow[], id: GeneratorRow["id"]) => list.find(entry => entry.id === id)!;

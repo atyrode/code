@@ -285,6 +285,8 @@ export type StatementContext = OptionContext & {
   /** The machine list could not be read; `machines` is the last list read, or null when none was. */
   readonly rosterError: boolean;
   readonly machineId: string;
+  /** Whether OMP answers on each online machine (machine-web.ts `OmpPresence`); null before any has answered. */
+  readonly omp: ReadonlyMap<string, "ok" | "absent" | "unknown"> | null;
 };
 
 function laneMark(lane: Lane | undefined): LaneMark | null {
@@ -364,10 +366,11 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
 }
 
 function machineSlot(context: StatementContext): Slot {
-  const { machines, machineId, rosterError } = context;
+  const { machines, machineId, rosterError, omp } = context;
   const options = (machines ?? []).map((machine): SlotOption => {
     const current = machine.id === machineId;
-    const reason = machine.revoked ? "access revoked" : machine.online ? null : "offline";
+    // A machine that refuses OMP outright can run nothing: it is refused like an offline one.
+    const reason = machine.revoked ? "access revoked" : !machine.online ? "offline" : omp?.get(machine.id) === "absent" ? "no OMP here" : null;
     return {
       value: machine.id, label: machine.name, mark: null, current, on: false, online: machine.online && !machine.revoked, available: reason === null || current, reason,
       selection: null, review: null, redline: null, note: reason ?? "online", meaning: reason ?? "", quota: null,
@@ -690,6 +693,12 @@ export type StatusFacts = {
   readonly rosterUnread: boolean;
   /** Another online machine, for an offline destination's fix. */
   readonly otherMachine: { readonly id: string; readonly name: string } | null;
+  /** The destination refuses OMP outright: OMP is not installed there, so nothing can be verified or launched on it. */
+  readonly ompMissing: boolean;
+  /** Why the accounts cannot be used, when the gate says they cannot: the read failed (in its words), the read is not current, or the saved choices no longer resolve. */
+  readonly accountsProblem: { readonly kind: "failed"; readonly text: string } | { readonly kind: "stale" } | { readonly kind: "choices" } | null;
+  /** The workspace profile's read failed, rather than merely being older than its last write. */
+  readonly configurationFailed: boolean;
   readonly message: { readonly text: string; readonly failed: boolean } | null;
   readonly outcome: { readonly kind: "launched" | "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
@@ -741,18 +750,27 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   const attention = (text: string, actions: readonly StatusAction[] = [], aside?: string): [StatusLine, StatusLine] =>
     [line([part(text, "attention")]), line(aside ? [part(aside, "meta")] : [], actions)];
   const where = facts.machine?.name ?? "this machine";
+  const use = facts.otherMachine ? [fix(`use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
+  // OMP missing from the destination explains every step that needs it; "unknown" is kept for reads that really failed.
+  if (facts.ompMissing && (refusal.code === "verify-status" || refusal.code === "verify-permissions" || refusal.code === "sessions" || refusal.code === "permissions")) {
+    return attention(`OMP isn't on ${where}`, use);
+  }
   switch (refusal.code) {
     case "read-only": return [line([part("Read-only workspace", "neutral")]), line([part("changes stay a local preview", "meta")])];
     case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the profile and accounts still save from here", "meta")])];
     case "unavailable": {
       // A failed read says nothing current about any machine: neither offline nor another to use.
       if (facts.rosterUnread) return attention("Machine list unreadable", [fix("retry", { kind: "refresh" })]);
-      const use = facts.otherMachine ? [fix(`use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
       if (!facts.machine) return attention(facts.machineChosen ? "The chosen machine is not in your machine list" : "No machine chosen", use);
       const { name, online, revoked } = facts.machine;
       return attention(revoked ? `${name}: access revoked` : online ? `${name} is unavailable` : `${name} is offline`, use);
     }
-    case "accounts": return attention("Accounts not readable", [fix("refresh", { kind: "refresh" })]);
+    case "accounts": {
+      const problem = facts.accountsProblem;
+      if (problem?.kind === "choices") return attention("Saved account choices no longer match your accounts", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (problem?.kind === "stale") return attention("Account list not current", [fix("refresh", { kind: "refresh" })]);
+      return attention(problem?.kind === "failed" ? `Accounts unreadable: ${problem.text.replace(/\.$/, "")}` : "Accounts unreadable", [fix("retry", { kind: "refresh" })]);
+    }
     case "no-accounts": return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
     case "no-account": {
       if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
@@ -761,7 +779,7 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
         ? [fix(`use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
       return attention(`No ${word} account included`, [...lane, fix(`show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
     }
-    case "configuration": return attention("The workspace profile needs a fresh read", [fix("retry", { kind: "refresh" })]);
+    case "configuration": return attention(facts.configurationFailed ? "Workspace profile unreadable" : "The workspace profile needs a fresh read", [fix("retry", { kind: "refresh" })]);
     case "staged": return attention("A staged model list waits in Models", [fix("review in Models", { kind: "open", place: "models" })]);
     case "unsaved": return attention("No model list in use", [fix("open Models", { kind: "open", place: "models" })]);
     case "conflict": return attention("The workspace profile changed elsewhere", [fix("use theirs", { kind: "discard" })]);

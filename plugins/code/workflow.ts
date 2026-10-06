@@ -44,11 +44,17 @@ const messages: Readonly<Record<string, string>> = {
   omp_session_unavailable: "That saved session is no longer on the machine.",
   omp_session_binding_changed: "That saved session moved or changed. Read the machine again.",
   omp_resume_plan_unsupported: "Resuming with the current profile cannot approve plans automatically.",
+  omp_operation_unavailable: "OMP is not installed on that machine.",
 };
 /** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
 const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;
 /** A refusal token (`code_account_unavailable`), and the detail for a person that may follow it. */
 const REFUSAL_TOKEN = /^((?:code|omp)_[a-z0-9_]+)(?:[:;] ([^]*))?$/;
+/** The refusal token a failure carries (`omp_operation_unavailable`), with its door's name stripped; null when it carries none. */
+export function refusalToken(message: string): string | null {
+  return REFUSAL_TOKEN.exec(DOOR_DENIAL.exec(message)?.[1] ?? message)?.[1] ?? null;
+}
+
 /**
  * A workflow failure in a person's words. A refused door's message loses the door name it was
  * reported under, and its refusal token becomes words: the known ones from `messages`, any other as

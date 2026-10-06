@@ -40,7 +40,7 @@ export type ProfileDraft = {
   metadataKey: string | null;
 };
 /** A polled observation (machine-web.ts `useWorkflowQuery`): `data` and `error` are mutually exclusive. */
-export type WorkbenchQuery<T> = { data: T | null; error: string | null; refreshing: boolean; refresh: () => void };
+export type WorkbenchQuery<T> = { data: T | null; error: string | null; code: string | null; refreshing: boolean; refresh: () => void };
 export type WorkbenchQueries = {
   configuration: WorkbenchQuery<ActionResult<"readConfiguration">>;
   metadata: WorkbenchQuery<ModelCatalogSnapshot>;
@@ -122,6 +122,12 @@ export type WorkbenchModel = {
   available: boolean;
   /** Whether a verification could compose its pool from the account observation (launch-step.ts `LaunchFacts`). */
   accounts: GateFacts["accounts"];
+  /** Why the accounts cannot be used while `accounts` is `unreadable`: the read failed (in its words), is not current, or the saved choices no longer resolve. */
+  accountsProblem: { readonly kind: "failed"; readonly text: string } | { readonly kind: "stale" } | { readonly kind: "choices" } | null;
+  /** The workspace profile's last read failed (the workspace profile, not the accounts, is what is unreadable). */
+  configurationFailed: boolean;
+  /** OMP refused the destination outright: it is not installed on the chosen machine. */
+  ompMissing: boolean;
   /** Native session launch permission is ready on the destination. */
   launchReady: boolean;
   previewCurrent: boolean;
@@ -172,6 +178,9 @@ export type WorkbenchModel = {
   recentTeams: readonly RecentTeam[];
 };
 
+/** How long one failed read of the account observation leaves the last good one standing for the gate. */
+const ACCOUNT_GRACE_MS = 15_000;
+
 /** Owns the workbench's state, observations, safety checks and actions; presentation stays with the caller. */
 export function useWorkbench({ host, target, machine, rosterError, available }: WorkbenchInput): WorkbenchModel {
   const machineId = target?.machineId ?? "";
@@ -205,11 +214,17 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     accounts.data?.status, accounts.data?.scope, accounts.data?.accounts]), [configuration.error, accounts.error, reading.error, accounts.data]);
   // The pool the session door would build: from the account observation and the saved choices, not
   // from usage readings. A fresh observation with nothing included is an empty set, never unknown.
+  // The observation is read every second, so one failed read is not a fact about the accounts: for a short grace the
+  // gate keeps judging the last good observation, and every effect reads the accounts again itself before it starts.
+  const lastAccounts = useRef<{ readonly data: NonNullable<typeof accounts.data>; readonly at: number } | null>(null);
+  if (accounts.data) lastAccounts.current = { data: accounts.data, at: Date.now() };
+  const judgedAccounts = accounts.data ?? (lastAccounts.current && Date.now() - lastAccounts.current.at < ACCOUNT_GRACE_MS ? lastAccounts.current.data : null);
+  const accountsFailed = accounts.error !== null && judgedAccounts === null;
   const servedKey = useMemo(() => {
-    if (!accounts.data || !configuration.data?.configuration || accounts.error !== null || configuration.error !== null) return null;
-    const providers = servedProviders(accounts.data, configuration.data.configuration.accounts);
+    if (!judgedAccounts || !configuration.data?.configuration || configuration.error !== null) return null;
+    const providers = servedProviders(judgedAccounts, configuration.data.configuration.accounts);
     return providers === null ? null : JSON.stringify([...providers].sort());
-  }, [accounts.data, accounts.error, configuration.data, configuration.error]);
+  }, [judgedAccounts, configuration.data, configuration.error]);
   const served = useMemo<ReadonlySet<string> | null>(() => servedKey === null ? null : new Set(JSON.parse(servedKey) as string[]), [servedKey]);
   const [accountsPending, setAccountsPending] = useState(false);
   const [accountsFailure, setAccountsFailure] = useState<string | null>(null);
@@ -315,9 +330,12 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // The pool a verification composes (`composeProbe`): a failed or historical observation, or saved
   // choices that no longer resolve, refuse it outright, and a fresh one with nothing included composes
   // nothing. A first read still out judges neither way; the run reads the accounts itself.
-  const accountState: GateFacts["accounts"] = accounts.error !== null || (accounts.data !== null && accounts.data.status !== "fresh") ? "unreadable"
-    : accounts.data === null || !configuration.data?.configuration ? "usable"
+  const accountState: GateFacts["accounts"] = accountsFailed || (judgedAccounts !== null && judgedAccounts.status !== "fresh") ? "unreadable"
+    : judgedAccounts === null || !configuration.data?.configuration ? "usable"
     : served === null ? "unreadable" : served.size === 0 ? "none" : "usable";
+  // What made them unusable, in its own words, so the launch line never calls a mismatch of saved choices an unreadable read.
+  const accountsProblem: WorkbenchModel["accountsProblem"] = accountState !== "unreadable" ? null
+    : accountsFailed ? { kind: "failed", text: accounts.error! } : judgedAccounts !== null && judgedAccounts.status !== "fresh" ? { kind: "stale" } : { kind: "choices" };
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
@@ -581,7 +599,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
     observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
-    configurationCurrent, unsaved, stale, writable, placeable, available, accounts: accountState, launchReady, previewCurrent, busy, inFlight, chaining,
+    configurationCurrent, unsaved, stale, writable, placeable, available, accounts: accountState, accountsProblem,
+    configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, previewCurrent, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
     step, verb, served, unservedLead, outcome, usage,

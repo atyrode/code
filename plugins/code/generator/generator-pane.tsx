@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { MachineSummary } from "@manifold/protocol";
+import type { OmpPresence } from "../machine-web.ts";
 import { prefersReducedMotion } from "@manifold/ui";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
@@ -78,6 +79,8 @@ export type GeneratorPaneProps = {
   readonly pools: readonly QuotaPool[];
   /** The machine roster; null while it is read. */
   readonly machines: readonly MachineSummary[] | null;
+  /** Whether OMP answers on each online machine (machine-web.ts `useCodeTarget().presence`). */
+  readonly presence: ReadonlyMap<string, OmpPresence> | null;
   /** Choose the destination (`useCodeTarget().select`); the pane asks the machine gate first. */
   readonly selectMachine: (id: string) => void;
   /** Recent profiles in digit order, pinned for the session: index i is digit i + 1. */
@@ -118,7 +121,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly ref
  * pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, controls } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -143,8 +146,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId,
-  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId]);
+    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   const machineOptions = slots?.machine.options ?? [];
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
@@ -173,7 +176,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   // ------------------------------------------------------------ the launch line and what the launch says
   const machine = machines?.find(entry => entry.id === model.machineId) ?? null;
-  const other = machines?.find(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? null;
+  // The other machine a fix offers: one where OMP answers, else any other online one.
+  const others = machines?.filter(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? [];
+  const other = others.find(entry => presence?.get(entry.id) === "ok") ?? (presence ? null : others[0] ?? null);
   const charge = verification.phase === "charge" ? verification.charge : null;
   const progress = verification.progress?.providers.reduce((sum, entry) => ({ done: sum.done + entry.done, total: sum.total + entry.total }), { done: 0, total: 0 }) ?? null;
   // A verification that stopped says so until the next one starts; the verb, Verify models again, is its retry.
@@ -189,6 +194,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     differs: stopped !== null && stopped.review === model.launchReview ? stopped.differs : null,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, listFailure,
+    ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
   }, vocab);
   const reviewed = model.launchReview && catalog ? {
     machine: machine?.name ?? model.launchReview.destination.machineId,

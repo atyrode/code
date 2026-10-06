@@ -4,7 +4,7 @@ import type { MachineSummary } from "@manifold/protocol";
 import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
-import { useCodeTarget } from "../machine-web.ts";
+import { useCodeTarget, type OmpPresence } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { PermissionReview } from "../permission-review.tsx";
 import { familyWord, hueOf, SheetFrame } from "../ui.tsx";
@@ -95,7 +95,7 @@ function Cue({ keyName, word, onPress }: { keyName: string; word: string; onPres
 
 type WorkbenchProps = {
   host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; machineId: string | null;
-  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void;
+  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void; presence: ReadonlyMap<string, OmpPresence> | null;
 };
 
 /**
@@ -105,7 +105,7 @@ type WorkbenchProps = {
  * Under 760px the generator stands alone, the team grouped under its rows, routing and usage each a
  * key away. Models, Setup and the session options open as sheets over the stage.
  */
-function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines }: WorkbenchProps) {
+function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines, presence }: WorkbenchProps) {
   const model = useWorkbench({ host, target, machine, rosterError, available });
   const { queries: { metadata, setup, skillCatalog }, record, observed, starterError, compiled, selection, profile, localDraft,
     configurationCurrent, launchReady, launchReview, busy, writable, verification, usage, exportedDraft, actions } = model;
@@ -359,7 +359,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     data-solo={view === "routing" || view === "usage" || undefined} hidden={sheet !== null} style={{ "--tui-acc": accent } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
     <main className={`${G}stage`}>
-      <GeneratorPane model={model} pools={pools} machines={roster} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
+      <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} optionsSummary={optionsSummary} announce={announce} onOpen={open}
         onRefresh={refresh} onLaunchState={setLaunch} controls={generator} />
       <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} cue={paneCue("routing", "p")} hidden={!showRouting} />
@@ -444,12 +444,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 }
 
 function Launcher({ host }: PanelProps) {
-  const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
+  const { machines, machine, machineId, target, available, error, select, refresh, presence } = useCodeTarget(host);
   // The panel root takes focus when the panel opens (Workbench), so its keys work before anything is clicked.
   return <div className="plugin-atyrode_code plugin-atyrode_code_generator" tabIndex={-1}>
     <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
       {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
-        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} />
+        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} presence={presence} />
         : <div className={`${G}tui`} data-tui="">
           <h1 className="plugin-atyrode_code__sr">Code</h1>
           <p className={`${G}pane-note`}>Open or create a workspace in Manifold to use Code here.</p>

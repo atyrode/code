@@ -56,7 +56,7 @@ const vocab: Vocabulary = {
   time: at => `T+${Math.round((at - now) / HOUR)}h`,
 };
 function context(selection: Selection, pool: readonly QuotaPool[]): StatementContext {
-  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, machines: [], rosterError: false, machineId: "studio" };
+  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, machines: [], rosterError: false, machineId: "studio", omp: null };
 }
 /** A value as the settings show it; each test sets only what it is about. */
 function slotOption(changes: Partial<SlotOption>): SlotOption {
@@ -226,7 +226,8 @@ describe("the launch line, in precedence", () => {
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
     verb: ready, phase: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
-    stop: null, fix: null, differs: null, laneFix: null, nobodyServes: false, listFailure: "none", ...changes,
+    stop: null, fix: null, differs: null, laneFix: null, nobodyServes: false, listFailure: "none", ompMissing: false, accountsProblem: null,
+    configurationFailed: false, ...changes,
   });
   const said = (changes: Partial<StatusFacts> = {}): StatusLine => launchLine(facts(changes), vocab)!;
   const fixes = (line: StatusLine) => line.actions.map(action => action.kind === "fix" ? action.fix.kind : action.kind);
@@ -284,6 +285,27 @@ describe("the launch line, in precedence", () => {
     expect(said({ stop }).actions).toEqual([]);
   });
 
+  test("a machine without OMP is said as such, with a machine where OMP answers; readiness unknown is kept for reads that failed", () => {
+    const status = { ...ready, state: "refused" as const, refusal: { code: "verify-status" as const, text: "" } };
+    const missing = said({ verb: status, ompMissing: true, machine: { name: "Code isolated destination", online: true, revoked: false }, otherMachine: { id: "dev-01", name: "dev-01" } });
+    expect(missing.parts[0]!.text).toBe("OMP isn't on Code isolated destination");
+    expect(missing.actions).toEqual([{ kind: "fix", key: "machine", label: "use dev-01", fix: { kind: "machine", machineId: "dev-01" } }]);
+    expect(said({ verb: status }).parts[0]!.text).toMatch(/^Verification readiness unknown on Studio/);
+    const sessions = { ...ready, state: "refused" as const, refusal: { code: "sessions" as const, text: "" } };
+    expect(said({ verb: sessions, ompMissing: true }).parts[0]!.text).toBe("OMP isn't on Studio");
+  });
+
+  test("unusable accounts are said as what failed: the read, its age, or saved choices that no longer match; a failed profile read is the profile's", () => {
+    const accounts = { ...ready, state: "refused" as const, refusal: { code: "accounts" as const, text: "" } };
+    expect(said({ verb: accounts, accountsProblem: { kind: "failed", text: "OMP refused the step." } }).parts[0]!.text).toBe("Accounts unreadable: OMP refused the step");
+    expect(said({ verb: accounts, accountsProblem: { kind: "stale" } }).parts[0]!.text).toBe("Account list not current");
+    const choices = said({ verb: accounts, accountsProblem: { kind: "choices" } });
+    expect(choices.parts[0]!.text).toBe("Saved account choices no longer match your accounts");
+    expect(fixes(choices)).toEqual(["open"]);
+    const profile = { ...ready, state: "refused" as const, refusal: { code: "configuration" as const, text: "" } };
+    expect(said({ verb: profile, configurationFailed: true }).parts[0]!.text).toBe("Workspace profile unreadable");
+  });
+
   test("a step in flight is said whatever else holds", () => {
     const refused = { ...ready, state: "refused" as const, refusal: { code: "read-only" as const, text: "Edit access needed." } };
     expect(said({ busy: true, inFlight: "launch", verb: refused }).parts).toEqual([{ text: "Opening a terminal on Studio", tone: "busy" }]);
@@ -296,7 +318,7 @@ describe("the launch line, in precedence", () => {
     const refused = said({ verb: unreadable, listFailure: "instead" });
     expect(refused.parts[0]!.tone).toBe("attention");
     expect(refused.parts.at(-1)!.tone).toBe("warn");
-    expect(keys(refused)).toEqual(["refresh", ...listFixes]);
+    expect(keys(refused)).toEqual(["retry", ...listFixes]);
     // Routes beside the failure with roles that have no route: the rescue stays beside its stop.
     const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
     expect(keys(said({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);
