@@ -153,12 +153,13 @@ empty prompt. Headless callers still pass a prompt.
 ## Workbench presentation
 
 The main view is one panel. A **top bar** carries the views as tabs (Generator,
-Accounts, Sessions) and the panel's actions as buttons (Refresh, Models, Setup,
-Options, Shortcuts). The **generator** holds five rows of plain words, a readout line,
-the cost and speed meters and the launch row; **routing** stands beside it and
+Accounts, Sessions) and one **More** menu (Models, Setup, Options, Shortcuts). The
+panel reads its inputs again on its own, so it has no Refresh button. The **generator**
+holds five rows of plain words, a readout line, the cost and speed meters and the
+launch row; **routing** stands beside it and
 **usage** under both. The **accounts** and the **sessions** replace that stage while
 open, and under the accounts **Manage accounts** opens their management. Models,
-Setup and Options open as sheets over the stage, from the bar, a key or a launch-line
+Setup and Options open as sheets over the stage, from More, a key or a launch-line
 fix; Esc or **Back to Code** returns, restoring focus to what opened the sheet (the
 generator's rows when that has gone) and the scroll position. Visited sheets stay
 mounted, and so does the accounts' management once opened, so profile, catalog,
@@ -178,17 +179,20 @@ Models names `m` only in the generator, where `m` opens Models rather than Manag
 
 The tabs are a tab list: `←` `→` move among them and `↵` or `Space` opens one. Below
 760 px of panel width **Routing** and **Usage** join them, since those panes are views
-of their own there, and the five buttons fold behind one **More** disclosure so a narrow
-panel spends one row on chrome. **Refresh** reads accounts, usage, machines, the
-workspace profile and the sessions already read again, and restarts the usage countdown
-(`r`). **Models**, **Setup** and **Options** open their sheets (`m`, `u`, `o` from the
-main view). While a staged model list waits beside the active one, **Models** reads
-**Models · staged**, since nothing changes until it is reviewed there. Options carries a
-summary beside it when session options are set ("· restricted", "· skills off", "· 2
-skills"). **Shortcuts** opens a native modal dialog that lists every key under the view
-it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `o` under
-Generator, where they act; `Esc` or its Close button closes it and it owns its keys while
-open.
+of their own there. **More** keeps to the bar's end and is a standard menu button: a
+press, `↓`, `↵` or `Space` opens its menu on the first item and `↑` on the last; `↑` `↓`,
+`Home` and `End` move, `↵` or `Space` chooses, and an item's own key (`m`, `u`, `o`, `?`)
+chooses it too. `Esc` closes the menu and returns focus to More; `Tab`, a press outside
+or focus leaving closes it. Choosing returns focus to More, where a sheet or dialog
+gives it back. **Models**, **Setup** and **Options** open their sheets (`m`, `u`, `o`
+from the main view, where the menu shows each key beside its item). While a staged model
+list waits beside the active one, More reads **More · staged** and its item **Models ·
+staged**, since nothing changes until it is reviewed there. When session options are
+set, More and its **Options** item carry their summary ("· restricted", "· skills off",
+"· 2 skills"). **Shortcuts** opens a native modal dialog that lists every key under the
+view it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `o`
+under Generator, where they act; `Esc` or its Close button closes it and it owns its
+keys while open.
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -196,12 +200,11 @@ while the panel shows and once when it shows again (its page returns or the pane
 back on screen) unless it read in the last 15 seconds. A minute keeps a panel left open
 current within a glance's patience for a handful of small reads, and a hidden panel
 reads nothing. Such a read never lands in the middle of something: while a step runs or
-a charge waits, a sheet, Shortcuts or the machine list is open, a row is being
+a charge waits, a sheet, Shortcuts, More or the machine list is open, a row is being
 scrubbed, a text field is in use, an account change is saving, or within four seconds
 of a key or a press in the panel, it waits and happens once that is over. A failed read
 is named where it always is: the launch line, the usage line, the sessions. The usage
-reading keeps its own cadence (below); **Refresh** and **Refresh now** (`r`) read
-everything at once.
+reading keeps its own cadence (below); **Refresh now** (`r`) reads everything at once.
 
 ### The generator
 
@@ -441,12 +444,12 @@ the usage again every five minutes, its freshness window: the host's feeds read 
 on events while their channel is live, and provider readings change without one, so the
 panel keeps its own cadence, by the same rules as its other reads on their own: a hidden
 panel reads when it shows again, and a read that comes due in the middle of something
-waits (the line says `refresh waits`). Refresh now, the bar's Refresh and `r` read
-accounts, usage, machines, the workspace profile and the sessions already read again at
-once, and restart the same countdown. The line says
-`refreshing…` and the bars drain and refill while a read is out, for at least half a
-second so the refresh reads as one gesture; under reduced motion nothing animates. The
-line reserves the width of its widest text, so the button never moves.
+waits (the line says `refresh waits`). Refresh now and `r` read accounts, usage,
+machines, the workspace profile and the sessions already read again at once, and
+restart the same countdown. The line says `refreshing…` and the bars drain and refill
+while a read is out, for at least half a second so the refresh reads as one gesture;
+under reduced motion nothing animates. The line reserves the width of its widest text,
+so the button never moves.
 
 ### Accounts
 
@@ -494,7 +497,7 @@ machine) offer **open**; while the terminal inventory is unread or failed, runni
 "unknown", never none. Saved sessions appear only after an explicit read of each
 permitted online machine (**Read <machine>**; a read machine says when it was read and
 offers **read again**, failed reads offer **read again**, offline machines are named
-once); Refresh reads every machine already read again. Saved sessions take one row per
+once); Refresh now and the usage line's cadence read every machine already read again. Saved sessions take one row per
 folder and machine: the folder first, then its newest session's title, when, and where
 it stands among the folder's sessions ("newest of 6", "2nd of 6"), then the verbs. The
 folder's other sessions are in that title's drum: `↑`/`↓` turn to a newer or older one,
@@ -529,7 +532,7 @@ write to the workspace record stamps that time and name.
 Keys are panel-local: the listener sits on the panel root, so a key pressed in another
 plugin never reaches Code and a key Code consumes does not reach workspace-wide
 bindings. None act behind a sheet, in a dialog (Shortcuts included) or an open popover
-(the machine list, a session drum), in a text field, or once a nearer control handled
+(More, the machine list, a session drum), in a text field, or once a nearer control handled
 the key. The panel takes focus when it opens; from there an arrow moves focus to the
 generator's rows. Each of these has a control; none is the only way to anything.
 
@@ -548,7 +551,8 @@ generator's rows. Each of these has a control; none is the only way to anything.
 - **Narrow routing and usage views.** Esc goes back and `a` opens the accounts; `p` and
   `s` open routing and usage, and return to the main view from their own; `f` shows the
   chains in routing.
-- **Anywhere in the panel.** `r` reads again and `?` opens Shortcuts.
+- **Anywhere in the panel.** `r` is Refresh now: everything read again at once. `?`
+  opens Shortcuts.
 
 `Esc` goes back: from the management to the accounts, from any other view to the
 generator; at rest in the main view it is left alone. The **key line** at the foot is
@@ -564,9 +568,8 @@ reason a pressed refused control gave.
 The layout answers the panel's own measured width, never the window's, since Code
 shares the window with its canvas. From 1180 px the generator and routing stand side by
 side with usage under both; from 760 px the same in slightly different proportions.
-Below 760 px the generator stands alone with the grouped team under its rows, routing
-and usage are tabs of their own, and the bar's actions fold behind More; widening the
-panel closes such a view. Below 430 px the lane's words drop under its label so the
+Below 760 px the generator stands alone with the grouped team under its rows, and routing
+and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lane's words drop under its label so the
 spectrum stays on one line, and below 380 px usage windows use thinner blocks and drop
 the word "used". Nothing scrolls sideways at any width. Hiding routing or usage is
 local to the open panel and not kept. The first layout and every resize place things

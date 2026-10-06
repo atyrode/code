@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
-import { ControlIcon, prefersReducedMotion, ScrollRegion } from "@manifold/ui";
+import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget, type OmpPresence } from "../machine-web.ts";
@@ -25,6 +25,7 @@ import { OptionSwitch } from "./option-switch.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { AUTO_READ_MS, readHeld } from "./auto-read.ts";
+import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelShown, useReadClock } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 
@@ -105,7 +106,7 @@ const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (rea
     ["Esc", "Back to the generator; from Manage accounts, back to the accounts"]] },
   { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
   { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
-  { title: "Anywhere", keys: [["r", "Read accounts, usage and machines again"], ["?", "These shortcuts"]] },
+  { title: "Anywhere", keys: [["r", "Refresh now: read everything again at once, as the panel also does on its own"], ["?", "These shortcuts"]] },
 ];
 
 /** The keyboard shortcuts, in a native modal dialog: Esc or its Close button closes it, and it owns its keys while open. */
@@ -410,9 +411,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     event.preventDefault();
     event.stopPropagation();
   }
-  // Narrow, the actions fold behind one More button, so the bar stays the tabs and one control.
-  const actionsId = useId();
-  const [actionsOpen, setActionsOpen] = useState(false);
+  const menuKey = (keys: readonly string[], does: (action: PanelAction) => boolean) => acceleratorFor(view, narrow, keys, does);
+  const isSheet = (sheet: PanelSheet) => (action: PanelAction) => action.kind === "sheet" && action.sheet === sheet;
+  // A staged model list beside the active one changes nothing until it is reviewed in Models; More and its Models item say it waits there.
+  const commands: readonly MenuCommand[] = [
+    { id: "models", label: "Models", aside: staged ? "staged" : null, staged, accelerator: menuKey(["m"], isSheet("models")),
+      title: staged ? "Models: a staged model list waits for review" : "Models", onSelect: () => run({ kind: "sheet", sheet: "models" }) },
+    { id: "setup", label: "Setup", aside: null, accelerator: menuKey(["u"], isSheet("setup")), title: "Setup", onSelect: () => run({ kind: "sheet", sheet: "setup" }) },
+    { id: "options", label: "Options", aside: optionsSummary, accelerator: menuKey(["o"], isSheet("options")), title: "Session options",
+      onSelect: () => run({ kind: "sheet", sheet: "options" }) },
+    { id: "shortcuts", label: "Shortcuts", aside: null, accelerator: menuKey(["?"], action => action.kind === "shortcuts"), title: "Keyboard shortcuts", dialog: true,
+      onSelect: () => run({ kind: "shortcuts" }) },
+  ];
   const bar = <nav className={`${G}bar`} aria-label="Code">
     <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
       {tab("main", "Generator")}
@@ -421,22 +431,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       {tab("accounts", "Accounts")}
       {tab("sessions", "Sessions")}
     </div>
-    {narrow && <Button aria-expanded={actionsOpen} aria-controls={actionsId} data-actions-toggle="" onClick={() => setActionsOpen(open => !open)}>
-      More<ControlIcon kind={actionsOpen ? "disclosed" : "collapsed"} size={13} />
-    </Button>}
-    <div id={actionsId} className={`${G}actions`} hidden={narrow && !actionsOpen}>
-      <Button {...keyed("Read accounts, usage and machines again", ["r"], action => action.kind === "refresh")} onClick={() => run({ kind: "refresh" })}>Refresh</Button>
-      {/* A staged model list beside the active one changes nothing until it is reviewed in Models; the button says it waits there. */}
-      <Button {...keyed(staged ? "Models: a staged model list waits for review" : "Models", ["m"], action => action.kind === "sheet" && action.sheet === "models")}
-        data-staged={staged || undefined} onClick={() => run({ kind: "sheet", sheet: "models" })}>
-        Models{staged && <span className={`${G}actions-aside`}>· staged</span>}
-      </Button>
-      <Button {...keyed("Setup", ["u"], action => action.kind === "sheet" && action.sheet === "setup")} onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
-      <Button {...keyed("Session options", ["o"], action => action.kind === "sheet" && action.sheet === "options")} onClick={() => run({ kind: "sheet", sheet: "options" })}>
-        Options{optionsSummary && <span className={`${G}actions-summary`}>· {optionsSummary}</span>}
-      </Button>
-      <Button {...keyed("Keyboard shortcuts", ["?"], action => action.kind === "shortcuts")} aria-haspopup="dialog" onClick={() => run({ kind: "shortcuts" })}>Shortcuts</Button>
-    </div>
+    <MoreMenu commands={commands} />
   </nav>;
   const hideButton = (pane: "routing" | "usage") => !narrow && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
     onClick={() => run({ kind: "toggle", pane })}>Hide</Button>;
