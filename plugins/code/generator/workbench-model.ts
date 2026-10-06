@@ -575,6 +575,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       choices, historical: historicalAccounts, pending: accountsPending, failure: accountsFailure,
       change: edit => void changeAccounts(edit),
     },
+    refreshing: reading.refreshing,
   };
   return {
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },

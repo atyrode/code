@@ -42,8 +42,9 @@ export function modelListFailure(failed: boolean, stored: boolean, team: boolean
  * `nowMs`: the clock the board judges against, read once per minute (`ui.tsx` `useMinuteTick`) so
  * ages and elapsed ticks move without re-judging every render.
  * `accounts`: the saved inclusion and its edit, or null when the workspace has no account choices yet.
+ * `refreshing`: a refresh asked for a new reading and none has answered yet.
  */
-export type BoardUsage = QuotaReading & { readonly accounts: BoardAccounts | null };
+export type BoardUsage = QuotaReading & { readonly accounts: BoardAccounts | null; readonly refreshing: boolean };
 export type BoardAccounts = {
   /** The saved choices (`Configuration.accounts`): the active preset, its exclusions, the presets. */
   readonly choices: AccountChoices;
