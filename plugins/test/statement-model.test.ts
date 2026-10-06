@@ -270,7 +270,7 @@ describe("the launch line, in precedence", () => {
   test("an offline destination offers another machine; an unserved lead offers the nearest served lane and its accounts", () => {
     const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "Runtime unavailable." } };
     const offline = said({ verb: unavailable, machine: { name: "Laptop", online: false, revoked: false }, otherMachine: { id: "studio", name: "Studio" } });
-    expect(offline.actions).toEqual([{ kind: "fix", key: "machine", label: "use Studio", fix: { kind: "machine", machineId: "studio" } }]);
+    expect(offline.actions).toEqual([{ kind: "fix", key: "machine", label: "Use Studio", fix: { kind: "machine", machineId: "studio" } }]);
     const unserved = { ...ready, state: "refused" as const, refusal: { code: "no-account" as const, text: "", gap: { provider: "anthropic", family: "anthropic", roles: ["reviewer"] } } };
     const lane = slotOption({ label: "GPT only", selection: team(), review: review() });
     expect(fixes(said({ verb: unserved, laneFix: lane }))).toEqual(["team", "open"]);
@@ -289,7 +289,7 @@ describe("the launch line, in precedence", () => {
     const status = { ...ready, state: "refused" as const, refusal: { code: "verify-status" as const, text: "" } };
     const missing = said({ verb: status, ompMissing: true, machine: { name: "Code isolated destination", online: true, revoked: false }, otherMachine: { id: "dev-01", name: "dev-01" } });
     expect(missing.parts[0]!.text).toBe("OMP isn't on Code isolated destination");
-    expect(missing.actions).toEqual([{ kind: "fix", key: "machine", label: "use dev-01", fix: { kind: "machine", machineId: "dev-01" } }]);
+    expect(missing.actions).toEqual([{ kind: "fix", key: "machine", label: "Use dev-01", fix: { kind: "machine", machineId: "dev-01" } }]);
     expect(said({ verb: status }).parts[0]!.text).toMatch(/^Verification readiness unknown on Studio/);
     const sessions = { ...ready, state: "refused" as const, refusal: { code: "sessions" as const, text: "" } };
     expect(said({ verb: sessions, ompMissing: true }).parts[0]!.text).toBe("OMP isn't on Studio");
@@ -318,7 +318,7 @@ describe("the launch line, in precedence", () => {
     const refused = said({ verb: unreadable, listFailure: "instead" });
     expect(refused.parts[0]!.tone).toBe("attention");
     expect(refused.parts.at(-1)!.tone).toBe("warn");
-    expect(keys(refused)).toEqual(["retry", ...listFixes]);
+    expect(keys(refused)).toEqual(["accounts-read", ...listFixes]);
     // Routes beside the failure with roles that have no route: the rescue stays beside its stop.
     const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
     expect(keys(said({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);

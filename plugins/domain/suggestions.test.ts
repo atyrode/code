@@ -94,7 +94,7 @@ describe("governed classifier suggestions", () => {
       // A Balanced baseline with no advisor, so the suggested sizing changes all three fields.
       const selection: Selection = {
         ...defaultSelection(catalog), lane: { kind: "provider", family: "openai", blend }, capability: 2, advisor: "off",
-        spark: true, priority: true, prewalk: true, planYolo: true, fallback: false,
+        spark: false, priority: true, prewalk: true, planYolo: true, fallback: false,
       };
       const snapshot = structuredClone(selection);
       const result = parseSuggestionResponse(catalog, selection, response(), nowMs);
@@ -107,9 +107,9 @@ describe("governed classifier suggestions", () => {
     }
   });
 
-  test("trivial sizing does not buy priority or enable Spark", () => {
+  test("trivial sizing does not buy priority", () => {
     const catalog = compileCatalog(document());
-    // Spark and priority start off, so a trivial suggestion has something it must not turn on;
+    // Priority starts off, so a trivial suggestion has something it must not turn on;
     // the advisor starts where the suggestion puts it, so only real sizing changes are reported.
     const selection: Selection = { ...defaultSelection(catalog), advisor: "off", spark: false };
     const result = parseSuggestionResponse(catalog, selection,
@@ -123,7 +123,7 @@ describe("governed classifier suggestions", () => {
     const selection = defaultSelection(catalog);
     expect(() => buildSuggestionRequest(catalog, selection, " \n\t", nowMs)).toThrow("code_suggestion_invalid_request");
     expect(() => buildSuggestionRequest(catalog, selection, "size a refactor", NaN)).toThrow("code_suggestion_invalid_request");
-    const invalid: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, spark: true };
+    const invalid: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, priority: true };
     expect(() => buildSuggestionRequest(catalog, invalid, "size a refactor", nowMs)).toThrow("code_suggestion_invalid_request");
     expect(() => parseSuggestionResponse(catalog, invalid, response(), nowMs)).toThrow("code_suggestion_invalid_request");
     const noVision = compileCatalog({ schemaVersion: 1, models: document().models.map(model => ({ ...model, images: false })) });

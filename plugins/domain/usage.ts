@@ -53,9 +53,8 @@ type UsageBucket = z.infer<typeof usageBucket>;
 function quotaBucket(provider: string, tier: string | null): string | null {
   const policy = providerPolicy(provider);
   if (!policy?.meteredProviders.includes(provider)) return null;
-  if (tier === null) return policy.quotaBucketBase;
-  const special = policy.special.find(value => value.bucket === tier);
-  return special ? `${policy.quotaBucketBase}-${special.bucket}` : null;
+  // A window metering a tier of its own (Spark's, retired) belongs to no bucket Code spends.
+  return tier === null ? policy.quotaBucketBase : null;
 }
 
 /** Observations inform views only; OMP still owns fallback, retries, and quota enforcement. */
@@ -106,8 +105,7 @@ export function projectUsage(
     if (!group) {
       const providerRules = providerPolicy(provider);
       const buckets: UsageBucket[] = providerRules?.meteredProviders.includes(provider) ?
-        [providerRules.quotaBucketBase, ...providerRules.special.map(special => `${providerRules.quotaBucketBase}-${special.bucket}`)]
-          .map(name => ({ name, status: "unknown", resetsAt: null })) : [];
+        [{ name: providerRules.quotaBucketBase, status: "unknown", resetsAt: null }] : [];
       group = { provider, family: providerRules?.family ?? null, accounts: [], buckets };
       providers.set(provider, group);
     }
@@ -150,9 +148,7 @@ export function projectUsage(
         if (!row.selected || row.account.disabled || (row.freshness === "fresh" && row.status === "credential_disabled")) continue;
         const windows = row.windows.filter(window => window.bucket === bucket.name);
         const blocks = accountFactsFresh ? row.account.blocks.filter(block => block.scope === "" ||
-          (bucket.name === providerRules.quotaBucketBase ? block.scope === "chat" :
-            providerRules.special.some(special => bucket.name === `${providerRules.quotaBucketBase}-${special.bucket}` &&
-              (block.scope === special.bucket || block.scope === `tier:${special.bucket}`)))) : [];
+          (bucket.name === providerRules.quotaBucketBase && block.scope === "chat")) : [];
         // OMP can report 100% as warning while the provider still permits use.
         // Only meters without a provider verdict fall back to their fraction.
         const exhausted = windows.filter(window => window.status === "fresh" &&

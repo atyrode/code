@@ -105,7 +105,7 @@ export function parseSuggestionResponse(
   if (lines[1]!.match(/"(?:[^"\\]|\\.)*"/gu)?.length !== 6) throw new SuggestionError("invalid_response");
   const capability = modelCapabilities[sizing.data.model];
   if (!before.available.capabilities.includes(capability)) throw new SuggestionError("unavailable");
-  // In particular, a suggestion cannot widen a provider-only lane, buy priority, or enable Spark.
+  // In particular, a suggestion cannot widen a provider-only lane or buy priority.
   const proposed: Selection = {
     ...before.selection, capability, thinking: sizing.data.thinking, advisor: sizing.data.advisor,
   };

@@ -57,9 +57,11 @@ Promotion supplies that digest against the same source and revision.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
-performance, context, thinking levels and image support. Tier 0 is off-ladder;
-capabilities are 1–4. `SelectionSchema` records lane, capability, thinking,
-advisor, spark, priority, prewalk, plan-yolo and fallback. Code never recovers
+performance, context, thinking levels and image support. Capabilities are 1–4; a
+stored tier-0 model (the retired Spark rung) still parses and is never placed or
+routed. `SelectionSchema` records lane, capability, thinking, advisor, priority,
+prewalk, plan-yolo and fallback; its `spark` field still parses and is always read
+as off. Code never recovers
 these semantics from terminal output.
 
 Known providers may add named families, quota metadata, special tiers, priority
@@ -98,8 +100,10 @@ snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier
 It reads no credentials, provider endpoint, machine inventory or runtime resource.
 Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
 and `openai-codex` providers. Ordinary eligible models retain their declared costs,
-context, image support and thinking levels; special, Spark and unknown quota
-classes are excluded. Unmeasured performance stays null. Derivation admits at
+context, image support and thinking levels; models in a quota class of their own
+(Spark's, or one not known yet) are excluded, from the bundled list and, through
+the same OMP version's classification, from a verified derivation
+(`separate_quota`). Unmeasured performance stays null. Derivation admits at
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
 
 Only a successful canonical configuration read establishes an absent revision 0
@@ -356,7 +360,7 @@ storage per principal and workspace (newest first, one entry per team, nine at m
 The list is device-local, never shared, and grants nothing; it does not record the
 machine. A team keeps its digit for the panel's life: relaunching it keeps the digit, a
 new team takes the next free one. A row says only the words that differ from the
-statement, extras as changes ("no spark"), or "this team", and what recalling it would
+statement, extras as changes ("no fallbacks"), or "this team", and what recalling it would
 strand on today's pools ("12 no route until 16:55", each group with its own time). Under
 the pointer or focus a row previews its team in the status line and on the board. A team
 today's catalog cannot form is refused, its word dimmed with the reason in its title.

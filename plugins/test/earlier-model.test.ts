@@ -38,9 +38,9 @@ describe("earlier statements print only what differs from the line", () => {
   });
 
   test("extras are written as the change from the line's: switches added by name, dropped ones as no-, none at all as no extras", () => {
-    const line = lineOf(team({ spark: true, fallback: true }));
-    expect(differences(team({ fallback: true }), line, familyWord)).toEqual([{ word: "extras", text: "no spark" }]);
-    expect(differences(team({ priority: true, prewalk: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority, prewalk, no spark, no fallbacks" }]);
+    const line = lineOf(team({ prewalk: true, fallback: true }));
+    expect(differences(team({ fallback: true }), line, familyWord)).toEqual([{ word: "extras", text: "no prewalk" }]);
+    expect(differences(team({ priority: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority, no fallbacks, no prewalk" }]);
     expect(differences(team(), line, familyWord)).toEqual([{ word: "extras", text: "no extras" }]);
   });
 

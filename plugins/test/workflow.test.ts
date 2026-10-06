@@ -90,6 +90,9 @@ function verificationFixture() {
     if (door === actionDoor("readDefaults")) return omp.defaults;
     if (door === actionDoor("startInventory")) return job("inventory-1", INVENTORY_OPERATION_ID);
     if (door === actionDoor("readInventory")) return { job: probeJob("inventory-1", INVENTORY_OPERATION_ID, "exited"), inventory: omp.inventory };
+    // The bundled classification the derivation joins: every listed model is chat.
+    if (door === actionDoor("readModelCatalog")) return { schemaVersion: 1, source: "bundled", ompVersion: omp.inventory.ompVersion, revision: "a".repeat(64),
+      models: omp.inventory.models.map(model => ({ ...model, quotaTier: null })) };
     if (door === actionDoor("startBenchmark")) {
       benchmarked.push(ompActionSchemas.startBenchmark.input.parse(raw).candidates);
       return job(`benchmark-${++benchmarks}`, BENCHMARK_OPERATION_ID);

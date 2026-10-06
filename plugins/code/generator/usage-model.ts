@@ -21,7 +21,7 @@ type Balance = NonNullable<UsageAccount["balance"]>;
  */
 export const USAGE_FRESH_MS = 300_000;
 
-/** One window: its label (`5h`, `7d`, `spark`), how much is used, Code's word for it, and when it resets or its block lifts. */
+/** One window: its label (`5h`, `7d`), how much is used, Code's word for it, and when it resets or its block lifts. */
 export type UsageWindowRow = {
   readonly key: string;
   readonly label: string;
@@ -111,7 +111,7 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
         disabled: entry.account.disabled || entry.status === "credential_disabled",
         ageMs: !allHistory && history(entry) && entry.observedAt !== null ? Math.max(0, nowMs - entry.observedAt) : null,
         windows: shown.map(({ window, state }) => ({
-          key: JSON.stringify([window.windowId, window.tier]), label: windowLabel(window, provider.provider),
+          key: JSON.stringify([window.windowId, window.tier]), label: windowLabel(window),
           percent: state.percent, level: state.level, word: state.word, until: state.until, resetsAt: window.resetsAt,
         })),
         balance: entry.balance,
@@ -127,9 +127,4 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
     };
   });
   return { kind: "groups", groups };
-}
-
-/** The families the included accounts serve, from the providers the session door's pool would serve; null when that pool is unknown. */
-export function servedFamilies(served: ReadonlySet<string> | null): ReadonlySet<string> | null {
-  return served === null ? null : new Set([...served].map(provider => providerPolicy(provider).family));
 }

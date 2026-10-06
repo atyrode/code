@@ -5,7 +5,7 @@ import { panelKey, type PanelKey } from "../code/generator/panel-keys.ts";
 function press(key: string, changes: Partial<PanelKey> = {}): PanelKey {
   return {
     key, mod: false, alt: false, repeat: false, defaultPrevented: false, inView: true, inField: false, inDialog: false, onControl: false, onRoot: false,
-    view: "main", narrow: false, more: false, recents: 3, ...changes,
+    view: "main", narrow: false, recents: 3, ...changes,
   };
 }
 
@@ -49,10 +49,10 @@ describe("views one key away", () => {
     expect(panelKey(press("s", { view: "accounts" }))).toBeNull();
   });
 
-  test("esc closes the full key line and goes back, and at rest in the main view is left to the host", () => {
+  test("esc goes back, and at rest in the main view is left to the host; ? shows the shortcuts", () => {
     expect(panelKey(press("Escape", { view: "usage" }))).toEqual({ kind: "back" });
-    expect(panelKey(press("Escape", { more: true }))).toEqual({ kind: "back" });
     expect(panelKey(press("Escape"))).toBeNull();
+    expect(panelKey(press("?"))).toEqual({ kind: "shortcuts" });
   });
 
   test("the profile's keys act in the main view only; in the accounts m opens their management, and Esc there returns to them", () => {

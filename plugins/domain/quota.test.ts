@@ -140,15 +140,13 @@ describe("what each role runs, from its own chain and the pools", () => {
     expect(result.get("default")).toEqual({ role: "default", kind: "no-route", until: null });
   });
 
-  test("Spark is its own pool: a Spark block moves tiny and commit to the regular rung while it lasts", () => {
+  test("Spark is retired: a block on its own scope stops nothing Code routes, and no pool is kept for it", () => {
     const sparkBlocked = { alice: [{ scope: "spark", until: now + 40 * MINUTE }], bob: [{ scope: "spark", until: now + 40 * MINUTE }],
       dave: [{ scope: "tier:spark", until: now + 30 * MINUTE }] };
     const value = reading({}, { blocks: sparkBlocked });
-    expect(quotaPools(catalog, value).map(entry => entry.id)).toEqual(["openai-codex:codex", "openai-codex:codex-spark", "anthropic:claude", "deepseek"]);
-    expect(pool(quotaPools(catalog, value), "openai-codex:codex-spark").verdict).toEqual({ kind: "blocked", until: now + 30 * MINUTE });
+    expect(quotaPools(catalog, value).map(entry => entry.id)).toEqual(["openai-codex:codex", "anthropic:claude", "deepseek"]);
     const result = outcomes(selection({ lane: { kind: "provider", family: "openai", blend: "only" }, spark: true }), value);
-    for (const role of ["tiny", "commit"]) expect(result.get(role)).toMatchObject({ kind: "falls-back", model: { key: "o1" }, until: now + 30 * MINUTE });
-    expect(result.get("default")?.kind).toBe("leads");
+    for (const role of ["tiny", "commit", "default"]) expect(result.get(role)?.kind).toBe("leads");
   });
 
   test("an unmetered provider is served without claiming room, and an account-wide block still stops it", () => {

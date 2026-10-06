@@ -21,10 +21,10 @@ export function previewSelection(compiled: CompiledCatalog, selection: Selection
   try { return reviewCatalog(compiled, selection, nowMs); } catch { return null; }
 }
 
-export type DialId = "lane" | "model" | "thinking" | "advisor" | "budget" | "priority" | "spark" | "prewalk" | "plans" | "fallbacks";
+export type DialId = "lane" | "model" | "thinking" | "advisor" | "budget" | "priority" | "prewalk" | "plans" | "fallbacks";
 export const MAIN_DIALS: readonly DialId[] = ["lane", "model", "thinking", "advisor"];
-export type MoreDial = "budget" | "priority" | "spark" | "prewalk" | "plans" | "fallbacks";
-export const MORE_DIALS: readonly MoreDial[] = ["budget", "priority", "spark", "prewalk", "plans", "fallbacks"];
+export type MoreDial = "budget" | "priority" | "prewalk" | "plans" | "fallbacks";
+export const MORE_DIALS: readonly MoreDial[] = ["budget", "priority", "prewalk", "plans", "fallbacks"];
 export const CAPABILITY_WORDS = ["fast", "normal", "smart", "elite"] as const;
 
 /** The lane's stable word (`gpt-led`), which map mode and the routing preview key on; never shown. */
@@ -48,17 +48,17 @@ export function laneGroups(lanes: readonly Lane[]): Lane[][] {
 function withLane(catalog: CompiledCatalog, selection: Selection, lane: Lane): Selection {
   const probe = previewSelection(catalog, { ...selection, lane, capability: 1, spark: false, priority: false, budget: "any" });
   if (!probe) return { ...selection, lane };
-  const { capabilities, spark, priority, budgets } = probe.available;
+  const { capabilities, priority, budgets } = probe.available;
   return {
     ...selection, lane,
     capability: capabilities.includes(selection.capability) ? selection.capability : capabilities.at(-1)!,
-    spark: selection.spark && spark, priority: selection.priority && priority,
+    spark: false, priority: selection.priority && priority,
     budget: budgets.includes(selection.budget) ? selection.budget : "any",
   };
 }
 
 type Spec = { label: string; words: (review: Review) => string[][]; get: (selection: Selection) => string; set: (catalog: CompiledCatalog, selection: Selection, word: string, review: Review) => Selection | null };
-const binary = (label: string, key: "priority" | "spark" | "prewalk" | "fallback"): Spec => ({
+const binary = (label: string, key: "priority" | "prewalk" | "fallback"): Spec => ({
   label, words: () => [["off", "on"]], get: selection => selection[key] ? "on" : "off", set: (_, selection, word) => ({ ...selection, [key]: word === "on" }),
 });
 export const SPECS: Readonly<Record<DialId, Spec>> = {
@@ -77,7 +77,6 @@ export const SPECS: Readonly<Record<DialId, Spec>> = {
   },
   budget: { label: "Budget", words: () => [["any", "free"]], get: selection => selection.budget, set: (_, selection, word) => word === "any" || word === "free" ? { ...selection, budget: word } : null },
   priority: binary("Priority", "priority"),
-  spark: binary("Spark", "spark"),
   prewalk: binary("Prewalk", "prewalk"),
   plans: { label: "Plans", words: () => [["ask", "auto"]], get: selection => selection.planYolo ? "auto" : "ask", set: (_, selection, word) => ({ ...selection, planYolo: word === "auto" }) },
   fallbacks: binary("Fallbacks", "fallback"),

@@ -43,7 +43,7 @@ export type LineTeam = { words: TeamWords; selection: Selection | null };
  * The words of `team` that differ from the statement's, in reading order; empty when the row is the
  * shown profile, which it then reads as "this profile". Identity is decided on the selections,
  * because words can coincide for different profiles. Extras are written as the change from the
- * statement's: the switches the profile adds by name, the ones it drops as "no spark", and "no
+ * statement's: the switches the profile adds by name, the ones it drops as "no fallbacks", and "no
  * extras" for none at all.
  */
 export function differences(team: Selection, line: LineTeam, familyWord: (family: string) => string): Difference[] {

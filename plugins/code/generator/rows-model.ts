@@ -25,7 +25,7 @@ export type RowWord = {
   readonly text: string;
   /** The model row's tier word under its alias; null elsewhere. */
   readonly sub: string | null;
-  /** The value as the readout and assistive technology name it ("sol, smart", "GPT-led", "spark on"). */
+  /** The value as the readout and assistive technology name it ("sol, smart", "GPT-led", "fallbacks on"). */
   readonly name: string;
   readonly selected: boolean;
   readonly available: boolean;
