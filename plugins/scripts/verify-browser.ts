@@ -15,10 +15,9 @@ import type { ActionResult, Target } from "../code/contract.ts";
 import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
-import { reviewCatalog } from "../domain/routing.ts";
+import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
-import { teamWords } from "../code/generator/statement-model.ts";
 import {
   BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, ResumeSessionInputSchema,
   actionSchemas as ompActionSchemas, type InventoryReceipt, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult,
@@ -37,17 +36,20 @@ Starts only a disposable loopback server and an isolated testkit machine transpo
 host. No native job owner, native setup, terminals, OMP processes, inference or providers are invoked.
 Every Chromium runs supervised in its own process group: success, failure, SIGINT/SIGTERM/SIGHUP
 and the death of this process all end the whole browser and remove its profile.
-Proves Code's main view (statement line, seat board, earlier statements, footer and sheets) in real
-Chromium identities: render-only bundled-metadata starter composition, retained conflicted drafts,
+Proves Code's main view, the terminal UI evolved (the generator's rows, the launch with its machine
+picker, routing, usage, the accounts and sessions views and the key line), in real Chromium
+identities: render-only bundled-metadata starter composition, retained conflicted drafts,
 permission choices, writer/viewer authority and container-shared choices across two destinations,
-and the browser-provable acceptance of the main view: no horizontal overflow and no intersecting
-text from 170 to 1440px, zero hover/focus layout shift, panel-local keys that never act from a
-sheet, dialog or popover, arrival keys, the wheel rules, focus kept through the gate and reduced
-motion. Also: an unsaved edit kept across a reload, own account edits that never conflict with it
-while a foreign team write does, a save refused for a lead no account serves, a writer without a
-canvas who saves but is told why launching waits, and saved sessions folded per folder into a
-drum. Separate synthetic RPC responses exercise the verification charge, folder-only readiness,
-and launch/resume review invalidation and refusal; the spend, preparation and execution they lead
+and the browser-provable acceptance of the main view: no horizontal overflow, cut text or colliding
+text from 170 to 1440px in every view, zero hover/focus layout shift, panel-local keys that never act
+from a sheet or an open popover, arrival keys, the wheel only on a focused or rested row, 44px
+targets on a coarse pointer, focus kept through the gate and reduced motion that animates nothing.
+Also: an unsaved edit kept across a reload, own account edits that never conflict with it while a
+foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
+who saves but is told why launching waits, account switches saved through the real changeAccounts
+CAS, the accounts' management in place, and saved sessions folded per folder into a drum.
+Separate synthetic RPC responses exercise the verification charge, folder-only readiness, and
+launch/resume review invalidation and refusal; the spend, preparation and execution they lead
 to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
@@ -238,14 +240,28 @@ async function press(browser: BrowserInstance, point: Point, clickCount = 1): Pr
 async function click(browser: BrowserInstance, expression: string): Promise<void> {
   await press(browser, await pointOf(browser, expression));
 }
-const KEY_CODES: Readonly<Record<string, string>> = { "?": "Slash", " ": "Space", "1": "Digit1", r: "KeyR" };
+/** Moves the pointer off every control, to the top-left corner of the page. */
+async function pointAway(browser: BrowserInstance): Promise<void> {
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
+}
+async function tap(browser: BrowserInstance, expression: string): Promise<void> {
+  const point = await pointOf(browser, expression);
+  await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+/** The physical key for a key name: letters and digits by their position, everything else by its own name. */
+function keyCode(name: string): string {
+  if (/^[a-z]$/.test(name)) return `Key${name.toUpperCase()}`;
+  if (/^[0-9]$/.test(name)) return `Digit${name}`;
+  return name === "?" ? "Slash" : name === " " ? "Space" : name;
+}
 async function key(browser: BrowserInstance, name: string, code: number, options: { modifiers?: number; autoRepeat?: boolean } = {}): Promise<void> {
   const modifiers = options.modifiers ?? 0;
   // Blink's native button activation needs Enter's character data, not only its key code.
   const text = name === "Enter" ? "\r" : name.length === 1 ? name : null;
-  await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: KEY_CODES[name] ?? name, windowsVirtualKeyCode: code, modifiers,
+  await browser.send("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: keyCode(name), windowsVirtualKeyCode: code, modifiers,
     autoRepeat: options.autoRepeat ?? false, ...(text === null ? {} : { text, unmodifiedText: text }) });
-  await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: name, code: KEY_CODES[name] ?? name, windowsVirtualKeyCode: code, modifiers });
+  await browser.send("Input.dispatchKeyEvent", { type: "keyUp", key: name, code: keyCode(name), windowsVirtualKeyCode: code, modifiers });
 }
 const CTRL = 2, SHIFT = 8;
 async function wheel(browser: BrowserInstance, point: Point, deltaY: number): Promise<void> {
@@ -256,100 +272,123 @@ async function wheel(browser: BrowserInstance, point: Point, deltaY: number): Pr
 
 const generator = ".plugin-atyrode_code_generator";
 const G = "plugin-atyrode_code_generator__";
-const mainView = `${generator} [data-view="main"]`;
-const verb = element(`${generator} [data-stmt-verb]`);
-const confirmCharge = element(`${generator} .${G}stmt-confirm`);
+/** The stage and its key line: every view of the main view, hidden while a sheet is open. */
+const stage = `${generator} [data-tui]`;
+const generatorTitle = element(`${generator} [data-pane="generator"] .${G}title`);
+const launchButton = element(`${generator} .${G}launch`);
+const confirmCharge = element(`${generator} .${G}confirm`);
+const readout = element(`${generator} .${G}readout`);
 // The announcer is the panel's polite live region; other status roles (skills, notices) are not it.
 const liveRegion = element(`${generator} div.plugin-atyrode_code__sr[role="status"][aria-live="polite"]`);
-const statusText = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-line`)})].map(line => line.textContent).join(' | ')`;
+const lineText = `(${element(`${generator} .${G}launch-line`)}?.textContent ?? '')`;
+/** A failure or refusal said beside the launch, in the attention colour. */
+const failureLine = `!!document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})`;
+const cancelCharge = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}cue`)})].find(el => el.textContent.trim() === 'cancel')`;
+const machinePicker = element(`${generator} [data-machine-picker]`);
+const machineList = element(`${generator} [role="listbox"][aria-label="machines"]`);
 const visibleSheet = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}sheet-host`)})].find(el => !el.hidden)`;
-// Session options is a sheet like Accounts, Models and Setup, opened from its link in the footer's run.
-const sessionOptions = footerLink("session options");
 const skillsSection = element(`${generator} [aria-label="Optional skills"]`);
-const keysDialog = element(`${generator} .${G}keys-dialog`);
 const profileExport = element(`${generator} textarea[data-profile-export]`);
-const board = element(`${generator} .${G}board`);
+const routeRows = `${generator} [data-pane="routing"] .${G}route`;
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
 const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
-type Word = "lane" | "tier" | "thinking" | "advisor" | "extras" | "machine";
-const WORDS: readonly Word[] = ["lane", "tier", "thinking", "advisor", "extras", "machine"];
-const READING_ORDER: readonly (Word | "verb")[] = ["verb", ...WORDS];
+/** The generator's rows, top to bottom: the dials, then fallbacks as an on/off row; the other profile switches live in the session options. */
+type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
+const ROWS: readonly RowId[] = ["lane", "tier", "thinking", "advisor", "fallbacks"];
 
-function slot(word: Word): string {
-  return element(`${generator} [data-stmt-word="${word}"]`);
+function row(id: RowId): string {
+  return element(`${generator} [data-row="${id}"]`);
 }
-function wordValue(word: Word): string {
-  return `${slot(word)}?.querySelector('.${G}stmt-value')?.textContent.trim()`;
+/** A row's value as assistive technology reads it: a slider's value text, a switch's checked state. */
+function rowValue(id: RowId): string {
+  return `(row => row && (row.getAttribute('role') === 'switch' ? row.getAttribute('aria-checked') : row.getAttribute('aria-valuetext')))(${row(id)})`;
 }
-/** The six words on the line, as one string: whatever a key or a press changed shows here. */
-const lineWords = `[${WORDS.map(word => wordValue(word)).join(", ")}].join(' / ')`;
-function option(word: Word, label: string): string {
-  return `[...(${slot(word)}?.querySelectorAll('[role="option"]') ?? [])].find(el => el.querySelector('.${G}stmt-text')?.textContent.trim() === ${JSON.stringify(label)})`;
+/** One option word of a row, by its stable key (a dial value, or `on`/`off`). */
+function word(id: RowId, key: string): string {
+  return element(`${generator} [data-row="${id}"] .${G}word[data-key="${key}"]`);
 }
-function statusFix(label: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-fix`)})].find(el => el.textContent.trim() === ${JSON.stringify(label)})`;
+function chosenKey(id: RowId): string {
+  return `${row(id)}?.querySelector('.${G}word[data-selected]')?.dataset.key`;
 }
-/** The second status line names a failed model list, with what that means here, and offers the list's own retry and Models. */
-function listFailureSaid(meaning: "no team can be formed without it" | "the seats are the team on the line"): string {
-  return `!!document.querySelectorAll(${JSON.stringify(`${generator} .${G}stmt-line`)})[1]?.textContent.startsWith(${JSON.stringify(`Model list unavailable · ${meaning}`)}) && !!${statusFix("retry")} && !!${statusFix("Models")}`;
+/** Every row's value, as one string: whatever a key, a press or the wheel changed shows here. */
+const profileValues = `[${ROWS.map(rowValue).join(", ")}].join(' / ')`;
+/** A fix beside the launch, by its stable key. */
+function fix(key: string): string {
+  return element(`${generator} .${G}launch-line [data-fix="${key}"]`);
 }
-function footerLink(name: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}footer-link`)})].find(el => el.textContent.trim().startsWith(${JSON.stringify(name)}))`;
+/** A cue in the generator's head (`d · defaults`, `z · saved`), by its key. */
+function headCue(key: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`${generator} [data-pane="generator"] .${G}head .${G}cue`)})].find(el => el.querySelector('.${G}cue-key')?.textContent === ${JSON.stringify(key)})`;
 }
-/** A visible button in the generator panel, its sheets and its layer, by its exact text. */
+/** A pressable word of the key line, by its key. */
+function keyWord(name: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`${generator} button.${G}keys-word`)})].find(el => el.querySelector('.${G}keys-key')?.textContent === ${JSON.stringify(name)})`;
+}
+/** A visible button in the generator panel, its views and its sheets, by its exact text. */
 function workspaceButton(text: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${generator} button`)})].find(el => el.getClientRects().length && el.textContent.trim() === ${JSON.stringify(text)})`;
 }
-function verbIs(label: string, state: "ready" | "busy" | "waiting" | "refused"): string {
-  // Focus stays on the verb through state changes, so it is never natively disabled (spec §3).
-  return `(${verb})?.textContent === ${JSON.stringify(label)} && ${verb}.dataset.state === '${state}' && !${verb}.disabled`;
+function shownView(name: string): string {
+  return `${element(stage)}?.dataset.view === ${JSON.stringify(name)}`;
+}
+/** The launch's label (lower case, as drawn) and state. Focus stays on the launch through its states, so it is never natively disabled. */
+function launchIs(label: string, state: "ready" | "busy" | "waiting" | "refused"): string {
+  return `${launchButton}?.querySelector('.${G}launch-label')?.textContent === ${JSON.stringify(label)} && ${launchButton}.dataset.state === '${state}' && !${launchButton}.disabled`;
+}
+/** A failed model list said beside the launch with its retry and Models: `instead` of a profile (no rows), or `beside` the rows it keeps. */
+function listFailure(kind: "instead" | "beside"): string {
+  return `!!document.querySelector('${generator} .${G}launch-part[data-tone="warn"]') && !!${fix("list-retry")} && !!${fix("list-models")} && (${row("lane")} ${kind === "instead" ? "===" : "!=="} null)`;
+}
+const running = `${element(generator)}.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running').length`;
+async function still(browser: BrowserInstance): Promise<void> {
+  await until(browser, "every animation has finished", `${running} === 0`);
 }
 
-/** The roles on the seat board: each role's seat (its model alias and id) and the thinking it runs at. */
-type Seated = { role: string; alias: string; model: string; thinking: string };
-async function seatedRoles(browser: BrowserInstance): Promise<Seated[]> {
-  return browser.evaluate<Seated[]>(`[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}board [role="group"]`)})].flatMap(seat => {
-    const alias = seat.querySelector('.${G}seat-alias');
-    if (!alias) return [];
-    return [...seat.querySelectorAll('ul.${G}roles')].flatMap(list => [...list.querySelectorAll('li')].map(item => ({
-      role: item.textContent.trim(), alias: alias.textContent.trim(), model: alias.title, thinking: list.dataset.level,
-    })));
+/** The routing beside the generator: each routed role's lead, its model alias and the thinking it runs at. */
+type Routed = { role: string; alias: string; thinking: string };
+async function routedRoles(browser: BrowserInstance): Promise<Routed[]> {
+  return browser.evaluate<Routed[]>(`[...document.querySelectorAll(${JSON.stringify(`${routeRows}:not([data-off])`)})].map(route => {
+    const value = route.querySelector('.${G}chain > .${G}tok > .${G}tok-layer:not([aria-hidden]) .${G}tok-value');
+    return { role: route.dataset.role, alias: value?.querySelector('.${G}tok-alias')?.textContent ?? '',
+      thinking: (value?.querySelector('.${G}tok-thinking')?.textContent ?? '').replace(/^:/, '') };
   }).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0)`);
 }
-/** What the board must show for a selection: every routed role on its lead's seat at the lead's thinking. */
-function expectedSeats(document: CatalogDocument, selection: Selection): Seated[] {
+/** What the routing must show for a selection: every routed role on its lead's alias at the lead's thinking. */
+function expectedRoutes(document: CatalogDocument, selection: Selection): Routed[] {
   const compiled = compileCatalog(document);
   const aliases = displayAliases(compiled);
   return reviewCatalog(compiled, selection, Date.now()).routes.map(route => ({
-    role: route.role, alias: aliases.get(route.lead.key) ?? route.lead.key, model: compiled.model(route.lead.key).id, thinking: route.lead.thinking,
+    role: route.role, alias: aliases.get(route.lead.key) ?? route.lead.key, thinking: route.lead.thinking,
   })).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0);
 }
-async function assertRoles(browser: BrowserInstance, advisor: boolean): Promise<void> {
-  await until(browser, "the seat board seats the team", `${board}?.querySelector('ul.${G}roles li') != null`);
-  const seated = await seatedRoles(browser);
-  assert.deepEqual(seated.map(entry => entry.role).sort(), [...profileRoles, ...(advisor ? ["advisor"] : [])].sort(),
-    "The full current role contract is seated, including delegated and utility roles");
-  assert(seated.every(entry => entry.alias && entry.model && entry.thinking), "Every seated role names its model and supported effort");
+async function assertRoutes(browser: BrowserInstance, advisor: boolean): Promise<void> {
+  await until(browser, "the routing routes the profile", `document.querySelector(${JSON.stringify(`${routeRows}:not([data-off])`)}) !== null`);
+  await still(browser);
+  const routed = await routedRoles(browser);
+  assert.deepEqual(routed.map(entry => entry.role).sort(), [...profileRoles, ...(advisor ? ["advisor"] : [])].sort(),
+    "The full current role contract is routed, including delegated and utility roles");
+  assert(routed.every(entry => entry.alias && entry.thinking), "Every routed role names its model and supported effort");
 }
 
-/** Opens a word's drum and picks the option with this label; extras stay open for more switches. */
-async function choose(browser: BrowserInstance, word: Word, label: string): Promise<void> {
-  // Pressing the option already on the line does nothing and leaves the drum open, so a word already there is only closed.
-  if (word !== "extras" && await browser.evaluate<boolean>(`${wordValue(word)} === ${JSON.stringify(label)}`)) {
-    if (await browser.evaluate<boolean>(`${slot(word)}?.dataset.open === 'true'`)) {
-      await click(browser, `${slot(word)}?.querySelector('.${G}stmt-value')`);
-      await until(browser, `the ${word} drum closes`, `${slot(word)}?.dataset.open !== 'true'`);
-    }
-    return;
-  }
-  if (!await browser.evaluate<boolean>(`${slot(word)}?.dataset.open === 'true'`)) await click(browser, `${slot(word)}?.querySelector('.${G}stmt-value')`);
-  await until(browser, `the ${word} drum opens`, `${slot(word)}?.dataset.open === 'true'`);
-  await click(browser, option(word, label));
+/** Chooses a word of a row by a real press, unless it is already chosen. */
+async function choose(browser: BrowserInstance, id: RowId, key: string): Promise<void> {
+  if (!await browser.evaluate<boolean>(`${word(id, key)}?.dataset.selected !== undefined`)) await click(browser, word(id, key));
+  await until(browser, `the ${id} row is on ${key}`, `${word(id, key)}?.dataset.selected !== undefined`);
 }
-async function chooseMachine(browser: BrowserInstance, name: string): Promise<void> {
-  await until(browser, "the line names a machine", `!!${wordValue("machine")}`);
-  await choose(browser, "machine", name);
-  await until(browser, `the line is on ${name}`, `${wordValue("machine")} === ${JSON.stringify(name)} && ${slot("machine")}?.dataset.open !== 'true'`);
+/**
+ * Keyboard focus on a row, by real keys only: a press on the generator's title gives the panel root
+ * focus, an arrow there enters the rows at the one the keyboard was last on, and ↑/↓ walk them.
+ */
+async function focusRow(browser: BrowserInstance, id: RowId): Promise<void> {
+  await click(browser, generatorTitle);
+  await key(browser, "ArrowDown", 40);
+  for (let step = 0; step < ROWS.length; step++) {
+    const at = await browser.evaluate<string>(`document.activeElement?.dataset.row ?? ''`);
+    if (at === id) break;
+    const from = ROWS.indexOf(at as RowId), to = ROWS.indexOf(id);
+    await key(browser, from < to ? "ArrowDown" : "ArrowUp", from < to ? 40 : 38);
+  }
+  await until(browser, `keyboard focus on the ${id} row`, `document.activeElement === ${row(id)} && document.activeElement.matches(':focus-visible')`);
 }
 /** Real Tab presses until the expression holds focus; Shift+Tab when `backward`. */
 async function tabTo(browser: BrowserInstance, description: string, expression: string, backward = false): Promise<void> {
@@ -359,47 +398,54 @@ async function tabTo(browser: BrowserInstance, description: string, expression: 
   }
   throw new ProofFailure(`Keyboard focus never reached ${description}`);
 }
-/**
- * Keyboard focus on a word or the verb, by real keys only: a press on the earlier statements'
- * heading sets the sequential focus point below the statement, Shift+Tab walks back to its first
- * stop there, and ←/→ walk the statement in reading order (locked words leave the Tab order).
- */
-async function focusStatement(browser: BrowserInstance, target: Word | "verb"): Promise<void> {
-  await click(browser, element(`${generator} .${G}earlier-title`));
-  await tabTo(browser, "the statement", `(() => { const el = document.activeElement; return el?.matches('${generator} [data-stmt-verb], ${generator} [data-stmt-word]') ? el : null; })()`, true);
-  for (let step = 0; step < READING_ORDER.length; step++) {
-    const at = await browser.evaluate<string>(`document.activeElement?.dataset.stmtWord ?? (document.activeElement?.matches('[data-stmt-verb]') ? 'verb' : '')`);
-    const from = READING_ORDER.indexOf(at as Word | "verb"), to = READING_ORDER.indexOf(target);
-    if (from === to) break;
-    await key(browser, from < to ? "ArrowRight" : "ArrowLeft", from < to ? 39 : 37);
-  }
-  await until(browser, `keyboard focus on ${target}`, `document.activeElement === ${target === "verb" ? verb : slot(target)} && document.activeElement.matches(':focus-visible')`);
+/** Keyboard focus on the launch, reached by Tab from the panel root: the rows are one Tab stop, and the launch comes after them. */
+async function focusLaunch(browser: BrowserInstance): Promise<void> {
+  await click(browser, generatorTitle);
+  await tabTo(browser, "the launch", launchButton);
+}
+async function chooseMachine(browser: BrowserInstance, machineId: string, name: string): Promise<void> {
+  await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent`);
+  if (await browser.evaluate<boolean>(`${machinePicker}.textContent === ${JSON.stringify(name)}`)) return;
+  await click(browser, machinePicker);
+  await until(browser, "the machine list opens", `${machineList} !== null`);
+  await click(browser, element(`${generator} [data-machine="${machineId}"]`));
+  await until(browser, `the launch runs on ${name}`, `${machineList} === null && ${machinePicker}?.textContent === ${JSON.stringify(name)}`);
 }
 
-/** The footer's ways out of the main view, by the link's own (lowercase) words. */
-type SheetLink = "accounts" | "models" | "setup" | "session options";
-async function openSheet(browser: BrowserInstance, name: SheetLink): Promise<void> {
-  await click(browser, footerLink(name));
-  await until(browser, `${name} opens over the main view`, `${element(mainView)}?.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Back to Code"]')`);
+/** The sheets that open over the stage, and the key the main view opens each with. */
+type Sheet = "models" | "setup" | "options";
+const SHEETS: Readonly<Record<Sheet, { key: string; code: number; title: string }>> = {
+  models: { key: "m", code: 77, title: "Models" }, setup: { key: "u", code: 85, title: "Setup" }, options: { key: "o", code: 79, title: "Session options" },
+};
+/** Opens a sheet by its key from the main view, remembering what had focus so its return can be checked. */
+async function openSheet(browser: BrowserInstance, sheet: Sheet): Promise<void> {
+  if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`)) await click(browser, generatorTitle);
+  await browser.evaluate(`(globalThis.__codeOpener = document.activeElement, true)`);
+  await key(browser, SHEETS[sheet].key, SHEETS[sheet].code);
+  await until(browser, `${sheet} opens over the stage with focus on its way back`, `${element(stage)}?.hidden === true &&
+    ${visibleSheet}?.querySelector('.plugin-atyrode_code__sheet')?.getAttribute('aria-label') === ${JSON.stringify(SHEETS[sheet].title)} &&
+    document.activeElement === ${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
 }
 async function closeSheet(browser: BrowserInstance): Promise<void> {
   await click(browser, `${visibleSheet}?.querySelector('[aria-label="Back to Code"]')`);
-  await until(browser, "the main view returns", `${element(mainView)}?.hidden === false`);
+  await until(browser, "the stage returns", `${element(stage)}?.hidden === false`);
 }
 async function openOptions(browser: BrowserInstance): Promise<void> {
-  if (!await browser.evaluate<boolean>(`!!${visibleSheet}?.contains(${skillsSection})`)) await openSheet(browser, "session options");
+  if (!await browser.evaluate<boolean>(`!!${visibleSheet}?.contains(${skillsSection})`)) await openSheet(browser, "options");
   await until(browser, "session options open", `!!${visibleSheet}?.contains(${skillsSection})`);
 }
-/** Esc from the control last used in the sheet closes it, and focus goes back to the link that opened it. */
+/** Esc from the control last used in the sheet closes it, and focus goes back to what opened it. */
 async function closeOptions(browser: BrowserInstance): Promise<void> {
   assert.equal(await browser.evaluate(`!!${visibleSheet}?.contains(document.activeElement)`), true, "Session options keep focus while they are open");
   await key(browser, "Escape", 27);
-  await until(browser, "Esc closes session options and gives focus back to their link", `${element(mainView)}?.hidden === false && document.activeElement === ${sessionOptions}`);
+  await until(browser, "Esc closes session options and gives focus back to what opened them", `${element(stage)}.hidden === false && document.activeElement === globalThis.__codeOpener`);
 }
-/** A session option's switch (a set, a skill, restricted automation or a tool), by its words. */
-function optionSwitch(group: "Optional skills" | "Automation policy", label: string): string {
+/** A switch in the session options (a profile switch, a set, a skill, restricted automation or a tool), by its words. */
+function optionSwitch(group: "Profile switches" | "Optional skills" | "Automation policy", label: string): string {
   return `[...document.querySelectorAll(${JSON.stringify(`${generator} [aria-label="${group}"] [role="switch"]`)})].find(el => el.textContent.trim() === ${JSON.stringify(label)})`;
 }
+/** Automatic plan approval: a profile switch, saved with the workspace profile, that lives in the session options. */
+const autoPlans = optionSwitch("Profile switches", "auto plans");
 /** Turns a switch on or off by a real press, unless it already is. */
 async function turn(browser: BrowserInstance, control: string, on: boolean): Promise<void> {
   if (await browser.evaluate<boolean>(`${control}?.getAttribute('aria-checked') !== '${on}'`)) await click(browser, control);
@@ -468,7 +514,7 @@ async function arrangeWorkbench(server: TestServer, grant: TokenGrant): Promise<
 }
 async function openGenerator(browser: BrowserInstance, server: TestServer, containerId: string): Promise<void> {
   await browser.goto(`${server.httpUrl}/p/${containerId}`);
-  await until(browser, "the Code main view is mounted", `${element(mainView)} !== null && ${verb} !== null`);
+  await until(browser, "the Code main view is mounted", `${element(stage)} !== null && ${launchButton} !== null`);
 }
 async function selectDestination(browser: BrowserInstance, selector: string, machineId: string): Promise<void> {
   await until(browser, "permitted destination is listed", `[...(${element(selector)}?.options ?? [])].some(option => option.value === ${JSON.stringify(machineId)})`);
@@ -600,8 +646,8 @@ async function readStarterDraft(browser: BrowserInstance): Promise<StarterDraft>
   return JSON.parse(await browser.evaluate<string>(`${profileExport}.value`)) as StarterDraft;
 }
 /**
- * A team this browser launched in the workspace before, as the panel keeps it (recent-teams.ts):
- * device-local, per principal and workspace, read when the panel mounts. It gives the digits a team
+ * A profile this browser launched in the workspace before, as the panel keeps it (recent-teams.ts):
+ * device-local, per principal and workspace, read when the panel mounts. It gives the digits a profile
  * to recall without a launch, which the fixture refuses.
  */
 async function rememberTeam(browser: BrowserInstance, principalId: string, containerId: string, selection: Selection): Promise<void> {
@@ -609,19 +655,20 @@ async function rememberTeam(browser: BrowserInstance, principalId: string, conta
 }
 
 async function usableStarter(browser: BrowserInstance): Promise<void> {
-  await until(browser, "the bundled preview is on the line", `['lane','tier','thinking','advisor','extras','machine'].every(word =>
-    document.querySelector('${generator} [data-stmt-word="' + word + '"]'))`);
+  await until(browser, "the bundled preview fills the generator's rows", `${JSON.stringify(ROWS)}.every(id => document.querySelector('${generator} [data-row="' + id + '"]'))`);
   // A bundled preview is saved only by the verification that replaces it; the fixture reads no accounts and has no discovery, so that is refused.
-  await until(browser, "the starter's only step is a refused verification", verbIs("Verify models", "refused"));
-  for (const word of ["lane", "tier", "thinking", "advisor", "extras", "machine"] as const) {
-    assert.equal(await browser.evaluate(`${slot(word)}.tabIndex === 0 && !${slot(word)}.hasAttribute('aria-disabled')`), true,
-      `The ${word} word is editable before shared policy exists`);
-  }
+  await until(browser, "the starter's only step is a refused verification", launchIs("verify models", "refused"));
+  // Before shared policy exists no row is locked: a row refuses only where its own other value is refused.
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') === 'true' &&
+    !(row.getAttribute('role') === 'switch' && row.querySelector('.${G}word:not([data-selected])[data-off]'))).map(row => row.dataset.row)`), [],
+    "Every row is editable before shared policy exists");
+  assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.tabIndex === 0).length`), 1,
+    "The rows are one keyboard Tab stop");
   // The default profile keeps the old Code advisor default (glance), so the advisor role is routed.
-  await assertRoles(browser, true);
+  await assertRoutes(browser, true);
 }
 
-// ---------------------------------------------------------------- acceptance a browser can prove (spec §2, §3, §7, §8, §10)
+// ---------------------------------------------------------------- acceptance a browser can prove
 
 /** Sizes the generator panel itself to `width` by resizing the viewport around the fixed layout. */
 async function panelWidth(browser: BrowserInstance, width: number, height = 900): Promise<void> {
@@ -641,11 +688,35 @@ async function panelWidth(browser: BrowserInstance, width: number, height = 900)
   }
   throw new ProofFailure(`The generator panel could not be sized to ${width}px`);
 }
-// Glyphs paint inside the middle of a text box: a font's ascent and descent may reach into a
-// neighbouring line without any ink touching, so each box is trimmed by a fifth top and bottom.
+
+/** The views a key opens from the generator, and back with Esc. Routing and usage are views of their own only when narrow. */
+type View = "main" | "accounts" | "sessions" | "routing" | "usage";
+const VIEW_KEYS: Readonly<Record<Exclude<View, "main">, { key: string; code: number }>> = {
+  accounts: { key: "a", code: 65 }, sessions: { key: "e", code: 69 }, routing: { key: "p", code: 80 }, usage: { key: "s", code: 83 },
+};
+async function showView(browser: BrowserInstance, view: View): Promise<void> {
+  for (let step = 0; step < 2 && !await browser.evaluate<boolean>(shownView("main")) && !await browser.evaluate<boolean>(shownView(view)); step++) {
+    await key(browser, "Escape", 27);
+  }
+  await until(browser, `Esc goes back towards ${view}`, `${shownView("main")} || ${shownView(view)}`);
+  if (view === "main" || await browser.evaluate<boolean>(shownView(view))) return;
+  if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`)) await click(browser, generatorTitle);
+  await key(browser, VIEW_KEYS[view].key, VIEW_KEYS[view].code);
+  await until(browser, `${view} takes the stage`, shownView(view));
+}
+
+/**
+ * The shown view's text and controls, as painted. Glyphs paint inside the middle of a text box: a
+ * font's ascent and descent may reach into a neighbouring line without any ink touching, so each box
+ * is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips
+ * it sideways is cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by
+ * a clip is still overflow. Screen-reader text is clipped to a pixel on purpose and is left out. A
+ * control narrower than 24px can no longer be read or pressed.
+ */
+type Paint = { overflow: number; overlaps: string[]; outside: string[]; cut: string[]; small: string[]; texts: number };
 const PAINT = `(() => {
   const root = document.querySelector('${generator}');
-  const view = root.querySelector('[data-view="main"]');
+  const view = root.querySelector('[data-tui]');
   const viewport = root.querySelector('.scroll-region__viewport');
   const bounds = root.getBoundingClientRect();
   const clips = new Map();
@@ -661,20 +732,32 @@ const PAINT = `(() => {
     clips.set(element, clip);
     return clip;
   };
-  const boxes = [];
+  const boxes = [], cut = [];
   const walker = document.createTreeWalker(view, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!node.textContent.trim()) continue;
     const parent = node.parentElement;
-    if (!parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+    if (parent.closest('.plugin-atyrode_code__sr') || !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
     const clip = clipOf(parent);
+    const text = node.textContent.trim().slice(0, 32);
     const range = document.createRange();
     range.selectNodeContents(node);
     for (const rect of range.getClientRects()) {
+      if (rect.width < 1) continue;
+      for (let box = parent; box && box !== root.parentElement; box = box.parentElement) {
+        const style = getComputedStyle(box);
+        if (style.overflowX === 'visible') continue;
+        const edge = box.getBoundingClientRect();
+        const ends = style.textOverflow === 'ellipsis' || getComputedStyle(parent).textOverflow === 'ellipsis' || style.webkitLineClamp !== 'none';
+        if ((rect.left < edge.left - 1 || rect.right > edge.right + 1) && !ends) {
+          cut.push(JSON.stringify(text) + ' cut by ' + (box.className || box.tagName));
+          break;
+        }
+      }
       const inset = rect.height / 5;
       const box = { left: Math.max(rect.left, clip.left), right: Math.min(rect.right, clip.right),
         top: Math.max(rect.top + inset, clip.top), bottom: Math.min(rect.bottom - inset, clip.bottom) };
-      if (box.right - box.left > 1 && box.bottom - box.top > 1) boxes.push({ node, text: node.textContent.trim().slice(0, 32), box });
+      if (box.right - box.left > 1 && box.bottom - box.top > 1) boxes.push({ node, text, box });
     }
   }
   const overlaps = [];
@@ -686,296 +769,347 @@ const PAINT = `(() => {
     if (across > 1 && down > 1) overlaps.push(JSON.stringify(a.text) + ' over ' + JSON.stringify(b.text));
   }
   const outside = boxes.filter(entry => entry.box.left < bounds.left - 1 || entry.box.right > bounds.right + 1).map(entry => entry.text);
+  const small = [...view.querySelectorAll('button, [role="slider"], [role="switch"], [role="listbox"]')]
+    .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length && el.getBoundingClientRect().width < 24)
+    .map(el => (el.dataset.row ?? (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 32)) + ' ' + Math.round(el.getBoundingClientRect().width) + 'px');
   return { overflow: Math.max(0, viewport.scrollWidth - viewport.clientWidth, view.scrollWidth - view.clientWidth),
-    overlaps: overlaps.slice(0, 6), outside: outside.slice(0, 6), texts: boxes.length };
+    overlaps: overlaps.slice(0, 6), outside: outside.slice(0, 6), cut: cut.slice(0, 6), small, texts: boxes.length };
 })()`;
+
 /**
- * Every rendered box in the main view, relative to the view itself so that scrolling it is not a
- * shift. Left out: boxes that paint nothing (unrendered, or screen-reader text), and the status
- * lines' own text, which a pointed option rewrites by design inside its fixed lines.
+ * Every laid-out element of the stage by its layout box: offsets summed up the offset parents and
+ * taken from the stage's own, so a transform (the ▸ pointer sliding in, the launch glyph's nudge, the
+ * glider) and a scroll are not shifts. Left out: what the readouts say, which by design changes inside
+ * their fixed boxes with whatever is pointed or focused; the next-refresh line, which follows the clock
+ * and the refresh cadence, never the pointer; and screen-reader text.
  */
 const BOXES = `(() => {
-  const view = document.querySelector('${mainView}');
-  const origin = view.getBoundingClientRect();
+  const stage = document.querySelector('${stage}');
+  const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
+  const [ox, oy] = at(stage);
   const boxes = new Map();
-  for (const element of view.querySelectorAll('*')) {
-    if (element.parentElement?.closest('.${G}stmt-line') || element.closest('.plugin-atyrode_code__sr')) continue;
-    const rect = element.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) continue;
-    boxes.set(element, [rect.x - origin.x, rect.y - origin.y, rect.width, rect.height].map(value => Math.round(value * 2) / 2).join(','));
+  for (const element of stage.querySelectorAll('*')) {
+    if (!(element instanceof HTMLElement) || element.offsetParent === null || element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')) continue;
+    const [x, y] = at(element);
+    boxes.set(element, [x - ox, y - oy, element.offsetWidth, element.offsetHeight].join(','));
   }
-  globalThis.__codeView = view;
+  globalThis.__codeStage = stage;
   globalThis.__codeBoxes = boxes;
   return boxes.size;
 })()`;
 const SHIFTED = `(() => {
-  const origin = globalThis.__codeView.getBoundingClientRect();
+  const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
+  const [ox, oy] = at(globalThis.__codeStage);
   const moved = [];
   for (const [element, before] of globalThis.__codeBoxes) {
-    if (!element.isConnected) continue;
-    const rect = element.getBoundingClientRect();
-    const now = [rect.x - origin.x, rect.y - origin.y, rect.width, rect.height].map(value => Math.round(value * 2) / 2).join(',');
+    if (!element.isConnected || element.offsetParent === null) continue;
+    const [x, y] = at(element);
+    const now = [x - ox, y - oy, element.offsetWidth, element.offsetHeight].join(',');
     if (now !== before) moved.push((element.className || element.tagName) + ' ' + JSON.stringify((element.textContent ?? '').trim().slice(0, 24)) + ' ' + before + ' -> ' + now);
   }
   return moved.slice(0, 6);
 })()`;
 
+const WIDTHS = [1440, 1280, 1100, 860, 620, 560, 390, 320, 240, 170];
 /**
- * No horizontal overflow and no text box intersecting another from 170 to 1440px of panel width,
- * in every width form of the statement and both forms of the board (spec §8, §10).
+ * From 170 to 1440px of panel width, in every view the width offers (routing and usage are views of
+ * their own when narrow): text paints, and there is no horizontal overflow, no cut text, no text
+ * outside the panel, no text box intersecting another and no control too narrow to press, in each of
+ * the panel's three layouts. Every width and view is measured before the verdict, so one run names
+ * every place that fails.
  */
 async function geometryAcrossWidths(browser: BrowserInstance, label: string): Promise<void> {
-  const forms = new Set<string>();
+  const modes = new Set<string>();
+  const problems: string[] = [];
   try {
-    for (const width of [1440, 1280, 1100, 860, 620, 560, 390, 320, 240, 170]) {
+    for (const width of WIDTHS) {
       await panelWidth(browser, width);
-      await until(browser, `the ${width}px statement has measured its form`, `${element(`${generator} .${G}stmt-statement`)}?.dataset.ready === 'true'`);
-      const facts = await browser.evaluate<{ overflow: number; overlaps: string[]; outside: string[]; texts: number }>(PAINT);
-      assert(facts.texts > 20, `The ${label} main view paints its text at ${width}px`);
-      assert.equal(facts.overflow, 0, `The ${label} main view has no horizontal overflow at ${width}px`);
-      assert.deepEqual(facts.outside, [], `No ${label} text paints outside the ${width}px panel`);
-      assert.deepEqual(facts.overlaps, [], `No ${label} text box intersects another at ${width}px`);
-      forms.add(await browser.evaluate<string>(`${element(`${generator} .${G}stmt-statement`)}.dataset.form + '/' + (${board}?.dataset.form ?? 'none')`));
+      const mode = await browser.evaluate<string>(`${element(stage)}.dataset.mode`);
+      modes.add(mode);
+      for (const view of ["main", "accounts", "sessions", ...(mode === "narrow" ? ["routing", "usage"] as const : [])] as const) {
+        await showView(browser, view);
+        await still(browser);
+        const facts = await browser.evaluate<Paint>(PAINT);
+        const where = `${view} at ${width}px`;
+        if (facts.texts <= (view === "main" ? 20 : 3)) problems.push(`${where}: too little text paints (${facts.texts})`);
+        if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
+        problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the panel`),
+          ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: control ${entry} wide`));
+      }
+      await showView(browser, "main");
     }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert(forms.size >= 3, `The ${label} widths exercise several statement and board forms (${[...forms].join(", ")})`);
+  assert.deepEqual(problems, [], `No ${label} view overflows, cuts, collides or squeezes a control from 170 to 1440px`);
+  assert.deepEqual([...modes].sort(), ["medium", "narrow", "wide"], `The ${label} widths exercise the panel's three layouts`);
 }
 
-/** Pointing at or focusing any control in the main view moves no box but the status lines' own text (spec §8, §10). */
+/** Pointing at or focusing any control of the generator, routing, usage or key line moves no layout box (the readouts' words aside). */
 async function zeroShift(browser: BrowserInstance, label: string): Promise<void> {
+  await showView(browser, "main");
   const targets = await browser.evaluate<number>(`(() => {
-    const view = document.querySelector('${mainView}');
-    globalThis.__codeTargets = [...view.querySelectorAll('button, [data-stmt-word] .${G}stmt-value, .${G}stmt-ghost')]
+    const stage = document.querySelector('${stage}');
+    globalThis.__codeTargets = [...stage.querySelectorAll('button, [role="slider"], [role="switch"], [role="meter"], .${G}word, .${G}tok')]
       .filter(el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length);
     return globalThis.__codeTargets.length;
   })()`);
-  assert(targets > 10, `The ${label} main view offers its pointer targets`);
+  assert(targets > 30, `The ${label} main view offers its pointer targets`);
   for (let index = 0; index < targets; index++) {
     const target = `globalThis.__codeTargets[${index}]`;
     if (!await browser.evaluate<boolean>(`${target}.isConnected`)) continue;
-    await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
-    await settle(browser);
+    await pointAway(browser);
+    await still(browser);
     await browser.evaluate(BOXES);
     await pointOf(browser, target);
     await settle(browser);
     assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at ${label} target ${index} shifts no layout box`);
   }
-  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
-  await focusStatement(browser, "verb");
-  await settle(browser);
+  await pointAway(browser);
+  await click(browser, generatorTitle);
+  await still(browser);
   await browser.evaluate(BOXES);
-  for (let step = 0; step < 40; step++) {
+  for (let step = 0; step < 60; step++) {
     await key(browser, "Tab", 9);
     await settle(browser);
-    if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${mainView}')`)) break;
+    if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}')`)) break;
     assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${step} in the ${label} main view shifts no layout box`);
   }
 }
 
+/** On a coarse pointer every target of the generator, the accounts and the sessions is at least 44px: a row by its height, anything else both ways. */
+async function coarseTargets(browser: BrowserInstance, label: string): Promise<void> {
+  for (const width of [1280, 860, 390, 240]) {
+    await panelWidth(browser, width);
+    for (const view of ["main", "accounts", "sessions"] as const) {
+      await showView(browser, view);
+      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${stage} :is(button, [role="slider"], [role="switch"], [role="listbox"])`)})]
+        .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length)
+        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 44 || (!el.matches('[data-row]') && rect.width < 44); })
+        .map(el => (el.dataset.row ?? (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 24)) + ' ' + Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height))`);
+      assert.deepEqual(small, [], `Every target is at least 44px on a coarse pointer in the ${label} ${view} view at ${width}px`);
+    }
+  }
+  await showView(browser, "main");
+}
+
 /**
  * The browser-provable acceptance of the main view on a bundled preview, which keeps every effect
- * local: panel-local keys, the keys dialog, keyboard edits, wheel rules, touch, reduced motion,
- * zero hover/focus shift and width geometry. `recent` is the browser's one recent team, which the
- * digit 1 recalls. Leaves the team as it found it.
+ * local: panel-local keys, keys an open popover owns, the full key line, keyboard edits and refusals,
+ * the wheel, touch and coarse targets, reduced motion, zero hover/focus shift and width geometry.
+ * `recent` is the browser's one recent profile, which the digit 1 recalls from the sessions view.
+ * Leaves the profile as it found it.
  */
 async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection): Promise<void> {
   const before = await readStarterDraft(browser);
-  const thinking = await browser.evaluate<string>(wordValue("thinking"));
+  const thinking = await browser.evaluate<string>(chosenKey("thinking"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
+  const routing = element(`${generator} [data-pane="routing"]`), usage = element(`${generator} [data-pane="usage"]`);
+  // The main view as it rests: the generator with routing and usage, one key line, no sheet and the fallback chains hidden.
+  const resting = `${shownView("main")} && document.querySelectorAll('${generator} .${G}keys-line').length === 1 && ${element(stage)}.hidden === false &&
+    ${routing}.hidden === false && ${usage}.hidden === false && ${element(`${generator} .${G}chains`)}.getAttribute('aria-pressed') === 'false'`;
 
-  // Keys are panel-local: the same keys pressed in another panel never reach the statement.
+  // Keys are panel-local: the same keys pressed in another panel never reach the generator.
   await click(browser, element(".react-flow .react-flow__pane"));
-  for (const [name, code] of [["?", 191], ["1", 49], ["ArrowUp", 38], ["r", 82]] as const) await key(browser, name, code);
-  assert.equal(await browser.evaluate(`${keysDialog} === null`), true, "A key pressed outside the panel never opens its keys");
-  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed outside the panel never edit its team");
+  for (const [name, code] of [["?", 191], ["a", 65], ["e", 69], ["m", 77], ["w", 87], ["p", 80], ["d", 68], ["f", 70], ["ArrowDown", 40], ["Enter", 13]] as const) await key(browser, name, code);
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(`${resting} && ${machineList} === null && !document.activeElement?.closest('${generator}')`), true,
+    "A key pressed outside the panel changes none of its views, panes, key line, sheets or focus");
+  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed outside the panel never edit its profile");
 
-  // Behind a sheet the panel's keys do nothing, even with the panel root itself focused: not ↵ or Mod+↵ (the verb's
-  // step, here a refusal it would say aloud), not a digit, not ?.
-  await openSheet(browser, "session options");
+  // Behind a sheet the panel's keys do nothing, even with the panel root itself focused: not ↵ or Mod+↵ (the launch's
+  // step, here a refusal it would say aloud), not a view, not the key line, not defaults.
+  await openSheet(browser, "options");
   await click(browser, element(`${generator} .${G}options-lede`));
   assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on a sheet's text leaves focus on the panel root behind it");
-  for (const [name, code, modifiers] of [["1", 49, 0], ["?", 191, 0], ["Enter", 13, 0], ["Enter", 13, CTRL]] as const) await key(browser, name, code, { modifiers });
+  for (const [name, code, modifiers] of [["?", 191, 0], ["a", 65, 0], ["e", 69, 0], ["w", 87, 0], ["d", 68, 0], ["Enter", 13, 0], ["Enter", 13, CTRL]] as const) {
+    await key(browser, name, code, { modifiers });
+  }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ keys: ${keysDialog} !== null, sheet: ${element(mainView)}.hidden, said: ${liveRegion}.textContent })`),
-    { keys: false, sheet: true, said: quiet }, "No panel key acts behind a sheet: no keys dialog, no step, nothing said");
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, lines: document.querySelectorAll('${generator} .${G}keys-line').length, sheet: ${element(stage)}.hidden, said: ${liveRegion}.textContent })`),
+    { view: "main", lines: 1, sheet: true, said: quiet }, "No panel key acts behind a sheet: no view, key line or step, nothing said");
   await closeSheet(browser);
-  assert.deepEqual(await readStarterDraft(browser), before, "No panel key behind a sheet recalls or edits the team");
+  assert.deepEqual(await readStarterDraft(browser), before, "No panel key behind a sheet edits the profile");
 
-  await focusStatement(browser, "thinking");
-  await key(browser, "?", 191);
-  await until(browser, "? opens the keys dialog in the panel's layer and gives it focus", `document.activeElement === ${element(`${generator} .${G}layer .${G}keys-dialog`)}`);
-  assert.deepEqual(await browser.evaluate(`[...${keysDialog}.querySelectorAll('section')].map(group => group.getAttribute('aria-label'))`),
-    ["statement", "pools", "sessions", "recent teams", "panel"], "The keys dialog lists the keys of every region that answers them");
-  // With the dialog itself focused (its close button would take ↵ as a press), the panel's keys do nothing either.
-  for (const [name, code, modifiers] of [["1", 49, 0], ["Enter", 13, CTRL]] as const) await key(browser, name, code, { modifiers });
+  // An open popover owns its keys: with the machine list open, the panel's keys leave it alone, and ↵ is the list's own choice.
+  await focusRow(browser, "thinking");
+  await key(browser, "w", 87);
+  await until(browser, "w opens the machine list with focus in it", `${machineList} !== null && document.activeElement === ${machineList}`);
+  const machine = await browser.evaluate<string>(`${machinePicker}.textContent`);
+  for (const [name, code] of [["a", 65], ["e", 69], ["p", 80], ["s", 83], ["?", 191], ["m", 77], ["u", 85], ["o", 79], ["d", 68], ["f", 70], ["z", 90], ["1", 49]] as const) {
+    await key(browser, name, code);
+  }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ focused: document.activeElement === ${keysDialog}, said: ${liveRegion}.textContent })`),
-    { focused: true, said: quiet }, "A digit or Mod+↵ in the keys dialog neither recalls a team nor takes a step");
-  for (const modifiers of [0, 0, 0, SHIFT, SHIFT]) await key(browser, "Tab", 9, { modifiers });
-  assert.equal(await browser.evaluate(`!!document.activeElement?.closest('.${G}keys-dialog')`), true, "Tab and Shift+Tab stay inside the open keys dialog");
+  assert.equal(await browser.evaluate(`${resting} && document.activeElement === ${machineList}`), true,
+    "With the machine list open no panel key changes a view, a pane, the key line, the chains or a sheet, and the list keeps focus");
+  assert.deepEqual(await readStarterDraft(browser), before, "With the machine list open no panel key edits the profile");
+  await key(browser, "Enter", 13, { modifiers: CTRL });
+  await until(browser, "↵ in the list chooses its machine and closes onto the machine's word", `${machineList} === null && document.activeElement === ${machinePicker}`);
+  assert.deepEqual(await browser.evaluate(`({ machine: ${machinePicker}.textContent, said: ${liveRegion}.textContent })`), { machine, said: quiet },
+    "Mod+↵ in the open list takes no launch step, and choosing the current machine changes nothing");
+  await key(browser, "w", 87);
+  await until(browser, "w opens the list again", `${machineList} !== null && document.activeElement === ${machineList}`);
   await key(browser, "Escape", 27);
-  await until(browser, "Esc closes the keys and returns focus to the word", `${keysDialog} === null && document.activeElement === ${slot("thinking")}`);
-  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed in the keys dialog never edit the team");
+  await until(browser, "Esc closes the list onto the machine's word", `${machineList} === null && document.activeElement === ${machinePicker}`);
+  await click(browser, machinePicker);
+  await until(browser, "a press opens the list", `${machineList} !== null`);
+  await click(browser, element(`${generator} [data-pane="routing"] .${G}title`));
+  await until(browser, "a press outside closes the list", `${machineList} === null`);
 
-  // In the main view the digit recalls the recent team; choosing the word back returns the exact team.
+  // `?` adds the full key line, every key the main view answers, and takes no focus; Esc hides it again.
+  await focusRow(browser, "thinking");
+  await key(browser, "?", 191);
+  await until(browser, "? shows the full key line", `document.querySelectorAll('${generator} .${G}keys-line').length === 2`);
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} .${G}keys-line')[1].querySelectorAll('.${G}keys-key')].map(el => el.textContent).sort()`),
+    ["d", "f", "m", "o", "p", "r", "s", "u", "w", "⏎"], "The full key line names every key the main view answers");
+  assert.equal(await browser.evaluate(`document.activeElement === ${row("thinking")}`), true, "The full key line takes no focus");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc hides the full key line and keeps focus on the rows",
+    `document.querySelectorAll('${generator} .${G}keys-line').length === 1 && !!document.activeElement?.closest('${generator} [data-row]')`);
+
+  // The sessions view lists the recent profile; its digit recalls it, and choosing the settings back returns the exact profile.
+  await key(browser, "e", 69);
+  await until(browser, "e opens the sessions", shownView("sessions"));
+  const listed = await browser.evaluate<string>(`${liveRegion}.textContent`);
   await key(browser, "1", 49);
-  await until(browser, "1 recalls the recent team and says so", `${wordValue("advisor")} === ${JSON.stringify(recent.advisor)} && ${liveRegion}.textContent.startsWith('Recent team 1')`);
+  await until(browser, "1 recalls the recent profile and says so",
+    `${chosenKey("advisor")} === ${JSON.stringify(recent.advisor)} && ${chosenKey("thinking")} === ${JSON.stringify(recent.thinking)} && ${liveRegion}.textContent !== '' && ${liveRegion}.textContent !== ${JSON.stringify(listed)}`);
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc goes back to the generator", shownView("main"));
   await choose(browser, "advisor", before.selection.advisor);
-  await until(browser, "the advisor is back", `${wordValue("advisor")} === ${JSON.stringify(before.selection.advisor)} && ${slot("advisor")}.dataset.open !== 'true'`);
-  assert.deepEqual(await readStarterDraft(browser), before, "Recalling a team and choosing its word back returns the exact team");
-  await focusStatement(browser, "thinking");
+  await choose(browser, "thinking", before.selection.thinking);
+  assert.deepEqual(await readStarterDraft(browser), before, "Recalling a profile and choosing its settings back returns the exact profile");
 
-  // Keyboard edits: ↑ is more, Home and End reach the drum's ends, each word is one tab stop.
-  const available = await browser.evaluate<string[]>(`[...${slot("thinking")}.querySelectorAll('[role="option"]:not([aria-disabled])')].map(el => el.querySelector('.${G}stmt-text').textContent.trim())`);
+  // Keyboard edits: → is more, Home and End reach the row's ends, ↑/↓ move between rows, and the rows are one Tab stop.
+  await focusRow(browser, "thinking");
+  const available = await browser.evaluate<string[]>(`[...${row("thinking")}.querySelectorAll('.${G}word:not([data-off])')].map(el => el.dataset.key)`);
   await key(browser, "Home", 36);
-  await until(browser, "Home reaches the most thinking", `${wordValue("thinking")} === ${JSON.stringify(available[0])}`);
+  await until(browser, "Home reaches the least thinking", `${chosenKey("thinking")} === ${JSON.stringify(available[0])}`);
   await key(browser, "End", 35);
-  await until(browser, "End reaches the least thinking", `${wordValue("thinking")} === ${JSON.stringify(available.at(-1))}`);
-  await key(browser, "ArrowUp", 38);
-  await until(browser, "↑ raises the thinking one available step", `${wordValue("thinking")} === ${JSON.stringify(available.at(-2))}`);
-  assert.equal(await browser.evaluate(`${slot("thinking")}.querySelectorAll('[tabindex]').length`), 0, "Each word is one keyboard tab stop; its options are not");
-  assert.equal(await browser.evaluate(`(() => {
-    const el = document.activeElement, style = getComputedStyle(el);
-    return el.matches(':focus-visible') && ((style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) || style.boxShadow !== 'none');
-  })()`), true, "Keyboard edits keep a visible focus indicator");
-  // A keyboard commit says what it did in the first status line, where a pointer reads it before choosing.
-  const firstLine = element(`${generator} .${G}stmt-line`);
-  assert.equal(await browser.evaluate(`${firstLine}.querySelector('[data-tone="strong"]')?.textContent`), `Thinking ${available.at(-2)}`,
-    "A keyboard commit names itself in the first status line");
+  await until(browser, "End reaches the most thinking", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-1))}`);
+  await key(browser, "ArrowLeft", 37);
+  await until(browser, "← lowers the thinking one available step", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-2))}`);
+  assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.tabIndex === 0).map(row => row.dataset.row).join()`), "thinking",
+    "The rows are one Tab stop, on the row the keyboard is on");
+  assert.equal(await browser.evaluate(`${row("thinking")}.querySelectorAll('[tabindex]').length`), 0, "A row's words are not Tab stops");
+  assert.equal(await browser.evaluate(`document.activeElement === ${row("thinking")} && document.activeElement.matches(':focus-visible') &&
+    getComputedStyle(document.activeElement.querySelector('.${G}dial-ptr')).opacity === '1'`), true, "Keyboard edits keep a visible focus indicator, the row's pointer");
+  // A keyboard commit names its value in the readout, where a pointer reads a word before choosing it (once the last
+  // press's scrub, which the readout keeps for a moment after the pointer lets go, has given way).
+  await until(browser, "a keyboard commit names its value in the readout",
+    `${readout}.querySelector('b')?.textContent === ${word("thinking", available.at(-2)!)}.querySelector('.${G}word-text').textContent`);
+  await key(browser, "ArrowDown", 40);
+  await until(browser, "↓ moves to the next row", `document.activeElement === ${row("advisor")}`);
   await choose(browser, "thinking", thinking);
-  await until(browser, "the thinking word is back", `${wordValue("thinking")} === ${JSON.stringify(thinking)} && ${slot("thinking")}.dataset.open !== 'true'`);
-  assert.deepEqual(await readStarterDraft(browser), before, "Keyboard round trips return the exact team");
+  assert.deepEqual(await readStarterDraft(browser), before, "Keyboard round trips return the exact profile");
 
-  // A step only a refused option could take does nothing and says why, in the first status line and aloud, until the next key.
-  await focusStatement(browser, "tier");
-  const tier = await browser.evaluate<string>(wordValue("tier"));
+  // A step only a refused word could take does nothing and says why, in the readout and aloud.
+  await focusRow(browser, "tier");
+  const tier = await browser.evaluate<string>(chosenKey("tier"));
   const refusedTier = await browser.evaluate<string | null>(`(() => {
-    const options = [...${slot("tier")}.querySelectorAll('[role="option"]')];
-    const top = options.findIndex(el => !el.hasAttribute('aria-disabled'));
-    return top > 0 ? options[top - 1].querySelector('.${G}stmt-text').textContent.trim() : null;
+    const words = [...${row("tier")}.querySelectorAll('.${G}word')];
+    const last = words.findLastIndex(el => el.dataset.off === undefined);
+    return last >= 0 && last < words.length - 1 ? words[last + 1].dataset.key : null;
   })()`);
   assert(refusedTier, "The bundled starter refuses the tier above its most capable available one");
-  await key(browser, "Home", 36);
-  await key(browser, "ArrowUp", 38);
-  await until(browser, "a refused step names the refused option and its reason in the first status line",
-    `${firstLine}.querySelector('[data-tone="strong"]')?.textContent === ${JSON.stringify(`Tier ${refusedTier}`)} && !!${firstLine}.querySelector('[data-tone="attention"]')?.textContent`);
-  const reason = await browser.evaluate<string>(`${firstLine}.querySelector('[data-tone="attention"]').textContent`);
-  await until(browser, "a refused step says its reason aloud", `${liveRegion}.textContent === ${JSON.stringify(`Tier ${refusedTier}: ${reason}`)}`);
-  assert.notEqual(await browser.evaluate(wordValue("tier")), refusedTier, "A refused step leaves the word where it was");
-  await key(browser, "Escape", 27);
-  await until(browser, "the next key clears what the refused step said", `!${firstLine}.textContent.includes(${JSON.stringify(`Tier ${refusedTier}`)})`);
-  if (await browser.evaluate<string>(wordValue("tier")) !== tier) await choose(browser, "tier", tier);
-  await until(browser, "the tier is back", `${wordValue("tier")} === ${JSON.stringify(tier)} && ${slot("tier")}.dataset.open !== 'true'`);
-  assert.deepEqual(await readStarterDraft(browser), before, "A refused step and Home return the exact team");
+  const refusedText = await browser.evaluate<string>(`${word("tier", refusedTier)}.querySelector('.${G}word-text').textContent`);
+  await key(browser, "End", 35);
+  await key(browser, "ArrowRight", 39);
+  await until(browser, "a refused step names the refused word and its reason in the readout",
+    `${readout}.dataset.tone === 'warn' && ${readout}.querySelector('b')?.textContent === ${JSON.stringify(refusedText)} && ${readout}.textContent.length > ${refusedText.length + 3}`);
+  await until(browser, "a refused step says its reason aloud",
+    `${liveRegion}.textContent.startsWith(${row("tier")}.getAttribute('aria-label') + ' ' + ${JSON.stringify(refusedText)} + ': ') && ${liveRegion}.textContent.length > ${refusedText.length + 10}`);
+  assert.notEqual(await browser.evaluate(chosenKey("tier")), refusedTier, "A refused step leaves the row where it was");
+  await choose(browser, "tier", tier);
+  assert.deepEqual(await readStarterDraft(browser), before, "A refused step and End return the exact profile");
 
-  // The wheel turns a word only on its open drum, or under keyboard focus after the pointer rests;
-  // never after a click focused it, and never while the panel scrolls (spec §2).
+  // The wheel steps a row the keyboard has focused, or one the pointer has rested on; over a row the pointer only passes, it scrolls the panel.
   await panelWidth(browser, 860, 520);
   try {
-    const restingWheel = async (target: string, deltaY: number) => {
-      const point = await pointOf(browser, target);
-      await Bun.sleep(450);
-      await wheel(browser, point, deltaY);
-      await settle(browser);
-    };
-    // Focus must come from the click itself: a word the keyboard focused keeps its keyboard focus through a later click.
-    await click(browser, element(`${generator} .${G}earlier-title`));
-    await click(browser, `${slot("thinking")}.querySelector('.${G}stmt-connector')`);
-    assert.deepEqual(await browser.evaluate(`({ focused: document.activeElement === ${slot("thinking")}, visible: document.activeElement.matches(':focus-visible'), open: ${slot("thinking")}.dataset.open === 'true', active: document.activeElement.getAttribute('aria-label') ?? document.activeElement.tagName })`),
-      { focused: true, visible: false, open: false, active: "Thinking" }, "A click on the word's connector gives it pointer focus without opening it");
-    await restingWheel(`${slot("thinking")}.querySelector('.${G}stmt-value')`, -100);
-    assert.equal(await browser.evaluate(wordValue("thinking")), thinking, "The wheel over a word focused by a click scrolls, never turns it");
-    // A key pressed after the click does not make the click's focus a keyboard focus.
-    await key(browser, "Escape", 27);
-    await restingWheel(`${slot("thinking")}.querySelector('.${G}stmt-value')`, -100);
-    assert.equal(await browser.evaluate(wordValue("thinking")), thinking, "Click, Esc, then the wheel still never turns the word");
-    await focusStatement(browser, "thinking");
-    await restingWheel(`${slot("thinking")}.querySelector('.${G}stmt-value')`, -100);
-    await until(browser, "the wheel turns a keyboard-focused word after the pointer rests", `${wordValue("thinking")} !== ${JSON.stringify(thinking)}`);
-    const turned = await browser.evaluate<string>(wordValue("thinking"));
-    await Bun.sleep(350);
-    const scrolling = await pointOf(browser, element(`${generator} .${G}earlier-title`));
-    await wheel(browser, scrolling, 120);
-    const word = await browser.evaluate<Point>(`(() => { const rect = ${slot("thinking")}.querySelector('.${G}stmt-value').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; })()`);
-    if (word.y > 0) {
-      await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...word });
-      await wheel(browser, word, -100);
-      await settle(browser);
-      assert.equal(await browser.evaluate(wordValue("thinking")), turned, "A wheel that arrives while the panel scrolls never turns a word");
-    }
-    await click(browser, `${slot("thinking")}.querySelector('.${G}stmt-value')`);
-    await until(browser, "the drum opens", `${slot("thinking")}.dataset.open === 'true'`);
-    await Bun.sleep(350);
-    const drum = await pointOf(browser, `${slot("thinking")}.querySelector('[role="option"][aria-selected="true"]')`);
-    await Bun.sleep(350);
-    await wheel(browser, drum, 100);
-    await until(browser, "the wheel turns an open drum at once", `${wordValue("thinking")} !== ${JSON.stringify(turned)}`);
-    await key(browser, "Escape", 27);
+    const chosenWord = `${row("thinking")}.querySelector('.${G}word[data-selected]')`;
+    await click(browser, element(`${generator} [data-pane="routing"] .${G}title`));
+    await wheel(browser, await pointOf(browser, chosenWord), 100);
+    await settle(browser);
+    assert.equal(await browser.evaluate(chosenKey("thinking")), thinking, "A wheel over a row the pointer has only passed scrolls, never steps it");
+    const rested = await pointOf(browser, chosenWord);
+    await Bun.sleep(600);
+    await wheel(browser, rested, 100);
+    await until(browser, "the wheel steps a row the pointer has rested on", `${chosenKey("thinking")} !== ${JSON.stringify(thinking)}`);
     await choose(browser, "thinking", thinking);
-    await until(browser, "the wheel round trip restores the thinking", `${wordValue("thinking")} === ${JSON.stringify(thinking)} && ${slot("thinking")}.dataset.open !== 'true'`);
+    await focusRow(browser, "thinking");
+    await wheel(browser, await pointOf(browser, chosenWord), -100);
+    await until(browser, "the wheel steps a keyboard-focused row at once", `${chosenKey("thinking")} !== ${JSON.stringify(thinking)}`);
+    await choose(browser, "thinking", thinking);
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert.deepEqual(await readStarterDraft(browser), before, "Wheel round trips return the exact team");
+  assert.deepEqual(await readStarterDraft(browser), before, "Wheel round trips return the exact profile");
 
-  // Coarse pointers: drum options are at least 44px tall, and a touch scroll never edits the team.
+  // Coarse pointers: a tap chooses the word under it, a touch that scrolls across the rows chooses nothing, and every target is 44px.
   await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
   try {
     assert.equal(await browser.evaluate("matchMedia('(pointer: coarse)').matches"), true);
-    const tap = await pointOf(browser, `${slot("advisor")}.querySelector('.${G}stmt-value')`);
-    await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [tap] });
-    await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await until(browser, "a tap opens the advisor drum", `${slot("advisor")}.dataset.open === 'true'`);
-    assert.equal(await browser.evaluate(`[...${slot("advisor")}.querySelectorAll('[role="option"]')].every(el => el.getBoundingClientRect().height >= 44)`), true,
-      "Drum options are at least 44px tall on a coarse pointer");
-    await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the drum", `${slot("advisor")}.dataset.open !== 'true'`);
-    const start = await pointOf(browser, `${slot("lane")}.querySelector('.${G}stmt-value')`);
+    const advisor = await browser.evaluate<string>(chosenKey("advisor"));
+    const other = advisor === "review" ? "glance" : "review";
+    await tap(browser, word("advisor", other));
+    await until(browser, "a tap chooses the word under it", `${chosenKey("advisor")} === ${JSON.stringify(other)}`);
+    await tap(browser, word("advisor", advisor));
+    await until(browser, "a tap chooses the advisor back", `${chosenKey("advisor")} === ${JSON.stringify(advisor)}`);
+    const start = await pointOf(browser, `${row("thinking")}.querySelector('.${G}word[data-selected]')`);
     await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
     await browser.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: start.x, y: start.y + 40 }] });
     await browser.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: start.x + 50, y: start.y + 90 }] });
     await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await settle(browser);
-    if (await browser.evaluate<boolean>(`${slot("lane")}.dataset.open === 'true'`)) await key(browser, "Escape", 27);
-    assert.deepEqual(await readStarterDraft(browser), before, "A touch scroll across the statement never edits the team");
-    // Every width form keeps 44px touch targets: the words, the verb and the footer's links, session options among them.
-    for (const width of [1280, 860, 390, 240]) {
-      await panelWidth(browser, width);
-      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${mainView} :is([data-stmt-word], [data-stmt-verb], .${G}footer-link)`)})]
-        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 44 || (!el.matches('[data-stmt-word]') && rect.width < 44); })
-        .map(el => (el.dataset.stmtWord ?? el.textContent.trim()) + ' ' + Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height))`);
-      assert.deepEqual(small, [], `Touch targets are at least 44px in the ${await browser.evaluate<string>(`${element(`${generator} .${G}stmt-statement`)}.dataset.form`)} form at ${width}px`);
-    }
+    assert.deepEqual(await readStarterDraft(browser), before, "A touch scroll across the rows never edits the profile");
+    await coarseTargets(browser, label);
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
     await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
   }
 
-  // Reduced motion: a commit animates by default and not at all under prefers-reduced-motion (spec §7, §10).
-  const running = `${element(generator)}.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running').length`;
-  const ghostUp = `${slot("thinking")}.querySelector('.${G}stmt-ghost[data-at="up"]:not([data-off])')`;
+  // Reduced motion: a change rolls and glides by default, and under prefers-reduced-motion nothing the panel does animates.
+  const other = available.find(entry => entry !== thinking)!;
   await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }] });
-  await click(browser, ghostUp);
-  assert((await browser.evaluate<number>(running)) > 0, "A pointer commit rolls the word when motion is allowed");
+  await click(browser, word("thinking", other));
+  assert((await browser.evaluate<number>(running)) > 0, "A pointer commit rolls and glides when motion is allowed");
   await choose(browser, "thinking", thinking);
   await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-  await until(browser, "the earlier motion has finished", `${running} === 0 && ${slot("thinking")}.dataset.open !== 'true'`);
-  await click(browser, ghostUp);
-  assert.equal(await browser.evaluate(running), 0, "Reduced motion: a pointer commit does not animate");
-  await focusStatement(browser, "thinking");
-  await key(browser, "ArrowDown", 40);
-  assert.equal(await browser.evaluate(running), 0, "Reduced motion: a keyboard commit does not animate");
-  await until(browser, "the thinking returns", `${wordValue("thinking")} === ${JSON.stringify(thinking)}`);
+  await still(browser);
+  const motionless = async (what: string) => {
+    await settle(browser);
+    assert.equal(await browser.evaluate(running), 0, `Reduced motion: ${what} does not animate`);
+  };
+  await click(browser, word("thinking", other));
+  await motionless("a pointer commit");
+  await focusRow(browser, "thinking");
+  await key(browser, "Home", 36);
+  await motionless("a keyboard commit");
+  await choose(browser, "thinking", thinking);
+  await key(browser, "r", 82);
+  await motionless("a refresh");
+  await key(browser, "a", 65);
+  await until(browser, "a opens the accounts", shownView("accounts"));
+  await motionless("a view coming in");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc comes back", shownView("main"));
+  await motionless("the generator coming back");
+  await focusRow(browser, "thinking");
+  await key(browser, "w", 87);
+  await until(browser, "w opens the machine list", `${machineList} !== null`);
+  await motionless("the machine list");
+  await key(browser, "Escape", 27);
+  await click(browser, launchButton);
+  await motionless("a refused launch press");
   await openSheet(browser, "models");
-  assert.equal(await browser.evaluate(running), 0, "Reduced motion: a sheet does not slide in");
+  await motionless("a sheet");
   await closeSheet(browser);
-  assert.deepEqual(await readStarterDraft(browser), before, "Motion checks return the exact team");
+  assert.deepEqual(await readStarterDraft(browser), before, "Motion checks return the exact profile");
 
   await zeroShift(browser, label);
   await geometryAcrossWidths(browser, label);
-  assert.deepEqual(await readStarterDraft(browser), before, "Hover, focus and resizing are presentation only");
+  await browser.send("Emulation.setEmulatedMedia", { features: [] });
+  assert.deepEqual(await readStarterDraft(browser), before, "Hover, focus, views and resizing are presentation only");
 }
 
 // ---------------------------------------------------------------- the bundled starter
@@ -1014,7 +1148,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       const initialDraft = await readStarterDraft(browser);
       assert.equal(initialDraft.baseRevision, base.revision);
       assert.deepEqual(initialDraft.metadata, metadata, "Local routes are based on the exact real OMP metadata response");
-      // The first workspace has one recent team, which the panel reads as it mounts.
+      // The first workspace has one recent profile, which the panel reads as it mounts.
       const recent = { ...initialDraft.selection, thinking: "high", advisor: "off" } satisfies Selection;
       if (!initialized) {
         await rememberTeam(browser, writer.principal.id, workspace.id, recent);
@@ -1023,33 +1157,36 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
         assert.deepEqual(await readStarterDraft(browser), initialDraft, "An untouched preview is the same after a reload");
       }
       await choose(browser, "thinking", "high");
-      await until(browser, "a pointer commit puts high thinking on the line", `${wordValue("thinking")} === 'high'`);
       await choose(browser, "advisor", "audit");
-      await until(browser, "a pointer commit puts the audit advisor on the line", `${wordValue("advisor")} === 'audit'`);
       await until(browser, "the commit is announced", `${liveRegion}?.textContent.includes('audit')`);
-      await assertRoles(browser, true);
+      await assertRoutes(browser, true);
       const chosen = await readStarterDraft(browser);
       assert.notDeepEqual(chosen.selection, initialDraft.selection, "The first explicit choice is a nondefault selection");
       assert.equal(chosen.selection.thinking, "high");
       assert.equal(chosen.selection.advisor, "audit");
-      for (const view of ["accounts", "models", "setup"] as const) {
-        await openSheet(browser, view);
+      for (const sheet of ["models", "setup", "options"] as const) {
+        await openSheet(browser, sheet);
         await closeSheet(browser);
       }
-      assert.deepEqual(await readStarterDraft(browser), chosen, "Sheets do not regenerate or rebase starter choices");
+      for (const view of ["accounts", "sessions"] as const) {
+        await showView(browser, view);
+        await showView(browser, "main");
+      }
+      assert.deepEqual(await readStarterDraft(browser), chosen, "Sheets and views do not regenerate or rebase starter choices");
       // The unsaved choices are kept in this tab: a reload brings them back on the same bundled list.
       await openGenerator(browser, server, workspace.id);
       await usableStarter(browser);
       assert.deepEqual(await readStarterDraft(browser), chosen, "A reload keeps the unsaved starter choices");
       if (!initialized) await acceptanceScenario(browser, "bundled starter", recent);
       assert.deepEqual(await readConfiguration(server, writer, target), base,
-        "Mount, words, keys, wheel, touch, resizing and sheets never initialize or mutate policy");
+        "Mount, rows, keys, wheel, touch, views, resizing and sheets never initialize or mutate policy");
       assert.deepEqual(trace.requests.slice(start).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|select|adoptStarterProfile|changeAccounts)$/.test(request.name)), []);
       // The preview is render-only: the exact OMP response's policy derivation, with no save.
       const document = catalogFromMetadata(metadata, chosen.selection.budget);
       assert.deepEqual(chosen.document, document, "The displayed/exported preview is the policy derivation of the real response");
-      assert.deepEqual(await seatedRoles(browser), expectedSeats(document, chosen.selection),
-        "Every seated role, its model and its supported effort exactly match the policy derivation of the chosen selection");
+      await still(browser);
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, chosen.selection),
+        "Every routed role, its model and its supported effort exactly match the policy derivation of the chosen selection");
       for (const model of document.models) {
         const source = metadata.models.find(row => row.provider === model.provider && row.id === model.id);
         assert(source, "Every previewed catalog row comes from the actual pinned OMP response");
@@ -1059,7 +1196,7 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
         assert.equal(model.timeToFirstTokenMs, null, "Bundled metadata does not invent measured latency");
       }
       assert.deepEqual(await readConfiguration(server, writer, target), base, "Nothing but a verification persists the preview");
-      await until(browser, "saved policy is not native launch readiness", verbIs("Verify models", "refused"));
+      await until(browser, "saved policy is not native launch readiness", launchIs("verify models", "refused"));
       const native = await callAction(server, writer.token, "atyrode.omp.describeDestination", { ...target, machineId: destination.machineId });
       assert(native.ok);
       assert((native.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady));
@@ -1082,23 +1219,23 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   await openGenerator(browser, server, workspace.id);
   await usableStarter(browser);
   await choose(browser, "thinking", "max");
-  await until(browser, "max thinking is on the line", `${wordValue("thinking")} === 'max'`);
   const frozen = await readStarterDraft(browser);
-  const boardText = await browser.evaluate<string>(`${board}.textContent`);
+  await still(browser);
+  const routes = await routedRoles(browser);
   const competing = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(competing.ok);
   // A competing initializer moves the revision under the frozen preview: unlike a verification's own
-  // initialization, it is a change made elsewhere, and the line says so and offers theirs.
-  await until(browser, "a revision-zero preview refuses to attach to a competing initializer",
-    `${verbIs("Verify models", "refused")} && !!${statusFix("use theirs")} && (${statusText}).includes('changed elsewhere')`);
-  for (const view of ["models", "accounts"] as const) {
-    await openSheet(browser, view);
-    await closeSheet(browser);
-  }
+  // initialization, it is a change made elsewhere, and the launch line offers theirs.
+  await until(browser, "a revision-zero preview refuses to attach to a competing initializer", `${launchIs("verify models", "refused")} && !!${fix("use theirs")}`);
+  await openSheet(browser, "models");
+  await closeSheet(browser);
+  await showView(browser, "accounts");
+  await showView(browser, "main");
   assert.deepEqual(await readStarterDraft(browser), frozen, "The exact document, metadata, choices and original revision remain inspectable/exportable");
-  assert.equal(await browser.evaluate(`${board}.textContent`), boardText, "A conflict does not replace the displayed seats");
+  await still(browser);
+  assert.deepEqual(await routedRoles(browser), routes, "A conflict does not replace the shown routes");
   assert.equal((await readConfiguration(server, writer, target)).revision, 1, "Navigation cannot auto-rebase or replay a rejected first adoption");
-  assert.equal(await browser.evaluate(verbIs("Verify models", "refused")), true, "A conflicted preview stays unsavable after observation recovery");
+  assert.equal(await browser.evaluate(launchIs("verify models", "refused")), true, "A conflicted preview stays unsavable after observation recovery");
 }
 
 /** Only transport failure/latency is injected. Every successful configuration and
@@ -1126,36 +1263,38 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       const workspace = await createContainer(server, `Unavailable starter ${observation}`, "canvas");
       const target = { containerId: workspace.id };
       const metadataFails = observation === "atyrode.omp.readModelCatalog";
-      // An unread workspace is the verb's refusal and its retry. A failed model list holds the second line with its own
-      // retry and Models, whatever else the verb is refused for, and the refusal's fix moves up beside its words.
-      const retry = statusFix("retry");
+      // An unread workspace is the launch's refusal and its retry. A failed model list holds the launch line with its own
+      // retry and Models, whatever else the launch is refused for, and the refusal's fix stays beside it.
+      const retry = fix(metadataFails ? "list-retry" : "retry");
+      const noRoutes = `document.querySelector(${JSON.stringify(routeRows)}) === null`;
       await openGenerator(browser, server, workspace.id);
       await waitFor(() => held.size > 0, timeout, 50);
-      await until(browser, "the line says the team is still being read", `${element(`${generator} .${G}stmt-empty`)}?.textContent === 'Reading the team'`);
-      assert.equal(await browser.evaluate(`${verb}.dataset.state !== 'ready'`), true,
+      await until(browser, "the generator says the profile is still being read, with no rows and no model list failure",
+        `${element(`${generator} [data-pane="generator"] .${G}pane-note`)} !== null && ${row("lane")} === null && ${fix("list-retry")} === null`);
+      assert.equal(await browser.evaluate(`${launchButton}.dataset.state !== 'ready'`), true,
         "Loading observations cannot authorize a save against an invented absent record");
-      assert.equal(await browser.evaluate(`${board} === null`), true, "First-use seats are not fabricated while an authoritative prerequisite is pending");
+      assert.equal(await browser.evaluate(noRoutes), true, "First-use routes are not fabricated while an authoritative prerequisite is pending");
       hold = false;
       for (const release of [...held]) release();
       await control(browser, "a failed prerequisite offers an explicit retry", retry, false);
       assert(failed > 0);
       if (metadataFails) {
-        await until(browser, "with no team to seat, the second line names the failed model list as the reason, with its retry and Models",
-          `${listFailureSaid("no team can be formed without it")} && !!${statusFix("refresh")}`);
-        await click(browser, statusFix("Models"));
-        await until(browser, "the Models fix opens Models", `${element(mainView)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+        await until(browser, "with no profile to form, the launch line names the failed model list instead, with its retry and Models beside the launch's own fix",
+          `${listFailure("instead")} && !!document.querySelector('${generator} .${G}launch-line [data-fix]:not([data-fix^="list-"])')`);
+        await click(browser, fix("list-models"));
+        await until(browser, "the Models fix opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
         await closeSheet(browser);
       }
-      assert.equal(await browser.evaluate(`${verb}.dataset.state !== 'ready'`), true, "An unavailable observation is not an empty configuration");
-      assert.equal(await browser.evaluate(`${board} === null`), true);
+      assert.equal(await browser.evaluate(`${launchButton}.dataset.state !== 'ready'`), true, "An unavailable observation is not an empty configuration");
+      assert.equal(await browser.evaluate(noRoutes), true);
       assert.deepEqual(await readConfiguration(server, writer, target), { configuration: null, legacyMachineId: null, revision: 0 });
       fail = false;
       await click(browser, retry);
       await usableStarter(browser);
       await choose(browser, "thinking", "max");
-      await until(browser, "max thinking is on the line", `${wordValue("thinking")} === 'max'`);
       const frozen = await readStarterDraft(browser);
-      const seats = await seatedRoles(browser);
+      await still(browser);
+      const routes = await routedRoles(browser);
       fail = true;
       const failures = failed;
       // Opening a sheet re-reads every observation; this one now fails.
@@ -1163,17 +1302,19 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       await closeSheet(browser);
       await waitFor(() => failed > failures, timeout, 50);
       await control(browser, "later observation failure remains separately retryable", retry, false);
-      if (metadataFails) await until(browser, "beside the retained team, the second line names the failed model list with its retry and Models",
-        `${listFailureSaid("the seats are the team on the line")} && !!${statusFix("refresh")}`);
+      if (metadataFails) await until(browser, "beside the retained profile, the launch line names the failed model list with its retry and Models",
+        `${listFailure("beside")} && !!document.querySelector('${generator} .${G}launch-line [data-fix]:not([data-fix^="list-"])')`);
       assert.deepEqual(await readStarterDraft(browser), frozen, "Observation failure retains the original document, metadata and selected policy");
-      assert.equal(await browser.evaluate(wordValue("thinking")), "max", "The retained team stays on the line");
-      assert.deepEqual(await seatedRoles(browser), seats, "Retained seats remain inspectable when current observations fail");
-      assert.equal(await browser.evaluate(`${verb}.dataset.state !== 'ready'`), true, "A failed refresh cannot authorize a retained starter");
+      assert.equal(await browser.evaluate(chosenKey("thinking")), "max", "The retained profile stays in the rows");
+      await still(browser);
+      assert.deepEqual(await routedRoles(browser), routes, "Retained routes remain inspectable when current observations fail");
+      assert.equal(await browser.evaluate(`${launchButton}.dataset.state !== 'ready'`), true, "A failed refresh cannot authorize a retained starter");
       fail = false;
       await click(browser, retry);
       await until(browser, "real observation recovery removes its retry control", `${retry} == null`);
       assert.deepEqual(await readStarterDraft(browser), frozen, "Recovery never regenerates the local profile");
-      assert.deepEqual(await seatedRoles(browser), seats, "Recovery shows the retained seats");
+      await still(browser);
+      assert.deepEqual(await routedRoles(browser), routes, "Recovery shows the retained routes");
       assert.equal((await readConfiguration(server, writer, target)).revision, 0, "Observation recovery never implicitly saves retained choices");
     }
     assert.deepEqual(trace.requests.filter(request => /^atyrode\.code\.(initializeConfiguration|adoptStarterProfile|stageCatalog|select)$/.test(request.name)), []);
@@ -1193,7 +1334,8 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
  * Synthetic OMP observations reach the verification charge: the destination reports discovery and
  * benchmark ready, a fictional account is observed and the inventory job has settled. Code's own
  * initialization, probe composition and inventory draft are the real server's. The benchmark that
- * would spend is refused, so nothing is probed, verified or saved.
+ * would spend is refused, so nothing is probed, verified or saved. The account switch at the end is
+ * the real changeAccounts CAS against the real server.
  */
 async function verificationChargeScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Verification charge", "canvas");
@@ -1203,11 +1345,11 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
   };
   for (const operationId of [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID]) assert(packed.manifest.machine.operations[operationId], "Synthetic readiness names real upstream operations");
   const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "b".repeat(64), resourceBindingDigest: "c".repeat(64) };
-  const row = (id: string, input: number, levels: ("low" | "medium" | "high" | "xhigh" | "max")[]) => ({ provider: "anthropic", id, api: "anthropic-messages",
+  const model = (id: string, input: number, levels: ("low" | "medium" | "high" | "xhigh" | "max")[]) => ({ provider: "anthropic", id, api: "anthropic-messages",
     inputCostPerMillion: input, outputCostPerMillion: input * 5, contextWindow: 200_000, maxTokens: 64_000, reasoning: true, thinkingLevels: levels, images: true });
   const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 5_000, models: [
-    row("claude-haiku-5", 1, ["low", "medium", "high"]), row("claude-sonnet-5", 3, ["low", "medium", "high", "xhigh"]),
-    row("claude-opus-5", 5, ["low", "medium", "high", "xhigh", "max"]) ] };
+    model("claude-haiku-5", 1, ["low", "medium", "high"]), model("claude-sonnet-5", 3, ["low", "medium", "high", "xhigh"]),
+    model("claude-opus-5", 5, ["low", "medium", "high", "xhigh", "max"]) ] };
   const charge = inventoryDraft(inventory, "any").benchmark.candidates;
   const started: Record<string, unknown>[] = [], benchmarks: Record<string, unknown>[] = [], cancels: unknown[] = [];
   let listFails = true;
@@ -1249,66 +1391,59 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     }
   });
   try {
-    // The model list fails at first. Verify needs no list, so it stays the step; with no team to seat there is no board,
-    // and the second status line names the failure with the list's own retry and Models.
+    // The model list fails at first. Verify needs no list, so it stays the step; with no profile to form there are no
+    // rows and no routes, and the launch line names the failure with the list's own retry and Models.
     await openGenerator(browser, server, workspace.id);
-    await until(browser, "beside a ready Verify the second line names the failed model list with its retry and Models",
-      `${verbIs("Verify models", "ready")} && ${listFailureSaid("no team can be formed without it")}`);
-    assert.equal(await browser.evaluate(`${board} === null`), true, "With no team to seat there is no board");
+    await until(browser, "beside a ready Verify the launch line names the failed model list instead of a profile, with its retry and Models",
+      `${launchIs("verify models", "ready")} && ${listFailure("instead")}`);
+    assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(routeRows)}) === null`), true, "With no profile to form there are no routes");
     listFails = false;
-    await click(browser, statusFix("retry"));
-    await until(browser, "the list's retry reads it again and seats the bundled team", `${board} !== null && !${statusFix("retry")}`);
-    // One provider word per glance: the team's counts name each family as the lane does, never an account or provider id.
-    assert.match(await browser.evaluate<string>(`document.querySelectorAll('${generator} .${G}stmt-line')[1].textContent`),
-      /^\d+ on (GPT|Claude|DeepSeek)( · \d+ on (GPT|Claude|DeepSeek))*$/, "The team's counts use family words");
+    await click(browser, fix("list-retry"));
+    await until(browser, "the list's retry reads it again and routes the bundled profile", `document.querySelector(${JSON.stringify(routeRows)}) !== null && !${fix("list-retry")}`);
 
-    // On arrival the panel root has focus, so its keys work at once: an arrow gives the lane focus and changes nothing.
+    // On arrival the panel root has focus, so its keys work at once: an arrow gives the rows focus and changes nothing.
     await openGenerator(browser, server, workspace.id);
-    await until(browser, "with discovery ready the first step is to verify", verbIs("Verify models", "ready"));
+    await until(browser, "with discovery ready the first step is to verify", launchIs("verify models", "ready"));
     await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
-    const arrived = await browser.evaluate<string>(lineWords);
+    const arrived = await browser.evaluate<string>(profileValues);
     await key(browser, "ArrowDown", 40);
-    await until(browser, "an arrow on arrival gives the lane focus", `document.activeElement === ${slot("lane")}`);
-    assert.equal(await browser.evaluate(lineWords), arrived, "An arrow on arrival changes no word");
+    await until(browser, "an arrow on arrival gives the first row focus", `document.activeElement === ${row("lane")}`);
+    assert.equal(await browser.evaluate(profileValues), arrived, "An arrow on arrival changes no setting");
 
-    // A double-click on Verify starts one verification; its second click lands on a busy verb, never on Confirm.
-    const point = await pointOf(browser, verb);
+    // A double-click on Verify starts one verification; its second click lands on a busy launch, never on Confirm.
+    const point = await pointOf(browser, launchButton);
     await press(browser, point, 1);
     await press(browser, point, 2);
-    await until(browser, "the verb checks the accounts' models", verbIs("Checking…", "busy"));
-    assert.equal(await browser.evaluate(`document.activeElement === ${verb} && ${verb}.getAttribute('aria-busy') === 'true'`), true,
-      "The pressed verb keeps focus while it checks");
-    await until(browser, "the charge waits on its own confirmation", `${verbIs("Verify models", "waiting")} && ${confirmCharge} !== null`);
+    await until(browser, "the pressed launch checks the accounts' models and keeps focus while it checks",
+      `${launchIs("checking…", "busy")} && document.activeElement === ${launchButton} && ${launchButton}.getAttribute('aria-busy') === 'true'`);
+    await until(browser, "the charge waits on its own confirmation", `${launchIs("verify models", "waiting")} && ${confirmCharge} !== null`);
     assert.equal(started.length, 1, "A double-click on Verify starts exactly one inventory");
     assert.equal(benchmarks.length, 0, "A double-click on Verify never confirms the charge");
-    assert.equal(await browser.evaluate(`document.activeElement === ${verb}`), true, "Confirm charge is never focused for the person; the verb keeps focus");
-    assert.equal(await browser.evaluate(`${verb}.getAttribute('aria-disabled')`), "true", "While a charge waits the verb refuses by aria-disabled");
+    assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "Confirm charge is never focused for the person; the launch keeps focus");
+    assert.equal(await browser.evaluate(`${launchButton}.getAttribute('aria-disabled')`), "true", "While a charge waits the launch refuses by aria-disabled");
     assert.equal(await browser.evaluate(`${confirmCharge}.getAttribute('aria-label')`), `Confirm charge: ${charge.length} ${charge.length === 1 ? "request" : "requests"}`,
       "Confirm is bound to the exact charge shown");
-    assert(await browser.evaluate<number>(`${confirmCharge}.getBoundingClientRect().height`) >= 28, "Confirm charge is at least 28px tall");
     await until(browser, "the charge is announced", `${liveRegion}?.textContent.includes(${JSON.stringify(String(charge.length))})`);
-    assert.equal(await browser.evaluate(`(${statusText}).includes(${JSON.stringify(`Claude ${charge.length}`)})`), true, "The charge names its provider by family");
+    assert.equal(await browser.evaluate(`${lineText}.includes(${JSON.stringify(`Claude ${charge.length}`)})`), true, "The charge names its provider by family");
 
-    // While the charge waits, no team, machine or account edit may start: the words leave the Tab order.
-    for (const word of ["lane", "tier", "thinking", "advisor", "extras", "machine"] as const) {
-      assert.equal(await browser.evaluate(`${slot(word)}.getAttribute('aria-disabled') === 'true' && ${slot(word)}.tabIndex === -1`), true,
-        `The ${word} word is locked while the charge waits`);
-    }
-    const team = await browser.evaluate<string>(`[${["lane", "tier", "thinking", "advisor", "extras", "machine"].map(word => wordValue(word as Word)).join(", ")}].join(' ')`);
-    await key(browser, "ArrowRight", 39);
-    await until(browser, "→ walks from the verb to the first word", `document.activeElement === ${slot("lane")}`);
+    // While the charge waits, no profile, machine or account edit may start: every row and the machine refuse with the gate's reason.
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') !== 'true').map(row => row.dataset.row)`), [],
+      "Every row is locked while the charge waits");
+    assert.equal(await browser.evaluate(`${machinePicker}.getAttribute('aria-disabled')`), "true", "The machine is locked while the charge waits");
+    const settings = await browser.evaluate<string>(profileValues), machine = await browser.evaluate<string>(`${machinePicker}.textContent`);
+    await focusRow(browser, "lane");
     const announced = await browser.evaluate<string>(`${liveRegion}.textContent`);
-    await key(browser, "ArrowUp", 38);
-    await key(browser, "ArrowLeft", 37);
-    await until(browser, "focus returns to the verb", `document.activeElement === ${verb}`);
-    for (let step = 0; step < 6; step++) await key(browser, "ArrowRight", 39);
-    await key(browser, "ArrowDown", 40);
+    await key(browser, "ArrowRight", 39);
     await until(browser, "a refused edit says why", `${liveRegion}.textContent !== ${JSON.stringify(announced)} && ${liveRegion}.textContent !== ''`);
-    assert.equal(await browser.evaluate(`[${["lane", "tier", "thinking", "advisor", "extras", "machine"].map(word => wordValue(word as Word)).join(", ")}].join(' ')`), team,
-      "No team or machine edit lands while a charge waits");
-    await focusStatement(browser, "verb");
+    await key(browser, "ArrowDown", 40);
+    await key(browser, "End", 35);
+    await key(browser, "w", 87);
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null })`), { settings, machine, list: false },
+      "No profile or machine edit lands while a charge waits, and the machine list does not open");
+    await focusLaunch(browser);
     await key(browser, "Tab", 9);
-    assert.equal(await browser.evaluate(`document.activeElement === ${confirmCharge}`), true, "Confirm charge is the next Tab stop after the verb");
+    assert.equal(await browser.evaluate(`document.activeElement === ${confirmCharge}`), true, "Confirm charge is the next Tab stop after the launch");
 
     // Only a deliberate single press spends: never the second click of a multi-click, never a held key.
     await press(browser, await pointOf(browser, confirmCharge), 2);
@@ -1317,11 +1452,10 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     await Bun.sleep(300);
     assert.equal(benchmarks.length, 0, "Neither a second click nor key repeat confirms the charge");
     assert.equal(await browser.evaluate(`${confirmCharge} !== null`), true, "The charge still waits");
-    const cancel = `[...document.querySelectorAll('${generator} .${G}stmt-link')].find(el => el.textContent.trim() === 'cancel')`;
     // The press that prepared the charge initialized the first-use workspace: that is the run's own
     // effect, so a cancelled or stopped run offers Verify again, never a conflict with "theirs".
-    const verifyAgain = `${verbIs("Verify models", "ready")} && ${confirmCharge} === null && !${statusFix("use theirs")}`;
-    await click(browser, cancel);
+    const verifyAgain = `${launchIs("verify models", "ready")} && ${confirmCharge} === null && !${fix("use theirs")}`;
+    await click(browser, cancelCharge);
     await until(browser, "a cancelled first-use charge offers Verify again without a conflict", verifyAgain);
     assert.equal(benchmarks.length, 0, "Cancelling a waiting charge spends nothing");
     assert.deepEqual(cancels, [], "A charge that never spent has no native job to cancel");
@@ -1330,47 +1464,46 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(prepared.configuration?.active, null, "Preparing a charge promotes nothing");
     assert.equal(prepared.configuration?.draft, null, "Preparing a charge stages nothing");
 
-    // The panel's keys never act from the keys dialog, nor from behind a sheet with the panel root focused: not Mod+↵, not ↵.
-    await focusStatement(browser, "lane");
-    await key(browser, "?", 191);
-    await until(browser, "the keys dialog has focus", `document.activeElement === ${keysDialog}`);
+    // The panel's keys never take the launch's step from an open popover, nor from behind a sheet with the panel root focused.
+    await focusRow(browser, "lane");
+    await key(browser, "w", 87);
+    await until(browser, "the machine list has focus", `document.activeElement === ${machineList}`);
     await key(browser, "Enter", 13, { modifiers: CTRL });
+    await until(browser, "the list takes ↵ as its own and closes", `${machineList} === null`);
     await Bun.sleep(300);
-    assert.equal(started.length, 1, "Mod+↵ in the keys dialog takes no step");
-    await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the keys", `${keysDialog} === null`);
-    await openSheet(browser, "session options");
+    assert.equal(started.length, 1, "Mod+↵ in the open machine list takes no step");
+    await openSheet(browser, "options");
     await click(browser, element(`${generator} .${G}options-lede`));
     assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on a sheet's text leaves focus on the panel root");
     await key(browser, "Enter", 13);
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
-    assert.equal(started.length, 1, "Neither ↵ nor Mod+↵ behind a sheet takes the verb's step");
-    assert.equal(await browser.evaluate(`${element(mainView)}.hidden`), true, "The sheet stays open");
+    assert.equal(started.length, 1, "Neither ↵ nor Mod+↵ behind a sheet takes the launch's step");
+    assert.equal(await browser.evaluate(`${element(stage)}.hidden`), true, "The sheet stays open");
     await closeSheet(browser);
 
-    // On arrival a plain ↵ at the panel root takes the verb's step through the same gate as Mod+↵: it prepares the
+    // On arrival a plain ↵ at the panel root takes the launch's step through the same gate as Mod+↵: it prepares the
     // charge, and pressed again while the charge waits it never confirms it.
     await openGenerator(browser, server, workspace.id);
     await until(browser, "the reopened panel offers Verify", verifyAgain);
     await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
     await key(browser, "Enter", 13);
-    await until(browser, "↵ on arrival prepares a charge", `${verbIs("Verify models", "waiting")} && ${confirmCharge} !== null`);
+    await until(browser, "↵ on arrival prepares a charge", `${launchIs("verify models", "waiting")} && ${confirmCharge} !== null`);
     assert.equal(started.length, 2, "↵ on arrival takes exactly one step");
     assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "The step leaves focus on the panel root");
     await key(browser, "Enter", 13);
     await Bun.sleep(300);
     assert.equal(benchmarks.length, 0, "↵ at the panel root never confirms a waiting charge");
     assert.equal(await browser.evaluate(`${confirmCharge} !== null`), true, "The charge still waits");
-    await click(browser, cancel);
+    await click(browser, cancelCharge);
     await until(browser, "the cancelled charge offers Verify again", verifyAgain);
 
-    // Mod+↵ takes the verb's step from a word and runs from the initialized revision (a run from the
+    // Mod+↵ takes the launch's step from a row and runs from the initialized revision (a run from the
     // stale one would refuse before its inventory); holding it takes no other step; one deliberate
     // press spends the charge once.
-    await focusStatement(browser, "lane");
+    await focusRow(browser, "lane");
     await key(browser, "Enter", 13, { modifiers: CTRL });
-    await until(browser, "Mod+↵ prepares a charge from revision 1", `${verbIs("Verify models", "waiting")} && ${confirmCharge} !== null`);
+    await until(browser, "Mod+↵ prepares a charge from revision 1", `${launchIs("verify models", "waiting")} && ${confirmCharge} !== null`);
     assert.equal(started.length, 3);
     await key(browser, "Enter", 13, { modifiers: CTRL, autoRepeat: true });
     await Bun.sleep(300);
@@ -1378,32 +1511,31 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(benchmarks.length, 0);
     await click(browser, confirmCharge);
     await waitFor(() => benchmarks.length === 1, timeout, 50);
-    await until(browser, "the refused spend stops the verification and the verb offers it again without a conflict", verifyAgain);
+    await until(browser, "the refused spend stops the verification and the launch offers it again without a conflict", verifyAgain);
     assert.equal(benchmarks.length, 1, "One press spends once");
-    assert(await browser.evaluate<boolean>(`[...document.querySelectorAll('${generator} .${G}stmt-part[data-tone="attention"]')].length > 0`),
-      "The stopped verification says so on the line");
+    assert.equal(await browser.evaluate(failureLine), true, "The stopped verification says so beside the launch");
     assert.deepEqual(await readConfiguration(server, writer, target), prepared, "Neither the later runs nor the refused benchmark initialize, stage, promote or save anything");
     assert.deepEqual(cancels, [], "A spend refused at its start leaves no native job to cancel");
 
-    // An include switch in a pool's accounts saves the choice, and keeps keyboard focus through the re-read it causes.
-    const head = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}phead-line`)})].find(el => el.getAttribute('aria-label').startsWith('Claude accounts'))`;
-    const accountSwitch = element(`${generator} .${G}paccounts [role="switch"]`);
-    await focusStatement(browser, "machine");
-    await tabTo(browser, "the Claude pool head", head);
-    await key(browser, "Enter", 13);
-    await until(browser, "opening a pool's accounts gives its switch focus", `document.activeElement === ${accountSwitch} && ${accountSwitch}.getAttribute('aria-checked') === 'true'`);
-    const switchName = await browser.evaluate<string>(`${accountSwitch}.getAttribute('aria-label')`);
+    // The accounts view: `a` gives its first switch focus, Space saves that account's inclusion through the real
+    // changeAccounts CAS, and the switch keeps focus through the re-read its save causes.
+    await key(browser, "a", 65);
+    await until(browser, "a opens the accounts with focus on the included account's switch",
+      `${shownView("accounts")} && !!document.activeElement?.matches('${generator} [data-accounts-pane] [role="switch"][data-account-switch]') && document.activeElement.getAttribute('aria-checked') === 'true'`);
+    const who = await browser.evaluate<string>(`document.activeElement.dataset.accountSwitch`);
+    const accountSwitch = element(`${generator} [data-account-switch="${who}"]`);
     for (const included of [false, true]) {
       const revision = (await readConfiguration(server, writer, target)).revision;
+      await until(browser, "the focused switch can move", `${accountSwitch}?.getAttribute('aria-disabled') !== 'true' && document.activeElement === ${accountSwitch}`);
       await key(browser, " ", 32);
       await waitFor(async () => (await readConfiguration(server, writer, target)).revision === revision + 1, timeout, 50);
       await until(browser, "the switch shows the saved choice and keeps focus through the re-read",
-        `${accountSwitch}?.getAttribute('aria-checked') === '${included}' && document.activeElement === ${accountSwitch} && ${accountSwitch}.getAttribute('aria-label') === ${JSON.stringify(switchName)}`);
+        `${accountSwitch}?.getAttribute('aria-checked') === '${included}' && document.activeElement === ${accountSwitch}`);
       assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.accounts.manualDisabled, included ? [] : [fixtureAccounts([1]).accounts[0]!.reference],
         "The switch saves exactly that account's inclusion");
     }
     await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the accounts and returns focus to the pool head", `${element(`${generator} .${G}paccounts`)} === null && document.activeElement === ${head}`);
+    await until(browser, "Esc closes the accounts and gives the rows focus", `${shownView("main")} && !!document.activeElement?.closest('${generator} [data-row]')`);
     fixture.check();
   } finally {
     await fixture.stop();
@@ -1467,17 +1599,22 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const viewerTrace = await watchActions(viewerBrowser, server);
   try {
     await openGenerator(viewerBrowser, server, first.containerId);
-    await until(viewerBrowser, "a viewer's verb refuses on authority, in neutral words",
-      `${verb}.dataset.state === 'refused' && !!document.querySelector('${generator} .${G}stmt-part[data-tone="neutral"]')`);
-    await focusStatement(viewerBrowser, "thinking");
-    await key(viewerBrowser, "ArrowDown", 40);
+    await until(viewerBrowser, "a viewer's launch refuses on authority, in neutral words",
+      `${launchButton}.dataset.state === 'refused' && !!document.querySelector('${generator} .${G}launch-part[data-tone="neutral"]')`);
+    await focusRow(viewerBrowser, "thinking");
+    await key(viewerBrowser, "ArrowLeft", 37);
     await key(viewerBrowser, "Enter", 13, { modifiers: CTRL });
-    await click(viewerBrowser, verb);
+    await click(viewerBrowser, launchButton);
+    // The viewer's accounts view offers the saved pools, and refuses every one of them.
+    await showView(viewerBrowser, "accounts");
+    await until(viewerBrowser, "a viewer's pool words are offered and refused", `document.querySelectorAll('${generator} [data-pool-word]').length > 1 &&
+      [...document.querySelectorAll('${generator} [data-pool-word]')].every(el => el.getAttribute('aria-disabled') === 'true')`);
+    await click(viewerBrowser, `[...document.querySelectorAll('${generator} [data-pool-word]')].find(el => el.getAttribute('aria-pressed') === 'false')`);
     await Bun.sleep(300);
     assert.deepEqual(viewerTrace.requests.filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), [],
       "A viewer's edits and presses never request a shared write");
   } finally { viewerTrace.stop(); }
-  assert.deepEqual((await readConfiguration(server, viewer, first)).revision, initial.revision, "A viewer leaves the workspace team as it is");
+  assert.deepEqual((await readConfiguration(server, viewer, first)).revision, initial.revision, "A viewer leaves the workspace profile as it is");
 
   await arrangeWorkbench(server, writer);
   const reads: Record<string, unknown>[] = [];
@@ -1492,12 +1629,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   try {
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await openGenerator(browser, server, first.containerId);
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, first.machineId, machineName);
     // The verification holds; the next step is the launch, which this machine has no permission for.
-    await until(browser, "the verified team's next step is a refused launch", verbIs("Launch", "refused"));
-    await assertRoles(browser, initial.selection?.advisor !== "off");
-    assert((await seatedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
-      "Configured seats use the saved catalog, never bundled starter metadata");
+    await until(browser, "the verified profile's next step is a refused launch", launchIs("launch", "refused"));
+    await assertRoutes(browser, initial.selection?.advisor !== "off");
+    assert((await routedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
+      "Configured routes use the saved catalog, never bundled starter metadata");
 
     // Session options: one launch's skill choices, kept across sheets and refreshes, never saved.
     assert.equal(await browser.evaluate(`${workspaceButton("all skills off")} === undefined`), true, "Closed session options leave no skill control to point at");
@@ -1510,48 +1647,50 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "disable-all is a distinct launch choice", `${skillsSection}?.dataset.mode === 'disabled'`);
     await click(browser, workspaceButton("read skills again"));
     await closeOptions(browser);
-    await openSheet(browser, "accounts");
-    await closeSheet(browser);
+    await showView(browser, "accounts");
+    await showView(browser, "main");
     await openOptions(browser);
     assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "disabled", "Unrelated navigation and refresh preserve the ephemeral skill choice");
     await click(browser, workspaceButton("default skills"));
     assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "preserve", "Default skills restores ordinary loading instead of disabling it");
     await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
-    assert.equal(await browser.evaluate(`${sessionOptions}.getAttribute('aria-label').includes('skills off')`), true, "The closed session options still say their choice");
-
-    // Local edits of the saved team: one keyboard step of thinking, the fourth tier, automatic plans.
-    const savedThinking = await browser.evaluate<string>(wordValue("thinking"));
-    await focusStatement(browser, "thinking");
-    await key(browser, "ArrowUp", 38);
-    await until(browser, "↑ raises the thinking", `${wordValue("thinking")} !== ${JSON.stringify(savedThinking)}`);
-    const localThinking = await browser.evaluate<string>(wordValue("thinking"));
-    await until(browser, "the fourth observed tier is available", `${option("tier", "elite")} !== undefined && !${option("tier", "elite")}.hasAttribute('aria-disabled')`);
-    await choose(browser, "tier", "elite");
-    await until(browser, "the fourth tier is on the line", `${wordValue("tier")} === 'elite'`);
-    await choose(browser, "extras", "auto plans");
-    await until(browser, "automatic plans are switched on", `${option("extras", "auto plans")}.getAttribute('aria-selected') === 'true'`);
+    await key(browser, "?", 191);
+    await until(browser, "the full key line still says the closed options' choice", `${keyWord("o")}?.textContent.includes('skills off') === true`);
     await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the extras without undoing them", `${slot("extras")}.dataset.open !== 'true' && ${option("extras", "auto plans")}.getAttribute('aria-selected') === 'true'`);
-    await until(browser, "an edited verified team saves before its review", `${verbIs("Save & review", "ready")} && !!${statusFix("revert")}`);
-    assert.equal(await browser.evaluate(wordValue("extras")), teamWords({ ...initial.selection!, planYolo: true }, family => family).extras,
-      "The extras word names the switches that are on");
-    assert.deepEqual(await browser.evaluate(`${JSON.stringify(WORDS)}.filter(word => document.querySelector('${generator} [data-stmt-word="' + word + '"]').dataset.edited === 'true')`),
-      ["tier", "thinking", "extras"], "Exactly the edited words carry the edited mark");
-    const edits = await browser.evaluate<string>(lineWords);
 
-    // The edit rests on the saved team, not on the record's revision: the writer's own account edits (a preset made and
+    // Local edits of the saved profile: one keyboard step of thinking, the fourth tier, automatic plans.
+    const savedThinking = await browser.evaluate<string>(chosenKey("thinking"));
+    await focusRow(browser, "thinking");
+    await key(browser, "ArrowRight", 39);
+    await until(browser, "→ raises the thinking", `${chosenKey("thinking")} !== ${JSON.stringify(savedThinking)}`);
+    const localThinking = await browser.evaluate<string>(chosenKey("thinking"));
+    await until(browser, "the fourth observed tier is available", `${word("tier", "elite")} !== null && ${word("tier", "elite")}.dataset.off === undefined`);
+    await choose(browser, "tier", "elite");
+    await openOptions(browser);
+    await turn(browser, autoPlans, true);
+    await closeOptions(browser);
+    await until(browser, "an edited verified profile saves before its review, and offers the saved one back", `${launchIs("save & review", "ready")} && !!${headCue("z")}`);
+    // The launch says what its save changes while it is pointed: exactly the three edited settings.
+    await pointOf(browser, launchButton);
+    await until(browser, "the launch's readout counts the edited settings", `/^save & review · 3 changes to the profile: /.test(${readout}.textContent)`);
+    assert.deepEqual(await browser.evaluate(`${readout}.textContent.split(': ').slice(1).join(': ').split(', ').map(change => change.split(' ')[0]).sort()`), ["extras", "thinking", "tier"],
+      "The save changes exactly the edited settings");
+    await pointAway(browser);
+    const edits = await browser.evaluate<string>(profileValues);
+
+    // The edit rests on the saved profile, not on the record's revision: the writer's own account edits (a preset made and
     // removed, which leaves the pool as it was) move the record on, and the edit stays ready to save, never a conflict.
     let revision = (await readConfiguration(server, writer, first)).revision;
     const spare = { id: "browser-spare-pool", name: "Spare pool", disabled: [] };
     for (const change of [{ kind: "create-preset", preset: spare }, { kind: "delete-preset", id: spare.id }]) {
       const changed = await callAction(server, writer.token, "atyrode.code.changeAccounts", { containerId: first.containerId, expectedRevision: revision, change });
-      assert(changed.ok, "The writer edits the workspace's account presets beside the unsaved team");
+      assert(changed.ok, "The writer edits the workspace's account presets beside the unsaved profile");
       revision = (changed.result as Configuration).revision;
     }
     await panelReads(browser, revision);
-    await until(browser, "own account edits leave the word edit ready to save, without a conflict",
-      `${verbIs("Save & review", "ready")} && !!${statusFix("revert")} && !${statusFix("use theirs")} && ${lineWords} === ${JSON.stringify(edits)}`);
+    await until(browser, "own account edits leave the edit ready to save, without a conflict",
+      `${launchIs("save & review", "ready")} && !!${headCue("z")} && !${fix("use theirs")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
     // Claude account as disabled (a GPT one stays) while the verification it stands on is not observed again: the save
@@ -1559,20 +1698,21 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
       type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
     observed = { ...fixtureAccounts(), accounts: [...fixtureAccounts().accounts.map(account => account.credentialId === 1 ? { ...account, disabled: true } : account), gpt] };
-    await focusStatement(browser, "verb");
+    await focusLaunch(browser);
     await key(browser, "r", 82);
-    await until(browser, "a lead no account serves refuses the save and names its family",
-      `${verbIs("Save & review", "refused")} && (${statusText}).includes('No Claude account included') && !!${statusFix("show Claude accounts")}`);
+    await until(browser, "a lead no account serves refuses the save and names its family, with the way to its accounts",
+      `${launchIs("save & review", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
+    const said = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await key(browser, "Enter", 13);
-    await until(browser, "the refused press says why", `${liveRegion}.textContent.startsWith('Save & review: ')`);
+    await until(browser, "the refused press says why", `${liveRegion}.textContent !== ${JSON.stringify(said)} && ${liveRegion}.textContent.endsWith(${launchButton}.title)`);
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
     assert.equal((await readConfiguration(server, writer, first)).revision, revision, "A save refused for an unserved lead writes nothing");
     observed = fixtureAccounts();
     await key(browser, "r", 82);
-    await until(browser, "with the Claude account back the save is ready again", `${verbIs("Save & review", "ready")} && ${lineWords} === ${JSON.stringify(edits)}`);
+    await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & review", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
-    // Unsaved catalog and account drafts in their sheets.
+    // Unsaved catalog and account drafts: Models a sheet, the accounts' management a view under the accounts.
     await openSheet(browser, "models");
     await click(browser, workspaceButton("Edit or import models"));
     const catalog = `${generator} [aria-label="Model catalog"]`;
@@ -1592,21 +1732,31 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await click(browser, importField);
     await browser.typeText(importDraft);
     await closeSheet(browser);
-    await openSheet(browser, "accounts");
+    const manage = `${generator} [data-pane="manage"]`;
+    const manageCue = `[...document.querySelectorAll('${generator} [data-accounts-pane] .${G}cue')].find(el => el.querySelector('.${G}cue-key')?.textContent === 'm')`;
+    await showView(browser, "accounts");
+    await click(browser, manageCue);
+    await until(browser, "the m · manage cue opens the accounts' management in place", shownView("manage"));
     await until(browser, "the passive account observation settles before the editor gesture",
-      `[...document.querySelectorAll('${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-observation, ${generator} .plugin-atyrode_code__accounts .plugin-atyrode_code__account-notice[role="status"]')].some(el => el.getClientRects().length)`);
+      `[...document.querySelectorAll('${manage} .plugin-atyrode_code__account-observation, ${manage} .plugin-atyrode_code__account-notice[role="status"]')].some(el => el.getClientRects().length)`);
     await control(browser, "shared saved account pool is editable", workspaceButton("Edit pool"), false);
     await click(browser, workspaceButton("Edit pool"));
-    const accountDraft = element(`${generator} .plugin-atyrode_code__accounts form[aria-label="Saved account pool editor"] input[required]`);
+    const accountDraft = element(`${manage} form[aria-label="Saved account pool editor"] input[required]`);
     await control(browser, "shared account editor has opened", accountDraft, false);
     await click(browser, accountDraft);
     await key(browser, "End", 35);
     await browser.typeText(" local draft");
     const accountDraftName = `${preset.name} local draft`;
-    await closeSheet(browser);
+    await click(browser, `[...document.querySelectorAll('${manage} .${G}head .${G}cue')].find(el => el.querySelector('.${G}cue-key')?.textContent === 'esc')`);
+    await until(browser, "the esc · accounts cue goes back to the accounts", shownView("accounts"));
+    await key(browser, "m", 77);
+    await until(browser, "m opens the management again, with the draft as it was left", `${shownView("manage")} && ${accountDraft}?.value === ${JSON.stringify(accountDraftName)}`);
+    await click(browser, element(`${manage} .${G}title`));
+    await key(browser, "a", 65);
+    await until(browser, "a goes from the management to the generator", shownView("main"));
 
-    // The second destination: the drafts and the edited team stay; the ad-hoc skill choice does not.
-    await chooseMachine(browser, secondName);
+    // The second destination: the drafts and the edited profile stay; the ad-hoc skill choice does not.
+    await chooseMachine(browser, second.machineId, secondName);
     await openSheet(browser, "models");
     assert.equal(await browser.evaluate(`${importField}.value`), importDraft, "Unparsed JSON import stays local across machines");
     assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Advanced catalog values survive navigation and destination changes");
@@ -1614,86 +1764,93 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await openOptions(browser);
     await until(browser, "a new destination clears ad-hoc skill choices before they can be reused", `${skillsSection}.dataset.mode === 'preserve'`);
     await closeOptions(browser);
-    await openSheet(browser, "accounts");
-    assert.equal(await browser.evaluate(`${accountDraft}.value`), accountDraftName, "Visited account editor retains its unsaved preset across destinations");
-    assert.equal(await browser.evaluate(`${element(`${generator} .plugin-atyrode_code__account-exclusions`)}.textContent.includes(${JSON.stringify(exclusion.scope)})`), true,
+    await showView(browser, "accounts");
+    await key(browser, "m", 77);
+    await until(browser, "the management opens", shownView("manage"));
+    assert.equal(await browser.evaluate(`${accountDraft}.value`), accountDraftName, "The visited account editor retains its unsaved preset across destinations");
+    assert.equal(await browser.evaluate(`${element(`${manage} .plugin-atyrode_code__account-exclusions`)}.textContent.includes(${JSON.stringify(exclusion.scope)})`), true,
       "The account draft keeps its nonempty unobserved exclusion instead of importing another machine’s pool");
-    await closeSheet(browser);
-    assert.equal(await browser.evaluate(wordValue("thinking")), localThinking, "The local thinking survives the switch");
-    assert.equal(await browser.evaluate(wordValue("tier")), "elite");
-    assert.equal(await browser.evaluate(`${option("extras", "auto plans")}.getAttribute('aria-selected')`), "true", "planYolo remains a profile choice, not a native permission");
+    await click(browser, element(`${manage} .${G}title`));
+    await key(browser, "a", 65);
+    await until(browser, "back to the generator", shownView("main"));
+    assert.equal(await browser.evaluate(chosenKey("thinking")), localThinking, "The local thinking survives the switch");
+    assert.equal(await browser.evaluate(chosenKey("tier")), "elite");
+    assert.equal(await browser.evaluate(`${autoPlans}?.getAttribute('aria-checked')`), "true", "planYolo remains a profile choice, not a native permission");
 
     // Save from the second destination: the press saves, and its review stops where this machine has no permission.
-    await until(browser, "the edited team can be saved from the second destination", verbIs("Save & review", "ready"));
+    await until(browser, "the edited profile can be saved from the second destination", launchIs("save & review", "ready"));
     const unsaved = (await readConfiguration(server, viewer, second)).revision;
-    await focusStatement(browser, "verb");
+    await focusLaunch(browser);
     await key(browser, "Enter", 13);
     await waitFor(async () => (await readConfiguration(server, viewer, second)).revision === unsaved + 1, timeout, 50);
-    await until(browser, "the saved team's review stops at this machine's missing permission", verbIs("Launch", "refused"));
-    assert.equal(await browser.evaluate(`document.activeElement === ${verb}`), true, "The verb keeps focus from Save through its refusal");
+    await until(browser, "the saved profile's review stops at this machine's missing permission", launchIs("launch", "refused"));
+    assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "The launch keeps focus from Save through its refusal");
     const saved = await readConfiguration(server, viewer, second);
-    assert.equal(saved.configuration?.selection?.thinking, localThinking === "x-high" ? "xhigh" : localThinking, "Second destination saves to the shared profile");
+    assert.equal(saved.configuration?.selection?.thinking, localThinking, "Second destination saves to the shared profile");
     assert.equal(saved.configuration?.selection?.capability, 4, "The fourth capability saves unchanged from the second destination");
     assert.equal(saved.configuration?.selection?.planYolo, true);
-    assert.deepEqual(saved.configuration?.accounts, initial.accounts, "Saving the team preserves shared account pools and exclusions");
-    assert.deepEqual(saved.configuration?.active, initial.active, "Saving the team leaves the verified catalog as it is");
-    await chooseMachine(browser, machineName);
-    assert.equal(await browser.evaluate(wordValue("thinking")), localThinking, "Saved choices remain identical when returning to the first destination");
+    assert.deepEqual(saved.configuration?.accounts, initial.accounts, "Saving the profile preserves shared account pools and exclusions");
+    assert.deepEqual(saved.configuration?.active, initial.active, "Saving the profile leaves the verified catalog as it is");
+    await chooseMachine(browser, first.machineId, machineName);
+    assert.equal(await browser.evaluate(chosenKey("thinking")), localThinking, "Saved choices remain identical when returning to the first destination");
     await openSheet(browser, "models");
     assert.equal(await browser.evaluate(`${importField}.value`), importDraft);
     await closeSheet(browser);
     assert(reads.length > 0 && reads.every(input => input.containerId === first.containerId && Object.keys(input).length === 1),
       "Ordinary browser configuration reads use only the container, never per-machine fanout or implicit legacy fallback");
 
-    // A narrow touch screen keeps session options and the line reachable.
+    // A narrow touch screen keeps the session options and the generator reachable through the key line.
     await browser.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     try {
-      await until(browser, "the line stays usable at a narrow viewport", `${verb}.getBoundingClientRect().width > 0`);
-      const tap = await pointOf(browser, sessionOptions);
-      await browser.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [tap] });
-      await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await until(browser, "the launch stays usable at a narrow viewport", `${launchButton}.getBoundingClientRect().width > 0`);
+      await tap(browser, keyWord("?"));
+      await until(browser, "a tap on ? shows every key", `!!${keyWord("o")}`);
+      await tap(browser, keyWord("o"));
       await until(browser, "touch opens the session options", `!!${visibleSheet}?.contains(${skillsSection})`);
       await click(browser, workspaceButton("all skills off"));
       await key(browser, "Tab", 9);
       assert.equal(await browser.evaluate(`document.activeElement?.closest('[aria-label="Optional skills"]') === ${skillsSection} && !document.activeElement.matches(':disabled')`), true,
         "Skill controls remain keyboard reachable at a narrow viewport");
       await click(browser, workspaceButton("default skills"));
-      await closeOptions(browser);
-      await focusStatement(browser, "machine");
-      assert.equal(await browser.evaluate(wordValue("thinking")), localThinking, "Responsive layout keeps the same team");
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc closes the session options and keeps focus in the panel", `${element(stage)}.hidden === false && !!document.activeElement?.closest('${generator}')`);
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc hides the full key line", `document.querySelectorAll('${generator} .${G}keys-line').length === 1`);
+      await focusRow(browser, "advisor");
+      assert.equal(await browser.evaluate(chosenKey("thinking")), localThinking, "Responsive layout keeps the same profile");
     } finally {
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
       await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
     }
 
-    // An unsaved edit is kept across a reload. A foreign write of the team it rests on, made while the panel was away,
+    // An unsaved edit is kept across a reload. A foreign write of the profile it rests on, made while the panel was away,
     // brings it back as a conflict: the edit stays on show, nothing is rebased, and theirs is one press away.
-    await focusStatement(browser, "thinking");
-    await key(browser, "ArrowDown", 40);
-    await until(browser, "↓ lowers the saved thinking", `${wordValue("thinking")} !== ${JSON.stringify(localThinking)} && ${verbIs("Save & review", "ready")}`);
-    const kept = await browser.evaluate<string>(lineWords);
+    await focusRow(browser, "thinking");
+    await key(browser, "ArrowLeft", 37);
+    await until(browser, "← lowers the saved thinking", `${chosenKey("thinking")} !== ${JSON.stringify(localThinking)} && ${launchIs("save & review", "ready")}`);
+    const kept = await browser.evaluate<string>(profileValues);
     await openGenerator(browser, server, first.containerId);
-    await chooseMachine(browser, machineName);
-    await until(browser, "the edited word survives a reload, still ready to save",
-      `${lineWords} === ${JSON.stringify(kept)} && ${verbIs("Save & review", "ready")} && !!${statusFix("revert")} && ${slot("thinking")}.dataset.edited === 'true'`);
+    await chooseMachine(browser, first.machineId, machineName);
+    await until(browser, "the edited setting survives a reload, still ready to save",
+      `${profileValues} === ${JSON.stringify(kept)} && ${launchIs("save & review", "ready")} && !!${headCue("z")}`);
     await browser.goto("about:blank");
     const current = await readConfiguration(server, writer, first);
     const ours = current.configuration!.selection!;
     const theirs = { ...ours, advisor: ours.advisor === "audit" ? "review" : "audit" } satisfies Selection;
     const foreign = await callAction(server, writer.token, "atyrode.code.select", { containerId: first.containerId, expectedRevision: current.revision, selection: theirs });
-    assert(foreign.ok, "The team is changed elsewhere while the panel is away");
+    assert(foreign.ok, "The profile is changed elsewhere while the panel is away");
     await openGenerator(browser, server, first.containerId);
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, first.machineId, machineName);
     await until(browser, "the kept edit comes back as a conflict with the write made meanwhile",
-      `${verb}.dataset.state === 'refused' && !!${statusFix("use theirs")} && (${statusText}).includes('changed elsewhere') && ${lineWords} === ${JSON.stringify(kept)}`);
+      `${launchButton}.dataset.state === 'refused' && !!${fix("use theirs")} && ${profileValues} === ${JSON.stringify(kept)}`);
     assert.equal((await readConfiguration(server, writer, first)).revision, (foreign.result as Configuration).revision, "A kept edit in conflict writes nothing");
-    await click(browser, statusFix("use theirs"));
+    await click(browser, fix("use theirs"));
     await until(browser, "theirs replaces the kept edit",
-      `${wordValue("thinking")} === ${JSON.stringify(localThinking)} && ${wordValue("advisor")} === ${JSON.stringify(theirs.advisor)} && !${statusFix("revert")} && !${statusFix("use theirs")}`);
+      `${chosenKey("thinking")} === ${JSON.stringify(localThinking)} && ${chosenKey("advisor")} === ${JSON.stringify(theirs.advisor)} && !${headCue("z")} && !${fix("use theirs")}`);
     const restored = await callAction(server, writer.token, "atyrode.code.select", { containerId: first.containerId, expectedRevision: (foreign.result as Configuration).revision, selection: ours });
     assert(restored.ok);
-    await until(browser, "the line follows the record back", `${wordValue("advisor")} === ${JSON.stringify(ours.advisor)}`);
+    await until(browser, "the rows follow the record back", `${chosenKey("advisor")} === ${JSON.stringify(ours.advisor)}`);
     fixture.check();
   } finally {
     offReads();
@@ -1705,8 +1862,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
 
 /**
  * A writer whose Code panel has no workspace canvas beside it: container writes need only the
- * writer's authority, so the team still saves from here, while a launch, which places a terminal on
- * the canvas, waits for one and says so. Such a writer is never told the workspace is read-only.
+ * writer's authority, so the profile still saves from here, while a launch, which places a terminal
+ * on the canvas, waits for one and says so. Such a writer is never told the workspace is read-only.
  */
 async function canvaslessWriterScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, target: Target): Promise<void> {
   const before = await readConfiguration(server, writer, target);
@@ -1716,28 +1873,28 @@ async function canvaslessWriterScenario(browser: BrowserInstance, server: TestSe
   assert(arranged.ok);
   const trace = await watchActions(browser, server);
   const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts() } : undefined);
-  const readOnly = `/read-only/i.test(${element(generator)}.textContent)`;
+  const readOnly = `/read-only/i.test(${element(generator)}.textContent + ${launchButton}.title)`;
   try {
     await openGenerator(browser, server, target.containerId);
     assert.equal(await browser.evaluate(`${element(".react-flow")} === null`), true, "No workspace canvas is mounted beside the panel");
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, target.machineId, machineName);
     await until(browser, "without a canvas only the launch is refused, in neutral words that say what it needs",
-      `${verbIs("Launch", "refused")} && (${statusText}).includes('Open Code beside the workspace canvas to launch') && !!document.querySelector('${generator} .${G}stmt-part[data-tone="neutral"]')`);
+      `${launchIs("launch", "refused")} && ${lineText}.includes('canvas') && !!document.querySelector('${generator} .${G}launch-part[data-tone="neutral"]')`);
     assert.equal(await browser.evaluate(readOnly), false, "A writer without a canvas is never told the workspace is read-only");
-    const thinking = await browser.evaluate<string>(wordValue("thinking"));
-    await focusStatement(browser, "thinking");
-    await key(browser, "ArrowDown", 40);
-    await until(browser, "an edit offers Save, with no launch to chain", verbIs("Save", "ready"));
+    const thinking = await browser.evaluate<string>(chosenKey("thinking"));
+    await focusRow(browser, "thinking");
+    await key(browser, "ArrowLeft", 37);
+    await until(browser, "an edit offers Save, with no launch to chain", launchIs("save", "ready"));
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
-    await until(browser, "after the save only the launch waits for a canvas", verbIs("Launch", "refused"));
+    await until(browser, "after the save only the launch waits for a canvas", launchIs("launch", "refused"));
     assert.notEqual((await readConfiguration(server, writer, target)).configuration?.selection?.thinking, before.configuration?.selection?.thinking, "Save wrote the edit");
-    await key(browser, "ArrowUp", 38);
-    await until(browser, "the edit back is another Save", `${verbIs("Save", "ready")} && ${wordValue("thinking")} === ${JSON.stringify(thinking)}`);
+    await key(browser, "ArrowRight", 39);
+    await until(browser, "the edit back is another Save", `${launchIs("save", "ready")} && ${chosenKey("thinking")} === ${JSON.stringify(thinking)}`);
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 2, timeout, 50);
-    await until(browser, "the team is saved back", verbIs("Launch", "refused"));
-    assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, before.configuration?.selection, "Saving back restores the exact team");
+    await until(browser, "the profile is saved back", launchIs("launch", "refused"));
+    assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, before.configuration?.selection, "Saving back restores the exact profile");
     assert.equal(await browser.evaluate(readOnly), false, "Nothing a canvas-less writer did is called read-only");
     assert.deepEqual(trace.requests.filter(request => /^(atyrode\.omp\.(reviewSession|prepareSession|resumeSession)|core\.terminals\.create)$/.test(request.name)), [],
       "Without a canvas nothing is reviewed for launch, prepared or placed");
@@ -1764,16 +1921,17 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: textOnly });
   assert(staged.ok, staged.ok ? "" : staged.denial.message);
   await openGenerator(browser, server, workspace.id);
-  // The verb's one place to send the person: a staged-only workspace is reviewed in Models, a press away and never refused.
-  await until(browser, "a staged-only workspace's verb is its review in Models", verbIs("Review in Models", "ready"));
-  const metadataKeys = new Set(document.models.map(model => model.key));
-  assert((await seatedRoles(browser)).every(entry => !metadataKeys.has(entry.alias)), "An unresolved saved catalog is never silently replaced by bundled starter seats");
-  await click(browser, verb);
-  await until(browser, "the verb opens Models", `${element(mainView)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+  // The launch's one place to send the person: a staged-only workspace is reviewed in Models, a press away and never refused.
+  await until(browser, "a staged-only workspace's launch is its review in Models", launchIs("review in models", "ready"));
+  await still(browser);
+  assert.notDeepEqual(await routedRoles(browser), expectedRoutes(document, defaultSelection(compileCatalog(document))),
+    "An unresolved staged catalog is never silently replaced by the bundled starter's routes");
+  await click(browser, launchButton);
+  await until(browser, "the launch opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
   assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.draft?.document, textOnly);
   await closeSheet(browser);
 
-  // Beside an active catalog a staged one changes nothing until reviewed; the footer says it waits.
+  // Beside an active catalog a staged one changes nothing until reviewed in Models.
   const waiting = await createContainer(server, "Staged beside active", "canvas");
   const waitingTarget = { containerId: waiting.id };
   const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...waitingTarget, expectedRevision: 0 });
@@ -1788,10 +1946,11 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   const second = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...waitingTarget, expectedRevision: (active.result as Configuration).revision, document: textOnly });
   assert(second.ok);
   await openGenerator(browser, server, waiting.id);
-  await until(browser, "the footer says a staged catalog waits", `${element(`${generator} .${G}footer-facts`)}?.textContent.includes('staged catalog waits in models')`);
-  assert.equal(await browser.evaluate(`${verb}.textContent !== 'Review in Models'`), true, "Beside an active catalog the verb never sends the person to a staged one");
-  assert.deepEqual(await seatedRoles(browser), expectedSeats(document, (active.result as Configuration).selection ?? selection),
-    "The active catalog, not the staged one, seats the team");
+  await until(browser, "the active catalog is routed", `document.querySelector(${JSON.stringify(routeRows)}) !== null && ${launchButton}.dataset.state !== 'busy'`);
+  assert.notEqual(await browser.evaluate(`${launchButton}.querySelector('.${G}launch-label').textContent`), "review in models", "Beside an active catalog the launch never sends the person to a staged one");
+  await still(browser);
+  assert.deepEqual(await routedRoles(browser), expectedRoutes(document, (active.result as Configuration).selection ?? selection),
+    "The active catalog, not the staged one, routes the profile");
 }
 
 async function manualCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
@@ -1838,25 +1997,25 @@ async function manualCatalogScenario(browser: BrowserInstance, server: TestServe
     // Reopen against the canonical saved draft, with no earlier local starter attached.
     await openGenerator(browser, server, workspace.id);
     // No selection is saved yet, so the preview uses the default profile, whose glance advisor is routed.
-    await assertRoles(browser, true);
-    assert((await seatedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
-      "The saved draft's own models seat its preview, not regenerated bundled choices");
-    await until(browser, "a staged catalog's verb is its review in Models", verbIs("Review in Models", "ready"));
+    await assertRoutes(browser, true);
+    assert((await routedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
+      "The saved draft's own models route its preview, not regenerated bundled choices");
+    await until(browser, "a staged catalog's launch is its review in Models", launchIs("review in models", "ready"));
     assert.deepEqual(await readConfiguration(server, writer, target), staged, "Opening an existing draft does not stage, promote or overwrite it");
-    await focusStatement(browser, "verb");
+    await focusRow(browser, "lane");
     await key(browser, "Enter", 13, { modifiers: CTRL });
-    await until(browser, "Mod+↵ takes the verb's step: it opens Models", `${element(mainView)}.hidden === true`);
+    await until(browser, "Mod+↵ takes the launch's step: it opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
     await click(browser, element(`${generator} [aria-label="Model catalog"] [data-action="atyrode.code.reviewCatalog"]`));
     await control(browser, "saved manual changes retain their existing review path", workspaceButton("Use this catalog"), false);
     await click(browser, workspaceButton("Use this catalog"));
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === 3, timeout, 50);
     const promoted = await readConfiguration(server, writer, target);
     assert.deepEqual(promoted.configuration?.active?.document, document, "Promotion uses the exact reviewed catalog");
-    await until(browser, "using the catalog returns to the main view", `${element(mainView)}.hidden === false`);
-    await until(browser, "promoted models seat the team in the main view",
-      `[...document.querySelectorAll('${generator} .${G}seat-alias')].some(el => el.textContent.trim() === 'entry-model-tier-1' || el.textContent.trim().startsWith('entry-model-tier-'))`);
+    await until(browser, "using the catalog returns to the main view", `${element(stage)}.hidden === false`);
+    await until(browser, "promoted models route the profile in the main view",
+      `[...document.querySelectorAll(${JSON.stringify(`${routeRows} .${G}tok-alias`)})].some(el => el.textContent.startsWith('entry-model-tier-'))`);
     // An authored catalog is unverified; verifying it needs native discovery the fixture does not have.
-    await until(browser, "missing native runtime still prevents launch after local catalog authoring", verbIs("Verify models", "refused"));
+    await until(browser, "missing native runtime still prevents launch after local catalog authoring", launchIs("verify models", "refused"));
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "First catalog authoring and conflicts never approve native access");
@@ -1887,26 +2046,29 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
   });
   try {
     const modal = "dialog.plugin-atyrode_code__permission-dialog:modal";
-    for (const destinationView of ["accounts", "models"] as const) {
+    // Each sheet is reached from the full key line before the configuration arrives, and the line keeps its order after it.
+    for (const [sheet, next] of [["models", "setup"], ["setup", "options"]] as const) {
       holdConfiguration = true;
       await openGenerator(browser, server, firstUse.containerId);
       await waitFor(() => held.size > 0, timeout, 50);
-      await control(browser, "the sheets remain reachable before configuration arrives", footerLink(destinationView), false);
-      await openSheet(browser, destinationView);
+      await key(browser, "?", 191);
+      await control(browser, "the sheets remain reachable before configuration arrives", keyWord(SHEETS[sheet].key), false);
+      await click(browser, keyWord(SHEETS[sheet].key));
+      await until(browser, `${sheet} opens over the stage`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       holdConfiguration = false;
       for (const release of [...held]) release();
-      await until(browser, "the absent configuration fills the hidden main view", `${element(mainView)}.hidden === true && ${slot("thinking")} !== null`);
+      await until(browser, "the absent configuration fills the hidden stage", `${element(stage)}.hidden === true && ${row("thinking")} !== null`);
       assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(modal)}) === null`), true,
         "A first-use review in a hidden frame must not make the visible document inert");
       await click(browser, `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
-      await until(browser, "the sheet returns focus to the link that opened it", `${element(mainView)}.hidden === false && document.activeElement === ${footerLink(destinationView)}`);
+      await until(browser, "the sheet returns focus to the key that opened it", `${element(stage)}.hidden === false && document.activeElement === ${keyWord(SHEETS[sheet].key)}`);
       await key(browser, "Tab", 9);
-      const next = destinationView === "accounts" ? "models" : "setup";
-      assert.equal(await browser.evaluate(`document.activeElement === ${footerLink(next)}`), true, "Keyboard navigation still walks the footer after the absent read");
+      assert.equal(await browser.evaluate(`document.activeElement === ${keyWord(SHEETS[next].key)}`), true, "Keyboard navigation still walks the key line after the absent read");
       await key(browser, "Enter", 13);
-      await until(browser, `keyboard opens ${next}`, `${element(mainView)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
+      await until(browser, `keyboard opens ${next}`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       await key(browser, "Escape", 27);
-      await until(browser, "Esc returns from the sheet to its link", `${element(mainView)}.hidden === false && document.activeElement === ${footerLink(next)}`);
+      await until(browser, "Esc returns from the sheet to its key", `${element(stage)}.hidden === false && document.activeElement === ${keyWord(SHEETS[next].key)}`);
+      await key(browser, "Escape", 27);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
       await openSheet(browser, "setup");
@@ -2069,7 +2231,7 @@ async function syntheticFolderReadinessScenario(browser: BrowserInstance, server
   try {
     await arrangeWorkbench(server, writer);
     await openGenerator(browser, server, target.containerId);
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, target.machineId, machineName);
     await openSheet(browser, "setup");
     await click(browser, workspaceButton("Folders"));
     const onboarding = element(`${generator} [aria-label="Code setup"]`);
@@ -2215,64 +2377,63 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   const savedRow = (machineId: string) => element(`${generator} [data-kind="saved"][data-session-id="${savedSessionId}"][data-machine-id="${machineId}"]`);
   const rowVerb = (machineId: string, verbName: string) => `${savedRow(machineId)}?.querySelector('[data-verb="${verbName}"]')`;
   const runningRow = (terminalId: string) => element(`${generator} [data-kind="running"][data-terminal-id="${terminalId}"]`);
-  const failureLine = `!!document.querySelector('${generator} .${G}stmt-line .${G}stmt-part[data-tone="attention"]')`;
   const reviewsFor = (count: number) => async () => reviews.length >= count;
   try {
     await arrangeWorkbench(server, writer);
-    // One recent team, so a digit pressed where the panel's keys must not act would recall it.
+    // One recent profile, so a digit pressed where the panel's keys must not act would recall it.
     const savedAdvisor = saved.configuration.selection.advisor;
     await rememberTeam(browser, writer.principal.id, first.containerId, { ...saved.configuration.selection, advisor: savedAdvisor === "off" ? "glance" : "off" });
     await openGenerator(browser, server, first.containerId);
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, first.machineId, machineName);
 
-    // The saved team reviews itself once its inputs settle, so Launch is one press (spec §3).
-    await until(browser, "the saved team is reviewed without a press", verbIs("Launch", "ready"));
-    assert.equal(reviews.length, 1, "One automatic review of the settled saved team");
+    // The saved profile reviews itself once its inputs settle, so Launch is one press.
+    await until(browser, "the saved profile is reviewed without a press", launchIs("launch", "ready"));
+    assert.equal(reviews.length, 1, "One automatic review of the settled saved profile");
     assert.equal(reviews[0]!.skills, undefined, "An ordinary launch carries no skill choice");
-    assert(await browser.evaluate<boolean>(`(${statusText}).includes(${JSON.stringify(machineName)})`), "The line says where the team was reviewed");
-    assert.match(await browser.evaluate<string>(`${element(`${generator} .${G}stmt-line`)}.textContent`), /^\d+ on Claude$/, "The team's count names its family");
+    // Pointed, the launch says where the profile was reviewed and the reviewed pool by family.
+    await pointOf(browser, launchButton);
+    await until(browser, "the launch's readout says where it was reviewed and its pool by family",
+      `${readout}.textContent.includes(${JSON.stringify(machineName)}) && /Claude \\d+/.test(${readout}.textContent)`);
+    await pointAway(browser);
 
     // Skills: a set and an individual choice review as one effective selection.
     await openOptions(browser);
     await click(browser, optionSwitch("Optional skills", "Reviewed pair"));
     await click(browser, optionSwitch("Optional skills", "Alpha"));
     await waitFor(reviewsFor(2), timeout, 50);
-    await until(browser, "overlapping skill selection is native-reviewed", `${verbIs("Launch", "ready")} && document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li').length > 0`);
+    await until(browser, "overlapping skill selection is native-reviewed", `${launchIs("launch", "ready")} && document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li').length > 0`);
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li .${G}options-skill-title')].map(el => el.textContent)`),
       ["Alpha", "Gamma"], "A set and individual choice render one effective selection without duplicates");
     await closeOptions(browser);
-    await focusStatement(browser, "verb");
+    await focusLaunch(browser);
     await key(browser, "Enter", 13);
-    await until(browser, "the refused preparation is said on the line", `${failureLine} && ${verbIs("Review", "ready")}`);
+    await until(browser, "the refused preparation is said beside the launch", `${failureLine} && ${launchIs("review", "ready")}`);
     assert.equal(prepareRequests, 1);
-    assert.equal(await browser.evaluate(`document.activeElement === ${verb}`), true, "The verb keeps focus through Launch and its refusal");
-    await until(browser, "the refusal is announced", `${liveRegion}.textContent !== '' && (${statusText}).includes(${liveRegion}.textContent)`);
-    // Outcome and refusal lines clear on any change to the team.
+    assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "The launch keeps focus through its press and its refusal");
+    await until(browser, "the refusal is announced", `${liveRegion}.textContent !== '' && ${lineText}.includes(${liveRegion}.textContent)`);
+    // Outcome and refusal lines clear on any change to the profile.
+    await focusRow(browser, "thinking");
+    const savedThinking = await browser.evaluate<string>(chosenKey("thinking"));
+    await key(browser, "ArrowLeft", 37);
+    await until(browser, "a profile change clears the refusal", `!${failureLine}`);
     await key(browser, "ArrowRight", 39);
-    await key(browser, "ArrowRight", 39);
-    await key(browser, "ArrowRight", 39);
-    await until(browser, "focus on the thinking word", `document.activeElement === ${slot("thinking")}`);
-    const savedThinking = await browser.evaluate<string>(wordValue("thinking"));
-    await key(browser, "ArrowDown", 40);
-    await until(browser, "a team change clears the refusal", `!${failureLine}`);
-    await key(browser, "ArrowUp", 38);
-    await until(browser, "the saved team is back without a draft", `${wordValue("thinking")} === ${JSON.stringify(savedThinking)} && !${statusFix("revert")}`);
+    await until(browser, "the saved profile is back without a draft", `${chosenKey("thinking")} === ${JSON.stringify(savedThinking)} && !${headCue("z")}`);
 
     // A declared conflict, a stale catalog and a cleared choice; disable-all reviews as such.
     await openOptions(browser);
     await click(browser, optionSwitch("Optional skills", "Beta"));
-    await until(browser, "a declared skill conflict refuses the step", `${verb}.dataset.state === 'refused' && !!${statusFix("open options")}`);
+    await until(browser, "a declared skill conflict refuses the step", `${launchButton}.dataset.state === 'refused' && !!${fix("open options")}`);
     await click(browser, optionSwitch("Optional skills", "Beta"));
-    await until(browser, "resolving the conflict restores the step", `${verb}.dataset.state === 'ready'`);
+    await until(browser, "resolving the conflict restores the step", `${launchButton}.dataset.state === 'ready'`);
     skillCatalog.revision++;
     await click(browser, workspaceButton("read skills again"));
-    await until(browser, "a stale catalog cannot silently rebase the selection", `${verb}.dataset.state === 'refused'`);
+    await until(browser, "a stale catalog cannot silently rebase the selection", `${launchButton}.dataset.state === 'refused'`);
     await click(browser, workspaceButton("default skills"));
-    await until(browser, "a cleared choice can be reviewed again", `${verb}.dataset.state === 'ready'`);
+    await until(browser, "a cleared choice can be reviewed again", `${launchButton}.dataset.state === 'ready'`);
     const beforeDisable = reviews.length;
     await click(browser, workspaceButton("all skills off"));
     await waitFor(reviewsFor(beforeDisable + 1), timeout, 50);
-    await until(browser, "disable-all is reviewed", verbIs("Launch", "ready"));
+    await until(browser, "disable-all is reviewed", launchIs("launch", "ready"));
     assert.deepEqual(reviews.at(-1)!.skills, { mode: "disabled" }, "The actual browser sends disable-all through the ordinary workflow");
 
     // Restricted automation reviews as such and suppresses ambient skills; any tool change needs a new review.
@@ -2285,8 +2446,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "native restricted policy is rendered", `${element(`${generator} [data-effective-automation]`)}?.dataset.effectiveAutomation === 'restricted'`);
     assert.equal(reviews.at(-1)!.skills, undefined, "Restricted review suppresses ambient defaults even without an explicit skill choice");
     await closeOptions(browser);
-    await click(browser, verb);
-    await until(browser, "restricted preparation refusal is visible", `${failureLine} && ${verbIs("Review", "ready")}`);
+    await click(browser, launchButton);
+    await until(browser, "restricted preparation refusal is visible", `${failureLine} && ${launchIs("review", "ready")}`);
     await openOptions(browser);
     const beforeTool = reviews.length;
     await turn(browser, readTool, false);
@@ -2294,50 +2455,51 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.deepEqual((reviews.at(-1)!.automation as { toolNames: string[] }).toolNames, [], "A tool change is reviewed again, never launched on the old review");
     await turn(browser, restricted, false);
     await closeOptions(browser);
-    await until(browser, "the ordinary session is reviewed", verbIs("Launch", "ready"));
+    await until(browser, "the ordinary session is reviewed", launchIs("launch", "ready"));
 
     // A machine without permission refuses; returning reviews afresh, never resurrecting the old review.
     const reviewsBeforeSecond = reviews.length, preparations = prepareRequests;
-    await chooseMachine(browser, secondName);
-    await until(browser, "the second destination cannot launch", `${verb}.dataset.state === 'refused' && !!${statusFix("enable in Setup")}`);
+    await chooseMachine(browser, second.machineId, secondName);
+    await until(browser, "the second destination cannot launch", `${launchButton}.dataset.state === 'refused' && !!${fix("enable in Setup")}`);
     await Bun.sleep(1_200);
     assert.equal(reviews.length, reviewsBeforeSecond, "Choosing an unprepared machine requests no review");
     assert.equal(prepareRequests, preparations, "Destination selection never prepares a launch");
-    await chooseMachine(browser, machineName);
+    await chooseMachine(browser, first.machineId, machineName);
     await waitFor(reviewsFor(reviewsBeforeSecond + 1), timeout, 50);
-    await until(browser, "returning reviews afresh", verbIs("Launch", "ready"));
+    await until(browser, "returning reviews afresh", launchIs("launch", "ready"));
 
-    // While a review is in flight no team or machine edit lands, and the focused word keeps focus.
+    // While a review is in flight no profile or machine edit lands, and the focused row keeps focus.
     holdNextReview = true;
     await openOptions(browser);
     await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
     await waitFor(() => heldReview.held, timeout, 50);
-    await until(browser, "the verb says the review runs", verbIs("Reviewing…", "busy"));
-    await focusStatement(browser, "machine");
-    const advisor = await browser.evaluate<string>(wordValue("advisor"));
+    await until(browser, "the launch says the review runs", launchIs("reviewing…", "busy"));
+    await focusRow(browser, "advisor");
+    const settings = await browser.evaluate<string>(profileValues);
     const announced = await browser.evaluate<string>(`${liveRegion}.textContent`);
-    await key(browser, "ArrowDown", 40);
     await key(browser, "ArrowLeft", 37);
-    await key(browser, "ArrowLeft", 37);
-    await key(browser, "ArrowUp", 38);
+    await key(browser, "Home", 36);
     await until(browser, "the refused edits say why", `${liveRegion}.textContent !== ${JSON.stringify(announced)}`);
-    assert.equal(await browser.evaluate(wordValue("machine")), machineName, "No machine edit lands while a review runs");
-    assert.equal(await browser.evaluate(wordValue("advisor")), advisor, "No team edit lands while a review runs");
+    await key(browser, "w", 87);
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null })`),
+      { settings, machine: machineName, list: false }, "No profile or machine edit lands while a review runs");
+    await focusRow(browser, "advisor");
     heldReview.release();
-    await until(browser, "the held review completes for the unchanged line", verbIs("Launch", "ready"));
-    assert.equal(await browser.evaluate(`document.activeElement === ${slot("advisor")}`), true, "Keyboard focus stays on its word through the gate");
-    await click(browser, verb);
-    await until(browser, "launch refusal is shown and consumes its review", `${failureLine} && ${verbIs("Review", "ready")}`);
+    await until(browser, "the held review completes for the unchanged profile", launchIs("launch", "ready"));
+    assert.equal(await browser.evaluate(`document.activeElement === ${row("advisor")}`), true, "Keyboard focus stays on its row through the gate");
+    await click(browser, launchButton);
+    await until(browser, "launch refusal is shown and consumes its review", `${failureLine} && ${launchIs("review", "ready")}`);
     await openOptions(browser);
     await click(browser, workspaceButton("default skills"));
     await closeOptions(browser);
     // The cleared choice is reviewed on its own, so no review is still due when the steps below are counted.
-    await until(browser, "the cleared choice is reviewed", verbIs("Launch", "ready"));
+    await until(browser, "the cleared choice is reviewed", launchIs("launch", "ready"));
 
-    // Earlier statements: saved sessions are read per machine; only an exact terminal correlation is a running row.
+    // The sessions view: saved sessions are read per machine; only an exact terminal correlation is a running row.
     // A Read button goes as its read starts; focus follows the read to the machine's first row verb, never out of the panel.
-    await focusStatement(browser, "machine");
+    await showView(browser, "sessions");
     await tabTo(browser, "the first machine's Read", element(`${generator} [data-read="${first.machineId}"]`));
     await key(browser, "Enter", 13);
     await until(browser, "the first machine's saved session is listed and its Resume takes focus",
@@ -2347,20 +2509,20 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     const firstRows = `[...document.querySelectorAll('${generator} [data-kind="saved"][data-machine-id="${first.machineId}"]')]`;
     assert.deepEqual(await browser.evaluate(`${firstRows}.map(row => row.dataset.sessionId)`), [savedSessionId, otherFolder.id], "One row per folder, each showing its newest session");
     assert.equal(await browser.evaluate(`${savedRow(first.machineId)}.querySelectorAll('[role="option"]').length`), folderSessions.length, "Every session of the folder is in its row's drum");
-    assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Earlier statements"] button')].some(el => /\\b(show|more)\\b/i.test(el.textContent))`), false,
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-pane="sessions"] button')].some(el => /\\b(show|more)\\b/i.test(el.textContent))`), false,
       "No count toggle hides saved sessions");
     // The machine is said once, by its group's head, with its read's age and a quiet read again.
     const firstRead = element(`${generator} [data-read-state="read"][data-machine-id="${first.machineId}"]`);
     assert.deepEqual(await browser.evaluate(`({ heads: [...document.querySelectorAll('${generator} .${G}earlier-machine')].filter(el => el.textContent === ${JSON.stringify(machineName)}).length,
-      named: ${firstRead}?.closest('li')?.querySelector('.${G}earlier-machine')?.textContent, age: / read \\S/.test(${firstRead}?.textContent ?? ''),
-      again: ${firstRead}?.querySelector('[data-read="${first.machineId}"]')?.textContent })`),
-      { heads: 1, named: machineName, age: true, again: "read again" }, "A read machine's head names it once, with its read's age and read again");
-    assert.match(await browser.evaluate<string>(`${rowVerb(first.machineId, "resume")}.getAttribute('aria-label')`), /^Resume .+ as saved$/, "Resume names its session and that it resumes as saved");
-    assert.match(await browser.evaluate<string>(`${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label')`), /^Resume .+ with the current team$/,
-      "The other resume names its session and the current team");
+      named: ${firstRead}?.closest('li')?.querySelector('.${G}earlier-machine')?.textContent, again: !!${firstRead}?.querySelector('[data-read="${first.machineId}"]') })`),
+      { heads: 1, named: machineName, again: true }, "A read machine's head names it once, with its read and a way to read it again");
+    const resumeName = await browser.evaluate<string>(`${rowVerb(first.machineId, "resume")}.getAttribute('aria-label')`);
+    const withName = await browser.evaluate<string>(`${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label')`);
+    assert(resumeName.includes(folderSessions[0]!.title) && withName.includes(folderSessions[0]!.title) && resumeName !== withName,
+      "Each resume names its session, and the two resumes name themselves apart");
 
-    // The drum answers the statement's keys: ↓/↑ turn the shown session and ↵ opens the folder's list, which then owns its keys:
-    // from it a digit recalls no team and Mod+↵ takes no step.
+    // The drum answers ↓/↑ by turning the shown session, and ↵ opens the folder's list as a popover that owns its keys:
+    // from it a digit recalls no profile and Mod+↵ takes no step.
     const folderRow = `${firstRows}[0]`;
     const drum = `${folderRow}?.querySelector('[role="listbox"]')`;
     await tabTo(browser, "the folder's session drum", drum, true);
@@ -2370,14 +2532,15 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "↑ shows the newest again", `${folderRow}?.dataset.sessionId === ${JSON.stringify(savedSessionId)} && document.activeElement === ${drum}`);
     await key(browser, "Enter", 13);
     await until(browser, "↵ opens the folder's sessions as a popover", `${drum}?.dataset.open === 'true' && ${drum}.dataset.popover !== undefined`);
-    const team = await browser.evaluate<string>(lineWords), steps = { prepares: prepareRequests, reviews: reviews.length };
-    await key(browser, "1", 49);
+    const team = await browser.evaluate<string>(profileValues), steps = { prepares: prepareRequests, reviews: reviews.length };
+    for (const [name, code] of [["1", 49], ["e", 69], ["a", 65]] as const) await key(browser, name, code);
     await Bun.sleep(300);
-    assert.equal(await browser.evaluate(lineWords), team, "A digit pressed in the open session drum recalls no team");
+    assert.deepEqual(await browser.evaluate(`({ team: ${profileValues}, sessions: ${shownView("sessions")} })`), { team, sessions: true },
+      "A digit or a view key pressed in the open session drum recalls no profile and changes no view");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
     assert.deepEqual({ prepares: prepareRequests, reviews: reviews.length }, steps, "Mod+↵ in the open session drum takes no step");
-    assert.equal(await browser.evaluate(lineWords), team);
+    assert.equal(await browser.evaluate(profileValues), team);
     if (await browser.evaluate<boolean>(`${drum}?.dataset.open === 'true'`)) await key(browser, "Escape", 27);
     await until(browser, "the drum closes on the newest session", `${drum}?.dataset.open !== 'true' && ${folderRow}?.dataset.sessionId === ${JSON.stringify(savedSessionId)}`);
 
@@ -2396,7 +2559,6 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     // The panel's refresh reads every machine already read again; a machine read again keeps its rows on show meanwhile.
     const readsBefore = firstReads;
     holdNextList = true;
-    await focusStatement(browser, "machine");
     await key(browser, "r", 82);
     await waitFor(() => heldList.held, timeout, 50);
     assert(firstReads > readsBefore, "The refresh reads the machine again");
@@ -2404,24 +2566,26 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       `${element(`${generator} [data-read-state="reading"][data-machine-id="${first.machineId}"]`)} !== null && ${savedRow(first.machineId)} !== null`);
     heldList.release();
     await until(browser, "the read again lands", `${firstRead} !== null && ${savedRow(first.machineId)} !== null`);
+    const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await click(browser, rowVerb(first.machineId, "resume"));
     await waitFor(() => resumedInputs.length === 1, timeout, 50);
-    await until(browser, "saved-state refusal is visible", failureLine);
+    await until(browser, "the saved-state refusal is said aloud and beside the launch", `${failureLine} && ${liveRegion}.textContent !== ${JSON.stringify(quiet)}`);
     assert.deepEqual(resumedInputs[0], { machineId: first.machineId, sessionId: savedSessionId }, "Preserve resume must not silently inject a profile");
-    await until(browser, "automatic plans refuse resuming with this team before native resume",
+    await until(browser, "automatic plans refuse resuming with this profile before native resume",
       `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') === 'true'`);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
     await until(browser, "the refused row verb says what and why", `${liveRegion}.textContent.startsWith(${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label') + ' · ')`);
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
 
-    // Save the team without automatic plans; the save changes only that choice.
-    await choose(browser, "extras", "auto plans");
-    await until(browser, "automatic plans are off", `${option("extras", "auto plans")}.getAttribute('aria-selected') === 'false'`);
-    await key(browser, "Escape", 27);
-    await until(browser, "the edit saves before its review", verbIs("Save & review", "ready"));
+    // Save the profile without automatic plans; the save changes only that choice.
+    await showView(browser, "main");
+    await openOptions(browser);
+    await turn(browser, autoPlans, false);
+    await closeOptions(browser);
+    await until(browser, "the edit saves before its review", launchIs("save & review", "ready"));
     const beforeSave = reviews.length;
-    await click(browser, verb);
+    await click(browser, launchButton);
     await waitFor(async () => (await readConfiguration(server, writer, first)).revision === saved.revision + 1, timeout, 50);
     await waitFor(reviewsFor(beforeSave + 1), timeout, 50);
     const supported = await readConfiguration(server, writer, first);
@@ -2430,18 +2594,19 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       ...saved.configuration, revision: saved.configuration!.revision + 1,
       updatedAt: supported.configuration.updatedAt, updatedBy: supported.configuration.updatedBy,
       selection: { ...saved.configuration!.selection, planYolo: false },
-    } }, "The explicit team save changes only its chosen policy and revision metadata");
+    } }, "The explicit profile save changes only its chosen policy and revision metadata");
     saved = supported;
-    await until(browser, "Save & review goes on to its review", verbIs("Launch", "ready"));
+    await until(browser, "Save & review goes on to its review", launchIs("launch", "ready"));
     await openOptions(browser);
     await turn(browser, restricted, true);
     await turn(browser, readTool, true);
     await closeOptions(browser);
-    await until(browser, "resuming with this team is allowed", `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') !== 'true'`);
+    await showView(browser, "sessions");
+    await until(browser, "resuming with this profile is allowed", `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') !== 'true'`);
     await waitFor(async () => JSON.stringify(reviews.at(-1)?.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
     await waitFor(() => resumedInputs.length === 2, timeout, 50);
-    await until(browser, "explicit team resume refusal is visible", failureLine);
+    await until(browser, "explicit profile resume refusal is visible", failureLine);
     const explicit = ResumeSessionInputSchema.parse(resumedInputs[1]);
     assert.equal(explicit.machineId, first.machineId);
     assert.equal(explicit.sessionId, savedSessionId);
@@ -2452,30 +2617,35 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(explicit.overrides.model, explicit.overlay.modelRoles.default);
     assert.equal(explicit.overrides.thinking, explicit.overrides.model.split(":").at(-1));
 
-    // While a resume runs, the line's machine cannot change under it.
+    // While a resume runs, the launch's machine cannot change under it.
     holdNextList = true;
     await click(browser, rowVerb(first.machineId, "resume"));
     await waitFor(() => heldList.held, timeout, 50);
-    await focusStatement(browser, "machine");
-    await key(browser, "ArrowDown", 40);
+    await showView(browser, "main");
+    await focusRow(browser, "lane");
+    await key(browser, "w", 87);
     await Bun.sleep(200);
-    assert.equal(await browser.evaluate(wordValue("machine")), machineName, "No machine edit lands while a resume runs");
+    assert.deepEqual(await browser.evaluate(`({ machine: ${machinePicker}.textContent, list: ${machineList} !== null })`), { machine: machineName, list: false },
+      "No machine edit lands while a resume runs");
     heldList.release();
     await waitFor(() => resumedInputs.length === 3, timeout, 50);
     await until(browser, "the held resume's refusal is visible", failureLine);
 
-    // An offline machine's read is no longer offered, and an offline destination stays on the line with its fix.
-    await chooseMachine(browser, secondName);
+    // An offline machine's read is no longer offered, and an offline destination stays the launch's machine with its fix.
+    await chooseMachine(browser, second.machineId, secondName);
     fleetMachines.find(machine => machine.id === second.machineId)!.online = false;
-    await click(browser, footerLink("refresh"));
+    await key(browser, "r", 82);
+    await until(browser, "an offline destination is kept as the launch's machine, not replaced, with the other machine as its fix",
+      `${machinePicker}.textContent === ${JSON.stringify(secondName)} && ${launchButton}.dataset.state === 'refused' && !!${fix("machine")}`);
+    await showView(browser, "sessions");
     await until(browser, "an offline machine's read is no longer offered",
       `${element(`${generator} [data-read-state="offline"][data-machine-id="${second.machineId}"]`)} !== null && ${savedRow(second.machineId)} === null`);
-    await until(browser, "an offline destination is preserved on the line, not replaced",
-      `${wordValue("machine")} === ${JSON.stringify(secondName)} && ${verb}.dataset.state === 'refused' && !!${statusFix(`use ${machineName}`)}`);
-    await click(browser, statusFix(`use ${machineName}`));
-    await until(browser, "the fix moves the line to the online machine", `${wordValue("machine")} === ${JSON.stringify(machineName)}`);
+    await showView(browser, "main");
+    await click(browser, fix("machine"));
+    await until(browser, "the fix moves the launch to the online machine", `${machinePicker}.textContent === ${JSON.stringify(machineName)}`);
     fleetMachines.find(machine => machine.id === second.machineId)!.online = true;
-    await click(browser, footerLink("refresh"));
+    await key(browser, "r", 82);
+    await showView(browser, "sessions");
 
     // An unreadable terminal inventory refuses resume; so does a session its machine no longer lists.
     // Each resume re-reads the machine first, so a refusal is awaited past that read.
@@ -2483,7 +2653,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       const reads = firstReads;
       await click(browser, rowVerb(first.machineId, "resume"));
       await waitFor(() => firstReads > reads, timeout, 50);
-      await until(browser, description, `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-busy') !== 'true' && ${verb}.dataset.state !== 'busy' && ${failureLine}`);
+      await until(browser, description, `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-busy') !== 'true' && ${launchButton}.dataset.state !== 'busy' && ${failureLine}`);
     };
     terminalInventoryFailed = true;
     await until(browser, "the resume row is offered", `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-disabled') !== 'true'`);
@@ -2505,13 +2675,14 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     const terminalRoute = `/uri/${encodeURIComponent(formatManifoldUri({ kind: "terminal", terminalId: "synthetic-exact" }))}`;
     await waitFor(() => navigations.some(url => new URL(url).pathname === terminalRoute), timeout, 50);
     assert.equal(resumedInputs.length, 3, "A newly correlated running session reopens instead of preparing a replacement");
-    await until(browser, "public terminal URI resolves back to the authoritative home", `location.pathname === ${JSON.stringify(`/p/${first.containerId}`)} && ${verb} !== null`);
+    await until(browser, "public terminal URI resolves back to the authoritative home", `location.pathname === ${JSON.stringify(`/p/${first.containerId}`)} && ${launchButton} !== null`);
+    await showView(browser, "sessions");
     await until(browser, "the exact running terminal is offered to open", `${runningRow("synthetic-exact")}?.querySelector('[data-verb="open"]') != null`);
     const navigationCount = navigations.filter(url => new URL(url).pathname === terminalRoute).length;
     await click(browser, `${runningRow("synthetic-exact")}.querySelector('[data-verb="open"]')`);
     await waitFor(() => navigations.filter(url => new URL(url).pathname === terminalRoute).length > navigationCount, timeout, 50);
     assert.equal(resumedInputs.length, 3, "Explicit open never prepares a replacement");
-    assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), realTerminals, "Earlier-statement actions never create a terminal");
+    assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), realTerminals, "Session actions never create a terminal");
     fixture.check();
   } finally {
     heldReview.release();
@@ -2769,8 +2940,10 @@ async function run(): Promise<void> {
     await selectDestination(writerBrowser, accountDestination, secondTarget.machineId);
     assert.equal(await writerBrowser.evaluate(`${element(profile)}.value`), preset.id, "Both destinations show the same saved active pool");
     assert.deepEqual((await readConfiguration(server, writer, secondTarget)).configuration?.accounts, activated.configuration?.accounts);
-    phase = "real shared workbench drafts across destinations";
+    phase = "real shared drafts across destinations";
     await sharedWorkbenchScenario(writerBrowser, viewerBrowser, server, writer, viewer, target, secondTarget);
+    // The viewer's part is done; one browser is enough from here on.
+    await viewerBrowser.close();
     phase = "a writer without a canvas saves and is told why launching waits";
     await canvaslessWriterScenario(writerBrowser, server, writer, target);
 
@@ -2781,7 +2954,7 @@ async function run(): Promise<void> {
     await usableStarter(writerBrowser);
     assert.equal(await writerBrowser.evaluate(`${element(permissionDialog)} === null`), true,
       "Bundled starter does not open a permission dialog");
-    // Enabling discovery is an explicit review in Setup; the first-use line's own fix is to read the accounts again.
+    // Enabling discovery is an explicit review in Setup; the first-use launch line's own fix is to read the accounts again.
     await openSheet(writerBrowser, "setup");
     await click(writerBrowser, workspaceButton("Machine"));
     const firstUseReview = workspaceButton("Choose capabilities to review");
@@ -2831,7 +3004,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view refuses every write. Genuine pinned OMP metadata yields an editable render-only starter whose seat board is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the verb says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop with every edit locked, and a refused spend saves nothing. Manual Models import, staging and exact promotion remain reachable, and a staged-only workspace's verb opens Models. Team, catalog and account drafts survive destinations, sheets and a reload; own account edits never conflict with an unsaved edit while a foreign team write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px nothing overflows or overlaps; pointing and focus shift nothing; keys stay panel-local and never act from a sheet, dialog or popover; arrival keys reach the lane or take the verb's step; a refused keyboard step says why; the wheel turns only open drums or keyboard-focused words at rest; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and earlier-statement correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. Manual Models import, staging and exact promotion remain reachable, and a staged-only workspace's launch opens Models. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text; pointing and focus shift nothing; keys stay panel-local and never act from a sheet or an open machine list or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();
