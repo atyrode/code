@@ -407,7 +407,13 @@ window of an account is one line: its label (`5h`, `7d`), a twelve-block bar fil
 the share used, the percentage, `↻` and the time to its reset, and Code's word for it:
 `tight` from 80% used (or when the provider warns), `maxed` when exhausted, `blocked`
 for a provider block, whose `↻` is the time it lifts. Windows are never averaged across
-accounts or providers. A prepaid balance is shown in its own currency; an account
+accounts or providers. Every reported window is a row. A window with a tier meters a
+limit of its own beside the account's shared windows, such as Anthropic's weekly limit
+for one model kind or a Codex named limit, and its label names the tier (`7d fable`,
+`7d base-model-inference`) so it is told apart from the shared `7d`. Only the shared
+windows judge the provider's pool: OMP does not yet say whether a tiered limit stops
+every route of the account or only one model's, so a used-up `fable` window makes
+Claude neither tight nor maxed. A prepaid balance is shown in its own currency; an account
 with no windows says "no windows reported"; a block on a scope no shown window meters
 is its own line ("<scope> requests blocked ↻ Sat 16:55"). An account excluded from the
 pool, or whose credential is disabled, is drawn in quieter colours. An account read

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { AccountsObservation, PermittedUsageSnapshot } from "@atyrode/manifold-omp";
 import { initialAccountChoices, reduceAccountChoices } from "../domain/accounts.ts";
 import type { AccountChoices } from "../domain/contracts.ts";
-import type { QuotaReading } from "../domain/quota.ts";
+import { compileCatalog } from "../domain/catalog.ts";
+import { quotaPools, type QuotaReading } from "../domain/quota.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { usageState, type UsageGroup, type UsageState } from "../code/generator/usage-model.ts";
 
@@ -19,6 +20,12 @@ const carol: Person = { provider: "anthropic", credentialId: 3, identityKey: "ca
 const erin: Person = { provider: "deepseek", credentialId: 5, identityKey: null };
 const frank: Person = { provider: "openrouter", credentialId: 6, identityKey: null };
 const grace: Person = { provider: "openai", credentialId: 7, identityKey: null };
+
+/** A Codex and a Claude ladder, so the pools their buckets judge exist. */
+const catalog = compileCatalog({ schemaVersion: 1, models: (["openai-codex", "anthropic"] as const).flatMap(provider => ([1, 2, 3] as const).map(tier => ({
+  key: `${provider === "anthropic" ? "a" : "o"}${tier}`, provider, tier, id: `model-${tier}`, api: "test-api", quotaBucket: provider === "anthropic" ? "claude" : "codex",
+  inputCostPerMillion: tier, outputCostPerMillion: tier * 5, tokensPerSecond: null, timeToFirstTokenMs: null, contextWindow: 200_000,
+  thinkingLevels: ["low", "medium", "high"] as const, images: true }))) });
 
 function window(usedFraction: number | null, changes: Partial<Window> = {}): Window {
   return { windowId: "5h", tier: null, usedFraction, quotaStatus: null, resetsAt: now + HOUR, durationMs: 5 * HOUR,
@@ -55,12 +62,20 @@ describe("the usage pane and the accounts view read the projection as it stands"
     expect(codex!.accounts.map(row => [row.who, row.included])).toEqual([["alice@example.test", false], ["bob@example.test", true]]);
   });
 
-  test("a window metering a quota of its own is no row of the account's usage; a provider Code does not meter keeps its windows", () => {
-    const accounts = observation([alice, erin]);
-    const value = reading(accounts, [report(alice, [window(0.4), window(1, { tier: "codex-spark" })]), report(erin, [window(0.3)])]);
-    const [codex, deepseek] = groups(usageState(value, initialAccountChoices()));
-    expect(codex!.accounts[0]!.windows.map(row => [row.label, row.percent, row.level])).toEqual([["5h", 40, "ok"]]);
-    expect(deepseek!.accounts[0]!.windows.map(row => row.percent)).toEqual([30]);
+  test("every reported window is a row, a tiered one named by its tier; only the shared windows judge the provider's pool", () => {
+    const accounts = observation([alice, carol]);
+    const week = { windowId: "7d", durationMs: 7 * 24 * HOUR };
+    // Claude's shared 5h and 7d, and its weekly limit for one model kind (Fable) used up; Codex's 5h and a named limit.
+    const value = reading(accounts, [report(alice, [window(0.4), window(0.18, { tier: "base-model-inference", ...week })]),
+      report(carol, [window(0.3), window(0.4, week), window(1, { tier: "fable", quotaStatus: "exhausted", ...week })])]);
+    const [codex, claude] = groups(usageState(value, initialAccountChoices()));
+    expect(claude!.accounts[0]!.windows.map(row => [row.label, row.tier, row.percent, row.word])).toEqual([
+      ["5h", null, 30, ""], ["7d", null, 40, ""], ["7d", "fable", 100, "maxed"]]);
+    expect(codex!.accounts[0]!.windows.map(row => [row.label, row.tier, row.percent])).toEqual([["5h", null, 40], ["7d", "base-model-inference", 18]]);
+    // OMP keeps serving Opus and Sonnet past a used-up Fable limit, so Claude is neither maxed nor tight for it.
+    const pools = quotaPools(catalog, value);
+    expect(pools.find(pool => pool.id === "anthropic:claude")?.verdict).toEqual({ kind: "room" });
+    expect(pools.find(pool => pool.id === "openai-codex:codex")?.verdict).toEqual({ kind: "room" });
   });
 
   test("providers come in the panel's family order, a family's own provider first, whatever order the reading lists them", () => {

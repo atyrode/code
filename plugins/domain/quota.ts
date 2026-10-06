@@ -38,7 +38,11 @@ export function windowState(entry: UsageAccount, window: UsageWindow, provider: 
   return { level: "ok", word: "", until: null, percent };
 }
 
-/** `5h`, `7d`: a window by its span. A plan tier (`Max`) describes the account, not the window. */
+/**
+ * `5h`, `7d`: a window by its span. A window's tier is not part of it: a tier names a limit of
+ * its own beside the account's shared windows (Anthropic's weekly limit for one model kind, such
+ * as `fable`; a Codex named limit), which the usage rows name beside the span.
+ */
 export function windowLabel(window: UsageWindow): string {
   const duration = window.durationMs;
   return duration === null ? ({ "5-hour": "5h", weekly: "7d", daily: "1d" } as Readonly<Record<string, string>>)[window.windowId] ?? window.windowId

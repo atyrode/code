@@ -156,8 +156,8 @@ function Bar({ percent, filled }: { percent: number | null; filled: boolean }) {
 }
 
 function WindowLine({ window, filled }: { window: UsageWindowRow; filled: boolean }) {
-  return <div className={`${G}usage-win`} data-level={window.level}>
-    <span className={`${G}usage-wl`}>{window.label}</span>
+  return <div className={`${G}usage-win`} data-level={window.level} data-tier={window.tier ?? undefined}>
+    <span className={`${G}usage-wl`}>{window.label}{window.tier !== null && <> <span className={`${G}usage-tier`}>{window.tier}</span></>}</span>
     <Bar percent={window.percent} filled={filled} />
     <span className={`${G}usage-pct`}>{window.percent === null ? "—" : `${Math.round(window.percent)}%`}</span>
     <span className={`${G}usage-used`}>used</span>
@@ -169,7 +169,8 @@ function WindowLine({ window, filled }: { window: UsageWindowRow; filled: boolea
 /** An account's readings under its identity line: its windows, its balance, and what no window says. */
 function AccountReadings({ row, filled }: { row: UsageAccountRow; filled: boolean }) {
   return <>
-    {row.windows.map(window => <WindowLine key={window.key} window={window} filled={filled} />)}
+    {/* One grid for the account's windows, so a tier's longer label moves all of its bars alike. */}
+    {row.windows.length > 0 && <div className={`${G}usage-wins`}>{row.windows.map(window => <WindowLine key={window.key} window={window} filled={filled} />)}</div>}
     {/* A prepaid balance in its own currency, dollars as `$`. */}
     {row.balance && <div className={`${G}usage-bal`}><span className={`${G}usage-bl`}>balance</span><span className={`${G}usage-bv`}>
       {row.balance.currency === "USD" ? `$${row.balance.total}` : `${row.balance.total} ${row.balance.currency}`}</span></div>}
