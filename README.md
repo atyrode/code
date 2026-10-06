@@ -33,26 +33,31 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
-- **Code workbench:** one main view of statement, seats and earlier statements. The
-  **statement** is a verb and six words (lane, tier, thinking, advisor, extras,
-  machine) changed in place by pointer, keys or wheel, with two status lines that say
-  what a pointed choice does, including to quota where it strands a role or leads on
-  a strained pool. The verb names the next step (Verify models, Save & launch,
-  Launch) and, when refused, stays focusable and gives the reason with a fix. The
-  **seat board** shows provider columns headed by their quota pools, tier rows of
-  model seats and each role on the seat that leads it, with fallbacks and fates; a
-  pool head opens its accounts in place. The **earlier statements** list running and
-  explicitly read saved sessions and this device's recent teams. Launch is task-less:
-  the task is typed in the session. Empty workspaces derive a render-only starter
-  from OMP's passive bundled model metadata, so exploring needs no models,
-  credentials or runtime setup; saving starts with **Verify models**. Stored active
-  policy always wins. Accounts, Models (manual authoring, import/export, discovery
-  and measurement) and Setup open as sheets, and the session options hold skills and
-  automation for one launch.
+- **Code workbench:** one main view in the terminal's grammar. The **generator** is
+  one row of plain words per setting (lane, model, thinking, advisor, and an on/off
+  row per extra) changed in place by pointer, keys or wheel, each model shown by its
+  short alias per tier, with a readout line that says what a pointed word does,
+  including to quota where it strands a role or leads on a strained pool. Cost and
+  speed meters sit above a launch row that names the next step (Verify models, Save &
+  launch, Launch) and the machine it runs on, a picker over the roster; when the step
+  is refused it stays focusable and the launch line gives the reason with a fix.
+  **Routing** beside it lists every role's `model:thinking`, with the fallback chains
+  on request, and **usage** under both. A key line names the keys of the view shown.
+  The **accounts** (`a`, with their management under `m`) and the **sessions** (`e`)
+  are views one key away, and routing and usage are views of their own below 760 px.
+  The sessions list running and explicitly read saved sessions and this device's
+  recent profiles. Launch is task-less: the task is typed in the session. Empty
+  workspaces derive a render-only starter from OMP's passive bundled model metadata,
+  so exploring needs no models, credentials or runtime setup; saving starts with
+  **Verify models**. Stored active policy always wins. Models (manual authoring,
+  import/export, discovery and measurement), Setup and the session options, which
+  hold skills and automation for one launch, open as sheets. An unsaved profile
+  survives a reload in the tab.
 - **Accounts / Usage:** include exact OMP-observed identities or credential slots
-  with straightforward checkboxes in the Accounts sheet, or switches under each pool
-  head, and reusable presets. Read each reported quota window separately; unknown
-  and historical facts never imply free capacity.
+  with a switch per account in the accounts view, choose among reusable presets, and
+  manage presets, sign-in and credentials in its management view. The usage pane
+  reads each reported quota window separately and again every five minutes, or on
+  `r`; unknown and historical facts never imply free capacity.
   OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and
@@ -72,13 +77,13 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 - **Native fleet sessions:** explicitly read bounded header/title metadata from
   each permitted machine. An exact harness/machine/session correlation can reopen
   its existing terminal at its authoritative current home; similar names or
-  directories never imply a match. Otherwise choose **Resume** or **Resume with
-  this team** on a saved session; resuming runs on the statement's machine. The
+  directories never imply a match. Otherwise choose **resume** or **with current
+  profile** on a saved session; resuming runs on the launch row's machine. The
   latter sends explicit next-resume model/thinking choices and the exact composed
   overlay/account pool, not a claim about live effective settings. Resume rechecks
   native inventory
   and running terminals before preparing anything; native refusals and placement
-  permissions remain authoritative. Recent teams are device-local and grant nothing.
+  permissions remain authoritative. Recent profiles are device-local and grant nothing.
 - **Suggestions:** Code reviews and invokes only its optional external
   classifier service, configured in Setup; the main view has no Suggest control.
   This policy is separate from OMP account and gateway configuration.
