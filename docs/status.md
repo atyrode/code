@@ -64,7 +64,7 @@ files, service state, credentials or backups.
   Neither path grants account authority or supplies credentials.
 - The first workbench derives a frozen local starter from OMP's passive bundled
   SDK model metadata after a successful absent or initialized-empty configuration
-  read. The statement and the seat board need no account or runtime setup. The
+  read. The generator's rows and routing need no account or runtime setup. The
   starter is render-only: saving it is the model verification (OMP inventory
   through the saved account pool, a charge the operator confirms, per-provider
   benchmarks, then the derived catalog staged, reviewed, promoted and saved with
@@ -72,6 +72,15 @@ files, service state, credentials or backups.
   stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
+- The main view's presentation has these bounds. Cost is a relative list-price index,
+  not billing, and the speed meter stays unlit and says "unmeasured" until every lead
+  model has measured throughput. The usage pane reads again every five minutes
+  (Code's own cadence, since the host's feeds read again only on events while their
+  channel is live); it draws reported windows, balances and blocks, not reset credits,
+  which appear in the manage view's readings. Presets are created, edited and
+  deleted, and sign-in and credential actions run, only in the manage view, which
+  keeps the Code accounts panel's own controls; the accounts view activates a preset
+  and switches accounts.
 - Pure catalog/preferences actions need no machine process or selected account.
   `composeProbe` and `composeSession` consume typed caller-supplied OMP
   observations but do not attest them; OMP rechecks concrete account slots before
