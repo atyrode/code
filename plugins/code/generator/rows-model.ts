@@ -32,8 +32,6 @@ export type RowWord = {
   /** What choosing it does; for the chosen word, what it means as it stands (empty when its own word says it all). */
   readonly says: string;
   readonly quota: QuotaNote | null;
-  /** Choosing it is the cause of a strained or stranded pool (`causalRedline`). */
-  readonly strains: boolean;
   /** The slot option a press commits: the dial value, or the extra to turn; null for the chosen word and a refused one. */
   readonly option: SlotOption | null;
   readonly tone: WordTone;
@@ -56,7 +54,7 @@ export type RowsInput = {
   readonly connected: ReadonlySet<string> | null;
 };
 
-const NO_WORD = { sub: null, reason: null, quota: null, strains: false, option: null, gap: false } as const;
+const NO_WORD = { sub: null, reason: null, quota: null, option: null, gap: false } as const;
 
 function laneFamilies(mark: LaneMark | null): readonly string[] {
   return mark === null ? [] : mark.kind === "mixed" ? ["openai", "anthropic"] : [mark.family];
@@ -66,7 +64,7 @@ function laneFamilies(mark: LaneMark | null): readonly string[] {
 function dialWord(option: SlotOption, text: string, name: string, tone: WordTone, quiet: boolean): RowWord {
   return {
     ...NO_WORD, key: option.value, text, name, selected: option.current, available: option.available, reason: option.available ? null : option.reason,
-    says: option.current ? option.meaning : option.note, quota: option.quota, strains: option.redline !== null,
+    says: option.current ? option.meaning : option.note, quota: option.quota,
     option: option.current || !option.available ? null : option, tone, quiet,
   };
 }
@@ -119,7 +117,7 @@ function switchRow(extra: SlotOption): GeneratorRow {
     return {
       ...NO_WORD, key: on ? "on" : "off", text: on ? "on" : "off", name: `${extra.label} ${on ? "on" : "off"}`, selected: chosen,
       available: chosen || extra.available, reason: chosen || extra.available ? null : extra.reason, says: chosen ? extra.meaning : extra.note,
-      quota: chosen ? null : extra.quota, strains: !chosen && extra.redline !== null, option: chosen || !extra.available ? null : extra,
+      quota: chosen ? null : extra.quota, option: chosen || !extra.available ? null : extra,
       tone: on ? { kind: "accent" } : { kind: "plain" }, quiet: !on,
     };
   };

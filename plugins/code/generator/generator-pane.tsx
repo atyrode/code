@@ -524,9 +524,10 @@ function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string;
 }
 
 /**
- * The line beside the launch: Confirm charge first when it carries it (the next Tab stop after the
- * launch), then its facts, then its fixes and cancel as cues; a fix that opens a place answers to
- * that place's key too. Its asides are the readout's, said while the launch is pointed.
+ * The line beside the launch and its machine: Confirm charge first when it carries it, then its
+ * facts, then its fixes and cancel as cues; a fix that opens a place answers to that place's key too.
+ * Its asides are the readout's, said while the launch is pointed. Confirm charge is the next Tab stop
+ * after the launch: while a charge waits the machine cannot change, and its word leaves the Tab order.
  */
 function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
   line: StatusLine; canConfirm: boolean; onConfirm: (detail: number) => void; onCancel: () => void; onFix: (action: Extract<StatusAction, { kind: "fix" }>) => void;
