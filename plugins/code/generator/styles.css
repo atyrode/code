@@ -796,19 +796,27 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-age { margin-left: 10px; color: var(--tui-warn); font-size: 13px; font-weight: 400; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-who { display: flex; align-items: baseline; min-width: 0; color: var(--tui-dim); line-height: 22px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win {
+/*
+ * An account's windows share one grid, each a row of it: the label column fits its longest label
+ * (up to 8em, a longer tier wraps), so a tier moves every bar of the account alike. The last column
+ * keeps the reset whole (its min-content), so a label never squeezes it; where the grid is too
+ * narrow for a tier's label beside the bar, the label takes its own line (below).
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-wins {
+  container: usage-wins / inline-size;
   display: grid;
-  grid-template-columns: 3em auto 3.1em auto minmax(0, 1fr);
+  grid-template-columns: fit-content(8em) auto 3.1em auto minmax(min-content, 1fr);
   column-gap: 10px;
-  align-items: start;
   font-size: 13.5px;
   line-height: 22px;
   font-variant-numeric: tabular-nums;
 }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: start; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="warn"] { --usage-bar: var(--tui-warn); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="error"] { --usage-bar: var(--tui-bad); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="unknown"] { --usage-bar: var(--tui-faint); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-wl { color: var(--tui-fg); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-wl { min-width: var(--usage-wl, 3em); color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tier { color: var(--tui-dim); overflow-wrap: anywhere; }
 /* Centred on the first 22px line, where the row's words sit even when its tail wraps. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar { display: flex; gap: 2px; margin-top: 5px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { position: relative; width: 7px; height: 12px; overflow: hidden; background: var(--tui-well); }
@@ -836,6 +844,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv) { transition: color 240ms cubic-bezier(.2, .8, .2, 1); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv, .plugin-atyrode_code_generator__usage-note) { color: var(--tui-quiet); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] .plugin-atyrode_code_generator__usage-win { --usage-bar: var(--tui-faint); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] .plugin-atyrode_code_generator__usage-tier { color: var(--tui-quiet); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] .plugin-atyrode_code_generator__usage-name { text-decoration: line-through; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-next { display: inline-grid; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-next::after { content: attr(data-sizer); grid-area: 1 / 1; height: 0; overflow: hidden; visibility: hidden; }
@@ -856,8 +865,8 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body:focus { outline: none; }
 /* Readings sit under the name, past the switch; the indent is paid for out of the gaps, so a row's word still shows whole. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-providers { column-gap: 36px; margin-top: 18px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-acct > :is(.plugin-atyrode_code_generator__usage-win, .plugin-atyrode_code_generator__usage-bal, .plugin-atyrode_code_generator__usage-note) { padding-left: 18px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-win { column-gap: 8px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-acct > :is(.plugin-atyrode_code_generator__usage-wins, .plugin-atyrode_code_generator__usage-bal, .plugin-atyrode_code_generator__usage-note) { padding-left: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-wins { column-gap: 8px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -934,18 +943,35 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-refresh { margin-top: 2px; }
 
 @container code (width < 430px) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em auto 3em auto minmax(0, 1fr); column-gap: 8px; font-size: 13px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-wins { --usage-wl: 2.6em; grid-template-columns: fit-content(7em) auto 3em auto minmax(min-content, 1fr); column-gap: 8px; font-size: 13px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { column-gap: 8px; }
 }
 /* Narrower than a window row at 13px: thinner blocks, and the share stands alone without "used". */
 @container code (width < 380px) {
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em auto 3em minmax(0, 1fr); column-gap: 6px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-wins { grid-template-columns: fit-content(6em) auto 3em minmax(min-content, 1fr); column-gap: 6px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { width: 5px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-used { display: none; }
 }
+/*
+ * An account's windows narrower than a full label, bar, share, "used" and reset (8em + about 290px):
+ * a tiered window's label takes the row's first line whole and its bar, share and reset the next,
+ * so a long tier never squeezes the reset. The reset keeps the last column, whichever columns show.
+ */
+@container usage-wins (width < 400px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-wl { grid-column: 1 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-bar { grid-row: 2; grid-column: 2; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-pct { grid-row: 2; grid-column: 3; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-used { grid-row: 2; grid-column: -3 / -2; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-tail { grid-row: 2; grid-column: -2 / -1; }
+}
 /* Under 300px the bar gives way: its blocks share the room left beside the label and the share, and the reset goes under them. */
 @container code (width < 300px) {
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em minmax(0, 1fr) 3em; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-wins { grid-template-columns: 2.6em minmax(0, 1fr) 3em; }
+  /* A tiered window's label takes the row's first line whole, its bar and share the next, so a long tier never squeezes the bar. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-wl { grid-column: 1 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-bar { grid-row: 2; grid-column: 2; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-pct { grid-row: 2; grid-column: 3; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-tier] .plugin-atyrode_code_generator__usage-tail { grid-row: 3; grid-column: 2 / -1; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar { min-width: 0; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { flex: 1 1 0; min-width: 2px; max-width: 5px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { grid-column: 2 / -1; }

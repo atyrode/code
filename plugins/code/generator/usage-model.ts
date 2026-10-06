@@ -21,10 +21,17 @@ type Balance = NonNullable<UsageAccount["balance"]>;
  */
 export const USAGE_FRESH_MS = 300_000;
 
-/** One window: its label (`5h`, `7d`), how much is used, Code's word for it, and when it resets or its block lifts. */
+/** One window: its label (`5h`, `7d`), its tier, how much is used, Code's word for it, and when it resets or its block lifts. */
 export type UsageWindowRow = {
   readonly key: string;
   readonly label: string;
+  /**
+   * The limit of its own the window meters (`fable`, `base-model-inference`), named beside the
+   * label so `7d` and `7d fable` are told apart; null for the account's shared windows. Only those
+   * judge the provider's pool (domain/usage.ts `quotaBucket`): whether a tiered limit stops every
+   * route or one model's is not reported yet, and Code does not guess.
+   */
+  readonly tier: string | null;
   readonly percent: number | null;
   readonly level: WindowState["level"];
   readonly word: WindowState["word"];
@@ -102,12 +109,9 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
     const reported = provider.accounts.filter(entry => entry.freshness !== "unknown");
     const allHistory = reported.length > 0 && reported.every(history);
     const observed = reported.flatMap(entry => entry.observedAt === null ? [] : [entry.observedAt]);
-    // A metered provider's window outside its bucket meters a quota of its own (Spark's, retired) that Code spends none of:
-    // it is no row of the account's usage, where it would read as a second, indistinguishable 5h, maxed or not.
-    const metered = providerPolicy(provider.provider).meteredProviders.includes(provider.provider);
     const accounts = provider.accounts.map((entry): UsageAccountRow => {
-      const windows = metered ? entry.windows.filter(window => window.bucket !== null) : entry.windows;
-      const states = windows.map(window => ({ window, state: windowState(entry, window, provider.provider) }));
+      // Every reported window is a row, a tiered one named by its tier.
+      const states = entry.windows.map(window => ({ window, state: windowState(entry, window, provider.provider) }));
       const shown = states.filter(({ state }) => entry.balance === null || state.level !== "unknown");
       return {
         key: JSON.stringify([entry.account.reference, entry.account.credentialId]), reference: entry.account.reference, who: accountName(entry),
@@ -115,11 +119,11 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
         disabled: entry.account.disabled || entry.status === "credential_disabled",
         ageMs: !allHistory && history(entry) && entry.observedAt !== null ? Math.max(0, nowMs - entry.observedAt) : null,
         windows: shown.map(({ window, state }) => ({
-          key: JSON.stringify([window.windowId, window.tier]), label: windowLabel(window),
+          key: JSON.stringify([window.windowId, window.tier]), label: windowLabel(window), tier: window.tier,
           percent: state.percent, level: state.level, word: state.word, until: state.until, resetsAt: window.resetsAt,
         })),
         balance: entry.balance,
-        unreported: entry.balance === null && windows.length === 0,
+        unreported: entry.balance === null && entry.windows.length === 0,
         blocks: entry.account.blocks.filter(block => !entry.windows.some(window => blockCovers(block, window, provider.provider)))
           .map(block => ({ scope: block.scope, until: block.until })),
       };
