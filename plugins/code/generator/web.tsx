@@ -1,13 +1,13 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
-import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
+import { ControlIcon, prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
-import { useCodeTarget } from "../machine-web.ts";
+import { useCodeTarget, type OmpPresence } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
 import { PermissionReview } from "../permission-review.tsx";
-import { familyWord, hueOf, SheetFrame } from "../ui.tsx";
+import { Button, familyWord, hueOf, SheetFrame } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
 import { modelListFailure } from "./board-model.ts";
 import { AccountsPane } from "./accounts-pane.tsx";
@@ -21,7 +21,8 @@ import { RoutingPane } from "./routing-pane.tsx";
 import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
-import { teamWords } from "./statement-model.ts";
+import { OptionSwitch } from "./option-switch.tsx";
+import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { useWorkbench } from "./workbench-model.ts";
 
@@ -32,7 +33,7 @@ const SHEET_TITLES: Readonly<Record<PanelSheet, string>> = { models: "Models", s
 /** Exclusion reasons in plain words, for the last verification's details in Setup. */
 const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
   superseded: "Superseded by a newer model", unstable_id: "Unstable id", not_found: "Not found through your accounts",
-  client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier",
+  client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier", separate_quota: "Draws a quota of its own, which Code does not spend",
 };
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
 /** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wide proportions. */
@@ -88,14 +89,36 @@ function useMode(app: RefObject<HTMLDivElement | null>): Mode {
   return mode;
 }
 
-/** A head's cue: a key and what it does, clickable as well as pressed. */
-function Cue({ keyName, word, onPress }: { keyName: string; word: string; onPress: () => void }) {
-  return <button type="button" className={`${G}cue`} onClick={onPress}><span className={`${G}cue-key`}>{keyName}</span> · {word}</button>;
+/** Every key the panel answers, by where it acts; the key line names only the most used. */
+const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (readonly [key: string, does: string])[] }[] = [
+  { title: "Generator", keys: [["↑ ↓", "Move between the rows"], ["← →", "Change the row's value"], ["Home End", "The row's first or last value"],
+    ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: verify, save, review or launch"], ["Mod ⏎", "The launch, from anywhere in the view"],
+    ["d", "Defaults"], ["z", "Back to the saved profile"], ["f", "Show or hide the fallback chains"], ["w", "Choose the machine"]] },
+  { title: "Views", keys: [["a", "Accounts"], ["e", "Sessions"], ["p", "Routing: hide or show, or open it when narrow"], ["s", "Usage: hide or show, or open it when narrow"],
+    ["Esc", "Back to the generator"]] },
+  { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
+  { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
+  { title: "Anywhere", keys: [["r", "Read accounts, usage and machines again"], ["m", "Models"], ["u", "Setup"], ["o", "Session options"], ["?", "These shortcuts"]] },
+];
+
+/** The keyboard shortcuts, in a native modal dialog: Esc or its Close button closes it, and it owns its keys while open. */
+function ShortcutsDialog({ dialog, narrow }: { dialog: RefObject<HTMLDialogElement | null>; narrow: boolean }) {
+  return <dialog ref={dialog} className={`${G}shortcuts`} aria-labelledby="code-shortcuts-title" data-narrow={narrow || undefined}
+    onClick={event => { if (event.target === event.currentTarget) event.currentTarget.close(); }}>
+    <div className={`${G}shortcuts-head`}>
+      <h2 id="code-shortcuts-title" className={`${G}title`}>Keyboard shortcuts</h2>
+      <Button autoFocus onClick={() => dialog.current?.close()}>Close</Button>
+    </div>
+    {SHORTCUTS.map(group => <section key={group.title} className={`${G}shortcuts-group`} aria-label={group.title}>
+      <h3 className={`${G}shortcuts-title`}>{group.title}</h3>
+      <dl className={`${G}shortcuts-list`}>{group.keys.map(([key, does]) => <Fragment key={key + does}><dt><kbd>{key}</kbd></dt><dd>{does}</dd></Fragment>)}</dl>
+    </section>)}
+  </dialog>;
 }
 
 type WorkbenchProps = {
   host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; machineId: string | null;
-  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void;
+  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void; presence: ReadonlyMap<string, OmpPresence> | null;
 };
 
 /**
@@ -105,7 +128,7 @@ type WorkbenchProps = {
  * Under 760px the generator stands alone, the team grouped under its rows, routing and usage each a
  * key away. Models, Setup and the session options open as sheets over the stage.
  */
-function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines }: WorkbenchProps) {
+function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines, presence }: WorkbenchProps) {
   const model = useWorkbench({ host, target, machine, rosterError, available });
   const { queries: { metadata, setup, skillCatalog }, record, observed, starterError, compiled, selection, profile, localDraft,
     configurationCurrent, launchReady, launchReview, busy, writable, verification, usage, exportedDraft, actions } = model;
@@ -120,9 +143,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   viewRef.current = view;
   const [hidden, setHidden] = useState({ routing: false, usage: false });
   const [chains, setChains] = useState(false);
-  const [more, setMore] = useState(false);
+  const shortcuts = useRef<HTMLDialogElement>(null);
   // The launch as the generator names it, for the key line and the accounts view's foot.
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
+  // The profile switches the generator keeps outside its rows, which the session options sheet draws.
+  const [extras, setExtras] = useState<readonly SlotOption[]>([]);
   // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
@@ -242,6 +267,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
   // One cadence for the panel: `r`, a pane's `r · now` and the usage freshness window all restart the same countdown.
   const cadence = useUsageCadence(usage, refresh);
+  const teamGate = model.gate("edit-team");
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
@@ -288,10 +314,10 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         if (action.view === "manage") setManaged(true);
         changeView(action.view);
         return true;
-      case "back": setMore(false); changeView("main"); return true;
+      case "back": changeView("main"); return true;
       case "refresh": cadence.now(); return true;
       case "machine": generator.current?.machines(); return true;
-      case "more": setMore(open => !open); return true;
+      case "shortcuts": shortcuts.current?.showModal(); return true;
       case "sheet": openSheet(action.sheet); return true;
       case "recall": generator.current?.recall(action.index); return true;
       case "enter":
@@ -311,7 +337,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       inField: target?.matches("textarea, input, select, [contenteditable]") ?? false,
       inDialog: target?.closest("[role=dialog], dialog, [data-popover]") != null,
       onControl: target?.closest("button, a, [role=listbox], [role=option]") != null,
-      onRoot, view, narrow, more, recents: recents.length,
+      onRoot, view, narrow, recents: recents.length,
     });
     if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }
   };
@@ -326,66 +352,98 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     return () => panel.removeEventListener("keydown", listener);
   }, []);
 
-  // ------------------------------------------------------------ the key line
-  type Item = { readonly key: string; readonly word: string; readonly action: PanelAction | null };
-  const item = (key: string, word: string, action: PanelAction | null = null): Item => ({ key, word, action });
-  const toRouting: PanelAction = narrow ? { kind: "view", view: "routing" } : { kind: "toggle", pane: "routing" };
-  const toUsage: PanelAction = narrow ? { kind: "view", view: "usage" } : { kind: "toggle", pane: "usage" };
-  const items: Item[] = view === "accounts" ? [item("↑↓", "move"), item("space", "toggle"), item("m", "manage", { kind: "view", view: "manage" }), item("a", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
-    : view === "manage" ? [item("esc", "accounts", { kind: "view", view: "accounts" }), item("a", "generator", { kind: "view", view: "main" })]
-    : view === "sessions" ? [item("↑↓", "move"), ...recents.length ? [item("1–9", "recall")] : [], item("e", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
-    : view !== "main" ? [item("esc", "back", { kind: "back" }), item("a", "accounts", { kind: "view", view: "accounts" })]
-    : [item("↑↓", "move"), item("←→", "change"),
-      ...narrow || hidden.routing ? [item("p", "routing", toRouting)] : [], ...narrow || hidden.usage ? [item("s", "usage", toUsage)] : [],
-      item("a", "accounts", { kind: "view", view: "accounts" }), item("e", "sessions", { kind: "view", view: "sessions" }), item("?", more ? "less" : "more", { kind: "more" })];
-  const extra: Item[] = more && view === "main" ? [
-    item("⏎", launch.label.toLowerCase(), { kind: "launch" }), item("d", "defaults", { kind: "defaults" }), item("f", "fallback chains", { kind: "chains" }),
-    item("w", "machine", { kind: "machine" }), item("p", narrow ? "routing" : hidden.routing ? "show routing" : "hide routing", toRouting), item("s", narrow ? "usage" : hidden.usage ? "show usage" : "hide usage", toUsage),
-    item("r", "refresh", { kind: "refresh" }), item("m", "models", { kind: "sheet", sheet: "models" }), item("u", "setup", { kind: "sheet", sheet: "setup" }),
-    item("o", optionsSummary ? `options · ${optionsSummary}` : "options", { kind: "sheet", sheet: "options" }),
-  ] : [];
-  // Each word and each separator is its own item, as in the terminal's key line, so a word never breaks across lines.
-  const keyLine = (list: readonly Item[]) => list.map(({ key, word, action }, index) => <Fragment key={`${key}:${word}`}>
-    {index > 0 && <span className={`${G}keys-sep`} aria-hidden="true">•</span>}
-    {action ? <button type="button" className={`${G}keys-word`} onClick={() => run(action)}><span className={`${G}keys-key`}>{key}</span>{word}</button>
-      : <span className={`${G}keys-word`}><span className={`${G}keys-key`}>{key}</span>{word}</span>}
-  </Fragment>);
+  // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
+  const tab = (to: PanelView, label: string, accelerator: string) => {
+    const selected = view === to || (to === "accounts" && view === "manage");
+    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected} aria-keyshortcuts={accelerator}
+      tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}</button>;
+  };
+  /** The tabs answer ←/→ among themselves, as a tab list does. */
+  function tabKeys(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+    const at = tabs.indexOf(event.target as HTMLButtonElement);
+    tabs[(at + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length]?.focus();
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  // Narrow, the actions fold behind one More button, so the bar stays the tabs and one control.
+  const actionsId = useId();
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const bar = <nav className={`${G}bar`} aria-label="Code">
+    <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
+      {tab("main", "Generator", "Escape")}
+      {narrow && tab("routing", "Routing", "p")}
+      {narrow && tab("usage", "Usage", "s")}
+      {tab("accounts", "Accounts", "a")}
+      {tab("sessions", "Sessions", "e")}
+    </div>
+    {narrow && <Button aria-expanded={actionsOpen} aria-controls={actionsId} data-actions-toggle="" onClick={() => setActionsOpen(open => !open)}>
+      More<ControlIcon kind={actionsOpen ? "disclosed" : "collapsed"} size={13} />
+    </Button>}
+    <div id={actionsId} className={`${G}actions`} hidden={narrow && !actionsOpen}>
+      <Button aria-keyshortcuts="r" title="Read accounts, usage and machines again (r)" onClick={() => run({ kind: "refresh" })}>Refresh</Button>
+      <Button aria-keyshortcuts="m" title="Models (m)" onClick={() => run({ kind: "sheet", sheet: "models" })}>Models</Button>
+      <Button aria-keyshortcuts="u" title="Setup (u)" onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
+      <Button aria-keyshortcuts="o" title="Session options (o)" onClick={() => run({ kind: "sheet", sheet: "options" })}>
+        Options{optionsSummary && <span className={`${G}actions-summary`}>· {optionsSummary}</span>}
+      </Button>
+      <Button aria-keyshortcuts="?" aria-haspopup="dialog" title="Keyboard shortcuts (?)" onClick={() => run({ kind: "shortcuts" })}>Shortcuts</Button>
+    </div>
+  </nav>;
+  const hideButton = (pane: "routing" | "usage") => !narrow && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
+    onClick={() => run({ kind: "toggle", pane })}>Hide</Button>;
+  // The short key line: the keys the shown view answers most, every other one under Shortcuts. Hidden for a coarse pointer, which has no keys.
+  const viewKeys: readonly (readonly [string, string])[] = view === "main"
+    ? [["↑↓", "move"], ["←→", "change"], ["⏎", launch.label.toLowerCase() || "launch"], ["a", "accounts"], ["e", "sessions"]]
+    : view === "accounts" ? [["↑↓", "move"], ["space", "include"], ["m", "manage"], ["esc", "generator"]]
+    : view === "manage" ? [["esc", "accounts"]]
+    : view === "sessions" && recents.length > 0 ? [["↑↓", "move"], [`1–${Math.min(9, recents.length)}`, "recall"], ["esc", "generator"]]
+    : [["esc", "generator"]];
+  const keyLine = [...viewKeys, ["?", "shortcuts"] as const]
+    .map(([key, word], index) => <Fragment key={key}>
+      {index > 0 && <span className={`${G}keys-sep`} aria-hidden="true">•</span>}
+      <span className={`${G}keys-word`}><span className={`${G}keys-key`}>{key}</span>{word}</span>
+    </Fragment>);
 
   // ------------------------------------------------------------ the stage
-  const back = <Cue keyName="esc" word="back" onPress={() => run({ kind: "back" })} />;
-  const paneCue = (pane: "routing" | "usage", key: string): ReactNode => view === pane ? back
-    : <Cue keyName={key} word="hide" onPress={() => run({ kind: "toggle", pane })} />;
   const tui = <div ref={app} className={`${G}tui`} data-tui="" data-mode={mode} data-view={view} data-solo-generator={(view === "main" && !showRouting) || undefined}
     data-solo={view === "routing" || view === "usage" || undefined} hidden={sheet !== null} style={{ "--tui-acc": accent } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
+    {bar}
     <main className={`${G}stage`}>
-      <GeneratorPane model={model} pools={pools} machines={roster} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
-        profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} optionsSummary={optionsSummary} announce={announce} onOpen={open}
-        onRefresh={refresh} onLaunchState={setLaunch} controls={generator} />
-      <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} cue={paneCue("routing", "p")} hidden={!showRouting} />
+      <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
+        profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} announce={announce} onOpen={open}
+        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator}
+        reveal={!narrow && (hidden.routing || hidden.usage) ? <>
+          {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
+          {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}
+        </> : null} />
+      <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} hide={hideButton("routing")} hidden={!showRouting} />
       <section className={`${G}pane`} data-pane="usage" aria-label="usage" hidden={!showUsage} tabIndex={-1}>
         <header className={`${G}head`}>
           <h2 className={`${G}title`}>usage</h2>
-          {paneCue("usage", "s")}
-          <Cue keyName="a" word="accounts" onPress={() => run({ kind: "view", view: "accounts" })} />
+          {hideButton("usage")}
         </header>
         <UsagePane usage={usage} cadence={cadence} />
       </section>
       <section className={`${G}pane`} data-pane="accounts" aria-label="accounts" hidden={view !== "accounts"} tabIndex={-1}>
-        <header className={`${G}head`}><h2 className={`${G}title`}>accounts</h2>{back}</header>
+        <header className={`${G}head`}>
+          <h2 className={`${G}title`}>accounts</h2>
+          <Button aria-keyshortcuts="m" title="Pools, sign-in and credentials (m)" data-manage="" onClick={() => run({ kind: "view", view: "manage" })}>Manage accounts</Button>
+        </header>
         {/* Mounted only while it shows: opening puts focus on its first switch that can move. */}
-        {view === "accounts" && <AccountsPane usage={usage} gate={accountsGate} families={compiled?.families ?? []} served={model.served} launch={launch}
-          cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
+        {view === "accounts" && <AccountsPane usage={usage} gate={accountsGate} cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
       </section>
       <section className={`${G}pane`} data-pane="manage" aria-label="manage accounts" hidden={view !== "manage"} tabIndex={-1}>
         <header className={`${G}head`}>
-          <h2 className={`${G}title`}>manage</h2>
-          <Cue keyName="esc" word="accounts" onPress={() => run({ kind: "view", view: "accounts" })} />
+          <h2 className={`${G}title`}>manage accounts</h2>
+          <Button aria-keyshortcuts="Escape" title="Back to the accounts (Esc)" onClick={() => run({ kind: "view", view: "accounts" })}>Back to accounts</Button>
         </header>
         {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
-        <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2>{back}</header>
+        <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2></header>
         <div className={`${G}earlier`}>
           <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} onRecall={index => generator.current?.recall(index)}
             rereads={rereads} announce={announce} />
@@ -393,9 +451,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       </section>
     </main>
     <footer className={`${G}keys`} aria-label="keys">
-      <span className={`${G}keys-line`}>{keyLine(items)}</span>
-      {extra.length > 0 && <span className={`${G}keys-line`}>{keyLine(extra)}</span>}
+      <span className={`${G}keys-line`}>{keyLine}</span>
     </footer>
+    <ShortcutsDialog dialog={shortcuts} narrow={narrow} />
   </div>;
 
   const sheetFrame = (name: PanelSheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name} onKeyDown={sheetKeys}>
@@ -434,7 +492,15 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       </details>}
     </>)}
     {sheetFrame("options", <>
-      <p className={`${G}options-lede`}>For the next launch or resume only; the workspace profile stays as it is.</p>
+      {extras.length > 0 && <section className={`${G}options-group`} aria-label="Profile switches">
+        <h3 className={`${G}options-head`}>profile</h3>
+        <p className={`${G}options-note`}>Saved with the workspace profile, like the generator's rows.</p>
+        <ul className={`${G}options-switches`}>{extras.map(extra => <li key={extra.value}>
+          <OptionSwitch on={extra.on} refusal={!extra.available ? extra.reason ?? extra.note : teamGate.open ? null : teamGate.refusal.text}
+            label={`${extra.label}: ${extra.meaning}`} onChange={() => generator.current?.extra(extra.value)}>{extra.label}</OptionSwitch>
+        </li>)}</ul>
+      </section>}
+      <p className={`${G}options-lede`}>The rest is for the next launch or resume only; the workspace profile stays as it is.</p>
       {optionsRefusal && <p className={`${G}options-note`} role="status">{optionsRefusal}</p>}
       <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} refusal={optionsRefusal} change={model.setAutomation} />
       <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
@@ -444,12 +510,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 }
 
 function Launcher({ host }: PanelProps) {
-  const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
+  const { machines, machine, machineId, target, available, error, select, refresh, presence } = useCodeTarget(host);
   // The panel root takes focus when the panel opens (Workbench), so its keys work before anything is clicked.
   return <div className="plugin-atyrode_code plugin-atyrode_code_generator" tabIndex={-1}>
     <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
       {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
-        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} />
+        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} presence={presence} />
         : <div className={`${G}tui`} data-tui="">
           <h1 className="plugin-atyrode_code__sr">Code</h1>
           <p className={`${G}pane-note`}>Open or create a workspace in Manifold to use Code here.</p>

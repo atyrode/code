@@ -46,7 +46,7 @@ export function redline(catalog: CompiledCatalog, routes: readonly Route[], pool
   const leading = new Map<string, string[]>();
   for (const route of routes) {
     const model = catalog.model(route.lead.key);
-    const id = poolId(model.provider, modelBucket(model.provider, model.tier));
+    const id = poolId(model.provider, modelBucket(model.provider));
     leading.set(id, [...leading.get(id) ?? [], route.role]);
   }
   let worst: Redline | null = null;
@@ -215,7 +215,7 @@ export function rescue(catalog: CompiledCatalog, current: Review, pools: readonl
   for (const route of current.routes) {
     if (!strandedRoles.has(route.role)) continue;
     const model = catalog.model(route.lead.key);
-    const pool = leadPools.get(poolId(model.provider, modelBucket(model.provider, model.tier)));
+    const pool = leadPools.get(poolId(model.provider, modelBucket(model.provider)));
     if (pool) waitedOn.set(pool.id, pool);
   }
   return { moves: found.moves, selection: found.review.selection, review: found.review, othersMoved: othersMoved(found.review, leads, strandedRoles),

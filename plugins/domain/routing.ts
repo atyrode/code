@@ -14,7 +14,6 @@ export const ReviewSchema = z.strictObject({
   available: z.strictObject({
     lanes: z.array(LaneSchema).min(1),
     capabilities: z.array(CapabilitySchema).min(1),
-    spark: z.boolean(),
     priority: z.boolean(),
     /**
      * The budgets this catalog can actually serve for the rest of this selection, proved by
@@ -69,7 +68,6 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   }
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const hosted = lane.kind === "provider" && lane.blend === "only" ? [primary] : catalog.families;
-  const special = catalog.special("spark");
   const capabilities: Review["available"]["capabilities"] = catalog.top(primary) === 4 ? [1, 2, 3, 4] : [1, 2, 3];
   // Proved, not inferred: a free model somewhere in the catalog does not make THIS selection's
   // profile free, so ask the resolver. The same trick `defaultSelection` uses to prove a
@@ -85,21 +83,20 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   }
   const available = {
     lanes, capabilities,
-    spark: special !== undefined && hosted.includes(catalog.family(special)),
     priority: hosted.some(family => familyPolicy(family).priority !== undefined),
     budgets: budgets.length === 0 ? (["any"] as Selection["budget"][]) : budgets,
   };
-  if (!capabilities.includes(selection.capability) || (selection.spark && !available.spark) ||
-      (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
-  return { selection, available };
+  if (!capabilities.includes(selection.capability) || (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
+  // Spark is retired: a stored selection that still asks for it is read with it off.
+  return { selection: { ...selection, spark: false }, available };
 }
 
 /**
  * OLD CODE'S DEFAULT (`keys.go:47-53`), the profile its screenshot shows: Capable, medium
- * thinking, a glance advisor, and Spark on wherever the lane can host it.
+ * thinking and a glance advisor.
  *
  * Availability is read first, from a selection every lane admits, because `selectionFacts`
- * refuses a Spark the lane cannot host and a capability the lead family lacks.
+ * refuses a capability the lead family lacks.
  */
 export function defaultSelection(catalog: CompiledCatalog): Selection {
   const lane: Lane = catalog.families.includes("openai") && catalog.families.includes("anthropic")
@@ -109,7 +106,7 @@ export function defaultSelection(catalog: CompiledCatalog): Selection {
     prewalk: false, planYolo: false, fallback: true, budget: "any",
   };
   const { available } = selectionFacts(catalog, admitted);
-  const selection: Selection = { ...admitted, capability: available.capabilities.filter(value => value <= 3).at(-1)!, spark: available.spark };
+  const selection: Selection = { ...admitted, capability: available.capabilities.filter(value => value <= 3).at(-1)! };
   // A catalog without any image-capable model has no complete default profile.
   selectedRoutes(catalog, selection);
   return selection;
@@ -120,7 +117,6 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const pure = lane.kind === "provider" && lane.blend === "only";
   const extreme = thinking === "minimal" || thinking === "max";
-  const special = catalog.special("spark");
   const crossingFamily = (family: string): string | undefined => {
     const preferred = familyPolicy(family).crossTo;
     return preferred === null ? undefined : catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
@@ -190,14 +186,8 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
     } else if (utilityCaps[role]) {
       const tier = utilityCaps[role]![capability - 1]!;
       if (!extreme) level = utilityThinking[role]![ThinkingLevelSchema.options.indexOf(thinking) - 1]!;
-      if (selection.spark && special && (role === "tiny" || role === "commit" || (role === "sonic" && capability === 1))) {
-        lead = special;
-        if (!extreme) level = "low";
-        fallbacks = [catalog.rung(primary, tier)];
-      } else {
-        lead = catalog.rung(primary, tier);
-        if (role === "scout" || role === "sonic") fallbacks = [sibling(lead)];
-      }
+      lead = catalog.rung(primary, tier);
+      if (role === "scout" || role === "sonic") fallbacks = [sibling(lead)];
     } else {
       let family = primary;
       if (!pure && deliberative[role]) {
@@ -270,8 +260,8 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
 
 /**
  * A SELECTION MADE AGAINST ANOTHER CATALOG, narrowed to what this one hosts: the operator chose
- * dials over the bundled preview, and the verified catalog may lack a lane, a fourth rung, Spark
- * or priority that the preview offered. Each structural choice it cannot host moves to the
+ * dials over the bundled preview, and the verified catalog may lack a lane, a fourth rung or
+ * priority that the preview offered. Each structural choice it cannot host moves to the
  * nearest one it can — the same family's other blend, then the default lane; the highest
  * capability not above the one chosen — and every other choice is kept as made.
  *
@@ -292,8 +282,7 @@ export function clampSelection(catalog: CompiledCatalog, wanted: Selection | nul
     ?? fallback.lane;
   const { available } = selectionFacts(catalog, { ...parsed.data, lane, capability: 1, spark: false, priority: false });
   const capability = available.capabilities.filter(value => value <= parsed.data.capability).at(-1) ?? available.capabilities[0]!;
-  const selection: Selection = { ...parsed.data, lane, capability,
-    spark: parsed.data.spark && available.spark, priority: parsed.data.priority && available.priority };
+  const selection: Selection = { ...parsed.data, lane, capability, spark: false, priority: parsed.data.priority && available.priority };
   selectedRoutes(catalog, selectionFacts(catalog, selection).selection);
   return selection;
 }

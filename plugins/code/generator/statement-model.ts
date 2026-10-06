@@ -49,19 +49,19 @@ export type Vocabulary = {
 export function thinkingWord(level: string): string {
   return level === "xhigh" ? "x-high" : level;
 }
-function laneLabel(lane: Lane, familyWord: (family: string) => string): string {
+/** A lane in the panel's words: `GPT-led`, `Claude only`, `Mixed`. */
+export function laneLabel(lane: Lane, familyWord: (family: string) => string): string {
   if (lane.kind === "mixed") return "Mixed";
   return lane.blend === "led" ? `${familyWord(lane.family)}-led` : `${familyWord(lane.family)} only`;
 }
 const CAPABILITY_LABELS = ["fast", "normal", "smart", "elite"] as const;
 
 /**
- * The six More switches, in the order the extras setting lists them, with the dial words that mean
- * on and off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`).
+ * The profile's switches, in the order the panel lists them, with the dial words that mean on and
+ * off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`). The budget
+ * is the domain's default and no control of the panel's.
  */
 const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } }[] = [
-  { dial: "spark", word: "spark", on: "on", off: "off",
-    does: { on: "Tiny and commit run on Spark's own quota, sonic too at fast", off: "Tiny, commit and sonic leave Spark for the lane's models" } },
   { dial: "fallbacks", word: "fallbacks", on: "on", off: "off",
     does: { on: "A role whose model is out falls back along its chain", off: "A role whose model is out waits for it" } },
   { dial: "priority", word: "priority", on: "on", off: "off",
@@ -70,18 +70,16 @@ const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonl
     does: { on: "Tasks and subagents start with OMP's prewalk", off: "Tasks and subagents start without a prewalk" } },
   { dial: "plans", word: "auto plans", on: "auto", off: "ask",
     does: { on: "Plans are approved without asking you", off: "Plans wait for your approval" } },
-  { dial: "budget", word: "free only", on: "free", off: "any",
-    does: { on: "Only free routes are used", off: "Any route may be used, free or paid" } },
 ];
 function extraOn(selection: Selection, dial: MoreDial): boolean {
   const extra = EXTRAS.find(entry => entry.dial === dial)!;
   return SPECS[dial].get(selection) === extra.on;
 }
-/** The words of the switches that are on, in the extras setting's order ("spark", "free only"). */
+/** The words of the switches that are on, in the extras setting's order ("fallbacks", "priority"). */
 export function extrasOn(selection: Selection): string[] {
   return EXTRAS.flatMap(extra => extraOn(selection, extra.dial) ? [extra.word] : []);
 }
-/** "no extras", the switches that are on by name up to two ("spark · fallbacks"), else how many are. */
+/** "no extras", the switches that are on by name up to two ("fallbacks · priority"), else how many are. */
 function extrasLabel(on: readonly string[]): string {
   return on.length === 0 ? "no extras" : on.length <= 2 ? on.join(" · ") : `${on.length} extras`;
 }
@@ -125,7 +123,7 @@ function stranded(outcome: RoleOutcome): boolean {
 /** The pool a model choice draws on: its provider's metered bucket, or the provider itself; null when the reading has none. */
 export function poolOf(catalog: CompiledCatalog, choice: ModelChoice, pools: readonly QuotaPool[]): QuotaPool | null {
   const model = catalog.model(choice.key);
-  const id = poolId(model.provider, modelBucket(model.provider, model.tier));
+  const id = poolId(model.provider, modelBucket(model.provider));
   return pools.find(pool => pool.id === id) ?? null;
 }
 
@@ -226,8 +224,7 @@ function refusalText(word: StatementWord, value: string, selection: Selection, r
   if (refusal.kind === "account") return `Needs a ${vocab.family(refusal.family)} account`;
   const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   if (word === "tier") return `No ${value} ${vocab.family(lead)} model`;
-  if (value === "spark" || value === "priority") return `${value === "spark" ? "Spark" : "Priority"} needs a GPT lane`;
-  if (value === "budget") return "No free route for this profile";
+  if (value === "priority") return "Priority needs a GPT lane";
   return "Not among the current models";
 }
 
@@ -285,6 +282,8 @@ export type StatementContext = OptionContext & {
   /** The machine list could not be read; `machines` is the last list read, or null when none was. */
   readonly rosterError: boolean;
   readonly machineId: string;
+  /** Whether OMP answers on each online machine (machine-web.ts `OmpPresence`); null before any has answered. */
+  readonly omp: ReadonlyMap<string, "ok" | "absent" | "unknown"> | null;
 };
 
 function laneMark(lane: Lane | undefined): LaneMark | null {
@@ -364,10 +363,11 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
 }
 
 function machineSlot(context: StatementContext): Slot {
-  const { machines, machineId, rosterError } = context;
+  const { machines, machineId, rosterError, omp } = context;
   const options = (machines ?? []).map((machine): SlotOption => {
     const current = machine.id === machineId;
-    const reason = machine.revoked ? "access revoked" : machine.online ? null : "offline";
+    // A machine that refuses OMP outright can run nothing: it is refused like an offline one.
+    const reason = machine.revoked ? "access revoked" : !machine.online ? "offline" : omp?.get(machine.id) === "absent" ? "no OMP here" : null;
     return {
       value: machine.id, label: machine.name, mark: null, current, on: false, online: machine.online && !machine.revoked, available: reason === null || current, reason,
       selection: null, review: null, redline: null, note: reason ?? "online", meaning: reason ?? "", quota: null,
@@ -411,11 +411,9 @@ function moveLabel(move: DialMove, review: Review, vocab: Vocabulary): string {
   const extra = EXTRAS.find(entry => entry.dial === move.dial)!;
   return move.word === extra.on ? extra.word : `no ${extra.word}`;
 }
-/** A pool in the statement's provider words: the family ("GPT"), or the family and its own bucket ("GPT spark"). */
+/** A pool in the panel's provider words: its family ("GPT"). */
 function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {
-  if (!pool) return "its pool";
-  const special = pool.bucket !== null && pool.bucket !== providerPolicy(pool.provider).quotaBucketBase;
-  return special ? `${vocab.family(pool.family)} ${pool.bucket!.split("-").at(-1)}` : vocab.family(pool.family);
+  return pool ? vocab.family(pool.family) : "its pool";
 }
 
 /** The one-press fix: the dial move as words ("GPT only") and what it does for the roles that had no route. */
@@ -690,6 +688,12 @@ export type StatusFacts = {
   readonly rosterUnread: boolean;
   /** Another online machine, for an offline destination's fix. */
   readonly otherMachine: { readonly id: string; readonly name: string } | null;
+  /** The destination refuses OMP outright: OMP is not installed there, so nothing can be verified or launched on it. */
+  readonly ompMissing: boolean;
+  /** Why the accounts cannot be used, when the gate says they cannot: the read failed (in its words), the read is not current, or the saved choices no longer resolve. */
+  readonly accountsProblem: { readonly kind: "failed"; readonly text: string } | { readonly kind: "stale" } | { readonly kind: "choices" } | null;
+  /** The workspace profile's read failed, rather than merely being older than its last write. */
+  readonly configurationFailed: boolean;
   readonly message: { readonly text: string; readonly failed: boolean } | null;
   readonly outcome: { readonly kind: "launched" | "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
@@ -741,36 +745,45 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   const attention = (text: string, actions: readonly StatusAction[] = [], aside?: string): [StatusLine, StatusLine] =>
     [line([part(text, "attention")]), line(aside ? [part(aside, "meta")] : [], actions)];
   const where = facts.machine?.name ?? "this machine";
+  const use = facts.otherMachine ? [fix(`Use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
+  // OMP missing from the destination explains every step that needs it; "unknown" is kept for reads that really failed.
+  if (facts.ompMissing && (refusal.code === "verify-status" || refusal.code === "verify-permissions" || refusal.code === "sessions" || refusal.code === "permissions")) {
+    return attention(`OMP isn't on ${where}`, use);
+  }
   switch (refusal.code) {
     case "read-only": return [line([part("Read-only workspace", "neutral")]), line([part("changes stay a local preview", "meta")])];
     case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the profile and accounts still save from here", "meta")])];
     case "unavailable": {
       // A failed read says nothing current about any machine: neither offline nor another to use.
-      if (facts.rosterUnread) return attention("Machine list unreadable", [fix("retry", { kind: "refresh" })]);
-      const use = facts.otherMachine ? [fix(`use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
+      if (facts.rosterUnread) return attention("Machine list unreadable", [fix("Retry", { kind: "refresh" }, "roster")]);
       if (!facts.machine) return attention(facts.machineChosen ? "The chosen machine is not in your machine list" : "No machine chosen", use);
       const { name, online, revoked } = facts.machine;
       return attention(revoked ? `${name}: access revoked` : online ? `${name} is unavailable` : `${name} is offline`, use);
     }
-    case "accounts": return attention("Accounts not readable", [fix("refresh", { kind: "refresh" })]);
-    case "no-accounts": return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+    case "accounts": {
+      const problem = facts.accountsProblem;
+      if (problem?.kind === "choices") return attention("Saved account choices no longer match your accounts", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (problem?.kind === "stale") return attention("Account list not current", [fix("Refresh", { kind: "refresh" }, "accounts-read")]);
+      return attention(problem?.kind === "failed" ? `Accounts unreadable: ${problem.text.replace(/\.$/, "")}` : "Accounts unreadable", [fix("Retry", { kind: "refresh" }, "accounts-read")]);
+    }
+    case "no-accounts": return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
     case "no-account": {
-      if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
       const word = vocab.family(refusal.gap.family);
       const lane = facts.laneFix?.selection
-        ? [fix(`use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
-      return attention(`No ${word} account included`, [...lane, fix(`show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
+        ? [fix(`Use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
+      return attention(`No ${word} account included`, [...lane, fix(`Show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
     }
-    case "configuration": return attention("The workspace profile needs a fresh read", [fix("retry", { kind: "refresh" })]);
-    case "staged": return attention("A staged model list waits in Models", [fix("review in Models", { kind: "open", place: "models" })]);
-    case "unsaved": return attention("No model list in use", [fix("open Models", { kind: "open", place: "models" })]);
-    case "conflict": return attention("The workspace profile changed elsewhere", [fix("use theirs", { kind: "discard" })]);
-    case "models": return attention("These choices need a model review", [fix("open Models", { kind: "open", place: "models" })]);
-    case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("retry", { kind: "refresh" })]);
-    case "verify-permissions": return attention("Discovery is not enabled", [fix("enable in Setup", { kind: "open", place: "setup" })], "verifying needs it");
-    case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("open Setup", { kind: "open", place: "setup" })]);
-    case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("enable in Setup", { kind: "open", place: "setup" })]);
-    case "skills": return attention("Skill choices need attention", [fix("open options", { kind: "open", place: "options" })]);
+    case "configuration": return attention(facts.configurationFailed ? "Workspace profile unreadable" : "The workspace profile needs a fresh read", [fix("Retry", { kind: "refresh" }, "configuration")]);
+    case "staged": return attention("A staged model list waits in Models", [fix("Review in Models", { kind: "open", place: "models" }, "staged")]);
+    case "unsaved": return attention("No model list in use", [fix("Open Models", { kind: "open", place: "models" }, "unsaved")]);
+    case "conflict": return attention("The workspace profile changed elsewhere", [fix("Use theirs", { kind: "discard" }, "conflict")]);
+    case "models": return attention("These choices need a model review", [fix("Open Models", { kind: "open", place: "models" }, "models")]);
+    case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
+    case "verify-permissions": return attention("Discovery is not enabled", [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], "verifying needs it");
+    case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("Open Setup", { kind: "open", place: "setup" }, "sessions")]);
+    case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("Enable in Setup", { kind: "open", place: "setup" }, "permissions")]);
+    case "skills": return attention("Skill choices need attention", [fix("Open options", { kind: "open", place: "options" }, "skills")]);
     default: return attention(refusal.text.replace(/\.$/, ""));
   }
 }
@@ -785,7 +798,7 @@ function withListFailure([first, second]: [StatusLine, StatusLine], failure: Lis
   if (failure === "none") return [first, second];
   const kept = second.actions.length ? line([...first.parts, ...second.parts], [...first.actions, ...second.actions]) : first;
   return [kept, line([part(failure === "beside" ? "Model list unavailable · the routes are this profile's" : "Model list unavailable · no profile can be formed without it", "warn")], [
-    { kind: "fix", key: "list-retry", label: "retry", fix: { kind: "refresh" } },
+    { kind: "fix", key: "list-retry", label: "Retry", fix: { kind: "refresh" } },
     { kind: "fix", key: "list-models", label: "Models", fix: { kind: "open", place: "models" } },
   ])];
 }

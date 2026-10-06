@@ -29,13 +29,13 @@ export class CompiledCatalog {
     const ladders = new Map<string, (string | undefined)[]>();
     const identities = new Set<string>();
     for (const model of parsed.data.models) {
+      // Tier 0 was Spark's own rung, which is retired: a stored catalog that still lists it keeps
+      // parsing, and the model is simply never placed or routed.
+      if (model.tier === 0) continue;
       const policy = providerPolicy(model.provider);
       // OMP addresses provider/id, so two API declarations for that address are ambiguous.
       const identity = `${model.provider}/${model.id}`;
-      if (models.has(model.key) || identities.has(identity) ||
-          (model.tier === 0 && !policy.special.some(special => special.tier === model.tier))) {
-        throw new DomainError("invalid_catalog");
-      }
+      if (models.has(model.key) || identities.has(identity)) throw new DomainError("invalid_catalog");
       identities.add(identity);
       const ladder = ladders.get(policy.family) ?? new Array<string | undefined>(5);
       if (ladder[model.tier] !== undefined) throw new DomainError("invalid_catalog");
@@ -97,14 +97,6 @@ export class CompiledCatalog {
     const key = this.#ladders.get(family)?.[Math.max(1, Math.min(this.top(family), tier))];
     if (!key) throw new DomainError("invalid_selection");
     return key;
-  }
-
-  special(facet: "spark"): string | undefined {
-    for (const family of this.families) {
-      const special = familyPolicy(family).special.find(value => value.facet === facet);
-      if (special) return this.#ladders.get(family)?.[special.tier];
-    }
-    return undefined;
   }
 
   clampThinking(key: string, requested: ThinkingLevel): ThinkingLevel {

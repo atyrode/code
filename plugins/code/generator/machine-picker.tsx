@@ -23,12 +23,14 @@ export type MachinePickerProps = {
 };
 
 /**
- * Where the launch runs: `on studio` after the launch's label, the machine's name a word that opens
- * a short list of the roster above the launch line, each machine with its neutral online dot. Click,
+ * Where the launch runs: `on studio` after the launch's label, the machine's name a dropdown (its
+ * name and a chevron) that opens a short list of the roster above the launch line, each machine
+ * with its neutral online dot. Click,
  * or ↑↓ and ↵, chooses; Esc, Tab or a press outside closes, and focus returns to the word. While the
  * list is open it owns its keys (`data-popover`), so the panel's keys leave them alone. A machine
- * that cannot be chosen is struck through and refuses with its reason; while the destination cannot
- * change at all, the word itself refuses with the gate's.
+ * that cannot be chosen is struck through and refuses with its reason. While the destination cannot
+ * change at all (a step runs or a charge waits), the word refuses with the gate's reason on a press
+ * or `w`, and leaves the Tab order, so Confirm charge stays the next stop after the launch.
  */
 export function MachinePicker({ options, locked, onChoose, onRefuse, onLocked, onPoint, handle }: MachinePickerProps) {
   const id = useId();
@@ -89,10 +91,14 @@ export function MachinePicker({ options, locked, onChoose, onRefuse, onLocked, o
   return <span ref={box} className={`${G}machine`} data-popover={open ? "" : undefined}>
     <span className={`${G}machine-on`} aria-hidden="true">on</span>
     <button ref={trigger} type="button" className={`${G}machine-word`} aria-haspopup="listbox" aria-expanded={open}
-      aria-label={`Machine: ${current?.label ?? "none"}`} aria-disabled={locked !== null || undefined} data-machine-picker=""
+      aria-label={`Machine: ${current?.label ?? "none"}`} aria-disabled={locked !== null || undefined} tabIndex={locked !== null ? -1 : undefined} data-machine-picker=""
+      title={current?.label}
       onClick={() => { if (open) close(true); else show(); }} onPointerEnter={() => onPoint(current)} onPointerLeave={() => { if (!open) onPoint(null); }}>
       {current?.online != null && <i className={`${G}machine-dot`} data-online={current.online} aria-hidden="true" />}
-      {current?.label ?? "no machine"}
+      <span className={`${G}machine-name`}>{current?.label ?? "no machine"}</span>
+      <svg className={`${G}machine-chevron`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4.5 6.25 8 9.75l3.5-3.5" />
+      </svg>
     </button>
     {open && <div ref={list} role="listbox" tabIndex={-1} aria-label="machines" aria-activedescendant={`${id}-${cursor}`} className={`${G}machine-list`}
       onKeyDown={keys} onBlur={event => { if (!box.current?.contains(event.relatedTarget as Node | null)) close(false); }}>

@@ -1,6 +1,6 @@
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
-import { hueOf } from "../ui.tsx";
+import { Check, hueOf } from "../ui.tsx";
 import type { LedgerRow, ProfileGroup, RouteToken } from "./routing-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -83,7 +83,7 @@ function RouteRow({ row, index, chains, onPoint }: { row: LedgerRow; index: numb
   const fallback = chains && !row.off ? row.fallback : [];
   return <li ref={element} className={`${G}route`} data-role={row.role} data-off={row.off || undefined}>
     <span className={`${G}route-mark`}>{row.agentBacked ? "●" : ""}{row.agentBacked && <span className="plugin-atyrode_code__sr">, agent</span>}</span>
-    <span className={`${G}route-role`}>{row.role}</span>
+    <span className={`${G}route-role`} title={row.role}>{row.role}</span>
     <span className={`${G}chain`}>
       <Token value={row.lead} reason={row.down} delay={delay} onPoint={onPoint} onChanged={() => flash(element.current, delay)} />
       {fallback.map((choice, step) => <span key={step} className={`${G}chain-step`} style={{ "--step-delay": `${index * 16 + step * 60}ms` } as CSSProperties}>
@@ -101,8 +101,8 @@ export type RoutingPaneProps = {
   /** The profile's fallbacks are on, so there are chains to show. */
   readonly fallbacks: boolean;
   readonly onChains: () => void;
-  /** The head's cue: `p · hide` beside the generator, `esc · back` as a view of its own. */
-  readonly cue: ReactNode;
+  /** The head's Hide control beside the generator; none when routing is a view of its own. */
+  readonly hide: ReactNode;
   readonly hidden: boolean;
 };
 
@@ -112,10 +112,18 @@ export type RoutingPaneProps = {
  * flashes its row, top to bottom; a lead quota leaves out is struck and says why under the pointer;
  * `f` shows the fallback chains behind each lead while fallbacks are on.
  */
-export function RoutingPane({ ledger, chains, fallbacks, onChains, cue, hidden }: RoutingPaneProps) {
+export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden }: RoutingPaneProps) {
   const [pointed, setPointed] = useState<Pointed | null>(null);
   return <section className={`${G}pane`} data-pane="routing" aria-label="routing" hidden={hidden} tabIndex={-1}>
-    <header className={`${G}head`}><h2 className={`${G}title`}>routing</h2>{cue}</header>
+    <header className={`${G}head`}>
+      <h2 className={`${G}title`}>routing</h2>
+      {/* While fallbacks are off there are no chains: the toggle stays, refused, and a press points at the fallbacks row. */}
+      <Check checked={chains && fallbacks} aria-disabled={!fallbacks || undefined} aria-keyshortcuts="f" data-chains=""
+        title={fallbacks ? "Fallback chains behind each lead (f)" : "Fallbacks are off: no chains to show"} onChange={onChains} onClick={event => { if (!fallbacks) { event.preventDefault(); onChains(); } }}>
+        fallback chains
+      </Check>
+      {hide}
+    </header>
     {ledger ? <ol className={`${G}routes`} onPointerLeave={() => setPointed(null)}>
       {ledger.map((row, index) => <RouteRow key={row.role} row={row} index={index} chains={chains && fallbacks} onPoint={setPointed} />)}
     </ol> : <p className={`${G}pane-note`}>no routes yet</p>}
@@ -124,9 +132,6 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, cue, hidden }
         style={pointed ? { "--rc": `var(--code-${hueOf(pointed.value.family)})` } as CSSProperties : undefined}>
         {pointed && <><b>{pointed.value.alias}:{pointed.value.thinking}</b> · {pointed.reason ?? `${pointed.value.id} · ${pointed.value.effort}`}</>}
       </div>
-      <button type="button" className={`${G}chains`} data-off={!fallbacks || undefined} aria-pressed={chains && fallbacks} onClick={onChains}>
-        <span className={`${G}cue-key`}>f</span> · {fallbacks ? `${chains ? "hide" : "show"} fallback chains` : "fallbacks off"}
-      </button>
     </div>
   </section>;
 }
@@ -134,7 +139,8 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, cue, hidden }
 /**
  * The narrow profile, under the generator's rows whenever routing is not beside them: the team
  * grouped by what it runs, each group's `model:thinking` then its roles, ● for the agent-backed. When
- * a change moves a role between groups it glides from where it was to where it lands.
+ * a change moves a role between groups it glides from where it was to where it lands. A name too long
+ * for its room ends in an ellipsis and says itself whole in its title.
  */
 export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   const box = useRef<HTMLDivElement>(null);
@@ -167,11 +173,12 @@ export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   }, [key]);
   return <div ref={box} className={`${G}profile`} aria-label="team">
     {groups.map(group => <Fragment key={group.key}>
-      <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}>
+      <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}
+        title={`${group.lead.alias}:${group.lead.thinking}`}>
         <span className={`${G}tok-alias`}>{group.lead.alias}</span><span className={`${G}tok-thinking`}>:{group.lead.thinking}</span>
       </span>
       <span className={`${G}profile-roles`}>
-        {group.roles.map(role => <span key={role.role} className={`${G}profile-role`} data-role={role.role}>
+        {group.roles.map(role => <span key={role.role} className={`${G}profile-role`} data-role={role.role} title={role.role}>
           {role.agentBacked && <span className={`${G}profile-mark`} aria-label="agent">●</span>}{role.role === "security-reviewer" ? "security" : role.role}
         </span>)}
       </span>

@@ -84,7 +84,8 @@ describe("sanctioned usage observations", () => {
     const selected = reduceAccountChoices(choices, { kind: "set-account", reference: accounts.accounts[1]!.reference, enabled: false });
     const result = projectUsage({ scope, observedAt: now, accounts: rows }, restricted, selected, now, freshness);
     expect(result.providers[0]!.buckets[0]!.status).toBe("available");
-    expect(result.providers[0]!.buckets.find(bucket => bucket.name.endsWith("-spark"))!.status).toBe("blocked");
+    // Spark is retired: its window belongs to no bucket Code keeps.
+    expect(result.providers[0]!.buckets.map(bucket => bucket.name)).toEqual([result.providers[0]!.buckets[0]!.name]);
     expect(result.providers[0]!.accounts[1]!.status).toBe("selection_disabled");
     restricted.accounts[0]!.blocks[0]!.scope = "";
     expect(projectUsage({ scope, observedAt: now, accounts: rows }, restricted, selected, now, freshness)

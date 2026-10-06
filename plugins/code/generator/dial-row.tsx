@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
 import { hueOf } from "../ui.tsx";
 import { edgeWord, stepWord, type GeneratorRow, type RowWord, type WordTone } from "./rows-model.ts";
@@ -17,12 +17,7 @@ const GLYPHS: Readonly<Record<GeneratorRow["id"], string>> = {
   tier: "M5.25 4.25h5.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-5.5a1 1 0 0 1-1-1v-5.5a1 1 0 0 1 1-1ZM6.5 1.75v2.5M9.5 1.75v2.5M6.5 11.75v2.5M9.5 11.75v2.5M1.75 6.5h2.5M1.75 9.5h2.5M11.75 6.5h2.5M11.75 9.5h2.5",
   thinking: "M5.6 10.6A4.6 4.6 0 1 1 10.4 10.6V12H5.6ZM6.2 14.25h3.6",
   advisor: "M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5ZM10.6 5.4 9.2 9.2 5.4 10.6 6.8 6.8Z",
-  spark: "M8 1.75 9.5 6.5 14.25 8 9.5 9.5 8 14.25 6.5 9.5 1.75 8 6.5 6.5Z",
   fallbacks: "M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5ZM8 5.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM3.6 3.6l2.6 2.6M12.4 3.6 9.8 6.2M3.6 12.4l2.6-2.6M12.4 12.4 9.8 9.8",
-  priority: "M9.25 1.75 3.75 9h4.5l-1.5 5.25L12.25 7h-4.5Z",
-  prewalk: "M8 1.75v8.5M4.5 6.75 8 10.25l3.5-3.5M3 14h10",
-  plans: "M5 3.25v9.5L12.5 8Z",
-  budget: "M2.25 8.25 8.25 2.25h5.5v5.5l-6 6ZM10.75 4.75v.01",
 };
 
 /** A 16px line glyph in the text's colour. */
@@ -48,7 +43,7 @@ type Drag = { readonly id: number; readonly mouse: boolean; readonly x0: number;
 
 export type DialRowProps = {
   readonly row: GeneratorRow;
-  /** Holds the rows' one Tab stop. */
+  /** The row the keyboard was last on, which the panel's keys return focus to. */
   readonly cursor: boolean;
   /** Edits wait (a step runs or a charge waits): the row still answers, and every choice is refused with the gate's reason. */
   readonly locked: boolean;
@@ -74,11 +69,12 @@ export type DialRowProps = {
  * scrubs, choosing at each detent it passes with the dot riding the pointer; ←/→ step over words
  * that cannot be chosen, Home/End go to the ends, Space flips a switch, and the wheel steps once the
  * row has focus or the pointer has rested on it. A word that cannot be chosen is struck through and
- * refuses with its reason. The row is a slider (a switch for on/off rows) whose words are drawn for
- * the eye; its value is its accessible text.
+ * refuses with its reason. The row is a radio group with one Tab stop, its chosen word, which keeps
+ * focus as the value moves; ↑/↓ go to the next row, as the rows read top to bottom.
  */
 export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onHover, onFocusChange, onScrub, onMove }: DialRowProps) {
   const element = useRef<HTMLDivElement>(null);
+  const labelId = useId();
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const follow = useRef<Geo | null>(null);
@@ -125,8 +121,9 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
       : `translate(${point.x}px, ${point.y - 1}px) scaleX(0)`;
   }
 
-  // After every render: the glider follows the chosen word (or a scrub's pointer), and a word whose text changed rolls in.
+  // After every render: focus moves to a newly chosen word, the glider follows it (or a scrub's pointer), and a word whose text changed rolls in.
   useLayoutEffect(() => {
+    if (refocus.current) { refocus.current = false; focusChosen(); }
     layout(drag.current?.moving ? follow.current : null);
     const still = prefersReducedMotion();
     for (const word of box.current?.querySelectorAll<HTMLElement>(`.${G}word`) ?? []) {
@@ -160,9 +157,15 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     box.current?.querySelector<HTMLElement>(`.${G}dot`)?.animate([{ translate: "0 0" }, { translate: `${direction * 5}px 0` }, { translate: "0 0" }],
       { duration: 240, easing: EASE, composite: "add" });
   }
+  /** Focus follows the chosen word, so the row's one Tab stop and the screen reader's place are the value it holds. */
+  const refocus = useRef(false);
+  function focusChosen() {
+    box.current?.querySelector<HTMLElement>('[role="radio"][tabindex="0"]')?.focus({ preventScroll: true });
+  }
   function choose(word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     if (word.selected) return;
     if (!word.available || locked) { if (via !== "scrub") shake(word); onRefuse(word, via); return; }
+    refocus.current = box.current?.contains(box.current.ownerDocument.activeElement) ?? false;
     onChoose(word, via);
   }
   function step(forward: boolean) {
@@ -207,7 +210,9 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     onCursor();
-    element.current?.focus({ preventScroll: true });
+    // The press focuses the row's value, never the word under the pointer: the value is the row's one Tab stop.
+    event.preventDefault();
+    focusChosen();
     const mouse = event.pointerType === "mouse";
     drag.current = { id: event.pointerId, mouse, x0: event.clientX, y0: event.clientY, moving: false };
     hovered.current = null;
@@ -253,7 +258,7 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     const enter = () => { window.clearTimeout(timer); timer = window.setTimeout(() => { rested.current = true; }, REST_MS); };
     const leave = () => { window.clearTimeout(timer); rested.current = false; wheelTravel.current = 0; };
     const wheel = (event: WheelEvent) => {
-      if (!(node.ownerDocument.activeElement === node || rested.current)) return;
+      if (!(node.contains(node.ownerDocument.activeElement) || rested.current)) return;
       event.preventDefault();
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       wheelTravel.current += event.deltaMode === 1 ? delta * 40 : delta;
@@ -289,31 +294,30 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     event.stopPropagation();
   }
 
-  const aria = switchRow
-    ? { role: "switch", "aria-checked": selected?.key === "on" }
-    : { role: "slider", "aria-orientation": "horizontal" as const, "aria-valuemin": 0, "aria-valuemax": Math.max(0, row.words.length - 1),
-      "aria-valuenow": Math.max(0, at), "aria-valuetext": selected?.name ?? "" };
-  const other = switchRow ? row.words.find(word => !word.selected) : undefined;
   const style = { "--dc": selected ? selected.quiet ? "var(--tui-faint)" : toneColor(selected.tone) : "var(--tui-faint)" } as CSSProperties;
-  return <div ref={element} className={`${G}dial`} data-row={row.id} data-kind={row.kind} {...aria} aria-label={row.label}
-    aria-disabled={locked || (other !== undefined && !other.available) || undefined} tabIndex={cursor ? 0 : -1} style={style}
-    onKeyDown={keys} onFocus={() => onFocusChange(true)} onBlur={() => onFocusChange(false)}
+  // A row with nothing chosen yet still has one Tab stop: its first word.
+  const stop = selected ?? row.words[0];
+  return <div ref={element} className={`${G}dial`} data-row={row.id} data-kind={row.kind} role="radiogroup" aria-labelledby={labelId}
+    aria-disabled={locked || undefined} data-cursor={cursor || undefined} style={style}
+    onKeyDown={keys} onFocus={() => onFocusChange(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onFocusChange(false); }}
     onPointerDown={event => { if (!(event.target as HTMLElement).closest(`.${G}words`)) onCursor(); }}
     onPointerLeave={() => { hovered.current = null; onHover(null); }}>
     <span className={`${G}dial-ptr`} aria-hidden="true">▸</span>
     <span className={`${G}dial-glyph`}><Glyph path={GLYPHS[row.id]} /></span>
-    <span className={`${G}dial-label`}>{row.label}</span>
-    <div ref={box} className={`${G}words`} aria-hidden="true" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
+    <span id={labelId} className={`${G}dial-label`}>{row.label}</span>
+    <div ref={box} className={`${G}words`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
       onPointerCancel={event => { if (drag.current?.id === event.pointerId) endDrag(); }}
       onLostPointerCapture={event => { if (drag.current?.id === event.pointerId) endDrag(); }}>
-      <span className={`${G}track`}>
+      <span className={`${G}track`} aria-hidden="true">
         {row.words.map(word => <i key={word.key} className={`${G}tick`} data-off={!word.available || undefined} />)}
         <i className={`${G}fill`} />
         <i className={`${G}dot`} />
       </span>
       {row.words.map(word => <Fragment key={word.key}>
         {word.gap && <i className={`${G}word-break`} />}
-        <span className={`${G}word`} data-key={word.key} data-selected={word.selected || undefined} data-off={!word.available || undefined}
+        <span className={`${G}word`} role="radio" aria-checked={word.selected} aria-disabled={!word.available || undefined} aria-label={word.name}
+          aria-description={word.available ? undefined : word.reason ?? undefined} tabIndex={word === stop ? 0 : -1}
+          data-key={word.key} data-selected={word.selected || undefined} data-off={!word.available || undefined}
           data-gap={word.gap || undefined} style={{ "--wc": toneColor(word.tone) } as CSSProperties}>
           <span className={`${G}word-text`} data-text={word.text}>{word.text}</span>
           {word.sub !== null && <span className={`${G}word-sub`}>{word.sub}</span>}

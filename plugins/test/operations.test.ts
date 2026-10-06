@@ -489,32 +489,30 @@ describe("verified catalogs and launch-time honesty", () => {
   });
 
   test("a launch prunes the fallbacks no included account serves and still refuses a lead nobody serves", async () => {
-    // Spark leads `tiny` and `commit`, so the tier-1 rung, alone on `openai`, is only ever a fallback.
-    const rung = (key: string, provider: string, tier: 0 | 1 | 2 | 3, inputCostPerMillion: number) => ({ ...document().models[0]!,
-      key, provider, id: `native-${key}`, api: "openai-codex-responses", tier, inputCostPerMillion, images: tier !== 0 });
-    const catalog: CatalogDocument = { schemaVersion: 1, models: [rung("o1", "openai", 1, 1), rung("o2", "openai-codex", 2, 2),
-      rung("o3", "openai-codex", 3, 3), rung("spark", "openai-codex", 0, 0.5)] };
+    // Claude-led at capability 3: the tier-2 GPT rung, alone on `openai`, is only ever a fallback, and Codex leads some roles.
+    const rung = (key: string, provider: string, tier: 1 | 2 | 3, inputCostPerMillion: number) => ({ ...document().models[0]!,
+      key, provider, id: `native-${key}`, api: "openai-codex-responses", tier, inputCostPerMillion, images: true });
+    const catalog: CatalogDocument = { schemaVersion: 1, models: [rung("o1", "openai-codex", 1, 1), rung("o2", "openai", 2, 2),
+      rung("o3", "openai-codex", 3, 3), rung("a1", "anthropic", 1, 1), rung("a2", "anthropic", 2, 2), rung("a3", "anthropic", 3, 3)] };
     const f = fixture();
     f.published = published(catalog.models);
     const record = await staged(f, catalog);
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: record.revision, source: "draft" });
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: record.revision, source: "draft", reviewDigest: review.reviewDigest });
     const saved = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision,
-      selection: { ...promoted.selection!, lane: { kind: "provider", family: "openai", blend: "only" }, capability: 3, spark: true, fallback: true,
-        // A glance advisor would lead on the tier-1 rung itself.
-        advisor: "off" } });
+      selection: { ...promoted.selection!, lane: { kind: "provider", family: "anthropic", blend: "led" }, capability: 3, fallback: true, advisor: "off" } });
     const scope = accounts().scope;
     const slot = (provider: string, credentialId: number) => ({ reference: { kind: "credential" as const, scope, provider, credentialId },
       credentialId, identityKey: null, type: "api_key" as const, email: null, disabled: false, blocks: [] });
     const input = { ...workspace, expectedRevision: saved.revision, prompt: "" };
-    const composed = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1)] } });
-    expect(composed.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o1")).toBe(false);
+    const composed = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1), slot("anthropic", 3)] } });
+    expect(composed.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o2")).toBe(false);
     expect(composed.review.routes.some(entry => entry.fallback.length > 0)).toBe(true);
     expect(Object.values(composed.overlay.retry?.fallbackChains ?? {}).flat().some(reference => reference.startsWith("openai/"))).toBe(false);
     // With both providers served, the same fallbacks are routed rather than pruned.
-    const both = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1), slot("openai", 2)] } });
-    expect(both.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o1")).toBe(true);
-    expect(await invoke(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai", 2)] } }))
+    const both = await accepted(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai-codex", 1), slot("openai", 2), slot("anthropic", 3)] } });
+    expect(both.review.routes.flatMap(entry => entry.fallback).some(choice => choice.key === "o2")).toBe(true);
+    expect(await invoke(f, "composeSession", { ...input, accounts: { ...accounts(), accounts: [slot("openai", 2), slot("anthropic", 3)] } }))
       .toEqual({ refused: "code_account_unavailable" });
   });
 

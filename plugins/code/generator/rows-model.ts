@@ -1,7 +1,9 @@
 import type { CompiledCatalog } from "../../domain/catalog.ts";
+import type { Lane } from "../../domain/contracts.ts";
+import { familyPolicy } from "../../domain/providers.ts";
 import type { Review } from "../../domain/routing.ts";
-import { SPECS } from "./dial-space.ts";
-import type { LaneMark, QuotaNote, Slot, SlotOption, StatementWord } from "./statement-model.ts";
+import { laneGroups, laneWord } from "./dial-space.ts";
+import { laneLabel, type LaneMark, type QuotaNote, type Slot, type SlotOption, type StatementWord } from "./statement-model.ts";
 
 /*
  * The generator's rows as data: one row per dial and per extra, each a line of plain option words
@@ -11,7 +13,7 @@ import type { LaneMark, QuotaNote, Slot, SlotOption, StatementWord } from "./sta
  * model row's aliases per tier, which lanes hide, how a switch reads) are tested apart from the DOM.
  */
 
-export type RowId = "lane" | "tier" | "thinking" | "advisor" | "spark" | "fallbacks" | "priority" | "prewalk" | "plans" | "budget";
+export type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
 /** A lane spectrum, a level whose fill grows from the first word, or an on/off switch. */
 export type RowKind = "lane" | "level" | "switch";
 /** How a chosen word is coloured: its provider's hue, Mixed's, the lane's accent, or the text colour (an off value). */
@@ -23,7 +25,7 @@ export type RowWord = {
   readonly text: string;
   /** The model row's tier word under its alias; null elsewhere. */
   readonly sub: string | null;
-  /** The value as the readout and assistive technology name it ("sol, smart", "GPT-led", "spark on"). */
+  /** The value as the readout and assistive technology name it ("sol, smart", "GPT-led", "fallbacks on"). */
   readonly name: string;
   readonly selected: boolean;
   readonly available: boolean;
@@ -32,8 +34,6 @@ export type RowWord = {
   /** What choosing it does; for the chosen word, what it means as it stands (empty when its own word says it all). */
   readonly says: string;
   readonly quota: QuotaNote | null;
-  /** Choosing it is the cause of a strained or stranded pool (`causalRedline`). */
-  readonly strains: boolean;
   /** The slot option a press commits: the dial value, or the extra to turn; null for the chosen word and a refused one. */
   readonly option: SlotOption | null;
   readonly tone: WordTone;
@@ -41,22 +41,24 @@ export type RowWord = {
   readonly quiet: boolean;
   /** The first lane of another provider's group, which starts its own line when the row wraps. */
   readonly gap: boolean;
+  /** Refused because the model list has no model of a family someone has signed in for: verifying models is what finds them. */
+  readonly verifies: boolean;
 };
 export type GeneratorRow = { readonly id: RowId; readonly word: Exclude<StatementWord, "machine">; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[] };
 
 export type RowsInput = {
   readonly slots: Readonly<Record<StatementWord, Slot>>;
   readonly catalog: CompiledCatalog;
-  /** The review the controls show, which names the lanes on offer (`controlsReview`). */
-  readonly controls: Review;
   /** The review the routing shows, whose default role names the chosen tier's model. */
   readonly shown: Review;
   readonly aliases: ReadonlyMap<string, string>;
   /** Families with at least one signed-in account, included or not; null when the reading cannot say. */
   readonly connected: ReadonlySet<string> | null;
+  /** How the panel names a family (`Claude`). */
+  readonly familyWord: (family: string) => string;
 };
 
-const NO_WORD = { sub: null, reason: null, quota: null, strains: false, option: null, gap: false } as const;
+const NO_WORD = { sub: null, reason: null, quota: null, option: null, gap: false, verifies: false } as const;
 
 function laneFamilies(mark: LaneMark | null): readonly string[] {
   return mark === null ? [] : mark.kind === "mixed" ? ["openai", "anthropic"] : [mark.family];
@@ -66,24 +68,47 @@ function laneFamilies(mark: LaneMark | null): readonly string[] {
 function dialWord(option: SlotOption, text: string, name: string, tone: WordTone, quiet: boolean): RowWord {
   return {
     ...NO_WORD, key: option.value, text, name, selected: option.current, available: option.available, reason: option.available ? null : option.reason,
-    says: option.current ? option.meaning : option.note, quota: option.quota, strains: option.redline !== null,
+    says: option.current ? option.meaning : option.note, quota: option.quota,
     option: option.current || !option.available ? null : option, tone, quiet,
   };
 }
 
+/** Every lane a set of families could form: each family alone and led, and Mixed over GPT and Claude. */
+function lanesOf(families: readonly string[]): Lane[] {
+  const lanes: Lane[] = families.flatMap(family => [{ kind: "provider", family, blend: "only" } as const,
+    ...familyPolicy(family).crossTo !== null ? [{ kind: "provider", family, blend: "led" } as const] : []]);
+  return families.includes("openai") && families.includes("anthropic") ? [...lanes, { kind: "mixed" }] : lanes;
+}
+/** The families a lane leads on: both of Mixed's, a led lane's own and the one it crosses to. */
+const familiesOf = (lane: Lane): string[] => lane.kind === "mixed" ? ["openai", "anthropic"]
+  : lane.blend === "led" ? [lane.family, ...familyPolicy(lane.family).crossTo !== null ? [familyPolicy(lane.family).crossTo!] : []] : [lane.family];
+
 /**
  * Lanes in their spectrum, then each other provider's group. A lane is hidden only while its
  * family has no signed-in account at all, unless it is the lane in use; a family whose accounts
- * are all excluded stays, refused with the domain's reason.
+ * are all excluded stays, refused with the domain's reason. A lane the model list cannot form
+ * because it has no model of a family someone has signed in for stays too, struck with that
+ * reason, so a short lane row explains itself; verifying models is what finds them.
  */
-function laneRow({ slots, controls, connected }: RowsInput): GeneratorRow {
-  const group = new Map(SPECS.lane.words(controls).flatMap((words, index) => words.map(word => [word, index] as const)));
-  const shown = slots.lane.options.filter(option => option.current || connected === null || laneFamilies(option.mark).every(family => connected.has(family)));
-  const words = shown.map((option, index): RowWord => {
-    const tone: WordTone = option.mark?.kind === "mixed" ? { kind: "mixed" } : option.mark ? { kind: "family", family: option.mark.family } : { kind: "accent" };
-    const gap = index > 0 && group.get(option.value) !== group.get(shown[index - 1]!.value);
-    return { ...dialWord(option, option.value, option.label, tone, false), gap };
-  });
+function laneRow({ slots, catalog, connected, familyWord }: RowsInput): GeneratorRow {
+  const listed = new Set(catalog.families);
+  const missing = connected === null ? [] : [...connected].filter(family => !listed.has(family));
+  const groups = laneGroups(lanesOf([...catalog.families, ...missing]));
+  const entries = groups.flatMap((lanes, group) => lanes.flatMap((lane): { word: RowWord; group: number }[] => {
+    const option = slots.lane.options.find(candidate => candidate.value === laneWord(lane));
+    const mark: LaneMark = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "provider", family: lane.family, cross: null };
+    const tone: WordTone = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "family", family: lane.family };
+    if (option) {
+      if (!option.current && connected !== null && !laneFamilies(option.mark ?? mark).every(family => connected.has(family))) return [];
+      return [{ word: dialWord(option, option.value, option.label, tone, false), group }];
+    }
+    const absent = familiesOf(lane).find(family => missing.includes(family));
+    if (!absent) return [];
+    const reason = `No ${familyWord(absent)} models in your model list`;
+    return [{ group, word: { ...NO_WORD, key: laneWord(lane), text: laneWord(lane), name: laneLabel(lane, familyWord), selected: false, available: false,
+      reason, says: reason, tone, quiet: false, verifies: true } }];
+  }));
+  const words = entries.map(({ word, group }, index) => ({ ...word, gap: index > 0 && entries[index - 1]!.group !== group }));
   return { id: "lane", word: "lane", label: "lane", kind: "lane", words };
 }
 
@@ -119,17 +144,21 @@ function switchRow(extra: SlotOption): GeneratorRow {
     return {
       ...NO_WORD, key: on ? "on" : "off", text: on ? "on" : "off", name: `${extra.label} ${on ? "on" : "off"}`, selected: chosen,
       available: chosen || extra.available, reason: chosen || extra.available ? null : extra.reason, says: chosen ? extra.meaning : extra.note,
-      quota: chosen ? null : extra.quota, strains: !chosen && extra.redline !== null, option: chosen || !extra.available ? null : extra,
+      quota: chosen ? null : extra.quota, option: chosen || !extra.available ? null : extra,
       tone: on ? { kind: "accent" } : { kind: "plain" }, quiet: !on,
     };
   };
   return { id: extra.value as RowId, word: "extras", label: extra.label, kind: "switch", words: [side(true), side(false)] };
 }
 
-/** Every row, top to bottom: lane, model, thinking, advisor, then each extra. The machine is the launch's own word (machine-picker.tsx). */
+/** The extras the generator keeps as rows; the others are switches in the session options sheet. */
+export const ROW_EXTRAS: readonly string[] = ["fallbacks"];
+
+/** Every row, top to bottom: lane, model, thinking, advisor, fallbacks. The machine is the launch's own word (machine-picker.tsx). */
 export function generatorRows(input: RowsInput): GeneratorRow[] {
   const { slots } = input;
-  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"), ...slots.extras.options.map(switchRow)];
+  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"),
+    ...slots.extras.options.filter(extra => ROW_EXTRAS.includes(extra.value)).map(switchRow)];
 }
 
 /** The nearest word that can be chosen one step right (`forward`) or left of the chosen one; null at the end of the row. */

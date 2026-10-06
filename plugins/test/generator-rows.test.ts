@@ -26,8 +26,8 @@ const vocab: Vocabulary = { family: family => ({ openai: "GPT", anthropic: "Clau
 
 function rows(selection: Selection, connected: ReadonlySet<string> | null = null): GeneratorRow[] {
   const review = reviewCatalog(catalog, selection, now);
-  const slots = statementSlots({ catalog, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio" }, vocab);
-  return generatorRows({ slots, catalog, controls: review, shown: review, aliases: displayAliases(catalog), connected });
+  const slots = statementSlots({ catalog, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
+  return generatorRows({ slots, catalog, shown: review, aliases: displayAliases(catalog), connected, familyWord: vocab.family });
 }
 const row = (list: readonly GeneratorRow[], id: GeneratorRow["id"]) => list.find(entry => entry.id === id)!;
 
@@ -56,11 +56,22 @@ describe("the generator's rows", () => {
     expect(fallbacks.words[0]!.says).toMatch(/falls back/);
     expect(fallbacks.words[1]!.says).toMatch(/waits/);
     expect(fallbacks.words[1]!.option?.value).toBe("fallbacks");
-    // No Spark model in this catalog: turning it on is refused with the reason, and off stays chosen.
-    const spark = row(list, "spark");
-    expect(spark.words[0]).toMatchObject({ text: "on", available: false, option: null });
-    expect(spark.words[0]!.reason).not.toBeNull();
-    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "spark", "fallbacks", "priority", "prewalk", "plans", "budget"]);
+    // The generator keeps five rows; priority, prewalk and auto plans are the session options sheet's switches, and the budget is no control.
+    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "fallbacks"]);
+  });
+
+  test("a family with a signed-in account but no listed model keeps its lanes, struck with the reason and one verification away", () => {
+    const gptOnly = compileCatalog({ schemaVersion: 1, models: [model("o1", "openai-codex", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3)] });
+    const selection = team();
+    const review = reviewCatalog(gptOnly, selection, now);
+    const slots = statementSlots({ catalog: gptOnly, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
+    const lane = (connected: ReadonlySet<string> | null) => generatorRows({ slots, catalog: gptOnly, shown: review, aliases: displayAliases(gptOnly), connected, familyWord: vocab.family })[0]!.words;
+    const words = lane(new Set(["openai", "anthropic"]));
+    expect(words.map(word => [word.key, word.available])).toEqual([["gpt-only", true], ["gpt-led", false], ["mixed", false], ["claude-led", false], ["claude-only", false]]);
+    expect(words.find(word => word.key === "claude-only")).toMatchObject({ reason: "No Claude models in your model list", verifies: true, option: null });
+    // A family nobody has signed in for is not offered at all, and with no reading nothing is claimed missing.
+    expect(lane(new Set(["openai"])).map(word => word.key)).toEqual(["gpt-only"]);
+    expect(lane(null).map(word => word.key)).toEqual(["gpt-only"]);
   });
 
   test("a step passes over words that cannot be chosen and stops at the end of the row", () => {

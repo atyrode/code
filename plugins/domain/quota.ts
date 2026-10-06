@@ -22,8 +22,7 @@ export type WindowState = { level: "ok" | "warn" | "error" | "unknown"; word: ""
 /** Whether a provider block covers this window's quota bucket, by the scope rules the bucket projection uses. */
 export function blockCovers(block: { scope: string }, window: UsageWindow, provider: string): boolean {
   const policy = providerPolicy(provider);
-  return block.scope === "" || (window.bucket === policy.quotaBucketBase ? block.scope === "chat" :
-    policy.special.some(special => window.bucket === `${policy.quotaBucketBase}-${special.bucket}` && (block.scope === special.bucket || block.scope === `tier:${special.bucket}`)));
+  return block.scope === "" || (window.bucket === policy.quotaBucketBase && block.scope === "chat");
 }
 
 /** The words for one window. High usage alone never reads as blocked. */
@@ -39,13 +38,11 @@ export function windowState(entry: UsageAccount, window: UsageWindow, provider: 
   return { level: "ok", word: "", until: null, percent };
 }
 
-/** `5h`, `7d`, or the special bucket a window meters (`spark`). A plan tier (`Max`) describes the account, not the window. */
-export function windowLabel(window: UsageWindow, provider: string): string {
+/** `5h`, `7d`: a window by its span. A plan tier (`Max`) describes the account, not the window. */
+export function windowLabel(window: UsageWindow): string {
   const duration = window.durationMs;
-  const span = duration === null ? ({ "5-hour": "5h", weekly: "7d", daily: "1d" } as Readonly<Record<string, string>>)[window.windowId] ?? window.windowId
+  return duration === null ? ({ "5-hour": "5h", weekly: "7d", daily: "1d" } as Readonly<Record<string, string>>)[window.windowId] ?? window.windowId
     : duration % 86_400_000 === 0 ? `${duration / 86_400_000}d` : duration % 3_600_000 === 0 ? `${duration / 3_600_000}h` : `${Math.round(duration / 60_000)}m`;
-  if (window.tier !== null && providerPolicy(provider).special.some(special => special.bucket === window.tier)) return window.tier.toLowerCase();
-  return span;
 }
 
 /** Early in a window a linear pace says little, so nothing is forecast before a quarter of it has passed. */
@@ -111,7 +108,7 @@ export type QuotaPool = {
   readonly id: string;
   readonly provider: string;
   readonly family: string;
-  /** The usage bucket (`codex`, `codex-spark`, `claude`); null for a provider that meters no windows. */
+  /** The usage bucket (`codex`, `claude`); null for a provider that meters no windows. */
   readonly bucket: string | null;
   readonly verdict: PoolVerdict;
   /** Included, enabled accounts serving it at the reading. */
@@ -133,12 +130,10 @@ export type QuotaPool = {
  */
 export type QuotaReading = { readonly view: UsageView | null; readonly current: boolean; readonly nowMs: number };
 
-/** The usage bucket a model's requests meter: its provider's base bucket, Spark's own at tier 0; null when the provider meters no windows. */
-export function modelBucket(provider: string, tier: number): string | null {
+/** The usage bucket a model's requests meter: its provider's base bucket; null when the provider meters no windows. */
+export function modelBucket(provider: string): string | null {
   const policy = providerPolicy(provider);
-  if (!policy.meteredProviders.includes(provider)) return null;
-  const special = policy.special.find(entry => entry.tier === tier);
-  return special ? `${policy.quotaBucketBase}-${special.bucket}` : policy.quotaBucketBase;
+  return policy.meteredProviders.includes(provider) ? policy.quotaBucketBase : null;
 }
 
 /** A pool's identity. Provider identifiers cannot contain `:`, so a bucket never collides with a provider's own pool. */
@@ -196,7 +191,7 @@ function verdictOf(bucket: string | null, group: UsageProvider | undefined, read
 
 /**
  * Every pool the catalog's models draw on, joined with the reading: in the catalog's family order,
- * a family's base bucket, then its special buckets, then its unmetered providers. Never `room` over
+ * a family's base bucket, then its unmetered providers. Never `room` over
  * a reading that is not fresh and current, for the pool or for any one account: such a pool is
  * `stale` with its age, or `unknown`, and such an account is left out of the judgement and its age
  * is stated once for the pool.
@@ -204,7 +199,7 @@ function verdictOf(bucket: string | null, group: UsageProvider | undefined, read
 export function quotaPools(catalog: CompiledCatalog, reading: QuotaReading): QuotaPool[] {
   const keys = new Map<string, { provider: string; family: string; bucket: string | null; rank: number }>();
   for (const model of catalog.models) {
-    const bucket = modelBucket(model.provider, model.tier);
+    const bucket = modelBucket(model.provider);
     const id = poolId(model.provider, bucket);
     if (keys.has(id)) continue;
     const policy = providerPolicy(model.provider);
@@ -218,7 +213,7 @@ export function quotaPools(catalog: CompiledCatalog, reading: QuotaReading): Quo
     const current = reading.current && reading.view?.accountsStatus === "fresh";
     const windows = bucket === null ? [] : usable.flatMap(entry => entry.windows.filter(window => window.bucket === bucket).map(window => {
       const state = windowState(entry, window, provider);
-      return { credentialId: entry.account.credentialId, windowId: window.windowId, label: windowLabel(window, provider), state, status: window.status,
+      return { credentialId: entry.account.credentialId, windowId: window.windowId, label: windowLabel(window), state, status: window.status,
         resetsAt: window.resetsAt, durationMs: window.durationMs, forecast: paceForecast(window, state, current, reading.nowMs) };
     }));
     // A whole reading that is not current judges no account: each is history, whatever its own status says.
@@ -263,7 +258,7 @@ export function roleOutcomes(catalog: CompiledCatalog, routes: readonly Route[],
   const byId = new Map(pools.map(pool => [pool.id, pool]));
   const poolFor = (choice: ModelChoice) => {
     const model = catalog.model(choice.key);
-    return byId.get(poolId(model.provider, modelBucket(model.provider, model.tier))) ?? null;
+    return byId.get(poolId(model.provider, modelBucket(model.provider))) ?? null;
   };
   return routes.map((route): RoleOutcome => {
     const lead = poolFor(route.lead);

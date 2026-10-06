@@ -1,11 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import type { MachineSummary } from "@manifold/protocol";
+import type { OmpPresence } from "../machine-web.ts";
 import { prefersReducedMotion } from "@manifold/ui";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import { defaultSelection, type Review } from "../../domain/routing.ts";
 import type { VerificationStep } from "../workflow.ts";
-import { clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
+import { Button, clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
 import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
@@ -16,7 +17,7 @@ import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
-import { generatorRows, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
+import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
   reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
@@ -70,6 +71,8 @@ export type GeneratorControls = {
   readonly recall: (index: number) => void;
   /** `w`: open the machine picker beside the launch. */
   readonly machines: () => void;
+  /** Turn a profile switch kept outside the rows (priority, prewalk, auto plans), through the edit gate. */
+  readonly extra: (value: string) => void;
 };
 
 export type GeneratorPaneProps = {
@@ -78,6 +81,8 @@ export type GeneratorPaneProps = {
   readonly pools: readonly QuotaPool[];
   /** The machine roster; null while it is read. */
   readonly machines: readonly MachineSummary[] | null;
+  /** Whether OMP answers on each online machine (machine-web.ts `useCodeTarget().presence`). */
+  readonly presence: ReadonlyMap<string, OmpPresence> | null;
   /** Choose the destination (`useCodeTarget().select`); the pane asks the machine gate first. */
   readonly selectMachine: (id: string) => void;
   /** Recent profiles in digit order, pinned for the session: index i is digit i + 1. */
@@ -93,14 +98,16 @@ export type GeneratorPaneProps = {
   /** Another view has the stage; the pane keeps its state behind it. */
   readonly hidden: boolean;
   readonly listFailure: ListFailure;
-  /** The session options' summary when they are not the ordinary ones ("2 skills", "restricted"). */
-  readonly optionsSummary: string | null;
+  /** Controls the shell adds to the head: the ways back to a pane it has hidden. */
+  readonly reveal: ReactNode;
   readonly announce: (text: string) => void;
   readonly onOpen: (place: GeneratorPlace, family?: string) => void;
   /** Read accounts, usage, machines and the workspace profile again. */
   readonly onRefresh: () => void;
   /** Hears the launch's label, readiness and refusal whenever they change. */
   readonly onLaunchState: (state: LaunchState) => void;
+  /** Hears the profile switches kept outside the rows (the session options sheet draws them) whenever they change. */
+  readonly onExtras: (extras: readonly SlotOption[]) => void;
   readonly controls: RefObject<GeneratorControls | null>;
 };
 
@@ -118,7 +125,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly ref
  * pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -143,13 +150,15 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId,
-  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId]);
+    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   const machineOptions = slots?.machine.options ?? [];
+  const sheetExtras = useMemo(() => slots?.extras.options.filter(extra => !ROW_EXTRAS.includes(extra.value)) ?? [], [slots]);
+  useEffect(() => onExtras(sheetExtras), [sheetExtras]);
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
   const rows = useMemo(() => slots && catalog && controlsReview && aliases
-    ? generatorRows({ slots, catalog, controls: controlsReview, shown: shown ?? controlsReview, aliases, connected }) : null,
+    ? generatorRows({ slots, catalog, shown: shown ?? controlsReview, aliases, connected, familyWord }) : null,
   [slots, catalog, controlsReview, shown, aliases, connected]);
   const quota = useMemo(() => {
     if (!catalog || !shown) return null;
@@ -173,7 +182,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   // ------------------------------------------------------------ the launch line and what the launch says
   const machine = machines?.find(entry => entry.id === model.machineId) ?? null;
-  const other = machines?.find(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? null;
+  // The other machine a fix offers: one where OMP answers, else any other online one.
+  const others = machines?.filter(entry => entry.id !== model.machineId && entry.online && entry.revoked !== true) ?? [];
+  const other = others.find(entry => presence?.get(entry.id) === "ok") ?? (presence ? null : others[0] ?? null);
   const charge = verification.phase === "charge" ? verification.charge : null;
   const progress = verification.progress?.providers.reduce((sum, entry) => ({ done: sum.done + entry.done, total: sum.total + entry.total }), { done: 0, total: 0 }) ?? null;
   // A verification that stopped says so until the next one starts; the verb, Verify models again, is its retry.
@@ -189,6 +200,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     differs: stopped !== null && stopped.review === model.launchReview ? stopped.differs : null,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, listFailure,
+    ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
   }, vocab);
   const reviewed = model.launchReview && catalog ? {
     machine: machine?.name ?? model.launchReview.destination.machineId,
@@ -209,7 +221,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   function wordSaid(row: GeneratorRow, word: RowWord): Said {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
     const lead = word.sub !== null ? [word.sub] : [];
-    if (!word.available) return { value, text: [...lead, word.reason ?? ""].filter(Boolean).join(" · "), warn: true, color: null };
+    if (!word.available) return { value, text: [...lead, word.reason ?? "", word.verifies ? "a press verifies models, which finds them" : ""].filter(Boolean).join(" · "), warn: true, color: null };
     const strain = quotaParts(word.quota, vocab);
     return {
       value, text: [...lead, word.says, ...strain.map(entry => entry.text)].filter(Boolean).join(" · "),
@@ -276,9 +288,17 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       if (!teamGate.open) refuse(teamGate.refusal.text, row.kind === "switch" ? `${row.label} ${word.text}` : word.text);
       return;
     }
-    if (via === "scrub") setScrub(current => current && { ...current, refused: word });
-    else say(wordSaid(row, word));
-    if (via !== "scrub") announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
+    if (via === "scrub") { setScrub(current => current && { ...current, refused: word }); return; }
+    // A lane whose family the model list lacks is one verification away: a press starts it, through its own gate (it spends nothing before Confirm charge).
+    const verify = model.gate("verify");
+    if (word.verifies && verify.open) {
+      model.actions.verify();
+      say({ value: "verify models", text: `finds the models your accounts reach · ${word.reason ?? ""}`, warn: false, color: null });
+      announce(`Verifying models: ${word.reason ?? ""}`);
+      return;
+    }
+    say(wordSaid(row, word));
+    announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
   }
   // ------------------------------------------------------------ the machine the launch runs on, through the machine gate
   const picker = useRef<MachinePickerHandle | null>(null);
@@ -309,7 +329,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   }
   function focusRow(rowId: RowId) {
     setCursor(rowId);
-    root.current?.querySelector<HTMLElement>(`[data-row="${rowId}"]`)?.focus();
+    root.current?.querySelector<HTMLElement>(`[data-row="${rowId}"] [role="radio"][tabindex="0"]`)?.focus();
   }
   function recall(index: number) {
     const team = recents[index];
@@ -387,6 +407,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   // What the panel's keys ask of the pane, current on every render.
   const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall, machines: () => picker.current?.open(),
+    extra: (value: string) => {
+      const extra = sheetExtras.find(entry => entry.value === value);
+      if (!extra) return;
+      if (!extra.available || !extra.selection) { announce(`${extra.label}: ${extra.reason ?? extra.note}`); return; }
+      commitTeam(extra.selection, `${extra.label} ${extra.on ? "off" : "on"}: ${extra.note}`, extra.label);
+    },
     focusRows: () => focusRow(cursor),
     noChains: () => {
       focusRow("fallbacks");
@@ -444,8 +470,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   return <section ref={root} className={`${G}pane`} data-pane="generator" aria-label="generator" hidden={hidden}>
     <header className={`${G}head`}>
       <h2 className={`${G}title`}>generator</h2>
-      <button type="button" className={`${G}cue`} onClick={() => resetTo("defaults")}><span className={`${G}cue-key`}>d</span> · defaults</button>
-      {saved && <button type="button" className={`${G}cue`} onClick={() => resetTo("saved")}><span className={`${G}cue-key`}>z</span> · saved</button>}
+      <Button aria-keyshortcuts="d" title="The default profile (d)" data-defaults="" onClick={() => resetTo("defaults")}>Defaults</Button>
+      {saved && <Button aria-keyshortcuts="z" title="Back to the saved profile (z)" data-revert="" onClick={() => resetTo("saved")}>Revert</Button>}
+      {reveal}
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
@@ -476,10 +503,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
               aria-busy={verb.state === "busy" || undefined} aria-describedby={lineId} title={verb.refusal ? verb.refusal.text : withKey(verb.label, LAUNCH_STROKE)}
               onPointerDown={event => { if (event.button === 0) pressing(true)(); }} onPointerUp={pressing(false)} onPointerCancel={pressing(false)}
               onPointerEnter={() => setHovered({ kind: "launch" })} onPointerLeave={() => { pressing(false)(); setHovered(null); }} onClick={fire}>
-              <Glyph className={`${G}launch-glyph`} path={ENTER} />
-              <Glyph className={`${G}launch-check`} path={CHECK} />
-              <span className={`${G}launch-label`}>{verb.label.toLowerCase()}</span>
-              <i className={`${G}launch-charge`} aria-hidden="true" />
+              <span className={`${G}launch-mark`} aria-hidden="true">
+                <Glyph className={`${G}launch-glyph`} path={ENTER} />
+                <Glyph className={`${G}launch-check`} path={CHECK} />
+              </span>
+              <span className={`${G}launch-label`}>{verb.label.toLowerCase()}<i className={`${G}launch-charge`} aria-hidden="true" /></span>
             </button>
             {slots && <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
               onRefuse={refuseMachine} onLocked={() => { if (!machineGate.open) refuse(machineGate.refusal.text, "machine"); }} handle={picker}
@@ -488,8 +516,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
           <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
             onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>
             {line ? <LaunchLine line={line} canConfirm={verification.canConfirm} onConfirm={detail => charge && model.actions.confirmCharge({ detail, repeat: false }, charge)}
-              onCancel={verification.cancel} onFix={runFix} />
-              : optionsSummary && <button type="button" className={`${G}cue`} onClick={() => onOpen("options")}><span className={`${G}cue-key`}>o</span> · {optionsSummary}</button>}
+              onCancel={verification.cancel} onFix={runFix} /> : null}
           </span>
         </span>
       </div>
@@ -523,9 +550,10 @@ function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string;
 }
 
 /**
- * The line beside the launch: Confirm charge first when it carries it (the next Tab stop after the
- * launch), then its facts, then its fixes and cancel as cues; a fix that opens a place answers to
- * that place's key too. Its asides are the readout's, said while the launch is pointed.
+ * The line beside the launch and its machine: Confirm charge first when it carries it, then its
+ * facts, then its fixes and cancel as cues; a fix that opens a place answers to that place's key too.
+ * Its asides are the readout's, said while the launch is pointed. Confirm charge is the next Tab stop
+ * after the launch: while a charge waits the machine cannot change, and its word leaves the Tab order.
  */
 function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
   line: StatusLine; canConfirm: boolean; onConfirm: (detail: number) => void; onCancel: () => void; onFix: (action: Extract<StatusAction, { kind: "fix" }>) => void;
@@ -540,12 +568,10 @@ function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
       {parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
     </span>}
     {line.actions.map(action => {
-      if (action.kind === "cancel") return <button key="cancel" type="button" className={`${G}cue`} onClick={onCancel}>cancel</button>;
+      if (action.kind === "cancel") return <Button key="cancel" className={`${G}fix`} onClick={onCancel}>Cancel</Button>;
       if (action.kind !== "fix") return null;
       const key = action.fix.kind === "open" ? FIX_KEYS[action.fix.place] : action.fix.kind === "refresh" ? FIX_KEYS.refresh : undefined;
-      return <button key={action.key} type="button" className={`${G}cue`} data-fix={action.key} onClick={() => onFix(action)}>
-        {key && <><span className={`${G}cue-key`}>{key}</span> · </>}{action.label}
-      </button>;
+      return <Button key={action.key} className={`${G}fix`} data-fix={action.key} aria-keyshortcuts={key} onClick={() => onFix(action)}>{action.label}</Button>;
     })}
   </>;
 }

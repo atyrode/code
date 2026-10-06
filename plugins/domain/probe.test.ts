@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt, type ModelCatalogSnapshot,
   type ThinkingLevel } from "@atyrode/manifold-omp";
-import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, quotaSpecials, type ScaffoldOptions } from "./probe.ts";
+import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, separateQuota, type ScaffoldOptions } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
 
@@ -59,13 +59,13 @@ function receiptOf(models: Row[]): InventoryReceipt {
 }
 /** A benchmark of every candidate: reachable, except the ids given another verdict. */
 function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {},
-  options: ScaffoldOptions = { specials: [], budget: "any" }) {
+  options: ScaffoldOptions = { separate: [], budget: "any" }) {
   const input = benchmarkCandidates(inv, options), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
   return { ...receipt, results: receipt.results.map(result => verdicts[result.id]
     ? { ...result, status: verdicts[result.id], tokensPerSecond: null, timeToFirstTokenMs: null } : result) };
 }
 /** The catalog an inventory derives when every candidate answers: the ladder rules alone. */
-function derived(inv: InventoryReceipt, options: ScaffoldOptions = { specials: [], budget: "any" }) {
+function derived(inv: InventoryReceipt, options: ScaffoldOptions = { separate: [], budget: "any" }) {
   return catalogFromObservations(inv, observed(inv, {}, options), options);
 }
 /** OMP 18.1.14's bundled OpenAI chat rows: what the starter and today's pinned inventory list. */
@@ -261,15 +261,16 @@ describe("pure typed scaffolding", () => {
     expect(catalogFromObservations(inv, blocked).document.models.filter(model => model.provider === "anthropic").map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"]);
     expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.filter(result => result.id !== "claude-opus-5") })).toThrow("probe_missing_probe");
   });
-  test("special tier requires sanctioned exact identity, optional family can supply one rung", () => {
+  test("a model drawing a quota of its own never takes a rung, however cheap; an optional family can supply one rung", () => {
     const inv = fullInventory();
-    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.5 });
+    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01 });
     inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
-    const special = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", facet: "spark" as const };
-    const result = derived(inv, { specials: [special], budget: "any" });
-    expect(result.document.models.find(model => model.id === special.id)).toMatchObject({ tier: 0, quotaBucket: "spark" });
+    const separate = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6" };
+    const result = derived(inv, { separate: [separate], budget: "any" });
+    expect(result.document.models.some(model => model.id === separate.id)).toBe(false);
+    expect(result.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota" });
     expect(result.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
-    expect(() => derived(inv, { specials: [{ ...special, id: "gpt-missing-6" }], budget: "any" })).toThrow("probe_invalid_input");
+    expect(() => derived(inv, { separate: [{ ...separate, id: "gpt-missing-6" }], budget: "any" })).toThrow("probe_invalid_input");
   });
 
   /**
@@ -312,14 +313,14 @@ describe("pure typed scaffolding", () => {
 
     // Derived under `any`, the free model is tier 1 and every tier above it is paid, so the
     // constraint cannot be met by a catalog that was laddered without it.
-    const paid = compileCatalog(derived(mixed, { specials: [], budget: "any" }).document);
+    const paid = compileCatalog(derived(mixed, { separate: [], budget: "any" }).document);
     expect(paid.models.filter(model => model.inputCostPerMillion === 0).map(model => model.tier)).toEqual([1]);
     expect(() => reviewCatalog(paid, { ...defaultSelection(paid), budget: "free" }, 101)).toThrow("budget_unsatisfiable");
 
     // Derived under `free`, the same free tier ladders on its own evidence — variant addresses
     // and all — and the constraint is met rather than refused.
     const inv = freeLadderInventory();
-    const result = derived(inv, { specials: [], budget: "free" });
+    const result = derived(inv, { separate: [], budget: "free" });
     expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "alpha-1:free"], [2, "beta-2:free"], [3, "gamma-3:free"]]);
     const free = compileCatalog(result.document);
     const review = reviewCatalog(free, { ...defaultSelection(free), budget: "free" }, 101);
@@ -330,8 +331,8 @@ describe("pure typed scaffolding", () => {
     expect(routed.every(choice => free.model(choice.key).inputCostPerMillion === 0 && free.model(choice.key).outputCostPerMillion === 0)).toBe(true);
 
     // The budget also bounds what a benchmark would probe, which is what a probe run spends.
-    expect(benchmarkCandidates(mixed, { specials: [], budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
-    expect(benchmarkCandidates(mixed, { specials: [], budget: "any" }).candidates).toHaveLength(4);
+    expect(benchmarkCandidates(mixed, { separate: [], budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
+    expect(benchmarkCandidates(mixed, { separate: [], budget: "any" }).candidates).toHaveLength(4);
   });
 
   test("addresses differing only by a character outside the key alphabet keep distinct keys", () => {
@@ -339,7 +340,7 @@ describe("pure typed scaffolding", () => {
     // `:` and `-` both fell outside the identifier alphabet and both folded to `-`, so these two
     // distinct models produced one key. Folding made them indistinguishable; escaping does not.
     inv.models.push({ ...inv.models[0]!, id: "alpha-1-free" });
-    const keys = benchmarkCandidates(inv, { specials: [], budget: "any" }).candidates.map(candidate => candidate.key);
+    const keys = benchmarkCandidates(inv, { separate: [], budget: "any" }).candidates.map(candidate => candidate.key);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain("openrouter.alpha-1_3Afree");
     expect(keys).toContain("openrouter.alpha-1-free");
@@ -437,23 +438,22 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     expect(() => catalogFromObservations(inv, observed(inv, verdicts)))
       .toThrow("code_ladder_regression: openai: openai-codex/gpt-5.5 regresses on openai-codex/gpt-5.6-luna");
   });
-  test("OMP's Spark quota class, joined to an inventory, derives the tier 0 the default selection drains", () => {
+  test("OMP's Spark quota class, joined to an inventory, keeps Spark off the ladder and out of every route", () => {
     const inv = receiptOf([...openai1814(), listed("openai-codex", "gpt-5.3-codex-spark", 1.75, 128_000, "low", "xhigh", false), ...anthropic1814()]);
     const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
       models: inv.models.map(model => ({ ...model,
         quotaTier: model.id === "gpt-5.3-codex-spark" ? "spark" : model.provider === "openai-codex" ? "chat" : null })) };
-    const specials = quotaSpecials(inv, metadata);
-    expect(specials).toEqual([{ provider: "openai-codex", id: "gpt-5.3-codex-spark", api: "openai-codex-responses", facet: "spark" }]);
-    const { document } = catalogFromObservations(inv, observed(inv), { specials, budget: "any" });
-    expect(document.models.filter(model => model.tier === 0))
-      .toEqual([expect.objectContaining({ id: "gpt-5.3-codex-spark", quotaBucket: "spark" })]);
+    const separate = separateQuota(inv, metadata);
+    expect(separate).toEqual([{ provider: "openai-codex", id: "gpt-5.3-codex-spark", api: "openai-codex-responses" }]);
+    const { document } = catalogFromObservations(inv, observed(inv), { separate, budget: "any" });
+    expect(document.models.some(model => model.id === "gpt-5.3-codex-spark")).toBe(false);
     const catalog = compileCatalog(document), review = reviewCatalog(catalog, defaultSelection(catalog), 200);
-    expect([review.selection.spark, review.available.spark]).toEqual([true, true]);
-    for (const role of ["tiny", "commit"]) {
-      expect(review.routes.find(route => route.role === role)?.lead.key).toBe("openai-codex.gpt-5.3-codex-spark");
-    }
+    expect(review.selection.spark).toBe(false);
+    expect(review.routes.some(route => [route.lead, ...route.fallback].some(choice => choice.key.includes("spark")))).toBe(false);
+    // A stored selection that still asks for Spark is read with it off, never refused.
+    expect(reviewCatalog(catalog, { ...defaultSelection(catalog), spark: true }, 200).selection.spark).toBe(false);
     // Another OMP version's classification does not describe this inventory, so nothing is joined.
-    expect(quotaSpecials(inv, { ...metadata, ompVersion: "18.4.4" })).toEqual([]);
+    expect(separateQuota(inv, { ...metadata, ompVersion: "18.4.4" })).toEqual([]);
   });
 });
 
@@ -479,20 +479,12 @@ describe("passive starter metadata", () => {
     expect(catalogFromMetadata({ ...snapshot, models: [...snapshot.models].reverse() }, "any")).toEqual(document);
   });
 
-  test("a declared Spark class is the off-ladder tier 0 only below some rung; unknown classes never enter", () => {
+  test("a model in a quota class of its own (Spark's, or one not known yet) never enters, however cheap", () => {
     const snapshot = metadata(), ordinary = catalogFromMetadata(snapshot, "any");
     const base = snapshot.models.find(model => model.provider === "openai-codex")!;
     snapshot.models.push(...["spark", "future-resource"].map((quotaTier, index) => ({
       ...base, id: `cheap-special-${index}`, inputCostPerMillion: 0, outputCostPerMillion: 0, quotaTier,
     })));
-    const document = catalogFromMetadata(snapshot, "any");
-    expect(document.models.filter(model => model.tier !== 0)).toEqual(ordinary.models);
-    expect(document.models.filter(model => model.tier === 0)).toEqual([expect.objectContaining({ id: "cheap-special-0", quotaBucket: "spark" })]);
-    const catalog = compileCatalog(document);
-    expect(reviewCatalog(catalog, { ...defaultSelection(catalog), spark: true }, 1000).selection.spark).toBe(true);
-    // Priced like the top rung, a Spark-class model is some other quota window: neither tier 0 nor a rung.
-    const top = Math.max(...ordinary.models.filter(model => model.provider === "openai-codex").map(model => model.inputCostPerMillion));
-    snapshot.models = snapshot.models.map(model => model.id === "cheap-special-0" ? { ...model, inputCostPerMillion: top } : model);
     expect(catalogFromMetadata(snapshot, "any")).toEqual(ordinary);
   });
 
