@@ -121,7 +121,11 @@ the one way a Code catalog comes to name models, because only a probe shows whic
 this operator can call. Preparing reads the workspace at `expectedRevision`
 (initializing an absent one), runs OMP's inventory with the pool Code composes from
 the saved account choices, and returns the charge, the number of tiny benchmark
-requests per provider, having probed and spent nothing. Only the returned `confirm`
+requests per provider, having probed and spent nothing. A catalog routes only its
+rungs, so the charge probes every eligible model of a family Code requires (OpenAI,
+Anthropic), whose ladder must survive a model that does not answer, and only the
+rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provider);
+such a rung that does not answer leaves that family shorter. Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
 revision, the exact account pool and OMP defaults, and stops, naming itself, when one

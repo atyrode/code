@@ -88,7 +88,9 @@ export type VerificationOptions = { isCurrent?: () => boolean; signal?: AbortSig
 /**
  * What confirming a verification will spend, shown before anything is: one tiny benchmark
  * request per candidate, per provider, through the exact pool and OMP defaults the inventory
- * used. `exclusions` are the unstable ids that are never probed. `replacesDraft` says the staged
+ * used. `exclusions` are the ids never probed, with their reason: unstable ids, and in a family
+ * Code does not require, the versions its newest supersedes and the models that would regress its
+ * ladder (domain/probe.ts `probeSet`). `replacesDraft` says the staged
  * catalog this workspace holds will be replaced.
  */
 export type ChargeReview = {

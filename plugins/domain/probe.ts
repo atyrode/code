@@ -49,7 +49,7 @@ export type Exclusion = z.infer<typeof ExclusionSchema>;
 const ExclusionsSchema = z.array(ExclusionSchema).max(PROBE_MODEL_LIMIT);
 /**
  * WHAT AN INVENTORY OFFERS, BEFORE ANYTHING IS PAID FOR: the exact candidates one benchmark
- * request each would probe, and the ids excluded as unstable without being probed. There is no
+ * request each would probe, and the ids left unprobed with their reason (`probeSet`). There is no
  * catalog document here, because a ladder built from an unprobed inventory names models no
  * benchmark has shown this operator can call — the same gap the bundled starter had — and a
  * draft that carried one was a draft somebody could stage.
@@ -128,14 +128,18 @@ function candidateKey(model: InventoryModel): string {
  *
  * The budget narrows it here rather than after the ladder, so deriving for `free` also probes
  * only what `free` can use: on the live listing that is 32 identities instead of 179, which is
- * the difference between a benchmark worth pricing and one worth stopping.
+ * the difference between a benchmark worth pricing and one worth stopping. Each family then
+ * narrows it to what its ladder can use (`probeSet`).
  */
 export function benchmarkCandidates(inventoryValue: unknown, optionsValue: unknown = { separate: [], budget: "any" }): BenchmarkInput {
   const inventory = parse(InventoryReceiptSchema, inventoryValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
   unique(inventory.models);
+  return benchmarkInput(inventory, probeSet(inventory, options.budget).models);
+}
+function benchmarkInput(inventory: InventoryReceipt, models: readonly InventoryModel[]): BenchmarkInput {
   return parseBenchmarkInput({ schemaVersion: 1, inventoryObservedAt: inventory.observedAt, ompVersion: inventory.ompVersion,
-    candidates: inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model)).sort((a, b) => compare(probeAddress(a), probeAddress(b)))
+    candidates: [...models].sort((a, b) => compare(probeAddress(a), probeAddress(b)))
       .map(model => ({ provider: model.provider, id: model.id, api: model.api, key: candidateKey(model) })) });
 }
 function modelFamily(id: string): { name: string; version: number[] } {
@@ -236,6 +240,39 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
     else rejected.push(candidate.model);
   }
   return { rungs: [bottom, ...middles, top].sort(tierOrder).map(value => value.model), rejected };
+}
+/**
+ * WHAT A BENCHMARK PROBES: EVERY ELIGIBLE MODEL OF A FAMILY CODE REQUIRES, ONLY THE RUNGS OF ANY
+ * OTHER.
+ *
+ * A derived catalog routes nothing but rungs: a lane, a crossing and an advisor all route to
+ * `rung(family, tier)`, so a model that is not a rung is never placed, as a lead or a fallback.
+ * A family Code requires (`requiredLadder`: OpenAI, Anthropic) is probed whole, because its
+ * ladder has to survive a model that does not answer: a blocked newest falls back to its callable
+ * predecessor and a blocked rung to the next candidate. Any other family may be shorter or absent,
+ * so it is probed only at the rungs its listing ladders as if every model answered, and a rung that
+ * does not answer leaves that family shorter. Probing such a family whole made one OpenRouter key
+ * put 207 of an aggregator's models in a 232-request charge, for a family that takes four rungs.
+ *
+ * What is left unprobed is said where it has a reason (`superseded`, `regression`); a model that
+ * is merely not chosen has none. The narrowing reads only the listing and the budget, never the
+ * separate-quota classification, so the draft, which has no metadata, and the derivation probe the
+ * same set.
+ */
+function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { models: InventoryModel[]; unprobed: Exclusion[] } {
+  const offered = inventory.models.filter(model => eligible(model) && admittedBy(budget, model));
+  const familyOf = (model: InventoryModel) => providerPolicy(model.provider).family;
+  const models: InventoryModel[] = [], unprobed: Exclusion[] = [];
+  for (const family of new Set(offered.map(familyOf))) {
+    const members = offered.filter(model => familyOf(model) === family);
+    if (familyPolicy(family).requiredLadder) { models.push(...members); continue; }
+    const ordinary = supersede(members);
+    const { rungs, rejected, regression } = ladder(ordinary.kept);
+    models.push(...rungs);
+    for (const model of ordinary.superseded) unprobed.push(exclusion(model, "superseded"));
+    for (const model of [...rejected, ...regression ?? []]) unprobed.push(exclusion(model, "regression"));
+  }
+  return { models, unprobed };
 }
 /** A row's static quota class puts it in a quota of its own: any class but chat (Spark's, for one). */
 function separateClass(row: { readonly quotaTier: string | null }): boolean {
@@ -341,15 +378,18 @@ function unstableExclusions(inventory: InventoryReceipt, budget: Selection["budg
 export function inventoryDraft(inventoryValue: unknown, budget: Selection["budget"]): CatalogDraft {
   const inventory = parse(InventoryReceiptSchema, inventoryValue);
   const options = parse(ScaffoldOptionsSchema, { separate: [], budget }, "invalid_input");
-  return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt,
-    benchmark: benchmarkCandidates(inventory, options),
-    exclusions: unstableExclusions(inventory, options.budget).sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
+  unique(inventory.models);
+  const { models, unprobed } = probeSet(inventory, options.budget);
+  return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt, benchmark: benchmarkInput(inventory, models),
+    exclusions: [...unstableExclusions(inventory, options.budget), ...unprobed].sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
-/** Every eligible candidate must have an exact probe, before superseding older versions. */
+/** Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions. */
 export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { separate: [], budget: "any" }): DerivedCatalog {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
-  const candidates = benchmarkCandidates(inventory, options).candidates;
+  unique(inventory.models);
+  const { models: offered, unprobed } = probeSet(inventory, options.budget);
+  const candidates = benchmarkInput(inventory, offered).candidates;
   if (benchmark.inventoryObservedAt !== inventory.observedAt) throw new ProbeError("missing_probe");
   const facts = unique(benchmark.results);
   if (facts.size !== candidates.length) throw new ProbeError("missing_probe");
@@ -359,12 +399,11 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
     if (fact.status === "unmatched" || fact.status === "unresolved") throw new ProbeError("inconclusive_probe");
   }
   requireListed(options.separate, inventory.models);
-  const offered = inventory.models.filter(model => eligible(model) && admittedBy(options.budget, model));
   const refused: Exclusion[] = [];
   for (const model of offered) {
     const status = facts.get(probeAddress(model))!.status;
     if (status === "not_found" || status === "client_blocked") refused.push(exclusion(model, status));
   }
   return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"), options,
-    [...unstableExclusions(inventory, options.budget), ...refused], facts);
+    [...unstableExclusions(inventory, options.budget), ...unprobed, ...refused], facts);
 }
