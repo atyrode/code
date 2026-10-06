@@ -13,7 +13,7 @@ import { AccountUsageReadings, useAccountUsage } from "./usage-view.tsx";
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
 type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: OmpInput<"clearAccountBlocks"> };
 /** `locked`: why edits wait now, as when a workbench step is in flight or a verification charge waits; null or absent when they may proceed. */
-type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; onDone?: () => void; locked?: string | null };
+type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; locked?: string | null };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
 function referenceKey(reference: AccountReference): string {
@@ -65,7 +65,7 @@ export function AccountsView(props: AccountsViewProps) {
   return <ScopedAccountsView key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
 
-function ScopedAccountsView({ host, target, available, onDone, locked = null }: AccountsViewProps) {
+function ScopedAccountsView({ host, target, available, locked = null }: AccountsViewProps) {
   const id = useId();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
@@ -292,7 +292,6 @@ function ScopedAccountsView({ host, target, available, onDone, locked = null }: 
       <div><h2 id={`${id}-title`}>Accounts</h2><p>Inclusion for the next launch · not credential or quota approval.</p></div>
       <div className="plugin-atyrode_code__account-toolbar">
         <button type="button" data-action="atyrode.omp.accounts.accounts" onClick={refresh}>Refresh</button>
-        {onDone && <button type="button" disabled={busy || draft !== null || confirmation !== null} onClick={onDone}>Done</button>}
       </div>
     </header>
     {!workspace && <p className="plugin-atyrode_code__account-notice" role="status">Open a workspace to edit shared account choices. Instance accounts and OMP sign-in do not depend on an execution destination.</p>}
@@ -361,7 +360,6 @@ function ScopedAccountsView({ host, target, available, onDone, locked = null }: 
           {draftMissing && <button type="button" className="plugin-atyrode_code__account-outline-action" disabled={!canEdit || confirmation !== null} onClick={() => { if (current) setDraft({ ...draft, kind: "create-preset", preset: { ...draft.preset, id: crypto.randomUUID() }, revision: current.revision }); }}>Keep as new preset</button>}
           <button type="button" disabled={busy} onClick={() => setDraft(null)}>Discard draft / revert</button>
         </div>
-        {onDone && <p className="plugin-atyrode_code__account-meta">Save or discard your draft before leaving this editor.</p>}
       </footer>
     </form> : choices && accountList}
     {choices && current && <details className="plugin-atyrode_code__account-details plugin-atyrode_code__account-library">

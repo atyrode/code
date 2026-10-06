@@ -11,6 +11,7 @@ import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
 import { DialRow, Glyph, toneColor } from "./dial-row.tsx";
+import { MachinePicker, type MachinePickerHandle } from "./machine-picker.tsx";
 import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import { profileGroups, type LedgerRow } from "./routing-model.ts";
@@ -19,7 +20,7 @@ import { generatorRows, type GeneratorRow, type RowId, type RowWord } from "./ro
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
   reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
-  type EstimateReadout, type Projection, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
+  type EstimateReadout, type Projection, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -67,6 +68,8 @@ export type GeneratorControls = {
   readonly focusRows: () => void;
   /** A digit in the sessions view: recall that recent profile. */
   readonly recall: (index: number) => void;
+  /** `w`: open the machine picker beside the launch. */
+  readonly machines: () => void;
 };
 
 export type GeneratorPaneProps = {
@@ -103,11 +106,12 @@ export type GeneratorPaneProps = {
 
 /** What the readout says: a value in bold, then what it means or does, warm when it refuses or strains. */
 type Said = { readonly value: string; readonly text: string; readonly warn: boolean; readonly color: string | null };
-type Hovered = { readonly kind: "word"; readonly row: RowId; readonly key: string } | { readonly kind: "launch" } | { readonly kind: "meter"; readonly name: "cost" | "speed" };
+type Hovered = { readonly kind: "word"; readonly row: RowId; readonly key: string } | { readonly kind: "launch" } | { readonly kind: "meter"; readonly name: "cost" | "speed" }
+  | { readonly kind: "machine"; readonly value: string };
 type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly refused: RowWord | null };
 
 /**
- * GENERATOR: one row of plain option words per dial, extra and machine, a readout line that says
+ * GENERATOR: one row of plain option words per dial and extra, a readout line that says
  * what is pointed, the narrow profile when routing is not beside, the cost and speed meters and the
  * launch line. Every action goes through the workbench model's gate; the pane only names the step,
  * shows what each word would do and quota's verdict on it, and says the consequence of whatever is
@@ -142,6 +146,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId,
   } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
+  const machineOptions = slots?.machine.options ?? [];
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
   const rows = useMemo(() => slots && catalog && controlsReview && aliases
     ? generatorRows({ slots, catalog, controls: controlsReview, shown: shown ?? controlsReview, aliases, connected }) : null,
@@ -228,6 +233,10 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   }
   function pointedSaid(): Said | null {
     if (!hovered) return null;
+    if (hovered.kind === "machine") {
+      const option = machineOptions.find(entry => entry.value === hovered.value);
+      return option ? { value: option.label, text: option.available ? option.note : option.reason ?? option.note, warn: !option.available, color: null } : null;
+    }
     if (hovered.kind === "launch") return { value: verb.label.toLowerCase(), text: launchSays.text, warn: launchSays.warn, color: null };
     if (hovered.kind === "meter") {
       const readout = estimates?.[hovered.name];
@@ -257,25 +266,34 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   }
   function choose(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
-    if (row.id === "machine") {
-      if (!machineGate.open) { refuse(machineGate.refusal.text, value); return; }
-      selectMachine(word.key);
-      announce(`Machine ${word.name}`);
-    } else if (!word.option?.selection || !commitTeam(word.option.selection, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
+    if (!word.option?.selection || !commitTeam(word.option.selection, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
     // The keyboard says what it did where a pointer read it before choosing; a scrub says its whole way from where it began.
     if (via === "keyboard") say(wordSaid(row, word));
   }
   function refuseWord(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     if (word.available && !word.selected) {
       // Edits wait: the gate's reason, not the word's.
-      const gate = row.id === "machine" ? machineGate : teamGate;
-      if (!gate.open) refuse(gate.refusal.text, row.kind === "switch" ? `${row.label} ${word.text}` : word.text);
+      if (!teamGate.open) refuse(teamGate.refusal.text, row.kind === "switch" ? `${row.label} ${word.text}` : word.text);
       return;
     }
     if (via === "scrub") setScrub(current => current && { ...current, refused: word });
     else say(wordSaid(row, word));
     if (via !== "scrub") announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
   }
+  // ------------------------------------------------------------ the machine the launch runs on, through the machine gate
+  const picker = useRef<MachinePickerHandle | null>(null);
+  function chooseMachine(option: SlotOption) {
+    if (!machineGate.open) { refuse(machineGate.refusal.text, option.label); return; }
+    selectMachine(option.value);
+    announce(`Machine ${option.label}`);
+    say({ value: option.label, text: option.note, warn: false, color: null });
+  }
+  function refuseMachine(option: SlotOption) {
+    const reason = option.reason ?? option.note;
+    announce(`${option.label}: ${reason}`);
+    say({ value: option.label, text: reason, warn: true, color: null });
+  }
+
   function resetTo(which: "defaults" | "saved") {
     if (!catalog || !selection || !controlsReview) return;
     const target = which === "defaults" ? defaultSelection(catalog) : saved;
@@ -368,7 +386,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   });
 
   // What the panel's keys ask of the pane, current on every render.
-  const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall,
+  const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall, machines: () => picker.current?.open(),
     focusRows: () => focusRow(cursor),
     noChains: () => {
       focusRow("fallbacks");
@@ -430,7 +448,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       {saved && <button type="button" className={`${G}cue`} onClick={() => resetTo("saved")}><span className={`${G}cue-key`}>z</span> · saved</button>}
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
-      {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={row.id === "machine" ? !machineGate.open : !teamGate.open}
+      {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
         onCursor={() => setCursor(row.id)} onChoose={(word, via) => choose(row, word, via)} onRefuse={(word, via) => refuseWord(row, word, via)}
         onHover={word => setHovered(current => word ? { kind: "word", row: row.id, key: word.key } : current?.kind === "word" && current.row === row.id ? null : current)}
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}
@@ -452,20 +470,27 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         <Meter name="speed" glyph={CHEVRONS} readout={estimates.speed} onPoint={on => setHovered(on ? { kind: "meter", name: "speed" } : null)} />
       </>}
       <div className={`${G}launchrow`}>
-        <button ref={launchButton} type="button" className={`${G}launch`} data-state={verb.state} aria-disabled={verb.state !== "ready" || undefined}
-          aria-busy={verb.state === "busy" || undefined} aria-describedby={lineId} title={verb.refusal ? verb.refusal.text : withKey(verb.label, LAUNCH_STROKE)}
-          onPointerDown={event => { if (event.button === 0) pressing(true)(); }} onPointerUp={pressing(false)} onPointerCancel={pressing(false)}
-          onPointerEnter={() => setHovered({ kind: "launch" })} onPointerLeave={() => { pressing(false)(); setHovered(null); }} onClick={fire}>
-          <Glyph className={`${G}launch-glyph`} path={ENTER} />
-          <Glyph className={`${G}launch-check`} path={CHECK} />
-          <span className={`${G}launch-label`}>{verb.label.toLowerCase()}</span>
-          <i className={`${G}launch-charge`} aria-hidden="true" />
-        </button>
-        <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
-          onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>
-          {line ? <LaunchLine line={line} canConfirm={verification.canConfirm} onConfirm={detail => charge && model.actions.confirmCharge({ detail, repeat: false }, charge)}
-            onCancel={verification.cancel} onFix={runFix} />
-            : optionsSummary && <button type="button" className={`${G}cue`} onClick={() => onOpen("options")}><span className={`${G}cue-key`}>o</span> · {optionsSummary}</button>}
+        <span className={`${G}launch-run`}>
+          <span className={`${G}launch-what`}>
+            <button ref={launchButton} type="button" className={`${G}launch`} data-state={verb.state} aria-disabled={verb.state !== "ready" || undefined}
+              aria-busy={verb.state === "busy" || undefined} aria-describedby={lineId} title={verb.refusal ? verb.refusal.text : withKey(verb.label, LAUNCH_STROKE)}
+              onPointerDown={event => { if (event.button === 0) pressing(true)(); }} onPointerUp={pressing(false)} onPointerCancel={pressing(false)}
+              onPointerEnter={() => setHovered({ kind: "launch" })} onPointerLeave={() => { pressing(false)(); setHovered(null); }} onClick={fire}>
+              <Glyph className={`${G}launch-glyph`} path={ENTER} />
+              <Glyph className={`${G}launch-check`} path={CHECK} />
+              <span className={`${G}launch-label`}>{verb.label.toLowerCase()}</span>
+              <i className={`${G}launch-charge`} aria-hidden="true" />
+            </button>
+            {slots && <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
+              onRefuse={refuseMachine} onLocked={() => { if (!machineGate.open) refuse(machineGate.refusal.text, "machine"); }} handle={picker}
+              onPoint={option => setHovered(current => option ? { kind: "machine", value: option.value } : current?.kind === "machine" ? null : current)} />}
+          </span>
+          <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
+            onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>
+            {line ? <LaunchLine line={line} canConfirm={verification.canConfirm} onConfirm={detail => charge && model.actions.confirmCharge({ detail, repeat: false }, charge)}
+              onCancel={verification.cancel} onFix={runFix} />
+              : optionsSummary && <button type="button" className={`${G}cue`} onClick={() => onOpen("options")}><span className={`${G}cue-key`}>o</span> · {optionsSummary}</button>}
+          </span>
         </span>
       </div>
     </div>

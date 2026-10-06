@@ -7,8 +7,8 @@
  * the last word. A generator row's own keys (←→, ↑↓, Home, End, Space) are the row's (dial-row.tsx).
  */
 
-/** What the stage shows: the generator with routing and usage, a pane alone (narrow), the accounts or the sessions. */
-export type PanelView = "main" | "routing" | "usage" | "accounts" | "sessions";
+/** What the stage shows: the generator with routing and usage, a pane alone (narrow), the accounts, their management (`manage`, under the accounts) or the sessions. */
+export type PanelView = "main" | "routing" | "usage" | "accounts" | "manage" | "sessions";
 /** The sheets that open over the stage. */
 export type PanelSheet = "models" | "setup" | "options";
 
@@ -53,20 +53,24 @@ export type PanelAction =
   | { readonly kind: "more" }
   | { readonly kind: "sheet"; readonly sheet: PanelSheet }
   | { readonly kind: "recall"; readonly index: number }
+  /** Open the machine picker beside the launch. */
+  | { readonly kind: "machine" }
   /** An arrow on arrival: focus moves into the view without changing anything. */
   | { readonly kind: "enter" };
 
-const SHEET_KEYS: Readonly<Record<string, PanelSheet>> = { m: "models", u: "setup", o: "options" };
+const SHEET_KEYS: Readonly<Record<string, PanelSheet>> = { u: "setup", o: "options" };
 
 /**
  * What a key press means, or null when the panel leaves it alone. Mod+↵ takes the launch's step in
  * the main view; a plain ↵ does too unless a control has focus, which answers it itself. Neither
  * acts on key repeat, so holding them cannot take one step after another. Letters act outside text:
  * `a` and `e` open the accounts and the sessions or come back; `p` and `s` hide routing and usage
- * beside the generator, or open them as views when narrow; `d`, `z` and `f` act in the main view;
- * `m`, `u` and `o` open Models, Setup and the session options from the main view; `r` reads again
- * and `?` shows every key. Digits recall a recent profile where the sessions view lists them. Esc
- * closes the full key line and goes back to the main view; at rest in the main view it is left alone.
+ * beside the generator, or open them as views when narrow; `d`, `z`, `f` and `w` (the machine) act
+ * in the main view; `m`, `u` and `o` open Models, Setup and the session options from the main view,
+ * and `m` the accounts' management from the accounts; `r` reads again and `?` shows every key.
+ * Digits recall a recent profile where the sessions view lists them. Esc closes the full key line
+ * and goes back: from the accounts' management to the accounts, from anything else to the main
+ * view; at rest in the main view it is left alone.
  */
 export function panelKey(press: PanelKey): PanelAction | null {
   if (!press.inView || press.defaultPrevented || press.inDialog || press.alt) return null;
@@ -76,17 +80,19 @@ export function panelKey(press: PanelKey): PanelAction | null {
     return press.mod || (!press.onControl && !press.inField) ? { kind: "launch" } : null;
   }
   if (press.mod || press.inField) return null;
-  if (press.key === "Escape") return press.more || !main ? { kind: "back" } : null;
+  if (press.key === "Escape") return press.view === "manage" ? { kind: "view", view: "accounts" } : press.more || !main ? { kind: "back" } : null;
   if (press.onRoot && press.key.startsWith("Arrow")) return { kind: "enter" };
   if (press.repeat) return null;
   switch (press.key) {
-    case "a": return { kind: "view", view: press.view === "accounts" ? "main" : "accounts" };
+    case "a": return { kind: "view", view: press.view === "accounts" || press.view === "manage" ? "main" : "accounts" };
     case "e": return { kind: "view", view: press.view === "sessions" ? "main" : "sessions" };
     case "p": return press.narrow ? { kind: "view", view: press.view === "routing" ? "main" : "routing" } : main ? { kind: "toggle", pane: "routing" } : null;
     case "s": return press.narrow ? { kind: "view", view: press.view === "usage" ? "main" : "usage" } : main ? { kind: "toggle", pane: "usage" } : null;
     case "d": return main ? { kind: "defaults" } : null;
     case "z": return main ? { kind: "saved" } : null;
     case "f": return main || press.view === "routing" ? { kind: "chains" } : null;
+    case "w": return main ? { kind: "machine" } : null;
+    case "m": return main ? { kind: "sheet", sheet: "models" } : press.view === "accounts" ? { kind: "view", view: "manage" } : null;
     case "r": return { kind: "refresh" };
     case "?": return { kind: "more" };
   }

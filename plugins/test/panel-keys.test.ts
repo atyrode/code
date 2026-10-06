@@ -55,11 +55,15 @@ describe("views one key away", () => {
     expect(panelKey(press("Escape"))).toBeNull();
   });
 
-  test("the profile's keys act in the main view only; the accounts view keeps m for its own", () => {
+  test("the profile's keys act in the main view only; in the accounts m opens their management, and Esc there returns to them", () => {
     expect(panelKey(press("d"))).toEqual({ kind: "defaults" });
     expect(panelKey(press("d", { view: "sessions" }))).toBeNull();
+    expect(panelKey(press("w"))).toEqual({ kind: "machine" });
+    expect(panelKey(press("w", { view: "accounts" }))).toBeNull();
     expect(panelKey(press("m"))).toEqual({ kind: "sheet", sheet: "models" });
-    expect(panelKey(press("m", { view: "accounts" }))).toBeNull();
+    expect(panelKey(press("m", { view: "accounts" }))).toEqual({ kind: "view", view: "manage" });
+    expect(panelKey(press("Escape", { view: "manage" }))).toEqual({ kind: "view", view: "accounts" });
+    expect(panelKey(press("a", { view: "manage" }))).toEqual({ kind: "view", view: "main" });
     expect(panelKey(press("d", { repeat: true }))).toBeNull();
   });
 

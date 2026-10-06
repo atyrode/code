@@ -60,7 +60,7 @@ describe("the generator's rows", () => {
     const spark = row(list, "spark");
     expect(spark.words[0]).toMatchObject({ text: "on", available: false, option: null });
     expect(spark.words[0]!.reason).not.toBeNull();
-    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "spark", "fallbacks", "priority", "prewalk", "plans", "budget", "machine"]);
+    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "spark", "fallbacks", "priority", "prewalk", "plans", "budget"]);
   });
 
   test("a step passes over words that cannot be chosen and stops at the end of the row", () => {

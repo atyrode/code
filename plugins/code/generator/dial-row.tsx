@@ -23,7 +23,6 @@ const GLYPHS: Readonly<Record<GeneratorRow["id"], string>> = {
   prewalk: "M8 1.75v8.5M4.5 6.75 8 10.25l3.5-3.5M3 14h10",
   plans: "M5 3.25v9.5L12.5 8Z",
   budget: "M2.25 8.25 8.25 2.25h5.5v5.5l-6 6ZM10.75 4.75v.01",
-  machine: "M2.75 3.25h10.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1ZM5.5 14.25h5M8 11.25v3",
 };
 
 /** A 16px line glyph in the text's colour. */
@@ -316,7 +315,7 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
         {word.gap && <i className={`${G}word-break`} />}
         <span className={`${G}word`} data-key={word.key} data-selected={word.selected || undefined} data-off={!word.available || undefined}
           data-gap={word.gap || undefined} style={{ "--wc": toneColor(word.tone) } as CSSProperties}>
-          <span className={`${G}word-text`} data-text={word.text}>{word.online !== null && <i className={`${G}word-online`} data-online={word.online} />}{word.text}</span>
+          <span className={`${G}word-text`} data-text={word.text}>{word.text}</span>
           {word.sub !== null && <span className={`${G}word-sub`}>{word.sub}</span>}
         </span>
       </Fragment>)}

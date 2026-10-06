@@ -4,21 +4,21 @@ import { SPECS } from "./dial-space.ts";
 import type { LaneMark, QuotaNote, Slot, SlotOption, StatementWord } from "./statement-model.ts";
 
 /*
- * The generator's rows as data: one row per dial and per extra, then the machine, each a line of
- * plain option words in order, the chosen one marked. Drawn over the statement's slots, so every
+ * The generator's rows as data: one row per dial and per extra, each a line of plain option words
+ * in order, the chosen one marked. Drawn over the statement's slots, so every
  * value's availability, reason, consequence and quota note is the slot's own; this only decides
  * which words a row shows, what they read and how a chosen one is coloured. Pure, so the rules (the
  * model row's aliases per tier, which lanes hide, how a switch reads) are tested apart from the DOM.
  */
 
-export type RowId = "lane" | "tier" | "thinking" | "advisor" | "spark" | "fallbacks" | "priority" | "prewalk" | "plans" | "budget" | "machine";
-/** A lane spectrum, a level whose fill grows from the first word, an on/off switch, or the destination. */
-export type RowKind = "lane" | "level" | "switch" | "machine";
-/** How a chosen word is coloured: its provider's hue, Mixed's, the lane's accent, or the text colour (an off value, a machine). */
+export type RowId = "lane" | "tier" | "thinking" | "advisor" | "spark" | "fallbacks" | "priority" | "prewalk" | "plans" | "budget";
+/** A lane spectrum, a level whose fill grows from the first word, or an on/off switch. */
+export type RowKind = "lane" | "level" | "switch";
+/** How a chosen word is coloured: its provider's hue, Mixed's, the lane's accent, or the text colour (an off value). */
 export type WordTone = { readonly kind: "family"; readonly family: string } | { readonly kind: "mixed" } | { readonly kind: "accent" } | { readonly kind: "plain" };
 
 export type RowWord = {
-  /** Stable within its row: a dial word, `on`/`off`, or a machine id. */
+  /** Stable within its row: a dial word, or `on`/`off`. */
   readonly key: string;
   readonly text: string;
   /** The model row's tier word under its alias; null elsewhere. */
@@ -34,17 +34,15 @@ export type RowWord = {
   readonly quota: QuotaNote | null;
   /** Choosing it is the cause of a strained or stranded pool (`causalRedline`). */
   readonly strains: boolean;
-  /** The slot option a press commits: the dial value, the extra to turn, or the machine; null for the chosen word and a refused one. */
+  /** The slot option a press commits: the dial value, or the extra to turn; null for the chosen word and a refused one. */
   readonly option: SlotOption | null;
   readonly tone: WordTone;
   /** Chosen, the row's glider dims: an off value. */
   readonly quiet: boolean;
   /** The first lane of another provider's group, which starts its own line when the row wraps. */
   readonly gap: boolean;
-  /** Machines only: online now; null for every other word and a destination the roster does not list. */
-  readonly online: boolean | null;
 };
-export type GeneratorRow = { readonly id: RowId; readonly word: StatementWord; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[] };
+export type GeneratorRow = { readonly id: RowId; readonly word: Exclude<StatementWord, "machine">; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[] };
 
 export type RowsInput = {
   readonly slots: Readonly<Record<StatementWord, Slot>>;
@@ -58,7 +56,7 @@ export type RowsInput = {
   readonly connected: ReadonlySet<string> | null;
 };
 
-const NO_WORD = { sub: null, reason: null, quota: null, strains: false, option: null, gap: false, online: null } as const;
+const NO_WORD = { sub: null, reason: null, quota: null, strains: false, option: null, gap: false } as const;
 
 function laneFamilies(mark: LaneMark | null): readonly string[] {
   return mark === null ? [] : mark.kind === "mixed" ? ["openai", "anthropic"] : [mark.family];
@@ -128,20 +126,10 @@ function switchRow(extra: SlotOption): GeneratorRow {
   return { id: extra.value as RowId, word: "extras", label: extra.label, kind: "switch", words: [side(true), side(false)] };
 }
 
-function machineRow(slot: Slot): GeneratorRow {
-  const words = slot.options.map((option): RowWord => ({
-    ...NO_WORD, key: option.value, text: option.label, name: option.label, selected: option.current, available: option.available,
-    reason: option.available ? null : option.reason, says: option.current ? option.meaning : option.note,
-    option: option.current || !option.available ? null : option, tone: { kind: "plain" }, quiet: false, online: option.online,
-  }));
-  return { id: "machine", word: "machine", label: "machine", kind: "machine", words };
-}
-
-/** Every row, top to bottom: lane, model, thinking, advisor, each extra, then the machine. */
+/** Every row, top to bottom: lane, model, thinking, advisor, then each extra. The machine is the launch's own word (machine-picker.tsx). */
 export function generatorRows(input: RowsInput): GeneratorRow[] {
   const { slots } = input;
-  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"),
-    ...slots.extras.options.map(switchRow), machineRow(slots.machine)];
+  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"), ...slots.extras.options.map(switchRow)];
 }
 
 /** The nearest word that can be chosen one step right (`forward`) or left of the chosen one; null at the end of the row. */

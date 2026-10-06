@@ -5,10 +5,12 @@ import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget } from "../machine-web.ts";
+import { AccountsView } from "../accounts-view.tsx";
 import { PermissionReview } from "../permission-review.tsx";
 import { familyWord, hueOf, SheetFrame } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
 import { modelListFailure } from "./board-model.ts";
+import { AccountsPane } from "./accounts-pane.tsx";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { EarlierStatements, usePinnedRecents } from "./earlier.tsx";
 import type { StatementWords } from "./earlier-model.ts";
@@ -20,6 +22,7 @@ import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { teamWords } from "./statement-model.ts";
+import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -98,9 +101,9 @@ type WorkbenchProps = {
 /**
  * The panel as the terminal UI had it, evolved for the web: the generator's rows with routing
  * beside them and usage under both when there is room, a key line at the foot, and the accounts and
- * the sessions one key away. Under 760px the generator stands alone, the team grouped under its
- * rows, routing and usage each a key away. Models, Setup and the session options open as sheets
- * over the stage.
+ * the sessions one key away; under the accounts, their management (sign-in, presets, credentials).
+ * Under 760px the generator stands alone, the team grouped under its rows, routing and usage each a
+ * key away. Models, Setup and the session options open as sheets over the stage.
  */
 function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines }: WorkbenchProps) {
   const model = useWorkbench({ host, target, machine, rosterError, available });
@@ -122,6 +125,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
   // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
+  // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
+  const [managed, setManaged] = useState(false);
   const [sheet, setSheet] = useState<PanelSheet | null>(null);
   const [visited, setVisited] = useState<readonly PanelSheet[]>([]);
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
@@ -235,6 +240,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     refreshMachines();
     setRereads(count => count + 1);
   }
+  // One cadence for the panel: `r`, a pane's `r · now` and the usage freshness window all restart the same countdown.
+  const cadence = useUsageCadence(usage, refresh);
+  // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
+  const accountsGate = model.gate("edit-accounts");
+  const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
 
   // ------------------------------------------------------------ session options: for one launch or resume, never saved
   const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
@@ -274,9 +284,13 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
         else if (view === "main") generator.current?.noChains();
         return true;
       case "toggle": setHidden(previous => ({ ...previous, [action.pane]: !previous[action.pane] })); return true;
-      case "view": changeView(action.view); return true;
+      case "view":
+        if (action.view === "manage") setManaged(true);
+        changeView(action.view);
+        return true;
       case "back": setMore(false); changeView("main"); return true;
-      case "refresh": refresh(); return true;
+      case "refresh": cadence.now(); return true;
+      case "machine": generator.current?.machines(); return true;
       case "more": setMore(open => !open); return true;
       case "sheet": openSheet(action.sheet); return true;
       case "recall": generator.current?.recall(action.index); return true;
@@ -317,7 +331,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const item = (key: string, word: string, action: PanelAction | null = null): Item => ({ key, word, action });
   const toRouting: PanelAction = narrow ? { kind: "view", view: "routing" } : { kind: "toggle", pane: "routing" };
   const toUsage: PanelAction = narrow ? { kind: "view", view: "usage" } : { kind: "toggle", pane: "usage" };
-  const items: Item[] = view === "accounts" ? [item("↑↓", "move"), item("space", "toggle"), item("m", "manage"), item("a", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
+  const items: Item[] = view === "accounts" ? [item("↑↓", "move"), item("space", "toggle"), item("m", "manage", { kind: "view", view: "manage" }), item("a", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
+    : view === "manage" ? [item("esc", "accounts", { kind: "view", view: "accounts" }), item("a", "generator", { kind: "view", view: "main" })]
     : view === "sessions" ? [item("↑↓", "move"), ...recents.length ? [item("1–9", "recall")] : [], item("e", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
     : view !== "main" ? [item("esc", "back", { kind: "back" }), item("a", "accounts", { kind: "view", view: "accounts" })]
     : [item("↑↓", "move"), item("←→", "change"),
@@ -325,7 +340,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       item("a", "accounts", { kind: "view", view: "accounts" }), item("e", "sessions", { kind: "view", view: "sessions" }), item("?", more ? "less" : "more", { kind: "more" })];
   const extra: Item[] = more && view === "main" ? [
     item("⏎", launch.label.toLowerCase(), { kind: "launch" }), item("d", "defaults", { kind: "defaults" }), item("f", "fallback chains", { kind: "chains" }),
-    item("p", narrow ? "routing" : hidden.routing ? "show routing" : "hide routing", toRouting), item("s", narrow ? "usage" : hidden.usage ? "show usage" : "hide usage", toUsage),
+    item("w", "machine", { kind: "machine" }), item("p", narrow ? "routing" : hidden.routing ? "show routing" : "hide routing", toRouting), item("s", narrow ? "usage" : hidden.usage ? "show usage" : "hide usage", toUsage),
     item("r", "refresh", { kind: "refresh" }), item("m", "models", { kind: "sheet", sheet: "models" }), item("u", "setup", { kind: "sheet", sheet: "setup" }),
     item("o", optionsSummary ? `options · ${optionsSummary}` : "options", { kind: "sheet", sheet: "options" }),
   ] : [];
@@ -354,12 +369,20 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           {paneCue("usage", "s")}
           <Cue keyName="a" word="accounts" onPress={() => run({ kind: "view", view: "accounts" })} />
         </header>
-        {/* Mount point, TuiUsage (generator/usage-pane.tsx): <UsagePane usage={model.usage} cadence={cadence} />, where `cadence = useUsageCadence(model.usage, refresh)` and `r` calls `cadence.now()`. */}
+        <UsagePane usage={usage} cadence={cadence} />
       </section>
       <section className={`${G}pane`} data-pane="accounts" aria-label="accounts" hidden={view !== "accounts"} tabIndex={-1}>
         <header className={`${G}head`}><h2 className={`${G}title`}>accounts</h2>{back}</header>
-        {/* Mount point, TuiUsage (generator/accounts-pane.tsx), mounted only while this view shows: <AccountsPane usage={model.usage} gate={model.gate("edit-accounts")}
-            families={model.compiled?.families ?? []} served={model.served} launch={launch} cadence={cadence} onManage={…} />. */}
+        {/* Mounted only while it shows: opening puts focus on its first switch that can move. */}
+        {view === "accounts" && <AccountsPane usage={usage} gate={accountsGate} families={compiled?.families ?? []} served={model.served} launch={launch}
+          cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
+      </section>
+      <section className={`${G}pane`} data-pane="manage" aria-label="manage accounts" hidden={view !== "manage"} tabIndex={-1}>
+        <header className={`${G}head`}>
+          <h2 className={`${G}title`}>manage</h2>
+          <Cue keyName="esc" word="accounts" onPress={() => run({ kind: "view", view: "accounts" })} />
+        </header>
+        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
         <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2>{back}</header>
