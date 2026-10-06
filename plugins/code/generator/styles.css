@@ -389,8 +389,12 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
 
 /* ---------------------------------------------------------------- routing: role, model:thinking in its provider's hue, the chain behind it */
-/* The role column gives way before the routes do: a role too long for its room ends in an ellipsis, its title whole. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+/*
+ * The role column gives way before the routes do: a role too long for its room ends in an ellipsis,
+ * its title whole. The routes' column keeps its widest token (its min-content), so `model:thinking`
+ * is never pushed past the pane; the role takes what is left.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(min-content, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route { display: contents; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route > span { line-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark { position: relative; color: var(--tui-fg); font-size: 8px; text-align: center; }
