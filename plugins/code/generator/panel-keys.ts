@@ -103,3 +103,16 @@ export function panelKey(press: PanelKey): PanelAction | null {
   }
   return null;
 }
+
+/**
+ * The key among `keys` that does what a control does, from the shown view, by the rules above;
+ * null where none does. A control names it as its accelerator, so it never claims a key that does
+ * something else in that view, or nothing.
+ */
+export function acceleratorFor(view: PanelView, narrow: boolean, keys: readonly string[], does: (action: PanelAction) => boolean): string | null {
+  return keys.find(key => {
+    const action = panelKey({ key, mod: false, alt: false, repeat: false, defaultPrevented: false, inView: true, inField: false,
+      inDialog: false, onControl: false, onRoot: false, view, narrow, recents: 0 });
+    return action !== null && does(action);
+  }) ?? null;
+}
