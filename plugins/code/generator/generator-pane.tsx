@@ -145,7 +145,6 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const keyTimer = useRef(0), scrubTimer = useRef(0);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
-  const starter = model.profile?.metadata != null;
   // Nothing to show yet because the first reads are still out, rather than because one failed.
   const reading = !model.profile && !model.document && model.queries.configuration.error === null && model.queries.metadata.error === null;
   const teamGate = model.gate("edit-team"), machineGate = model.gate("edit-machine");
@@ -154,8 +153,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const saved = model.localDraft?.source === "active" ? model.record?.selection ?? null : null;
   const rosterError = model.rosterError !== null;
   const context = useMemo<StatementContext | null>(() => catalog && selection && controlsReview ? {
-    catalog, selection, review: controlsReview, served, starter, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
-  } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId, presence]);
+    catalog, selection, review: controlsReview, served, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
+  } : null, [catalog, selection, controlsReview, served, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   const machineOptions = slots?.machine.options ?? [];
   const sheetExtras = useMemo(() => slots?.extras.options.filter(extra => !ROW_EXTRAS.includes(extra.value)) ?? [], [slots]);
@@ -167,9 +166,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const quota = useMemo(() => {
     if (!catalog || !shown) return null;
     const stop = standstill(catalog, shown.routes, pools);
-    const found = stop ? rescue(catalog, shown, pools, { served, starter, nowMs: Date.now() }) : null;
+    const found = stop ? rescue(catalog, shown, pools, { served, nowMs: Date.now() }) : null;
     return { stop, fix: found && fixView(found, catalog, pools, vocab), grounded: grounded(catalog, shown.routes, pools, served) };
-  }, [catalog, shown, pools, served, starter, vocab]);
+  }, [catalog, shown, pools, served, vocab]);
   const estimates = useMemo(() => catalog && shown ? estimateReadouts(catalog, shown) : null, [catalog, shown]);
   const groups = useMemo(() => profile && ledger ? profileGroups(ledger) : null, [profile, ledger]);
 

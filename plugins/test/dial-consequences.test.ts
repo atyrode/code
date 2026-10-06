@@ -35,7 +35,7 @@ function review(changes: Partial<Selection> = {}): Review {
     priority: false, prewalk: false, planYolo: false, fallback: true, budget: "any", ...changes,
   }, now);
 }
-const known: OptionContext = { served: null, starter: false, nowMs: now };
+const known: OptionContext = { served: null, nowMs: now };
 
 type Provider = "openai-codex" | "anthropic" | "deepseek";
 /** Pools from a real projection: one Codex and one Claude subscription and a DeepSeek key, quiet and open unless told otherwise. */

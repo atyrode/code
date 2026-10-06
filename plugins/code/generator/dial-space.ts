@@ -21,10 +21,11 @@ export function previewSelection(compiled: CompiledCatalog, selection: Selection
   try { return reviewCatalog(compiled, selection, nowMs); } catch { return null; }
 }
 
-export type DialId = "lane" | "model" | "thinking" | "advisor" | "budget" | "priority" | "prewalk" | "plans" | "fallbacks";
+/** Every control the panel has over a team. The budget is the domain's default and no control of the panel's, so nothing moves it. */
+export type DialId = "lane" | "model" | "thinking" | "advisor" | "priority" | "prewalk" | "plans" | "fallbacks";
 export const MAIN_DIALS: readonly DialId[] = ["lane", "model", "thinking", "advisor"];
-export type MoreDial = "budget" | "priority" | "prewalk" | "plans" | "fallbacks";
-export const MORE_DIALS: readonly MoreDial[] = ["budget", "priority", "prewalk", "plans", "fallbacks"];
+export type MoreDial = "priority" | "prewalk" | "plans" | "fallbacks";
+export const MORE_DIALS: readonly MoreDial[] = ["priority", "prewalk", "plans", "fallbacks"];
 export const CAPABILITY_WORDS = ["fast", "normal", "smart", "elite"] as const;
 
 /** The lane's stable word (`gpt-led`), which map mode and the routing preview key on; never shown. */
@@ -75,7 +76,6 @@ export const SPECS: Readonly<Record<DialId, Spec>> = {
     label: "Advisor", words: () => [["off", "glance", "review", "audit"]], get: selection => selection.advisor,
     set: (_, selection, word) => word === "off" || word === "glance" || word === "review" || word === "audit" ? { ...selection, advisor: word } : null,
   },
-  budget: { label: "Budget", words: () => [["any", "free"]], get: selection => selection.budget, set: (_, selection, word) => word === "any" || word === "free" ? { ...selection, budget: word } : null },
   priority: binary("Priority", "priority"),
   prewalk: binary("Prewalk", "prewalk"),
   plans: { label: "Plans", words: () => [["ask", "auto"]], get: selection => selection.planYolo ? "auto" : "ask", set: (_, selection, word) => ({ ...selection, planYolo: word === "auto" }) },
@@ -90,7 +90,7 @@ export type OptionRefusal = { kind: "catalog" } | { kind: "account"; provider: s
 export type OptionChoice = {
   /** The selection choosing the option commits; null when the dial has no such word. */
   selection: Selection | null;
-  /** The review it produces; null when refused, or when it cannot be previewed (a starter's budget re-derives the catalog). */
+  /** The review it produces; null when refused. */
   review: Review | null;
   refusal: OptionRefusal | null;
   /** Fallbacks the door would drop for want of an account: a note on the option, never a reason to refuse it. */
@@ -101,11 +101,10 @@ export type OptionChoice = {
  * the review the controls show, which names the lanes on offer. `served` holds the providers a
  * launch's pool would serve when that is known (accounts.ts `servedProviders`); an option is
  * refused only where the session door would refuse it, a lead nobody serves, and fallbacks nobody
- * serves are listed in `pruned` instead. `starter` marks a bundled catalog, which is re-derived for
- * a new budget, so the current catalog cannot preview a budget change.
+ * serves are listed in `pruned` instead.
  */
 export function chooseOption(catalog: CompiledCatalog, selection: Selection, base: Review, dial: DialId, word: string,
-  context: { served: ReadonlySet<string> | null; starter: boolean; nowMs: number }): OptionChoice {
+  context: { served: ReadonlySet<string> | null; nowMs: number }): OptionChoice {
   let candidate = SPECS[dial].set(catalog, selection, word, base);
   let review = candidate && previewSelection(catalog, candidate, context.nowMs);
   // A free budget a new lane cannot serve steps back to any, rather than refusing the lane.
@@ -113,12 +112,10 @@ export function chooseOption(catalog: CompiledCatalog, selection: Selection, bas
     candidate = { ...candidate, budget: "any" };
     review = previewSelection(catalog, candidate, context.nowMs);
   }
-  const previewable = review !== null && !(dial === "budget" && context.starter);
   const served = context.served;
-  const service = review !== null && previewable && served ? routeService(catalog, review.routes, provider => served.has(provider)) : null;
+  const service = review !== null && served ? routeService(catalog, review.routes, provider => served.has(provider)) : null;
   let refusal: OptionRefusal | null = null;
-  if (dial === "budget" && word === "free" && context.starter) refusal = base.available.budgets.includes("free") ? null : { kind: "catalog" };
-  else if (!review) refusal = { kind: "catalog" };
+  if (!review) refusal = { kind: "catalog" };
   else if (service?.lead) refusal = { kind: "account", provider: service.lead.provider, family: service.lead.family };
-  return { selection: candidate, review: refusal === null && previewable ? review : null, refusal, pruned: refusal === null ? service?.pruned ?? [] : [] };
+  return { selection: candidate, review: refusal === null ? review : null, refusal, pruned: refusal === null ? service?.pruned ?? [] : [] };
 }

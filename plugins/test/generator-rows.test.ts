@@ -26,7 +26,7 @@ const vocab: Vocabulary = { family: family => ({ openai: "GPT", anthropic: "Clau
 
 function rows(selection: Selection, connected: ReadonlySet<string> | null = null): GeneratorRow[] {
   const review = reviewCatalog(catalog, selection, now);
-  const slots = statementSlots({ catalog, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
+  const slots = statementSlots({ catalog, selection, review, served: null, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
   return generatorRows({ slots, catalog, shown: review, aliases: displayAliases(catalog), connected, familyWord: vocab.family });
 }
 const row = (list: readonly GeneratorRow[], id: GeneratorRow["id"]) => list.find(entry => entry.id === id)!;
@@ -64,7 +64,7 @@ describe("the generator's rows", () => {
     const gptOnly = compileCatalog({ schemaVersion: 1, models: [model("o1", "openai-codex", 1), model("o2", "openai-codex", 2), model("o3", "openai-codex", 3)] });
     const selection = team();
     const review = reviewCatalog(gptOnly, selection, now);
-    const slots = statementSlots({ catalog: gptOnly, selection, review, served: null, starter: false, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
+    const slots = statementSlots({ catalog: gptOnly, selection, review, served: null, nowMs: now, pools: [], machines: [], rosterError: false, machineId: "studio", omp: null }, vocab);
     const lane = (connected: ReadonlySet<string> | null) => generatorRows({ slots, catalog: gptOnly, shown: review, aliases: displayAliases(gptOnly), connected, familyWord: vocab.family })[0]!.words;
     const words = lane(new Set(["openai", "anthropic"]));
     expect(words.map(word => [word.key, word.available])).toEqual([["gpt-only", true], ["gpt-led", false], ["mixed", false], ["claude-led", false], ["claude-only", false]]);

@@ -50,7 +50,7 @@ function pools(options: { claudeBlockedUntil?: number; codexUsed?: number; stale
   const view = projectUsage({ scope, observedAt: now, accounts: reports }, observation, initialAccountChoices(), now, { maxAgeMs: 300_000, refreshStatus: "succeeded" });
   return quotaPools(catalog, { view, current: !options.stale, nowMs: now });
 }
-const known = { served: null, starter: false, nowMs: now } as const;
+const known = { served: null, nowMs: now } as const;
 const vocab: Vocabulary = {
   family: family => ({ openai: "GPT", anthropic: "Claude" })[family] ?? family,
   time: at => `T+${Math.round((at - now) / HOUR)}h`,
