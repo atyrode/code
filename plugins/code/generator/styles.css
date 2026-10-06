@@ -190,9 +190,11 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg { display: block; width: 16px; height: 16px; margin: 0 -3px; color: #363c47; stroke-width: 2; transition: color 200ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg[data-lit] { color: var(--tui-acc); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter[data-unmeasured] .plugin-atyrode_code_generator__glyphs > svg { color: #30353f; }
-/* The launch, the machine it runs on, then the line beside them, which wraps under them where there is no room. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; min-height: 32px; margin-top: 12px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap; grid-column: 2; align-items: center; gap: 2px 16px; min-width: 0; }
+/* The launch, the machine it runs on, then the line beside them. The foot sits on the pane's floor, and the launch on the foot's:
+   the line beside it grows upward, and where there is no room beside the launch it goes above it, so the launch never moves
+   while its line changes and a double press lands on it twice. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: end; min-height: 32px; margin-top: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap-reverse; grid-column: 2; align-items: flex-start; gap: 2px 16px; min-width: 0; }
 /* The machine goes under the launch where both do not fit, never squeezed out of sight. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; max-width: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark { display: grid; flex: none; }
