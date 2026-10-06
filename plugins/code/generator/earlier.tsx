@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode, type SetStateAction } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { ATTENDANCE_RESOURCE, FALLBACK_POLL_MS, usePolledResource } from "@manifold/plugin/hooks";
 import { formatManifoldUri, type Attendance } from "@manifold/protocol";
@@ -8,46 +8,36 @@ import type { QuotaPool } from "../../domain/quota.ts";
 import { codeOperationFailure, codeWorkflow, useCodeMachines, useCodeTerminals, useWorkflowQuery } from "../machine-web.ts";
 import { WorkflowError } from "../workflow.ts";
 import { familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
-import type { KeyHelp } from "./keys-dialog.tsx";
 import { when } from "./board-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
-import type { TeamPreview } from "./statement.tsx";
 import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
   differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote, sessionTitle,
   strandsNote, teamProvenance, teamSentence, type RecentForm, type RowIntent, type RowVerdict, type SavedFolder, type SessionRead, type SessionRow, type StatementWords,
 } from "./earlier-model.ts";
-import { sameTeam, teamWords, type Vocabulary } from "./statement-model.ts";
+import { teamWords, type Vocabulary } from "./statement-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
-/** The keys the panel's keys dialog lists for the recent profiles; the digits are decided with the statement's keys (statement-keys.ts). */
-export const EARLIER_KEY_HELP: readonly KeyHelp[] = [{ keys: ["1–9"], text: "Recall the recent profile with that number" }];
-/** The keys a folder's saved sessions answer on their drum (`SessionDrum`). */
-export const SESSIONS_KEY_HELP: readonly KeyHelp[] = [
-  { keys: ["↑", "↓"], text: "On a folder's session: the newer or the older one" },
-  { keys: ["↵", "Space"], text: "Open or close the folder's sessions" },
-  { keys: ["Esc"], text: "Close them; the shown session stays" },
-];
 
 /**
  * The part of the workbench the earlier statements read and act through; a `WorkbenchModel`
  * satisfies it. A row's Resume asks `gate` with its own session, so its refusal shows before it is pressed.
  */
-export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "record" | "localDraft" | "machineId" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "gate"> & {
-  actions: Pick<WorkbenchActions, "resume" | "recallTeam" | "discardChanges">;
+export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "machineId" | "record" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "gate"> & {
+  actions: Pick<WorkbenchActions, "resume">;
 };
 export type EarlierProps = {
   host: HostServices;
   model: EarlierModel;
-  /** The statement's current settings, which every row is compared with. */
+  /** The generator's current settings, which every row is compared with. */
   line: StatementWords;
-  /** The recent profiles in digit order (`usePinnedRecents`), shared with the statement's digit keys. */
+  /** The recent profiles in digit order (`usePinnedRecents`), shared with the panel's digit keys. */
   recents: readonly RecentTeam[];
   /** `quotaPools` over the present usage reading, which a recent profile's fate is judged on. */
   pools: readonly QuotaPool[];
-  /** The panel's pointed profile: a recent row under the pointer or focus previews here, as `team:<digit>`, and clears only its own. */
-  setPreview: Dispatch<SetStateAction<TeamPreview | null>>;
+  /** Recall the recent profile at `index`, as its digit does (generator-pane.tsx `recall`). */
+  onRecall: (index: number) => void;
   /** Bumped by the panel's refresh, which reads every machine already read again. */
   rereads: number;
   /** The panel's one polite live region. */
@@ -56,8 +46,8 @@ export type EarlierProps = {
 
 /**
  * The browser's recent profiles, pinned to their digits for the panel's life (earlier-model.ts
- * `pinRecents`). Call it once per panel and hand the list to both the statement and the earlier
- * statements, so a digit means the same profile in both.
+ * `pinRecents`). Call it once per panel and hand the list to both the generator and the sessions
+ * view, so a digit means the same profile in both.
  */
 export function usePinnedRecents(teams: readonly RecentTeam[]): readonly RecentTeam[] {
   const [pinned, setPinned] = useState(() => ({ source: teams, list: pinRecents([], teams) }));
@@ -92,25 +82,22 @@ function LaneMark({ lane }: { lane: Lane }) {
 /**
  * A row's verb, named with its object. Always focusable: a refused one is `aria-disabled`, carries
  * its reason as its description and tooltip, and says it in the live region when pressed.
- * `onPoint` hears the pointer and focus arrive and leave, for a row that previews what it would do.
  */
-function Verb({ className, name, subject, verdict, busy = false, onPress, onPoint, announce, children, ...data }: {
-  className: string; name: string; subject?: string; verdict: RowVerdict; busy?: boolean; onPress: () => void; onPoint?: (via: "pointer" | "focus", on: boolean) => void;
+function Verb({ className, name, subject, verdict, busy = false, onPress, announce, children, ...data }: {
+  className: string; name: string; subject?: string; verdict: RowVerdict; busy?: boolean; onPress: () => void;
   announce: (text: string) => void; children: ReactNode; [attribute: `data-${string}`]: string | number | true | undefined;
 }) {
   const reason = useId();
   return <>
     <button type="button" className={className} aria-label={name} aria-disabled={verdict.open ? undefined : "true"} aria-busy={busy || undefined}
       aria-describedby={verdict.open ? undefined : reason} title={verdict.open ? undefined : verdict.reason} {...data}
-      onPointerEnter={onPoint && (() => onPoint("pointer", true))} onPointerLeave={onPoint && (() => onPoint("pointer", false))}
-      onFocus={onPoint && (() => onPoint("focus", true))} onBlur={onPoint && (() => onPoint("focus", false))}
       onClick={() => { if (verdict.open) onPress(); else announce(`${subject ?? name} · ${verdict.reason}`); }}>{children}</button>
     {!verdict.open && <span id={reason} hidden>{verdict.reason}</span>}
   </>;
 }
 
 /**
- * A folder's sessions as the statement's drum: the shown session is the value; ↑/↓ turn it (up is
+ * A folder's sessions as a drum: the shown session is the value; ↑/↓ turn it (up is
  * newer), Home/End go to the newest and the oldest, Enter or Space open the whole list below it and
  * choose the one under the cursor, Esc closes, a click opens it or chooses. The older sessions live
  * here, never behind a count. While open it owns its keys (`data-popover`), so the panel's keys
@@ -167,12 +154,12 @@ function SessionDrum({ id, folder, index, now, onChoose }: { id: string; folder:
 }
 
 /**
- * EARLIER STATEMENTS: the sessions running or saved on the permitted machines, and the profiles this
- * browser launched, each said only where it differs from the statement. Every verb asks the workbench's
- * one gate (launch-step.ts `actionGate`) through the model, before it starts and again between its
+ * SESSIONS: the sessions running or saved on the permitted machines, and the profiles this browser
+ * launched, each said only where it differs from the generator. Every verb asks the workbench's one
+ * gate (launch-step.ts `actionGate`) through the model, before it starts and again between its
  * steps; a refused one does nothing and says why.
  */
-export function EarlierStatements({ host, model, line, recents, pools, setPreview, rereads, announce }: EarlierProps) {
+export function EarlierStatements({ host, model, line, recents, pools, onRecall, rereads, announce }: EarlierProps) {
   const id = useId();
   useMinuteTick();
   const now = Date.now();
@@ -220,7 +207,7 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
   }
   // A Read button goes once its read starts, so the read takes focus to the sessions and, when the
   // machine answers, on to its first row's verb (or Read again); never out of the panel with the button.
-  const sessions = useRef<HTMLElement>(null);
+  const sessions = useRef<HTMLDivElement>(null);
   const awaited = useRef<string | null>(null);
   function read(machineId: string, follow: boolean) {
     setAttempts(previous => new Map(previous).set(machineId, (previous.get(machineId) ?? 0) + 1));
@@ -305,36 +292,12 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
   const { compiled, selection, profile } = model;
   const forms = useMemo(() => recents.map((team): RecentForm | null => {
     if (!compiled || !selection) return null;
-    // A bundled starter derives another catalog for another budget, which the board cannot draw: such a profile is recalled as it is, unpreviewed.
+    // A bundled starter derives another catalog for another budget, which this one cannot form: such a profile is recalled as it is, unjudged.
     if (profile?.metadata && team.selection.budget !== profile.selection.budget) return null;
     return formRecent(compiled, selection, team.selection, familyWord, Date.now());
   }), [recents, compiled, selection, profile]);
   const fates = useMemo(() => forms.map(form => form?.kind === "formed" && compiled ? strandsNote(compiled, form.review.routes, pools, vocab) : null),
     [forms, compiled, pools, vocab]);
-  // The row under the pointer, else the one with focus, shows what recalling it would do in the status line and on the board.
-  const [pointed, setPointed] = useState<{ pointer: number | null; focus: number | null }>({ pointer: null, focus: null });
-  const shownIndex = pointed.pointer ?? pointed.focus;
-  useEffect(() => {
-    const team = shownIndex === null ? undefined : recents[shownIndex];
-    const form = shownIndex === null ? null : forms[shownIndex];
-    const here = team && selection ? sameTeam(team.selection, selection) : false;
-    if (team && form?.kind === "formed" && !here) {
-      setPreview({ key: `team:${shownIndex! + 1}`, selection: team.selection, review: form.review, label: `Profile ${shownIndex! + 1}` });
-    } else setPreview(previous => previous?.key.startsWith("team:") ? null : previous);
-  }, [shownIndex, recents, forms, selection]);
-  useEffect(() => () => setPreview(previous => previous?.key.startsWith("team:") ? null : previous), []);
-  function point(index: number, via: "pointer" | "focus", on: boolean) {
-    setPointed(previous => ({ ...previous, [via]: on ? index : previous[via] === index ? null : previous[via] }));
-  }
-
-  function recall(team: RecentTeam, index: number) {
-    // Back to the saved profile is a discard, not a local edit that happens to match it.
-    if (model.localDraft && model.record?.selection && sameTeam(team.selection, model.record.selection)) model.actions.discardChanges();
-    else model.actions.recallTeam(team);
-    const fate = fates[index];
-    announce(`Recalled profile ${index + 1}${fate ? ` · ${fate}` : ""}.`);
-  }
-
   /**
    * A running session, or a folder's shown session with the folder's others in its drum (`place`:
    * the folder and its position in the list). The folder is the row's key and comes first; the
@@ -409,12 +372,12 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     const form = forms[index] ?? null;
     const refused = form?.kind === "refused" ? form : null;
     const fate = fates[index] ?? null;
-    const allowed: RowVerdict = here ? { open: false, reason: "Already the profile above." } : refused ? { open: false, reason: `${refused.reason}; nothing to recall.` }
+    const allowed: RowVerdict = here ? { open: false, reason: "Already the generator's profile." } : refused ? { open: false, reason: `${refused.reason}; nothing to recall.` }
       : recallGate.open ? recallGate : { open: false, reason: recallGate.refusal.text };
     return <li key={digit}>
       <Verb className={`${G}earlier-team`} name={`Recall profile ${digit}: ${teamSentence(teamWords(team.selection, familyWord))}${fate ? `; ${fate}` : ""}`}
         subject={`Recall profile ${digit}`} verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
-        onPoint={(via, on) => point(index, via, on)} onPress={() => recall(team, index)} announce={announce}>
+        onPress={() => onRecall(index)} announce={announce}>
         <span className={`${G}earlier-digit`} aria-hidden="true">{digit}</span>
         <span className={`${G}earlier-words`}>
           {here ? <span className={`${G}earlier-word`} data-same="">this profile</span> : changed.map((difference, position) => <Fragment key={difference.word}>
@@ -430,11 +393,11 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
     </li>;
   }
 
-  return <section className={`${G}section ${G}earlier`} aria-label="Earlier statements">
+  // The view's own head names it; each group heads only what it says of itself.
+  return <>
     {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
-    <section ref={sessions} className={`${G}earlier-group`} aria-labelledby={`${id}-sessions`} tabIndex={-1}>
+    <div ref={sessions} className={`${G}earlier-group`} role="group" aria-label="sessions on your machines" tabIndex={-1}>
       <div className={`${G}earlier-head`}>
-        <h2 id={`${id}-sessions`} className={`${G}earlier-title`}>sessions</h2>
         <span className={`${G}earlier-meta`}>{sessionsNote(terminals.terminals === null || terminals.error !== null ? null : rows.running.length, rows.saved.length, readOnly)}</span>
         {rosterError !== null ? <span className={`${G}earlier-meta`}>{rosterError}</span> : <>
           {reading.unread.map(machine => <button key={machine.id} type="button" className={`${G}earlier-link`} data-read={machine.id}
@@ -460,15 +423,15 @@ export function EarlierStatements({ host, model, line, recents, pools, setPrevie
       {byMachine.size > 0 && <ul className={`${G}earlier-rows`} data-sessions="">
         {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId), ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
       </ul>}
-    </section>
+    </div>
     <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>
       <div className={`${G}earlier-head`}>
-        <h2 id={`${id}-recent`} className={`${G}earlier-title`}>recent profiles</h2>
+        <h3 id={`${id}-recent`} className={`${G}earlier-title`}>recent profiles</h3>
         <span className={`${G}earlier-meta`}>this device{recents.length ? ` · 1–${recents.length} recall` : ""}</span>
       </div>
-      {recents.length === 0 && <p className={`${G}earlier-empty`}>Nothing launched from this browser yet; each profile you launch is kept here, recalled by its digit.</p>}
+      {recents.length === 0 && <p className={`${G}earlier-empty`}>nothing launched from this browser yet</p>}
       {provenance && <p className={`${G}earlier-note`}>{provenance}</p>}
       {recents.length > 0 && <ol className={`${G}earlier-rows`}>{recents.map(recentRow)}</ol>}
     </section>
-  </section>;
+  </>;
 }

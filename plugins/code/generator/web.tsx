@@ -1,54 +1,52 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
 import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
+import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget } from "../machine-web.ts";
-import { AccountsView } from "../accounts-view.tsx";
 import { PermissionReview } from "../permission-review.tsx";
-import { familyWord, SheetFrame, since } from "../ui.tsx";
+import { familyWord, hueOf, SheetFrame } from "../ui.tsx";
+import { displayAliases } from "./aliases.ts";
+import { modelListFailure } from "./board-model.ts";
 import { CatalogWorkbench } from "./catalog-editor.tsx";
+import { EarlierStatements, usePinnedRecents } from "./earlier.tsx";
+import type { StatementWords } from "./earlier-model.ts";
+import { GeneratorPane, PANEL_VOCABULARY, type GeneratorControls, type GeneratorPlace, type LaunchState } from "./generator-pane.tsx";
+import { panelKey, type PanelAction, type PanelSheet, type PanelView } from "./panel-keys.ts";
+import { routeLedger } from "./routing-model.ts";
+import { RoutingPane } from "./routing-pane.tsx";
 import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
-import { useWorkbench } from "./workbench-model.ts";
-import { COST_NOTE, StatementLine, useAnnouncer, type TeamPreview } from "./statement.tsx";
-import { STATEMENT_KEY_HELP } from "./statement-keys.ts";
 import { teamWords } from "./statement-model.ts";
-import { SeatBoard, useBoardModel } from "./seat-board.tsx";
-import { modelListFailure } from "./board-model.ts";
-import { BOARD_KEY_HELP } from "./pool-head.tsx";
-import { EARLIER_KEY_HELP, EarlierStatements, SESSIONS_KEY_HELP, usePinnedRecents } from "./earlier.tsx";
-import { pastMoment, type StatementWords } from "./earlier-model.ts";
-import { KeysDialog, type KeyGroup } from "./keys-dialog.tsx";
+import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
-type Sheet = "accounts" | "models" | "setup" | "options";
-/** The sheets the footer names in its run, in order; session options follows with its summary, then the keys. */
-const SHEETS: readonly Sheet[] = ["accounts", "models", "setup"];
-const SHEET_TITLES: Readonly<Record<Sheet, string>> = { accounts: "Accounts", models: "Models", setup: "Setup", options: "Session options" };
+const PANEL_ROOT = ".plugin-atyrode_code_generator";
+const SHEET_TITLES: Readonly<Record<PanelSheet, string>> = { models: "Models", setup: "Setup", options: "Session options" };
 /** Exclusion reasons in plain words, for the last verification's details in Setup. */
 const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
   superseded: "Superseded by a newer model", unstable_id: "Unstable id", not_found: "Not found through your accounts",
   client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier",
 };
-/** Every key the main view answers, grouped by the region that answers it. */
-const KEY_GROUPS: readonly KeyGroup[] = [
-  { title: "statement", keys: STATEMENT_KEY_HELP },
-  { title: "pools", keys: BOARD_KEY_HELP },
-  { title: "sessions", keys: SESSIONS_KEY_HELP },
-  { title: "recent profiles", keys: EARLIER_KEY_HELP },
-  { title: "panel", keys: [
-    { keys: ["r"], text: "Read accounts, usage and machines again" },
-    { keys: ["?"], text: "Show these keys" },
-    { keys: ["Esc"], text: "Back from accounts, models, setup or session options" },
-  ] },
-];
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
+/** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wide proportions. */
+const NARROW_BELOW_PX = 760, WIDE_FROM_PX = 1180;
+type Mode = "narrow" | "medium" | "wide";
 
-/** The nearest scrolling ancestor: the ScrollRegion viewport, whose scroll position the main view keeps across sheets. */
+/** One polite live region, mounted empty; an identical message is announced again because its node is replaced. */
+function useAnnouncer(): { region: ReactElement; announce: (text: string) => void } {
+  const [message, setMessage] = useState({ text: "", serial: 0 });
+  const announce = useCallback((text: string) => setMessage(previous => ({ text, serial: previous.serial + 1 })), []);
+  const region = <div className="plugin-atyrode_code__sr" role="status" aria-live="polite" aria-atomic="true">
+    <span key={message.serial}>{message.text}</span>
+  </div>;
+  return { region, announce };
+}
+
+/** The nearest scrolling ancestor: the ScrollRegion viewport, whose scroll position the stage keeps across sheets. */
 function scrollParent(element: HTMLElement | null): HTMLElement | null {
   for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
     if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) return node;
@@ -56,49 +54,134 @@ function scrollParent(element: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
+/**
+ * The layout the panel's own width allows, judged before paint and on every resize: the panel, not
+ * the window, since Code shares the window with its canvas. The first layout and every resize place
+ * things without motion (`data-boot`), so nothing glides into its place on arrival.
+ */
+function useMode(app: RefObject<HTMLDivElement | null>): Mode {
+  const [mode, setMode] = useState<Mode>("wide");
+  useLayoutEffect(() => {
+    const node = app.current;
+    if (!node) return;
+    node.dataset.boot = "";
+    let booted = false, frame = 0;
+    const judge = () => {
+      const width = node.clientWidth;
+      if (width > 0) setMode(width < NARROW_BELOW_PX ? "narrow" : width < WIDE_FROM_PX ? "medium" : "wide");
+    };
+    judge();
+    const settle = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => { delete node.dataset.boot; }); }); };
+    const observer = new ResizeObserver(() => {
+      if (booted) node.dataset.boot = "";
+      judge();
+      if (booted) settle();
+    });
+    observer.observe(node);
+    let live = true;
+    void node.ownerDocument.fonts.ready.then(() => { if (!live) return; booted = true; settle(); });
+    return () => { live = false; cancelAnimationFrame(frame); observer.disconnect(); };
+  }, []);
+  return mode;
+}
+
+/** A head's cue: a key and what it does, clickable as well as pressed. */
+function Cue({ keyName, word, onPress }: { keyName: string; word: string; onPress: () => void }) {
+  return <button type="button" className={`${G}cue`} onClick={onPress}><span className={`${G}cue-key`}>{keyName}</span> · {word}</button>;
+}
+
 type WorkbenchProps = {
   host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; machineId: string | null;
-  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void; layer: HTMLElement | null;
+  rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void;
 };
 
 /**
- * The main view, top to bottom: the statement (the profile's settings, the verb, two status lines and the estimates),
- * the seat board under its quota pools, the earlier statements, and a footer with provenance and the
- * ways into Accounts, Models and Setup, which open as sheets over the main view.
+ * The panel as the terminal UI had it, evolved for the web: the generator's rows with routing
+ * beside them and usage under both when there is room, a key line at the foot, and the accounts and
+ * the sessions one key away. Under 760px the generator stands alone, the team grouped under its
+ * rows, routing and usage each a key away. Models, Setup and the session options open as sheets
+ * over the stage.
  */
-function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines, layer }: WorkbenchProps) {
+function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines }: WorkbenchProps) {
   const model = useWorkbench({ host, target, machine, rosterError, available });
   const { queries: { metadata, setup, skillCatalog }, record, observed, starterError, compiled, selection, profile, localDraft,
     configurationCurrent, launchReady, launchReview, busy, writable, verification, usage, exportedDraft, actions } = model;
-  const { pools, outcomes } = useBoardModel(model, usage);
   const recents = usePinnedRecents(model.recentTeams);
   const { region, announce } = useAnnouncer();
-  const [preview, setPreview] = useState<TeamPreview | null>(null);
-  // Bumped by every panel refresh, so the earlier statements read again the machines they have read.
+  const app = useRef<HTMLDivElement>(null);
+  const generator = useRef<GeneratorControls | null>(null);
+  const mode = useMode(app);
+  const narrow = mode === "narrow";
+  const [view, setView] = useState<PanelView>("main");
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const [hidden, setHidden] = useState({ routing: false, usage: false });
+  const [chains, setChains] = useState(false);
+  const [more, setMore] = useState(false);
+  // The launch as the generator names it, for the key line and the accounts view's foot.
+  const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
+  // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
-  const [keysOpen, setKeysOpen] = useState(false);
-  const [sheet, setSheet] = useState<Sheet | null>(null);
-  const [visited, setVisited] = useState<readonly Sheet[]>([]);
-  const view = useRef<HTMLDivElement>(null);
-  const backButtons = useRef<Partial<Record<Sheet, HTMLButtonElement | null>>>({});
-  const sheetLinks = useRef<Partial<Record<Sheet, HTMLButtonElement | null>>>({});
+  const [sheet, setSheet] = useState<PanelSheet | null>(null);
+  const [visited, setVisited] = useState<readonly PanelSheet[]>([]);
+  const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
   const returnFocus = useRef<HTMLElement | null>(null);
-  const mainScroll = useRef(0);
+  const stageScroll = useRef(0);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
-  // The settings' measured width while two sit per line, the measure the footer's run (and anything else that should end with them) keeps to.
-  const [measure, setMeasure] = useState<number | null>(null);
-  // The roster is polled; the statement's options are recomputed only when it really changes.
+  // The roster is polled; what reads it is recomputed only when it really changes.
   const machinesKey = JSON.stringify(machines);
   const roster = useMemo(() => machines, [machinesKey]);
   const line = useMemo<StatementWords>(() => selection ? { ...teamWords(selection, familyWord), machine: machine?.name ?? "" } : NO_WORDS,
     [selection, machine?.name]);
 
-  // ------------------------------------------------------------ sheets
-  function openSheet(next: Sheet) {
+  // ------------------------------------------------------------ one quota truth and one routing for every pane
+  const pools = useMemo(() => compiled ? quotaPools(compiled, { view: usage.view, current: usage.current, nowMs: usage.nowMs }) : [],
+    [compiled, usage.view, usage.current, usage.nowMs]);
+  const shown = model.review ?? model.controlsReview;
+  const aliases = useMemo(() => compiled && displayAliases(compiled), [compiled]);
+  const ledger = useMemo(() => compiled && shown && aliases ? routeLedger(compiled, shown, aliases, pools, PANEL_VOCABULARY) : null,
+    [compiled, shown, aliases, pools]);
+  // A lane is hidden only while its family has no signed-in account at all; with none signed in anywhere, every lane shows.
+  const connected = useMemo(() => {
+    const view = usage.view;
+    if (!view || view.accountsStatus === "unavailable") return null;
+    const families = view.providers.flatMap(group => group.accounts.length && group.family ? [group.family] : []);
+    return families.length ? new Set(families) : null;
+  }, [usage.view]);
+  const fallbacks = selection?.fallback ?? false;
+  // The bundled list's failure is said in the launch line, with its retry and Models, whatever else it says.
+  const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
+  const lane = selection?.lane;
+  const accent = !lane || lane.kind === "mixed" ? "var(--tui-mixed)" : `var(--code-${hueOf(lane.family)})`;
+
+  // ------------------------------------------------------------ views and sheets
+  const showRouting = (view === "main" && !narrow && !hidden.routing) || view === "routing";
+  const showUsage = (view === "main" && !narrow && !hidden.usage) || view === "usage";
+  function changeView(next: PanelView) {
+    if (next !== view) setView(next);
+  }
+  // A width that brings routing and usage back beside the generator closes them as views of their own.
+  useEffect(() => { if (!narrow && (view === "routing" || view === "usage")) setView("main"); }, [narrow]);
+  // A pane that comes into view slides in; one that leaves simply goes.
+  const shownPanes = useRef<ReadonlySet<string>>(new Set());
+  useLayoutEffect(() => {
+    const node = app.current;
+    if (!node) return;
+    const panes = [...node.querySelectorAll<HTMLElement>("[data-pane]")].filter(pane => !pane.hidden);
+    const now = new Set(panes.map(pane => pane.dataset.pane!));
+    if (shownPanes.current.size && node.dataset.boot === undefined && !prefersReducedMotion()) {
+      for (const pane of panes) if (!shownPanes.current.has(pane.dataset.pane!)) {
+        pane.animate([{ opacity: 0, transform: "translateX(10px)" }, { opacity: 1, transform: "none" }], { duration: 240, easing: "cubic-bezier(.2, .8, .2, 1)" });
+      }
+    }
+    shownPanes.current = now;
+  });
+
+  function openSheet(next: PanelSheet) {
     if (!currentSheet.current) {
-      returnFocus.current = view.current?.ownerDocument.activeElement as HTMLElement | null;
-      mainScroll.current = scrollParent(view.current)?.scrollTop ?? 0;
+      returnFocus.current = app.current?.ownerDocument.activeElement as HTMLElement | null;
+      stageScroll.current = scrollParent(app.current)?.scrollTop ?? 0;
     }
     setSheet(next);
     setVisited(previous => previous.includes(next) ? previous : [...previous, next]);
@@ -113,7 +196,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     const closed = sheetChanged.current;
     if (closed === sheet) return;
     sheetChanged.current = sheet;
-    const scroller = scrollParent(view.current);
+    const scroller = scrollParent(app.current);
     if (sheet) {
       if (scroller) scroller.scrollTop = 0;
       const back = backButtons.current[sheet];
@@ -122,14 +205,14 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       if (frame && !prefersReducedMotion()) frame.animate([{ transform: "translateX(24px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 160, easing: "cubic-bezier(.2, 0, 0, 1)" });
       return;
     }
-    if (scroller) scroller.scrollTop = mainScroll.current;
-    // Focus returns to what opened the sheet (the verb, a status fix, a footer link), judged now that the main view shows
-    // again: while the sheet covered it, nothing in it showed. One that has since gone gives way to the sheet's own link.
+    if (scroller) scroller.scrollTop = stageScroll.current;
+    // Focus returns to what opened the sheet (a key line word, a launch-line fix), judged now that the stage shows
+    // again; one that has since gone gives way to the generator's rows.
     const opener = returnFocus.current;
-    const target = opener?.isConnected && opener.offsetParent !== null ? opener : closed ? sheetLinks.current[closed] ?? null : null;
-    target?.focus({ preventScroll: true });
+    if (opener?.isConnected && opener.offsetParent !== null) opener.focus({ preventScroll: true });
+    else generator.current?.focusRows();
   }, [sheet]);
-  function finish(source: Sheet) {
+  function finish(source: PanelSheet) {
     if (currentSheet.current === source) closeSheet();
     else actions.refresh();
   }
@@ -140,70 +223,168 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     event.preventDefault();
     closeSheet();
   }
+  /** Where a launch-line fix sends the person: a sheet, or the accounts view. */
+  function open(place: GeneratorPlace) {
+    if (place === "accounts") changeView("accounts");
+    else openSheet(place);
+  }
 
-  // ------------------------------------------------------------ what `r` and the footer reach (the statement's fixes open sheets directly)
+  // ------------------------------------------------------------ `r`: everything the panel stands on, read again
   function refresh() {
     actions.refresh();
     refreshMachines();
     setRereads(count => count + 1);
   }
-  // The Accounts sheet's own edits wait while a step runs or a charge waits, as the pool heads' do; read-only it says itself.
-  const accountsGate = model.gate("edit-accounts");
-  const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
 
   // ------------------------------------------------------------ session options: for one launch or resume, never saved
   const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
   const optionsSummary = model.automation ? "restricted" : model.skillChoice?.mode === "disabled" ? "skills off"
     : model.skillChoice?.mode === "select" ? `${chosenSkills} ${chosenSkills === 1 ? "skill" : "skills"}` : null;
-  // The options wait while a step runs or a charge waits, as the profile's settings do, and need what a launch needs: write access and the machine.
+  // The options wait while a step runs or a charge waits, as the profile's rows do, and need what a launch needs: write access and the machine.
   const optionsGate = model.gate("edit-options");
   const optionsRefusal = !optionsGate.open ? optionsGate.refusal.text : !writable ? "Edit access needed." : !available ? "The machine is unavailable."
     : busy ? "Wait for the step in progress." : null;
 
-  // ------------------------------------------------------------ the footer: where the facts come from, and the ways out
-  const verified = verification.provenance ? `models verified ${pastMoment(verification.provenance.benchmarkCompletedAt, usage.nowMs)}` : "models unverified";
-  // The read's age only while every pool's reading is current; a stale pool states its own age in its head, and the footer never contradicts it.
-  const read = usage.view?.observedAt && usage.current && pools.every(pool => pool.staleAgeMs === null) ? `usage read ${since(usage.nowMs - usage.view.observedAt)}` : null;
-  // A staged catalog beside the active one changes nothing until it is reviewed in Models; the verb speaks only for a staged-only workspace.
-  const staged = record?.active && record.draft ? "a staged catalog waits in models" : null;
-  // What the cost readout is, said once and quietly, while the readouts show.
-  const facts = [verified, read, staged, compiled && COST_NOTE].filter(Boolean).join(" · ");
-  // The bundled list's failure is said in the status lines, with its retry and Models, whatever else they say; the seats of a profile
-  // the model holds stay, and with no profile to seat there is no board.
-  const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
+  // ------------------------------------------------------------ keys: panel-local, decided by panelKey
+  /**
+   * A key or a key-line word that changes what shows keeps focus in the panel: a view that took no
+   * focus of its own on arrival (the accounts view focuses its first switch) is focused itself, and
+   * the main view hands focus to the row the keyboard was last on. Focus left on a hidden control
+   * would drop to the page, where the panel's keys no longer reach.
+   */
+  function keepFocus() {
+    requestAnimationFrame(() => {
+      const node = app.current, shown = viewRef.current;
+      if (!node) return;
+      const active = node.ownerDocument.activeElement;
+      const pane = node.querySelector<HTMLElement>(`[data-pane="${shown === "main" ? "generator" : shown}"]`);
+      if (active && pane?.contains(active) && (active as HTMLElement).offsetParent !== null) return;
+      if (shown === "main") generator.current?.focusRows();
+      else pane?.focus({ preventScroll: true });
+    });
+  }
+  function run(action: PanelAction): boolean {
+    if (action.kind === "view" || action.kind === "back" || action.kind === "toggle") keepFocus();
+    switch (action.kind) {
+      case "launch": generator.current?.launch(); return true;
+      case "defaults": generator.current?.defaults(); return true;
+      case "saved": generator.current?.saved(); return true;
+      case "chains":
+        if (fallbacks) setChains(shown => !shown);
+        else if (view === "main") generator.current?.noChains();
+        return true;
+      case "toggle": setHidden(previous => ({ ...previous, [action.pane]: !previous[action.pane] })); return true;
+      case "view": changeView(action.view); return true;
+      case "back": setMore(false); changeView("main"); return true;
+      case "refresh": refresh(); return true;
+      case "more": setMore(open => !open); return true;
+      case "sheet": openSheet(action.sheet); return true;
+      case "recall": generator.current?.recall(action.index); return true;
+      case "enter":
+        if (view === "main") generator.current?.focusRows();
+        else app.current?.querySelector<HTMLElement>(`[data-pane="${view}"] :is(button, [tabindex="0"]):not([aria-disabled="true"])`)?.focus();
+        return true;
+    }
+  }
+  const keys = useRef<(event: globalThis.KeyboardEvent) => void>(() => {});
+  keys.current = event => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const panel = app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
+    const onRoot = target !== null && target === panel;
+    const action = panelKey({
+      key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
+      inView: sheet === null && target !== null && (onRoot || app.current?.contains(target) === true),
+      inField: target?.matches("textarea, input, select, [contenteditable]") ?? false,
+      inDialog: target?.closest("[role=dialog], dialog, [data-popover]") != null,
+      onControl: target?.closest("button, a, [role=listbox], [role=option]") != null,
+      onRoot, view, narrow, more, recents: recents.length,
+    });
+    if (action && run(action)) { event.preventDefault(); event.stopPropagation(); }
+  };
+  useEffect(() => {
+    const panel = app.current?.closest<HTMLElement>(PANEL_ROOT);
+    if (!panel) return;
+    const listener = (event: globalThis.KeyboardEvent) => keys.current(event);
+    panel.addEventListener("keydown", listener);
+    // The panel root takes focus when the panel opens, so its keys work at once; never from another control.
+    const focused = panel.ownerDocument.activeElement;
+    if (!focused || focused === panel.ownerDocument.body) panel.focus({ preventScroll: true });
+    return () => panel.removeEventListener("keydown", listener);
+  }, []);
 
-  const main = <div ref={view} className={`${G}view`} data-view="main" hidden={sheet !== null}
-    style={measure === null ? undefined : { "--stmt-measure": `${measure}px` } as CSSProperties}>
+  // ------------------------------------------------------------ the key line
+  type Item = { readonly key: string; readonly word: string; readonly action: PanelAction | null };
+  const item = (key: string, word: string, action: PanelAction | null = null): Item => ({ key, word, action });
+  const toRouting: PanelAction = narrow ? { kind: "view", view: "routing" } : { kind: "toggle", pane: "routing" };
+  const toUsage: PanelAction = narrow ? { kind: "view", view: "usage" } : { kind: "toggle", pane: "usage" };
+  const items: Item[] = view === "accounts" ? [item("↑↓", "move"), item("space", "toggle"), item("m", "manage"), item("a", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
+    : view === "sessions" ? [item("↑↓", "move"), ...recents.length ? [item("1–9", "recall")] : [], item("e", "generator", { kind: "view", view: "main" }), item("esc", "back", { kind: "back" })]
+    : view !== "main" ? [item("esc", "back", { kind: "back" }), item("a", "accounts", { kind: "view", view: "accounts" })]
+    : [item("↑↓", "move"), item("←→", "change"),
+      ...narrow || hidden.routing ? [item("p", "routing", toRouting)] : [], ...narrow || hidden.usage ? [item("s", "usage", toUsage)] : [],
+      item("a", "accounts", { kind: "view", view: "accounts" }), item("e", "sessions", { kind: "view", view: "sessions" }), item("?", more ? "less" : "more", { kind: "more" })];
+  const extra: Item[] = more && view === "main" ? [
+    item("⏎", launch.label.toLowerCase(), { kind: "launch" }), item("d", "defaults", { kind: "defaults" }), item("f", "fallback chains", { kind: "chains" }),
+    item("p", narrow ? "routing" : hidden.routing ? "show routing" : "hide routing", toRouting), item("s", narrow ? "usage" : hidden.usage ? "show usage" : "hide usage", toUsage),
+    item("r", "refresh", { kind: "refresh" }), item("m", "models", { kind: "sheet", sheet: "models" }), item("u", "setup", { kind: "sheet", sheet: "setup" }),
+    item("o", optionsSummary ? `options · ${optionsSummary}` : "options", { kind: "sheet", sheet: "options" }),
+  ] : [];
+  // Each word and each separator is its own item, as in the terminal's key line, so a word never breaks across lines.
+  const keyLine = (list: readonly Item[]) => list.map(({ key, word, action }, index) => <Fragment key={`${key}:${word}`}>
+    {index > 0 && <span className={`${G}keys-sep`} aria-hidden="true">•</span>}
+    {action ? <button type="button" className={`${G}keys-word`} onClick={() => run(action)}><span className={`${G}keys-key`}>{key}</span>{word}</button>
+      : <span className={`${G}keys-word`}><span className={`${G}keys-key`}>{key}</span>{word}</span>}
+  </Fragment>);
+
+  // ------------------------------------------------------------ the stage
+  const back = <Cue keyName="esc" word="back" onPress={() => run({ kind: "back" })} />;
+  const paneCue = (pane: "routing" | "usage", key: string): ReactNode => view === pane ? back
+    : <Cue keyName={key} word="hide" onPress={() => run({ kind: "toggle", pane })} />;
+  const tui = <div ref={app} className={`${G}tui`} data-tui="" data-mode={mode} data-view={view} data-solo-generator={(view === "main" && !showRouting) || undefined}
+    data-solo={view === "routing" || view === "usage" || undefined} hidden={sheet !== null} style={{ "--tui-acc": accent } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
-    <StatementLine model={model} active={sheet === null} preview={preview} setPreview={setPreview} pools={pools} machines={roster} selectMachine={select} recents={recents}
-      announce={announce} onOpen={openSheet} onKeys={() => setKeysOpen(true)} onRefresh={refresh} listFailure={listFailure} onMeasure={setMeasure} />
-    {listFailure !== "instead" && <SeatBoard model={model} usage={usage} preview={preview} pools={pools} outcomes={outcomes} />}
-    <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} setPreview={setPreview} rereads={rereads} announce={announce} />
-    {/* One left-aligned run on the settings' measure: the facts, then the ways out, session options with its choice, the keys. */}
-    <footer className={`${G}footer`}>
-      <span className={`${G}footer-facts`}>{facts}</span>
-      <button type="button" className={`${G}footer-link`} title="Read accounts, usage and machines again (r)" onClick={refresh}>refresh</button>
-      {SHEETS.map(name => <button key={name} ref={element => { sheetLinks.current[name] = element; }} type="button" className={`${G}footer-link`}
-        onClick={() => openSheet(name)}>{name}</button>)}
-      <button ref={element => { sheetLinks.current.options = element; }} type="button" className={`${G}footer-link`}
-        aria-label={`Session options: ${optionsSummary ?? "ordinary session, default skills"}`} title="Skills and automation for the next launch or resume only"
-        onClick={() => openSheet("options")}>session options{optionsSummary && <span className={`${G}footer-summary`}> · {optionsSummary}</span>}</button>
-      <button type="button" className={`${G}footer-link`} aria-haspopup="dialog" aria-expanded={keysOpen} aria-label="Keys" onClick={() => setKeysOpen(true)}>keys ?</button>
+    <main className={`${G}stage`}>
+      <GeneratorPane model={model} pools={pools} machines={roster} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
+        profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} optionsSummary={optionsSummary} announce={announce} onOpen={open}
+        onRefresh={refresh} onLaunchState={setLaunch} controls={generator} />
+      <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} cue={paneCue("routing", "p")} hidden={!showRouting} />
+      <section className={`${G}pane`} data-pane="usage" aria-label="usage" hidden={!showUsage} tabIndex={-1}>
+        <header className={`${G}head`}>
+          <h2 className={`${G}title`}>usage</h2>
+          {paneCue("usage", "s")}
+          <Cue keyName="a" word="accounts" onPress={() => run({ kind: "view", view: "accounts" })} />
+        </header>
+        {/* Mount point, TuiUsage (generator/usage-pane.tsx): <UsagePane usage={model.usage} cadence={cadence} />, where `cadence = useUsageCadence(model.usage, refresh)` and `r` calls `cadence.now()`. */}
+      </section>
+      <section className={`${G}pane`} data-pane="accounts" aria-label="accounts" hidden={view !== "accounts"} tabIndex={-1}>
+        <header className={`${G}head`}><h2 className={`${G}title`}>accounts</h2>{back}</header>
+        {/* Mount point, TuiUsage (generator/accounts-pane.tsx), mounted only while this view shows: <AccountsPane usage={model.usage} gate={model.gate("edit-accounts")}
+            families={model.compiled?.families ?? []} served={model.served} launch={launch} cadence={cadence} onManage={…} />. */}
+      </section>
+      <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
+        <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2>{back}</header>
+        <div className={`${G}earlier`}>
+          <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} onRecall={index => generator.current?.recall(index)}
+            rereads={rereads} announce={announce} />
+        </div>
+      </section>
+    </main>
+    <footer className={`${G}keys`} aria-label="keys">
+      <span className={`${G}keys-line`}>{keyLine(items)}</span>
+      {extra.length > 0 && <span className={`${G}keys-line`}>{keyLine(extra)}</span>}
     </footer>
   </div>;
 
-  const sheetFrame = (name: Sheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name} onKeyDown={sheetKeys}>
+  const sheetFrame = (name: PanelSheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name} onKeyDown={sheetKeys}>
     <SheetFrame name={SHEET_TITLES[name]} onBack={closeSheet} backRef={element => { backButtons.current[name] = element; }}>
-      {/* Session options is in the main view's grammar; the other sheets keep their original layout until their own pass. */}
+      {/* Session options is in the panel's grammar; Models and Setup keep their original layout until their own pass. */}
       <div className={name === "options" ? `${G}options` : `${G}legacy`}>{body}</div>
     </SheetFrame>
   </div>;
 
   return <>
     {region}
-    {main}
-    {layer && createPortal(<KeysDialog open={keysOpen} groups={KEY_GROUPS} onClose={() => setKeysOpen(false)} />, layer)}
-    {sheetFrame("accounts", <AccountsView host={host} target={target} available={available} onDone={() => finish("accounts")} locked={accountsLocked} />)}
+    {tui}
     {sheetFrame("models", <CatalogWorkbench host={host} target={target} available={available} onDone={() => finish("models")} />)}
     {sheetFrame("setup", <>
       <RuntimeSettings host={host} target={target} available={available} onDone={() => finish("setup")} />
@@ -241,19 +422,16 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
 function Launcher({ host }: PanelProps) {
   const { machines, machine, machineId, target, available, error, select, refresh } = useCodeTarget(host);
-  const [layer, setLayer] = useState<HTMLDivElement | null>(null);
-  // The panel root takes focus when the panel opens (statement.tsx), so its keys work before anything is clicked.
+  // The panel root takes focus when the panel opens (Workbench), so its keys work before anything is clicked.
   return <div className="plugin-atyrode_code plugin-atyrode_code_generator" tabIndex={-1}>
     <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
       {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
-        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} layer={layer} />
-        : <div className={`${G}view`}>
+        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} />
+        : <div className={`${G}tui`} data-tui="">
           <h1 className="plugin-atyrode_code__sr">Code</h1>
-          <div className={`${G}section`}><div className={`${G}empty-state`}><p>Open or create a workspace in Manifold to use Code here.</p></div></div>
+          <p className={`${G}pane-note`}>Open or create a workspace in Manifold to use Code here.</p>
         </div>}
     </ScrollRegion>
-    {/* The overlay layer: the keys dialog renders here, so the scroll region neither clips nor scrolls it. */}
-    <div ref={setLayer} className={`${G}layer`} />
   </div>;
 }
 export default { id: GENERATOR_PLUGIN_ID, panels: { [LAUNCHER_PANEL]: Launcher } } satisfies { id: string; panels: Record<string, ComponentType<PanelProps>> };

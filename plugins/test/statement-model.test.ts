@@ -9,8 +9,8 @@ import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue } from "../code/generator/consequences.ts";
 import type { GateRefusal, LaunchStep } from "../code/generator/launch-step.ts";
 import {
-  causalRedline, commitKind, estimateReadouts, fixView, grounded, lastLaunchTeam, projectionOf, reviewMatches, statementSlots, statusLines, stepOption, verbView,
-  type Slot, type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
+  causalRedline, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, movesText, projectionOf, reviewMatches, statementSlots, verbView,
+  type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
 } from "../code/generator/statement-model.ts";
 
 const scope = "machine/broker-scope";
@@ -55,13 +55,13 @@ const vocab: Vocabulary = {
   family: family => ({ openai: "GPT", anthropic: "Claude" })[family] ?? family,
   time: at => `T+${Math.round((at - now) / HOUR)}h`,
 };
-function context(selection: Selection, pool: readonly QuotaPool[], lastLaunch: Selection | null = null): StatementContext {
-  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, lastLaunch, saved: null, machines: [], rosterError: false, machineId: "studio" };
+function context(selection: Selection, pool: readonly QuotaPool[]): StatementContext {
+  return { ...known, catalog, selection, review: reviewCatalog(catalog, selection, now), pools: pool, machines: [], rosterError: false, machineId: "studio" };
 }
 /** A value as the settings show it; each test sets only what it is about. */
 function slotOption(changes: Partial<SlotOption>): SlotOption {
   return { value: "", label: "", mark: null, current: false, on: false, online: null, available: true, reason: null, selection: null, review: null,
-    moves: [], redline: null, last: false, note: "", quota: null, ...changes };
+    redline: null, note: "", meaning: "", quota: null, ...changes };
 }
 
 describe("the redline marks only the option that causes the strain", () => {
@@ -99,41 +99,19 @@ describe("the redline marks only the option that causes the strain", () => {
   });
 });
 
-describe("the settings' values, steps and the last launch", () => {
-  test("values run low to high from left to right, and a step right passes over a tier the catalog lacks", () => {
+describe("the settings' values", () => {
+  test("values run low to high from left to right, with a tier the catalog lacks refused in place", () => {
     const slots = statementSlots(context(team({ capability: 2, thinking: "medium" }), pools()), vocab);
     expect(slots.tier.options.map(option => [option.value, option.available])).toEqual([["fast", true], ["normal", true], ["smart", true], ["elite", false]]);
     expect(slots.thinking.options.map(option => option.value)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
     expect(slots.lane.options.map(option => option.value)).toEqual(["gpt-only", "gpt-led", "mixed", "claude-led", "claude-only"]);
-    expect(stepOption(statementSlots(context(team({ capability: 3 }), pools()), vocab).tier, true)).toBeNull();
-    expect(stepOption(slots.tier, true)?.value).toBe("smart");
-    expect(stepOption(slots.thinking, false)?.value).toBe("low");
   });
 
-  test("a step passes over values that cannot be chosen and stops at the end of the row", () => {
-    const option = (value: string, available: boolean, current = false) => slotOption({ value, label: value, available, current });
-    const slot: Slot = { word: "tier", current: 0, changed: false, edited: false, options: [option("normal", true, true), option("smart", false), option("elite", true)] };
-    expect(stepOption(slot, true)?.value).toBe("elite");
-    expect(stepOption({ ...slot, current: 1, options: [option("smart", false), option("elite", true, true)] }, false)).toBeNull();
-  });
-
-  test("the last launch's value is tagged, and Backspace returns exactly that word", () => {
-    const current = team({ thinking: "medium", capability: 3 });
-    const last = team({ thinking: "high", capability: 3 });
-    const shown = context(current, pools(), last);
-    const slots = statementSlots(shown, vocab);
-    expect(slots.thinking.changed).toBe(true);
-    expect(slots.thinking.options.find(option => option.last)?.value).toBe("high");
-    expect(slots.tier.changed).toBe(false);
-    expect(lastLaunchTeam("thinking", slots.thinking, shown)).toEqual({ ...current, thinking: "high" });
-    expect(lastLaunchTeam("tier", slots.tier, shown)).toBeNull();
-  });
-
-  test("Backspace on extras turns every switch back as the last launch had it, and only those", () => {
-    const current = team({ fallback: true, prewalk: true });
-    const last = team({ spark: false, fallback: false, prewalk: true, priority: true });
-    const shown = context(current, pools(), last);
-    expect(lastLaunchTeam("extras", statementSlots(shown, vocab).extras, shown)).toEqual({ ...current, fallback: false, priority: true });
+  test("an extra says what its present position means and what turning it would do, never the same sentence twice", () => {
+    const fallbacks = statementSlots(context(team({ fallback: true }), pools()), vocab).extras.options.find(option => option.value === "fallbacks")!;
+    expect(fallbacks.on).toBe(true);
+    expect(fallbacks.meaning).toMatch(/falls back/);
+    expect(fallbacks.note).toMatch(/waits/);
   });
 });
 
@@ -154,17 +132,8 @@ describe("the cost and speed readouts", () => {
       models: catalog.models.map(entry => ({ ...entry, thinkingLevels: [...entry.thinkingLevels], tokensPerSecond: null, timeToFirstTokenMs: null })) });
     const shown = reviewCatalog(unmeasured, team(), now);
     expect(shown.estimates.speedScore).toBe(3);
-    expect(estimateReadouts(unmeasured, shown, reviewCatalog(unmeasured, team({ thinking: "max" }), now)).speed).toEqual({ level: null, next: null, word: "unmeasured" });
-  });
-
-  test("a pointed profile shows its level and word only where it differs from the shown one", () => {
-    const shown = review({ capability: 1, thinking: "minimal" });
-    const dearer = review({ capability: 3, thinking: "max" });
-    const { cost } = estimateReadouts(catalog, shown, dearer);
-    expect(cost.level).toBe(shown.estimates.costScore);
-    expect(cost.next).toBe(dearer.estimates.costScore);
-    expect(cost.next).toBeGreaterThan(cost.level!);
-    expect(estimateReadouts(catalog, shown, review({ capability: 1, thinking: "minimal", advisor: "off" })).cost).toMatchObject({ next: null });
+    expect(estimateReadouts(unmeasured, shown).speed).toEqual({ level: null, word: "unmeasured" });
+    expect(estimateReadouts(catalog, review()).speed.level).not.toBeNull();
   });
 });
 
@@ -219,6 +188,12 @@ describe("Save & launch stops at a review that differs from the projection", () 
     expect(reviewMatches(projectionOf(shown, null), { review: shown, accountPool: pool })).toBe(false);
   });
 
+  test("what the review shows unlike the projection is said role by role, grouped where roles go alike", () => {
+    expect(movesText(catalog, review(), shown)).toBe("reviewer, security-reviewer o3 → a3");
+    expect(movesText(catalog, review(), review({ thinking: "high" }))).toContain("high → x-high");
+    expect(movesText(catalog, shown, shown)).toBe("");
+  });
+
   test("a projection rests on present readings only when every lead's pool is judged fresh and the pool is known", () => {
     expect(grounded(catalog, shown.routes, pools(), new Set(["openai-codex", "anthropic"]))).toBe(true);
     expect(grounded(catalog, shown.routes, pools({ stale: true }), new Set(["openai-codex", "anthropic"]))).toBe(false);
@@ -244,106 +219,112 @@ describe("the fix for roles with no route", () => {
   });
 });
 
-describe("the status lines, in precedence", () => {
+describe("the launch line, in precedence", () => {
   const charge = { requests: 19, providers: [{ provider: "openai-codex", requests: 12 }, { provider: "anthropic", requests: 7 }] };
   const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
     draft: false, phase: null, verification: "current", stranded: false, grounded: true, placeable: true, launching: false });
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
     verb: ready, phase: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
-    launchStatus: "Ready to open a terminal.", stop: null, fix: null, team: { counts: [{ family: "openai", count: 12 }], fallsBack: [], tight: [], unread: false },
-    edits: [], reviewed: null, differs: null, laneFix: null, nobodyServes: false, listFailure: "none", pointed: null, moves: null, ...changes,
+    stop: null, fix: null, differs: null, laneFix: null, nobodyServes: false, listFailure: "none", ...changes,
   });
-  const actions = (line: { actions: readonly { kind: string }[] }) => line.actions.map(action => action.kind);
+  const said = (changes: Partial<StatusFacts> = {}): StatusLine => launchLine(facts(changes), vocab)!;
+  const fixes = (line: StatusLine) => line.actions.map(action => action.kind === "fix" ? action.fix.kind : action.kind);
+  const keys = (line: StatusLine) => line.actions.map(action => action.kind === "fix" ? action.key : action.kind);
 
-  test("a waiting charge is never written over, and offers Confirm only for a charge of at least one request", () => {
-    const pointed = { kind: "team", label: "Recent team 2", sentence: "Raises plan", quota: null } as const;
-    const [first, second] = statusLines(facts({ phase: "charge", charge, pointed, outcome: { kind: "launched", machine: "Studio" } }), vocab);
-    expect(first.parts.map(part => part.text).join(" ")).toContain("19");
-    expect(second.actions).toContainEqual({ kind: "confirm", requests: 19 });
-    expect(actions(statusLines(facts({ phase: "charge", charge: { requests: 0, providers: [] } }), vocab)[1])).toEqual(["cancel"]);
+  test("at rest it says nothing: the label, the routing and the usage say the rest", () => {
+    expect(launchLine(facts(), vocab)).toBeNull();
+    const verify = verbView({ step: { step: "verify", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
+      draft: false, phase: null, verification: "unverified", stranded: false, grounded: true, placeable: true, launching: false });
+    expect(launchLine(facts({ verb: verify }), vocab)).toBeNull();
+  });
+
+  test("a waiting charge outranks the last outcome, and offers Confirm only for a charge of at least one request", () => {
+    const line = said({ phase: "charge", charge, outcome: { kind: "launched", machine: "Studio" } });
+    expect(line.parts.map(part => part.text).join(" ")).toContain("19");
+    expect(line.actions).toContainEqual({ kind: "confirm", requests: 19 });
+    expect(fixes(said({ phase: "charge", charge: { requests: 0, providers: [] } }))).toEqual(["cancel"]);
   });
 
   test("a refusal outranks the outcome of the last step, and read-only is said in neutral grey", () => {
     const refused = { ...ready, state: "refused" as const, refusal: { code: "read-only" as const, text: "Edit access needed." } };
-    const [first] = statusLines(facts({ verb: refused, outcome: { kind: "launched", machine: "Studio" } }), vocab);
-    expect(first.parts).toEqual([{ text: "Read-only workspace", tone: "neutral" }]);
+    expect(said({ verb: refused, outcome: { kind: "launched", machine: "Studio" } }).parts[0]).toEqual({ text: "Read-only workspace", tone: "neutral" });
   });
 
   test("a machine list that cannot be read is said as such, never as a machine being offline, and offers no other machine", () => {
     const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "" } };
-    const lines = statusLines(facts({ verb: unavailable, rosterUnread: true, otherMachine: { id: "build", name: "Build box" } }), vocab);
-    expect(lines[0].parts[0]!.text).not.toMatch(/offline/);
-    expect(lines[1].actions.map(action => action.kind === "fix" ? action.fix.kind : action.kind)).toEqual(["refresh"]);
+    const unread = said({ verb: unavailable, rosterUnread: true, otherMachine: { id: "build", name: "Build box" } });
+    expect(unread.parts[0]!.text).not.toMatch(/offline/);
+    expect(fixes(unread)).toEqual(["refresh"]);
     // Online by the list's own word, yet unavailable: never "offline".
-    expect(statusLines(facts({ verb: unavailable }), vocab)[0].parts[0]!.text).not.toMatch(/offline/);
+    expect(said({ verb: unavailable }).parts[0]!.text).not.toMatch(/offline/);
   });
 
   test("roles waiting on two pools name both, each with its own reopening, never one pool with the other's time", () => {
     const claude = pools({ claudeBlockedUntil: now + 4 * HOUR }).find(pool => pool.provider === "anthropic")!;
     const codex = { ...pools().find(pool => pool.provider === "openai-codex")!, verdict: { kind: "maxed" as const, until: now + HOUR } };
-    const lines = statusLines(facts({ stop: { roles: ["reviewer", "default"], waits: [claude, codex] } }), vocab);
-    expect(lines[0].parts[0]).toEqual({ text: "Claude blocked until T+4h · GPT maxed until T+1h", tone: "attention" });
+    expect(said({ stop: { roles: ["reviewer", "default"], waits: [claude, codex] } }).parts[0]).toEqual({ text: "Claude blocked until T+4h · GPT maxed until T+1h", tone: "attention" });
   });
 
   test("an offline destination offers another machine; an unserved lead offers the nearest served lane and its accounts", () => {
     const unavailable = { ...ready, state: "refused" as const, refusal: { code: "unavailable" as const, text: "Runtime unavailable." } };
-    const offline = statusLines(facts({ verb: unavailable, machine: { name: "Laptop", online: false, revoked: false }, otherMachine: { id: "studio", name: "Studio" } }), vocab);
-    expect(offline[1].actions).toEqual([{ kind: "fix", key: "machine", label: "use Studio", fix: { kind: "machine", machineId: "studio" } }]);
+    const offline = said({ verb: unavailable, machine: { name: "Laptop", online: false, revoked: false }, otherMachine: { id: "studio", name: "Studio" } });
+    expect(offline.actions).toEqual([{ kind: "fix", key: "machine", label: "use Studio", fix: { kind: "machine", machineId: "studio" } }]);
     const unserved = { ...ready, state: "refused" as const, refusal: { code: "no-account" as const, text: "", gap: { provider: "anthropic", family: "anthropic", roles: ["reviewer"] } } };
     const lane = slotOption({ label: "GPT only", selection: team(), review: review() });
-    const fixes = statusLines(facts({ verb: unserved, laneFix: lane }), vocab)[1].actions;
-    expect(fixes.map(action => action.kind === "fix" ? action.fix.kind : action.kind)).toEqual(["team", "open"]);
+    expect(fixes(said({ verb: unserved, laneFix: lane }))).toEqual(["team", "open"]);
   });
 
   test("roles with no route say so with the fix that routes them, which commits through a team fix", () => {
     const stop = { roles: ["reviewer", "security-reviewer"], waits: [] };
     const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
-    const [first, second] = statusLines(facts({ stop, fix }), vocab);
-    expect(first.parts.some(part => part.tone === "attention")).toBe(true);
-    expect(second.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 12 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
-    expect(statusLines(facts({ stop }), vocab)[1].actions).toEqual([]);
+    const line = said({ stop, fix });
+    expect(line.parts.some(part => part.tone === "attention")).toBe(true);
+    expect(line.actions).toEqual([{ kind: "fix", key: "rescue", label: "GPT only keeps all 12 on Codex", fix: { kind: "team", selection: fix.selection, review: fix.review } }]);
+    expect(said({ stop }).actions).toEqual([]);
   });
 
-  test("a press that saves while roles have no route says what it changes, and revert stays beside the rescue", () => {
-    const saving = verbView({ step: { step: "save", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: true,
-      draft: true, phase: null, verification: "current", stranded: true, grounded: true, placeable: true, launching: false });
-    const stop = { roles: ["advisor"], waits: [] };
-    const fix = { label: "GPT only", result: "puts advisor on GPT", selection: team(), review: review() };
-    const edits = [{ word: "thinking" as const, from: "medium", to: "high" }];
-    const [first, second] = statusLines(facts({ verb: saving, stop, fix, edits }), vocab);
-    expect(first.parts.some(part => part.text.includes("medium → high"))).toBe(true);
-    expect(second.actions.map(action => action.kind === "fix" ? action.key : action.kind)).toEqual(["rescue", "revert"]);
-    // With no move that routes every role, revert is still a press away.
-    expect(statusLines(facts({ verb: saving, stop, edits }), vocab)[1].actions.map(action => action.kind === "fix" ? action.key : action.kind)).toEqual(["revert"]);
-  });
-
-  test("a pointed option writes its consequence over the lines; a step in flight is not written over", () => {
-    const option = slotOption({ value: "high", label: "high", note: "Raises default" });
-    expect(statusLines(facts({ pointed: { kind: "option", word: "thinking", option } }), vocab)[0].parts[0]).toEqual({ text: "Thinking high", tone: "strong" });
-    expect(statusLines(facts({ busy: true, inFlight: "launch", pointed: { kind: "option", word: "thinking", option } }), vocab)[0].parts)
-      .toEqual([{ text: "Opening a terminal on Studio", tone: "busy" }]);
+  test("a step in flight is said whatever else holds", () => {
+    const refused = { ...ready, state: "refused" as const, refusal: { code: "read-only" as const, text: "Edit access needed." } };
+    expect(said({ busy: true, inFlight: "launch", verb: refused }).parts).toEqual([{ text: "Opening a terminal on Studio", tone: "busy" }]);
   });
 
   test("a failed model list is stated with its fixes whatever the verb says, and the verb's own fix stays a press away", () => {
-    const keys = (line: StatusLine) => line.actions.map(action => action.kind === "fix" ? action.key : action.kind);
     const listFixes = ["list-retry", "list-models"];
-    // A refused verb with no team to seat: the refusal and its fix, and the list failure with its fixes.
+    // A refused verb with no profile to form: the refusal and its fix, then the list failure with its fixes.
     const unreadable = { ...ready, state: "refused" as const, refusal: { code: "accounts" as const, text: "" } };
-    const [refusal, failure] = statusLines(facts({ verb: unreadable, listFailure: "instead" }), vocab);
-    expect(refusal.parts[0]!.tone).toBe("attention");
-    expect(keys(refusal)).toEqual(["refresh"]);
-    expect(failure.parts[0]!.tone).toBe("warn");
-    expect(keys(failure)).toEqual(listFixes);
-    // A team beside the failure with roles that have no route: the rescue moves up beside its stop.
+    const refused = said({ verb: unreadable, listFailure: "instead" });
+    expect(refused.parts[0]!.tone).toBe("attention");
+    expect(refused.parts.at(-1)!.tone).toBe("warn");
+    expect(keys(refused)).toEqual(["refresh", ...listFixes]);
+    // Routes beside the failure with roles that have no route: the rescue stays beside its stop.
     const fix = { label: "GPT only", result: "keeps all 12 on Codex", selection: team(), review: review() };
-    const [stop, beside] = statusLines(facts({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }), vocab);
-    expect(keys(stop)).toEqual(["rescue"]);
-    expect(keys(beside)).toEqual(listFixes);
-    // Beside the verification still to do, as at rest.
-    const verify = verbView({ step: { step: "verify", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-      draft: false, phase: null, verification: "unverified", stranded: false, grounded: true, placeable: true, launching: false });
-    expect(keys(statusLines(facts({ verb: verify, listFailure: "beside" }), vocab)[1])).toEqual(listFixes);
-    expect(keys(statusLines(facts({ listFailure: "beside" }), vocab)[1])).toEqual(listFixes);
+    expect(keys(said({ stop: { roles: ["reviewer"], waits: [] }, fix, listFailure: "beside" }))).toEqual(["rescue", ...listFixes]);
+    // At rest the failure is the whole line.
+    expect(keys(said({ listFailure: "beside" }))).toEqual(listFixes);
+  });
+});
+
+describe("what the launch says while it is pointed", () => {
+  const verb = (changes: Partial<VerbFacts> = {}) => verbView({ step: { step: "save", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false,
+    unsaved: true, draft: true, phase: null, verification: "current", stranded: false, grounded: true, placeable: true, launching: false, ...changes });
+
+  test("a press that saves says what it changes on the workspace profile; a refused one says only its reason", () => {
+    const edits = [{ word: "thinking" as const, from: "medium", to: "high" }];
+    expect(launchReadout({ verb: verb(), edits, reviewed: null, grounded: true, launchStatus: "Ready." }, vocab))
+      .toEqual({ text: "1 change to the profile: thinking medium → high", warn: false });
+    const refusal: GateRefusal = { code: "read-only", text: "Edit access needed." };
+    expect(launchReadout({ verb: verb({ verdict: { open: false, refusal } }), edits, reviewed: null, grounded: true, launchStatus: "Ready." }, vocab))
+      .toEqual({ text: "Edit access needed.", warn: true });
+  });
+
+  test("a reviewed launch names the pool it reviewed; an unreviewed one on readings not current says the review shows it", () => {
+    const launch = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
+      draft: false, phase: null, verification: "current", stranded: false, grounded: true, placeable: true, launching: false });
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [{ family: "openai", count: 2 }] }, grounded: true, launchStatus: "Ready." }, vocab).text)
+      .toBe("reviewed on Studio: GPT 2");
+    const review = verbView({ step: { step: "review", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
+      draft: false, phase: null, verification: "current", stranded: false, grounded: false, placeable: true, launching: false });
+    expect(launchReadout({ verb: review, edits: [], reviewed: null, grounded: false, launchStatus: "Ready." }, vocab).text).toBe("the review shows the pool before anything runs");
   });
 });
