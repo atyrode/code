@@ -20,7 +20,7 @@ import { Profile, rippleTeam } from "./routing-pane.tsx";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
-  reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
+  machineSlot, reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
   type EstimateReadout, type Projection, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
@@ -156,7 +156,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     catalog, selection, review: controlsReview, served, nowMs: Date.now(), pools, machines, rosterError, machineId: model.machineId, omp: presence,
   } : null, [catalog, selection, controlsReview, served, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
-  const machineOptions = slots?.machine.options ?? [];
+  // The machine is chosen from the roster alone: a profile that cannot be formed (a first use whose bundled list failed) still has somewhere to run.
+  const machineOptions = useMemo(() => machineSlot({ machines, rosterError, machineId: model.machineId, omp: presence }).options,
+    [machines, rosterError, model.machineId, presence]);
   const sheetExtras = useMemo(() => slots?.extras.options.filter(extra => !ROW_EXTRAS.includes(extra.value)) ?? [], [slots]);
   useEffect(() => onExtras(sheetExtras), [sheetExtras]);
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
@@ -514,9 +516,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
               </span>
               <span className={`${G}launch-label`}>{verb.label.toLowerCase()}<i className={`${G}launch-charge`} aria-hidden="true" /></span>
             </button>
-            {slots && <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
+            <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
               onRefuse={refuseMachine} onLocked={() => { if (!machineGate.open) refuse(machineGate.refusal.text, "machine"); }} handle={picker}
-              onPoint={option => setHovered(current => option ? { kind: "machine", value: option.value } : current?.kind === "machine" ? null : current)} />}
+              onPoint={option => setHovered(current => option ? { kind: "machine", value: option.value } : current?.kind === "machine" ? null : current)} />
           </span>
           <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
             onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>

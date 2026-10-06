@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { MachineSummary } from "@manifold/protocol";
 import type { AccountsObservation, PermittedUsageSnapshot } from "@atyrode/manifold-omp";
 import { initialAccountChoices } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
@@ -9,7 +10,7 @@ import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue } from "../code/generator/consequences.ts";
 import type { GateRefusal, LaunchStep } from "../code/generator/launch-step.ts";
 import {
-  causalRedline, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, movesText, projectionOf, reviewMatches, statementSlots, verbView,
+  causalRedline, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, machineSlot, movesText, projectionOf, reviewMatches, statementSlots, verbView,
   type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
 } from "../code/generator/statement-model.ts";
 
@@ -293,6 +294,14 @@ describe("the launch line, in precedence", () => {
     expect(said({ verb: status }).parts[0]!.text).toMatch(/^Verification readiness unknown on Studio/);
     const sessions = { ...ready, state: "refused" as const, refusal: { code: "sessions" as const, text: "" } };
     expect(said({ verb: sessions, ompMissing: true }).parts[0]!.text).toBe("OMP isn't on Studio");
+  });
+
+  test("the machine is chosen from the roster alone, so a profile that cannot be formed still has somewhere to run", () => {
+    const machines = [{ id: "studio", name: "Studio", online: true }, { id: "laptop", name: "Laptop", online: false }] as unknown as MachineSummary[];
+    // No catalog, selection or review: a first use whose bundled model list failed.
+    const slot = machineSlot({ machines, rosterError: false, machineId: "studio", omp: new Map([["studio", "ok"]]) });
+    expect(slot.options.map(option => [option.value, option.current, option.available, option.reason])).toEqual([
+      ["studio", true, true, null], ["laptop", false, false, "offline"]]);
   });
 
   test("unusable accounts are said as what failed: the read, its age, or saved choices that no longer match; a failed profile read is the profile's", () => {

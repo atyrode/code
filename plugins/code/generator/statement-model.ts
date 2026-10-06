@@ -364,7 +364,10 @@ function extrasSlot(context: StatementContext, vocab: Vocabulary): Slot {
   return { word: "extras", options, current: -1 };
 }
 
-function machineSlot(context: StatementContext): Slot {
+/** What the machine setting is read from: the roster alone, so the machine can be chosen while no catalog forms. */
+export type MachineContext = Pick<StatementContext, "machines" | "rosterError" | "machineId" | "omp">;
+/** The machine setting: every machine in the roster, and the destination even where the roster does not list it. */
+export function machineSlot(context: MachineContext): Slot {
   const { machines, machineId, rosterError, omp } = context;
   const options = (machines ?? []).map((machine): SlotOption => {
     const current = machine.id === machineId;
