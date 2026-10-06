@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { panelKey, type PanelKey } from "../code/generator/panel-keys.ts";
+import { acceleratorFor, panelKey, type PanelAction, type PanelKey, type PanelView } from "../code/generator/panel-keys.ts";
 
 /** A key pressed on a generator row in the shown main view at full width, with three recent profiles; each test changes only what it is about. */
 function press(key: string, changes: Partial<PanelKey> = {}): PanelKey {
@@ -75,5 +75,18 @@ describe("views one key away", () => {
 
   test("an arrow on arrival moves focus into the view and changes nothing", () => {
     expect(panelKey(press("ArrowRight", { onRoot: true }))).toEqual({ kind: "enter" });
+  });
+
+  test("a control names a key only where that key does what the control does", () => {
+    const models = (action: PanelAction) => action.kind === "sheet" && action.sheet === "models";
+    expect(acceleratorFor("main", false, ["m"], models)).toBe("m");
+    expect(acceleratorFor("accounts", false, ["m"], models)).toBeNull();
+    const tab = (to: PanelView) => (action: PanelAction) => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to;
+    const keys = ["Escape", "a", "e", "p", "s"];
+    expect(acceleratorFor("main", false, keys, tab("main"))).toBeNull();
+    expect(acceleratorFor("sessions", false, keys, tab("main"))).toBe("Escape");
+    expect(acceleratorFor("manage", false, keys, tab("main"))).toBe("a");
+    expect(acceleratorFor("manage", false, keys, tab("accounts"))).toBe("Escape");
+    expect(acceleratorFor("accounts", false, keys, tab("accounts"))).toBeNull();
   });
 });

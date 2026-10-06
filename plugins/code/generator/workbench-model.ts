@@ -13,6 +13,7 @@ import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace
 import { operationReady } from "../permission-plan.ts";
 import { useMinuteTick } from "../ui.tsx";
 import { useAccountUsage } from "../usage-view.tsx";
+import { NOT_CURRENT, SAVING } from "./account-switch.ts";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
@@ -559,8 +560,17 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       }
     });
   }
+  // Why no account edit can be made now, in the words the accounts view locks its switches on.
+  const editAccountsGate = actionGate(facts, "edit-accounts");
+  const accountsRefusal = !editAccountsGate.open ? editAccountsGate.refusal.text
+    : busy ? "Wait for the current step to finish."
+    : !record || !configurationCurrent ? "Waiting for a current read of the workspace profile."
+    : null;
   async function changeAccounts(edit: AccountChoiceChange) {
-    if (!record || !configurationCurrent || accountsBusy.current || !allowed("edit-accounts") || (edit.kind === "set-account" && historicalAccounts)) return;
+    // An edit that cannot be made is refused aloud, never dropped: the refusal stands where an edit's failure would.
+    const refusal = accountsBusy.current ? SAVING : pending.current ? "Wait for the current step to finish."
+      : accountsRefusal ?? (edit.kind === "set-account" && historicalAccounts ? NOT_CURRENT : null);
+    if (refusal !== null || !record) { setAccountsFailure(refusal ?? "Waiting for a current read of the workspace profile."); return; }
     accountsBusy.current = true; setAccountsPending(true); setAccountsFailure(null);
     try {
       await callCodeAction(host, "changeAccounts", { containerId: host.containerId!, expectedRevision: record.revision, change: edit });
@@ -590,7 +600,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const usage: BoardUsage = {
     view: reading.value, current: !(reading.cached || historicalChoices || configuration.error !== null || accounts.error !== null), nowMs,
     accounts: choices && {
-      choices, historical: historicalAccounts, pending: accountsPending, failure: accountsFailure,
+      choices, revision: record?.revision ?? null, refusal: accountsRefusal, historical: historicalAccounts, pending: accountsPending, failure: accountsFailure,
       change: edit => void changeAccounts(edit),
     },
     refreshing: reading.refreshing,
