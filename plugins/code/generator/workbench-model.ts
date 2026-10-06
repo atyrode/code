@@ -88,6 +88,8 @@ export type WorkbenchActions = {
   changeAccounts: (edit: AccountChoiceChange) => void;
   /** Re-observe every query, accounts and usage included. */
   refresh: () => void;
+  /** Re-observe every query but the usage reading, whose own cadence is the usage line's: the workbench's quiet re-read. */
+  reread: () => void;
 };
 
 export type WorkbenchModel = {
@@ -452,8 +454,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
     baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
   }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
+  function reread() {
+    configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh();
+  }
   function refresh() {
-    configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
+    reread(); reading.refresh();
   }
   async function perform(kind: WorkbenchStep | null, work: () => Promise<void>) {
     if (pending.current || !writable) return;
@@ -618,7 +623,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh },
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh, reread },
     verification, recentTeams,
   };
 }

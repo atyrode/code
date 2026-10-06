@@ -24,6 +24,8 @@ import { Automation } from "./automation.tsx";
 import { OptionSwitch } from "./option-switch.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
+import { AUTO_READ_MS, readHeld } from "./auto-read.ts";
+import { usePanelShown, useReadClock } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -264,15 +266,37 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     else openSheet(place);
   }
 
-  // ------------------------------------------------------------ `r`: everything the panel stands on, read again
+  // ------------------------------------------------------------ reading again: on its own (auto-read.ts), and Refresh now (`r`)
+  /** Everything the panel stands on, read again: Refresh now, `r`, and the usage line's cadence. */
   function refresh() {
     actions.refresh();
     refreshMachines();
     setRereads(count => count + 1);
   }
-  // One cadence for the panel: `r`, a pane's `r · now` and the usage freshness window all restart the same countdown.
-  const cadence = useUsageCadence(usage, refresh);
   const teamGate = model.gate("edit-team");
+  const visible = usePanelShown(app);
+  // When the person last pressed a key or the pointer in the panel: a read on its own waits a few seconds after.
+  const inputAt = useRef(0);
+  /**
+   * Whether the person is in the middle of something a read on its own must not interrupt: a step
+   * that runs or a charge that waits, a sheet, the shortcuts or a popup (the More menu, the machine
+   * list) open, a row being scrubbed, a text field in use, an account change saving, or a press a
+   * moment ago. Asked when a read comes due, so it reads the latest render and the DOM.
+   */
+  const held = () => {
+    const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
+    return readHeld({
+      step: !teamGate.open,
+      open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null,
+      editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
+        || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
+      inputAt: inputAt.current,
+    }, Date.now());
+  };
+  // The workbench's inputs, read again once a minute and when the panel shows again; the usage keeps the usage line's own cadence.
+  useReadClock(AUTO_READ_MS, () => { actions.reread(); refreshMachines(); }, visible, held);
+  // One cadence for the usage: Refresh now, `r` and the usage freshness window all restart the same countdown.
+  const cadence = useUsageCadence(usage, refresh, visible, held);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
@@ -351,11 +375,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     const panel = app.current?.closest<HTMLElement>(PANEL_ROOT);
     if (!panel) return;
     const listener = (event: globalThis.KeyboardEvent) => keys.current(event);
+    const input = () => { inputAt.current = Date.now(); };
     panel.addEventListener("keydown", listener);
+    panel.addEventListener("keydown", input, true);
+    panel.addEventListener("pointerdown", input, true);
     // The panel root takes focus when the panel opens, so its keys work at once; never from another control.
     const focused = panel.ownerDocument.activeElement;
     if (!focused || focused === panel.ownerDocument.body) panel.focus({ preventScroll: true });
-    return () => panel.removeEventListener("keydown", listener);
+    return () => {
+      panel.removeEventListener("keydown", listener);
+      panel.removeEventListener("keydown", input, true);
+      panel.removeEventListener("pointerdown", input, true);
+    };
   }, []);
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators

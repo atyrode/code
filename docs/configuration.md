@@ -190,6 +190,19 @@ it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `
 Generator, where they act; `Esc` or its Close button closes it and it owns its keys while
 open.
 
+The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
+defaults, bundled model list, skills and accounts, and the machine list, once a minute
+while the panel shows and once when it shows again (its page returns or the panel comes
+back on screen) unless it read in the last 15 seconds. A minute keeps a panel left open
+current within a glance's patience for a handful of small reads, and a hidden panel
+reads nothing. Such a read never lands in the middle of something: while a step runs or
+a charge waits, a sheet, Shortcuts or the machine list is open, a row is being
+scrubbed, a text field is in use, an account change is saving, or within four seconds
+of a key or a press in the panel, it waits and happens once that is over. A failed read
+is named where it always is: the launch line, the usage line, the sessions. The usage
+reading keeps its own cadence (below); **Refresh** and **Refresh now** (`r`) read
+everything at once.
+
 ### The generator
 
 Rows run top to bottom: **lane**, **model**, **thinking**, **advisor** and
@@ -426,9 +439,11 @@ the pane; **Show usage** in the generator's head brings it back.
 Its last line reads `next refresh 4:54` with a **Refresh now** button (`r`). Code reads
 the usage again every five minutes, its freshness window: the host's feeds read again
 on events while their channel is live, and provider readings change without one, so the
-panel keeps its own cadence (a hidden tab waits until it shows again). Refresh now, the
-bar's Refresh and `r` read accounts, usage, machines, the workspace profile and the
-sessions already read again, and restart the same countdown. The line says
+panel keeps its own cadence, by the same rules as its other reads on their own: a hidden
+panel reads when it shows again, and a read that comes due in the middle of something
+waits (the line says `refresh waits`). Refresh now, the bar's Refresh and `r` read
+accounts, usage, machines, the workspace profile and the sessions already read again at
+once, and restart the same countdown. The line says
 `refreshing…` and the bars drain and refill while a read is out, for at least half a
 second so the refresh reads as one gesture; under reduced motion nothing animates. The
 line reserves the width of its widest text, so the button never moves.
