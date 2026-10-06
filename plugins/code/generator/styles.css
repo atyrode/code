@@ -632,6 +632,9 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note { margin: 0; padding: 4px 0; color: var(--tui-dim); overflow-wrap: anywhere; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note > .plugin-atyrode_code_generator__earlier-link { margin-left: 0; }
 /* An empty list is a sentence, not a framed row. */
+/* The view's own line: what its last verb came to, warm when it failed or was refused. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said { min-height: 20px; margin: 0 0 6px; color: var(--tui-dim); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said[data-tone="warn"] { color: var(--tui-warn-text); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { margin: 0; color: var(--tui-dim); overflow-wrap: anywhere; }
 
 /*

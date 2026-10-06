@@ -3,7 +3,7 @@ import type { MachineSummary, TerminalSummary } from "@manifold/protocol";
 import type { Selection } from "../domain/contracts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import {
-  differences, formRecent, machineReads, machineState, pastMoment, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionsNote,
+  differences, formRecent, machineReads, machineState, pastMoment, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionSaid, sessionsNote,
   teamProvenance, type SessionRead,
 } from "../code/generator/earlier-model.ts";
 import { sameTeam, teamWords } from "../code/generator/statement-model.ts";
@@ -261,5 +261,20 @@ describe("a recent team on today's catalog", () => {
   test("a team it cannot form blames the word whose value has no route here, not the words beside it", () => {
     const form = formRecent(catalog, team(), team({ capability: 4, thinking: "xhigh", lane: { kind: "provider", family: "openai", blend: "only" } }), familyWord, 0);
     expect(form).toMatchObject({ kind: "refused", word: "tier" });
+  });
+});
+
+describe("what the sessions view says of its last verb", () => {
+  test("a resume is answered by its own message, never by one standing before it, and says nothing while it runs", () => {
+    const older = { text: "Launched on Studio.", failed: false };
+    const refused = { text: "Nothing was opened: the canvas refused the terminal.", failed: true };
+    const press = { kind: "resume", before: older } as const;
+    expect(sessionSaid(press, older, false)).toBeNull();
+    expect(sessionSaid(press, null, true)).toBeNull();
+    expect(sessionSaid(press, refused, false)).toBe(refused);
+    // A refusal the view said itself stands as it is.
+    const own = { text: "Nothing was resumed: Choose a saved session.", failed: true };
+    expect(sessionSaid({ kind: "said", said: own }, refused, false)).toBe(own);
+    expect(sessionSaid(null, refused, false)).toBeNull();
   });
 });
