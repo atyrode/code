@@ -172,11 +172,12 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] { color: var(--tui-warn-text); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] b { color: var(--tui-warn); }
 /* The narrow profile: the team grouped by what it runs, whenever routing is not beside the generator. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 18px; margin: 14px 0 0 calc(16px + 24px); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead { color: var(--h); line-height: 22px; white-space: nowrap; }
+/* Either column gives way before anything is cut: a lead or a role too long for its room ends in an ellipsis, its title whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 2px 18px; margin: 14px 0 0 calc(16px + 24px); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead { min-width: 0; overflow: hidden; color: var(--h); line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead[data-down] { text-decoration: line-through; text-decoration-color: var(--tui-bad); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-roles { min-width: 0; color: var(--tui-fg); line-height: 22px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-role { display: inline-block; margin-right: 12px; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-role { display: inline-block; max-width: 100%; margin-right: 12px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-mark { margin-right: 4px; color: var(--tui-mid); font-size: 7px; vertical-align: 2px; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-alias { font-weight: 560; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-thinking { opacity: .8; }
@@ -192,7 +193,8 @@
 /* The launch, the machine it runs on, then the line beside them, which wraps under them where there is no room. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; min-height: 32px; margin-top: 12px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap; grid-column: 2; align-items: center; gap: 2px 16px; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-what { display: inline-flex; align-items: center; gap: 0 8px; min-width: 0; max-width: 100%; }
+/* The machine goes under the launch where both do not fit, never squeezed out of sight. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; max-width: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark { display: grid; flex: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark > svg { grid-area: 1 / 1; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-label { position: relative; }
@@ -219,13 +221,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line { display: flex; flex: 1 1 12rem; flex-wrap: wrap; align-items: baseline; gap: 0 14px; min-width: 0; color: var(--tui-warn-text); font-size: 13px; line-height: 20px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line:empty { display: none; }
 /* The machine: `on` and its name, a word that opens the roster above the launch line; each machine with its neutral online dot. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine { display: inline-flex; align-items: baseline; gap: 0 7px; min-width: 0; font-size: 14px; line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine { display: inline-flex; align-items: baseline; gap: 0 7px; min-width: 0; max-width: 100%; font-size: 14px; line-height: 22px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-on { flex: none; color: var(--tui-dim); }
+/* The name ends in an ellipsis where the line is short, its title whole; it never narrows past a few letters. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  min-width: 0;
+  min-width: 4em;
   min-height: 0;
   margin: 0;
   border: 0;
@@ -254,7 +257,7 @@
   z-index: 5;
   display: grid;
   width: max-content;
-  min-width: 12rem;
+  min-width: min(12rem, 100%);
   max-width: 100%;
   border-block: 1px solid var(--tui-rule);
   padding: 4px 0;
@@ -336,10 +339,17 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial[data-kind="lane"] .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: calc(20px + var(--labw)); }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__meter { grid-template-columns: 0 calc(20px + var(--labw)) auto; }
-/* Coarse pointers: every target at least 44px tall, the launch, each row's words and the machine's included; set at rest, so nothing moves on hover or focus. */
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__launchrow { grid-template-columns: 0 minmax(0, 1fr); }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__profile { margin-left: 20px; column-gap: 12px; }
 }
+/* Under 300px every row's words go under its label, as the lane's do under 430px, and each group's roles under its lead, so nothing is squeezed to a word a line or an ellipsis. */
+@container code (width < 300px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: 20px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-roles { margin-bottom: 4px; padding-left: 12px; }
+}
+/* Coarse pointers: every target at least 44px tall, the launch, each row's words and the machine's included; set at rest, so nothing moves on hover or focus. */
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__cue, .plugin-atyrode_code_generator__chains, .plugin-atyrode_code_generator__keys-word, .plugin-atyrode_code_generator__confirm, .plugin-atyrode_code_generator__machine-word, .plugin-atyrode_code_generator__launch) { align-items: center; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { box-sizing: border-box; min-height: 44px; }

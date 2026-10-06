@@ -90,9 +90,10 @@ export function MachinePicker({ options, locked, onChoose, onRefuse, onLocked, o
     <span className={`${G}machine-on`} aria-hidden="true">on</span>
     <button ref={trigger} type="button" className={`${G}machine-word`} aria-haspopup="listbox" aria-expanded={open}
       aria-label={`Machine: ${current?.label ?? "none"}`} aria-disabled={locked !== null || undefined} data-machine-picker=""
+      title={current?.label}
       onClick={() => { if (open) close(true); else show(); }} onPointerEnter={() => onPoint(current)} onPointerLeave={() => { if (!open) onPoint(null); }}>
       {current?.online != null && <i className={`${G}machine-dot`} data-online={current.online} aria-hidden="true" />}
-      {current?.label ?? "no machine"}
+      <span className={`${G}machine-name`}>{current?.label ?? "no machine"}</span>
     </button>
     {open && <div ref={list} role="listbox" tabIndex={-1} aria-label="machines" aria-activedescendant={`${id}-${cursor}`} className={`${G}machine-list`}
       onKeyDown={keys} onBlur={event => { if (!box.current?.contains(event.relatedTarget as Node | null)) close(false); }}>

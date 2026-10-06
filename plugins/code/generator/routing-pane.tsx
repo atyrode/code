@@ -134,7 +134,8 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, cue, hidden }
 /**
  * The narrow profile, under the generator's rows whenever routing is not beside them: the team
  * grouped by what it runs, each group's `model:thinking` then its roles, ● for the agent-backed. When
- * a change moves a role between groups it glides from where it was to where it lands.
+ * a change moves a role between groups it glides from where it was to where it lands. A name too long
+ * for its room ends in an ellipsis and says itself whole in its title.
  */
 export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   const box = useRef<HTMLDivElement>(null);
@@ -167,11 +168,12 @@ export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   }, [key]);
   return <div ref={box} className={`${G}profile`} aria-label="team">
     {groups.map(group => <Fragment key={group.key}>
-      <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}>
+      <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}
+        title={`${group.lead.alias}:${group.lead.thinking}`}>
         <span className={`${G}tok-alias`}>{group.lead.alias}</span><span className={`${G}tok-thinking`}>:{group.lead.thinking}</span>
       </span>
       <span className={`${G}profile-roles`}>
-        {group.roles.map(role => <span key={role.role} className={`${G}profile-role`} data-role={role.role}>
+        {group.roles.map(role => <span key={role.role} className={`${G}profile-role`} data-role={role.role} title={role.role}>
           {role.agentBacked && <span className={`${G}profile-mark`} aria-label="agent">●</span>}{role.role === "security-reviewer" ? "security" : role.role}
         </span>)}
       </span>
