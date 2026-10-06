@@ -112,8 +112,13 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__confirm:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- the bar: the views as tabs, then More, the one menu of the panel's sheets */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; padding: 6px var(--pad); border-bottom: 1px solid var(--tui-rule); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tabs { display: flex; flex-wrap: wrap; gap: 0 18px; min-width: 0; }
+/*
+ * The bar is one run of words: the tabs wrap like words, and More floats right on the line the last
+ * tab ends, or on its own line under it where that line has no room left. So a narrow panel spends
+ * no line on More alone while the tabs leave it room.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__bar { display: flow-root; padding: 6px var(--pad); border-bottom: 1px solid var(--tui-rule); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tabs { display: inline; }
 /* A tab is a word: the chosen one bright and heavier with the accent rule under it; each keeps the room of its heavier form, so choosing moves nothing. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab {
   position: relative;
@@ -121,7 +126,8 @@
   flex-direction: column;
   align-items: center;
   min-height: 32px;
-  margin: 0;
+  margin: 0 18px 0 0;
+  vertical-align: top;
   border: 0;
   border-radius: 0;
   padding: 6px 0;
@@ -134,13 +140,15 @@
   cursor: pointer;
   transition: color 140ms;
 }
+/* The last tab ends its line at its text, so More fits beside it wherever the two leave room. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:last-child { margin-right: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab::after { content: ""; position: absolute; right: 0; bottom: -7px; left: 0; height: 2px; background: var(--tui-acc); opacity: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:hover { border: 0; color: var(--tui-fg); background: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"] { color: var(--tui-fg); font-weight: 650; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"]::after { opacity: 1; }
 /* More keeps to the bar's end, on the tabs' line or the next, so its menu always opens leftward inside the panel. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__more { position: relative; display: inline-flex; margin-left: auto; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__more { position: relative; display: flex; float: right; align-items: center; max-width: 100%; min-height: 32px; margin-left: 12px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__more-button { flex-wrap: wrap; justify-content: flex-start; gap: 0 6px; height: auto; white-space: normal; text-align: left; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__more-aside { color: var(--tui-dim); white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__more-chevron { flex: none; width: 14px; height: 14px; color: var(--tui-dim); }
@@ -453,6 +461,7 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { box-sizing: border-box; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option { min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__menu-item { align-items: center; min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__more { min-height: 44px; }
 }
 
 /* ---------------------------------------------------------------- motion: none on arrival or resize, none under reduced motion */
