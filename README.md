@@ -33,31 +33,36 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
-- **Code workbench:** one main view in the terminal's grammar. The **generator** is
-  one row of plain words per setting (lane, model, thinking, advisor, and an on/off
-  row per extra) changed in place by pointer, keys or wheel, each model shown by its
-  short alias per tier, with a readout line that says what a pointed word does,
-  including to quota where it strands a role or leads on a strained pool. Cost and
-  speed meters sit above a launch row that names the next step (Verify models, Save &
-  launch, Launch) and the machine it runs on, a picker over the roster; when the step
-  is refused it stays focusable and the launch line gives the reason with a fix.
-  **Routing** beside it lists every role's `model:thinking`, with the fallback chains
-  on request, and **usage** under both. A key line names the keys of the view shown.
-  The **accounts** (`a`, with their management under `m`) and the **sessions** (`e`)
-  are views one key away, and routing and usage are views of their own below 760 px.
-  The sessions list running and explicitly read saved sessions and this device's
-  recent profiles. Launch is task-less: the task is typed in the session. Empty
-  workspaces derive a render-only starter from OMP's passive bundled model metadata,
-  so exploring needs no models, credentials or runtime setup; saving starts with
-  **Verify models**. Stored active policy always wins. Models (manual authoring,
-  import/export, discovery and measurement), Setup and the session options, which
-  hold skills and automation for one launch, open as sheets. An unsaved profile
-  survives a reload in the tab.
+- **Code workbench:** one main view under a top bar of tabs (Generator, Accounts,
+  Sessions) and buttons (Refresh, Models, Setup, Options, Shortcuts), which fold
+  behind **More** when the panel is narrow. The **generator** is five rows of plain
+  words (lane, model, thinking, advisor, fallbacks) changed in place by pointer, keys
+  or wheel, each model shown by its short alias per tier, with **Defaults** and
+  **Revert** in its head and a readout line that says what a pointed word does,
+  including to quota where it strands a role or leads on a strained pool. A lane for
+  a signed-in family the model list lacks is struck, and pressing it starts **Verify
+  models**. Cost and speed meters sit above a launch row that names the next step
+  (Verify models, Save & launch, Launch) beside a dropdown of the machines it can run
+  on; a machine without OMP is refused like an offline one. When the step is refused it
+  stays focusable and the launch line names what failed (the accounts, the workspace
+  profile, OMP missing from the machine) with a fix. **Routing** beside it lists every
+  role's `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
+  each can be hidden. Below 760 px routing and usage are tabs of their own. The
+  **sessions** list running and explicitly read saved sessions and this device's
+  recent profiles. Priority, prewalk and auto plans are profile switches in Options.
+  Every action is a visible control; keys are accelerators, listed under
+  **Shortcuts**, with a short key line that a touch screen does not show. Launch is
+  task-less: the task is typed in the session. Empty workspaces derive a render-only
+  starter from OMP's passive bundled model metadata, so exploring needs no models,
+  credentials or runtime setup; saving starts with **Verify models**. Stored active
+  policy always wins. Models (manual authoring, import/export, discovery and
+  measurement), Setup and Options (profile switches, skills and automation for one
+  launch) open as sheets. An unsaved profile survives a reload in the tab.
 - **Accounts / Usage:** include exact OMP-observed identities or credential slots
-  with a switch per account in the accounts view, choose among reusable presets, and
-  manage presets, sign-in and credentials in its management view. The usage pane
+  with a switch per account in the Accounts view; choose the pool, manage reusable
+  presets, sign in and manage credentials under **Manage accounts**. The usage pane
   reads each reported quota window separately and again every five minutes, or on
-  `r`; unknown and historical facts never imply free capacity.
+  Refresh; unknown and historical facts never imply free capacity.
   OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and
