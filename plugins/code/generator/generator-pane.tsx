@@ -31,6 +31,9 @@ const KEY_SAID_MS = 2600;
 /** How long the readout keeps a scrub's consequence after the pointer lets go. */
 const SCRUB_SAID_MS = 900;
 const ENTER = "M13.25 2.75v5.5a1 1 0 0 1-1 1H3.5M6.75 6 3.5 9.25l3.25 3.25";
+/** The meters' glyphs, drawn rather than typed: the unlit ones are the meter's empty track, a graphic, not words. */
+const DOLLAR = "M10.6 4.6c-.55-.85-1.45-1.3-2.6-1.3-1.5 0-2.55.8-2.55 1.95 0 2.85 5.6 1.6 5.6 4.65 0 1.25-1.15 2.1-2.85 2.1-1.2 0-2.2-.5-2.8-1.4M8 1.75v12.5";
+const CHEVRONS = "M4.5 5.25 7.25 8 4.5 10.75M8.75 5.25 11.5 8l-2.75 2.75";
 const CHECK = "M3 8.5 6.5 12 13 4.5";
 /** Where a verification stopped, in the panel's words rather than the workflow's step names. */
 const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
@@ -186,8 +189,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     machine: machine?.name ?? model.launchReview.destination.machineId,
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
   } : null;
-  const launchSays = launchReadout({ verb, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [], reviewed, grounded: quota?.grounded ?? false,
+  const readout = launchReadout({ verb, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [], reviewed, grounded: quota?.grounded ?? false,
     launchStatus: model.launchStatus }, vocab);
+  // The line beside the launch keeps to its facts and fixes; its asides ("changes stay a local preview") are said only when the launch is pointed.
+  const asides = line?.parts.filter(entry => entry.tone === "meta").map(entry => entry.text) ?? [];
+  const launchSays = { ...readout, text: [readout.text, ...asides].join(" · ") };
 
   // ------------------------------------------------------------ the readout: a scrub, then a key's word, then the pointer, then focus
   function say(said: Said | null) {
@@ -442,8 +448,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     {groups && <Profile groups={groups} />}
     <div className={`${G}genfoot`}>
       {estimates && <>
-        <Meter name="cost" glyph="$" readout={estimates.cost} onPoint={on => setHovered(on ? { kind: "meter", name: "cost" } : null)} />
-        <Meter name="speed" glyph="»" readout={estimates.speed} onPoint={on => setHovered(on ? { kind: "meter", name: "speed" } : null)} />
+        <Meter name="cost" glyph={DOLLAR} readout={estimates.cost} onPoint={on => setHovered(on ? { kind: "meter", name: "cost" } : null)} />
+        <Meter name="speed" glyph={CHEVRONS} readout={estimates.speed} onPoint={on => setHovered(on ? { kind: "meter", name: "speed" } : null)} />
       </>}
       <div className={`${G}launchrow`}>
         <button ref={launchButton} type="button" className={`${G}launch`} data-state={verb.state} aria-disabled={verb.state !== "ready" || undefined}
@@ -467,8 +473,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 }
 
 /**
- * One estimate: its name and five glyphs, lit to its level in the lane's accent; a speed nothing
- * measures stays unlit. Glyphs light and go out one after another, and one that lights pops once.
+ * One estimate: its name and five glyphs (`$`, `»`), lit to its level in the lane's accent; a speed
+ * nothing measures stays unlit. Glyphs light and go out one after another, and one that lights pops once.
  */
 function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string; readout: EstimateReadout; onPoint: (on: boolean) => void }) {
   const box = useRef<HTMLSpanElement>(null);
@@ -486,27 +492,27 @@ function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string;
   return <div className={`${G}meter`} role="meter" aria-label={name} aria-valuemin={0} aria-valuemax={5} aria-valuenow={lit} aria-valuetext={readout.word}
     data-unmeasured={readout.level === null || undefined} onPointerEnter={() => onPoint(true)} onPointerLeave={() => onPoint(false)}>
     <span className={`${G}meter-label`}>{name}</span>
-    <span ref={box} className={`${G}glyphs`} aria-hidden="true">{[0, 1, 2, 3, 4].map(index => <i key={index} data-lit={index < lit || undefined}
-      style={{ transitionDelay: `${Math.max(0, lit >= previous ? (index - previous) * 50 : (previous - 1 - index) * 50)}ms` }}>{glyph}</i>)}</span>
+    <span ref={box} className={`${G}glyphs`} aria-hidden="true">{[0, 1, 2, 3, 4].map(index => <Glyph key={index} path={glyph} data-lit={index < lit || undefined}
+      style={{ transitionDelay: `${Math.max(0, lit >= previous ? (index - previous) * 50 : (previous - 1 - index) * 50)}ms` }} />)}</span>
   </div>;
 }
 
 /**
  * The line beside the launch: Confirm charge first when it carries it (the next Tab stop after the
- * launch), then its facts, which give way to an ellipsis, then its fixes and cancel as cues; a fix
- * that opens a place answers to that place's key too.
+ * launch), then its facts, then its fixes and cancel as cues; a fix that opens a place answers to
+ * that place's key too. Its asides are the readout's, said while the launch is pointed.
  */
 function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
   line: StatusLine; canConfirm: boolean; onConfirm: (detail: number) => void; onCancel: () => void; onFix: (action: Extract<StatusAction, { kind: "fix" }>) => void;
 }) {
-  const text = line.parts.map(entry => entry.text).join(" · ");
+  const parts = line.parts.filter(entry => entry.tone !== "meta");
   const confirm = line.actions.find(action => action.kind === "confirm");
   return <>
     {confirm && <button type="button" className={`${G}confirm`} aria-label={`Confirm charge: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}`}
       aria-disabled={!canConfirm || undefined} onClick={event => onConfirm(event.detail)}
       onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>confirm charge</button>}
-    {line.parts.length > 0 && <span className={`${G}launch-facts`} title={text}>
-      {line.parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
+    {parts.length > 0 && <span className={`${G}launch-facts`}>
+      {parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
     </span>}
     {line.actions.map(action => {
       if (action.kind === "cancel") return <button key="cancel" type="button" className={`${G}cue`} onClick={onCancel}>cancel</button>;

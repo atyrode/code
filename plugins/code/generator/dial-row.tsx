@@ -26,8 +26,9 @@ const GLYPHS: Readonly<Record<GeneratorRow["id"], string>> = {
   machine: "M2.75 3.25h10.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1ZM5.5 14.25h5M8 11.25v3",
 };
 
-export function Glyph({ path, className }: { path: string; className?: string }) {
-  return <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+/** A 16px line glyph in the text's colour. */
+export function Glyph({ path, className, style, ...data }: { path: string; className?: string; style?: CSSProperties; [attribute: `data-${string}`]: true | undefined }) {
+  return <svg className={className} style={style} {...data} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d={path} />
   </svg>;
 }

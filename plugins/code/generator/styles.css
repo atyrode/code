@@ -186,10 +186,11 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__genfoot { display: grid; row-gap: 2px; margin-top: auto; padding-top: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter { display: grid; grid-template-columns: 16px calc(24px + var(--labw)) auto; justify-content: start; align-items: center; line-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter-label { grid-column: 2; color: var(--tui-dim); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs { display: flex; font-size: 16px; font-weight: 700; letter-spacing: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > i { width: .62em; color: #363c47; font-style: normal; text-align: center; transition: color 200ms var(--tui-ease); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > i[data-lit] { color: var(--tui-acc); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter[data-unmeasured] .plugin-atyrode_code_generator__glyphs > i { color: #30353f; }
+/* Five glyphs a little closer than a letter's width, bold like the terminal's: lit in the accent, unlit as the meter's dark track. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs { display: flex; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg { display: block; width: 16px; height: 16px; margin: 0 -3px; color: #363c47; stroke-width: 2; transition: color 200ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg[data-lit] { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter[data-unmeasured] .plugin-atyrode_code_generator__glyphs > svg { color: #30353f; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px auto minmax(0, 1fr); align-items: center; min-height: 32px; margin-top: 12px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch { position: relative; grid-column: 2; align-items: center; gap: 9px; padding: 4px 2px 6px 0; color: var(--tui-acc); font-size: 15px; font-weight: 650; transition: color 320ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch:hover { color: var(--tui-acc); }
@@ -210,9 +211,10 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-state="busy"] .plugin-atyrode_code_generator__launch-glyph { animation: plugin-atyrode_code_generator__breathe 1.4s ease-in-out infinite; }
 @keyframes plugin-atyrode_code_generator__fire { from { opacity: 1; } to { opacity: 0; } }
 @keyframes plugin-atyrode_code_generator__breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
-/* The line beside the launch: its facts give way to an ellipsis, its fixes keep their words, and it wraps rather than overflow. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line { display: flex; flex-wrap: wrap; grid-column: 3; align-items: baseline; gap: 0 14px; min-width: 0; margin-left: 16px; color: var(--tui-warn-text); font-size: 13px; line-height: 22px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-facts { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The line beside the launch: its facts and fixes wrap beside the launch rather than clip, since a refusal's words are its reason. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line { display: flex; flex-wrap: wrap; grid-column: 3; align-items: baseline; gap: 0 14px; min-width: 0; margin-left: 16px; color: var(--tui-warn-text); font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-facts { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line .plugin-atyrode_code_generator__cue { line-height: 20px; white-space: normal; text-align: left; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part + .plugin-atyrode_code_generator__launch-part::before { content: " · "; color: var(--tui-quiet); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part:is([data-tone="plain"], [data-tone="neutral"], [data-tone="busy"], [data-tone="meta"]) { color: var(--tui-dim); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part[data-tone="strong"] { color: var(--tui-fg); }
@@ -237,6 +239,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-off] { color: var(--tui-dim); }
 /* A lead quota leaves out is struck, its colour withdrawn; pointing at it says why. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-down] { color: var(--tui-dim); text-decoration: line-through; text-decoration-color: var(--tui-bad); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-down] .plugin-atyrode_code_generator__tok-thinking { opacity: 1; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-step { display: inline-flex; gap: 7px; white-space: nowrap; animation: plugin-atyrode_code_generator__chain-in 260ms var(--tui-ease) var(--step-delay, 0ms) backwards; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-arrow { color: var(--tui-quiet); }
 @keyframes plugin-atyrode_code_generator__chain-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
@@ -292,6 +295,7 @@
     transition-duration: 0s !important;
     transition-delay: 0s !important;
     animation-duration: 0s !important;
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
   }
 }
