@@ -21,7 +21,8 @@ import { RoutingPane } from "./routing-pane.tsx";
 import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
-import { teamWords } from "./statement-model.ts";
+import { OptionSwitch } from "./option-switch.tsx";
+import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { useWorkbench } from "./workbench-model.ts";
 
@@ -123,6 +124,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [more, setMore] = useState(false);
   // The launch as the generator names it, for the key line and the accounts view's foot.
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
+  // The profile switches the generator keeps outside its rows, which the session options sheet draws.
+  const [extras, setExtras] = useState<readonly SlotOption[]>([]);
   // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
@@ -242,6 +245,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
   // One cadence for the panel: `r`, a pane's `r · now` and the usage freshness window all restart the same countdown.
   const cadence = useUsageCadence(usage, refresh);
+  const teamGate = model.gate("edit-team");
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
@@ -361,7 +365,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     <main className={`${G}stage`}>
       <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} optionsSummary={optionsSummary} announce={announce} onOpen={open}
-        onRefresh={refresh} onLaunchState={setLaunch} controls={generator} />
+        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator} />
       <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} cue={paneCue("routing", "p")} hidden={!showRouting} />
       <section className={`${G}pane`} data-pane="usage" aria-label="usage" hidden={!showUsage} tabIndex={-1}>
         <header className={`${G}head`}>
@@ -434,7 +438,15 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       </details>}
     </>)}
     {sheetFrame("options", <>
-      <p className={`${G}options-lede`}>For the next launch or resume only; the workspace profile stays as it is.</p>
+      {extras.length > 0 && <section className={`${G}options-group`} aria-label="Profile switches">
+        <h3 className={`${G}options-head`}>profile</h3>
+        <p className={`${G}options-note`}>Saved with the workspace profile, like the generator's rows.</p>
+        <ul className={`${G}options-switches`}>{extras.map(extra => <li key={extra.value}>
+          <OptionSwitch on={extra.on} refusal={!extra.available ? extra.reason ?? extra.note : teamGate.open ? null : teamGate.refusal.text}
+            label={`${extra.label}: ${extra.meaning}`} onChange={() => generator.current?.extra(extra.value)}>{extra.label}</OptionSwitch>
+        </li>)}</ul>
+      </section>}
+      <p className={`${G}options-lede`}>The rest is for the next launch or resume only; the workspace profile stays as it is.</p>
       {optionsRefusal && <p className={`${G}options-note`} role="status">{optionsRefusal}</p>}
       <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} refusal={optionsRefusal} change={model.setAutomation} />
       <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}

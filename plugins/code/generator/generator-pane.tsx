@@ -17,7 +17,7 @@ import { strandsNote } from "./earlier-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
 import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
-import { generatorRows, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
+import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
   reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
@@ -71,6 +71,8 @@ export type GeneratorControls = {
   readonly recall: (index: number) => void;
   /** `w`: open the machine picker beside the launch. */
   readonly machines: () => void;
+  /** Turn a profile switch kept outside the rows (priority, prewalk, auto plans), through the edit gate. */
+  readonly extra: (value: string) => void;
 };
 
 export type GeneratorPaneProps = {
@@ -104,6 +106,8 @@ export type GeneratorPaneProps = {
   readonly onRefresh: () => void;
   /** Hears the launch's label, readiness and refusal whenever they change. */
   readonly onLaunchState: (state: LaunchState) => void;
+  /** Hears the profile switches kept outside the rows (the session options sheet draws them) whenever they change. */
+  readonly onExtras: (extras: readonly SlotOption[]) => void;
   readonly controls: RefObject<GeneratorControls | null>;
 };
 
@@ -121,7 +125,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly ref
  * pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -150,6 +154,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   } : null, [catalog, selection, controlsReview, served, starter, pools, machines, rosterError, model.machineId, presence]);
   const slots = useMemo(() => context && statementSlots(context, vocab), [context, vocab]);
   const machineOptions = slots?.machine.options ?? [];
+  const sheetExtras = useMemo(() => slots?.extras.options.filter(extra => !ROW_EXTRAS.includes(extra.value)) ?? [], [slots]);
+  useEffect(() => onExtras(sheetExtras), [sheetExtras]);
   const aliases = useMemo(() => catalog && displayAliases(catalog), [catalog]);
   const rows = useMemo(() => slots && catalog && controlsReview && aliases
     ? generatorRows({ slots, catalog, shown: shown ?? controlsReview, aliases, connected, familyWord }) : null,
@@ -401,6 +407,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   // What the panel's keys ask of the pane, current on every render.
   const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall, machines: () => picker.current?.open(),
+    extra: (value: string) => {
+      const extra = sheetExtras.find(entry => entry.value === value);
+      if (!extra) return;
+      if (!extra.available || !extra.selection) { announce(`${extra.label}: ${extra.reason ?? extra.note}`); return; }
+      commitTeam(extra.selection, `${extra.label} ${extra.on ? "off" : "on"}: ${extra.note}`, extra.label);
+    },
     focusRows: () => focusRow(cursor),
     noChains: () => {
       focusRow("fallbacks");

@@ -42,7 +42,6 @@ describe("earlier statements print only what differs from the line", () => {
     expect(differences(team({ fallback: true }), line, familyWord)).toEqual([{ word: "extras", text: "no spark" }]);
     expect(differences(team({ priority: true, prewalk: true }), line, familyWord)).toEqual([{ word: "extras", text: "priority, prewalk, no spark, no fallbacks" }]);
     expect(differences(team(), line, familyWord)).toEqual([{ word: "extras", text: "no extras" }]);
-    expect(differences(team({ budget: "free" }), lineOf(team()), familyWord)).toEqual([{ word: "extras", text: "free only" }]);
   });
 
   test("before the line has a team, rows compare with its words alone", () => {

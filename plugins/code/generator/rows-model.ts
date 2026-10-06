@@ -13,7 +13,7 @@ import { laneLabel, type LaneMark, type QuotaNote, type Slot, type SlotOption, t
  * model row's aliases per tier, which lanes hide, how a switch reads) are tested apart from the DOM.
  */
 
-export type RowId = "lane" | "tier" | "thinking" | "advisor" | "spark" | "fallbacks" | "priority" | "prewalk" | "plans" | "budget";
+export type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
 /** A lane spectrum, a level whose fill grows from the first word, or an on/off switch. */
 export type RowKind = "lane" | "level" | "switch";
 /** How a chosen word is coloured: its provider's hue, Mixed's, the lane's accent, or the text colour (an off value). */
@@ -151,10 +151,14 @@ function switchRow(extra: SlotOption): GeneratorRow {
   return { id: extra.value as RowId, word: "extras", label: extra.label, kind: "switch", words: [side(true), side(false)] };
 }
 
-/** Every row, top to bottom: lane, model, thinking, advisor, then each extra. The machine is the launch's own word (machine-picker.tsx). */
+/** The extras the generator keeps as rows; the others are switches in the session options sheet. */
+export const ROW_EXTRAS: readonly string[] = ["fallbacks"];
+
+/** Every row, top to bottom: lane, model, thinking, advisor, fallbacks. The machine is the launch's own word (machine-picker.tsx). */
 export function generatorRows(input: RowsInput): GeneratorRow[] {
   const { slots } = input;
-  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"), ...slots.extras.options.map(switchRow)];
+  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"),
+    ...slots.extras.options.filter(extra => ROW_EXTRAS.includes(extra.value)).map(switchRow)];
 }
 
 /** The nearest word that can be chosen one step right (`forward`) or left of the chosen one; null at the end of the row. */

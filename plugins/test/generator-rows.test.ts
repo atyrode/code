@@ -56,11 +56,8 @@ describe("the generator's rows", () => {
     expect(fallbacks.words[0]!.says).toMatch(/falls back/);
     expect(fallbacks.words[1]!.says).toMatch(/waits/);
     expect(fallbacks.words[1]!.option?.value).toBe("fallbacks");
-    // No Spark model in this catalog: turning it on is refused with the reason, and off stays chosen.
-    const spark = row(list, "spark");
-    expect(spark.words[0]).toMatchObject({ text: "on", available: false, option: null });
-    expect(spark.words[0]!.reason).not.toBeNull();
-    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "spark", "fallbacks", "priority", "prewalk", "plans", "budget"]);
+    // The generator keeps five rows; priority, prewalk and auto plans are the session options sheet's switches, and the budget is no control.
+    expect(list.map(entry => entry.id)).toEqual(["lane", "tier", "thinking", "advisor", "fallbacks"]);
   });
 
   test("a family with a signed-in account but no listed model keeps its lanes, struck with the reason and one verification away", () => {

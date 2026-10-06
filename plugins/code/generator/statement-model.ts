@@ -57,8 +57,9 @@ export function laneLabel(lane: Lane, familyWord: (family: string) => string): s
 const CAPABILITY_LABELS = ["fast", "normal", "smart", "elite"] as const;
 
 /**
- * The six More switches, in the order the extras setting lists them, with the dial words that mean
- * on and off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`).
+ * The profile's switches, in the order the panel lists them, with the dial words that mean on and
+ * off and what turning each on or off does to a session (routing.ts `compileOmpOverlay`). The budget
+ * is the domain's default and no control of the panel's.
  */
 const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } }[] = [
   { dial: "spark", word: "spark", on: "on", off: "off",
@@ -71,8 +72,6 @@ const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonl
     does: { on: "Tasks and subagents start with OMP's prewalk", off: "Tasks and subagents start without a prewalk" } },
   { dial: "plans", word: "auto plans", on: "auto", off: "ask",
     does: { on: "Plans are approved without asking you", off: "Plans wait for your approval" } },
-  { dial: "budget", word: "free only", on: "free", off: "any",
-    does: { on: "Only free routes are used", off: "Any route may be used, free or paid" } },
 ];
 function extraOn(selection: Selection, dial: MoreDial): boolean {
   const extra = EXTRAS.find(entry => entry.dial === dial)!;
@@ -228,7 +227,6 @@ function refusalText(word: StatementWord, value: string, selection: Selection, r
   const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   if (word === "tier") return `No ${value} ${vocab.family(lead)} model`;
   if (value === "spark" || value === "priority") return `${value === "spark" ? "Spark" : "Priority"} needs a GPT lane`;
-  if (value === "budget") return "No free route for this profile";
   return "Not among the current models";
 }
 
