@@ -279,6 +279,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
   // ------------------------------------------------------------ session options: for one launch or resume, never saved
   const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
+  const staged = model.record?.active != null && model.record.draft != null;
   const optionsSummary = model.automation ? "restricted" : model.skillChoice?.mode === "disabled" ? "skills off"
     : model.skillChoice?.mode === "select" ? `${chosenSkills} ${chosenSkills === 1 ? "skill" : "skills"}` : null;
   // The options wait while a step runs or a charge waits, as the profile's rows do, and need what a launch needs: write access and the machine.
@@ -394,7 +395,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     </Button>}
     <div id={actionsId} className={`${G}actions`} hidden={narrow && !actionsOpen}>
       <Button {...keyed("Read accounts, usage and machines again", ["r"], action => action.kind === "refresh")} onClick={() => run({ kind: "refresh" })}>Refresh</Button>
-      <Button {...keyed("Models", ["m"], action => action.kind === "sheet" && action.sheet === "models")} onClick={() => run({ kind: "sheet", sheet: "models" })}>Models</Button>
+      {/* A staged model list beside the active one changes nothing until it is reviewed in Models; the button says it waits there. */}
+      <Button {...keyed(staged ? "Models: a staged model list waits for review" : "Models", ["m"], action => action.kind === "sheet" && action.sheet === "models")}
+        data-staged={staged || undefined} onClick={() => run({ kind: "sheet", sheet: "models" })}>
+        Models{staged && <span className={`${G}actions-aside`}>· staged</span>}
+      </Button>
       <Button {...keyed("Setup", ["u"], action => action.kind === "sheet" && action.sheet === "setup")} onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
       <Button {...keyed("Session options", ["o"], action => action.kind === "sheet" && action.sheet === "options")} onClick={() => run({ kind: "sheet", sheet: "options" })}>
         Options{optionsSummary && <span className={`${G}actions-summary`}>· {optionsSummary}</span>}

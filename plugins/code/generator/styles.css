@@ -143,6 +143,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions[hidden] { display: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__actions { flex-basis: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-summary { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-aside { color: var(--tui-dim); }
 /* The panel's buttons on the stage read in its greys: quiet at rest, the text colour under the pointer. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button { color: var(--tui-mid); font-size: 13px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { color: var(--tui-fg); }
