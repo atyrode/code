@@ -57,14 +57,14 @@ Promotion supplies that digest against the same source and revision.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
-performance, context, thinking levels and image support. Capabilities are 1–4; a
-stored tier-0 model (the retired Spark rung) still parses and is never placed or
-routed. `SelectionSchema` records lane, capability, thinking, advisor, priority,
-prewalk, plan-yolo and fallback; its `spark` field still parses and is always read
-as off. Code never recovers
-these semantics from terminal output.
+performance, context, thinking levels and image support. Capabilities are 1–4. Tier 0
+was Spark's off-ladder rung and is retired: a stored catalog that still lists a tier-0
+model keeps parsing, and the model is never placed or routed. `SelectionSchema` records
+lane, capability, thinking, advisor, priority, prewalk, plan-yolo, fallback and budget
+(always the domain's default, `any`, in the panel), and still parses a `spark` flag,
+which is read as off. Code never recovers these semantics from terminal output.
 
-Known providers may add named families, quota metadata, special tiers, priority
+Known providers may add named families, quota metadata, priority
 or off-peak behavior. A provider without such a policy is still a complete
 provider family: its exact provider identifier is the family, its declared
 rungs may fill missing capability tiers, and Code adds no cross-provider lane,
@@ -100,10 +100,8 @@ snapshot with `revision`, `ompVersion`, complete model identities and `quotaTier
 It reads no credentials, provider endpoint, machine inventory or runtime resource.
 Code's `readStarterCatalog()` workflow requests the exact `anthropic`, `deepseek`
 and `openai-codex` providers. Ordinary eligible models retain their declared costs,
-context, image support and thinking levels; models in a quota class of their own
-(Spark's, or one not known yet) are excluded, from the bundled list and, through
-the same OMP version's classification, from a verified derivation
-(`separate_quota`). Unmeasured performance stays null. Derivation admits at
+context, image support and thinking levels; any quota class other than chat (Spark's,
+for one) is excluded, since Code spends no quota of its own. Unmeasured performance stays null. Derivation admits at
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
 
 Only a successful canonical configuration read establishes an absent revision 0
@@ -113,7 +111,7 @@ revision and account-independent configuration digests. Existing active policy
 wins, including historical catalogs without recorded registry provenance. A saved
 staged catalog is an explicit preview, not an active profile or a bundled fallback.
 An unresolved catalog keeps Models repair reachable; the main view then says the
-model list is unavailable, with Retry and Models, whatever else its status lines say.
+model list is unavailable, with Retry and Models, whatever else the launch line says.
 
 The starter is render-only. Nothing writes it as the workspace's catalog except a
 model verification, `workflow.verifyModels(target, { expectedRevision, budget })`:
@@ -134,7 +132,9 @@ history and a staged catalog stays staged. A confirmation is used once, and a fa
 or uncertain one is never replayed. The promoted catalog records its verification
 provenance (OMP version, inventory and benchmark times, the account providers and a
 digest of the exact account pool). A catalog stops being verified when OMP serves
-another model list or the saved choices select another pool.
+another model list or the saved choices select another pool. A model that draws a quota
+of its own (any OMP class but chat, Spark's for one) is left off the derived ladder and
+listed among the last verification's excluded models, since Code spends no such quota.
 
 A stale or failed save is never retried or rebased. The local draft remains
 exportable until explicitly discarded. It also survives a reload: the main view keeps
@@ -152,93 +152,234 @@ empty prompt. Headless callers still pass a prompt.
 
 ## Workbench presentation
 
-The main view reads top to bottom: the **statement**, the **seat board**, the
-**earlier statements** and a footer. Accounts, Models and Setup open as sheets over
-it, from the footer or from a status fix; Esc or **Back to Code** returns, restoring
-focus to what opened the sheet (its footer link when that has gone) and the scroll
-position. Visited sheets stay mounted, so profile, catalog, account
-and session-option drafts survive moving between them and the empty-to-active
-transition. Opening a sheet grants no permission and starts no inventory, benchmark
-or session. Blocked, offline, read-only, stale/conflict and failed-observation
-status stays visible, with full error detail reachable deliberately.
+The main view is one panel. A **top bar** carries the views as tabs (Generator,
+Accounts, Sessions) and the panel's actions as buttons (Refresh, Models, Setup,
+Options, Shortcuts). The **generator** holds five rows of plain words, a readout line,
+the cost and speed meters and the launch row; **routing** stands beside it and
+**usage** under both. The **accounts** and the **sessions** replace that stage while
+open, and under the accounts **Manage accounts** opens their management. Models,
+Setup and Options open as sheets over the stage, from the bar, a key or a launch-line
+fix; Esc or **Back to Code** returns, restoring focus to what opened the sheet (the
+generator's rows when that has gone) and the scroll position. Visited sheets stay
+mounted, and so does the accounts' management once opened, so profile, catalog,
+session-option and preset drafts survive moving between views and the empty-to-active
+transition. Opening a view or a sheet grants no permission and starts no inventory,
+benchmark or session. Blocked, offline, read-only, stale/conflict and failed-observation
+states stay visible in the launch line, with full error detail reachable deliberately
+in Setup's connection details.
 
-### The statement
+Every action is a visible control; keys are accelerators for them, listed in the
+**Shortcuts** dialog by the view they act in. A control names its key in its tooltip and
+`aria-keyshortcuts` only where that key does what the control does in the view shown:
+the Generator tab names Esc or `a` only from the views where they go back to it, and
+Models names `m` only in the generator, where `m` opens Models rather than Manage accounts.
 
-The statement is a verb and six words: lane, tier, thinking, advisor, extras and
-machine. Thinking, advisor and machine read after a connector ("thinking high", "on
-Studio"). The machine is the destination, not part of the team. Advisor adds its real
-role only when selected. Each word changes in place. In the wide forms the first row's
-lane, tier and thinking show their neighbouring values as smaller ghosts, and pressing
-one chooses it. Pressing a word, or Enter or Space on it, opens its options below the
-line, inside the panel and never over the verb; up is more. Extras is a list of
-switches, kept open while they are turned. The width form is chosen by measuring the
-words in the panel's own font: the whole statement on one line, two rows, the verb on
-its own row above pairs of words, or one word per row. A form changes back only once a
-wider one fits with room to spare, so a scrollbar appearing does not flip it.
+### The top bar
 
-Pointing at or focusing an option or a status fix writes in the two
-status lines below the words what choosing it would do (which roles rise, fall, change
-provider, appear or go, and how the estimates shift), and the seat board draws the same
-team as moves without choosing it. An option that cannot be chosen is shown unavailable
-with its reason.
+The tabs are a tab list: `←` `→` move among them and `↵` or `Space` opens one. Below
+760 px of panel width **Routing** and **Usage** join them, since those panes are views
+of their own there, and the five buttons fold behind one **More** disclosure so a narrow
+panel spends one row on chrome. **Refresh** reads accounts, usage, machines, the
+workspace profile and the sessions already read again, and restarts the usage countdown
+(`r`). **Models**, **Setup** and **Options** open their sheets (`m`, `u`, `o` from the
+main view). While a staged model list waits beside the active one, **Models** reads
+**Models · staged**, since nothing changes until it is reviewed there. Options carries a
+summary beside it when session options are set ("· restricted", "· skills off", "· 2
+skills"). **Shortcuts** opens a native modal dialog that lists every key under the view
+it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `o` under
+Generator, where they act; `Esc` or its Close button closes it and it owns its keys while
+open.
 
-**Quota at the point of choice.** An option carries a hatched redline mark, and its
-status line says it, only where choosing it is the cause: it would leave without a
-route a role that has one now (its lead's pool is blocked, maxed or has no included
-account, and no fallback serves it), or it would lead on a blocked, maxed, tight or
-unserved pool that the current team does not already lead on. A pool the team already
-strains marks no option, since nearly every option keeps it and that says nothing about
-any one. An option that gives roles a route again says so. Choosing a stranding option
-is not refused; the status line and the live
+### The generator
+
+Rows run top to bottom: **lane**, **model**, **thinking**, **advisor** and
+**fallbacks**. Each is a radio group of its words in order, with one Tab stop, on its
+chosen word; the chosen word is bold in its provider's hue (the lane's accent for
+thinking and advisor), with a glider under the words and a detent tick under each word
+while the row is pointed or focused. A click chooses a word and focuses the row's
+value; a drag scrubs along the row and chooses at each detent it passes. A word that
+cannot be chosen is struck through and refuses, with its reason in the readout. Priority,
+prewalk and auto plans are not rows: they are the **Profile switches** at the head of
+the Options sheet, saved with the workspace profile like the rows and refused through
+the same gate (priority also needs a GPT lane). The machine is not a row: it is a
+dropdown beside the launch (see the launch). Free-only is not a control: the budget
+stays the domain's default. The generator's head carries **Defaults**, which returns
+every row to the catalog's default, and **Revert**, shown only while the rows hold an
+edit of the saved workspace profile, which discards it. Both go through the edit gate,
+and the readout says the route changes they made ("no route changes" when none). When
+routing or usage is hidden, **Show routing** and **Show usage** stand in this head.
+
+- **Lane** is a spectrum: each provider's lanes, **Mixed** between GPT and Claude, then
+  every other provider's lanes as a group of its own. A lane is hidden only while its
+  family has no signed-in account at all, unless it is the lane in use; with no account
+  signed in anywhere every lane shows. A lane whose accounts are all excluded stays,
+  refused with the domain's reason. A family someone has signed in for but the model
+  list has no model of keeps its lanes, struck, with "No <family> models in your model
+  list"; pressing one starts **Verify models** (through its own gate, spending nothing
+  before Confirm charge) and the readout says it finds the models the accounts reach.
+- **Model** is the capability tier (fast, normal, smart, elite), each tier read as the
+  model alias its `default` role would lead on in the profile that choosing it forms,
+  with the tier's word under the alias. A tier no model fills reads as its word alone,
+  refused. A curated catalog's own keys (`sol`, `opus`) are its aliases. A derived key
+  (`provider.id`) is named by the last id segment that is not a version or qualifier
+  (`gpt-5.6-sol` is `sol`, `claude-haiku-4-5` is `haiku`); models whose aliases collide
+  keep their full ids, since two models wearing one name would misreport the route.
+- **Thinking** and **advisor** are levels whose fill grows from the first word; `off`
+  is drawn quietly. Advisor adds its real role only when selected.
+- **Fallbacks** is two words, on then off. The chosen one says what it means; the other
+  says what turning it does. `Space` flips it.
+
+One **readout** line under the rows says what is pointed or focused: the value in bold,
+then what it means or what choosing it does (which roles rise, fall, change provider,
+appear or go, and how the estimates shift), warm when it refuses or strains. Its
+precedence is a scrub in progress (the whole change from where it began), then what
+the last key or press did, kept about 2.6 s, then the pointed word, then the focused
+row.
+
+**Quota at the point of choice.** A word's readout says, in the warm tone, where
+choosing it is the cause: it would leave without a route a role that has one now (its
+lead's pool is blocked, maxed or has no included account, and no fallback serves it),
+or it would lead on a blocked, maxed, tight or unserved pool that the current team does
+not already lead on. A pool the team already strains marks no word, since nearly every
+word keeps it and that says nothing about any one. A word that gives roles a route
+again says so. Choosing a stranding word is not refused; the readout and the live
 region name the roles that would have no route. Quota comes from the same pools and
-role outcomes the seat board draws. The status lines are written in this precedence:
-a verification running or its charge, a step in flight, the pointed option, team or
-fix, the verb's refusal and its fix, a review that differs from what was shown, a
-failure, the last outcome, a verification still to do, roles with no route and the one
-change of a word that routes them, and at rest where the team's roles lead ("7 on Codex · 6 on
-Claude"), whether any reading is not current, the press's scope, pools that are out or
-tight and the reviewed pool. From the verb's refusal on, a model list that cannot be read
-holds the second line with its Retry and Models, beside the seats the line still holds or
-as the reason there is no team; a fix the second line offered moves up beside the first.
+role outcomes the routing pane draws. Spark is retired: there is no Spark row, route
+or quota bucket, and a stored selection with the Spark flag reads as off.
 
-**The verb.** One control whose `data-state` is `ready`, `busy`, `waiting` (a charge
-waits on its own Confirm) or `refused`. It is `aria-disabled` rather than disabled and
-stays focusable, so a step changing its state never drops focus, and a status fix that
-leaves the lines once pressed hands focus to the verb; pressing a refused one
-announces the reason, and the status lines give the reason with a one-press fix where
-there is one (use another online machine, show the accounts, review a staged catalog in
-Models, retry a read, enable discovery or sessions in Setup, use the saved workspace
-team). A read-only workspace (no `containers:write`) is stated in neutral grey:
-"Read-only workspace · changes stay a local preview". Write access is the caps alone:
-without a canvas beside the panel, verifying, saving and account edits still work, and
-only launch and resume refuse, in neutral grey, "Open Code beside the workspace canvas to
-launch". The label names the next step: **Verify models**, **Review**, **Save**
-(no canvas to launch from), **Save & review**, **Save & launch**, **Launch**, **Launch
-anyway** (a role's pools are out; never for a lead no included account serves, which
-save, review and launch all refuse) or **Review in Models** (a staged-only workspace;
-the press opens Models), with **Checking…**, **Verifying…**, **Saving…**,
-**Reviewing…**, **Launching…** and **Resuming…** while one runs. Verify is refused up
+### Routing, cost and speed
+
+The **routing** pane lists every role on one line: `●` for a role an agent backs, the
+role, and its lead as `model:thinking` in the provider's hue, with the advisor's line
+held while it is off so turning it on adds a value rather than a line. A change rolls
+each value that moves and flashes its row, top to bottom; a launch lights the rows in
+turn. A lead that quota leaves out (its pool blocked, maxed or served by no included
+account) is struck and says why under the pointer ("Claude blocked until 16:55 ·
+falls back to sol:high", or "no route"); any pointed value names its exact
+`provider/id` and thinking level. A role name too long for its room ends in an ellipsis
+and says itself whole in its title; under 300 px each chain goes under its role. Routes
+come from the review on display: the reviewed composition while it is current, else
+the local review.
+
+The **fallback chains** checkbox in routing's head (`f`) shows the chains behind each
+lead (`lead → fallback → fallback`) while the profile's fallbacks are on. With fallbacks
+off the checkbox is refused, and a press (or `f` in the main view) takes focus to the
+fallbacks row and says there are no chains to show. Its state is local to the open
+panel. **Hide** in routing's head (`p`) removes the pane; **Show routing** in the
+generator's head brings it back.
+
+Whenever routing is not beside the rows (a narrow panel, or hidden) the team shows
+under the rows grouped by what it runs: each group's `model:thinking`, then its roles
+with `●` on agent-backed ones. A change that moves a role between groups glides it
+there.
+
+The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
+lit to the level in the lane's accent, and the level's word while pointed. Cost is a
+role-weighted relative list-price index, lowest to highest, not billing; subscriptions
+spend quota windows, which usage shows. Speed comes from measured throughput and
+first-token time, and only when every lead model has them: otherwise its glyphs stay
+unlit and the readout says "unmeasured · verifying models measures it", rather than
+showing the index's middle level.
+
+### The launch
+
+The launch row reads `↵ <step> on <machine ▾>`: the **launch** button, the machine
+dropdown, and the **launch line** (below) beside them. The launch row is anchored to
+the bottom of the generator and the launch line grows upward, or sits above the launch
+when it has no room beside it, so the launch never moves under the pointer while its
+line changes. The step is the label of the next step in lower case: **verify models**,
+**review**, **save**, **save & review**, **save & launch**, **launch**, **launch
+anyway** or **review in Models**, and **checking…**, **verifying…**, **saving…**,
+**reviewing…**, **launching…**, **resuming…** or **working…** while one runs.
+
+**The machine.** The dropdown shows the machine's name, a neutral dot that shows
+whether it is online and a chevron. It opens a list of the machine roster above the
+launch row; click, or `w`, opens it with focus in the list. `↑` `↓`, `Home`, `End` and
+`↵` or `Space` choose; `Esc`, `Tab` or a press outside closes it and returns focus to
+the dropdown. While open the list owns its keys, so the panel's keys do nothing.
+Choosing goes through the edit-machine gate: while a step runs or a charge waits the
+dropdown refuses with the gate's reason and leaves the Tab order, so Confirm charge is
+the next Tab stop after the launch. An offline or access-revoked machine is struck and
+refuses with its reason, and so is a machine OMP is not installed on ("no OMP here"),
+which can run nothing. Code checks every online machine for OMP, and a browser starts
+on the destination it saved in the tab if OMP answers there, else on the first online
+machine where it does; with none, the saved one or the first online machine stays
+chosen so the launch line can say why nothing runs there, and nothing is chosen before
+every online machine has answered. The readout says what the pointed machine is
+("online", or why it cannot be chosen). The machine is the destination, not part of
+the team, and is not recorded in recent profiles.
+
+**The verb.** The launch is one control whose `data-state` is `ready`, `busy`,
+`waiting` (a charge waits on its own Confirm) or `refused`. It is `aria-disabled`
+rather than disabled and stays focusable, so a step changing its state never drops
+focus, and a launch-line control that leaves once pressed hands focus to the launch;
+pressing a refused one shakes it, says the reason in the readout and announces it. A
+read-only workspace (no `containers:write`) is stated in neutral grey, "Read-only
+workspace" (its readout adds "changes stay a local preview"). Write access is the caps
+alone: without a canvas beside the panel, verifying, saving and account edits still
+work, and only launch and resume refuse, in neutral grey, "Open Code beside the
+workspace canvas to launch". **Launch anyway** is offered when a role's pools are out,
+never for a lead no included account serves, which save, review and launch all refuse.
+**Review in Models** opens Models for a staged-only workspace. Verify is refused up
 front when the account observation cannot be read or includes no account. An edited
-team saves first, and while it does the status lines say what the save changes
-("2 changes: thinking high → max, advisor glance → off") beside revert, also beside the
-fix for roles with no route. **Save &
-launch** is offered when the projection rests on present readings (every lead's pool
-judged fresh and the served providers known), and the press then continues from the
-review to the launch only if the review shows the projected leads and the same
-providers in the account pool; otherwise it stops and says what differs (roles' seats,
-providers that joined or left the pool) as a choice: launch with the reviewed pool or
-change a word first. **Save & review** stops at the review so the pool is seen first.
+team saves first; while the launch is pointed or pressed the readout says what the save
+changes ("2 changes to the profile: thinking high → max, advisor glance → off"), and
+**Revert** discards the edit. **Save & launch** is offered when the projection rests
+on present readings (every lead's pool judged fresh and the served providers known),
+and the press then continues from the review to the launch only if the review shows the
+projected leads and the same providers in the account pool; otherwise it stops and says
+what differs (roles' leads, providers that joined or left the pool) as a choice: launch
+with the reviewed pool or change a setting first. **Save & review** stops at the
+review so the pool is seen first. Outcome and refusal lines clear whenever the team,
+machine or account pool changes.
+
+**The launch line** sits beside the launch and keeps to facts and one-press fixes, each
+a button; its asides ("changes stay a local preview", "nothing is spent until you
+confirm", and, while a staged model list waits beside the active one, "a staged model
+list waits in Models") are said in the readout while the launch is pointed or pressed. It is written in this
+precedence: a verification running or its charge, a step in flight, the verb's refusal
+with its fix, a staged model list the verb opens, a review that differs from what was
+projected, a failure, the last outcome, and roles with no route with the one change
+that routes them (said once verifying is no longer the next step). A model list that
+cannot be read joins the line from the verb's refusal on, with its Retry and Models.
+The line names what failed rather than a general refusal:
+
+- **Accounts.** "Accounts unreadable: <reason>" with **Retry** when the read failed;
+  "Account list not current" with **Refresh**; "Saved account choices no longer match
+  your accounts" with **Show accounts**. The account observation is read every second,
+  so one failed read is not a fact about the accounts: for 15 seconds the gate keeps
+  judging the last good observation, and every effect reads the accounts again itself
+  before it starts. "No account is included" and "No <family> account included" offer
+  **Show accounts** (`a`) and, where one exists, **Use <lane>** for the nearest lane the
+  accounts serve.
+- **Workspace profile.** "Workspace profile unreadable" when its read failed, "The
+  workspace profile needs a fresh read" when it is only older than its last write, each
+  with **Retry**; "The workspace profile changed elsewhere" with **Use theirs**.
+- **OMP.** "OMP isn't on <machine>" when the destination refuses OMP's actions
+  outright, in place of the readiness and permission refusals it would otherwise cause,
+  with **Use <machine>** for another online machine where OMP answers. "Verification
+  readiness unknown on <machine>" is kept for a read that really failed.
+- **Machine.** "<machine> is offline", "access revoked", "is unavailable", "The chosen
+  machine is not in your machine list" or "Machine list unreadable", each with **Use
+  <machine>** or **Retry** where one applies.
+- **Models and setup.** "A staged model list waits in Models" (**Review in Models**),
+  "No model list in use" and "These choices need a model review" (**Open Models**),
+  "Discovery is not enabled", "Sessions not enabled on <machine>" and "Sessions
+  unavailable on <machine>" (**Enable in Setup** or **Open Setup**), and "Skill choices
+  need attention" (**Open options**).
+
+A fix that opens a place answers to that place's key too.
 
 **Verification and its charge.** **Verify models** runs OMP's inventory ("Checking
 which models your accounts can reach"), then states the charge: "Verifying spends N tiny
-requests", per provider, "nothing is spent until you confirm", with **Confirm charge**
-and cancel. A charge of nothing says "Nothing to verify through these accounts" and
-cannot be confirmed. Confirm is the next Tab stop after the verb, is never focused for
-the person, and spends only the very charge it showed: never one of zero requests,
-never before the Verify press has stayed in its checking state for 700 ms, and only on
-a deliberate single press, never the second click of a double-click or a held key.
-Progress reads "N of M requests". A verification that stopped or was cancelled says so
-until the next one starts; Verify models again is its retry.
+requests", per provider, with **Confirm charge** and cancel. A charge of nothing says
+"Nothing to verify through these accounts" and cannot be confirmed. Confirm is a Tab
+stop after the launch, is never focused for the person, and spends only the very charge
+it showed: never one of zero requests, never before the Verify press has stayed in its
+checking state for 700 ms, and only on a deliberate single press, never the second
+click of a double-click or a held key. Progress reads "N of M requests". A verification
+that stopped or was cancelled says so until the next one starts; Verify models again is
+its retry.
 
 Once the saved, verified team meets every launch precondition and its review inputs
 (options, accounts, revisions, destination) have held still briefly, the workbench
@@ -246,98 +387,85 @@ requests the launch review itself, so Launch is one press. It never does so for 
 unsaved edit, a starter or a staged catalog, and at most once per review scope: a
 refused review or launch waits for an explicit Review or a changed input.
 
-One gate decides every action: the verb, saving, verifying, confirming the charge,
-resuming with or without the team, opening a running session, and every edit of the
-team (including a recalled team), the machine or the account pool. Nothing starts while
-a step runs, and only Confirm while a charge waits; edits wait too, shown unavailable
-in place (a word stays reachable by arrow keys but leaves the Tab order). A chain asks
-the gate again before each later step (save, then review once the save is observed;
-prepare, then open the terminal), so a team, machine, pool or authority change
-mid-flight stops it with the reason. Review and launch refuse only a lead no included
-account serves, as the session door does; fallbacks it would drop are noted, never a
-refusal. Outcome and refusal lines clear whenever the team, machine or account pool
-changes.
+One gate decides every action: the launch, saving, verifying, confirming the charge,
+resuming with or without the profile, opening a running session, and every edit of the
+team (including a recalled profile and a profile switch), the machine or the account
+pool. Nothing starts while a step runs, and only Confirm while a charge waits; edits
+wait too, and a row still answers but refuses each choice with the gate's reason. A
+chain asks the gate again before each later step (save, then review once the save is
+observed; prepare, then open the terminal), so a team, machine, pool or authority
+change mid-flight stops it with the reason. Review and launch refuse only a lead no
+included account serves, as the session door does; fallbacks it would drop are noted,
+never a refusal.
 
-**Keys** act only from inside the panel's main view, and keys Code consumes do not reach
-workspace-wide bindings; none act behind a sheet, in a dialog or popover, or once another
-control handled the key. The panel takes focus when it opens: from there an arrow moves
-focus to the lane and `↵` takes the verb's step. `Mod+↵` takes the verb's step from
-anywhere in the main view, typing included, but never on key repeat. A keyboard change
-writes its consequence, or the reason it was refused, in the status lines until the next
-input. Outside text fields and dialogs: `←` and `→` move between the verb and
-the words in reading order; on a word `↑` and `↓` change it (up is more), `Home` and
-`End` jump to its ends, `↵` or `Space` open and close its options, `Backspace` returns
-it to the last launch (the machine is not recorded) and `Esc` closes the options
-without undoing anything. On extras `↑` and `↓` move through the open switches and
-`Space` turns the one under the cursor. `1`–`9` recall the recent team with that
-number, `r` reads accounts, usage, machines and the workspace team again, and `?` shows
-the keys. On a pool head `↵` opens and closes its accounts, `Space` includes or excludes
-the focused account and `Esc` closes them. The mouse wheel turns a word only when it is
-open, or when the keyboard focused it and the pointer has rested on it for 300 ms
-(focus from a click never counts, so the wheel over a just-clicked word scrolls), and
-only while the whole panel has been still for 300 ms, with no scrolling and no wheel
-left to scroll anywhere in it; otherwise it scrolls. One polite live region announces
-outcomes, failures, the charge, recalls and the reason a pressed refused control gave.
+### Usage
 
-### The seat board
+The **usage** pane stands under routing, or alone as the **Usage** tab in a narrow
+panel. It lists providers in the panel's family order (GPT, Claude, DeepSeek, then the
+rest) and, under each, its accounts by email (else API key or identity). Each reported
+window of an account is one line: its label (`5h`, `7d`), a twelve-block bar filled to
+the share used, the percentage, `↻` and the time to its reset, and Code's word for it:
+`tight` from 80% used (or when the provider warns), `maxed` when exhausted, `blocked`
+for a provider block, whose `↻` is the time it lifts. Windows are never averaged across
+accounts or providers. A prepaid balance is shown in its own currency; an account
+with no windows says "no windows reported"; a block on a scope no shown window meters
+is its own line ("<scope> requests blocked ↻ Sat 16:55"). An account excluded from the
+pool, or whose credential is disabled, is drawn in quieter colours. An account read
+from a stale source or longer ago than the five-minute freshness window says its age
+("12m old") and is never drawn as current; a provider whose accounts are all history
+says it once. Where nothing can be drawn the pane says "no account choices yet", "not
+read yet", "accounts unavailable" or "no accounts". **Hide** in the head (`s`) removes
+the pane; **Show usage** in the generator's head brings it back.
 
-Under the statement, provider columns headed by their quota pools, with tier rows of
-model seats and each role on the seat that leads it. From 560 px of panel width the
-board is columns by tier rows; below it is a roster grouped by provider, and the first
-status line says a pointed team as moves of named seats ("default, task sol → astra").
-Both draw one model. Quota comes only from the pools and role outcomes, seats only from
-the seat model, and both are recomputed when the catalog, the team or the reading changes.
+Its last line reads `next refresh 4:54` with a **Refresh now** button (`r`). Code reads
+the usage again every five minutes, its freshness window: the host's feeds read again
+on events while their channel is live, and provider readings change without one, so the
+panel keeps its own cadence (a hidden tab waits until it shows again). Refresh now, the
+bar's Refresh and `r` read accounts, usage, machines, the workspace profile and the
+sessions already read again, and restart the same countdown. The line says
+`refreshing…` and the bars drain and refill while a read is out, for at least half a
+second so the refresh reads as one gesture; under reduced motion nothing animates. The
+line reserves the width of its widest text, so the button never moves.
 
-A **pool head** is a line (provider, `×included` or `×included of total` accounts and
-the verdict, which takes a second line wherever one cannot hold it, breaking only
-between facts), a track per reported quota window and a note. A track has a cell per
-included account, in one order for every window (present readings from the least to
-the most used, then history, then unread accounts, an account without that window held
-by an empty outline), and the pool's level: the mean used share of the present
-readings, `–` when none is present; each account's reading is in the track's title.
-History is drawn as an outline of the width it had, never as a level. The note says
-readings too old to judge first, then a pace forecast ("5h full ≈ 14:20", "7d full ≈
-Mon 20:00") and the reset: the forecast is the first moment every included account would be
-full at once at its pace, a projection from one reading, said only when every account
-is read fresh, each one with room is on pace to fill before its window resets, and none
-has reopened by then; never a moment already past. Beside a forecast the reset is when
-the first full account frees again; without one, the soonest reset of a window near its
-limit. Times beyond today carry their
-weekday, from six days on their date. The verdict reads room, "N of M with room", tight,
-"blocked" or "maxed" until the reset time or "reset unknown", "none included" or "no
-account". Historical readings are said in neutral grey as "<age> old · availability
-unknown", never as room. Accounts not yet read, or unavailable, are said once for the
-board ("accounts not read yet · capacity unknown, not zero"). A pool without windows
-shows its balance, or that no quota is reported. A provider with no seated role, and
-none under a pointed team, has its tracks and verdict in grey, its numbers kept.
+### Accounts
 
-A **seat** shows the model, its roles grouped by thinking level and what each meets:
-"→ model until 14:20" when its lead's pool is out and the first fallback takes over
-(unless its pool is out too), "no route until 14:20" (or "reset unknown"), "no
-<provider> account" when no included account serves its lead, its fallback chain ("then
-A › B"), and fallbacks the session would drop because no included account serves their
-provider. A model whose quota is metered apart says its own state on a line of its own,
-in both forms, "own quota · unknown" when nothing current is read. A capability rung a
-provider has no model for says so ("no elite GPT model"). A provider with no seated role
-takes only the width its head needs, its seats one idle line in the head's note row. A
-pointed team marks the roles it would move or drop, and names its arrivals on the seat
-that receives them ("fable + reviewer, security-reviewer"); after a commit by keyboard
-the moved roles keep a brief afterglow, none under reduced motion. Providers with
-balances that this catalog does not use are listed as "not in this catalog".
+The **Accounts** tab (`a`) replaces the stage with the usage grid again, each account
+headed by a **switch**: "Include <who> in the workspace pool", a shared edit every
+member's next launch draws on. A switch edits the saved choices through
+`changeAccounts` at the observed revision, one edit at a time, never retried. A press
+shows as made, and every switch stays locked, from the press until the saved choices
+are read back at a newer revision, so a second press never carries a revision the first
+has already moved past. A failed or refused edit is said in the readout and the switch
+shows the saved state again. Same-email OAuth organizations are distinct switches.
+Excluding an account is not disabling its native credential.
 
-Pressing a pool head opens its accounts in place: the workspace pool (Manual and each
-preset), then each account with an in/out switch ("Include <who> in the workspace
-pool", a shared edit every member's next launch draws on) and its readings. Switches
-edit the saved choices through `changeAccounts` at the observed revision, one edit at a
-time, never retried. They wait while a step runs or a charge waits, are unavailable in
-a read-only workspace, and refuse to include an account while the account list is
-historical or its credential is disabled. While a preset is active, accounts change only
-by choosing another pool, because hand edits belong to Manual. A failed edit is said
-once beside the accounts.
+A switch that cannot act is never left looking open: it is `aria-disabled`, and a press
+on it (like pointing at or focusing it) says why in the readout, in the model's words
+where the model refuses ("Wait for the current step to finish", "Waiting for a current
+read of the workspace profile"). It waits when no choices are set up yet, while a step
+runs or a charge waits, when the workspace is read-only, while an edit is saving
+("Saving the last change"), while the account list is historical ("The account list is
+not current"), and for an account whose credential is disabled ("Credential disabled").
+While a preset is active a switch says "Set by the <name> pool; choose the manual pool
+under Manage accounts to edit", since hand edits belong to Manual. Opening the view puts
+focus on its first switch that can move. `↑` `↓`,
+`Home` and `End` move through the switches, `Space` or `↵` presses one, `m` opens
+**Manage accounts**, `a` or Esc return to the generator.
 
-### Earlier statements
+**Manage accounts** (the button in the accounts head, or `m`) is the accounts'
+management inside the same panel: the controls of the Code accounts panel, unchanged.
+The pools live here: the active pool (Manual or a saved preset), creating, editing and
+deleting presets with a local draft ("Save as preset…", "Edit pool"), and inclusion as a
+checkbox per account, the same `changeAccounts` edit. It also signs in through OMP's
+handoff and clears blocks or disables credentials behind a confirmation, and is
+read-only while a step runs or a charge waits. **Back to accounts** (Esc) returns to
+the accounts and `a` to the generator; the management stays mounted once opened, so an
+unsaved preset draft survives a look back at the accounts.
 
-Below the board, two groups, each said only where it differs from the statement.
+### Sessions
+
+The **Sessions** tab (`e`) replaces the stage with two groups, each said only where it
+differs from the generator.
 
 **Sessions.** Rows are grouped under their machine, whose head names it once with its
 read. Running sessions (terminals that carry an OMP session reference on their own
@@ -345,51 +473,109 @@ machine) offer **open**; while the terminal inventory is unread or failed, runni
 "unknown", never none. Saved sessions appear only after an explicit read of each
 permitted online machine (**Read <machine>**; a read machine says when it was read and
 offers **read again**, failed reads offer **read again**, offline machines are named
-once); the panel's refresh reads every machine already read again. Saved sessions take
-one row per folder and machine: the folder first, then its newest session's title, when,
-and where it stands among the folder's sessions ("newest of 6", "2nd of 6"), then the
-verbs. The folder's other sessions are in that title's drum, the statement's idiom:
-`↑`/`↓` turn to a newer or older one, `↵`/`Space` open the list below it, `Esc` closes
-it. A saved session offers **resume** (as saved) and **with current team** (resume with
-the statement's saved workspace team); below 480 px a row takes two lines, folder and
-title, then when and the verbs. The note says "team not recorded" because no session
-records the team it ran with. Every row verb asks the one gate for its own session
-before it is pressed and again between its steps. A refused verb stays focusable and
-gives its reason, including that a saved session on another machine waits until that
-machine is chosen on the statement, since resuming runs on the statement's machine, and
-that a read-only workspace allows open only.
+once); Refresh reads every machine already read again. Saved sessions take one row per
+folder and machine: the folder first, then its newest session's title, when, and where
+it stands among the folder's sessions ("newest of 6", "2nd of 6"), then the verbs. The
+folder's other sessions are in that title's drum: `↑`/`↓` turn to a newer or older one,
+`Home`/`End` go to the ends, `↵`/`Space` open the list below it, `Esc` closes it. A
+saved session offers **resume** (as saved) and **with current profile** (resume with
+the saved workspace profile); below 480 px a row takes two lines, folder and title,
+then when and the verbs. The group's note says "profile not recorded" because no
+session records the profile it ran with. Every row verb asks the one gate for its own
+session before it is pressed and again between its steps. A refused verb stays
+focusable and gives its reason, including that a saved session on another machine waits
+until that machine is chosen beside the launch ("choose it on the line to resume
+here"), since resuming runs on the launch's machine, and that a read-only workspace
+allows open only.
 
-**Recent teams.** Each successful launch records its team in this browser's local
+**Recent profiles.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).
 The list is device-local, never shared, and grants nothing; it does not record the
-machine. A team keeps its digit for the panel's life: relaunching it keeps the digit, a
-new team takes the next free one. A row says only the words that differ from the
-statement, extras as changes ("no fallbacks"), or "this team", and what recalling it would
-strand on today's pools ("12 no route until 16:55", each group with its own time). Under
-the pointer or focus a row previews its team in the status line and on the board. A team
-today's catalog cannot form is refused, its word dimmed with the reason in its title.
-Pressing a row, or its digit, recalls the team through the edit gate and announces what
-it strands; it launches nothing, and recalling the saved workspace team is a discard, not
-a local edit that happens to match. When the statement is the saved workspace team and no
-recent team says it already, the group says "Workspace team · last change to the workspace
-<time> by <name>": every write to the workspace record stamps that time and name.
+machine. A profile keeps its digit for the panel's life: relaunching it keeps the
+digit, a new one takes the next free one. A row says only the settings that differ from
+the generator, extras as changes ("no fallbacks"), or "this profile", and what recalling it
+would strand on today's pools ("12 no route until 16:55", each group with its own
+time). A profile today's catalog cannot form is refused, its word dimmed with the
+reason in its title. Pressing a row, or its digit `1`–`9`, recalls the profile through
+the edit gate and announces what it strands; it launches nothing, and recalling the
+saved workspace profile is a discard, not a local edit that happens to match. When the
+generator holds the saved workspace profile and no recent profile says it already, the
+group says "Workspace profile · last change to the workspace <time> by <name>": every
+write to the workspace record stamps that time and name.
 
-### The footer and session options
+### Keys, focus and layout
 
-The footer says where the facts come from: "models verified <time>" (the last
-benchmark), "accounts updated <age>" and, when a staged catalog waits beside the active
-one, "a staged catalog waits in Models"; then the links refresh, Accounts, Models,
-Setup and keys `?`. **Session options** is a quiet verb beside the first status line
-("session options · restricted", "· skills off" or "· N skills" when set). It opens
-Automation and Optional skills for the next launch or resume only: the workspace team
-stays as it is, the restrictions are not an OS or network sandbox, and a successful
-launch or resume clears them. Their closed summary retains restricted tool counts,
-skill selections or explicit disable-all.
+Keys are panel-local: the listener sits on the panel root, so a key pressed in another
+plugin never reaches Code and a key Code consumes does not reach workspace-wide
+bindings. None act behind a sheet, in a dialog (Shortcuts included) or an open popover
+(the machine list, a session drum), in a text field, or once a nearer control handled
+the key. The panel takes focus when it opens; from there an arrow moves focus to the
+generator's rows. Each of these has a control; none is the only way to anything.
 
-Setup is optional runtime management: connection status, independent machine
+- **Main view.** `↑` `↓` move between rows. On a row, `←` `→` step to the nearest word
+  that can be chosen, `Home` and `End` jump to the ends, and `Space` flips fallbacks;
+  focus stays on the row's chosen word as the value moves. The wheel steps a row only
+  while the row has focus or the pointer has rested on it for 450 ms, so a page scroll
+  passing over never turns it. `↵` takes the launch's step unless a button has focus,
+  which answers it itself; `Mod+↵` takes it from anywhere in the main view, typing
+  included. Neither acts on key repeat. `d` Defaults, `z` Revert, `f` fallback chains,
+  `w` the machine list, `p` and `s` hide or show routing and usage, `a` the accounts,
+  `e` the sessions, `m` Models, `u` Setup, `o` Options.
+- **Accounts.** `↑` `↓`, `Home`, `End`, `Space`, `↵`, `m` and `a` as above.
+- **Manage.** Esc returns to the accounts, `a` to the generator.
+- **Sessions.** `↑` `↓` move, `1`–`9` recall a recent profile, `e` or Esc go back.
+- **Narrow routing and usage views.** Esc goes back and `a` opens the accounts; `p` and
+  `s` open routing and usage, and return to the main view from their own; `f` shows the
+  chains in routing.
+- **Anywhere in the panel.** `r` reads again and `?` opens Shortcuts.
+
+`Esc` goes back: from the management to the accounts, from any other view to the
+generator; at rest in the main view it is left alone. The **key line** at the foot is
+short and names only the keys of the view shown, then `? shortcuts`: in the generator
+`↑↓ move · ←→ change · ↵ <step> · a accounts · e sessions`, in the accounts `↑↓ move ·
+space include · m manage · esc generator`, in the management `esc accounts`, in the
+sessions `esc generator`, preceded by `↑↓ move · 1–N recall` when recent profiles exist.
+Words are not buttons, since every action is a control elsewhere. For a coarse pointer,
+which has no keys, the key line is hidden, and every button, tab and radio is at least
+44 px. One polite live region announces outcomes, failures, the charge, recalls and the
+reason a pressed refused control gave.
+
+The layout answers the panel's own measured width, never the window's, since Code
+shares the window with its canvas. From 1180 px the generator and routing stand side by
+side with usage under both; from 760 px the same in slightly different proportions.
+Below 760 px the generator stands alone with the grouped team under its rows, routing
+and usage are tabs of their own, and the bar's actions fold behind More; widening the
+panel closes such a view. Below 430 px the lane's words drop under its label so the
+spectrum stays on one line, and below 380 px usage windows use thinner blocks and drop
+the word "used". Nothing scrolls sideways at any width. Hiding routing or usage is
+local to the open panel and not kept. The first layout and every resize place things
+without motion; a pane that comes into view slides in, and under reduced motion nothing
+moves.
+
+### Drafts and what persists
+
+An unsaved team survives a reload in the tab's session storage and returns only onto
+the catalog or model list it was made on (see the verification section above). So does
+the machine chosen beside the launch, per principal and workspace, subject to the
+default rules above. Recent profiles persist in the browser's local storage, as
+described under the sessions. Session options live only in the open panel and clear
+after a successful launch or resume. A preset draft, a catalog draft and the visited
+sheets stay as long as the panel is open.
+
+### Session options, Models and Setup
+
+**Options** (`o`) opens a sheet in two parts. **Profile switches** (priority, prewalk
+and auto plans) are saved with the workspace profile through the edit gate, and refuse
+with its reason or with the domain's ("Priority needs a GPT lane"). Below them,
+Automation and Optional skills apply to the next launch or resume only: the workspace
+profile stays as it is, the restrictions are not an OS or network sandbox, and a
+successful launch or resume clears them. The summary on the Options button retains
+restricted tool counts, skill selections or explicit disable-all.
+
+Setup (`u`) is optional runtime management: connection status, independent machine
 capabilities, folder preparation and the external suggestion classifier, and, under
 Profile & source details, the displayed catalog's source, the destination and the
-last verification's excluded models. Models leads with authoring/discovery; the editor
+last verification's excluded models. Models (`m`) leads with authoring/discovery; the editor
 reveals pricing, performance, limits and thinking metadata independently.
 Editing/import needs no runtime or account setup. Manual catalog authoring retains its
 explicit first-save initialization, staging, owner review and separate exact-reviewed
@@ -430,7 +616,8 @@ Manifold action transport as the web. It composes `createCodeClient` with
   observations. Code projects usage through shared account choices. The web
   polls on the live owner event channel, retains the last permitted reading
   while a refresh is pending or refused and labels source age separately from a
-  quota reset.
+  quota reset. The main view also reads usage again every five minutes, Code's
+  freshness window, and on `r`; a reading older than that is shown as history.
 
 Workspace, inventory and benchmark results are OMP-owned native job records.
 Code accepts only exact OMP plugin/operation/machine/job identities when reading
@@ -586,7 +773,7 @@ selection, and fences the returned job against both material and native-derived
 optional input bindings. Optional source bindings never replace the caller's
 material. Independent headless calls have no inherited skill choice.
 
-The session options popover presents available and selected metadata, deliberate sets and
+The session options sheet presents available and selected metadata, deliberate sets and
 conflict reasons. Choices are local to the pending launch or resume: unrelated navigation
 and refresh retain them; destination changes, a successful terminal placement
 and a fresh workbench clear them. “Clear optional choices” preserves ordinary
@@ -629,8 +816,8 @@ default is stored in a shared profile.
 
 `workflow.listSessions(machineId)` returns OMP's bounded header/title metadata
 only (`id`, `title`, `cwd`, `updatedAt`), never message bodies or transcript paths.
-The earlier statements request each permitted online machine explicitly (a **Read**
-control per machine) and distinguish pending,
+The sessions view requests each permitted online machine explicitly (a **Read**
+control per machine) and distinguishes pending,
 failed, unavailable and empty inventories. Native metadata is not a fleet archive.
 `workflow.runningSession(ref)` correlates only the exact harness, machine and session
 ID in public running-terminal metadata. A matched terminal supplies its authoritative
@@ -654,10 +841,10 @@ OMP's `{ harness: "atyrode.omp", machineId, sessionId }` reference.
   Native missing, incompatible or unavailable model/thinking state refuses before
   a replacement session or inference can be created.
 
-The earlier statements offer separate **resume** (saved state) and **with current team**
-(the statement's saved workspace team) actions on a listed saved session, and **open** on
-a running one. Session options chosen in the popover apply to the resume. Resuming with
-the current team needs the
+The sessions view offers separate **resume** (saved state) and **with current profile**
+(the saved workspace profile) actions on a listed saved session, and **open** on
+a running one. Session options chosen in their sheet apply to the resume. Resuming with
+the current profile needs the
 saved, verified, reviewed team and a lead some included account serves; local
 unsaved edits cannot be resumed as a team, and a team that approves plans
 automatically refuses. The workflow refreshes
@@ -682,20 +869,24 @@ observation refuses rather than broadening to another account. Unknown,
 stale, blocked, disabled and exhausted remain different states; a fresh native
 quota verdict takes precedence over a rounded fraction.
 
-The Accounts sheet's ledger uses inclusion checkboxes for exact full identities or
-API-key slots; each pool head on the main view offers the same inclusion as in/out
-switches over the same Manual and preset pools and the same `changeAccounts` edit.
-Same-email OAuth organizations are distinct choices. Manual changes save
-immediately; Edit pool creates a local preset draft, and creating a preset does
-not activate it. A preset named “Manual” is still a saved preset. Excluding an
-account is not disabling its native credential; credential actions and sign-in
-remain explicit OMP handoffs.
+The accounts view's switches include or exclude exact full identities or API-key
+slots in the active pool through one guarded `changeAccounts` edit; the manage view,
+which is the Code accounts panel's own, chooses the pool (Manual or a saved preset),
+edits presets, and offers the same inclusion as a checkbox per account. Same-email
+OAuth organizations are distinct choices. Manual
+changes save immediately; while a preset is active, accounts change only by choosing
+another pool, because hand edits belong to Manual. Edit pool creates a local preset
+draft, and creating a preset does not activate it. A preset named “Manual” is still a
+saved preset. A switch is locked for every account while the account list is historical,
+and for an account whose credential is disabled. Excluding an account is not disabling
+its native credential; credential actions and sign-in remain explicit OMP handoffs.
 
 Usage lists reported windows per account, never an average across incompatible
 windows or providers. Missing capacity has no fabricated meter. Failed reads keep
-the last permitted facts visibly historical, including blocks, reset deadlines,
-balance and credits; none proves current availability. Detailed account facts open in
-place under each pool head, and the Accounts sheet keeps the complete ledger. Exact selections omit providers
+the last permitted facts visibly historical, with their age, including blocks, reset
+deadlines and balance; none proves current availability. The main view's usage pane
+and accounts view draw the same grid of windows; reset credits and the per-account
+detail are in the manage view's readings. Exact selections omit providers
 with no selected account and refuse unresolved saved exclusions.
 
 OMP's accounts action door owns `accounts`, `usage`, `clearAccountBlocks`,
