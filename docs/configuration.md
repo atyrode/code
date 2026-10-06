@@ -164,8 +164,11 @@ benchmark or session. Blocked, offline, read-only, stale/conflict and failed-obs
 states stay visible in the launch line, with full error detail reachable deliberately
 in Setup's connection details.
 
-Every action is a visible control; keys are accelerators for them, named in each
-control's tooltip and `aria-keyshortcuts`, and listed in the **Shortcuts** dialog.
+Every action is a visible control; keys are accelerators for them, listed in the
+**Shortcuts** dialog by the view they act in. A control names its key in its tooltip and
+`aria-keyshortcuts` only where that key does what the control does in the view shown:
+the Generator tab names Esc or `a` only from the views where they go back to it, and
+Models names `m` only in the generator, where `m` opens Models rather than Manage accounts.
 
 ### The top bar
 
@@ -175,10 +178,13 @@ of their own there, and the five buttons fold behind one **More** disclosure so 
 panel spends one row on chrome. **Refresh** reads accounts, usage, machines, the
 workspace profile and the sessions already read again, and restarts the usage countdown
 (`r`). **Models**, **Setup** and **Options** open their sheets (`m`, `u`, `o` from the
-main view); Options carries a summary beside it when session options are set ("·
-restricted", "· skills off", "· 2 skills"). **Shortcuts** opens a native modal dialog
-that lists every key by where it acts; `Esc` or its Close button closes it and it owns
-its keys while open.
+main view). While a staged model list waits beside the active one, **Models** reads
+**Models · staged**, since nothing changes until it is reviewed there. Options carries a
+summary beside it when session options are set ("· restricted", "· skills off", "· 2
+skills"). **Shortcuts** opens a native modal dialog that lists every key under the view
+it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `o` under
+Generator, where they act; `Esc` or its Close button closes it and it owns its keys while
+open.
 
 ### The generator
 
@@ -325,7 +331,8 @@ machine or account pool changes.
 
 **The launch line** sits beside the launch and keeps to facts and one-press fixes, each
 a button; its asides ("changes stay a local preview", "nothing is spent until you
-confirm") are said in the readout while the launch is pointed. It is written in this
+confirm", and, while a staged model list waits beside the active one, "a staged model
+list waits in Models") are said in the readout while the launch is pointed or pressed. It is written in this
 precedence: a verification running or its charge, a step in flight, the verb's refusal
 with its fix, a staged model list the verb opens, a review that differs from what was
 projected, a failure, the last outcome, and roles with no route with the one change
@@ -422,16 +429,22 @@ The **Accounts** tab (`a`) replaces the stage with the usage grid again, each ac
 headed by a **switch**: "Include <who> in the workspace pool", a shared edit every
 member's next launch draws on. A switch edits the saved choices through
 `changeAccounts` at the observed revision, one edit at a time, never retried. A press
-shows as made until the saved choices answer it; a failed or refused edit is said in
-the readout and the switch shows the saved state again. Same-email OAuth organizations
-are distinct switches. Excluding an account is not disabling its native credential.
+shows as made, and every switch stays locked, from the press until the saved choices
+are read back at a newer revision, so a second press never carries a revision the first
+has already moved past. A failed or refused edit is said in the readout and the switch
+shows the saved state again. Same-email OAuth organizations are distinct switches.
+Excluding an account is not disabling its native credential.
 
-A switch waits, with its reason in the readout, when no choices are set up yet, while a
-step runs or a charge waits, when the workspace is read-only, while an edit is saving
-or the accounts are read again after one, while the account list is historical, and for
-an account whose credential is disabled. While a preset is active a switch says "Set by
-the <name> pool; choose the manual pool under Manage accounts to edit", since hand edits
-belong to Manual. Opening the view puts focus on its first switch that can move. `↑` `↓`,
+A switch that cannot act is never left looking open: it is `aria-disabled`, and a press
+on it (like pointing at or focusing it) says why in the readout, in the model's words
+where the model refuses ("Wait for the current step to finish", "Waiting for a current
+read of the workspace profile"). It waits when no choices are set up yet, while a step
+runs or a charge waits, when the workspace is read-only, while an edit is saving
+("Saving the last change"), while the account list is historical ("The account list is
+not current"), and for an account whose credential is disabled ("Credential disabled").
+While a preset is active a switch says "Set by the <name> pool; choose the manual pool
+under Manage accounts to edit", since hand edits belong to Manual. Opening the view puts
+focus on its first switch that can move. `↑` `↓`,
 `Home` and `End` move through the switches, `Space` or `↵` presses one, `m` opens
 **Manage accounts**, `a` or Esc return to the generator.
 
