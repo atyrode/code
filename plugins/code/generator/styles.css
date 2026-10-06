@@ -940,6 +940,13 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { width: 5px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-used { display: none; }
 }
+/* Under 300px the bar gives way: its blocks share the room left beside the label and the share, and the reset goes under them. */
+@container code (width < 300px) {
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em minmax(0, 1fr) 3em; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar { min-width: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { flex: 1 1 0; min-width: 2px; max-width: 5px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { grid-column: 2 / -1; }
+}
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch { align-items: center; min-height: 44px; }
 }
