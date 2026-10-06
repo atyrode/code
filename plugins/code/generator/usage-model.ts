@@ -128,8 +128,3 @@ export function usageState(reading: QuotaReading, choices: AccountChoices | null
   });
   return { kind: "groups", groups };
 }
-
-/** The families the included accounts serve, from the providers the session door's pool would serve; null when that pool is unknown. */
-export function servedFamilies(served: ReadonlySet<string> | null): ReadonlySet<string> | null {
-  return served === null ? null : new Set([...served].map(provider => providerPolicy(provider).family));
-}
