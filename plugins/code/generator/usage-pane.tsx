@@ -249,7 +249,7 @@ export function UsagePane({ usage, cadence }: { usage: BoardUsage; cadence: Usag
   return <div className={`${G}usage-body`} data-usage-pane="">
     {state.kind === "groups"
       ? <ProviderGrid groups={state.groups} filled={filled} identity={row => <span className={`${G}usage-who`}>
-        <span className={`${G}usage-name`}>{row.who}</span>{row.ageMs !== null && <span className={`${G}usage-age`}>{ageText(row.ageMs)}</span>}
+        <span className={`${G}usage-name`} title={row.who}>{row.who}</span>{row.ageMs !== null && <span className={`${G}usage-age`}>{ageText(row.ageMs)}</span>}
       </span>} />
       : <UsageNote state={state} />}
     <RefreshLine cadence={cadence} />
