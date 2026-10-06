@@ -1962,6 +1962,11 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   await still(browser);
   assert.deepEqual(await routedRoles(browser), expectedRoutes(document, (active.result as Configuration).selection ?? selection),
     "The active catalog, not the staged one, routes the profile");
+  // The staged catalog still waits where it is reviewed: the Models action says so, and so does the launch while it is pointed.
+  await until(browser, "the Models action says a staged catalog waits", `${actionButton("Models")}?.hasAttribute('data-staged') === true`);
+  await pointOf(browser, launchButton);
+  await until(browser, "the pointed launch says a staged catalog waits in Models", `${readout}.hasAttribute('data-staged')`);
+  await pointAway(browser);
 }
 
 async function manualCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
