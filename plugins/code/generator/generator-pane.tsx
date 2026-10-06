@@ -33,7 +33,7 @@ const SCRUB_SAID_MS = 900;
 const ENTER = "M13.25 2.75v5.5a1 1 0 0 1-1 1H3.5M6.75 6 3.5 9.25l3.25 3.25";
 /** The meters' glyphs, drawn rather than typed: the unlit ones are the meter's empty track, a graphic, not words. */
 const DOLLAR = "M10.6 4.6c-.55-.85-1.45-1.3-2.6-1.3-1.5 0-2.55.8-2.55 1.95 0 2.85 5.6 1.6 5.6 4.65 0 1.25-1.15 2.1-2.85 2.1-1.2 0-2.2-.5-2.8-1.4M8 1.75v12.5";
-const CHEVRONS = "M4.5 5.25 7.25 8 4.5 10.75M8.75 5.25 11.5 8l-2.75 2.75";
+const CHEVRONS = "M5 5.25 7.5 8 5 10.75M8.75 5.25 11.25 8l-2.5 2.75";
 const CHECK = "M3 8.5 6.5 12 13 4.5";
 /** Where a verification stopped, in the panel's words rather than the workflow's step names. */
 const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
