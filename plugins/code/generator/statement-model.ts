@@ -745,7 +745,7 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
   const attention = (text: string, actions: readonly StatusAction[] = [], aside?: string): [StatusLine, StatusLine] =>
     [line([part(text, "attention")]), line(aside ? [part(aside, "meta")] : [], actions)];
   const where = facts.machine?.name ?? "this machine";
-  const use = facts.otherMachine ? [fix(`use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
+  const use = facts.otherMachine ? [fix(`Use ${facts.otherMachine.name}`, { kind: "machine", machineId: facts.otherMachine.id }, "machine")] : [];
   // OMP missing from the destination explains every step that needs it; "unknown" is kept for reads that really failed.
   if (facts.ompMissing && (refusal.code === "verify-status" || refusal.code === "verify-permissions" || refusal.code === "sessions" || refusal.code === "permissions")) {
     return attention(`OMP isn't on ${where}`, use);
@@ -755,35 +755,35 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
     case "placement": return [line([part("Open Code beside the workspace canvas to launch", "neutral")]), line([part("the profile and accounts still save from here", "meta")])];
     case "unavailable": {
       // A failed read says nothing current about any machine: neither offline nor another to use.
-      if (facts.rosterUnread) return attention("Machine list unreadable", [fix("retry", { kind: "refresh" })]);
+      if (facts.rosterUnread) return attention("Machine list unreadable", [fix("Retry", { kind: "refresh" }, "roster")]);
       if (!facts.machine) return attention(facts.machineChosen ? "The chosen machine is not in your machine list" : "No machine chosen", use);
       const { name, online, revoked } = facts.machine;
       return attention(revoked ? `${name}: access revoked` : online ? `${name} is unavailable` : `${name} is offline`, use);
     }
     case "accounts": {
       const problem = facts.accountsProblem;
-      if (problem?.kind === "choices") return attention("Saved account choices no longer match your accounts", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
-      if (problem?.kind === "stale") return attention("Account list not current", [fix("refresh", { kind: "refresh" })]);
-      return attention(problem?.kind === "failed" ? `Accounts unreadable: ${problem.text.replace(/\.$/, "")}` : "Accounts unreadable", [fix("retry", { kind: "refresh" })]);
+      if (problem?.kind === "choices") return attention("Saved account choices no longer match your accounts", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (problem?.kind === "stale") return attention("Account list not current", [fix("Refresh", { kind: "refresh" }, "accounts-read")]);
+      return attention(problem?.kind === "failed" ? `Accounts unreadable: ${problem.text.replace(/\.$/, "")}` : "Accounts unreadable", [fix("Retry", { kind: "refresh" }, "accounts-read")]);
     }
-    case "no-accounts": return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+    case "no-accounts": return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
     case "no-account": {
-      if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("show accounts", { kind: "open", place: "accounts" }, "accounts")]);
+      if (facts.nobodyServes || !refusal.gap) return attention("No account is included", [fix("Show accounts", { kind: "open", place: "accounts" }, "accounts")]);
       const word = vocab.family(refusal.gap.family);
       const lane = facts.laneFix?.selection
-        ? [fix(`use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
-      return attention(`No ${word} account included`, [...lane, fix(`show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
+        ? [fix(`Use ${facts.laneFix.label}`, { kind: "team", selection: facts.laneFix.selection, review: facts.laneFix.review }, "lane")] : [];
+      return attention(`No ${word} account included`, [...lane, fix(`Show ${word} accounts`, { kind: "open", place: "accounts", family: refusal.gap.family }, "accounts")]);
     }
-    case "configuration": return attention(facts.configurationFailed ? "Workspace profile unreadable" : "The workspace profile needs a fresh read", [fix("retry", { kind: "refresh" })]);
-    case "staged": return attention("A staged model list waits in Models", [fix("review in Models", { kind: "open", place: "models" })]);
-    case "unsaved": return attention("No model list in use", [fix("open Models", { kind: "open", place: "models" })]);
-    case "conflict": return attention("The workspace profile changed elsewhere", [fix("use theirs", { kind: "discard" })]);
-    case "models": return attention("These choices need a model review", [fix("open Models", { kind: "open", place: "models" })]);
-    case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("retry", { kind: "refresh" })]);
-    case "verify-permissions": return attention("Discovery is not enabled", [fix("enable in Setup", { kind: "open", place: "setup" })], "verifying needs it");
-    case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("open Setup", { kind: "open", place: "setup" })]);
-    case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("enable in Setup", { kind: "open", place: "setup" })]);
-    case "skills": return attention("Skill choices need attention", [fix("open options", { kind: "open", place: "options" })]);
+    case "configuration": return attention(facts.configurationFailed ? "Workspace profile unreadable" : "The workspace profile needs a fresh read", [fix("Retry", { kind: "refresh" }, "configuration")]);
+    case "staged": return attention("A staged model list waits in Models", [fix("Review in Models", { kind: "open", place: "models" }, "staged")]);
+    case "unsaved": return attention("No model list in use", [fix("Open Models", { kind: "open", place: "models" }, "unsaved")]);
+    case "conflict": return attention("The workspace profile changed elsewhere", [fix("Use theirs", { kind: "discard" }, "conflict")]);
+    case "models": return attention("These choices need a model review", [fix("Open Models", { kind: "open", place: "models" }, "models")]);
+    case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
+    case "verify-permissions": return attention("Discovery is not enabled", [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], "verifying needs it");
+    case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("Open Setup", { kind: "open", place: "setup" }, "sessions")]);
+    case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("Enable in Setup", { kind: "open", place: "setup" }, "permissions")]);
+    case "skills": return attention("Skill choices need attention", [fix("Open options", { kind: "open", place: "options" }, "skills")]);
     default: return attention(refusal.text.replace(/\.$/, ""));
   }
 }
@@ -798,7 +798,7 @@ function withListFailure([first, second]: [StatusLine, StatusLine], failure: Lis
   if (failure === "none") return [first, second];
   const kept = second.actions.length ? line([...first.parts, ...second.parts], [...first.actions, ...second.actions]) : first;
   return [kept, line([part(failure === "beside" ? "Model list unavailable · the routes are this profile's" : "Model list unavailable · no profile can be formed without it", "warn")], [
-    { kind: "fix", key: "list-retry", label: "retry", fix: { kind: "refresh" } },
+    { kind: "fix", key: "list-retry", label: "Retry", fix: { kind: "refresh" } },
     { kind: "fix", key: "list-models", label: "Models", fix: { kind: "open", place: "models" } },
   ])];
 }
