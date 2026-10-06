@@ -332,18 +332,63 @@ describe("pure typed scaffolding", () => {
 
     // The budget also bounds what a benchmark would probe, which is what a probe run spends.
     expect(benchmarkCandidates(mixed, { separate: [], budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
-    expect(benchmarkCandidates(mixed, { separate: [], budget: "any" }).candidates).toHaveLength(4);
+    // Under `any` the family's newest `delta` supersedes the older two, which are never probed.
+    expect(benchmarkCandidates(mixed, { separate: [], budget: "any" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free", "delta-4"]);
   });
 
   test("addresses differing only by a character outside the key alphabet keep distinct keys", () => {
     const inv = mixedInventory();
     // `:` and `-` both fell outside the identifier alphabet and both folded to `-`, so these two
     // distinct models produced one key. Folding made them indistinguishable; escaping does not.
-    inv.models.push({ ...inv.models[0]!, id: "alpha-1-free" });
+    // The second is the listing's most capable model, so both are rungs and both are probed.
+    inv.models = [inv.models[0]!, { ...inv.models[3]!, id: "alpha-1-free" }];
     const keys = benchmarkCandidates(inv, { separate: [], budget: "any" }).candidates.map(candidate => candidate.key);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain("openrouter.alpha-1_3Afree");
     expect(keys).toContain("openrouter.alpha-1-free");
+  });
+});
+
+describe("what a verification charges", () => {
+  /** An aggregator's listing: forty models of one family Code does not require, which a ladder takes four of. */
+  function aggregatorInventory(): InventoryReceipt {
+    const inv = fullInventory();
+    inv.models.push(...Array.from({ length: 40 }, (_, index): Row => ({ provider: "openrouter", id: `vendor${index}/model`, api: "openai-completions",
+      inputCostPerMillion: index + 1, outputCostPerMillion: (index + 1) * 5, contextWindow: 100_000 + index * 1_000, maxTokens: 128000,
+      reasoning: true, thinkingLevels: ["low", "high"], images: true })));
+    return inv;
+  }
+  const ids = (input: { candidates: readonly { provider: string; id: string }[] }, provider: string) =>
+    input.candidates.filter(candidate => candidate.provider === provider).map(candidate => candidate.id);
+
+  test("an optional family is probed only at the rungs it ladders, and a required one whole", () => {
+    const inv = aggregatorInventory(), draft = inventoryDraft(inv, "any");
+    expect(ids(draft.benchmark, "openrouter")).toEqual(["vendor0/model", "vendor37/model", "vendor38/model", "vendor39/model"]);
+    expect(draft.benchmark.candidates).toHaveLength(10);
+    expect(ids(draft.benchmark, "anthropic")).toHaveLength(3);
+    expect(ids(draft.benchmark, "openai-codex")).toHaveLength(3);
+    expect(benchmarkCandidates(inv)).toEqual(draft.benchmark);
+    // With every probe answering, every probed model of the optional family is placed: nothing is charged that no route could use.
+    const result = derived(inv);
+    expect(tiers(result.document, "openrouter")).toEqual([[1, "vendor0/model"], [2, "vendor37/model"], [3, "vendor38/model"], [4, "vendor39/model"]]);
+    expect(catalogFromObservations({ ...inv, models: [...inv.models].reverse() }, observed(inv))).toEqual(result);
+  });
+
+  test("a rung of an optional family that does not answer leaves the family shorter", () => {
+    const inv = aggregatorInventory();
+    const result = catalogFromObservations(inv, observed(inv, { "vendor39/model": "client_blocked" }));
+    expect(tiers(result.document, "openrouter")).toEqual([[1, "vendor0/model"], [2, "vendor37/model"], [3, "vendor38/model"]]);
+    expect(result.exclusions).toContainEqual({ provider: "openrouter", id: "vendor39/model", reason: "client_blocked" });
+  });
+
+  test("an unprobed version its newest supersedes is said in the charge and the catalog", () => {
+    const inv = aggregatorInventory();
+    inv.models.push({ ...inv.models.find(model => model.id === "vendor39/model")!, id: "vendor39/model-2", inputCostPerMillion: 50 });
+    inv.models.push({ ...inv.models.find(model => model.id === "vendor39/model")!, id: "vendor39/model-1", inputCostPerMillion: 45 });
+    const draft = inventoryDraft(inv, "any");
+    expect(ids(draft.benchmark, "openrouter")).not.toContain("vendor39/model-1");
+    expect(draft.exclusions).toContainEqual({ provider: "openrouter", id: "vendor39/model-1", reason: "superseded" });
+    expect(derived(inv).exclusions).toContainEqual({ provider: "openrouter", id: "vendor39/model-1", reason: "superseded" });
   });
 });
 
