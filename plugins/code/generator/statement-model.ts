@@ -62,8 +62,6 @@ const CAPABILITY_LABELS = ["fast", "normal", "smart", "elite"] as const;
  * is the domain's default and no control of the panel's.
  */
 const EXTRAS: readonly { readonly dial: MoreDial; readonly word: string; readonly on: string; readonly off: string; readonly does: { readonly on: string; readonly off: string } }[] = [
-  { dial: "spark", word: "spark", on: "on", off: "off",
-    does: { on: "Tiny and commit run on Spark's own quota, sonic too at fast", off: "Tiny, commit and sonic leave Spark for the lane's models" } },
   { dial: "fallbacks", word: "fallbacks", on: "on", off: "off",
     does: { on: "A role whose model is out falls back along its chain", off: "A role whose model is out waits for it" } },
   { dial: "priority", word: "priority", on: "on", off: "off",
@@ -77,11 +75,11 @@ function extraOn(selection: Selection, dial: MoreDial): boolean {
   const extra = EXTRAS.find(entry => entry.dial === dial)!;
   return SPECS[dial].get(selection) === extra.on;
 }
-/** The words of the switches that are on, in the extras setting's order ("spark", "free only"). */
+/** The words of the switches that are on, in the extras setting's order ("fallbacks", "priority"). */
 export function extrasOn(selection: Selection): string[] {
   return EXTRAS.flatMap(extra => extraOn(selection, extra.dial) ? [extra.word] : []);
 }
-/** "no extras", the switches that are on by name up to two ("spark · fallbacks"), else how many are. */
+/** "no extras", the switches that are on by name up to two ("fallbacks · priority"), else how many are. */
 function extrasLabel(on: readonly string[]): string {
   return on.length === 0 ? "no extras" : on.length <= 2 ? on.join(" · ") : `${on.length} extras`;
 }
@@ -125,7 +123,7 @@ function stranded(outcome: RoleOutcome): boolean {
 /** The pool a model choice draws on: its provider's metered bucket, or the provider itself; null when the reading has none. */
 export function poolOf(catalog: CompiledCatalog, choice: ModelChoice, pools: readonly QuotaPool[]): QuotaPool | null {
   const model = catalog.model(choice.key);
-  const id = poolId(model.provider, modelBucket(model.provider, model.tier));
+  const id = poolId(model.provider, modelBucket(model.provider));
   return pools.find(pool => pool.id === id) ?? null;
 }
 
@@ -226,7 +224,7 @@ function refusalText(word: StatementWord, value: string, selection: Selection, r
   if (refusal.kind === "account") return `Needs a ${vocab.family(refusal.family)} account`;
   const lead = selection.lane.kind === "mixed" ? "openai" : selection.lane.family;
   if (word === "tier") return `No ${value} ${vocab.family(lead)} model`;
-  if (value === "spark" || value === "priority") return `${value === "spark" ? "Spark" : "Priority"} needs a GPT lane`;
+  if (value === "priority") return "Priority needs a GPT lane";
   return "Not among the current models";
 }
 
@@ -413,11 +411,9 @@ function moveLabel(move: DialMove, review: Review, vocab: Vocabulary): string {
   const extra = EXTRAS.find(entry => entry.dial === move.dial)!;
   return move.word === extra.on ? extra.word : `no ${extra.word}`;
 }
-/** A pool in the statement's provider words: the family ("GPT"), or the family and its own bucket ("GPT spark"). */
+/** A pool in the panel's provider words: its family ("GPT"). */
 function poolWord(pool: QuotaPool | null, vocab: Vocabulary): string {
-  if (!pool) return "its pool";
-  const special = pool.bucket !== null && pool.bucket !== providerPolicy(pool.provider).quotaBucketBase;
-  return special ? `${vocab.family(pool.family)} ${pool.bucket!.split("-").at(-1)}` : vocab.family(pool.family);
+  return pool ? vocab.family(pool.family) : "its pool";
 }
 
 /** The one-press fix: the dial move as words ("GPT only") and what it does for the roles that had no route. */

@@ -33,7 +33,7 @@ const SHEET_TITLES: Readonly<Record<PanelSheet, string>> = { models: "Models", s
 /** Exclusion reasons in plain words, for the last verification's details in Setup. */
 const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
   superseded: "Superseded by a newer model", unstable_id: "Unstable id", not_found: "Not found through your accounts",
-  client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier",
+  client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier", separate_quota: "Draws a quota of its own, which Code does not spend",
 };
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
 /** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wide proportions. */

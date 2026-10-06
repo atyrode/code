@@ -218,7 +218,8 @@ export const rootActionSchemas = {
   // A draft is only the charge: the candidates a benchmark would probe, never a stageable catalog.
   draftInventory: { input: z.strictObject({ inventory: InventoryReceiptSchema, budget: SelectionSchema.shape.budget }), result: CatalogDraftSchema },
   // `metadata` is OMP's bundled snapshot, read only for the quota class inventory rows do not carry
-  // yet (Spark); it is joined by exact identity and only at the inventory's own OMP version.
+  // yet, so models drawing a quota of their own stay off the ladder; it is joined by exact identity
+  // and only at the inventory's own OMP version.
   deriveCatalog: { input: z.strictObject({ inventory: InventoryReceiptSchema, benchmark: BenchmarkReceiptSchema, budget: SelectionSchema.shape.budget, metadata: ModelCatalogSnapshotSchema.optional() }), result: DerivedCatalogSchema },
   composeSession: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, prompt: sessionPrompt }), result: SessionCompositionSchema },
   listProfiles: { input: z.strictObject({}), result: ProfileListSchema },

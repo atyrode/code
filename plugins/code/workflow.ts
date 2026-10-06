@@ -216,8 +216,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       throw new WorkflowError("omp_result_unavailable");
     return job;
   }
-  // Inventory rows carry no quota class yet, so Spark is read from OMP's bundled metadata for the
-  // providers that can host a special; the derivation joins it only at the inventory's OMP version.
+  // Inventory rows carry no quota class yet, so which models draw a quota of their own (Spark) is
+  // read from OMP's bundled metadata; the derivation joins it only at the inventory's OMP version.
   async function quotaMetadata(inventory: OmpResult<"readInventory">["inventory"]): Promise<{ metadata?: OmpResult<"readModelCatalog"> }> {
     const providers = quotaProviders(inventory);
     return providers.length === 0 ? {} : { metadata: await omp("readModelCatalog", { providers }) };
