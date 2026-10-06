@@ -433,7 +433,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <Button aria-keyshortcuts="m" title="Pools, sign-in and credentials (m)" data-manage="" onClick={() => run({ kind: "view", view: "manage" })}>Manage accounts</Button>
         </header>
         {/* Mounted only while it shows: opening puts focus on its first switch that can move. */}
-        {view === "accounts" && <AccountsPane usage={usage} gate={accountsGate} cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
+        {view === "accounts" && <AccountsPane usage={usage} cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
       </section>
       <section className={`${G}pane`} data-pane="manage" aria-label="manage accounts" hidden={view !== "manage"} tabIndex={-1}>
         <header className={`${G}head`}>

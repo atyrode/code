@@ -48,11 +48,15 @@ export type BoardUsage = QuotaReading & { readonly accounts: BoardAccounts | nul
 export type BoardAccounts = {
   /** The saved choices (`Configuration.accounts`): the active preset, its exclusions, the presets. */
   readonly choices: AccountChoices;
+  /** The revision an edit is made at; a press stands until a read past it. */
+  readonly revision: number | null;
+  /** Why no edit can be made now, in the model's words; null when one can. */
+  readonly refusal: string | null;
   /** The account inventory is history (stale, unread or failed): an include switch refuses on it. */
   readonly historical: boolean;
   /** An edit is in flight; switches wait for it. */
   readonly pending: boolean;
-  /** Why the last edit failed, said once beside the accounts; null when it did not. */
+  /** Why the last edit failed or was refused, said once beside the accounts; null when it did not. */
   readonly failure: string | null;
   /** The model's guarded `changeAccounts` edit: the exact saved revision, never retried. */
   readonly change: (edit: AccountChoiceChange) => void;
