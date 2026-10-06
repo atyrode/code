@@ -18,6 +18,7 @@ import { catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
+import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
 import {
   BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, ResumeSessionInputSchema,
   actionSchemas as ompActionSchemas, type InventoryReceipt, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult,
@@ -37,17 +38,20 @@ host. No native job owner, native setup, terminals, OMP processes, inference or 
 Every Chromium runs supervised in its own process group: success, failure, SIGINT/SIGTERM/SIGHUP
 and the death of this process all end the whole browser and remove its profile.
 Proves Code's main view, the terminal UI evolved (the generator's rows, the launch with its machine
-picker, routing, usage, the accounts and sessions views and the key line), in real Chromium
-identities: render-only bundled-metadata starter composition, retained conflicted drafts,
+picker, routing, usage, the accounts and sessions views, the key line and the bar's More menu), in real
+Chromium identities: render-only bundled-metadata starter composition, retained conflicted drafts,
 permission choices, writer/viewer authority and container-shared choices across two destinations,
 and the browser-provable acceptance of the main view: no horizontal overflow, cut text or colliding
 text from 170 to 1440px in every view, zero hover/focus layout shift, panel-local keys that never act
-from a sheet or an open popover, arrival keys, the wheel only on a focused or rested row, 44px
-targets on a coarse pointer, focus kept through the gate and reduced motion that animates nothing.
+from a sheet or an open popover, More as a menu button by pointer and keyboard, arrival keys, the
+wheel only on a focused or rested row, 44px targets on a coarse pointer, focus kept through the gate
+and reduced motion that animates nothing.
 Also: an unsaved edit kept across a reload, own account edits that never conflict with it while a
 foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
 who saves but is told why launching waits, account switches saved through the real changeAccounts
-CAS, the accounts' management in place, and saved sessions folded per folder into a drum.
+CAS, the accounts' management in place, saved sessions folded per folder into a drum, the panel
+reading its inputs again on its own when shown again but never mid-edit, mid-step or behind a sheet,
+and tiered usage windows that are their own rows and judge no provider's pool.
 Separate synthetic RPC responses exercise the verification charge, folder-only readiness, and
 launch/resume review invalidation and refusal; the spend, preparation and execution they lead
 to are refused, never native execution or consent success.
@@ -318,9 +322,21 @@ function fix(key: string): string {
   return element(`${generator} .${G}launch-line [data-fix="${key}"]`);
 }
 const revertButton = element(`${generator} [data-revert]`);
-/** One of the bar's actions (Refresh, Models, Setup, Options, Shortcuts), by the word it starts with. */
-function actionButton(name: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}actions button`)})].find(el => el.textContent.trim().startsWith(${JSON.stringify(name)}))`;
+/** More, the bar's one menu button, and its menu while it is open (more-menu.tsx). */
+const more = element(`${generator} [data-more]`);
+const menu = element(`${generator} [role="menu"]`);
+/** The open menu's items, top to bottom. */
+const menuItems = `[...document.querySelectorAll(${JSON.stringify(`${generator} [role="menu"] [role="menuitem"]`)})]`;
+type MenuItem = "models" | "setup" | "options" | "shortcuts";
+const MENU: readonly MenuItem[] = ["models", "setup", "options", "shortcuts"];
+function menuItem(id: MenuItem): string {
+  return element(`${generator} [role="menu"] [role="menuitem"][data-menu-item="${id}"]`);
+}
+/** Opens More by a real press: its menu opens with focus on its first item. */
+async function openMenu(browser: BrowserInstance): Promise<void> {
+  await click(browser, more);
+  await until(browser, "a press on More opens its menu with focus on its first item",
+    `${more}.getAttribute('aria-expanded') === 'true' && ${menu} !== null && document.activeElement === ${menuItems}[0]`);
 }
 /** A visible button in the generator panel, its views and its sheets, by its exact text. */
 function workspaceButton(text: string): string {
@@ -410,20 +426,23 @@ async function chooseMachine(browser: BrowserInstance, machineId: string, name: 
   await until(browser, `the launch runs on ${name}`, `${machineList} === null && ${machinePicker}?.textContent === ${JSON.stringify(name)}`);
 }
 
-/** The sheets that open over the stage: the key the main view opens each with, the bar's action that does, and the sheet's title. */
+/** The sheets that open over the stage: the key the main view opens each with, More's item that does, and the sheet's title. */
 type Sheet = "models" | "setup" | "options";
-const SHEETS: Readonly<Record<Sheet, { key: string; code: number; action: string; title: string }>> = {
-  models: { key: "m", code: 77, action: "Models", title: "Models" }, setup: { key: "u", code: 85, action: "Setup", title: "Setup" },
-  options: { key: "o", code: 79, action: "Options", title: "Session options" },
+const SHEETS: Readonly<Record<Sheet, { key: string; code: number; item: MenuItem; title: string }>> = {
+  models: { key: "m", code: 77, item: "models", title: "Models" }, setup: { key: "u", code: 85, item: "setup", title: "Setup" },
+  options: { key: "o", code: 79, item: "options", title: "Session options" },
 };
+/** A sheet over the stage, by its title, with focus on its way back. */
+function sheetOpen(title: string): string {
+  return `${element(stage)}?.hidden === true && ${visibleSheet}?.querySelector('.plugin-atyrode_code__sheet')?.getAttribute('aria-label') === ${JSON.stringify(title)} &&
+    document.activeElement === ${visibleSheet}.querySelector('[aria-label="Back to Code"]')`;
+}
 /** Opens a sheet by its key from the main view, remembering what had focus so its return can be checked. */
 async function openSheet(browser: BrowserInstance, sheet: Sheet): Promise<void> {
   if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`)) await click(browser, generatorTitle);
   await browser.evaluate(`(globalThis.__codeOpener = document.activeElement, true)`);
   await key(browser, SHEETS[sheet].key, SHEETS[sheet].code);
-  await until(browser, `${sheet} opens over the stage with focus on its way back`, `${element(stage)}?.hidden === true &&
-    ${visibleSheet}?.querySelector('.plugin-atyrode_code__sheet')?.getAttribute('aria-label') === ${JSON.stringify(SHEETS[sheet].title)} &&
-    document.activeElement === ${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
+  await until(browser, `${sheet} opens over the stage with focus on its way back`, sheetOpen(SHEETS[sheet].title));
 }
 async function closeSheet(browser: BrowserInstance): Promise<void> {
   await click(browser, `${visibleSheet}?.querySelector('[aria-label="Back to Code"]')`);
@@ -456,6 +475,34 @@ async function panelReads(browser: BrowserInstance, revision: number): Promise<v
   await until(browser, `the panel reads revision ${revision}`,
     `[...document.querySelectorAll('${generator} .${G}setup-facts dt')].find(el => el.textContent === 'Shared revision')?.nextElementSibling?.textContent === '${revision}'`);
   await closeSheet(browser);
+}
+
+/**
+ * The panel's own reads of what it stands on, as the SDK's feed probe counts them (polled-resource.ts `__manifoldFeeds`,
+ * installed where `localStorage["manifold:debug"]` is set before the page loads): the `manual` reads of the machine
+ * list and of OMP's defaults, those a caller asks for outright. The feeds' own read on a page's return counts as
+ * `resume`, apart. Only the panel's own read (read-clock.ts) and Refresh now ask for the machine list; OMP's defaults
+ * are asked for by a sheet's opening and closing too.
+ */
+const ownReads = `(() => {
+  const feeds = globalThis.__manifoldFeeds?.() ?? [];
+  return ['core.machines.list|', 'atyrode.omp.readDefaults:'].map(prefix => feeds.find(feed => feed.key.startsWith(prefix))?.reads.manual ?? null);
+})()`;
+/**
+ * The person looks at another tab and back: a tab opened in the panel's browser window hides the panel's page (its
+ * document's visibility), and closing it shows the page again.
+ */
+async function lookAway(browser: BrowserInstance): Promise<void> {
+  const pages = (await browser.send("Target.getTargets", {}, false)).result?.["targetInfos"] as { type: string; attached: boolean; browserContextId?: string }[] | undefined;
+  const page = pages?.find(entry => entry.type === "page" && entry.attached);
+  assert(page?.browserContextId, "The panel's page is its browser's attached tab");
+  const opened = String((await browser.send("Target.createTarget", { url: "about:blank", browserContextId: page.browserContextId }, false)).result?.["targetId"]);
+  try {
+    await until(browser, "another tab hides the panel's page", "document.visibilityState === 'hidden'");
+  } finally {
+    await browser.send("Target.closeTarget", { targetId: opened }, false);
+  }
+  await until(browser, "closing that tab shows the panel's page again", "document.visibilityState === 'visible'");
 }
 
 type Configuration = NonNullable<ActionResult<"readConfiguration">["configuration"]>;
@@ -615,12 +662,22 @@ function fixtureAccounts(credentials: readonly number[] = [1, 7]): OmpResult<"ac
     type: "api_key", identityKey: null, email: null, disabled: false, blocks: [],
   })) };
 }
-/** A passive OMP usage reading of the fixture's slots: a fresh 5-hour window for each, no provider behind it. */
-function fixtureUsage(credentials: readonly number[]): OmpResult<"usage"> {
+type UsageWindow = NonNullable<OmpResult<"usage">["snapshot"]>["accounts"][number]["windows"][number];
+/**
+ * A passive OMP usage reading of an observation's slots, no provider behind it. Each account has its shared 5-hour
+ * window, fresh, and beside it the weekly limit of its own its provider meters, named by its tier (#248): Anthropic's
+ * `fable`, used up, and a Codex named limit with a long name. Only the shared windows judge a provider's pool.
+ */
+function fixtureUsage(observation: OmpResult<"accounts">): OmpResult<"usage"> {
   const now = Date.now() - 1_000;
-  return { accounts: fixtureAccounts(credentials), refreshStatus: "succeeded", snapshot: { scope: fixtureScope, observedAt: now, accounts: credentials.map(credentialId => ({
-    provider: "anthropic", credentialId, identityKey: null, observedAt: now, status: "reported",
-    windows: [{ windowId: "5h", tier: null, usedFraction: 0.2, quotaStatus: "ok", resetsAt: now + 3 * 3_600_000, durationMs: 5 * 3_600_000, observedAt: now }],
+  const window = (windowId: string, tier: string | null, usedFraction: number, resetHours: number, durationMs: number): UsageWindow =>
+    ({ windowId, tier, usedFraction, quotaStatus: usedFraction >= 1 ? "exhausted" : "ok", resetsAt: now + resetHours * 3_600_000, durationMs, observedAt: now });
+  const tiered: Readonly<Record<string, UsageWindow>> = {
+    anthropic: window("7d", "fable", 1, 50, 7 * 86_400_000), "openai-codex": window("7d", "base-model-inference", 0.4, 100, 7 * 86_400_000),
+  };
+  return { accounts: observation, refreshStatus: "succeeded", snapshot: { scope: fixtureScope, observedAt: now, accounts: observation.accounts.map(account => ({
+    provider: account.reference.provider, credentialId: account.credentialId, identityKey: null, observedAt: now, status: "reported",
+    windows: [window("5h", null, 0.2, 3, 5 * 3_600_000), ...tiered[account.reference.provider] ? [tiered[account.reference.provider]!] : []],
   })) } };
 }
 /** A settled synthetic OMP probe job, in the public job shape the native job owner answers. */
@@ -810,17 +867,65 @@ const SHIFTED = `(() => {
   return moved.slice(0, 6);
 })()`;
 
-const WIDTHS = [1440, 1280, 1100, 860, 620, 560, 390, 320, 240, 170];
+/** The panel widths of the geometry sweep: 760 to 790px are the medium layout's narrowest, where the routing pane is about 250px. */
+const WIDTHS = [1440, 1280, 1100, 860, 790, 780, 770, 760, 620, 560, 390, 320, 240, 170];
+/**
+ * Text of the routing pane whose painted part runs past the pane's sides: a role, a route's `model:thinking` token or
+ * its fallback chain. A box inside the pane that clips its text (a role ending in an ellipsis) bounds what paints.
+ */
+const PAST_ROUTING = `(() => {
+  const pane = document.querySelector('${generator} [data-pane="routing"]');
+  if (!pane || !pane.checkVisibility()) return [];
+  const edge = pane.getBoundingClientRect(), past = [];
+  const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (!node.textContent.trim() || parent.closest('.plugin-atyrode_code__sr') || !parent.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+    let left = -Infinity, right = Infinity;
+    for (let box = parent; box && box !== pane; box = box.parentElement) {
+      if (getComputedStyle(box).overflowX === 'visible') continue;
+      const clip = box.getBoundingClientRect();
+      left = Math.max(left, clip.left);
+      right = Math.min(right, clip.right);
+    }
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) {
+      const from = Math.max(rect.left, left), to = Math.min(rect.right, right);
+      if (to - from >= 1 && (from < edge.left - 1 || to > edge.right + 1)) past.push(JSON.stringify(node.textContent.trim().slice(0, 32)) + ' by ' + Math.round(Math.max(edge.left - from, to - edge.right)) + 'px');
+    }
+  }
+  return past.slice(0, 6);
+})()`;
+/** Where More's open menu leaves the panel, or cuts an item's words. */
+const MENU_OUTSIDE = `(() => {
+  const panel = document.querySelector('${generator}').getBoundingClientRect(), box = ${menu}.getBoundingClientRect(), problems = [];
+  if (box.left < panel.left - 1 || box.right > panel.right + 1 || box.top < panel.top - 1 || box.bottom > panel.bottom + 1) {
+    problems.push("More's menu " + [box.left, box.right, box.top, box.bottom].map(Math.round).join(',') + ' leaves the panel ' + [panel.left, panel.right, panel.top, panel.bottom].map(Math.round).join(','));
+  }
+  for (const item of ${menuItems}) if (item.scrollWidth > item.clientWidth + 1) problems.push("More's " + item.dataset.menuItem + ' item is cut');
+  return problems;
+})()`;
 /**
  * From 170 to 1440px of panel width, in every view the width offers (routing and usage are views of
  * their own when narrow): text paints, and there is no horizontal overflow, no cut text, no text
- * outside the panel, no text box intersecting another and no control too narrow to press, in each of
- * the panel's three layouts. Every width and view is measured before the verdict, so one run names
- * every place that fails.
+ * outside the panel, no text box intersecting another, no text past the routing pane and no control
+ * too narrow to press, in each of the panel's three layouts; in the medium layout with the routing's
+ * fallback chains shown too. More's menu opens inside the panel at every width. Every width and view
+ * is measured before the verdict, so one run names every place that fails.
  */
 async function geometryAcrossWidths(browser: BrowserInstance, label: string): Promise<void> {
   const modes = new Set<string>();
   const problems: string[] = [];
+  const chains = element(`${generator} [data-chains]`);
+  const measure = async (where: string, view: string) => {
+    const facts = await browser.evaluate<Paint>(PAINT);
+    if (facts.texts <= (view === "main" ? 20 : 3)) problems.push(`${where}: too little text paints (${facts.texts})`);
+    if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
+    problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the panel`),
+      ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: control ${entry} wide`),
+      ...(await browser.evaluate<string[]>(PAST_ROUTING)).map(entry => `${where}: ${entry} past the routing pane`));
+  };
   try {
     for (const width of WIDTHS) {
       await panelWidth(browser, width);
@@ -829,19 +934,29 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
       for (const view of ["main", "accounts", "sessions", ...(mode === "narrow" ? ["routing", "usage"] as const : [])] as const) {
         await showView(browser, view);
         await still(browser);
-        const facts = await browser.evaluate<Paint>(PAINT);
         const where = `${view} at ${width}px`;
-        if (facts.texts <= (view === "main" ? 20 : 3)) problems.push(`${where}: too little text paints (${facts.texts})`);
-        if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
-        problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the panel`),
-          ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: control ${entry} wide`));
+        await measure(where, view);
+        if (view !== "main") continue;
+        if (mode === "medium") {
+          if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`)) await click(browser, generatorTitle);
+          await key(browser, "f", 70);
+          await until(browser, "f shows the routing's fallback chains", `${chains}.getAttribute('aria-checked') === 'true'`);
+          await still(browser);
+          await measure(`${where} with the fallback chains`, view);
+          await key(browser, "f", 70);
+          await until(browser, "f hides the fallback chains", `${chains}.getAttribute('aria-checked') !== 'true'`);
+        }
+        await openMenu(browser);
+        problems.push(...(await browser.evaluate<string[]>(MENU_OUTSIDE)).map(entry => `${where}: ${entry}`));
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes More's menu", `${menu} === null`);
       }
       await showView(browser, "main");
     }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert.deepEqual(problems, [], `No ${label} view overflows, cuts, collides or squeezes a control from 170 to 1440px`);
+  assert.deepEqual(problems, [], `No ${label} view overflows, cuts, collides, runs past the routing pane or squeezes a control from 170 to 1440px, and More's menu stays inside the panel`);
   assert.deepEqual([...modes].sort(), ["medium", "narrow", "wide"], `The ${label} widths exercise the panel's three layouts`);
 }
 
@@ -883,13 +998,22 @@ async function coarseTargets(browser: BrowserInstance, label: string): Promise<v
     await panelWidth(browser, width);
     for (const view of ["main", "accounts", "sessions"] as const) {
       await showView(browser, view);
+      // In the main view More's menu is open, so its items are measured with every other target.
+      if (view === "main") {
+        await tap(browser, more);
+        await until(browser, "a tap on More opens its menu", `${menu} !== null`);
+      }
       // A row's words are its targets, tall like the row and as wide as their word, spaced by the row's gap.
       const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${stage} :is(button, [role="radio"], [role="switch"], [role="checkbox"], [role="listbox"])`)})]
         .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length)
         // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
         .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || (!el.matches('[role="radio"]') && rect.width < 43.5); })
         .map(el => (el.closest('[data-row]')?.dataset.row ?? '') + (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 24) + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`);
-      assert.deepEqual(small, [], `Every target is at least 44px on a coarse pointer in the ${label} ${view} view at ${width}px`);
+      if (view === "main") {
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes More's menu", `${menu} === null`);
+      }
+      assert.deepEqual(small, [], `Every target is at least 44px on a coarse pointer in the ${label} ${view} view at ${width}px${view === "main" ? ", More's open menu included" : ""}`);
     }
   }
   await showView(browser, "main");
@@ -980,6 +1104,97 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.equal(await browser.evaluate(`${liveRegion}.textContent`), quiet, "Mod+↵ in the shortcuts takes no launch step");
   if (await browser.evaluate<boolean>(`${shortcuts}.open`)) await key(browser, "Escape", 27);
   await until(browser, "the shortcuts close onto the row", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
+
+  // More, the bar's one menu, is a WAI-ARIA menu button. A press opens it with focus on its first item, which names the
+  // key that does the same from the main view; ↑/↓ walk its items round from end to end, Home and End reach its ends,
+  // and pointing at an item focuses it. Opening the menu, walking it and pointing at it move nothing on the stage.
+  await pointAway(browser);
+  await still(browser);
+  await browser.evaluate(BOXES);
+  await openMenu(browser);
+  assert.equal(await browser.evaluate(`${more}.getAttribute('aria-haspopup') === 'menu' && ${more}.getAttribute('aria-controls') === ${menu}.id &&
+    ${menu}.getAttribute('aria-labelledby') === ${more}.id && ${menu}.getAttribute('role') === 'menu'`), true, "More is a menu button that controls the menu it labels");
+  assert.deepEqual(await browser.evaluate(`${menuItems}.map(item => [item.dataset.menuItem, item.getAttribute('aria-keyshortcuts')])`),
+    [["models", "m"], ["setup", "u"], ["options", "o"], ["shortcuts", "?"]], "More holds Models, Setup, Options and Shortcuts, each naming its key from the main view");
+  assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "Opening More shifts nothing on the stage");
+  for (const [name, code, at] of [["ArrowDown", 40, 1], ["ArrowDown", 40, 2], ["ArrowDown", 40, 3], ["ArrowDown", 40, 0], ["ArrowUp", 38, 3],
+    ["Home", 36, 0], ["End", 35, 3], ["ArrowUp", 38, 2]] as const) {
+    await key(browser, name, code);
+    await until(browser, `${name} moves to More's ${MENU[at]} item`, `document.activeElement === ${menuItem(MENU[at]!)}`);
+    await settle(browser);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Focus on More's ${MENU[at]} item shifts nothing on the stage`);
+  }
+  for (const id of MENU) {
+    await pointOf(browser, menuItem(id));
+    await until(browser, `pointing at More's ${id} item focuses it`, `document.activeElement === ${menuItem(id)}`);
+    await settle(browser);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at More's ${id} item shifts nothing on the stage`);
+  }
+  // An open menu owns its keys: the panel's leave it alone, and Esc closes it onto More.
+  for (const [name, code] of [["a", 65], ["e", 69], ["w", 87], ["d", 68], ["f", 70], ["1", 49]] as const) await key(browser, name, code);
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(`${resting} && ${machineList} === null && ${menu} !== null && ${menu}.contains(document.activeElement)`), true,
+    "With More open no panel key changes a view, a pane, the key line, the chains or the machine, and the menu keeps focus");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes More's menu onto More", `${menu} === null && ${more}.getAttribute('aria-expanded') === 'false' && document.activeElement === ${more}`);
+  await settle(browser);
+  assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "Closing More shifts nothing on the stage");
+  assert.deepEqual(await readStarterDraft(browser), before, "With More open no panel key edits the profile");
+  // From More the keyboard opens the menu (↵ and Space on its first item, ↓ too, ↑ on its last), ↵ or Space chooses an
+  // item and an item's own key chooses it as well; what it opens gives focus back to More.
+  await key(browser, "Enter", 13);
+  await until(browser, "↵ on More opens its menu on its first item", `document.activeElement === ${menuItem("models")}`);
+  await key(browser, "ArrowDown", 40);
+  await key(browser, "Enter", 13);
+  await until(browser, "↵ on More's Setup item opens Setup", sheetOpen("Setup"));
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes Setup onto More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
+  await key(browser, " ", 32);
+  await until(browser, "Space on More opens its menu on its first item", `document.activeElement === ${menuItem("models")}`);
+  await key(browser, "ArrowDown", 40);
+  await key(browser, "ArrowDown", 40);
+  await key(browser, " ", 32);
+  await until(browser, "Space on More's Options item opens the session options", sheetOpen("Session options"));
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes the session options onto More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
+  await key(browser, "ArrowUp", 38);
+  await until(browser, "↑ on More opens its menu on its last item", `document.activeElement === ${menuItem("shortcuts")}`);
+  await key(browser, "Enter", 13);
+  await until(browser, "↵ on More's Shortcuts item opens the shortcuts", `!!${shortcuts}?.open && ${shortcuts}.matches(':modal') && ${shortcuts}.contains(document.activeElement)`);
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes the shortcuts onto More", `!${shortcuts}.open && document.activeElement === ${more}`);
+  await key(browser, "ArrowDown", 40);
+  await until(browser, "↓ on More opens its menu on its first item", `document.activeElement === ${menuItem("models")}`);
+  await key(browser, "o", 79);
+  await until(browser, "o in the open menu chooses the session options", sheetOpen("Session options"));
+  await closeSheet(browser);
+  await until(browser, "the session options close onto More", `document.activeElement === ${more}`);
+  // An item names a key only where the panel's keys give it that action: from the accounts, where m manages the accounts
+  // and u and o do nothing, only ? does what an item does.
+  await key(browser, "a", 65);
+  await until(browser, "a opens the accounts", shownView("accounts"));
+  await openMenu(browser);
+  assert.deepEqual(await browser.evaluate(`${menuItems}.map(item => item.getAttribute('aria-keyshortcuts'))`), [null, null, null, "?"],
+    "From the accounts More names only ? as a key");
+  // A press outside closes the menu.
+  await click(browser, element(`${generator} [data-pane="accounts"] .${G}title`));
+  await until(browser, "a press outside closes More's menu", `${menu} === null && ${more}.getAttribute('aria-expanded') === 'false'`);
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc goes back to the generator", shownView("main"));
+  assert.deepEqual(await readStarterDraft(browser), before, "More and what it opens change no setting");
+  // More flows after the last tab, on its line: the bar is one line at 1280 and 800px and two at 320px.
+  try {
+    for (const [width, lines] of [[1280, 1], [800, 1], [320, 2]] as const) {
+      await panelWidth(browser, width);
+      assert.deepEqual(await browser.evaluate(`(() => {
+        const tabs = [...document.querySelectorAll('${generator} [role="tablist"] [role="tab"]')].map(tab => tab.getBoundingClientRect());
+        const last = tabs.at(-1), button = ${more}.getBoundingClientRect();
+        return { lines: new Set(tabs.map(rect => Math.round(rect.top))).size, onLast: button.top >= last.top - 0.5 && button.bottom <= last.bottom + 0.5 && button.left >= last.right };
+      })()`), { lines, onLast: true }, `At ${width}px More sits on the last tab's line, and the bar is ${lines} ${lines === 1 ? "line" : "lines"}`);
+    }
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
 
   // The sessions view lists the recent profile; its digit recalls it, and choosing the settings back returns the exact profile.
   await key(browser, "e", 69);
@@ -1112,6 +1327,10 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "w opens the machine list", `${machineList} !== null`);
   await motionless("the machine list");
   await key(browser, "Escape", 27);
+  await openMenu(browser);
+  await motionless("More's menu");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes More's menu", `${menu} === null`);
   await click(browser, launchButton);
   await motionless("a refused launch press");
   await openSheet(browser, "models");
@@ -1378,10 +1597,13 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
   const charge = inventoryDraft(inventory, "any").benchmark.candidates;
   const started: Record<string, unknown>[] = [], benchmarks: Record<string, unknown>[] = [], cancels: unknown[] = [];
   let listFails = true;
+  // A check held in flight, to observe the panel while a step runs.
+  const heldInventory = holdable();
+  let holdNextInventory = false;
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
   await arrangeWorkbench(server, writer);
-  const fixture = await intercept(browser, server, (name, input) => {
+  const fixture = await intercept(browser, server, async (name, input) => {
     switch (name) {
       case "atyrode.omp.describeDestination": {
         if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
@@ -1391,12 +1613,13 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
       }
       case "atyrode.omp.readModelCatalog": return listFails ? refused("synthetic_model_list_failure") : undefined;
       case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts([1]) };
-      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage([1]) };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(fixtureAccounts([1])) };
       case "atyrode.omp.startInventory": {
         assert.equal(input.containerId, target.containerId);
         assert.equal(input.machineId, target.machineId);
         assert.deepEqual(Object.keys(input.accountPool as object), ["anthropic"], "The inventory runs with the pool Code composed from the saved choices");
         started.push(input);
+        if (holdNextInventory) { holdNextInventory = false; await heldInventory.wait(); }
         return { ok: true, result: probeJob(target, `synthetic-inventory-${started.length}`, INVENTORY_OPERATION_ID, writer.principal.id) };
       }
       case "engine.jobs.status": {
@@ -1507,9 +1730,12 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(await browser.evaluate(`${element(stage)}.hidden`), true, "The sheet stays open");
     await closeSheet(browser);
 
+    // From here the SDK's feed probe counts the panel's own reads (`ownReads`), checked at the end of this scenario.
+    await browser.evaluate("localStorage.setItem('manifold:debug', '1')");
     // On arrival a plain ↵ at the panel root takes the launch's step through the same gate as Mod+↵: it prepares the
     // charge, and pressed again while the charge waits it never confirms it.
     await openGenerator(browser, server, workspace.id);
+    const openedAt = Date.now();
     await until(browser, "the reopened panel offers Verify", verifyAgain);
     await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
     await key(browser, "Enter", 13);
@@ -1562,13 +1788,178 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     }
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the accounts and gives the rows focus", `${shownView("main")} && !!document.activeElement?.closest('${generator} [data-row]')`);
+
+    // The panel reads its inputs again on its own (auto-read.ts). Away at another tab and back a while after its last read
+    // (it read when it opened, above), it reads them again, once.
+    const unread = await readConfiguration(server, writer, target);
+    await Bun.sleep(Math.max(0, openedAt + SHOWN_AGAIN_MS + 1_000 - Date.now()));
+    const counted = await browser.evaluate<(number | null)[]>(ownReads);
+    assert(counted.every(count => count !== null), "The SDK's feed probe counts the panel's reads of the machine list and OMP's defaults");
+    const reads = counted.map(count => count! + 1);
+    await lookAway(browser);
+    await until(browser, "back from another tab the panel reads the machine list and OMP's defaults again", `JSON.stringify(${ownReads}) === ${JSON.stringify(JSON.stringify(reads))}`);
+    const readAt = Date.now();
+    await Bun.sleep(2 * HOLD_RECHECK_MS);
+    assert.deepEqual(await browser.evaluate(ownReads), reads, "Back from another tab the panel reads its inputs once");
+    /** A read a hold failed to stop would come once the last press is a moment old (EDIT_QUIET_MS) and the clock looks again. */
+    const readsNothing = async (description: string, since: number) => {
+      await Bun.sleep(Math.max(2 * HOLD_RECHECK_MS, since + EDIT_QUIET_MS + 2 * HOLD_RECHECK_MS - Date.now()));
+      assert.equal((await browser.evaluate<number[]>(ownReads))[0], reads[0], description);
+    };
+    // Away and back again a while later, in the middle of an edit (a pool named in the accounts' management, unsaved), it
+    // reads nothing; nor with a sheet open, nor while a step runs; once nothing holds it, the read it owes comes, once.
+    await key(browser, "a", 65);
+    await until(browser, "a opens the accounts", shownView("accounts"));
+    await click(browser, element(`${generator} [data-manage]`));
+    await until(browser, "Manage accounts opens the accounts' management", shownView("manage"));
+    await control(browser, "a new pool can be named", workspaceButton("Save as preset…"), false);
+    await click(browser, workspaceButton("Save as preset…"));
+    const poolName = element(`${generator} [data-pane="manage"] form[aria-label="Saved account pool editor"] input[required]`);
+    await control(browser, "the new pool's name field opens", poolName, false);
+    await click(browser, poolName);
+    await browser.typeText("Unsaved pool");
+    const typed = Date.now();
+    await Bun.sleep(Math.max(0, readAt + SHOWN_AGAIN_MS + 1_000 - Date.now()));
+    await lookAway(browser);
+    await readsNothing("Away and back in the middle of an unsaved edit, the panel reads nothing", typed);
+    assert.equal(await browser.evaluate(`document.activeElement === ${poolName} && ${poolName}.value === 'Unsaved pool'`), true, "The edit keeps its focus and its words");
+    await openMenu(browser);
+    await click(browser, menuItem("setup"));
+    await until(browser, "More's Setup item opens Setup", sheetOpen("Setup"));
+    await readsNothing("With a sheet open the panel reads nothing", Date.now());
+    await closeSheet(browser);
+    await click(browser, element(`${generator} [data-view-tab="main"]`));
+    await until(browser, "the Generator tab shows the generator, which offers Verify", `${shownView("main")} && ${verifyAgain}`);
+    holdNextInventory = true;
+    await click(browser, launchButton);
+    await waitFor(() => heldInventory.held, timeout, 50);
+    await until(browser, "the verification's check runs", launchIs("checking…", "busy"));
+    await readsNothing("While a step runs the panel reads nothing", Date.now());
+    heldInventory.release();
+    await until(browser, "the checked charge waits", `${launchIs("verify models", "waiting")} && ${confirmCharge} !== null`);
+    await click(browser, cancelCharge);
+    await until(browser, "the cancelled charge offers Verify again", verifyAgain);
+    await until(browser, "once nothing holds it the panel reads its inputs again", `${ownReads}[0] === ${reads[0]! + 1}`);
+    await Bun.sleep(2 * HOLD_RECHECK_MS);
+    assert.equal((await browser.evaluate<number[]>(ownReads))[0], reads[0]! + 1, "Once nothing holds it the panel reads its inputs once");
+    assert.deepEqual(await readConfiguration(server, writer, target), unread, "Reading on its own, an unsaved pool and a cancelled check write nothing");
+    await browser.evaluate("localStorage.removeItem('manifold:debug')");
     fixture.check();
   } finally {
+    heldInventory.release();
     await fixture.stop();
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "The verification charge never requests native approval");
   assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), terminals);
+}
+
+// ---------------------------------------------------------------- tiered usage windows
+
+/**
+ * Every window of the fixture's usage is a row (#248): a tiered one, a limit of its own beside the account's shared
+ * windows, is labelled with its tier, in the usage and the accounts. A used-up `fable` window makes Claude neither tight
+ * nor maxed, as only the shared windows judge a provider's pool, while the same window reported as shared does. Where
+ * the usage grid turns to two columns no label squeezes a reset. The observation and the reading are synthetic, a Codex
+ * slot beside the Claude one; nothing is saved.
+ */
+async function tieredUsageScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const workspace = await createContainer(server, "Tiered usage windows", "canvas");
+  const target = { containerId: workspace.id };
+  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(created.ok);
+  const base = await readConfiguration(server, writer, target);
+  await arrangeWorkbench(server, writer);
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  const observation = (): OmpResult<"accounts"> => {
+    const claude = fixtureAccounts([1]);
+    return { ...claude, accounts: [...claude.accounts, codex] };
+  };
+  // The control: reported as shared, the `fable` window's numbers judge Claude's pool, so the checks below can see a strain.
+  let shared = false;
+  const fixture = await intercept(browser, server, name => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
+    if (name !== "atyrode.omp.accounts.usage") return undefined;
+    const reading = fixtureUsage(observation());
+    if (!shared) return { ok: true, result: reading };
+    return { ok: true, result: { ...reading, snapshot: { ...reading.snapshot!, accounts: reading.snapshot!.accounts.map(account => ({
+      ...account, windows: account.windows.map(window => window.tier === "fable" ? { ...window, tier: null } : window) })) } } };
+  });
+  const usagePane = `${generator} [data-pane="usage"]`, accountsPane = `${generator} [data-pane="accounts"]`;
+  /** Each account's windows as drawn, by provider and account: the label, the tier it names and the window's word. */
+  const windowRows = (pane: string) => `Object.fromEntries([...document.querySelectorAll('${pane} .${G}usage-acct')].map(cell => [
+    cell.querySelector('.${G}usage-pname').firstChild.textContent + ' ' + cell.dataset.usageAccount,
+    [...cell.querySelectorAll('.${G}usage-win')].map(row => [row.querySelector('.${G}usage-wl').textContent, row.dataset.tier ?? null, row.querySelector('.${G}usage-word')?.textContent ?? '']),
+  ]))`;
+  const rows = {
+    "Claude API key 1": [["5h", null, ""], ["7d fable", "fable", "maxed"]],
+    "Codex API key 3": [["5h", null, ""], ["7d base-model-inference", "base-model-inference", ""]],
+  };
+  /** What would say Claude's pool is strained: a struck lead in the routing or the profile, a refused lane, Claude called tight or maxed. */
+  const strain = `({ struck: [...document.querySelectorAll('${generator} [data-down]')].map(el => el.textContent),
+    refused: [...document.querySelectorAll('${generator} [data-row="lane"] .${G}word[data-off]')].map(el => el.dataset.key),
+    said: /Claude (tight|maxed|has no account with room)/.test(${element(stage)}.textContent) })`;
+  /** Every reset a pane draws, and those not shown whole on one line inside their column, their window's row, the pane and any box that clips them. */
+  const resets = (pane: string) => `(() => {
+    const shown = [...document.querySelectorAll('${pane} .${G}usage-rst')].filter(el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length);
+    const clipped = [];
+    for (const el of shown) {
+      let right = Math.min(el.parentElement.getBoundingClientRect().right, el.closest('.${G}usage-win').getBoundingClientRect().right, el.closest('[data-pane]').getBoundingClientRect().right);
+      for (let box = el.parentElement; box && !box.matches('[data-pane]'); box = box.parentElement) if (getComputedStyle(box).overflowX !== 'visible') right = Math.min(right, box.getBoundingClientRect().right);
+      const over = el.getBoundingClientRect().right - right;
+      if (over > 0.5 || el.getClientRects().length > 1) clipped.push(JSON.stringify(el.textContent) + ' runs ' + over.toFixed(1) + 'px past its column on ' + el.getClientRects().length + ' line(s)');
+    }
+    return { checked: shown.length, clipped };
+  })()`;
+  try {
+    await openGenerator(browser, server, workspace.id);
+    await until(browser, "the usage draws both accounts' windows", `document.querySelectorAll('${usagePane} .${G}usage-win').length === 4`);
+    assert.deepEqual(await browser.evaluate(windowRows(usagePane)), rows, "Every reported window is its own row in the usage, a tiered one labelled with its tier");
+    await showView(browser, "accounts");
+    await until(browser, "the accounts draw both accounts' windows", `document.querySelectorAll('${accountsPane} .${G}usage-win').length === 4`);
+    assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
+    await showView(browser, "main");
+    await assertRoutes(browser, true);
+    // Wide, the routing's leads; narrow, the profile's leads beside the generator.
+    try {
+      for (const [width, leads] of [[1280, `[data-pane="routing"] .${G}tok-value`], [390, `.${G}profile-lead`]] as const) {
+        await panelWidth(browser, width);
+        await still(browser);
+        assert.deepEqual(await browser.evaluate(strain), { struck: [], refused: [], said: false },
+          `At ${width}px a used-up fable window strikes no lead, refuses no lane and calls Claude neither tight nor maxed`);
+        shared = true;
+        await key(browser, "r", 82);
+        await until(browser, `at ${width}px the same window reported as shared strikes Claude's leads`, `document.querySelector('${generator} ${leads}[data-down]') !== null`);
+        shared = false;
+        await key(browser, "r", 82);
+        await until(browser, "reported as tiered again it strikes none", `document.querySelector('${generator} [data-down]') === null`);
+      }
+    } finally {
+      await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    }
+    const problems: string[] = [];
+    try {
+      for (const width of [780, 790, 800, 810]) {
+        await panelWidth(browser, width);
+        for (const [view, pane] of [["main", usagePane], ["accounts", accountsPane]] as const) {
+          await showView(browser, view);
+          await still(browser);
+          const { checked, clipped } = await browser.evaluate<{ checked: number; clipped: string[] }>(resets(pane));
+          if (checked !== 4) problems.push(`${view} at ${width}px: ${checked} resets drawn, not 4`);
+          problems.push(...clipped.map(entry => `${view} at ${width}px: ${entry}`));
+        }
+      }
+    } finally {
+      await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    }
+    await showView(browser, "main");
+    assert.deepEqual(problems, [], "From 780 to 810px, where the usage grid turns to two columns, every reset shows whole in the usage and the accounts");
+    assert.deepEqual(await readConfiguration(server, writer, target), base, "Reading tiered windows saves nothing");
+    fixture.check();
+  } finally {
+    await fixture.stop();
+  }
 }
 
 // ---------------------------------------------------------------- shared drafts across destinations
@@ -1682,7 +2073,11 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "preserve", "Default skills restores ordinary loading instead of disabling it");
     await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
-    await until(browser, "the Options action still says the closed options' choice", `${actionButton("Options")}?.textContent.includes('skills off') === true`);
+    await until(browser, "More still says the closed options' choice", `${more}?.textContent.includes('skills off') === true`);
+    await openMenu(browser);
+    assert.equal(await browser.evaluate(`${menuItem("options")}.textContent.includes('skills off')`), true, "More's Options item says the closed options' choice");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes More's menu", `${menu} === null`);
 
     // Local edits of the saved profile: one keyboard step of thinking, the fourth tier, automatic plans.
     const savedThinking = await browser.evaluate<string>(chosenKey("thinking"));
@@ -1828,10 +2223,9 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     try {
       await until(browser, "the launch stays usable at a narrow viewport", `${launchButton}.getBoundingClientRect().width > 0`);
-      const more = element(`${generator} [data-actions-toggle]`);
       await tap(browser, more);
-      await until(browser, "a tap on More shows the actions", `${more}.getAttribute('aria-expanded') === 'true' && !!${actionButton("Options")}?.getClientRects().length`);
-      await tap(browser, actionButton("Options"));
+      await until(browser, "a tap on More opens its menu", `${more}.getAttribute('aria-expanded') === 'true' && !!${menuItem("options")}?.getClientRects().length`);
+      await tap(browser, menuItem("options"));
       await until(browser, "touch opens the session options", `!!${visibleSheet}?.contains(${skillsSection})`);
       await click(browser, workspaceButton("all skills off"));
       await key(browser, "Tab", 9);
@@ -1943,9 +2337,24 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   assert(initialized.ok);
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...target, expectedRevision: (initialized.result as Configuration).revision, document: textOnly });
   assert(staged.ok, staged.ok ? "" : staged.denial.message);
+  /** What says a staged model list waits: More's mark and aside, its Models item's, and any other item's, read with the menu open. */
+  const stagedMarks = async () => {
+    await openMenu(browser);
+    const says = (control: string) => `[...${control}.querySelectorAll('.${G}more-aside')].some(aside => aside.textContent === '· staged')`;
+    const marks = await browser.evaluate<Record<string, boolean>>(`({
+      more: ${more}.hasAttribute('data-staged'), moreSays: ${says(more)},
+      models: ${menuItem("models")}.hasAttribute('data-staged'), modelsSays: ${says(menuItem("models"))},
+      others: ${menuItems}.some(item => item.dataset.menuItem !== 'models' && (item.hasAttribute('data-staged') || ${says("item")})),
+    })`);
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes More's menu", `${menu} === null`);
+    return marks;
+  };
+  const unmarked = { more: false, moreSays: false, models: false, modelsSays: false, others: false };
   await openGenerator(browser, server, workspace.id);
   // The launch's one place to send the person: a staged-only workspace is reviewed in Models, a press away and never refused.
   await until(browser, "a staged-only workspace's launch is its review in Models", launchIs("review in models", "ready"));
+  assert.deepEqual(await stagedMarks(), unmarked, "With no active model list beside it, a staged one marks neither More nor its Models item: the launch is the way there");
   await still(browser);
   assert.notDeepEqual(await routedRoles(browser), expectedRoutes(document, defaultSelection(compileCatalog(document))),
     "An unresolved staged catalog is never silently replaced by the bundled starter's routes");
@@ -1966,6 +2375,9 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   const active = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...waitingTarget, expectedRevision: (first.result as Configuration).revision, source: "draft",
     reviewDigest: (firstReview.result as ActionResult<"reviewCatalog">).reviewDigest });
   assert(active.ok);
+  await openGenerator(browser, server, waiting.id);
+  await until(browser, "the active catalog is routed", `document.querySelector(${JSON.stringify(routeRows)}) !== null && ${launchButton}.dataset.state !== 'busy'`);
+  assert.deepEqual(await stagedMarks(), unmarked, "An active model list alone marks neither More nor its Models item");
   const second = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...waitingTarget, expectedRevision: (active.result as Configuration).revision, document: textOnly });
   assert(second.ok);
   await openGenerator(browser, server, waiting.id);
@@ -1974,8 +2386,10 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   await still(browser);
   assert.deepEqual(await routedRoles(browser), expectedRoutes(document, (active.result as Configuration).selection ?? selection),
     "The active catalog, not the staged one, routes the profile");
-  // The staged catalog still waits where it is reviewed: the Models action says so, and so does the launch while it is pointed.
-  await until(browser, "the Models action says a staged catalog waits", `${actionButton("Models")}?.hasAttribute('data-staged') === true`);
+  // The staged catalog still waits where it is reviewed: More and its Models item say so, and so does the launch while it is pointed.
+  await until(browser, "More says a staged catalog waits", `${more}?.hasAttribute('data-staged') === true`);
+  assert.deepEqual(await stagedMarks(), { ...unmarked, more: true, moreSays: true, models: true, modelsSays: true },
+    "A staged model list beside the active one marks More and its Models item, and no other item");
   await pointOf(browser, launchButton);
   await until(browser, "the pointed launch says a staged catalog waits in Models", `${readout}.hasAttribute('data-staged')`);
   await pointAway(browser);
@@ -2074,13 +2488,14 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
   });
   try {
     const modal = "dialog.plugin-atyrode_code__permission-dialog:modal";
-    // Each sheet is reached from the full key line before the configuration arrives, and the line keeps its order after it.
+    // Each sheet is reached from More before the configuration arrives, and More's menu keeps its order after it.
     for (const [sheet, next] of [["models", "setup"], ["setup", "options"]] as const) {
       holdConfiguration = true;
       await openGenerator(browser, server, firstUse.containerId);
       await waitFor(() => held.size > 0, timeout, 50);
-      await control(browser, "the sheets remain reachable before configuration arrives", actionButton(SHEETS[sheet].action), false);
-      await click(browser, actionButton(SHEETS[sheet].action));
+      await control(browser, "More remains reachable before configuration arrives", more, false);
+      await openMenu(browser);
+      await click(browser, menuItem(SHEETS[sheet].item));
       await until(browser, `${sheet} opens over the stage`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       holdConfiguration = false;
       for (const release of [...held]) release();
@@ -2088,13 +2503,15 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(modal)}) === null`), true,
         "A first-use review in a hidden frame must not make the visible document inert");
       await click(browser, `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
-      await until(browser, "the sheet returns focus to the action that opened it", `${element(stage)}.hidden === false && document.activeElement === ${actionButton(SHEETS[sheet].action)}`);
-      await key(browser, "Tab", 9);
-      assert.equal(await browser.evaluate(`document.activeElement === ${actionButton(SHEETS[next].action)}`), true, "Keyboard navigation still walks the actions after the absent read");
+      await until(browser, "the sheet returns focus to More, which opened it", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
+      await key(browser, "ArrowDown", 40);
+      await until(browser, "↓ on More opens its menu on its first item", `document.activeElement === ${menuItems}[0]`);
+      for (let step = 0; step < MENU.indexOf(SHEETS[next].item); step++) await key(browser, "ArrowDown", 40);
+      assert.equal(await browser.evaluate(`document.activeElement === ${menuItem(SHEETS[next].item)}`), true, "Keyboard navigation still walks More's items after the absent read");
       await key(browser, "Enter", 13);
       await until(browser, `keyboard opens ${next}`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       await key(browser, "Escape", 27);
-      await until(browser, "Esc returns from the sheet to its action", `${element(stage)}.hidden === false && document.activeElement === ${actionButton(SHEETS[next].action)}`);
+      await until(browser, "Esc returns from the sheet to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
       await openSheet(browser, "setup");
@@ -3027,6 +3444,8 @@ async function run(): Promise<void> {
     await starterObservationScenario(writerBrowser, server, writer);
     phase = "verification charge gate";
     await verificationChargeScenario(writerBrowser, server, writer, target);
+    phase = "tiered usage windows are their own rows and judge no pool";
+    await tieredUsageScenario(writerBrowser, server, writer);
     phase = "manual catalog authoring and concurrent first-save refusal";
     await manualCatalogScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
@@ -3051,7 +3470,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. Manual Models import, staging and exact promotion remain reachable, and a staged-only workspace's launch opens Models. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text; pointing and focus shift nothing; keys stay panel-local and never act from a sheet or an open machine list or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. The panel reads its inputs again on its own when shown again, never mid-edit, mid-step or behind a sheet, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();
