@@ -283,7 +283,8 @@ const liveRegion = element(`${generator} div.plugin-atyrode_code__sr[role="statu
 const lineText = `(${element(`${generator} .${G}launch-line`)}?.textContent ?? '')`;
 /** A failure or refusal said beside the launch, in the attention colour. */
 const failureLine = `!!document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})`;
-const cancelCharge = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}cue`)})].find(el => el.textContent.trim() === 'cancel')`;
+const cancelCharge = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}fix`)})].find(el => el.textContent.trim() === 'Cancel')`;
+const shortcuts = element(`${generator} dialog.${G}shortcuts`);
 const machinePicker = element(`${generator} [data-machine-picker]`);
 const machineList = element(`${generator} [role="listbox"][aria-label="machines"]`);
 const visibleSheet = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}sheet-host`)})].find(el => !el.hidden)`;
@@ -299,9 +300,9 @@ const ROWS: readonly RowId[] = ["lane", "tier", "thinking", "advisor", "fallback
 function row(id: RowId): string {
   return element(`${generator} [data-row="${id}"]`);
 }
-/** A row's value as assistive technology reads it: a slider's value text, a switch's checked state. */
+/** A row's value as assistive technology reads it: the name of its checked radio. */
 function rowValue(id: RowId): string {
-  return `(row => row && (row.getAttribute('role') === 'switch' ? row.getAttribute('aria-checked') : row.getAttribute('aria-valuetext')))(${row(id)})`;
+  return `${row(id)}?.querySelector('[role="radio"][aria-checked="true"]')?.getAttribute('aria-label')`;
 }
 /** One option word of a row, by its stable key (a dial value, or `on`/`off`). */
 function word(id: RowId, key: string): string {
@@ -316,13 +317,10 @@ const profileValues = `[${ROWS.map(rowValue).join(", ")}].join(' / ')`;
 function fix(key: string): string {
   return element(`${generator} .${G}launch-line [data-fix="${key}"]`);
 }
-/** A cue in the generator's head (`d · defaults`, `z · saved`), by its key. */
-function headCue(key: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} [data-pane="generator"] .${G}head .${G}cue`)})].find(el => el.querySelector('.${G}cue-key')?.textContent === ${JSON.stringify(key)})`;
-}
-/** A pressable word of the key line, by its key. */
-function keyWord(name: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${generator} button.${G}keys-word`)})].find(el => el.querySelector('.${G}keys-key')?.textContent === ${JSON.stringify(name)})`;
+const revertButton = element(`${generator} [data-revert]`);
+/** One of the bar's actions (Refresh, Models, Setup, Options, Shortcuts), by the word it starts with. */
+function actionButton(name: string): string {
+  return `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}actions button`)})].find(el => el.textContent.trim().startsWith(${JSON.stringify(name)}))`;
 }
 /** A visible button in the generator panel, its views and its sheets, by its exact text. */
 function workspaceButton(text: string): string {
@@ -383,12 +381,12 @@ async function focusRow(browser: BrowserInstance, id: RowId): Promise<void> {
   await click(browser, generatorTitle);
   await key(browser, "ArrowDown", 40);
   for (let step = 0; step < ROWS.length; step++) {
-    const at = await browser.evaluate<string>(`document.activeElement?.dataset.row ?? ''`);
+    const at = await browser.evaluate<string>(`document.activeElement?.closest('[data-row]')?.dataset.row ?? ''`);
     if (at === id) break;
     const from = ROWS.indexOf(at as RowId), to = ROWS.indexOf(id);
     await key(browser, from < to ? "ArrowDown" : "ArrowUp", from < to ? 40 : 38);
   }
-  await until(browser, `keyboard focus on the ${id} row`, `document.activeElement === ${row(id)} && document.activeElement.matches(':focus-visible')`);
+  await until(browser, `keyboard focus on the ${id} row`, `!!${row(id)}?.contains(document.activeElement) && document.activeElement.matches(':focus-visible')`);
 }
 /** Real Tab presses until the expression holds focus; Shift+Tab when `backward`. */
 async function tabTo(browser: BrowserInstance, description: string, expression: string, backward = false): Promise<void> {
@@ -412,10 +410,11 @@ async function chooseMachine(browser: BrowserInstance, machineId: string, name: 
   await until(browser, `the launch runs on ${name}`, `${machineList} === null && ${machinePicker}?.textContent === ${JSON.stringify(name)}`);
 }
 
-/** The sheets that open over the stage, and the key the main view opens each with. */
+/** The sheets that open over the stage: the key the main view opens each with, the bar's action that does, and the sheet's title. */
 type Sheet = "models" | "setup" | "options";
-const SHEETS: Readonly<Record<Sheet, { key: string; code: number; title: string }>> = {
-  models: { key: "m", code: 77, title: "Models" }, setup: { key: "u", code: 85, title: "Setup" }, options: { key: "o", code: 79, title: "Session options" },
+const SHEETS: Readonly<Record<Sheet, { key: string; code: number; action: string; title: string }>> = {
+  models: { key: "m", code: 77, action: "Models", title: "Models" }, setup: { key: "u", code: 85, action: "Setup", title: "Setup" },
+  options: { key: "o", code: 79, action: "Options", title: "Session options" },
 };
 /** Opens a sheet by its key from the main view, remembering what had focus so its return can be checked. */
 async function openSheet(browser: BrowserInstance, sheet: Sheet): Promise<void> {
@@ -658,12 +657,13 @@ async function usableStarter(browser: BrowserInstance): Promise<void> {
   await until(browser, "the bundled preview fills the generator's rows", `${JSON.stringify(ROWS)}.every(id => document.querySelector('${generator} [data-row="' + id + '"]'))`);
   // A bundled preview is saved only by the verification that replaces it; the fixture reads no accounts and has no discovery, so that is refused.
   await until(browser, "the starter's only step is a refused verification", launchIs("verify models", "refused"));
-  // Before shared policy exists no row is locked: a row refuses only where its own other value is refused.
-  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') === 'true' &&
-    !(row.getAttribute('role') === 'switch' && row.querySelector('.${G}word:not([data-selected])[data-off]'))).map(row => row.dataset.row)`), [],
+  // Before shared policy exists no row is locked.
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') === 'true').map(row => row.dataset.row)`), [],
     "Every row is editable before shared policy exists");
-  assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.tabIndex === 0).length`), 1,
-    "The rows are one keyboard Tab stop");
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => {
+    const stops = row.querySelectorAll('[role="radio"][tabindex="0"]');
+    return stops.length !== 1 || stops[0].getAttribute('aria-checked') !== 'true';
+  }).map(row => row.dataset.row)`), [], "Each row is one keyboard Tab stop: its chosen value");
   // The default profile keeps the old Code advisor default (glance), so the advisor role is routed.
   await assertRoutes(browser, true);
 }
@@ -769,7 +769,7 @@ const PAINT = `(() => {
     if (across > 1 && down > 1) overlaps.push(JSON.stringify(a.text) + ' over ' + JSON.stringify(b.text));
   }
   const outside = boxes.filter(entry => entry.box.left < bounds.left - 1 || entry.box.right > bounds.right + 1).map(entry => entry.text);
-  const small = [...view.querySelectorAll('button, [role="slider"], [role="switch"], [role="listbox"]')]
+  const small = [...view.querySelectorAll('button, [role="tab"], [role="switch"], [role="checkbox"], [role="listbox"]')]
     .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length && el.getBoundingClientRect().width < 24)
     .map(el => (el.dataset.row ?? (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 32)) + ' ' + Math.round(el.getBoundingClientRect().width) + 'px');
   return { overflow: Math.max(0, viewport.scrollWidth - viewport.clientWidth, view.scrollWidth - view.clientWidth),
@@ -850,7 +850,7 @@ async function zeroShift(browser: BrowserInstance, label: string): Promise<void>
   await showView(browser, "main");
   const targets = await browser.evaluate<number>(`(() => {
     const stage = document.querySelector('${stage}');
-    globalThis.__codeTargets = [...stage.querySelectorAll('button, [role="slider"], [role="switch"], [role="meter"], .${G}word, .${G}tok')]
+    globalThis.__codeTargets = [...stage.querySelectorAll('button, [role="radio"], [role="checkbox"], [role="meter"], .${G}tok')]
       .filter(el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length);
     return globalThis.__codeTargets.length;
   })()`);
@@ -883,10 +883,12 @@ async function coarseTargets(browser: BrowserInstance, label: string): Promise<v
     await panelWidth(browser, width);
     for (const view of ["main", "accounts", "sessions"] as const) {
       await showView(browser, view);
-      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${stage} :is(button, [role="slider"], [role="switch"], [role="listbox"])`)})]
+      // A row's words are its targets, tall like the row and as wide as their word, spaced by the row's gap.
+      const small = await browser.evaluate<string[]>(`[...document.querySelectorAll(${JSON.stringify(`${stage} :is(button, [role="radio"], [role="switch"], [role="checkbox"], [role="listbox"])`)})]
         .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length)
-        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 44 || (!el.matches('[data-row]') && rect.width < 44); })
-        .map(el => (el.dataset.row ?? (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 24)) + ' ' + Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height))`);
+        // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
+        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || (!el.matches('[role="radio"]') && rect.width < 43.5); })
+        .map(el => (el.closest('[data-row]')?.dataset.row ?? '') + (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 24) + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`);
       assert.deepEqual(small, [], `Every target is at least 44px on a coarse pointer in the ${label} ${view} view at ${width}px`);
     }
   }
@@ -905,9 +907,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   const thinking = await browser.evaluate<string>(chosenKey("thinking"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
   const routing = element(`${generator} [data-pane="routing"]`), usage = element(`${generator} [data-pane="usage"]`);
-  // The main view as it rests: the generator with routing and usage, one key line, no sheet and the fallback chains hidden.
-  const resting = `${shownView("main")} && document.querySelectorAll('${generator} .${G}keys-line').length === 1 && ${element(stage)}.hidden === false &&
-    ${routing}.hidden === false && ${usage}.hidden === false && ${element(`${generator} .${G}chains`)}.getAttribute('aria-pressed') === 'false'`;
+  // The main view as it rests: the generator with routing and usage, no sheet, no shortcuts dialog and the fallback chains hidden.
+  const resting = `${shownView("main")} && !${shortcuts}?.open && ${element(stage)}.hidden === false && ${routing}.hidden === false && ${usage}.hidden === false &&
+    ${element(`${generator} [data-chains]`)}.getAttribute('aria-checked') !== 'true'`;
 
   // Keys are panel-local: the same keys pressed in another panel never reach the generator.
   await click(browser, element(".react-flow .react-flow__pane"));
@@ -926,8 +928,8 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     await key(browser, name, code, { modifiers });
   }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, lines: document.querySelectorAll('${generator} .${G}keys-line').length, sheet: ${element(stage)}.hidden, said: ${liveRegion}.textContent })`),
-    { view: "main", lines: 1, sheet: true, said: quiet }, "No panel key acts behind a sheet: no view, key line or step, nothing said");
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: !!${shortcuts}?.open, sheet: ${element(stage)}.hidden, said: ${liveRegion}.textContent })`),
+    { view: "main", shortcuts: false, sheet: true, said: quiet }, "No panel key acts behind a sheet: no view, shortcuts or step, nothing said");
   await closeSheet(browser);
   assert.deepEqual(await readStarterDraft(browser), before, "No panel key behind a sheet edits the profile");
 
@@ -956,16 +958,28 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await click(browser, element(`${generator} [data-pane="routing"] .${G}title`));
   await until(browser, "a press outside closes the list", `${machineList} === null`);
 
-  // `?` adds the full key line, every key the main view answers, and takes no focus; Esc hides it again.
+  // `?` opens the shortcuts as a modal dialog with focus in it; from there the panel's keys take no step and change no view,
+  // Tab never reaches a control behind it, and Esc closes it onto the row it was opened from.
   await focusRow(browser, "thinking");
   await key(browser, "?", 191);
-  await until(browser, "? shows the full key line", `document.querySelectorAll('${generator} .${G}keys-line').length === 2`);
-  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} .${G}keys-line')[1].querySelectorAll('.${G}keys-key')].map(el => el.textContent).sort()`),
-    ["d", "f", "m", "o", "p", "r", "s", "u", "w", "⏎"], "The full key line names every key the main view answers");
-  assert.equal(await browser.evaluate(`document.activeElement === ${row("thinking")}`), true, "The full key line takes no focus");
+  await until(browser, "? opens the shortcuts with focus in them", `!!${shortcuts}?.open && ${shortcuts}.matches(':modal') && ${shortcuts}.contains(document.activeElement)`);
+  for (const [name, code] of [["a", 65], ["e", 69], ["d", 68], ["1", 49]] as const) await key(browser, name, code);
+  for (const modifiers of [0, 0, 0, SHIFT, SHIFT]) await key(browser, "Tab", 9, { modifiers });
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, open: ${shortcuts}.open,
+    behind: !!document.activeElement?.closest('${generator}') && !${shortcuts}.contains(document.activeElement), said: ${liveRegion}.textContent })`),
+    { view: "main", open: true, behind: false, said: quiet }, "From the shortcuts no panel key acts, and Tab reaches no control behind them");
+  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed in the shortcuts never edit the profile");
   await key(browser, "Escape", 27);
-  await until(browser, "Esc hides the full key line and keeps focus on the rows",
-    `document.querySelectorAll('${generator} .${G}keys-line').length === 1 && !!document.activeElement?.closest('${generator} [data-row]')`);
+  await until(browser, "Esc closes the shortcuts onto the row they were opened from", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
+  // Mod+↵ in the shortcuts is their Close button's own press: it closes them and takes no launch step.
+  await key(browser, "?", 191);
+  await until(browser, "? opens the shortcuts again", `!!${shortcuts}?.open && ${shortcuts}.contains(document.activeElement)`);
+  await key(browser, "Enter", 13, { modifiers: CTRL });
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(`${liveRegion}.textContent`), quiet, "Mod+↵ in the shortcuts takes no launch step");
+  if (await browser.evaluate<boolean>(`${shortcuts}.open`)) await key(browser, "Escape", 27);
+  await until(browser, "the shortcuts close onto the row", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
 
   // The sessions view lists the recent profile; its digit recalls it, and choosing the settings back returns the exact profile.
   await key(browser, "e", 69);
@@ -989,17 +1003,16 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "End reaches the most thinking", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-1))}`);
   await key(browser, "ArrowLeft", 37);
   await until(browser, "← lowers the thinking one available step", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-2))}`);
-  assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.tabIndex === 0).map(row => row.dataset.row).join()`), "thinking",
-    "The rows are one Tab stop, on the row the keyboard is on");
-  assert.equal(await browser.evaluate(`${row("thinking")}.querySelectorAll('[tabindex]').length`), 0, "A row's words are not Tab stops");
-  assert.equal(await browser.evaluate(`document.activeElement === ${row("thinking")} && document.activeElement.matches(':focus-visible') &&
-    getComputedStyle(document.activeElement.querySelector('.${G}dial-ptr')).opacity === '1'`), true, "Keyboard edits keep a visible focus indicator, the row's pointer");
+  assert.equal(await browser.evaluate(`document.activeElement === ${word("thinking", available.at(-2)!)} && [...${row("thinking")}.querySelectorAll('[tabindex="0"]')].length === 1`), true,
+    "Focus follows the value: the row's one Tab stop is the word it holds");
+  assert.equal(await browser.evaluate(`document.activeElement.matches(':focus-visible') &&
+    getComputedStyle(${row("thinking")}.querySelector('.${G}dial-ptr')).opacity === '1'`), true, "Keyboard edits keep a visible focus indicator, the row's pointer");
   // A keyboard commit names its value in the readout, where a pointer reads a word before choosing it (once the last
   // press's scrub, which the readout keeps for a moment after the pointer lets go, has given way).
   await until(browser, "a keyboard commit names its value in the readout",
     `${readout}.querySelector('b')?.textContent === ${word("thinking", available.at(-2)!)}.querySelector('.${G}word-text').textContent`);
   await key(browser, "ArrowDown", 40);
-  await until(browser, "↓ moves to the next row", `document.activeElement === ${row("advisor")}`);
+  await until(browser, "↓ moves to the next row", `!!${row("advisor")}.contains(document.activeElement)`);
   await choose(browser, "thinking", thinking);
   assert.deepEqual(await readStarterDraft(browser), before, "Keyboard round trips return the exact profile");
 
@@ -1018,7 +1031,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "a refused step names the refused word and its reason in the readout",
     `${readout}.dataset.tone === 'warn' && ${readout}.querySelector('b')?.textContent === ${JSON.stringify(refusedText)} && ${readout}.textContent.length > ${refusedText.length + 3}`);
   await until(browser, "a refused step says its reason aloud",
-    `${liveRegion}.textContent.startsWith(${row("tier")}.getAttribute('aria-label') + ' ' + ${JSON.stringify(refusedText)} + ': ') && ${liveRegion}.textContent.length > ${refusedText.length + 10}`);
+    `${liveRegion}.textContent.startsWith(${row("tier")}.querySelector('.${G}dial-label').textContent + ' ' + ${JSON.stringify(refusedText)} + ': ') && ${liveRegion}.textContent.length > ${refusedText.length + 10}`);
   assert.notEqual(await browser.evaluate(chosenKey("tier")), refusedTier, "A refused step leaves the row where it was");
   await choose(browser, "tier", tier);
   assert.deepEqual(await readStarterDraft(browser), before, "A refused step and End return the exact profile");
@@ -1226,7 +1239,7 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   assert(competing.ok);
   // A competing initializer moves the revision under the frozen preview: unlike a verification's own
   // initialization, it is a change made elsewhere, and the launch line offers theirs.
-  await until(browser, "a revision-zero preview refuses to attach to a competing initializer", `${launchIs("verify models", "refused")} && !!${fix("use theirs")}`);
+  await until(browser, "a revision-zero preview refuses to attach to a competing initializer", `${launchIs("verify models", "refused")} && !!${fix("conflict")}`);
   await openSheet(browser, "models");
   await closeSheet(browser);
   await showView(browser, "accounts");
@@ -1265,7 +1278,7 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       const metadataFails = observation === "atyrode.omp.readModelCatalog";
       // An unread workspace is the launch's refusal and its retry. A failed model list holds the launch line with its own
       // retry and Models, whatever else the launch is refused for, and the refusal's fix stays beside it.
-      const retry = fix(metadataFails ? "list-retry" : "retry");
+      const retry = fix(metadataFails ? "list-retry" : "configuration");
       const noRoutes = `document.querySelector(${JSON.stringify(routeRows)}) === null`;
       await openGenerator(browser, server, workspace.id);
       await waitFor(() => held.size > 0, timeout, 50);
@@ -1407,7 +1420,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
     const arrived = await browser.evaluate<string>(profileValues);
     await key(browser, "ArrowDown", 40);
-    await until(browser, "an arrow on arrival gives the first row focus", `document.activeElement === ${row("lane")}`);
+    await until(browser, "an arrow on arrival gives the first row focus", `!!${row("lane")}.contains(document.activeElement)`);
     assert.equal(await browser.evaluate(profileValues), arrived, "An arrow on arrival changes no setting");
 
     // A double-click on Verify starts one verification; its second click lands on a busy launch, never on Confirm.
@@ -1454,7 +1467,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(await browser.evaluate(`${confirmCharge} !== null`), true, "The charge still waits");
     // The press that prepared the charge initialized the first-use workspace: that is the run's own
     // effect, so a cancelled or stopped run offers Verify again, never a conflict with "theirs".
-    const verifyAgain = `${launchIs("verify models", "ready")} && ${confirmCharge} === null && !${fix("use theirs")}`;
+    const verifyAgain = `${launchIs("verify models", "ready")} && ${confirmCharge} === null && !${fix("conflict")}`;
     await click(browser, cancelCharge);
     await until(browser, "a cancelled first-use charge offers Verify again without a conflict", verifyAgain);
     assert.equal(benchmarks.length, 0, "Cancelling a waiting charge spends nothing");
@@ -1528,9 +1541,10 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
       const revision = (await readConfiguration(server, writer, target)).revision;
       await until(browser, "the focused switch can move", `${accountSwitch}?.getAttribute('aria-disabled') !== 'true' && document.activeElement === ${accountSwitch}`);
       await key(browser, " ", 32);
+      await until(browser, "Space flips the focused switch, which keeps focus", `${accountSwitch}?.getAttribute('aria-checked') === '${included}' && document.activeElement === ${accountSwitch}`);
       await waitFor(async () => (await readConfiguration(server, writer, target)).revision === revision + 1, timeout, 50);
       await until(browser, "the switch shows the saved choice and keeps focus through the re-read",
-        `${accountSwitch}?.getAttribute('aria-checked') === '${included}' && document.activeElement === ${accountSwitch}`);
+        `${accountSwitch}?.getAttribute('aria-checked') === '${included}' && ${accountSwitch}.getAttribute('aria-disabled') !== 'true' && document.activeElement === ${accountSwitch}`);
       assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.accounts.manualDisabled, included ? [] : [fixtureAccounts([1]).accounts[0]!.reference],
         "The switch saves exactly that account's inclusion");
     }
@@ -1605,11 +1619,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(viewerBrowser, "ArrowLeft", 37);
     await key(viewerBrowser, "Enter", 13, { modifiers: CTRL });
     await click(viewerBrowser, launchButton);
-    // The viewer's accounts view offers the saved pools, and refuses every one of them.
+    // The viewer's accounts are managed read-only: the saved pool shows and cannot be chosen or edited.
     await showView(viewerBrowser, "accounts");
-    await until(viewerBrowser, "a viewer's pool words are offered and refused", `document.querySelectorAll('${generator} [data-pool-word]').length > 1 &&
-      [...document.querySelectorAll('${generator} [data-pool-word]')].every(el => el.getAttribute('aria-disabled') === 'true')`);
-    await click(viewerBrowser, `[...document.querySelectorAll('${generator} [data-pool-word]')].find(el => el.getAttribute('aria-pressed') === 'false')`);
+    await click(viewerBrowser, element(`${generator} [data-manage]`));
+    await until(viewerBrowser, "the viewer's management shows the saved pool, refused", shownView("manage"));
+    await control(viewerBrowser, "a viewer's saved pool cannot be chosen", element(`${generator} [data-pane="manage"] [aria-label="Active account pool"] select`), true);
+    await control(viewerBrowser, "a viewer cannot save a pool", workspaceButton("Save as preset…"), true);
     await Bun.sleep(300);
     assert.deepEqual(viewerTrace.requests.filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|select|changeAccounts)$/.test(request.name)), [],
       "A viewer's edits and presses never request a shared write");
@@ -1655,9 +1670,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.equal(await browser.evaluate(`${skillsSection}.dataset.mode`), "preserve", "Default skills restores ordinary loading instead of disabling it");
     await click(browser, workspaceButton("all skills off"));
     await closeOptions(browser);
-    await key(browser, "?", 191);
-    await until(browser, "the full key line still says the closed options' choice", `${keyWord("o")}?.textContent.includes('skills off') === true`);
-    await key(browser, "Escape", 27);
+    await until(browser, "the Options action still says the closed options' choice", `${actionButton("Options")}?.textContent.includes('skills off') === true`);
 
     // Local edits of the saved profile: one keyboard step of thinking, the fourth tier, automatic plans.
     const savedThinking = await browser.evaluate<string>(chosenKey("thinking"));
@@ -1670,7 +1683,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await openOptions(browser);
     await turn(browser, autoPlans, true);
     await closeOptions(browser);
-    await until(browser, "an edited verified profile saves before its review, and offers the saved one back", `${launchIs("save & review", "ready")} && !!${headCue("z")}`);
+    await until(browser, "an edited verified profile saves before its review, and offers the saved one back", `${launchIs("save & review", "ready")} && !!${revertButton}`);
     // The launch says what its save changes while it is pointed: exactly the three edited settings.
     await pointOf(browser, launchButton);
     await until(browser, "the launch's readout counts the edited settings", `/^save & review · 3 changes to the profile: /.test(${readout}.textContent)`);
@@ -1690,7 +1703,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     }
     await panelReads(browser, revision);
     await until(browser, "own account edits leave the edit ready to save, without a conflict",
-      `${launchIs("save & review", "ready")} && !!${headCue("z")} && !${fix("use theirs")} && ${profileValues} === ${JSON.stringify(edits)}`);
+      `${launchIs("save & review", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
     // Claude account as disabled (a GPT one stays) while the verification it stands on is not observed again: the save
@@ -1733,10 +1746,9 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await browser.typeText(importDraft);
     await closeSheet(browser);
     const manage = `${generator} [data-pane="manage"]`;
-    const manageCue = `[...document.querySelectorAll('${generator} [data-accounts-pane] .${G}cue')].find(el => el.querySelector('.${G}cue-key')?.textContent === 'm')`;
     await showView(browser, "accounts");
-    await click(browser, manageCue);
-    await until(browser, "the m · manage cue opens the accounts' management in place", shownView("manage"));
+    await click(browser, element(`${generator} [data-manage]`));
+    await until(browser, "Manage accounts opens the accounts' management in place", shownView("manage"));
     await until(browser, "the passive account observation settles before the editor gesture",
       `[...document.querySelectorAll('${manage} .plugin-atyrode_code__account-observation, ${manage} .plugin-atyrode_code__account-notice[role="status"]')].some(el => el.getClientRects().length)`);
     await control(browser, "shared saved account pool is editable", workspaceButton("Edit pool"), false);
@@ -1747,8 +1759,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "End", 35);
     await browser.typeText(" local draft");
     const accountDraftName = `${preset.name} local draft`;
-    await click(browser, `[...document.querySelectorAll('${manage} .${G}head .${G}cue')].find(el => el.querySelector('.${G}cue-key')?.textContent === 'esc')`);
-    await until(browser, "the esc · accounts cue goes back to the accounts", shownView("accounts"));
+    await click(browser, `[...document.querySelectorAll('${manage} .${G}head button')].find(el => el.textContent.trim() === 'Back to accounts')`);
+    await until(browser, "Back to accounts goes back to the accounts", shownView("accounts"));
     await key(browser, "m", 77);
     await until(browser, "m opens the management again, with the draft as it was left", `${shownView("manage")} && ${accountDraft}?.value === ${JSON.stringify(accountDraftName)}`);
     await click(browser, element(`${manage} .${G}title`));
@@ -1804,9 +1816,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     try {
       await until(browser, "the launch stays usable at a narrow viewport", `${launchButton}.getBoundingClientRect().width > 0`);
-      await tap(browser, keyWord("?"));
-      await until(browser, "a tap on ? shows every key", `!!${keyWord("o")}`);
-      await tap(browser, keyWord("o"));
+      const more = element(`${generator} [data-actions-toggle]`);
+      await tap(browser, more);
+      await until(browser, "a tap on More shows the actions", `${more}.getAttribute('aria-expanded') === 'true' && !!${actionButton("Options")}?.getClientRects().length`);
+      await tap(browser, actionButton("Options"));
       await until(browser, "touch opens the session options", `!!${visibleSheet}?.contains(${skillsSection})`);
       await click(browser, workspaceButton("all skills off"));
       await key(browser, "Tab", 9);
@@ -1815,8 +1828,6 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       await click(browser, workspaceButton("default skills"));
       await key(browser, "Escape", 27);
       await until(browser, "Esc closes the session options and keeps focus in the panel", `${element(stage)}.hidden === false && !!document.activeElement?.closest('${generator}')`);
-      await key(browser, "Escape", 27);
-      await until(browser, "Esc hides the full key line", `document.querySelectorAll('${generator} .${G}keys-line').length === 1`);
       await focusRow(browser, "advisor");
       assert.equal(await browser.evaluate(chosenKey("thinking")), localThinking, "Responsive layout keeps the same profile");
     } finally {
@@ -1833,7 +1844,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, first.machineId, machineName);
     await until(browser, "the edited setting survives a reload, still ready to save",
-      `${profileValues} === ${JSON.stringify(kept)} && ${launchIs("save & review", "ready")} && !!${headCue("z")}`);
+      `${profileValues} === ${JSON.stringify(kept)} && ${launchIs("save & review", "ready")} && !!${revertButton}`);
     await browser.goto("about:blank");
     const current = await readConfiguration(server, writer, first);
     const ours = current.configuration!.selection!;
@@ -1843,11 +1854,11 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, first.machineId, machineName);
     await until(browser, "the kept edit comes back as a conflict with the write made meanwhile",
-      `${launchButton}.dataset.state === 'refused' && !!${fix("use theirs")} && ${profileValues} === ${JSON.stringify(kept)}`);
+      `${launchButton}.dataset.state === 'refused' && !!${fix("conflict")} && ${profileValues} === ${JSON.stringify(kept)}`);
     assert.equal((await readConfiguration(server, writer, first)).revision, (foreign.result as Configuration).revision, "A kept edit in conflict writes nothing");
-    await click(browser, fix("use theirs"));
+    await click(browser, fix("conflict"));
     await until(browser, "theirs replaces the kept edit",
-      `${chosenKey("thinking")} === ${JSON.stringify(localThinking)} && ${chosenKey("advisor")} === ${JSON.stringify(theirs.advisor)} && !${headCue("z")} && !${fix("use theirs")}`);
+      `${chosenKey("thinking")} === ${JSON.stringify(localThinking)} && ${chosenKey("advisor")} === ${JSON.stringify(theirs.advisor)} && !${revertButton} && !${fix("conflict")}`);
     const restored = await callAction(server, writer.token, "atyrode.code.select", { containerId: first.containerId, expectedRevision: (foreign.result as Configuration).revision, selection: ours });
     assert(restored.ok);
     await until(browser, "the rows follow the record back", `${chosenKey("advisor")} === ${JSON.stringify(ours.advisor)}`);
@@ -2051,9 +2062,8 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       holdConfiguration = true;
       await openGenerator(browser, server, firstUse.containerId);
       await waitFor(() => held.size > 0, timeout, 50);
-      await key(browser, "?", 191);
-      await control(browser, "the sheets remain reachable before configuration arrives", keyWord(SHEETS[sheet].key), false);
-      await click(browser, keyWord(SHEETS[sheet].key));
+      await control(browser, "the sheets remain reachable before configuration arrives", actionButton(SHEETS[sheet].action), false);
+      await click(browser, actionButton(SHEETS[sheet].action));
       await until(browser, `${sheet} opens over the stage`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       holdConfiguration = false;
       for (const release of [...held]) release();
@@ -2061,14 +2071,13 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(modal)}) === null`), true,
         "A first-use review in a hidden frame must not make the visible document inert");
       await click(browser, `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
-      await until(browser, "the sheet returns focus to the key that opened it", `${element(stage)}.hidden === false && document.activeElement === ${keyWord(SHEETS[sheet].key)}`);
+      await until(browser, "the sheet returns focus to the action that opened it", `${element(stage)}.hidden === false && document.activeElement === ${actionButton(SHEETS[sheet].action)}`);
       await key(browser, "Tab", 9);
-      assert.equal(await browser.evaluate(`document.activeElement === ${keyWord(SHEETS[next].key)}`), true, "Keyboard navigation still walks the key line after the absent read");
+      assert.equal(await browser.evaluate(`document.activeElement === ${actionButton(SHEETS[next].action)}`), true, "Keyboard navigation still walks the actions after the absent read");
       await key(browser, "Enter", 13);
       await until(browser, `keyboard opens ${next}`, `${element(stage)}.hidden === true && document.activeElement?.getAttribute('aria-label') === 'Back to Code'`);
       await key(browser, "Escape", 27);
-      await until(browser, "Esc returns from the sheet to its key", `${element(stage)}.hidden === false && document.activeElement === ${keyWord(SHEETS[next].key)}`);
-      await key(browser, "Escape", 27);
+      await until(browser, "Esc returns from the sheet to its action", `${element(stage)}.hidden === false && document.activeElement === ${actionButton(SHEETS[next].action)}`);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
       await openSheet(browser, "setup");
@@ -2417,12 +2426,12 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await key(browser, "ArrowLeft", 37);
     await until(browser, "a profile change clears the refusal", `!${failureLine}`);
     await key(browser, "ArrowRight", 39);
-    await until(browser, "the saved profile is back without a draft", `${chosenKey("thinking")} === ${JSON.stringify(savedThinking)} && !${headCue("z")}`);
+    await until(browser, "the saved profile is back without a draft", `${chosenKey("thinking")} === ${JSON.stringify(savedThinking)} && !${revertButton}`);
 
     // A declared conflict, a stale catalog and a cleared choice; disable-all reviews as such.
     await openOptions(browser);
     await click(browser, optionSwitch("Optional skills", "Beta"));
-    await until(browser, "a declared skill conflict refuses the step", `${launchButton}.dataset.state === 'refused' && !!${fix("open options")}`);
+    await until(browser, "a declared skill conflict refuses the step", `${launchButton}.dataset.state === 'refused' && !!${fix("skills")}`);
     await click(browser, optionSwitch("Optional skills", "Beta"));
     await until(browser, "resolving the conflict restores the step", `${launchButton}.dataset.state === 'ready'`);
     skillCatalog.revision++;
@@ -2460,7 +2469,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     // A machine without permission refuses; returning reviews afresh, never resurrecting the old review.
     const reviewsBeforeSecond = reviews.length, preparations = prepareRequests;
     await chooseMachine(browser, second.machineId, secondName);
-    await until(browser, "the second destination cannot launch", `${launchButton}.dataset.state === 'refused' && !!${fix("enable in Setup")}`);
+    await until(browser, "the second destination cannot launch", `${launchButton}.dataset.state === 'refused' && !!${fix("permissions")}`);
     await Bun.sleep(1_200);
     assert.equal(reviews.length, reviewsBeforeSecond, "Choosing an unprepared machine requests no review");
     assert.equal(prepareRequests, preparations, "Destination selection never prepares a launch");
@@ -2488,7 +2497,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await focusRow(browser, "advisor");
     heldReview.release();
     await until(browser, "the held review completes for the unchanged profile", launchIs("launch", "ready"));
-    assert.equal(await browser.evaluate(`document.activeElement === ${row("advisor")}`), true, "Keyboard focus stays on its row through the gate");
+    assert.equal(await browser.evaluate(`!!${row("advisor")}.contains(document.activeElement)`), true, "Keyboard focus stays on its row through the gate");
     await click(browser, launchButton);
     await until(browser, "launch refusal is shown and consumes its review", `${failureLine} && ${launchIs("review", "ready")}`);
     await openOptions(browser);
