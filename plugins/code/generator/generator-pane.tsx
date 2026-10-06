@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import type { MachineSummary } from "@manifold/protocol";
 import type { OmpPresence } from "../machine-web.ts";
 import { prefersReducedMotion } from "@manifold/ui";
@@ -6,7 +6,7 @@ import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import { defaultSelection, type Review } from "../../domain/routing.ts";
 import type { VerificationStep } from "../workflow.ts";
-import { clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
+import { Button, clock, familyWord, hhmm, LAUNCH_STROKE, withKey } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
 import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
@@ -98,8 +98,8 @@ export type GeneratorPaneProps = {
   /** Another view has the stage; the pane keeps its state behind it. */
   readonly hidden: boolean;
   readonly listFailure: ListFailure;
-  /** The session options' summary when they are not the ordinary ones ("2 skills", "restricted"). */
-  readonly optionsSummary: string | null;
+  /** Controls the shell adds to the head: the ways back to a pane it has hidden. */
+  readonly reveal: ReactNode;
   readonly announce: (text: string) => void;
   readonly onOpen: (place: GeneratorPlace, family?: string) => void;
   /** Read accounts, usage, machines and the workspace profile again. */
@@ -125,7 +125,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly ref
  * pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, optionsSummary, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -329,7 +329,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   }
   function focusRow(rowId: RowId) {
     setCursor(rowId);
-    root.current?.querySelector<HTMLElement>(`[data-row="${rowId}"]`)?.focus();
+    root.current?.querySelector<HTMLElement>(`[data-row="${rowId}"] [role="radio"][tabindex="0"]`)?.focus();
   }
   function recall(index: number) {
     const team = recents[index];
@@ -470,8 +470,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   return <section ref={root} className={`${G}pane`} data-pane="generator" aria-label="generator" hidden={hidden}>
     <header className={`${G}head`}>
       <h2 className={`${G}title`}>generator</h2>
-      <button type="button" className={`${G}cue`} onClick={() => resetTo("defaults")}><span className={`${G}cue-key`}>d</span> · defaults</button>
-      {saved && <button type="button" className={`${G}cue`} onClick={() => resetTo("saved")}><span className={`${G}cue-key`}>z</span> · saved</button>}
+      <Button aria-keyshortcuts="d" title="The default profile (d)" data-defaults="" onClick={() => resetTo("defaults")}>Defaults</Button>
+      {saved && <Button aria-keyshortcuts="z" title="Back to the saved profile (z)" data-revert="" onClick={() => resetTo("saved")}>Revert</Button>}
+      {reveal}
     </header>
     <div className={`${G}dials`} role="group" aria-label="profile">
       {rows ? rows.map((row, index) => <DialRow key={row.id} row={row} cursor={row.id === cursorRow} locked={!teamGate.open}
@@ -515,8 +516,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
           <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
             onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>
             {line ? <LaunchLine line={line} canConfirm={verification.canConfirm} onConfirm={detail => charge && model.actions.confirmCharge({ detail, repeat: false }, charge)}
-              onCancel={verification.cancel} onFix={runFix} />
-              : optionsSummary && <button type="button" className={`${G}cue`} onClick={() => onOpen("options")}><span className={`${G}cue-key`}>o</span> · {optionsSummary}</button>}
+              onCancel={verification.cancel} onFix={runFix} /> : null}
           </span>
         </span>
       </div>
@@ -568,12 +568,10 @@ function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
       {parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
     </span>}
     {line.actions.map(action => {
-      if (action.kind === "cancel") return <button key="cancel" type="button" className={`${G}cue`} onClick={onCancel}>cancel</button>;
+      if (action.kind === "cancel") return <Button key="cancel" className={`${G}fix`} onClick={onCancel}>Cancel</Button>;
       if (action.kind !== "fix") return null;
       const key = action.fix.kind === "open" ? FIX_KEYS[action.fix.place] : action.fix.kind === "refresh" ? FIX_KEYS.refresh : undefined;
-      return <button key={action.key} type="button" className={`${G}cue`} data-fix={action.key} onClick={() => onFix(action)}>
-        {key && <><span className={`${G}cue-key`}>{key}</span> · </>}{action.label}
-      </button>;
+      return <Button key={action.key} className={`${G}fix`} data-fix={action.key} aria-keyshortcuts={key} onClick={() => onFix(action)}>{action.label}</Button>;
     })}
   </>;
 }

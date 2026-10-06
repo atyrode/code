@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { providerPolicy } from "../../domain/providers.ts";
 import type { QuotaReading } from "../../domain/quota.ts";
-import { accountWord, ago, hueOf } from "../ui.tsx";
+import { accountWord, ago, Button, hueOf } from "../ui.tsx";
 import { when, type BoardUsage } from "./board-model.ts";
 import { USAGE_FRESH_MS, usageState, type UsageAccountRow, type UsageGroup, type UsageState, type UsageWindowRow } from "./usage-model.ts";
 
@@ -120,10 +120,6 @@ export function ageText(ageMs: number | null): string {
   return age === "now" ? "not current" : `${age} old`;
 }
 
-/** A key cue in the panel's own markup (the generator shell styles it): the key, then ` · word`. */
-export function Cue({ cueKey, word, onClick }: { cueKey: string; word: string; onClick: () => void }) {
-  return <button type="button" className={`${G}cue`} onClick={onClick}><span className={`${G}cue-key`}>{cueKey}</span> · {word}</button>;
-}
 
 /**
  * The reading the panes draw. The model drops its reading whenever the saved choices change, until one is
@@ -243,9 +239,9 @@ export function RefreshLine({ cadence, children }: { cadence: UsageCadence; chil
     return `next refresh ${Math.floor(left / 60_000)}:${String(Math.floor((left % 60_000) / 1000)).padStart(2, "0")}`;
   });
   return <div className={`${G}usage-refresh`}>
-    <span className={`${G}usage-next`}>{text}</span>
-    <span className={`${G}usage-sep`} aria-hidden="true">·</span>
-    <Cue cueKey="r" word="now" onClick={cadence.now} />
+    {/* As wide as its widest text, so the line's button never moves when a refresh starts or ends. */}
+    <span className={`${G}usage-next`} data-sizer="next refresh 0:00">{text}</span>
+    <Button aria-keyshortcuts="r" title="Read the usage now (r)" data-refresh-now="" onClick={cadence.now}>Refresh now</Button>
     {children}
   </div>;
 }

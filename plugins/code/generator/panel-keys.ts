@@ -33,8 +33,6 @@ export type PanelKey = {
   readonly view: PanelView;
   /** The panel is too narrow for routing and usage beside the generator; they open as views of their own. */
   readonly narrow: boolean;
-  /** The key line shows every key (`?`). */
-  readonly more: boolean;
   /** How many recent profiles the digits can recall, in the sessions view. */
   readonly recents: number;
 };
@@ -50,7 +48,8 @@ export type PanelAction =
   | { readonly kind: "view"; readonly view: PanelView }
   | { readonly kind: "back" }
   | { readonly kind: "refresh" }
-  | { readonly kind: "more" }
+  /** Show the keyboard shortcuts. */
+  | { readonly kind: "shortcuts" }
   | { readonly kind: "sheet"; readonly sheet: PanelSheet }
   | { readonly kind: "recall"; readonly index: number }
   /** Open the machine picker beside the launch. */
@@ -68,9 +67,9 @@ const SHEET_KEYS: Readonly<Record<string, PanelSheet>> = { u: "setup", o: "optio
  * beside the generator, or open them as views when narrow; `d`, `z`, `f` and `w` (the machine) act
  * in the main view; `m`, `u` and `o` open Models, Setup and the session options from the main view,
  * and `m` the accounts' management from the accounts; `r` reads again and `?` shows every key.
- * Digits recall a recent profile where the sessions view lists them. Esc closes the full key line
- * and goes back: from the accounts' management to the accounts, from anything else to the main
- * view; at rest in the main view it is left alone.
+ * Digits recall a recent profile where the sessions view lists them. Esc goes back: from the
+ * accounts' management to the accounts, from anything else to the main view; at rest in the main
+ * view it is left alone. Every one of these is also a control on the panel; keys only speed them up.
  */
 export function panelKey(press: PanelKey): PanelAction | null {
   if (!press.inView || press.defaultPrevented || press.inDialog || press.alt) return null;
@@ -80,7 +79,7 @@ export function panelKey(press: PanelKey): PanelAction | null {
     return press.mod || (!press.onControl && !press.inField) ? { kind: "launch" } : null;
   }
   if (press.mod || press.inField) return null;
-  if (press.key === "Escape") return press.view === "manage" ? { kind: "view", view: "accounts" } : press.more || !main ? { kind: "back" } : null;
+  if (press.key === "Escape") return press.view === "manage" ? { kind: "view", view: "accounts" } : !main ? { kind: "back" } : null;
   if (press.onRoot && press.key.startsWith("Arrow")) return { kind: "enter" };
   if (press.repeat) return null;
   switch (press.key) {
@@ -94,7 +93,7 @@ export function panelKey(press: PanelKey): PanelAction | null {
     case "w": return main ? { kind: "machine" } : null;
     case "m": return main ? { kind: "sheet", sheet: "models" } : press.view === "accounts" ? { kind: "view", view: "manage" } : null;
     case "r": return { kind: "refresh" };
-    case "?": return { kind: "more" };
+    case "?": return { kind: "shortcuts" };
   }
   const sheet = SHEET_KEYS[press.key];
   if (sheet) return main ? { kind: "sheet", sheet } : null;

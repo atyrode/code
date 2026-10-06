@@ -23,8 +23,9 @@ export type MachinePickerProps = {
 };
 
 /**
- * Where the launch runs: `on studio` after the launch's label, the machine's name a word that opens
- * a short list of the roster above the launch line, each machine with its neutral online dot. Click,
+ * Where the launch runs: `on studio` after the launch's label, the machine's name a dropdown (its
+ * name and a chevron) that opens a short list of the roster above the launch line, each machine
+ * with its neutral online dot. Click,
  * or ↑↓ and ↵, chooses; Esc, Tab or a press outside closes, and focus returns to the word. While the
  * list is open it owns its keys (`data-popover`), so the panel's keys leave them alone. A machine
  * that cannot be chosen is struck through and refuses with its reason. While the destination cannot
@@ -95,6 +96,9 @@ export function MachinePicker({ options, locked, onChoose, onRefuse, onLocked, o
       onClick={() => { if (open) close(true); else show(); }} onPointerEnter={() => onPoint(current)} onPointerLeave={() => { if (!open) onPoint(null); }}>
       {current?.online != null && <i className={`${G}machine-dot`} data-online={current.online} aria-hidden="true" />}
       <span className={`${G}machine-name`}>{current?.label ?? "no machine"}</span>
+      <svg className={`${G}machine-chevron`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4.5 6.25 8 9.75l3.5-3.5" />
+      </svg>
     </button>
     {open && <div ref={list} role="listbox" tabIndex={-1} aria-label="machines" aria-activedescendant={`${id}-${cursor}`} className={`${G}machine-list`}
       onKeyDown={keys} onBlur={event => { if (!box.current?.contains(event.relatedTarget as Node | null)) close(false); }}>
