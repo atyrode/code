@@ -1295,6 +1295,17 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       if (metadataFails) {
         await until(browser, "with no profile to form, the launch line names the failed model list instead, with its retry and Models beside the launch's own fix",
           `${listFailure("instead")} && !!document.querySelector('${generator} .${G}launch-line [data-fix]:not([data-fix^="list-"])')`);
+        // The machine is chosen from the roster alone, so it stays beside the launch while no profile forms, and opens by `w` and by a press.
+        await until(browser, "with no profile the launch still names its machine", `${machinePicker}?.textContent === ${JSON.stringify(machineName)} && ${machinePicker}.getClientRects().length > 0`);
+        await click(browser, generatorTitle);
+        await key(browser, "w", 87);
+        await until(browser, "w opens the machine list with no profile", `${machineList} !== null && document.activeElement === ${machineList}`);
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes it onto the machine", `${machineList} === null && document.activeElement === ${machinePicker}`);
+        await click(browser, machinePicker);
+        await until(browser, "a press opens the machine list with no profile", `${machineList} !== null`);
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes it again", `${machineList} === null`);
         await click(browser, fix("list-models"));
         await until(browser, "the Models fix opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
         await closeSheet(browser);
@@ -2581,15 +2592,36 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       `${element(`${generator} [data-read-state="reading"][data-machine-id="${first.machineId}"]`)} !== null && ${savedRow(first.machineId)} !== null`);
     heldList.release();
     await until(browser, "the read again lands", `${firstRead} !== null && ${savedRow(first.machineId)} !== null`);
+    // What a sighted person sees of a resume: the sessions view's own line, shown in a real box (never screen-reader-only
+    // text), warm, saying the refusal's own words; and the rows where they were, since the line keeps its room.
+    const saidLine = element(`${generator} [data-pane="sessions"] [data-session-said]`);
+    const sessionSays = (words: string) => `(() => {
+      const el = ${saidLine};
+      if (!el || el.closest('.plugin-atyrode_code__sr') || !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 1 && rect.height > 1 && el.dataset.tone === 'warn' && el.textContent !== '' && el.textContent === ${words};
+    })()`;
+    // The refusal a resume came to, as the workbench model said it: the words of the (hidden) launch line's failure.
+    const modelSaid = `document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})?.textContent`;
+    const rowTops = `(() => {
+      const pane = document.querySelector('${generator} [data-pane="sessions"]'), top = pane.getBoundingClientRect().top;
+      return [...pane.querySelectorAll('.${G}earlier-group, .${G}earlier-rows > li')].map(el => Math.round((el.getBoundingClientRect().top - top) * 2) / 2);
+    })()`;
+    const tops = await browser.evaluate<number[]>(rowTops);
     const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await click(browser, rowVerb(first.machineId, "resume"));
     await waitFor(() => resumedInputs.length === 1, timeout, 50);
-    await until(browser, "the saved-state refusal is said aloud and beside the launch", `${failureLine} && ${liveRegion}.textContent !== ${JSON.stringify(quiet)}`);
+    await until(browser, "the saved-state refusal is said aloud and on the sessions view's own line, in the model's words",
+      `${sessionSays(modelSaid)} && ${liveRegion}.textContent !== ${JSON.stringify(quiet)}`);
+    assert.deepEqual(await browser.evaluate<number[]>(rowTops), tops, "A resume and its refusal move no row of the sessions view");
     assert.deepEqual(resumedInputs[0], { machineId: first.machineId, sessionId: savedSessionId }, "Preserve resume must not silently inject a profile");
     await until(browser, "automatic plans refuse resuming with this profile before native resume",
       `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') === 'true'`);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
-    await until(browser, "the refused row verb says what and why", `${liveRegion}.textContent.startsWith(${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label') + ' · ')`);
+    await until(browser, "the refused row verb says what and why, on the view's own line and aloud",
+      `${sessionSays(`${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label') + ' · ' + ${rowVerb(first.machineId, "resume-with-team")}.title`)} &&
+      ${liveRegion}.textContent === ${saidLine}.textContent`);
+    assert.deepEqual(await browser.evaluate<number[]>(rowTops), tops, "A refused verb's words move no row of the sessions view");
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
 
@@ -2621,7 +2653,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await waitFor(async () => JSON.stringify(reviews.at(-1)?.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
     await waitFor(() => resumedInputs.length === 2, timeout, 50);
-    await until(browser, "explicit profile resume refusal is visible", failureLine);
+    await until(browser, "explicit profile resume refusal is said on the sessions view's own line", sessionSays(modelSaid));
     const explicit = ResumeSessionInputSchema.parse(resumedInputs[1]);
     assert.equal(explicit.machineId, first.machineId);
     assert.equal(explicit.sessionId, savedSessionId);
@@ -2668,7 +2700,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       const reads = firstReads;
       await click(browser, rowVerb(first.machineId, "resume"));
       await waitFor(() => firstReads > reads, timeout, 50);
-      await until(browser, description, `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-busy') !== 'true' && ${launchButton}.dataset.state !== 'busy' && ${failureLine}`);
+      await until(browser, description, `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-busy') !== 'true' && ${launchButton}.dataset.state !== 'busy' && ${sessionSays(`${saidLine}.textContent`)}`);
     };
     terminalInventoryFailed = true;
     await until(browser, "the resume row is offered", `${rowVerb(first.machineId, "resume")}?.getAttribute('aria-disabled') !== 'true'`);
