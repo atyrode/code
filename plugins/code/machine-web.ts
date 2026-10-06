@@ -1,33 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
 import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
 import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient, WorkflowError } from "./workflow.ts";
+import { createCodeWorkflowClient, failureWords, refusalToken, WorkflowError } from "./workflow.ts";
+import { initialDestination, ompPresence, type OmpPresence } from "./destination.ts";
 
 const CODE_PREFERENCES_TOPIC = { kind: "plugin", pluginId: CODE_PLUGIN_ID } as const;
-const messages: Readonly<Record<string, string>> = {
-  code_stale_preferences: "Shared choices changed. Read the current revision before committing your edit.",
-  code_composition_changed: "The saved profile, account pool or OMP defaults changed. Review the session again before launching.",
-  code_configuration_missing: "Initialize Code for this container first.",
-  code_catalog_missing: "Stage, review and promote a catalog first.",
-  code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
-  code_scope_refused: "Your current authority does not cover this container.",
-  code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
-  code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
-  code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
-};
-/** An authoring handle exposes operations; the native cap set grants write access. */
+/**
+ * Write access is the caller's native caps alone: Manifold admits Code's mutating actions, which
+ * declare `containers:write`, on that cap at the container, whatever view is mounted. A mounted
+ * view adds no authority; its authoring door (`host.authoring`) only places terminals.
+ */
 export function canWriteCodeWorkspace(host: HostServices): boolean {
-  return host.authoring !== null && hasCap(host.client.selfCaps(), "containers:write");
+  return hasCap(host.client.selfCaps(), "containers:write");
 }
+/** A failure in the panel's words (workflow.ts `failureWords`); one that no workflow raised says only that the action could not be completed. */
 export function codeOperationFailure(reason: unknown): string {
-  return reason instanceof WorkflowError ? messages[reason.message] ?? reason.message : "The Code action could not be completed.";
+  return reason instanceof WorkflowError ? failureWords(reason.message) : "The Code action could not be completed.";
 }
-export function codeWorkflow(host: HostServices) {
+export function codeWorkflow(host: HostServices, current?: () => boolean) {
   return createCodeWorkflowClient(async (door, input) => {
+    if (current && !current()) throw new WorkflowError("code_destination_changed");
     if (door === "core.machines.list") return { machines: await host.client.machines() };
     if (door === "core.terminals.listAll") return { terminals: await host.client.allTerminals() };
     const outcome = await host.client.action(door, input);
@@ -65,9 +61,30 @@ export function useCodeTerminals(host: HostServices) {
   return { terminals: feed.value?.terminals ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 
+function useOmpPresence(host: HostServices, machines: readonly MachineSummary[] | null): ReadonlyMap<string, OmpPresence> | null {
+  const online = (machines ?? []).filter(machine => machine.online && machine.revoked !== true).map(machine => machine.id).sort();
+  const containerId = host.containerId;
+  const key = JSON.stringify([containerId, online]);
+  const { value } = usePolledResource<{ key: string; presence: [string, OmpPresence][] } | null>(async () => {
+    if (containerId === null || machines === null) return null;
+    const workflow = codeWorkflow(host);
+    const presence = await Promise.all(online.map(async (machineId): Promise<[string, OmpPresence]> => {
+      try { await workflow.omp("describeDestination", { containerId, machineId }); return [machineId, "ok"]; }
+      catch (failure) { return [machineId, ompPresence(failure)]; }
+    }));
+    return { key, presence };
+  }, FALLBACK_POLL_MS, { key: `omp-presence:${key}`, restartKey: host.principal.id, initial: null, enabled: containerId !== null && machines !== null });
+  // A read for another set of machines says nothing about these; one equal to the last keeps its identity, so what reads it is not recomputed.
+  const answer = value?.key === key ? JSON.stringify(value.presence) : null;
+  return useMemo(() => answer === null ? null : new Map(JSON.parse(answer) as [string, OmpPresence][]), [answer]);
+}
+
+export type { OmpPresence } from "./destination.ts";
+
 /** Destinations are a browser-local choice, never inferred from saved workspace data. */
 export function useCodeTarget(host: HostServices) {
   const { machines, error, refresh } = useCodeMachines(host);
+  const presence = useOmpPresence(host, machines);
   const scope = JSON.stringify([host.principal.id, host.containerId]);
   const storageKey = `${CODE_PLUGIN_ID}.destination:${scope}`;
   const [choice, setChoice] = useState<{ scope: string; machineId: string | null } | null>(null);
@@ -76,9 +93,12 @@ export function useCodeTarget(host: HostServices) {
     if (choice?.scope === scope || machines === null || host.containerId === null) return;
     let saved: string | null = null;
     try { saved = sessionStorage.getItem(storageKey); } catch { /* Browser storage is optional. */ }
-    const initial = saved || machines.find(machine => machine.online && machine.revoked !== true)?.id || machines[0]?.id;
+    // Every online machine must have answered (`ok`, `absent` or `unknown`) before a default is judged.
+    const online = machines.filter(machine => machine.online && machine.revoked !== true);
+    if (online.length && (presence === null || online.some(machine => !presence.has(machine.id)))) return;
+    const initial = initialDestination(machines, presence ?? new Map(), saved);
     if (initial) setChoice({ scope, machineId: initial });
-  }, [choice, scope, storageKey, machines, host.containerId]);
+  }, [choice, scope, storageKey, machines, presence, host.containerId]);
   function select(value: string | null) {
     setChoice({ scope, machineId: value });
     try {
@@ -89,7 +109,7 @@ export function useCodeTarget(host: HostServices) {
   const machine = machines?.find(candidate => candidate.id === machineId) ?? null;
   const target: Target | null = host.containerId && machineId ? { containerId: host.containerId, machineId } : null;
   return {
-    machines, machine, machineId, target, error, refresh, select,
+    machines, machine, machineId, target, error, refresh, select, presence,
     available: error === null && machine !== null && machine.online && machine.revoked !== true,
   };
 }
@@ -148,10 +168,10 @@ export function useOmpQuery<K extends OmpAction>(host: HostServices, name: K, in
 export function useWorkflowQuery<T>(host: HostServices, key: string, enabled: boolean, observe: () => Promise<T>, intervalMs = FALLBACK_POLL_MS) {
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => { setRefreshing(false); }, [key, host.principal.id]);
-  const feed = usePolledResource<{ data: T | null; error: string | null } | null>(async () => {
+  const feed = usePolledResource<{ data: T | null; error: string | null; code: string | null } | null>(async () => {
     if (!enabled) return null;
-    try { return { data: await observe(), error: null }; }
-    catch (reason) { return { data: null, error: codeOperationFailure(reason) }; }
+    try { return { data: await observe(), error: null, code: null }; }
+    catch (reason) { return { data: null, error: codeOperationFailure(reason), code: reason instanceof WorkflowError ? refusalToken(reason.message) : null }; }
   }, intervalMs, {
     key, restartKey: host.principal.id,
     initial: null, enabled,
@@ -164,5 +184,5 @@ export function useWorkflowQuery<T>(host: HostServices, key: string, enabled: bo
     setRefreshing(true);
     feed.refresh();
   }, [enabled, feed.refresh]);
-  return { data: feed.value?.data ?? null, error: feed.value?.error ?? null, refreshing, refresh };
+  return { data: feed.value?.data ?? null, error: feed.value?.error ?? null, code: feed.value?.code ?? null, refreshing, refresh };
 }

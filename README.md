@@ -33,16 +33,37 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 
 ## Native workflows
 
-- **Code workbench:** initialize container-scoped configuration; edit, stage,
-  review and promote a structured catalog; save shared dials. The default Profile
-  prioritizes model, core controls, task and explicit launch review. Contextual help,
-  routing, session policy, skills, usage and saved sessions open on demand without
-  discarding drafts. Changing the execution destination preserves shared choices,
-  prompts and catalog/account edits.
-- **Accounts / Usage:** choose exact OMP-observed identities or credential
-  slots, manage shared presets and inspect selected capacity with source age and
-  refresh status. OMP owns the shared broker, sign-in terminal, observations,
-  credential mutation and gateway.
+- **Code workbench:** one main view under a top bar of tabs (Generator, Accounts,
+  Sessions) and buttons (Refresh, Models, Setup, Options, Shortcuts), which fold
+  behind **More** when the panel is narrow. The **generator** is five rows of plain
+  words (lane, model, thinking, advisor, fallbacks) changed in place by pointer, keys
+  or wheel, each model shown by its short alias per tier, with **Defaults** and
+  **Revert** in its head and a readout line that says what a pointed word does,
+  including to quota where it strands a role or leads on a strained pool. A lane for
+  a signed-in family the model list lacks is struck, and pressing it starts **Verify
+  models**. Cost and speed meters sit above a launch row that names the next step
+  (Verify models, Save & launch, Launch) beside a dropdown of the machines it can run
+  on; a machine without OMP is refused like an offline one. When the step is refused it
+  stays focusable and the launch line names what failed (the accounts, the workspace
+  profile, OMP missing from the machine) with a fix. **Routing** beside it lists every
+  role's `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
+  each can be hidden. Below 760 px routing and usage are tabs of their own. The
+  **sessions** list running and explicitly read saved sessions and this device's
+  recent profiles. Priority, prewalk and auto plans are profile switches in Options.
+  Every action is a visible control; keys are accelerators, listed under
+  **Shortcuts**, with a short key line that a touch screen does not show. Launch is
+  task-less: the task is typed in the session. Empty workspaces derive a render-only
+  starter from OMP's passive bundled model metadata, so exploring needs no models,
+  credentials or runtime setup; saving starts with **Verify models**. Stored active
+  policy always wins. Models (manual authoring, import/export, discovery and
+  measurement), Setup and Options (profile switches, skills and automation for one
+  launch) open as sheets. An unsaved profile survives a reload in the tab.
+- **Accounts / Usage:** include exact OMP-observed identities or credential slots
+  with a switch per account in the Accounts view; choose the pool, manage reusable
+  presets, sign in and manage credentials under **Manage accounts**. The usage pane
+  reads each reported quota window separately and again every five minutes, or on
+  Refresh; unknown and historical facts never imply free capacity.
+  OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and
   returns OMP's retained job receipts or terminal descriptor. Explicit
@@ -61,15 +82,16 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 - **Native fleet sessions:** explicitly read bounded header/title metadata from
   each permitted machine. An exact harness/machine/session correlation can reopen
   its existing terminal at its authoritative current home; similar names or
-  directories never imply a match. Otherwise choose **Resume saved state** or
-  **Resume with this profile** on the selected destination. The latter sends
-  explicit next-resume model/thinking choices and the exact composed overlay/account
-  pool, not a claim about live effective settings. Resume rechecks native inventory
+  directories never imply a match. Otherwise choose **resume** or **with current
+  profile** on a saved session; resuming runs on the launch row's machine. The
+  latter sends explicit next-resume model/thinking choices and the exact composed
+  overlay/account pool, not a claim about live effective settings. Resume rechecks
+  native inventory
   and running terminals before preparing anything; native refusals and placement
-  permissions remain authoritative.
+  permissions remain authoritative. Recent profiles are device-local and grant nothing.
 - **Suggestions:** Code reviews and invokes only its optional external
-  classifier service. This policy is separate from OMP account and gateway
-  configuration.
+  classifier service, configured in Setup; the main view has no Suggest control.
+  This policy is separate from OMP account and gateway configuration.
 
 Native Plugins installs and governs OMP's root, accounts and gateway bundles,
 managed resources, locations, service bindings and operation consent. Code has

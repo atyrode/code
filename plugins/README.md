@@ -17,7 +17,7 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
 | Directory | Plugin / surface |
 | --- | --- |
 | `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |
-| `atyrode.code/generator/` | `atyrode.code.generator`: workbench, catalog editor, dials, workspace/probe/session flows |
+| `atyrode.code/generator/` | `atyrode.code.generator`: the main view (top bar, generator rows, routing, usage, launch with its machine dropdown, and the accounts, their management and sessions views), Models/Setup/Options sheets and catalog editor, workspace/probe/session flows |
 | `atyrode.code/accounts/` | `atyrode.code.accounts`: account-pool choices and OMP sign-in presentation |
 | `atyrode.code/usage/` | `atyrode.code.usage`: selected-capacity and OMP usage presentation |
 
@@ -27,6 +27,16 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
 - `domain/accounts.ts`, `usage.ts`, `probe.ts`, `suggestions.ts`: exact account
   selection, freshness and Code-owned catalog/suggestion policy over typed OMP
   observations.
+- `atyrode.code/generator/`: the main view's rules are pure modules tested apart from
+  the DOM — `rows-model.ts` (rows, aliases, which lanes hide or strike),
+  `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
+  line and readout), `consequences.ts`, `launch-step.ts` (the one action gate),
+  `panel-keys.ts` (every panel key as a decision over plain facts) and
+  `draft-store.ts` (the unsaved profile kept per tab). `atyrode.code/destination.ts`
+  decides where OMP answers and which machine a browser starts on. `web.tsx` is the
+  shell (top bar, views, sheets, key line, Shortcuts dialog); `generator-pane.tsx`,
+  `routing-pane.tsx`, `usage-pane.tsx`, `accounts-pane.tsx`, `earlier.tsx` and
+  `machine-picker.tsx` draw the panes and `styles.css` is the one stylesheet.
 - `atyrode.code/contract.ts`, `server.ts`, `state.ts`: container-scoped
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one
@@ -74,7 +84,7 @@ A dependent plugin's server reaches those five doors through
 `ctx.actions.call`, under the principal of the request it is answering; Code
 reads the account observation and OMP's defaults itself, so a caller supplies
 only a profile, a destination and a prompt. The profile's `revision` is the
-handle: a composition the operator changed in the generator after a caller read
+handle: a composition the operator changed in the Code panel after a caller read
 it refuses rather than posting quietly.
 
 A profile also says which accounts it spends. Account choices are stored as
@@ -96,7 +106,7 @@ class instead — `code_omp_accounts_dependency_unavailable`,
 ## Shared state and review boundaries
 
 Catalogs, profiles and account-pool choices belong to the container. Schema
-version 3 stores no destination runtime pins. Changing Run on preserves the
+version 3 stores no destination runtime pins. Changing the launch machine preserves the
 prompt, visited editors and unsaved drafts; only selected destination,
 permission progress and launch review are invalidated. An installed schema
 version 2 canonical record is transformed by the named native migration while
@@ -139,7 +149,10 @@ runtime reach native terminal placement.
 
 Usage polls the OMP accounts owner through the live event channel, retains the
 last permitted reading while refresh is pending or refused, and labels source
-age separately from quota reset time. Unknown, stale, blocked, disabled and
+age separately from quota reset time. The main view adds its own cadence: the
+host's feeds read again only on events while their channel is live and provider
+readings change without one, so the generator panel asks for a fresh reading every
+five minutes, Code's freshness window, and on `r`. Unknown, stale, blocked, disabled and
 exhausted remain distinct. Code projects these observations through shared
 account choices; it does not fetch a provider or mutate broker state.
 
@@ -253,7 +266,9 @@ Code's one native service policy is the optional external `suggest` classifier.
 that service's exact revision while preserving unrelated native policies.
 `suggest` invokes the reviewed `classify` operation and returns a validated
 revision-bound selection; saving remains an explicit Code CAS. It does not
-configure the OMP gateway or account broker.
+configure the OMP gateway or account broker. The Code panel's main view has no
+Suggest control (its launch is task-less): the classifier is configured in Setup
+and invoked only through the headless `suggest` door.
 
 No actual deployed revision, credential or account-backed provider proof is
 supplied by this source guide. Operational acceptance must name the installed

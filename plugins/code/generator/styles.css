@@ -1,270 +1,960 @@
-.plugin-atyrode_code_generator {
+/*
+ * The generator panel. Shared tokens and primitives come from the Code root stylesheet; this
+ * sheet lays out the panel as the terminal UI had it, evolved for the web: the generator's rows,
+ * routing beside them, usage under both, a key line, and the accounts and the sessions one key away;
+ * then the sheets over it. Flat and typographic: selection is weight, colour and position; feedback
+ * is colour, motion and simple block bars; no capsules, no grounds behind words, no glows. Widths
+ * answer the panel's own (`data-mode`, set from its measured width, and container queries on the
+ * `code` container), never the viewport, and every track is `minmax(0, …)` so nothing scrolls
+ * sideways. The prototype's quieter greys are raised to 4.5:1 on the panel ground.
+ * Sections: panel · palette · stage · generator rows · readout, profile, meters and launch ·
+ * routing · key line · widths · motion · session options · sheets · sessions.
+ */
+
+/* ---------------------------------------------------------------- panel */
+.plugin-atyrode_code_generator.plugin-atyrode_code {
+  position: relative;
   flex: 1 1 auto;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  container: code-generator / inline-size;
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: normal;
+  -webkit-font-smoothing: antialiased;
 }
-.plugin-atyrode_code_generator__body {
-  display: grid;
-  gap: 1rem;
-  width: 100%;
-  max-width: 88rem;
-  margin-inline: auto;
-  padding: clamp(0.8rem, 2.5cqi, 1.75rem);
+/* The root takes focus only so the panel's keys work before anything is clicked; it is not a control. */
+.plugin-atyrode_code_generator.plugin-atyrode_code:focus { outline: none; }
+.plugin-atyrode_code_generator [hidden] { display: none !important; }
+/* Radix positions the region inline (relative), so size it rather than inset it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__scroll { width: 100%; height: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__sheet-host { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; max-width: 100%; }
+
+/* ---------------------------------------------------------------- palette
+ * One accent, the lane's colour (`--tui-acc`, set on the stage from the lane), and the providers'
+ * hues. Text never falls under 4.5:1 on the panel ground: `quiet` is the lowest text grey, `faint`
+ * only draws marks (ticks, an off glider, unlit glyphs).
+ */
+.plugin-atyrode_code_generator.plugin-atyrode_code {
+  --tui-fg: #dee2e6;
+  --tui-mid: #adb5bd;
+  --tui-dim: #8f969e;
+  --tui-quiet: #7d848c;
+  --tui-faint: #4b525e;
+  --tui-rule: #2b3036;
+  --tui-well: #2a2f39;
+  --tui-warn: #e2c063;
+  --tui-warn-text: #b9a271;
+  --tui-bad: #ee8080;
+  --tui-mixed: #b8a8f6;
+  --tui-acc: var(--tui-mixed);
+  --tui-ease: cubic-bezier(.2, .8, .2, 1);
+  --tui-spring: cubic-bezier(.34, 1.5, .64, 1);
 }
-.plugin-atyrode_code_generator__masthead,
-.plugin-atyrode_code_generator__profile-header {
+
+/* ---------------------------------------------------------------- stage: the panes in a grid, the key line at the foot */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui {
+  --pad: 28px;
+  --gap: 16px;
   display: flex;
-  flex-wrap: wrap;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--tui-fg);
+  font: 14px/20px var(--code-sans);
+  font-variant-numeric: tabular-nums;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__stage {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  min-height: 0;
+  overflow-x: clip;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane { display: flex; flex-direction: column; min-width: 0; padding: 24px var(--pad) 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="generator"] { --labw: 92px; grid-column: 1; grid-row: 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="routing"] { position: relative; grid-column: 2; grid-row: 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="routing"]::before { content: ""; position: absolute; left: 0; top: 24px; bottom: 20px; width: 1px; background: var(--tui-rule); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="usage"] { grid-column: 1 / -1; grid-row: 2; border-top: 1px solid var(--tui-rule); padding-bottom: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane:is([data-pane="accounts"], [data-pane="manage"], [data-pane="sessions"]) { grid-column: 1 / -1; grid-row: 1 / -1; }
+/* The accounts' management keeps its own controls (accounts-view.tsx), set on the pane's edge. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="manage"] .plugin-atyrode_code_generator__legacy { padding: 14px 0 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-solo-generator] .plugin-atyrode_code_generator__pane[data-pane="generator"],
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-solo] .plugin-atyrode_code_generator__pane { grid-column: 1 / -1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-solo] .plugin-atyrode_code_generator__pane[data-pane="routing"]::before { display: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-solo] .plugin-atyrode_code_generator__pane[data-pane="usage"] { grid-row: 1 / -1; border-top: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane-note { margin: 18px 0 0; color: var(--tui-dim); font-size: 13px; }
+
+/* A pane's head: its title in the accent, then its controls. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__title { margin: 0 6px 0 0; color: var(--tui-acc); font-size: 15px; font-weight: 650; line-height: 22px; letter-spacing: .005em; transition: color 320ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__confirm) {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  overflow-wrap: normal;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__confirm):hover { border: 0; background: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__confirm:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------- the bar: the views as tabs, the panel's actions as buttons */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; padding: 6px var(--pad); border-bottom: 1px solid var(--tui-rule); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tabs { display: flex; flex-wrap: wrap; gap: 0 18px; min-width: 0; }
+/* A tab is a word: the chosen one bright and heavier with the accent rule under it; each keeps the room of its heavier form, so choosing moves nothing. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.45rem 1rem;
+  min-height: 32px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 6px 0;
+  color: var(--tui-dim);
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 140ms;
 }
-.plugin-atyrode_code_generator__masthead {
-  justify-content: space-between;
-  padding-bottom: 0.85rem;
-  border-bottom: 1px solid var(--code-rule);
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab::after { content: ""; position: absolute; right: 0; bottom: -7px; left: 0; height: 2px; background: var(--tui-acc); opacity: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:hover { border: 0; color: var(--tui-fg); background: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"] { color: var(--tui-fg); font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"]::after { opacity: 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions[hidden] { display: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__actions { flex-basis: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-summary { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-aside { color: var(--tui-dim); }
+/* The panel's buttons on the stage read in its greys: quiet at rest, the text colour under the pointer. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button { color: var(--tui-mid); font-size: 13px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check { color: var(--tui-mid); font-size: 13px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check[aria-checked="true"] { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check[aria-checked="true"] .plugin-atyrode_code__check-box { border-color: var(--tui-acc); background: var(--tui-acc); }
+
+/* The keyboard shortcuts, in a native dialog over the panel. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts {
+  width: min(34rem, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  border: 1px solid var(--tui-rule);
+  border-radius: 3px;
+  padding: 16px 20px 20px;
+  color: var(--tui-fg);
+  background: var(--code-panel);
+  font: 14px/20px var(--code-sans);
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__masthead h1 {
-  color: var(--code-fg);
-  font-size: 1.8rem;
-  font-family: var(--code-mono);
-  font-weight: 700;
-  letter-spacing: -0.06em;
-  line-height: 1;
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts::backdrop { background: rgb(0 0 0 / 50%); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-group { margin-top: 14px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-title { margin: 0 0 4px; color: var(--tui-mid); font-size: 13px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 16px; margin: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-list dt { color: var(--tui-mid); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-list dd { margin: 0; color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__shortcuts-list kbd { font: inherit; }
+
+/* ---------------------------------------------------------------- generator rows: glyph, label, every option word, the glider under them */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dials { display: grid; row-gap: 1px; margin-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial { position: relative; display: grid; grid-template-columns: 16px 24px var(--labw) minmax(0, 1fr); align-items: start; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-ptr { padding-top: 4px; color: var(--tui-acc); font-size: 11px; line-height: 20px; opacity: 0; transform: translateX(-4px); transition: opacity 140ms, transform 160ms var(--tui-ease), color 320ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial:hover .plugin-atyrode_code_generator__dial-ptr { opacity: .45; transform: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial:focus-within .plugin-atyrode_code_generator__dial-ptr { opacity: 1; transform: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-glyph { box-sizing: content-box; width: 15px; height: 15px; padding-top: 6px; color: var(--tui-acc); transition: color 320ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-glyph > svg { display: block; width: 15px; height: 15px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-label { justify-self: start; padding-top: 4px; color: var(--tui-dim); white-space: nowrap; transition: color 140ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial:is(:hover, :focus-within) .plugin-atyrode_code_generator__dial-label { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__words { position: relative; display: flex; flex-wrap: wrap; column-gap: var(--gap); min-width: 0; padding-top: 4px; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: pan-y; }
+/* A provider group (the DeepSeek lanes) starts its own line whenever the row has to wrap (`data-wrapped`, measured by dial-row.tsx). */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word-break { display: none; flex-basis: 100%; height: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-wrapped] .plugin-atyrode_code_generator__word-break { display: block; }
+/* Each word keeps the room of its bold form (the hidden `::after`), so choosing one never moves another. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { position: relative; display: flex; flex-direction: column; align-items: center; padding-bottom: 9px; color: var(--tui-dim); white-space: nowrap; transition: color 220ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-row="tier"] .plugin-atyrode_code_generator__word { padding-bottom: 5px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-wrapped] .plugin-atyrode_code_generator__word { padding-bottom: 13px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word[data-gap] { margin-left: 10px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-wrapped] .plugin-atyrode_code_generator__word[data-gap] { margin-left: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word-text { display: inline-flex; flex-direction: column; align-items: center; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word-text::after { content: attr(data-text); height: 0; overflow: hidden; font-weight: 700; visibility: hidden; pointer-events: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word[data-selected] { color: var(--wc, var(--tui-acc)); font-weight: 700; }
+/* A word that cannot be chosen is struck through and quieter; pointing at it says why. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word[data-off] { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word[data-off] .plugin-atyrode_code_generator__word-text { text-decoration: line-through; text-decoration-thickness: 1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__words:hover .plugin-atyrode_code_generator__word:not([data-selected]):not([data-off]):hover { color: var(--tui-fg); }
+/* A word is a radio: the pointer says it can be pressed, and keyboard focus draws a ring around its text that takes no room. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word:focus-visible .plugin-atyrode_code_generator__word-text { outline: 1px solid var(--tui-acc); outline-offset: 3px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word-sub { margin-top: 8px; color: var(--tui-quiet); font-size: 11px; font-weight: 400; line-height: 13px; transition: color 220ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__word[data-selected] .plugin-atyrode_code_generator__word-sub { color: var(--tui-mid); }
+/* The glider: a dot under the chosen word, a level fill from the line's first word to it, a tick under each word while pointed or focused. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__track { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fill { position: absolute; top: 0; left: 0; width: 1px; height: 2px; background: var(--dc, var(--tui-acc)); opacity: .5; transform-origin: 0 0; transition: transform 280ms var(--tui-ease), background-color 240ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dot { position: absolute; top: -2px; left: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--dc, var(--tui-acc)); transition: transform 320ms var(--tui-spring), background-color 240ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tick { position: absolute; top: 0; left: 0; width: 1px; height: 5px; margin-top: -2px; background: var(--tui-dim); opacity: 0; transition: opacity 160ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tick[data-off] { height: 3px; margin-top: -1px; background: var(--tui-faint); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial:is(:hover, :focus-within) .plugin-atyrode_code_generator__tick { opacity: .7; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-dragging] :is(.plugin-atyrode_code_generator__dot, .plugin-atyrode_code_generator__fill) { transition: background-color 240ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial[data-dragging] .plugin-atyrode_code_generator__words { cursor: grabbing; }
+
+/* ---------------------------------------------------------------- readout, profile, meters and launch */
+/* The readout: the one place exact values and reasons appear, only while something is pointed, dragged, pressed or focused. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout {
+  display: -webkit-box;
+  min-height: 40px;
+  margin: 8px 0 0 calc(16px + 24px + var(--labw));
+  overflow: hidden;
+  color: var(--tui-dim);
+  font-size: 13px;
+  line-height: 20px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
-.plugin-atyrode_code_generator__masthead h1 span { color: var(--code-accent); }
-.plugin-atyrode_code_generator__machine { display: flex; align-items: center; flex-wrap: wrap; gap: 0.45rem; min-width: 0; }
-.plugin-atyrode_code_generator__machine label { color: var(--code-muted); }
-.plugin-atyrode_code_generator__machine select { max-width: min(25rem, 65cqi); }
-.plugin-atyrode_code_generator__connection { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--code-dim); }
-.plugin-atyrode_code_generator__connection[data-online="true"] { background: var(--code-positive); }
-.plugin-atyrode_code_generator__workbench,
-.plugin-atyrode_code_generator__view { display: grid; gap: 1rem; min-width: 0; }
-.plugin-atyrode_code_generator__view { scroll-margin-block-start: 6rem; }
-.plugin-atyrode_code_generator__view[hidden] { display: none; }
-.plugin-atyrode_code_generator__workspace-nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; padding-block: 0.3rem; border-bottom: 1px solid var(--code-rule); background: var(--code-bg); }
-.plugin-atyrode_code_generator__workspace-nav nav { display: flex; flex-wrap: wrap; gap: 0.2rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button { min-height: 2.2rem; padding-inline: 0.8rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button[aria-current="page"] { color: var(--code-accent); background: color-mix(in srgb, var(--code-accent) 13%, var(--code-bg)); box-shadow: inset 0 -2px var(--code-accent); font-weight: 650; }
-.plugin-atyrode_code_generator__profile-state { display: inline-flex; align-items: center; gap: 0.45rem; padding-inline: 0.5rem; color: var(--code-positive); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__profile-state > span { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: currentColor; }
-.plugin-atyrode_code_generator__profile-state[data-state="local"] { color: var(--code-accent); }
-.plugin-atyrode_code_generator__profile-state[data-state="conflict"] { color: var(--code-warning); }
-.plugin-atyrode_code_generator__session-summary { padding: 0.3rem 0.15rem 0.8rem; }
-.plugin-atyrode_code_generator__session-identity { display: grid; gap: 0.3rem; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__session-model { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.7rem; color: var(--code-fg); font-family: var(--code-mono); font-size: clamp(1.1rem, 2.3cqi, 1.45rem); font-weight: 600; }
-.plugin-atyrode_code_generator__session-model > span { color: var(--code-muted); font-family: inherit; font-size: 0.75rem; font-weight: 400; }
-.plugin-atyrode_code_generator__session-context { display: flex; flex-wrap: wrap; gap: 0.25rem 0.8rem; color: var(--code-muted); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__feedback { padding: 0.65rem 0.8rem; border-inline-start: 2px solid var(--code-positive); background: color-mix(in srgb, var(--code-positive) 5%, transparent); }
-.plugin-atyrode_code_generator__feedback[data-failed="true"] { border-color: var(--code-warning); background: color-mix(in srgb, var(--code-warning) 5%, transparent); }
-.plugin-atyrode_code_generator__profile-grid { display: grid; gap: 1rem; align-items: start; min-width: 0; }
-.plugin-atyrode_code_generator__controls { display: grid; gap: 0.9rem; min-width: 0; padding-block: 0.6rem; }
-.plugin-atyrode_code_generator__profile-header { justify-content: space-between; }
-.plugin-atyrode_code_generator__dials { display: grid; gap: 0.75rem; min-width: 0; }
-.plugin-atyrode_code_generator__dial { position: relative; display: grid; grid-template-columns: 6.1rem minmax(0, 1fr) 2.75rem; align-items: center; gap: 0.35rem 0.65rem; min-width: 0; }
-.plugin-atyrode_code_generator__dial-label { display: inline-flex; align-items: center; gap: 0.55rem; color: var(--code-muted); font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__icon { width: 1rem; height: 1rem; flex: none; color: var(--code-accent); vertical-align: -0.15em; }
-.plugin-atyrode_code_generator__dial-control { min-width: 0; }
-.plugin-atyrode_code_generator__dial-options { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.15rem; width: fit-content; max-width: 100%; min-width: 0; padding: 0.2rem; border: 1px solid color-mix(in srgb, var(--code-rule) 70%, transparent); border-radius: 0.5rem; background: var(--code-bg); user-select: none; touch-action: pan-y; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button { --dial-color: var(--code-accent); min-height: 2.15rem; padding: 0.25rem 0.5rem; color: var(--code-muted); font-size: 0.75rem; font-weight: 500; touch-action: pan-y; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button[data-family="openai"] { --dial-color: var(--code-blue); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button[data-family="anthropic"] { --dial-color: var(--code-amber); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button[data-family="deepseek"] { --dial-color: var(--code-positive); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button[aria-checked="true"] { color: var(--dial-color); border-color: color-mix(in srgb, var(--dial-color) 38%, transparent); background: color-mix(in srgb, var(--dial-color) 15%, var(--code-bg)); box-shadow: 0 1px 3px color-mix(in srgb, var(--code-bg) 75%, transparent), inset 0 1px color-mix(in srgb, var(--dial-color) 12%, transparent); font-weight: 650; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button:disabled { opacity: 0.65; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-help > summary { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; min-block-size: 2rem; margin: 0; border: 1px solid color-mix(in srgb, var(--code-rule) 65%, transparent); border-radius: 50%; color: var(--code-dim); font-family: var(--code-mono); }
-.plugin-atyrode_code_generator__dial-help[open] > summary { color: var(--code-accent); border-color: var(--code-accent); }
-.plugin-atyrode_code_generator__dial-help > dl { position: absolute; inset-inline-end: 0; z-index: 3; display: grid; gap: 0.65rem; width: min(28rem, calc(100cqi - 4.5rem)); max-height: min(26rem, 40svh); overflow: auto; margin-top: 0.4rem; padding: 0.85rem; border: 1px solid var(--code-rule); border-radius: 0.5rem; background: var(--code-bg); box-shadow: 0 0.4rem 1.2rem color-mix(in srgb, black 35%, transparent); font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__dial-help dt { color: var(--code-accent); font-weight: 600; }
-.plugin-atyrode_code_generator__dial-help dd { margin: 0.15rem 0 0; color: var(--code-muted); }
-.plugin-atyrode_code_generator__extra-dials { padding-top: 0.7rem; border-top: 1px solid color-mix(in srgb, var(--code-rule) 65%, transparent); }
-.plugin-atyrode_code_generator__extra-dials > summary { font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__extra-dials > summary > span { padding-inline-start: 0.5rem; color: var(--code-dim); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__extra-dials > .plugin-atyrode_code_generator__dial { margin-top: 0.75rem; }
-.plugin-atyrode_code_generator__draft { display: grid; gap: 0.7rem; border: 1px solid color-mix(in srgb, var(--code-accent) 38%, transparent); border-inline-start: 3px solid var(--code-accent); border-radius: 0.35rem; padding: 0.8rem; background: color-mix(in srgb, var(--code-accent) 5%, transparent); }
-.plugin-atyrode_code_generator__draft strong { color: var(--code-accent); font-size: 0.8125rem; font-weight: 600; }
-.plugin-atyrode_code_generator__draft p { color: var(--code-muted); font-size: 0.75rem; margin-top: 0.2rem; }
-.plugin-atyrode_code_generator__draft[data-stale="true"] { border-color: color-mix(in srgb, var(--code-warning) 45%, transparent); background: color-mix(in srgb, var(--code-warning) 5%, transparent); }
-.plugin-atyrode_code_generator__draft[data-stale="true"] strong { color: var(--code-warning); }
-.plugin-atyrode_code_generator__suggestion { display: grid; gap: 0.4rem; min-width: 0; }
-.plugin-atyrode_code_generator__suggestion > button { justify-self: start; padding-inline: 0; font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__suggestion > p { font-size: 0.75rem; }
-.plugin-atyrode_code_generator__suggested-values { display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; margin-block: 0.4rem !important; }
-.plugin-atyrode_code_generator__suggested-values > div { display: flex; gap: 0.5rem; }
-.plugin-atyrode_code_generator__suggested-values dd { margin: 0; color: var(--code-accent); }
-.plugin-atyrode_code_generator__estimate-panel { display: grid; gap: 0.6rem; border-top: 1px solid color-mix(in srgb, var(--code-rule) 65%, transparent); padding-top: 0.8rem; }
-.plugin-atyrode_code_generator__estimates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem 1.5rem; }
-.plugin-atyrode_code_generator__estimates > div { display: grid; gap: 0.3rem; min-width: 0; }
-.plugin-atyrode_code_generator__estimates dt { color: var(--code-muted); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__estimates dd { display: grid; gap: 0.4rem; margin: 0; }
-.plugin-atyrode_code_generator__estimate-value { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0.2rem 0.5rem; font-size: 0.875rem; }
-.plugin-atyrode_code_generator__estimate-value small { color: var(--code-dim); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__estimate-meter { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.25rem; }
-.plugin-atyrode_code_generator__estimate-meter > span { height: 0.3rem; border-radius: 2px; background: color-mix(in srgb, var(--code-rule) 65%, transparent); }
-.plugin-atyrode_code_generator__estimates [data-estimate="cost"] [data-filled="true"] { background: var(--code-amber); }
-.plugin-atyrode_code_generator__estimates [data-estimate="speed"] [data-filled="true"] { background: var(--code-positive); }
-.plugin-atyrode_code_generator__estimate-panel > details { color: var(--code-dim); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__disclosure { min-width: 0; border-top: 1px solid color-mix(in srgb, var(--code-rule) 65%, transparent); }
-.plugin-atyrode_code_generator__disclosure > summary { padding-block: 0.7rem; color: var(--code-fg); font-weight: 550; }
-.plugin-atyrode_code_generator__disclosure > summary > span { margin-inline-start: 0.5rem; color: var(--code-muted); font-size: 0.75rem; font-weight: 400; }
-.plugin-atyrode_code_generator__disclosure[open] > summary { color: var(--code-accent); }
-.plugin-atyrode_code_generator summary { min-block-size: 2.75rem; align-content: center; }
-.plugin-atyrode_code_generator__route-preview { min-width: 0; }
-.plugin-atyrode_code_generator__routing { display: grid; gap: 0.7rem; min-width: 0; container: code-routing / inline-size; }
-.plugin-atyrode_code_generator__route-status { margin-inline-start: auto; color: var(--code-dim); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__route-status[data-local="true"] { color: var(--code-accent); }
-.plugin-atyrode_code_generator__routing-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--code-rule); }
-.plugin-atyrode_code_generator__routing-tools > p { display: flex; flex-wrap: wrap; gap: 0.35rem 0.7rem; color: var(--code-muted); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__agent-legend { color: var(--code-dim); }
-.plugin-atyrode_code_generator__agent-legend > span { color: var(--code-accent); font-size: 0.6rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routing-tools button { min-height: 1.8rem; padding: 0.2rem 0.45rem; border: 1px solid color-mix(in srgb, var(--code-rule) 75%, transparent); font-size: 0.7rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routing-tools button[aria-expanded="true"] { color: var(--code-accent); background: color-mix(in srgb, var(--code-accent) 13%, var(--code-bg)); }
-.plugin-atyrode_code_generator__count { min-width: 1.15rem; padding-inline: 0.2rem; border-radius: 0.2rem; background: color-mix(in srgb, var(--code-fg) 6%, transparent); font-size: 0.65rem; }
-.plugin-atyrode_code_generator__routes { display: grid; gap: 0 1.5rem; min-width: 0; font-family: var(--code-mono); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__routes > div { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); align-items: baseline; gap: 0.55rem; min-width: 0; padding-block: 0.55rem; border-bottom: 1px solid color-mix(in srgb, var(--code-rule) 40%, transparent); }
-.plugin-atyrode_code_generator__routes > div:last-child { border-bottom: 0; }
-.plugin-atyrode_code_generator__routes dt { display: flex; align-items: baseline; min-width: 0; color: var(--code-muted); }
-.plugin-atyrode_code_generator__routes dd { min-width: 0; margin: 0; }
-.plugin-atyrode_code_generator__agent-marker { display: inline-block; flex: 0 0 0.9rem; color: var(--code-accent); font-size: 0.6em; }
-.plugin-atyrode_code_generator__model { --model-color: var(--code-accent); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.55rem; min-width: 0; max-width: 100%; color: var(--model-color); }
-.plugin-atyrode_code_generator__model-name { min-width: 0; overflow-wrap: anywhere; color: var(--model-color); font-weight: 550; }
-.plugin-atyrode_code_generator__model[data-family="openai"] { --model-color: var(--code-blue); }
-.plugin-atyrode_code_generator__model[data-family="anthropic"] { --model-color: var(--code-amber); }
-.plugin-atyrode_code_generator__model[data-family="deepseek"] { --model-color: var(--code-positive); }
-.plugin-atyrode_code_generator__model-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.4rem; font-family: system-ui, sans-serif; font-size: 0.65rem; }
-.plugin-atyrode_code_generator__provider { color: var(--model-color); }
-.plugin-atyrode_code_generator__thinking { border-radius: 0.25rem; padding: 0.05rem 0.3rem; color: var(--code-muted); background: color-mix(in srgb, var(--code-fg) 5%, transparent); }
-.plugin-atyrode_code_generator__thinking:is([data-level="high"], [data-level="xhigh"], [data-level="max"]) { color: var(--code-accent); background: color-mix(in srgb, var(--code-accent) 9%, transparent); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__model-id { flex-basis: 100%; min-width: 0; color: var(--code-muted); font-size: 0.7rem; line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fallbacks { display: grid; gap: 0.45rem; list-style: none; padding: 0.55rem 0 0.1rem; }
-.plugin-atyrode_code_generator__fallback { display: flex; align-items: baseline; min-width: 0; gap: 0.45rem; border-inline-start: 1px solid var(--code-rule); padding-inline-start: 0.5rem; font-size: 0.7rem; }
-.plugin-atyrode_code_generator__fallback-order { flex-shrink: 0; color: var(--code-dim); font-size: 0.65rem; }
-.plugin-atyrode_code_generator__routing-note { color: var(--code-dim); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__launch { display: grid; gap: 0.6rem; min-width: 0; padding: 1rem; border: 1px solid color-mix(in srgb, var(--code-accent) 45%, var(--code-rule)); border-radius: 0.65rem; background: color-mix(in srgb, var(--code-accent) 4%, var(--code-bg)); }
-.plugin-atyrode_code_generator__launch[data-reviewed="true"] { border-color: color-mix(in srgb, var(--code-positive) 70%, var(--code-rule)); }
-.plugin-atyrode_code_generator__launch > label { color: var(--code-muted); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__launch > label > span { margin-inline-start: 0.35rem; font-size: 0.7rem; }
-.plugin-atyrode_code_generator__launch-bar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 0.65rem 1rem; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-bar > button { min-height: 2.45rem; gap: 0.75rem; }
-.plugin-atyrode_code_generator__launch-status { color: var(--code-muted); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__launch > button { justify-self: start; font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__launch-review { display: grid; gap: 0.5rem; padding-block: 0.7rem; border-block: 1px solid color-mix(in srgb, var(--code-positive) 25%, transparent); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-review h3 { color: var(--code-positive); font-size: 0.75rem; }
-.plugin-atyrode_code_generator__launch-review ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
-.plugin-atyrode_code_generator__launch-review li { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; font-size: 0.75rem; }
-.plugin-atyrode_code_generator__launch-review li[data-family="openai"] > span:first-child { color: var(--code-blue); }
-.plugin-atyrode_code_generator__launch-review li[data-family="anthropic"] > span:first-child { color: var(--code-amber); }
-.plugin-atyrode_code_generator__launch-review li[data-family="deepseek"] > span:first-child { color: var(--code-positive); }
-.plugin-atyrode_code_generator__launch-review li > span:last-child { color: var(--code-muted); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation, .plugin-atyrode_code_generator__saved-sessions) { display: grid; gap: 0.65rem; min-width: 0; padding-block-start: 0.8rem; border-block-start: 1px solid var(--code-rule); font-size: 0.8125rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout b { color: var(--rc, var(--tui-acc)); font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] b { color: var(--tui-warn); }
+/* The narrow profile: the team grouped by what it runs, whenever routing is not beside the generator. */
+/* Either column gives way before anything is cut: a lead or a role too long for its room ends in an ellipsis, its title whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 2px 18px; margin: 14px 0 0 calc(16px + 24px); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead { min-width: 0; overflow: hidden; color: var(--h); line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead[data-down] { text-decoration: line-through; text-decoration-color: var(--tui-bad); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-roles { min-width: 0; color: var(--tui-fg); line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-role { display: inline-block; max-width: 100%; margin-right: 12px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-mark { margin-right: 4px; color: var(--tui-mid); font-size: 7px; vertical-align: 2px; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-alias { font-weight: 560; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-thinking { opacity: .8; }
+/* Cost, speed and the launch, pinned at the generator's foot, level with the routing pane's own foot. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__genfoot { display: grid; row-gap: 2px; margin-top: auto; padding-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter { display: grid; grid-template-columns: 16px calc(24px + var(--labw)) auto; justify-content: start; align-items: center; line-height: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter-label { grid-column: 2; color: var(--tui-dim); }
+/* Five glyphs a little closer than a letter's width, bold like the terminal's: lit in the accent, unlit as the meter's dark track. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs { display: flex; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg { display: block; width: 16px; height: 16px; margin: 0 -3px; color: #363c47; stroke-width: 2; transition: color 200ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg[data-lit] { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter[data-unmeasured] .plugin-atyrode_code_generator__glyphs > svg { color: #30353f; }
+/* The launch, the machine it runs on, then the line beside them. The foot sits on the pane's floor, and the launch on the foot's:
+   the line beside it grows upward, and where there is no room beside the launch it goes above it, so the launch never moves
+   while its line changes and a double press lands on it twice. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: end; min-height: 32px; margin-top: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap-reverse; grid-column: 2; align-items: flex-start; gap: 2px 16px; min-width: 0; }
+/* The machine goes under the launch where both do not fit, never squeezed out of sight. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; max-width: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark { display: grid; flex: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark > svg { grid-area: 1 / 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-label { position: relative; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch { position: relative; flex: none; align-items: center; gap: 9px; padding: 4px 2px 6px 0; color: var(--tui-acc); font-size: 15px; font-weight: 650; transition: color 320ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch:hover { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch:focus-visible { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch:focus-visible .plugin-atyrode_code_generator__launch-label { text-decoration: underline 1px color-mix(in srgb, var(--tui-acc) 50%, transparent); text-underline-offset: 5px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-glyph { display: block; width: 17px; height: 17px; transition: transform 220ms var(--tui-spring), opacity 160ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-check { display: block; width: 17px; height: 17px; opacity: 0; transform: scale(.4); transition: opacity 160ms, transform 260ms var(--tui-spring); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-charge { position: absolute; right: 0; bottom: -5px; left: 0; height: 2px; background: var(--tui-acc); opacity: .9; transform: scaleX(0); transform-origin: 0 50%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch:is(:hover, :focus-visible) .plugin-atyrode_code_generator__launch-glyph { transform: translateX(-3px); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-pressing] .plugin-atyrode_code_generator__launch-glyph { transform: translate(-2px, 1px) scale(.92); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-pressing] .plugin-atyrode_code_generator__launch-charge { transform: scaleX(1); transition: transform 320ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-fired] .plugin-atyrode_code_generator__launch-charge { transform: scaleX(1); animation: plugin-atyrode_code_generator__fire 900ms var(--tui-ease) forwards; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-fired] .plugin-atyrode_code_generator__launch-glyph { opacity: 0; transform: translateX(-8px); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-fired] .plugin-atyrode_code_generator__launch-check { opacity: 1; transform: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[aria-disabled="true"] .plugin-atyrode_code_generator__launch-glyph { transform: none; }
+/* Only a step that runs breathes: a busy state, never a decoration. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch[data-state="busy"] .plugin-atyrode_code_generator__launch-glyph { animation: plugin-atyrode_code_generator__breathe 1.4s ease-in-out infinite; }
+@keyframes plugin-atyrode_code_generator__fire { from { opacity: 1; } to { opacity: 0; } }
+@keyframes plugin-atyrode_code_generator__breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+/* The line beside the launch: its facts and fixes wrap beside the launch rather than clip, since a refusal's words are its reason. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line { display: flex; flex: 1 1 12rem; flex-wrap: wrap; align-items: baseline; gap: 0 14px; min-width: 0; color: var(--tui-warn-text); font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line:empty { display: none; }
+/* The machine: `on` and its name, a word that opens the roster above the launch line; each machine with its neutral online dot. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine { display: inline-flex; align-items: center; gap: 0 7px; min-width: 0; max-width: 100%; font-size: 14px; line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-on { flex: none; color: var(--tui-dim); }
+/* The name ends in an ellipsis where the line is short, its title whole; it never narrows past a few letters. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 4em;
+  min-height: 26px;
+  margin: 0;
+  border: 1px solid var(--tui-rule);
+  border-radius: 3px;
+  padding: 0 6px 0 8px;
+  overflow: hidden;
+  color: var(--tui-fg);
+  background: none;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 140ms;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word:hover { border-color: var(--tui-faint); color: var(--code-text-bright); background: var(--code-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-chevron { flex: none; width: 14px; height: 14px; color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word[aria-expanded="true"] { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__machine-word[aria-disabled="true"] { color: var(--tui-dim); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-dot { flex: none; box-sizing: border-box; width: 5px; height: 5px; border: 1px solid var(--tui-dim); border-radius: 50%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-dot[data-online="true"] { background: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-dot:not([data-online]) { visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  display: grid;
+  width: max-content;
+  min-width: min(12rem, 100%);
+  max-width: 100%;
+  border-block: 1px solid var(--tui-rule);
+  padding: 4px 0;
+  background: var(--code-panel);
+  font-size: 14px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-list:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 1px 12px 1px 10px; border-left: 2px solid transparent; color: var(--tui-mid); line-height: 24px; cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option[data-cursor] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option[aria-selected="true"] { border-left-color: var(--tui-acc); color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option[data-off] { color: var(--tui-quiet); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option[data-off] .plugin-atyrode_code_generator__machine-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-facts { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line .plugin-atyrode_code_generator__fix { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part + .plugin-atyrode_code_generator__launch-part::before { content: " · "; color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part:is([data-tone="plain"], [data-tone="neutral"], [data-tone="busy"], [data-tone="meta"]) { color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part[data-tone="strong"] { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part[data-tone="done"] { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm { color: var(--tui-acc); font-size: 14px; font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
+
+/* ---------------------------------------------------------------- routing: role, model:thinking in its provider's hue, the chain behind it */
+/* The role column gives way before the routes do: a role too long for its room ends in an ellipsis, its title whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route { display: contents; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route > span { line-height: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark { position: relative; color: var(--tui-fg); font-size: 8px; text-align: center; }
+/* A row that changed flashes a bar beside its mark (routing-pane.tsx animates it). */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark::before { content: ""; position: absolute; top: 6px; bottom: 6px; left: -12px; width: 2px; background: var(--tui-acc); opacity: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-role { min-width: 0; overflow: hidden; color: var(--tui-fg); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route[data-off] .plugin-atyrode_code_generator__route-role { color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain { display: flex; flex-wrap: wrap; column-gap: 7px; min-width: 0; }
+/* A value rolls inside its own box: the old one leaves upward, clipped, as the new one rises into place. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok { display: inline-grid; overflow: clip; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-layer { grid-area: 1 / 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value { color: var(--h); transition: color 260ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-off] { color: var(--tui-dim); }
+/* A lead quota leaves out is struck, its colour withdrawn; pointing at it says why. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-down] { color: var(--tui-dim); text-decoration: line-through; text-decoration-color: var(--tui-bad); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tok-value[data-down] .plugin-atyrode_code_generator__tok-thinking { opacity: 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-step { display: inline-flex; gap: 7px; white-space: nowrap; animation: plugin-atyrode_code_generator__chain-in 260ms var(--tui-ease) var(--step-delay, 0ms) backwards; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-arrow { color: var(--tui-quiet); }
+@keyframes plugin-atyrode_code_generator__chain-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routefoot { display: grid; row-gap: 6px; margin-top: auto; padding-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout { min-height: 20px; overflow: hidden; color: var(--tui-dim); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout b { color: var(--rc, var(--tui-fg)); font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout[data-tone="warn"] { color: var(--tui-warn-text); }
+
+/* ---------------------------------------------------------------- key line: the most used keys, the rest under Shortcuts; a coarse pointer has no keys, so it has no key line */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys { display: grid; padding: 10px var(--pad) 13px; border-top: 1px solid var(--tui-rule); color: var(--tui-dim); font-size: 13px; line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 9px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-sep { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-key { margin-right: 5px; color: var(--tui-mid); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-word { color: var(--tui-dim); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- widths: the panel's own (`data-mode`), the label column measured from the labels */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="wide"] .plugin-atyrode_code_generator__stage { grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="medium"] { --gap: 14px; --pad: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="medium"] .plugin-atyrode_code_generator__stage { grid-template-columns: minmax(0, 1.72fr) minmax(0, 1fr); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] { --gap: 12px; --pad: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__pane { padding-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial { grid-template-columns: 12px 22px var(--labw) minmax(0, 1fr); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: calc(12px + 22px + var(--labw)); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__meter { grid-template-columns: 12px calc(22px + var(--labw)) auto; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__launchrow { grid-template-columns: 12px minmax(0, 1fr); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__profile { margin-left: calc(12px + 22px); }
+/* Under 430px the lane's words drop under its label, so the GPT↔Claude spectrum stays on one line. */
+@container code (width < 430px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] { --gap: 8px; --pad: 14px; font-size: 13px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__dial-label, .plugin-atyrode_code_generator__meter-label) { font-size: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial { grid-template-columns: 0 20px var(--labw) minmax(0, 1fr); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial-ptr { margin-left: -11px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial[data-kind="lane"] .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: calc(20px + var(--labw)); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__meter { grid-template-columns: 0 calc(20px + var(--labw)) auto; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__launchrow { grid-template-columns: 0 minmax(0, 1fr); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__profile { margin-left: 20px; column-gap: 12px; }
+}
+/* Under 300px every row's words go under its label, as the lane's do under 430px, each group's roles under its lead and each route's chain under its role, so nothing is squeezed to a word a line or an ellipsis. */
+@container code (width < 300px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { grid-template-columns: 18px minmax(0, 1fr); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain { grid-column: 2; margin-bottom: 4px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: 20px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-roles { margin-bottom: 4px; padding-left: 12px; }
+}
+/* Coarse pointers: every target at least 44px tall, the launch, each row's words and the machine's included; set at rest, so nothing moves on hover or focus. */
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys { display: none; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__confirm, .plugin-atyrode_code_generator__machine-word, .plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__tab) { align-items: center; min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { box-sizing: border-box; min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option { min-height: 44px; }
+}
+
+/* ---------------------------------------------------------------- motion: none on arrival or resize, none under reduced motion */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-boot] *, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-boot] *::before, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-boot] *::after { transition: none !important; animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui *, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui *::before, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui *::after {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---------------------------------------------------------------- session options: a sheet in the panel's grammar
+ * No boxes and no native controls: groups under lowercase heads 24px apart, notes in 13px text,
+ * on/off as an 8px square switch, filled when on, a choice of two as pressed
+ * words, a skill's source opened in place by its own word.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options { display: grid; gap: 24px; min-width: 0; max-width: 44rem; padding: 16px; font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-lede { margin: 0; color: var(--code-text-2); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-group { display: grid; justify-items: start; gap: 4px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-head { margin: 0 0 4px; color: var(--code-text-2); font-size: 13px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-subhead { margin: 8px 0 0; color: var(--code-text-3); font-size: 11.5px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note { max-width: 40rem; margin: 0; color: var(--code-text-2); overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note[data-tone="meta"] { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-note[data-tone="warn"] { color: var(--code-warn); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__options-switches, .plugin-atyrode_code_generator__options-skills) { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-switches { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); justify-self: stretch; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-skills > li { display: grid; justify-items: start; min-width: 0; }
+/* What a switch governs (its purpose, its source, the tools it opens) sits under its words, past the 8px square and its gap. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch ~ :is(p, button, dl, ul) { margin-left: 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-skill-title { color: var(--code-text-bright); font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; min-width: 0; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: var(--code-text-2);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link):hover:not([aria-disabled="true"]) { border: 0; color: var(--code-text-bright); background: none; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link):focus-visible { outline: 2px solid var(--code-focus); outline-offset: 2px; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link)[aria-disabled="true"] { color: var(--code-text-3); cursor: not-allowed; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch > i { flex: none; width: 8px; height: 8px; box-shadow: inset 0 0 0 1.5px currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch[aria-checked="true"] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__option-switch[aria-checked="true"] > i { background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-choice[aria-pressed="true"] { border: 0; color: var(--code-text-bright); background: none; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-link { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 12px; margin: 4px 0 0; color: var(--code-text-3); font-size: 11.5px; line-height: 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__options-facts dd { margin: 0; min-width: 0; color: var(--code-text-2); overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- views hosted in sheets
+ * Accounts, Models and Setup are not redesigned yet; sheets keep their original layout inside the
+ * new frame until their own pass.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  font: 400 0.875rem/1.5 var(--code-sans);
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy :where(button, select, summary) { min-block-size: 2.75rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy :where(button) { min-inline-size: 2.75rem; border-radius: 3px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy :where(summary) { align-content: center; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__next-action > button { border-color: var(--code-accent); background: var(--code-accent); color: var(--code-on-accent); font-weight: 600; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) { display: grid; gap: 0.65rem; min-width: 0; padding-block-start: 0.8rem; border-block-start: 1px solid var(--code-hairline); font-size: 0.8125rem; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) :is(fieldset, ul) { display: grid; gap: 0.75rem; min-width: 0; margin: 0; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) fieldset { padding: 0.65rem; border: 1px solid var(--code-rule); }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) label { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) label > input { width: auto; }
-.plugin-atyrode_code_generator__skills label > span { color: var(--code-muted); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation, .plugin-atyrode_code_generator__saved-sessions) :is(p, dd, select) { overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
-.plugin-atyrode_code_generator__skills dl { display: grid; gap: 0.2rem; }
-.plugin-atyrode_code_generator__skills dt { color: var(--code-muted); }
-.plugin-atyrode_code_generator__skills dd { margin: 0 0 0.4rem; }
-.plugin-atyrode_code_generator__footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--code-dim); font-size: 0.7rem; }
-.plugin-atyrode_code_generator__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.plugin-atyrode_code_generator__onboarding { display: grid; gap: 1.5rem; min-width: 0; }
-.plugin-atyrode_code_generator__steps { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; list-style: none; padding: 0 !important; }
-.plugin-atyrode_code_generator__steps li { min-width: 0; }
-.plugin-atyrode_code_generator__steps button { display: inline-flex; gap: 0.5rem; padding-inline: 0.1rem; font-size: 0.8125rem; }
-.plugin-atyrode_code_generator__steps li[aria-current="step"] button { color: var(--code-accent); border-bottom-color: var(--code-accent); }
-.plugin-atyrode_code_generator__steps li[data-complete="true"]:not([aria-current="step"]) button { color: var(--code-positive); }
-.plugin-atyrode_code_generator__setup-step { display: grid; gap: 1rem; min-width: 0; max-width: 62rem; }
-.plugin-atyrode_code_generator__setup-step > p { max-width: 44rem; color: var(--code-muted); }
-.plugin-atyrode_code_generator__setup-step > button,
-.plugin-atyrode_code_generator__onboarding > button { justify-self: start; }
-.plugin-atyrode_code_generator__setup-step > h3 { font-size: 1.1rem; color: var(--code-fg); }
-.plugin-atyrode_code_generator__setup-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 1rem; }
-.plugin-atyrode_code_generator__setup-facts dt { color: var(--code-muted); }
-.plugin-atyrode_code_generator__setup-facts dd { margin: 0; }
-.plugin-atyrode_code_generator__requirements { list-style: none; display: grid; gap: 0.4rem; padding: 0 !important; max-width: 36rem; }
-.plugin-atyrode_code_generator__requirements li { display: flex; justify-content: space-between; gap: 1rem; }
-.plugin-atyrode_code_generator__requirements li > span:last-child { color: var(--code-warning); }
-.plugin-atyrode_code_generator__requirements li[data-ready="true"] > span:last-child { color: var(--code-positive); }
-.plugin-atyrode_code_generator__catalog,
-.plugin-atyrode_code_generator__catalog-review,
-.plugin-atyrode_code_generator__model-editor { display: grid; gap: 0.8rem; min-width: 0; }
-.plugin-atyrode_code_generator__catalog > .plugin-atyrode_code__section-heading > button { margin-inline-start: auto; }
-.plugin-atyrode_code_generator__model-editor > fieldset { margin: 0; }
-.plugin-atyrode_code_generator__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 0.6rem; }
-.plugin-atyrode_code_generator__fields > label { display: grid; gap: 0.25rem; min-width: 0; }
-.plugin-atyrode_code_generator__fields > label > :is(input, select) { width: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__skills label > span { color: var(--code-muted); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__skills, .plugin-atyrode_code_generator__automation) :is(p, dd, select) { overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__skills dl { display: grid; gap: 0.2rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__skills dt { color: var(--code-muted); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__skills dd { margin: 0 0 0.4rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__runtime-settings { display: grid; gap: 0.8rem; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 1rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts dt { color: var(--code-muted); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts dd { margin: 0; }
+/* The last verification's excluded models, in Setup's source details. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__exclusions { display: grid; gap: 0.1rem; margin: 0 0 0.4rem; padding: 0.35rem 0.5rem; background: var(--code-card); list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__exclusions li { display: grid; grid-template-columns: minmax(0, 18rem) minmax(0, 1fr); gap: 0.75rem; color: var(--code-text-3); font-size: 0.7rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__exclusions code { overflow: hidden; color: var(--code-text-2); font-family: var(--code-mono); font-size: 0.64rem; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__requirements { display: grid; gap: 0.4rem; max-width: 36rem; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__requirements li { display: flex; justify-content: space-between; gap: 1rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__requirements li > span:last-child { color: var(--code-warning); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__requirements li[data-ready="true"] > span:last-child { color: var(--code-positive); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__catalog, .plugin-atyrode_code_generator__catalog-review, .plugin-atyrode_code_generator__model-editor) { display: grid; gap: 0.8rem; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__model-editor > fieldset { margin: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 0.6rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fields > label { display: grid; gap: 0.25rem; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fields > label > :is(input, select) { width: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__check { display: inline-flex; align-items: center; gap: 0.4rem; }
-.plugin-atyrode_code_generator__check input { width: auto; }
-.plugin-atyrode_code_generator__job-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; padding-inline-start: 0.65rem; border-inline-start: 2px solid var(--code-accent); }
-.plugin-atyrode_code_generator__job-progress > p { flex-basis: 100%; }
-.plugin-atyrode_code_generator__job-progress > details { flex-basis: 100%; min-width: 0; }
-@container code-generator (min-width: 62rem) {
-  .plugin-atyrode_code_generator__profile-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
-  .plugin-atyrode_code_generator__controls { grid-column: 1; grid-row: 1; }
-  .plugin-atyrode_code_generator__launch { grid-column: 2; grid-row: 1; }
-  .plugin-atyrode_code_generator__route-preview { grid-column: 1 / -1; grid-row: 2; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__check input { width: auto; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__job-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.8rem; padding-inline-start: 0.65rem; border-inline-start: 2px solid var(--code-accent); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__job-progress > :is(p, details) { flex-basis: 100%; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__legacy .plugin-atyrode_code_generator__routing-review { padding-inline: 0; }
+
+/* ---------------------------------------------------------------- the Models sheet's routing table: every role on one 24px line */
+/* A compact table: role, model and effort stay adjacent at every width and hug the section's left edge. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__ledger { position: relative; display: grid; margin: 0 -0.4rem; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow {
+  display: grid;
+  grid-template-columns: minmax(0, 11.5rem) minmax(0, 8rem) minmax(0, 4.5rem);
+  grid-template-areas: "role model effort" "id id id" "fallback fallback fallback";
+  justify-content: start;
+  align-items: center;
+  column-gap: 0.75rem;
+  min-height: 24px;
+  border-radius: 3px;
+  padding: 0 0.4rem;
+  cursor: pointer;
 }
-@container code-routing (min-width: 46rem) {
-  .plugin-atyrode_code_generator__routes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@container code-routing (max-width: 28rem) {
-  .plugin-atyrode_code_generator__routes > div { grid-template-columns: 8.25rem minmax(0, 1fr); font-size: 0.7rem; }
-  .plugin-atyrode_code_generator__model-meta { flex-basis: 100%; }
-}
-@container code-generator (max-width: 38rem) {
-  .plugin-atyrode_code_generator__dial { grid-template-columns: 5.5rem minmax(0, 1fr) 2.75rem; column-gap: 0.4rem; }
-  .plugin-atyrode_code_generator__workspace-nav { gap: 0.35rem; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button { padding-inline: 0.6rem; }
-  .plugin-atyrode_code_generator__profile-state { font-size: 0.7rem; }
-  .plugin-atyrode_code_generator__steps li:not([aria-current="step"]) button > span:last-child { display: none; }
-}
-@container code-generator (max-width: 25rem) {
-  .plugin-atyrode_code_generator__masthead { align-items: start; }
-  .plugin-atyrode_code_generator__machine { width: 100%; }
-  .plugin-atyrode_code_generator__machine select { flex: 1; max-width: none; }
-  .plugin-atyrode_code_generator__workspace-nav nav { width: 100%; justify-content: space-between; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button { padding-inline: 0.4rem; font-size: 0.75rem; }
-  .plugin-atyrode_code_generator__launch { padding: 0.75rem; }
-  .plugin-atyrode_code_generator__dial { grid-template-columns: minmax(0, 1fr) 2.75rem; row-gap: 0.3rem; }
-  .plugin-atyrode_code_generator__dial-label { grid-column: 1; }
-  .plugin-atyrode_code_generator__dial-control { grid-column: 1 / -1; grid-row: 2; }
-  .plugin-atyrode_code_generator__dial-help { grid-column: 2; grid-row: 1; }
-  .plugin-atyrode_code_generator__launch-bar > button { width: 100%; }
-  .plugin-atyrode_code_generator__setup-facts { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
-  .plugin-atyrode_code_generator__setup-facts dd { margin-bottom: 0.35rem; }
-}
-@container code-routing (max-width: 20rem) {
-  .plugin-atyrode_code_generator__routes > div { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
-  .plugin-atyrode_code_generator__routes dd { padding-inline-start: 0.9rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow:hover { background: var(--code-hover); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow:focus-visible { outline: 1px solid var(--code-focus); outline-offset: -1px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow[data-pinned] { background: var(--code-selected-row); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__role { grid-area: role; display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; line-height: 24px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__role-name { min-width: 0; overflow: hidden; color: var(--code-text-strong); font-size: 0.76rem; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__agent { flex: none; color: var(--code-text-3); font-size: 0.64rem; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__model { grid-area: model; display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__alias { min-width: 0; overflow: hidden; color: var(--code-text); font-size: 0.76rem; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__effort { grid-area: effort; min-width: 0; overflow: hidden; color: var(--code-text-2); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__model-id,
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fallback { display: none; min-width: 0; padding: 0 0 0.2rem 0.75rem; color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__model-id { grid-area: id; overflow: hidden; font-family: var(--code-mono); font-size: 0.64rem; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fallback { grid-area: fallback; font-size: 0.7rem; line-height: 1.35; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__ledger[data-ids] .plugin-atyrode_code_generator__model-id,
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__ledger[data-fallbacks] .plugin-atyrode_code_generator__fallback,
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow[data-pinned] :is(.plugin-atyrode_code_generator__model-id, .plugin-atyrode_code_generator__fallback) { display: block; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__probe { position: absolute; display: block; visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__fallback-step { white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow[data-off] :is(.plugin-atyrode_code_generator__role-name, .plugin-atyrode_code_generator__alias) { color: var(--code-text-3); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routing-review { display: grid; gap: 0.25rem; }
+/* The table's note under it: how its chains are read. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__empty { display: flex; align-items: center; min-height: 24px; margin: 0; color: var(--code-text-3); font-size: 13px; }
+
+/* ---------------------------------------------------------------- sheets and table: container queries, coarse pointers, motion */
+@container code (width < 40rem) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__options { padding-inline: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow { column-gap: 0.5rem; grid-template-columns: minmax(0, 11.5rem) minmax(0, 7rem) minmax(0, 3.75rem); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__exclusions li { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__setup-facts { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
 }
 @media (pointer: coarse) {
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-options button { min-height: 2.75rem; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__dial-help > summary { width: 2.75rem; height: 2.75rem; min-block-size: 2.75rem; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__workspace-nav button { min-height: 2.75rem; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__option-switch, .plugin-atyrode_code_generator__options-choice, .plugin-atyrode_code_generator__options-link) { min-width: 44px; min-height: 44px; }
 }
-@keyframes plugin-atyrode_code_generator__enter {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) {
+  /* A changed route keeps its glow as a still mark that simply ends, never a fade. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__lrow[data-changed] { background: var(--code-afterglow); }
 }
-@keyframes plugin-atyrode_code_generator__choice {
-  from { background-color: color-mix(in srgb, var(--code-accent) 14%, transparent); }
-  to { background-color: transparent; }
+
+/* ---------------------------------------------------------------- sessions: the sessions on the machines and the recent profiles, one key away
+ * Rows say only what differs from the generator, on 4px steps and the 13 / 11.5 type steps, in the
+ * stage's greys. Refused verbs stay focusable and turn quiet (`aria-disabled`); hover brightens text
+ * and nothing else, and nothing changes size on hover or focus. Sessions take one line from 480px;
+ * below, the verb, the title and where it is stack.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier { display: grid; gap: 24px; min-width: 0; margin-top: 14px; font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-group { display: grid; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-group:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; padding-bottom: 4px; font-size: 12px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-title { margin: 0; color: var(--tui-mid); font-size: 13px; font-weight: 600; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-meta { min-width: 0; color: var(--tui-dim); overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-sep { color: var(--tui-quiet); }
+
+/* Text controls: words that brighten under the pointer, pulled out by their padding so the text keeps its column. */
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with) {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  min-height: 24px;
+  margin: 0 -4px;
+  border: 0;
+  border-radius: 0;
+  padding: 2px 4px;
+  color: var(--tui-fg);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
-@media (prefers-reduced-motion: no-preference) {
-  .plugin-atyrode_code_generator__view,
-  .plugin-atyrode_code_generator__draft,
-  .plugin-atyrode_code_generator__feedback,
-  .plugin-atyrode_code_generator__launch-review { animation: plugin-atyrode_code_generator__enter 180ms ease-out both; }
-  .plugin-atyrode_code_generator__model,
-  .plugin-atyrode_code_generator__estimate-value { animation: plugin-atyrode_code_generator__choice 500ms ease-out; }
-  .plugin-atyrode_code_generator__workspace-nav button,
-  .plugin-atyrode_code_generator__dial-options button,
-  .plugin-atyrode_code_generator__routing-tools button,
-  .plugin-atyrode_code_generator__launch-bar > button { transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 100ms ease; }
-  .plugin-atyrode_code_generator__dial-options button:active:not(:disabled),
-  .plugin-atyrode_code_generator__launch-bar > button:active:not(:disabled) { transform: translateY(1px); }
-  .plugin-atyrode_code_generator__estimate-meter > span { transition: background-color 180ms ease; }
+/* A machine name can be long: the link shrinks to the line and ends in an ellipsis rather than pushing the panel wider. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-link { display: inline-block; flex: 0 1 auto; min-width: 0; max-width: calc(100% + 8px); overflow: hidden; font-size: 11.5px; text-overflow: ellipsis; }
+/* The second verb is lighter in weight, not in colour, so a refused one (grey) still reads apart from an available one. It may wrap on the narrowest tiles. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-with { flex: 0 1 auto; justify-content: flex-start; min-width: 0; font-weight: 400; text-align: left; white-space: normal; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with):hover:not([aria-disabled="true"]) {
+  border: 0;
+  color: var(--code-text-bright);
+  background: transparent;
+}
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with, .plugin-atyrode_code_generator__earlier-team)[aria-disabled="true"] { cursor: default; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with)[aria-disabled="true"],
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with)[aria-disabled="true"]:hover { border: 0; color: var(--tui-quiet); background: transparent; }
+/* The verb whose step is running names it in full colour while every other verb waits in grey. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verb[aria-busy="true"],
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verb[aria-busy="true"]:hover { color: var(--tui-fg); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with, .plugin-atyrode_code_generator__earlier-team):focus-visible { outline: none; box-shadow: inset 0 -1px 0 var(--tui-acc); }
+
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows { display: grid; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li { position: relative; min-width: 0; }
+/* An open folder drum stacks above the rows after it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li:has([data-open]) { z-index: 3; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note { margin: 0; padding: 4px 0; color: var(--tui-dim); overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note > .plugin-atyrode_code_generator__earlier-link { margin-left: 0; }
+/* An empty list is a sentence, not a framed row. */
+/* The view's own line: what its last verb came to, warm when it failed or was refused. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said { min-height: 20px; margin: 0 0 6px; color: var(--tui-dim); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said[data-tone="warn"] { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { margin: 0; color: var(--tui-dim); overflow-wrap: anywhere; }
+
+/*
+ * Sessions, grouped under their machine's head: each row is folder, title (a folder's drum), when
+ * and its place among the folder's sessions, then the verbs. The rows share one grid (`subgrid`)
+ * sized to what they hold, so the verbs follow the content and never park at the panel's far edge.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] {
+  grid-template-columns: fit-content(14rem) fit-content(28rem) max-content max-content;
+  column-gap: 16px;
+  justify-content: start;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] > li { grid-column: 1 / -1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-session { display: grid; grid-template-columns: subgrid; align-items: baseline; padding: 4px 0; }
+/* A machine's head says it once, with its read; the first group sits under the section head without a rule. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li.plugin-atyrode_code_generator__earlier-machine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  border-top: 0;
+  padding: 12px 0 4px;
+  font-size: 11.5px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li.plugin-atyrode_code_generator__earlier-machine-head:first-child { padding-top: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-machine { min-width: 0; color: var(--tui-mid); font-size: 13px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-folder { min-width: 0; overflow: hidden; color: var(--tui-mid); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-head-line { display: flex; align-items: baseline; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-name { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; color: var(--tui-fg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { display: flex; align-items: baseline; gap: 0 4px; min-width: 0; color: var(--tui-dim); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+/* The verbs: resume in the text colour, the second verb quieter; both brighten under the pointer. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs > .plugin-atyrode_code_generator__earlier-with { flex: none; color: var(--tui-dim); white-space: nowrap; }
+
+/*
+ * A folder's sessions as a drum: the shown session is the value; open, the others
+ * hang below it on the panel ground between hairlines, their text on the name's x, the shown one
+ * marked by the 2px accent and the cursor by brightness. Closed, the options stay in the document
+ * for the listbox, clipped to nothing, so opening moves nothing.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 100%; cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word:hover > .plugin-atyrode_code_generator__earlier-name { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word:focus-visible { outline: none; box-shadow: 0 1px 0 var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word[data-open] > .plugin-atyrode_code_generator__earlier-drum {
+  top: calc(100% + 4px);
+  left: -8px;
+  display: grid;
+  width: max-content;
+  min-width: calc(100% + 16px);
+  max-width: min(36rem, calc(100cqi - 16px));
+  height: auto;
+  max-height: calc(8 * 24px);
+  overflow-y: auto;
+  border-block: 1px solid var(--tui-rule);
+  background: var(--code-panel);
+  clip-path: none;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 8px 2px 6px;
+  border-left: 2px solid transparent;
+  color: var(--tui-mid);
+  line-height: 20px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option:hover,
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option[data-cursor] { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option[data-current] { border-left-color: var(--tui-acc); color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-option-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* A recent team: its digit, then only the words that differ, what it would strand, then its age; the whole row recalls it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  justify-content: stretch;
+  align-items: baseline;
+  gap: 0 4px;
+  width: calc(100% + 8px);
+  min-height: 28px;
+  margin: 0 -4px;
+  border: 0;
+  border-radius: 0;
+  padding: 4px;
+  color: var(--tui-fg);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+  overflow-wrap: normal;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team:hover:not([aria-disabled="true"]) { border: 0; color: var(--code-text-bright); background: transparent; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-team[aria-disabled="true"]:hover { border: 0; color: var(--tui-fg); background: transparent; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-digit { color: var(--tui-dim); font-size: 11.5px; font-weight: 600; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-words { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-same] { color: var(--tui-mid); }
+/* The word today's catalog has no route for, quieter, its reason in its title: the row cannot be recalled. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-word[data-off] { color: var(--tui-quiet); text-decoration: line-through; }
+/* What recalling the profile would strand, warm: "12 no route until 16:55". */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-fate { color: var(--tui-warn-text); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-marks { display: inline-flex; flex: none; align-self: center; gap: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-age { color: var(--tui-dim); font-size: 11.5px; white-space: nowrap; }
+
+/* Narrow, a session takes two lines on the same shared grid: folder and title, then when and the verbs. */
+@container code (width < 480px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] { grid-template-columns: fit-content(6rem) minmax(0, 1fr); column-gap: 12px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { flex-wrap: wrap; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { column-gap: 8px; }
+}
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word { align-items: center; min-height: 44px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-link, .plugin-atyrode_code_generator__earlier-verb, .plugin-atyrode_code_generator__earlier-with) { align-items: center; min-width: 44px; min-height: 44px; }
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-team, .plugin-atyrode_code_generator__earlier-option) { min-height: 44px; align-items: center; }
+}
+
+/* ---------------------------------------------------------------- usage pane and accounts view (TuiUsage)
+ * usage-pane.tsx and accounts-pane.tsx, on the shell's TUI tokens: per provider, then per account, a
+ * 12-block bar per window with its share, reset and word; in the accounts view a switch per account.
+ * Text never goes below --tui-quiet, so an excluded account is quiet rather than faded. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-body { display: flex; flex-direction: column; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-providers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
+  gap: 12px 44px;
+  align-items: start;
+  margin-top: 14px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct { --usage-hue: var(--code-other); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-hue="openai"] { --usage-hue: var(--code-openai); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-hue="anthropic"] { --usage-hue: var(--code-anthropic); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-hue="deepseek"] { --usage-hue: var(--code-deepseek); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct { min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-pname {
+  overflow: hidden;
+  color: var(--usage-hue);
+  font-weight: 650;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A later account of a provider keeps the name's line, and shows the name only where it starts a grid row. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-pname[data-cont] { visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-pname[data-cont="lead"] { visibility: visible; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-pname[data-cont="gone"] { display: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-age { margin-left: 10px; color: var(--tui-warn); font-size: 13px; font-weight: 400; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-who { display: flex; align-items: baseline; min-width: 0; color: var(--tui-dim); line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win {
+  display: grid;
+  grid-template-columns: 3em auto 3.1em auto minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+  font-size: 13.5px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="warn"] { --usage-bar: var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="error"] { --usage-bar: var(--tui-bad); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="unknown"] { --usage-bar: var(--tui-faint); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-wl { color: var(--tui-fg); white-space: nowrap; }
+/* Centred on the first 22px line, where the row's words sit even when its tail wraps. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar { display: flex; gap: 2px; margin-top: 5px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { position: relative; width: 7px; height: 12px; overflow: hidden; background: var(--tui-well); }
+/* Each block fills from its left edge, one after another (the inline delay), and drains the same way while a refresh reads. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i > b {
+  position: absolute;
+  inset: 0;
+  background: var(--usage-bar, var(--usage-hue));
+  transform-origin: 0 50%;
+  transition: transform 240ms cubic-bezier(.2, .8, .2, 1), background-color 240ms;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-pct { color: var(--tui-fg); text-align: right; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="warn"] .plugin-atyrode_code_generator__usage-pct { color: var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win[data-level="error"] :is(.plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-word) { color: var(--tui-bad); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst) { color: var(--tui-dim); white-space: nowrap; }
+/* The reset and the word wrap inside the last column, the word under the reset only where a row cannot hold both. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { display: flex; flex-wrap: wrap; column-gap: 10px; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-word { color: var(--tui-warn); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bal { display: flex; gap: 10px; line-height: 22px; font-variant-numeric: tabular-nums; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bl { color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bv { color: var(--tui-fg); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-note { color: var(--tui-dim); font-size: 13px; line-height: 22px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-note[data-tone="warn"] { color: var(--tui-warn-text); }
+/* Excluded or disabled: every word quiet, the name struck, the bars faint. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv) { transition: color 240ms cubic-bezier(.2, .8, .2, 1); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv, .plugin-atyrode_code_generator__usage-note) { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] .plugin-atyrode_code_generator__usage-win { --usage-bar: var(--tui-faint); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct[data-excluded] .plugin-atyrode_code_generator__usage-name { text-decoration: line-through; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-next { display: inline-grid; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-next::after { content: attr(data-sizer); grid-area: 1 / 1; height: 0; overflow: hidden; visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-refresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin-top: 14px;
+  color: var(--tui-dim);
+  font-size: 13px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The accounts view: offers, the pool when presets exist, switches over their windows, one readout line, the launch line. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body:focus { outline: none; }
+/* Readings sit under the name, past the switch; the indent is paid for out of the gaps, so a row's word still shows whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-providers { column-gap: 36px; margin-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-acct > :is(.plugin-atyrode_code_generator__usage-win, .plugin-atyrode_code_generator__usage-bal, .plugin-atyrode_code_generator__usage-note) { padding-left: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-win { column-gap: 8px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--tui-fg);
+  font: inherit;
+  line-height: 24px;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch:focus-visible { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch[aria-disabled="true"] { cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-sw {
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--usage-hue);
+  border-radius: 50%;
+  background: var(--usage-hue);
+  transition: background-color 200ms, border-color 200ms, transform 260ms cubic-bezier(.34, 1.5, .64, 1);
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch[aria-checked="false"] .plugin-atyrode_code_generator__accounts-sw { border-color: var(--tui-quiet); background: transparent; transform: scale(.85); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch:focus-visible .plugin-atyrode_code_generator__accounts-sw { box-shadow: 0 0 0 3px var(--code-panel), 0 0 0 4px var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-who {
+  position: relative;
+  justify-self: start;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tui-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 240ms;
+}
+/* Switching off strikes the name from its left, as the TUI crossed out a vault. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-who::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch[aria-checked="false"] .plugin-atyrode_code_generator__accounts-who { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch[aria-checked="false"] .plugin-atyrode_code_generator__accounts-who::after { transform: scaleX(1); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch:is(:hover, :focus-visible) .plugin-atyrode_code_generator__accounts-who { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch[aria-checked="false"]:is(:hover, :focus-visible) .plugin-atyrode_code_generator__accounts-who { color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-st { margin-left: 12px; color: var(--tui-quiet); font-size: 13px; white-space: nowrap; }
+/* Two lines are always reserved, so a reason that appears under the pointer moves nothing below it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-readout {
+  display: -webkit-box;
+  height: 40px;
+  margin: 12px 0 0;
+  overflow: hidden;
+  color: var(--tui-dim);
+  font-size: 13px;
+  line-height: 20px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-readout b { color: var(--tui-fg); font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-readout[data-tone="warn"] { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-readout[data-tone="warn"] b { color: var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-body .plugin-atyrode_code_generator__usage-refresh { margin-top: 2px; }
+
+@container code (width < 430px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em auto 3em auto minmax(0, 1fr); column-gap: 8px; font-size: 13px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { column-gap: 8px; }
+}
+/* Narrower than a window row at 13px: thinner blocks, and the share stands alone without "used". */
+@container code (width < 380px) {
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em auto 3em minmax(0, 1fr); column-gap: 6px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { width: 5px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-used { display: none; }
+}
+/* Under 300px the bar gives way: its blocks share the room left beside the label and the share, and the reset goes under them. */
+@container code (width < 300px) {
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-body, .plugin-atyrode_code_generator__accounts-body) .plugin-atyrode_code_generator__usage-win { grid-template-columns: 2.6em minmax(0, 1fr) 3em; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar { min-width: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-bar > i { flex: 1 1 0; min-width: 2px; max-width: 5px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-tail { grid-column: 2 / -1; }
+}
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-switch { align-items: center; min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-bar > i > b, .plugin-atyrode_code_generator__accounts-sw, .plugin-atyrode_code_generator__accounts-who) { transition: none; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-who::after { transition: none; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv) { transition: none; }
 }

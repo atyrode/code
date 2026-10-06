@@ -83,7 +83,7 @@ describe("governed classifier suggestions", () => {
     const selection = defaultSelection(catalog);
     const elite = response('critical — security migration\n{"model":"elite","thinking":"xhigh","advisor":"audit"}');
     expect(() => parseSuggestionResponse(catalog, selection, elite, nowMs)).toThrow("code_suggestion_unavailable");
-    const only: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" } };
+    const only: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, spark: false };
     const suggested = parseSuggestionResponse(catalog, only, elite, nowMs);
     expect(suggested.selection).toEqual({ ...only, capability: 4, thinking: "xhigh", advisor: "audit" });
   });
@@ -91,9 +91,10 @@ describe("governed classifier suggestions", () => {
   test("preserves provider blend and session controls while reporting only real sizing changes", () => {
     const catalog = compileCatalog(document());
     for (const blend of ["only", "led"] as const) {
+      // A Balanced baseline with no advisor, so the suggested sizing changes all three fields.
       const selection: Selection = {
-        ...defaultSelection(catalog), lane: { kind: "provider", family: "openai", blend },
-        spark: true, priority: true, prewalk: true, planYolo: true, fallback: false,
+        ...defaultSelection(catalog), lane: { kind: "provider", family: "openai", blend }, capability: 2, advisor: "off",
+        spark: false, priority: true, prewalk: true, planYolo: true, fallback: false,
       };
       const snapshot = structuredClone(selection);
       const result = parseSuggestionResponse(catalog, selection, response(), nowMs);
@@ -106,9 +107,11 @@ describe("governed classifier suggestions", () => {
     }
   });
 
-  test("trivial sizing does not buy priority or enable Spark", () => {
+  test("trivial sizing does not buy priority", () => {
     const catalog = compileCatalog(document());
-    const selection = defaultSelection(catalog);
+    // Priority starts off, so a trivial suggestion has something it must not turn on;
+    // the advisor starts where the suggestion puts it, so only real sizing changes are reported.
+    const selection: Selection = { ...defaultSelection(catalog), advisor: "off", spark: false };
     const result = parseSuggestionResponse(catalog, selection,
       response('trivial — typo\n{"model":"fast","thinking":"minimal","advisor":"off"}'), nowMs);
     expect(result.selection).toEqual({ ...selection, capability: 1, thinking: "minimal" });
@@ -120,7 +123,7 @@ describe("governed classifier suggestions", () => {
     const selection = defaultSelection(catalog);
     expect(() => buildSuggestionRequest(catalog, selection, " \n\t", nowMs)).toThrow("code_suggestion_invalid_request");
     expect(() => buildSuggestionRequest(catalog, selection, "size a refactor", NaN)).toThrow("code_suggestion_invalid_request");
-    const invalid: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, spark: true };
+    const invalid: Selection = { ...selection, lane: { kind: "provider", family: "anthropic", blend: "only" }, priority: true };
     expect(() => buildSuggestionRequest(catalog, invalid, "size a refactor", nowMs)).toThrow("code_suggestion_invalid_request");
     expect(() => parseSuggestionResponse(catalog, invalid, response(), nowMs)).toThrow("code_suggestion_invalid_request");
     const noVision = compileCatalog({ schemaVersion: 1, models: document().models.map(model => ({ ...model, images: false })) });

@@ -14,7 +14,6 @@ export const ReviewSchema = z.strictObject({
   available: z.strictObject({
     lanes: z.array(LaneSchema).min(1),
     capabilities: z.array(CapabilitySchema).min(1),
-    spark: z.boolean(),
     priority: z.boolean(),
     /**
      * The budgets this catalog can actually serve for the rest of this selection, proved by
@@ -26,9 +25,10 @@ export const ReviewSchema = z.strictObject({
 });
 export type Review = z.infer<typeof ReviewSchema>;
 
-const roles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic",
+/** The roles Code routes, in its order. Advisor is omitted while the advisor is off. */
+export const ROLES = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic",
   "advisor", "vision", "smol", "tiny", "commit"] as const;
-type Role = typeof roles[number];
+type Role = typeof ROLES[number];
 const agentRoles: Partial<Record<Role, true>> = { task: true, reviewer: true, "security-reviewer": true, scout: true, sonic: true };
 const deliberative: Partial<Record<Role, true>> = { plan: true, slow: true, reviewer: true, "security-reviewer": true };
 const utilityCaps: Partial<Record<Role, readonly number[]>> = {
@@ -68,7 +68,6 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   }
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const hosted = lane.kind === "provider" && lane.blend === "only" ? [primary] : catalog.families;
-  const special = catalog.special("spark");
   const capabilities: Review["available"]["capabilities"] = catalog.top(primary) === 4 ? [1, 2, 3, 4] : [1, 2, 3];
   // Proved, not inferred: a free model somewhere in the catalog does not make THIS selection's
   // profile free, so ask the resolver. The same trick `defaultSelection` uses to prove a
@@ -84,22 +83,30 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
   }
   const available = {
     lanes, capabilities,
-    spark: special !== undefined && hosted.includes(catalog.family(special)),
     priority: hosted.some(family => familyPolicy(family).priority !== undefined),
     budgets: budgets.length === 0 ? (["any"] as Selection["budget"][]) : budgets,
   };
-  if (!capabilities.includes(selection.capability) || (selection.spark && !available.spark) ||
-      (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
-  return { selection, available };
+  if (!capabilities.includes(selection.capability) || (selection.priority && !available.priority)) throw new DomainError("invalid_selection");
+  // Spark is retired: a stored selection that still asks for it is read with it off.
+  return { selection: { ...selection, spark: false }, available };
 }
 
+/**
+ * OLD CODE'S DEFAULT (`keys.go:47-53`), the profile its screenshot shows: Capable, medium
+ * thinking and a glance advisor.
+ *
+ * Availability is read first, from a selection every lane admits, because `selectionFacts`
+ * refuses a capability the lead family lacks.
+ */
 export function defaultSelection(catalog: CompiledCatalog): Selection {
   const lane: Lane = catalog.families.includes("openai") && catalog.families.includes("anthropic")
     ? { kind: "mixed" } : { kind: "provider", family: catalog.families[0]!, blend: "only" };
-  const selection: Selection = {
-    lane, capability: 2, thinking: "medium", advisor: "off", spark: false, priority: false,
+  const admitted: Selection = {
+    lane, capability: 1, thinking: "medium", advisor: "glance", spark: false, priority: false,
     prewalk: false, planYolo: false, fallback: true, budget: "any",
   };
+  const { available } = selectionFacts(catalog, admitted);
+  const selection: Selection = { ...admitted, capability: available.capabilities.filter(value => value <= 3).at(-1)! };
   // A catalog without any image-capable model has no complete default profile.
   selectedRoutes(catalog, selection);
   return selection;
@@ -110,7 +117,6 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
   const primary = lane.kind === "mixed" ? "openai" : lane.family;
   const pure = lane.kind === "provider" && lane.blend === "only";
   const extreme = thinking === "minimal" || thinking === "max";
-  const special = catalog.special("spark");
   const crossingFamily = (family: string): string | undefined => {
     const preferred = familyPolicy(family).crossTo;
     return preferred === null ? undefined : catalog.families.includes(preferred) ? preferred : catalog.families.find(candidate => candidate !== family);
@@ -148,7 +154,7 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
    */
   const admits = (key: string): boolean => admittedBy(selection.budget, catalog.model(key));
   const routes: Route[] = [];
-  for (const role of roles) {
+  for (const role of ROLES) {
     let lead: string;
     let level = thinking;
     let fallbacks: (string | undefined)[] = [];
@@ -180,14 +186,8 @@ function selectedRoutes(catalog: CompiledCatalog, selection: Selection): Route[]
     } else if (utilityCaps[role]) {
       const tier = utilityCaps[role]![capability - 1]!;
       if (!extreme) level = utilityThinking[role]![ThinkingLevelSchema.options.indexOf(thinking) - 1]!;
-      if (selection.spark && special && (role === "tiny" || role === "commit" || (role === "sonic" && capability === 1))) {
-        lead = special;
-        if (!extreme) level = "low";
-        fallbacks = [catalog.rung(primary, tier)];
-      } else {
-        lead = catalog.rung(primary, tier);
-        if (role === "scout" || role === "sonic") fallbacks = [sibling(lead)];
-      }
+      lead = catalog.rung(primary, tier);
+      if (role === "scout" || role === "sonic") fallbacks = [sibling(lead)];
     } else {
       let family = primary;
       if (!pure && deliberative[role]) {
@@ -258,10 +258,81 @@ export function reviewCatalog(catalog: CompiledCatalog, input: Selection, nowMs:
   return { selection, routes, estimates: estimate(catalog, selection, routes, nowMs), available };
 }
 
-/** Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. */
-export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[]): Overlay {
+/**
+ * A SELECTION MADE AGAINST ANOTHER CATALOG, narrowed to what this one hosts: the operator chose
+ * dials over the bundled preview, and the verified catalog may lack a lane, a fourth rung or
+ * priority that the preview offered. Each structural choice it cannot host moves to the
+ * nearest one it can — the same family's other blend, then the default lane; the highest
+ * capability not above the one chosen — and every other choice is kept as made.
+ *
+ * The budget is never narrowed. It is a constraint rather than a preference, so a free selection
+ * this catalog cannot serve refuses `budget_unsatisfiable` here instead of becoming a paid one.
+ * Without a selection to keep, the catalog's own default is the answer.
+ */
+export function clampSelection(catalog: CompiledCatalog, wanted: Selection | null): Selection {
+  const fallback = defaultSelection(catalog);
+  if (wanted === null) return fallback;
+  const parsed = SelectionSchema.safeParse(wanted);
+  if (!parsed.success) throw new DomainError("invalid_selection");
+  const lanes = lanesFor(catalog);
+  const want = parsed.data.lane;
+  const lane = lanes.find(candidate => candidate.kind === "mixed" ? want.kind === "mixed"
+      : want.kind === "provider" && candidate.family === want.family && candidate.blend === want.blend)
+    ?? lanes.find(candidate => candidate.kind === "provider" && want.kind === "provider" && candidate.family === want.family)
+    ?? fallback.lane;
+  const { available } = selectionFacts(catalog, { ...parsed.data, lane, capability: 1, spark: false, priority: false });
+  const capability = available.capabilities.filter(value => value <= parsed.data.capability).at(-1) ?? available.capabilities[0]!;
+  const selection: Selection = { ...parsed.data, lane, capability, spark: false, priority: parsed.data.priority && available.priority };
+  selectedRoutes(catalog, selectionFacts(catalog, selection).selection);
+  return selection;
+}
+
+/**
+ * OLD CODE'S `filterRows` (`0035b4f:routing.go:447-477`): a fallback rung whose provider no
+ * included account serves is dropped, so neither the reviewed routes nor the launched overlay
+ * name a model OMP cannot route. A lead is never dropped: a lead nobody can serve is a role
+ * that cannot run, and that refuses `account_unavailable` rather than silently promoting a
+ * fallback into the lead.
+ */
+export function servedRoutes(catalog: CompiledCatalog, routes: readonly Route[], serves: (provider: string) => boolean): Route[] {
+  return routes.map(route => {
+    if (!serves(catalog.model(route.lead.key).provider)) throw new DomainError("account_unavailable");
+    return { ...route, fallback: route.fallback.filter(choice => serves(catalog.model(choice.key).provider)) };
+  });
+}
+
+/** A lead nobody serves, or the fallbacks on one provider nobody serves: who, where, and the provider's family. */
+export type ServiceGap = { readonly provider: string; readonly family: string; readonly roles: readonly string[] };
+
+/**
+ * The rule `servedRoutes` applies, judged without refusing, so a client can say beforehand what
+ * the session door will do. `lead`: the first provider that leads a route and that no included
+ * account serves, with every role it leads; the door refuses the whole composition for it
+ * (`account_unavailable`). `pruned`: per provider nobody serves, the roles that lose fallbacks
+ * there; the door drops those fallbacks and the launch goes on, so they are a note, never a refusal.
+ */
+export function routeService(catalog: CompiledCatalog, routes: readonly Route[], serves: (provider: string) => boolean): { lead: ServiceGap | null; pruned: ServiceGap[] } {
+  const gap = (provider: string, roles: string[]): ServiceGap => ({ provider, family: providerPolicy(provider).family, roles });
+  const unservedLeads = new Map<string, string[]>(), pruned = new Map<string, string[]>();
+  for (const route of routes) {
+    const lead = catalog.model(route.lead.key).provider;
+    if (!serves(lead)) unservedLeads.set(lead, [...unservedLeads.get(lead) ?? [], route.role]);
+    for (const provider of new Set(route.fallback.map(choice => catalog.model(choice.key).provider))) {
+      if (!serves(provider)) pruned.set(provider, [...pruned.get(provider) ?? [], route.role]);
+    }
+  }
+  const [first] = unservedLeads;
+  return { lead: first ? gap(...first) : null, pruned: [...pruned].map(([provider, roles]) => gap(provider, roles)) };
+}
+
+/**
+ * Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. The
+ * routes must be exactly the selection's, less precisely the fallbacks `serves` rules out.
+ */
+export function compileOmpOverlay(catalog: CompiledCatalog, input: Selection, routes: readonly Route[],
+  serves: (provider: string) => boolean = () => true): Overlay {
   const { selection } = selectionFacts(catalog, input);
-  const expected = selectedRoutes(catalog, selection);
+  const expected = servedRoutes(catalog, selectedRoutes(catalog, selection), serves);
   const parsed = z.array(RouteSchema).max(32).safeParse(routes);
   if (!parsed.success || parsed.data.length !== expected.length) throw new DomainError("invalid_selection");
   const supplied = new Map(parsed.data.map(route => [route.role, route]));
