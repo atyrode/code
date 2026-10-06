@@ -283,13 +283,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
 
 /* ---------------------------------------------------------------- routing: role, model:thinking in its provider's hue, the chain behind it */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px max-content minmax(0, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+/* The role column gives way before the routes do: a role too long for its room ends in an ellipsis, its title whole. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route { display: contents; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route > span { line-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark { position: relative; color: var(--tui-fg); font-size: 8px; text-align: center; }
 /* A row that changed flashes a bar beside its mark (routing-pane.tsx animates it). */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark::before { content: ""; position: absolute; top: 6px; bottom: 6px; left: -12px; width: 2px; background: var(--tui-acc); opacity: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-role { color: var(--tui-fg); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-role { min-width: 0; overflow: hidden; color: var(--tui-fg); text-overflow: ellipsis; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route[data-off] .plugin-atyrode_code_generator__route-role { color: var(--tui-dim); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain { display: flex; flex-wrap: wrap; column-gap: 7px; min-width: 0; }
 /* A value rolls inside its own box: the old one leaves upward, clipped, as the new one rises into place. */
@@ -344,7 +345,7 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__launchrow { grid-template-columns: 0 minmax(0, 1fr); }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__profile { margin-left: 20px; column-gap: 12px; }
 }
-/* Under 300px every row's words go under its label, as the lane's do under 430px, and each group's roles under its lead, so nothing is squeezed to a word a line or an ellipsis. */
+/* Under 300px every row's words go under its label, as the lane's do under 430px, each group's roles under its lead and each route's chain under its role, so nothing is squeezed to a word a line or an ellipsis. */
 @container code (width < 300px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__readout { margin-left: 20px; }
@@ -399,6 +400,8 @@
   margin: 0;
   border: 0;
   padding: 0;
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { grid-template-columns: 18px minmax(0, 1fr); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain { grid-column: 2; margin-bottom: 4px; }
   color: var(--code-text-2);
   background: none;
   font: inherit;

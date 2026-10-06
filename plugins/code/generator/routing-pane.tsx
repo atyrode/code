@@ -83,7 +83,7 @@ function RouteRow({ row, index, chains, onPoint }: { row: LedgerRow; index: numb
   const fallback = chains && !row.off ? row.fallback : [];
   return <li ref={element} className={`${G}route`} data-role={row.role} data-off={row.off || undefined}>
     <span className={`${G}route-mark`}>{row.agentBacked ? "●" : ""}{row.agentBacked && <span className="plugin-atyrode_code__sr">, agent</span>}</span>
-    <span className={`${G}route-role`}>{row.role}</span>
+    <span className={`${G}route-role`} title={row.role}>{row.role}</span>
     <span className={`${G}chain`}>
       <Token value={row.lead} reason={row.down} delay={delay} onPoint={onPoint} onChanged={() => flash(element.current, delay)} />
       {fallback.map((choice, step) => <span key={step} className={`${G}chain-step`} style={{ "--step-delay": `${index * 16 + step * 60}ms` } as CSSProperties}>
