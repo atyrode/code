@@ -247,9 +247,11 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       providers: Object.keys(probe.accountPool).filter(provider => probe.accountPool[provider]!.length > 0).sort() };
   }
   /**
-   * A probe job followed to its end. A stop — before a wait or during one — cancels the job
-   * through the native job owner, because a benchmark still running after its caller left is
-   * still spending; the job and whatever it already answered stay in OMP's history either way.
+   * A probe job followed to its end. Anything that ends the wait while the job is still active —
+   * a stop before a wait or during one, or a status read that fails or answers malformed — cancels
+   * the job through the native job owner, because a benchmark still running after its caller left
+   * is still spending; a cancellation that fails is named in the error beside what stopped the
+   * wait. The job and whatever it already answered stay in OMP's history either way.
    */
   async function settledJob(job: PublicJob, node: JobNode, run: VerificationRun): Promise<void> {
     if (job.jobId !== node.jobId || job.machineId !== node.machineId || job.operationId !== node.operationId || job.pluginId !== OMP_PLUGIN_ID)
@@ -259,12 +261,12 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       try {
         run.check();
         await run.wait(PROBE_POLL_MS);
+        current = await run.call(() => readJob(node), false);
       } catch (stop) {
         try { await native("cancel", { node }); }
         catch (error) { throw run.fail(`${stop instanceof VerificationError ? stop.reason : "code_verification_changed"}; job ${job.jobId} was not cancelled: ${error instanceof Error ? error.message : "unknown"}`); }
         throw stop;
       }
-      current = await run.call(() => readJob(node), false);
     }
     if (current.state !== "exited" || current.result?.exitCode !== 0)
       throw run.fail(`job ${job.jobId} ${current.state}${current.result?.exitCode == null ? "" : ` with exit code ${current.result.exitCode}`}`);
