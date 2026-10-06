@@ -17,7 +17,7 @@ import { NOT_CURRENT, SAVING } from "./account-switch.ts";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep,
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
@@ -534,11 +534,12 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   async function resume(withTeam: boolean) {
     const intent = withTeam ? "resume-with-team" : "resume";
-    if (!target || !record || !allowed(intent)) return;
+    const team = target ? resumeTeam(withTeam, target, record) : null;
+    if (!team || !allowed(intent)) return;
     await perform("resume", async () => {
       setPreview(null);
       const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
-        ...(withTeam ? { profile: { target, expectedRevision: record.revision } } : {}),
+        ...team,
         ...(skillChoice === undefined ? {} : { skills: skillChoice }), ...(automation === undefined ? {} : { automation }),
       }, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
       if (result.kind === "reopen") {

@@ -1,5 +1,6 @@
 import type { Selection } from "../../domain/contracts.ts";
 import type { ServiceGap } from "../../domain/routing.ts";
+import type { Configuration, Target } from "../contract.ts";
 import type { VerificationStatus } from "./verification.ts";
 
 /** Where the profile the controls show comes from: the bundled render-only preview, the shared
@@ -320,6 +321,17 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
       return facts.planYolo ? refuse("plans") : OPEN;
     }
   }
+}
+
+/**
+ * The saved team a resume sends with the session, if any. A plain resume sends none and needs no
+ * Code configuration, so a workspace whose Code choices were never initialized still reopens a
+ * saved session as it was; a resume with the team sends the saved profile at its revision. Null
+ * when a resume with the team has no saved profile to send, which the gate refuses before this.
+ */
+export function resumeTeam(withTeam: boolean, target: Target, record: Configuration | null): { readonly profile?: { readonly target: Target; readonly expectedRevision: number } } | null {
+  if (!withTeam) return {};
+  return record ? { profile: { target, expectedRevision: record.revision } } : null;
 }
 
 /** How long a saved team's inputs must hold still before Code reviews its launch on its own. */
