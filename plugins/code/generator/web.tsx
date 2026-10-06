@@ -15,7 +15,7 @@ import { CatalogWorkbench } from "./catalog-editor.tsx";
 import { EarlierStatements, usePinnedRecents } from "./earlier.tsx";
 import type { StatementWords } from "./earlier-model.ts";
 import { GeneratorPane, PANEL_VOCABULARY, type GeneratorControls, type GeneratorPlace, type LaunchState } from "./generator-pane.tsx";
-import { panelKey, type PanelAction, type PanelSheet, type PanelView } from "./panel-keys.ts";
+import { acceleratorFor, panelKey, type PanelAction, type PanelSheet, type PanelView } from "./panel-keys.ts";
 import { routeLedger } from "./routing-model.ts";
 import { RoutingPane } from "./routing-pane.tsx";
 import { RuntimeSettings } from "./runtime-settings.tsx";
@@ -89,16 +89,21 @@ function useMode(app: RefObject<HTMLDivElement | null>): Mode {
   return mode;
 }
 
-/** Every key the panel answers, by where it acts; the key line names only the most used. */
+/** The keys that can open a view tab: Esc goes back to the generator, or from Manage accounts to the accounts. */
+const TAB_KEYS = ["Escape", "a", "e", "p", "s"] as const;
+
+/** Every key the panel answers, grouped by the view it acts in (panel-keys.ts); the key line names only the most used. */
 const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (readonly [key: string, does: string])[] }[] = [
   { title: "Generator", keys: [["↑ ↓", "Move between the rows"], ["← →", "Change the row's value"], ["Home End", "The row's first or last value"],
     ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: verify, save, review or launch"], ["Mod ⏎", "The launch, from anywhere in the view"],
-    ["d", "Defaults"], ["z", "Back to the saved profile"], ["f", "Show or hide the fallback chains"], ["w", "Choose the machine"]] },
-  { title: "Views", keys: [["a", "Accounts"], ["e", "Sessions"], ["p", "Routing: hide or show, or open it when narrow"], ["s", "Usage: hide or show, or open it when narrow"],
-    ["Esc", "Back to the generator"]] },
+    ["d", "Defaults"], ["z", "Back to the saved profile"], ["f", "Show or hide the fallback chains, here or in Routing"], ["w", "Choose the machine"],
+    ["m", "Models"], ["u", "Setup"], ["o", "Session options"]] },
+  { title: "Views", keys: [["a", "Accounts, or back to the generator"], ["e", "Sessions, or back to the generator"],
+    ["p", "Routing: hide or show it beside the generator, or open it when narrow"], ["s", "Usage: hide or show it beside the generator, or open it when narrow"],
+    ["Esc", "Back to the generator; from Manage accounts, back to the accounts"]] },
   { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
   { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
-  { title: "Anywhere", keys: [["r", "Read accounts, usage and machines again"], ["m", "Models"], ["u", "Setup"], ["o", "Session options"], ["?", "These shortcuts"]] },
+  { title: "Anywhere", keys: [["r", "Read accounts, usage and machines again"], ["?", "These shortcuts"]] },
 ];
 
 /** The keyboard shortcuts, in a native modal dialog: Esc or its Close button closes it, and it owns its keys while open. */
@@ -274,6 +279,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
 
   // ------------------------------------------------------------ session options: for one launch or resume, never saved
   const chosenSkills = model.skillChoice?.mode === "select" ? model.skillChoice.skillIds.length + model.skillChoice.setIds.length : 0;
+  const staged = model.record?.active != null && model.record.draft != null;
   const optionsSummary = model.automation ? "restricted" : model.skillChoice?.mode === "disabled" ? "skills off"
     : model.skillChoice?.mode === "select" ? `${chosenSkills} ${chosenSkills === 1 ? "skill" : "skills"}` : null;
   // The options wait while a step runs or a charge waits, as the profile's rows do, and need what a launch needs: write access and the machine.
@@ -353,9 +359,15 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }, []);
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
-  const tab = (to: PanelView, label: string, accelerator: string) => {
+  // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).
+  const keyed = (title: string, keys: readonly string[], does: (action: PanelAction) => boolean) => {
+    const key = acceleratorFor(view, narrow, keys, does);
+    return { "aria-keyshortcuts": key ?? undefined, title: key === null ? title : `${title} (${key === "Escape" ? "Esc" : key})` };
+  };
+  const tab = (to: PanelView, label: string) => {
     const selected = view === to || (to === "accounts" && view === "manage");
-    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected} aria-keyshortcuts={accelerator}
+    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected}
+      {...keyed(label, TAB_KEYS, action => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to)}
       tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}</button>;
   };
   /** The tabs answer ←/→ among themselves, as a tab list does. */
@@ -372,23 +384,27 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [actionsOpen, setActionsOpen] = useState(false);
   const bar = <nav className={`${G}bar`} aria-label="Code">
     <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
-      {tab("main", "Generator", "Escape")}
-      {narrow && tab("routing", "Routing", "p")}
-      {narrow && tab("usage", "Usage", "s")}
-      {tab("accounts", "Accounts", "a")}
-      {tab("sessions", "Sessions", "e")}
+      {tab("main", "Generator")}
+      {narrow && tab("routing", "Routing")}
+      {narrow && tab("usage", "Usage")}
+      {tab("accounts", "Accounts")}
+      {tab("sessions", "Sessions")}
     </div>
     {narrow && <Button aria-expanded={actionsOpen} aria-controls={actionsId} data-actions-toggle="" onClick={() => setActionsOpen(open => !open)}>
       More<ControlIcon kind={actionsOpen ? "disclosed" : "collapsed"} size={13} />
     </Button>}
     <div id={actionsId} className={`${G}actions`} hidden={narrow && !actionsOpen}>
-      <Button aria-keyshortcuts="r" title="Read accounts, usage and machines again (r)" onClick={() => run({ kind: "refresh" })}>Refresh</Button>
-      <Button aria-keyshortcuts="m" title="Models (m)" onClick={() => run({ kind: "sheet", sheet: "models" })}>Models</Button>
-      <Button aria-keyshortcuts="u" title="Setup (u)" onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
-      <Button aria-keyshortcuts="o" title="Session options (o)" onClick={() => run({ kind: "sheet", sheet: "options" })}>
+      <Button {...keyed("Read accounts, usage and machines again", ["r"], action => action.kind === "refresh")} onClick={() => run({ kind: "refresh" })}>Refresh</Button>
+      {/* A staged model list beside the active one changes nothing until it is reviewed in Models; the button says it waits there. */}
+      <Button {...keyed(staged ? "Models: a staged model list waits for review" : "Models", ["m"], action => action.kind === "sheet" && action.sheet === "models")}
+        data-staged={staged || undefined} onClick={() => run({ kind: "sheet", sheet: "models" })}>
+        Models{staged && <span className={`${G}actions-aside`}>· staged</span>}
+      </Button>
+      <Button {...keyed("Setup", ["u"], action => action.kind === "sheet" && action.sheet === "setup")} onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
+      <Button {...keyed("Session options", ["o"], action => action.kind === "sheet" && action.sheet === "options")} onClick={() => run({ kind: "sheet", sheet: "options" })}>
         Options{optionsSummary && <span className={`${G}actions-summary`}>· {optionsSummary}</span>}
       </Button>
-      <Button aria-keyshortcuts="?" aria-haspopup="dialog" title="Keyboard shortcuts (?)" onClick={() => run({ kind: "shortcuts" })}>Shortcuts</Button>
+      <Button {...keyed("Keyboard shortcuts", ["?"], action => action.kind === "shortcuts")} aria-haspopup="dialog" onClick={() => run({ kind: "shortcuts" })}>Shortcuts</Button>
     </div>
   </nav>;
   const hideButton = (pane: "routing" | "usage") => !narrow && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
@@ -433,7 +449,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <Button aria-keyshortcuts="m" title="Pools, sign-in and credentials (m)" data-manage="" onClick={() => run({ kind: "view", view: "manage" })}>Manage accounts</Button>
         </header>
         {/* Mounted only while it shows: opening puts focus on its first switch that can move. */}
-        {view === "accounts" && <AccountsPane usage={usage} gate={accountsGate} cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
+        {view === "accounts" && <AccountsPane usage={usage} cadence={cadence} onManage={() => run({ kind: "view", view: "manage" })} />}
       </section>
       <section className={`${G}pane`} data-pane="manage" aria-label="manage accounts" hidden={view !== "manage"} tabIndex={-1}>
         <header className={`${G}head`}>

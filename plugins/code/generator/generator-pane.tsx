@@ -112,7 +112,11 @@ export type GeneratorPaneProps = {
 };
 
 /** What the readout says: a value in bold, then what it means or does, warm when it refuses or strains. */
-type Said = { readonly value: string; readonly text: string; readonly warn: boolean; readonly color: string | null };
+type Said = {
+  readonly value: string; readonly text: string; readonly warn: boolean; readonly color: string | null;
+  /** The launch's words, which say a staged model list waits in Models. */
+  readonly staged?: boolean;
+};
 type Hovered = { readonly kind: "word"; readonly row: RowId; readonly key: string } | { readonly kind: "launch" } | { readonly kind: "meter"; readonly name: "cost" | "speed" }
   | { readonly kind: "machine"; readonly value: string };
 type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly refused: RowWord | null };
@@ -210,7 +214,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     launchStatus: model.launchStatus }, vocab);
   // The line beside the launch keeps to its facts and fixes; its asides ("changes stay a local preview") are said only when the launch is pointed.
   const asides = line?.parts.filter(entry => entry.tone === "meta").map(entry => entry.text) ?? [];
-  const launchSays = { ...readout, text: [readout.text, ...asides].join(" · ") };
+  // A staged model list beside the active one changes nothing until it is reviewed in Models; the launch's words say it waits there.
+  const staged = model.record?.active != null && model.record.draft != null;
+  const launchSays = { ...readout, text: [readout.text, ...asides, ...staged ? ["a staged model list waits in Models"] : []].join(" · "), staged };
 
   // ------------------------------------------------------------ the readout: a scrub, then a key's word, then the pointer, then focus
   function say(said: Said | null) {
@@ -249,7 +255,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       const option = machineOptions.find(entry => entry.value === hovered.value);
       return option ? { value: option.label, text: option.available ? option.note : option.reason ?? option.note, warn: !option.available, color: null } : null;
     }
-    if (hovered.kind === "launch") return { value: verb.label.toLowerCase(), text: launchSays.text, warn: launchSays.warn, color: null };
+    if (hovered.kind === "launch") return { value: verb.label.toLowerCase(), text: launchSays.text, warn: launchSays.warn, color: null, staged };
     if (hovered.kind === "meter") {
       const readout = estimates?.[hovered.name];
       if (!readout) return null;
@@ -369,7 +375,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     const still = prefersReducedMotion();
     if (verb.state !== "ready") {
       if (!still) button?.animate([{ transform: "none" }, { transform: "translateX(-2px)" }, { transform: "translateX(2px)" }, { transform: "none" }], { duration: 260 });
-      say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: true, color: null });
+      say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: true, color: null, staged });
       if (verb.refusal) announce(`${verb.label}: ${verb.refusal.text}`);
       return;
     }
@@ -379,7 +385,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       button.dataset.fired = "";
       window.setTimeout(() => { delete button.dataset.fired; }, 1400);
     }
-    say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: false, color: null });
+    say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: false, color: null, staged });
     rippleTeam(root.current?.closest<HTMLElement>("[data-tui]") ?? null);
     act();
   }
@@ -487,7 +493,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         onMove={delta => { const next = rows[index + delta]; if (next) focusRow(next.id); }} />)
         : <p className={`${G}pane-note`}>{model.starterError ?? (reading ? "reading the profile" : "no profile to show")}</p>}
     </div>
-    <div className={`${G}readout`} data-tone={said?.warn ? "warn" : undefined} style={said?.color ? { "--rc": said.color } as CSSProperties : undefined}>
+    <div className={`${G}readout`} data-tone={said?.warn ? "warn" : undefined} data-staged={said?.staged || undefined} style={said?.color ? { "--rc": said.color } as CSSProperties : undefined}>
       {said && <><b>{said.value}</b>{said.text && ` · ${said.text}`}</>}
     </div>
     {groups && <Profile groups={groups} />}
