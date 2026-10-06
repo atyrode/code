@@ -476,10 +476,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
               aria-busy={verb.state === "busy" || undefined} aria-describedby={lineId} title={verb.refusal ? verb.refusal.text : withKey(verb.label, LAUNCH_STROKE)}
               onPointerDown={event => { if (event.button === 0) pressing(true)(); }} onPointerUp={pressing(false)} onPointerCancel={pressing(false)}
               onPointerEnter={() => setHovered({ kind: "launch" })} onPointerLeave={() => { pressing(false)(); setHovered(null); }} onClick={fire}>
-              <Glyph className={`${G}launch-glyph`} path={ENTER} />
-              <Glyph className={`${G}launch-check`} path={CHECK} />
-              <span className={`${G}launch-label`}>{verb.label.toLowerCase()}</span>
-              <i className={`${G}launch-charge`} aria-hidden="true" />
+              <span className={`${G}launch-mark`} aria-hidden="true">
+                <Glyph className={`${G}launch-glyph`} path={ENTER} />
+                <Glyph className={`${G}launch-check`} path={CHECK} />
+              </span>
+              <span className={`${G}launch-label`}>{verb.label.toLowerCase()}<i className={`${G}launch-charge`} aria-hidden="true" /></span>
             </button>
             {slots && <MachinePicker options={machineOptions} locked={machineGate.open ? null : machineGate.refusal.text} onChoose={chooseMachine}
               onRefuse={refuseMachine} onLocked={() => { if (!machineGate.open) refuse(machineGate.refusal.text, "machine"); }} handle={picker}
