@@ -7,6 +7,8 @@ import { compileCatalog, validTierPair } from "./catalog.ts";
 import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
+/** A quota class OMP names for an inventory row (`quotaTier`), as a separate-quota exclusion carries it. */
+const QuotaTierSchema = InventoryModelSchema.shape.quotaTier.unwrap();
 export const ScaffoldOptionsSchema = z.strictObject({
   /**
    * WHAT THE LADDER MAY BE BUILT FROM, because a budget applied afterwards can be unsatisfiable
@@ -31,13 +33,16 @@ export type ScaffoldOptions = z.infer<typeof ScaffoldOptionsSchema>;
  * preview or experiment, never probed or laddered. `not_found` and `client_blocked`: the
  * benchmark's own verdicts; a blocked model is the operator's to fix, so it is named, as the old
  * scaffold's warnings named it. `regression`: as a rung it would lose context or thinking against
- * a cheaper rung. A model that is merely not chosen (a third middle, a model priced above the
- * top) has no such reason and is not listed.
+ * a cheaper rung. `separate_quota`: it draws a quota of its own, which Code does not spend, named
+ * by OMP's class for it (`quotaTier`), so a reader can tell Spark's retired class from another.
+ * A model that is merely not chosen (a third middle, a model priced above the top) has no such
+ * reason and is not listed.
  */
-export const ExclusionSchema = z.strictObject({
-  provider: ProbeIdentitySchema.shape.provider, id: ProbeIdentitySchema.shape.id,
-  reason: z.enum(["superseded", "unstable_id", "not_found", "client_blocked", "regression", "separate_quota"]),
-});
+const excludedIdentity = { provider: ProbeIdentitySchema.shape.provider, id: ProbeIdentitySchema.shape.id };
+export const ExclusionSchema = z.discriminatedUnion("reason", [
+  z.strictObject({ ...excludedIdentity, reason: z.enum(["superseded", "unstable_id", "not_found", "client_blocked", "regression"]) }),
+  z.strictObject({ ...excludedIdentity, reason: z.literal("separate_quota"), quotaTier: QuotaTierSchema }),
+]);
 export type Exclusion = z.infer<typeof ExclusionSchema>;
 const ExclusionsSchema = z.array(ExclusionSchema).max(PROBE_MODEL_LIMIT);
 /**
@@ -268,18 +273,20 @@ function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { m
 }
 /** A row's static quota class puts it in a quota of its own: any class but chat (Spark's, for one).
  * Inventory and bundled metadata rows carry the same OMP SDK classification. */
-function separateClass(row: { readonly quotaTier: string | null }): boolean {
+function separateClass<T extends { readonly quotaTier: string | null }>(row: T): row is T & { readonly quotaTier: string } {
   return row.quotaTier !== null && row.quotaTier !== "chat";
 }
-function exclusion(model: Pick<ProbeIdentity, "provider" | "id">, reason: Exclusion["reason"]): Exclusion {
+function exclusion(model: Pick<ProbeIdentity, "provider" | "id">, reason: Exclude<Exclusion["reason"], "separate_quota">): Exclusion {
   return { provider: model.provider, id: model.id, reason };
 }
 function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
   facts?: Map<string, BenchmarkReceipt["results"][number]>): DerivedCatalog {
   const models: CatalogModel[] = [];
   const exclusions = [...excluded];
-  // Code spends no quota of its own, so a model drawing one never competes for a rung.
-  for (const model of allowed.filter(separateClass)) exclusions.push(exclusion(model, "separate_quota"));
+  // Code spends no quota of its own, so a model drawing one never competes for a rung. Its
+  // exclusion keeps OMP's class for it, so a reader names Spark by that class, never by its id.
+  for (const model of allowed.filter(separateClass))
+    exclusions.push({ provider: model.provider, id: model.id, reason: "separate_quota", quotaTier: model.quotaTier });
   const laddered = allowed.filter(model => !separateClass(model));
   for (const family of orderedFamilies(laddered.map(model => providerPolicy(model.provider).family))) {
     const policy = familyPolicy(family);

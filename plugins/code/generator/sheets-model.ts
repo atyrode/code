@@ -86,7 +86,7 @@ export function listChanges(active: readonly ModelRow[], staged: readonly ModelR
 }
 
 /** Why a verification left a model out, in a word and in full. */
-export const EXCLUSION_WORDS: Readonly<Record<Exclusion["reason"], readonly [string, string]>> = {
+const EXCLUSION_WORDS: Readonly<Record<Exclusion["reason"], readonly [string, string]>> = {
   superseded: ["superseded", "Superseded by a newer model"],
   unstable_id: ["unstable id", "A rolling alias, preview or experiment, which Code never probes"],
   not_found: ["not reachable", "Not found through your accounts"],
@@ -94,6 +94,15 @@ export const EXCLUSION_WORDS: Readonly<Record<Exclusion["reason"], readonly [str
   regression: ["worse than cheaper", "Worse than a cheaper tier"],
   separate_quota: ["own quota", "Draws a quota of its own, which Code does not spend"],
 };
+/**
+ * The words a left-out model reads with. Spark is known by OMP's quota class for it (`spark`), which
+ * the exclusion carries, never by its id: Code retired Spark's rung, so it reads as retired. Any
+ * other class of its own reads as its own quota.
+ */
+export function exclusionWords(exclusion: Exclusion): readonly [string, string] {
+  return exclusion.reason === "separate_quota" && exclusion.quotaTier === "spark"
+    ? ["retired", "Retired: Code no longer routes to Spark"] : EXCLUSION_WORDS[exclusion.reason];
+}
 
 /**
  * The step the Models sheet is at, which decides its one next action. A run in flight comes first

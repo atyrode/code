@@ -12,7 +12,7 @@ import { WorkflowError } from "../workflow.ts";
 import type { GateRefusal } from "./launch-step.ts";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
-import { contextWords, EXCLUSION_WORDS, listChanges, modelRows, modelsPhase, money, speedLevel, thinkingRange, TIERS,
+import { contextWords, exclusionWords, listChanges, modelRows, modelsPhase, money, speedLevel, thinkingRange, TIERS,
   type ListChange, type ModelRow } from "./sheets-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
@@ -289,7 +289,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     }
     if (kind === "out") {
       const exclusion = outs.find(entry => `${entry.provider}/${entry.id}` === rest.join(":"));
-      return exclusion ? { value: exclusion.id, text: EXCLUSION_WORDS[exclusion.reason][1], color: "var(--tui-mid)" } : null;
+      return exclusion ? { value: exclusion.id, text: exclusionWords(exclusion)[1], color: "var(--tui-mid)" } : null;
     }
     if (kind === "provider") {
       const entry = chargeRows.find(candidate => candidate.provider === rest[0]);
@@ -398,7 +398,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     </div>;
   const outList = (exclusions: readonly Exclusion[]) => <ul className={`${G}models-out`}>
     {exclusions.map(exclusion => {
-      const [short, full] = EXCLUSION_WORDS[exclusion.reason];
+      const [short, full] = exclusionWords(exclusion);
       const id = `${exclusion.provider}/${exclusion.id}`;
       return <li key={id}>
         <span className={`${G}models-xid`} tabIndex={0} aria-label={`${id}: ${full}`} {...readout.bind(`out:${id}`)}>{id}</span>

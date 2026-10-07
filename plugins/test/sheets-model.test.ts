@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CatalogDocument } from "../domain/contracts.ts";
-import { listChanges, modelRows, modelsPhase, nextSetupRow, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+import { exclusionWords, listChanges, modelRows, modelsPhase, nextSetupRow, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
 
 const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
   key: `model-${tier}`, provider: "anthropic", id: `native-model${tier}`, api: "anthropic-messages", tier,
@@ -27,6 +27,15 @@ describe("the Models sheet", () => {
     const spark = { ...document, models: [...document.models, { ...document.models[0]!, key: "spark", id: "spark", tier: 0 as const }] };
     expect(modelRows(spark).map(row => row.key)).toEqual(["model-1", "model-2", "model-3"]);
     expect([null, 29, 30, 45, 60, 90].map(speedLevel)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  test("a model left out for OMP's Spark quota class reads retired, by that class and never by its id; another class of its own reads own quota", () => {
+    const left = (quotaTier: string, id: string) => exclusionWords({ provider: "openai-codex", id, reason: "separate_quota", quotaTier });
+    expect(left("spark", "gpt-5.3-codex-spark")).toEqual(["retired", "Retired: Code no longer routes to Spark"]);
+    // The class decides, not the id: a spark-named id in another class is its own quota, and Spark's class under any id is retired.
+    expect(left("future-resource", "gpt-5.3-codex-spark")[0]).toBe("own quota");
+    expect(left("spark", "codex-mini-next")[0]).toBe("retired");
+    expect(exclusionWords({ provider: "anthropic", id: "claude-opus-4", reason: "superseded" })[0]).toBe("superseded");
   });
 
   test("the next action follows the step: a run first, then a staged list, then the verification and its refusal", () => {

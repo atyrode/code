@@ -152,8 +152,8 @@ current verification can still be renewed: Verify needs only its own preconditio
 (write access, the machine, readable accounts that include one, discovery and benchmark
 readiness), and its charge still waits on Confirm. A model that draws a
 quota of its own (any OMP class but chat, Spark's for one, as each inventory row states) is
-left off the derived ladder and listed among the last verification's excluded models,
-since Code spends no such quota.
+left off the derived ladder and listed among the last verification's excluded models as
+`separate_quota` with OMP's class for it (`quotaTier`), since Code spends no such quota.
 
 A stale or failed save is never retried or rebased. The local draft remains
 until explicitly discarded. It also survives a reload: the main view keeps
@@ -640,8 +640,10 @@ starter, with **import** (`i`) and **export** (`x`) as two quiet words. Beside t
 is what the step is about: the charge per provider and the models not probed while
 verifying, a staged list's changes (field by field, a model added or dropped, the old
 value struck), or, after a verification in this panel, the models it left out, each
-with its reason in a word. Ids, prices, speeds, thinking ranges and reasons appear only
-in the readout line while a cell, a provider or a left-out model is pointed or focused.
+with its reason in a word; a model in OMP's `spark` quota class reads **retired**, any
+other class of its own **own quota**. Ids, prices, speeds, thinking ranges and reasons
+appear only in the readout line while a cell, a provider or a left-out model is pointed
+or focused.
 One next action sits where the launch sits and follows the step: **verify models**,
 **checking models…** (drawn with the checking hold the charge keeps), **confirm charge**
 (a single deliberate press of the exact charge shown, as in the launch line), **verifying…**
