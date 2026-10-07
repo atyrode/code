@@ -103,7 +103,7 @@ export function AccountsPane({ usage, cadence, onManage }: AccountsPaneProps) {
           onPointerEnter={() => setPointed(row.key)} onPointerLeave={() => setPointed(null)}
           onFocus={() => { setFocused(row.key); setRefused(null); }} onBlur={() => { setFocused(null); setRefused(null); }}>
           <span className={`${G}accounts-sw`} aria-hidden="true" />
-          <span className={`${G}accounts-who`}>{row.who}</span>
+          <span className={`${G}accounts-who`} title={row.who}>{row.who}</span>
           <span className={`${G}accounts-st`}>{row.disabled ? "disabled" : row.ageMs !== null ? ageText(row.ageMs) : ""}</span>
         </button>;
       }} />

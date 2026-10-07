@@ -31,12 +31,15 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   the DOM — `rows-model.ts` (rows, aliases, which lanes hide or strike),
   `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
   line and readout), `consequences.ts`, `launch-step.ts` (the one action gate),
-  `panel-keys.ts` (every panel key as a decision over plain facts) and
-  `draft-store.ts` (the unsaved profile kept per tab). `atyrode.code/destination.ts`
+  `panel-keys.ts` (every panel key as a decision over plain facts),
+  `auto-read.ts` (what the panel reads again on its own, when, in one pass, and when it waits)
+  and `draft-store.ts` (the unsaved profile kept per tab). `atyrode.code/destination.ts`
   decides where OMP answers and which machine a browser starts on. `web.tsx` is the
-  shell (top bar, views, sheets, key line, Shortcuts dialog); `generator-pane.tsx`,
-  `routing-pane.tsx`, `usage-pane.tsx`, `accounts-pane.tsx`, `earlier.tsx` and
-  `machine-picker.tsx` draw the panes and `styles.css` is the one stylesheet.
+  shell (top bar, views, sheets, key line, Shortcuts dialog); `more-menu.tsx` is the
+  bar's More menu and `read-clock.ts` the timers and visibility behind the panel's own
+  re-reads; `generator-pane.tsx`, `routing-pane.tsx`, `usage-pane.tsx`,
+  `accounts-pane.tsx`, `earlier.tsx` and `machine-picker.tsx` draw the panes and
+  `styles.css` is the one stylesheet.
 - `atyrode.code/contract.ts`, `server.ts`, `state.ts`: container-scoped
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one

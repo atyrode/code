@@ -111,9 +111,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__confirm):hover { border: 0; background: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__confirm:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
 
-/* ---------------------------------------------------------------- the bar: the views as tabs, the panel's actions as buttons */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; padding: 6px var(--pad); border-bottom: 1px solid var(--tui-rule); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tabs { display: flex; flex-wrap: wrap; gap: 0 18px; min-width: 0; }
+/* ---------------------------------------------------------------- the bar: the views as tabs, then More, the one menu of the panel's sheets */
+/*
+ * The bar is one run of words: the tabs wrap like words, and More floats right on the line the last
+ * tab ends, or on its own line under it where that line has no room left. So a narrow panel spends
+ * no line on More alone while the tabs leave it room.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__bar { display: flow-root; padding: 6px var(--pad); border-bottom: 1px solid var(--tui-rule); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tabs { display: inline; }
 /* A tab is a word: the chosen one bright and heavier with the accent rule under it; each keeps the room of its heavier form, so choosing moves nothing. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab {
   position: relative;
@@ -121,7 +126,8 @@
   flex-direction: column;
   align-items: center;
   min-height: 32px;
-  margin: 0;
+  margin: 0 18px 0 0;
+  vertical-align: top;
   border: 0;
   border-radius: 0;
   padding: 6px 0;
@@ -134,16 +140,56 @@
   cursor: pointer;
   transition: color 140ms;
 }
+/* The last tab ends its line at its text, so More fits beside it wherever the two leave room. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:last-child { margin-right: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab::after { content: ""; position: absolute; right: 0; bottom: -7px; left: 0; height: 2px; background: var(--tui-acc); opacity: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:hover { border: 0; color: var(--tui-fg); background: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"] { color: var(--tui-fg); font-weight: 650; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[aria-selected="true"]::after { opacity: 1; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; min-width: 0; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions[hidden] { display: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__actions { flex-basis: 100%; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-summary { color: var(--tui-fg); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__actions-aside { color: var(--tui-dim); }
+/* More keeps to the bar's end, on the tabs' line or the next, so its menu always opens leftward inside the panel. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__more { position: relative; display: flex; float: right; align-items: center; max-width: 100%; min-height: 32px; margin-left: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__more-button { flex-wrap: wrap; justify-content: flex-start; gap: 0 6px; height: auto; white-space: normal; text-align: left; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__more-aside { color: var(--tui-dim); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__more-chevron { flex: none; width: 14px; height: 14px; color: var(--tui-dim); }
+/* The menu: the machine list's grammar, rules above and below and no box, its items the panel's words; the item under focus is bright with the accent rule beside it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 6;
+  display: grid;
+  width: max-content;
+  min-width: min(11rem, calc(100cqw - 2 * var(--pad)));
+  max-width: calc(100cqw - 2 * var(--pad));
+  border-block: 1px solid var(--tui-rule);
+  padding: 4px 0;
+  background: var(--code-panel);
+  font-size: 14px;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__menu-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 24px;
+  min-width: 0;
+  min-height: 30px;
+  margin: 0;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  padding: 5px 12px 5px 10px;
+  color: var(--tui-mid);
+  background: none;
+  font: inherit;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__menu-item:hover { border-color: transparent; background: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__menu-item:focus { outline: none; border-left-color: var(--tui-acc); color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__menu-label { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__menu-key { flex: none; color: var(--tui-dim); font: inherit; font-size: 13px; }
 /* The panel's buttons on the stage read in its greys: quiet at rest, the text colour under the pointer. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button { color: var(--tui-mid); font-size: 13px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { color: var(--tui-fg); }
@@ -343,8 +389,12 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
 
 /* ---------------------------------------------------------------- routing: role, model:thinking in its provider's hue, the chain behind it */
-/* The role column gives way before the routes do: a role too long for its room ends in an ellipsis, its title whole. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+/*
+ * The role column gives way before the routes do: a role too long for its room ends in an ellipsis,
+ * its title whole. The routes' column keeps its widest token (its min-content), so `model:thinking`
+ * is never pushed past the pane; the role takes what is left.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routes { display: grid; grid-template-columns: 18px minmax(0, max-content) minmax(min-content, 1fr); column-gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route { display: contents; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route > span { line-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-mark { position: relative; color: var(--tui-fg); font-size: 8px; text-align: center; }
@@ -414,6 +464,8 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__confirm, .plugin-atyrode_code_generator__machine-word, .plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__tab) { align-items: center; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { box-sizing: border-box; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option { min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__menu-item { align-items: center; min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__more { min-height: 44px; }
 }
 
 /* ---------------------------------------------------------------- motion: none on arrival or resize, none under reduced motion */

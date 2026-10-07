@@ -34,8 +34,8 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 ## Native workflows
 
 - **Code workbench:** one main view under a top bar of tabs (Generator, Accounts,
-  Sessions) and buttons (Refresh, Models, Setup, Options, Shortcuts), which fold
-  behind **More** when the panel is narrow. The **generator** is five rows of plain
+  Sessions) and one **More** menu (Models, Setup, Options, Shortcuts); the panel
+  reads its inputs again on its own. The **generator** is five rows of plain
   words (lane, model, thinking, advisor, fallbacks) changed in place by pointer, keys
   or wheel, each model shown by its short alias per tier, with **Defaults** and
   **Revert** in its head and a readout line that says what a pointed word does,
@@ -62,7 +62,7 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   with a switch per account in the Accounts view; choose the pool, manage reusable
   presets, sign in and manage credentials under **Manage accounts**. The usage pane
   reads each reported quota window separately and again every five minutes, or on
-  Refresh; unknown and historical facts never imply free capacity.
+  **Refresh now** (`r`); unknown and historical facts never imply free capacity.
   OMP owns the broker, sign-in, credential mutation and gateway.
 - **Workspace / probes / sessions:** the shared headless workflow opens exact
   OMP native reviews, re-observes current revisions before preparation, and

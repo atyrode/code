@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import type { HostServices, PanelProps } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
-import { ControlIcon, prefersReducedMotion, ScrollRegion } from "@manifold/ui";
+import { prefersReducedMotion, ScrollRegion } from "@manifold/ui";
 import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget, type OmpPresence } from "../machine-web.ts";
@@ -24,6 +24,9 @@ import { Automation } from "./automation.tsx";
 import { OptionSwitch } from "./option-switch.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
+import { readHeld } from "./auto-read.ts";
+import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
+import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -103,7 +106,7 @@ const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (rea
     ["Esc", "Back to the generator; from Manage accounts, back to the accounts"]] },
   { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
   { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
-  { title: "Anywhere", keys: [["r", "Read accounts, usage and machines again"], ["?", "These shortcuts"]] },
+  { title: "Anywhere", keys: [["r", "Refresh now: read everything again at once, as the panel also does on its own"], ["?", "These shortcuts"]] },
 ];
 
 /** The keyboard shortcuts, in a native modal dialog: Esc or its Close button closes it, and it owns its keys while open. */
@@ -153,10 +156,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
   // The profile switches the generator keeps outside its rows, which the session options sheet draws.
   const [extras, setExtras] = useState<readonly SlotOption[]>([]);
-  // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
+  // Bumped by every read of the usage, by the clock or by a press, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
   const [managed, setManaged] = useState(false);
+  // Whether that management holds a saved pool draft, as it says itself: asked when a read comes due.
+  const presetDraft = useRef(false);
   const [sheet, setSheet] = useState<PanelSheet | null>(null);
   const [visited, setVisited] = useState<readonly PanelSheet[]>([]);
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
@@ -220,11 +225,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     }
     setSheet(next);
     setVisited(previous => previous.includes(next) ? previous : [...previous, next]);
-    actions.refresh();
+    refresh();
   }
   function closeSheet() {
     setSheet(null);
-    actions.refresh();
+    refresh();
   }
   const sheetChanged = useRef(sheet);
   useLayoutEffect(() => {
@@ -249,7 +254,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }, [sheet]);
   function finish(source: PanelSheet) {
     if (currentSheet.current === source) closeSheet();
-    else actions.refresh();
+    else refresh();
   }
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
@@ -264,15 +269,41 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     else openSheet(place);
   }
 
-  // ------------------------------------------------------------ `r`: everything the panel stands on, read again
+  // ------------------------------------------------------------ reading again: on its own (auto-read.ts), and Refresh now (`r`)
+  /** Everything the panel stands on, read again in one pass, both clocks restarted: Refresh now, `r`, and a sheet's open or close. */
   function refresh() {
-    actions.refresh();
-    refreshMachines();
-    setRereads(count => count + 1);
+    reads.now();
   }
-  // One cadence for the panel: `r`, a pane's `r · now` and the usage freshness window all restart the same countdown.
-  const cadence = useUsageCadence(usage, refresh);
   const teamGate = model.gate("edit-team");
+  const visible = usePanelShown(app);
+  // When the person last pressed a key or the pointer in the panel: a read on its own waits a few seconds after.
+  const inputAt = useRef(0);
+  /**
+   * Whether the person is in the middle of something a read on its own must not interrupt: a step
+   * that runs or a charge that waits, a sheet, the shortcuts or a popup (the More menu, the machine
+   * list) open, a row being scrubbed, a text field in use, an account change saving, a profile edit or
+   * a saved pool draft left unsaved, or a press a moment ago. Asked when a read comes due, so it reads
+   * the latest render and the DOM.
+   */
+  const held = () => {
+    const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
+    return readHeld({
+      step: !teamGate.open,
+      open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null,
+      editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
+        || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
+      unsaved: model.edited || presetDraft.current,
+      inputAt: inputAt.current,
+    }, Date.now());
+  };
+  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
+  // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
+  const reads = usePanelReads({
+    configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: setup.refresh, defaults: model.queries.defaults.refresh,
+    skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
+    usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
+  }, visible, held);
+  const cadence = useUsageCadence(usage, reads);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
@@ -351,11 +382,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     const panel = app.current?.closest<HTMLElement>(PANEL_ROOT);
     if (!panel) return;
     const listener = (event: globalThis.KeyboardEvent) => keys.current(event);
+    const input = () => { inputAt.current = Date.now(); };
     panel.addEventListener("keydown", listener);
+    panel.addEventListener("keydown", input, true);
+    panel.addEventListener("pointerdown", input, true);
     // The panel root takes focus when the panel opens, so its keys work at once; never from another control.
     const focused = panel.ownerDocument.activeElement;
     if (!focused || focused === panel.ownerDocument.body) panel.focus({ preventScroll: true });
-    return () => panel.removeEventListener("keydown", listener);
+    return () => {
+      panel.removeEventListener("keydown", listener);
+      panel.removeEventListener("keydown", input, true);
+      panel.removeEventListener("pointerdown", input, true);
+    };
   }, []);
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
@@ -379,9 +417,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     event.preventDefault();
     event.stopPropagation();
   }
-  // Narrow, the actions fold behind one More button, so the bar stays the tabs and one control.
-  const actionsId = useId();
-  const [actionsOpen, setActionsOpen] = useState(false);
+  const menuKey = (keys: readonly string[], does: (action: PanelAction) => boolean) => acceleratorFor(view, narrow, keys, does);
+  const isSheet = (sheet: PanelSheet) => (action: PanelAction) => action.kind === "sheet" && action.sheet === sheet;
+  // A staged model list beside the active one changes nothing until it is reviewed in Models; More and its Models item say it waits there.
+  const commands: readonly MenuCommand[] = [
+    { id: "models", label: "Models", aside: staged ? "staged" : null, staged, accelerator: menuKey(["m"], isSheet("models")),
+      title: staged ? "Models: a staged model list waits for review" : "Models", onSelect: () => run({ kind: "sheet", sheet: "models" }) },
+    { id: "setup", label: "Setup", aside: null, accelerator: menuKey(["u"], isSheet("setup")), title: "Setup", onSelect: () => run({ kind: "sheet", sheet: "setup" }) },
+    { id: "options", label: "Options", aside: optionsSummary, accelerator: menuKey(["o"], isSheet("options")), title: "Session options",
+      onSelect: () => run({ kind: "sheet", sheet: "options" }) },
+    { id: "shortcuts", label: "Shortcuts", aside: null, accelerator: menuKey(["?"], action => action.kind === "shortcuts"), title: "Keyboard shortcuts", dialog: true,
+      onSelect: () => run({ kind: "shortcuts" }) },
+  ];
   const bar = <nav className={`${G}bar`} aria-label="Code">
     <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
       {tab("main", "Generator")}
@@ -390,22 +437,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       {tab("accounts", "Accounts")}
       {tab("sessions", "Sessions")}
     </div>
-    {narrow && <Button aria-expanded={actionsOpen} aria-controls={actionsId} data-actions-toggle="" onClick={() => setActionsOpen(open => !open)}>
-      More<ControlIcon kind={actionsOpen ? "disclosed" : "collapsed"} size={13} />
-    </Button>}
-    <div id={actionsId} className={`${G}actions`} hidden={narrow && !actionsOpen}>
-      <Button {...keyed("Read accounts, usage and machines again", ["r"], action => action.kind === "refresh")} onClick={() => run({ kind: "refresh" })}>Refresh</Button>
-      {/* A staged model list beside the active one changes nothing until it is reviewed in Models; the button says it waits there. */}
-      <Button {...keyed(staged ? "Models: a staged model list waits for review" : "Models", ["m"], action => action.kind === "sheet" && action.sheet === "models")}
-        data-staged={staged || undefined} onClick={() => run({ kind: "sheet", sheet: "models" })}>
-        Models{staged && <span className={`${G}actions-aside`}>· staged</span>}
-      </Button>
-      <Button {...keyed("Setup", ["u"], action => action.kind === "sheet" && action.sheet === "setup")} onClick={() => run({ kind: "sheet", sheet: "setup" })}>Setup</Button>
-      <Button {...keyed("Session options", ["o"], action => action.kind === "sheet" && action.sheet === "options")} onClick={() => run({ kind: "sheet", sheet: "options" })}>
-        Options{optionsSummary && <span className={`${G}actions-summary`}>· {optionsSummary}</span>}
-      </Button>
-      <Button {...keyed("Keyboard shortcuts", ["?"], action => action.kind === "shortcuts")} aria-haspopup="dialog" onClick={() => run({ kind: "shortcuts" })}>Shortcuts</Button>
-    </div>
+    <MoreMenu commands={commands} />
   </nav>;
   const hideButton = (pane: "routing" | "usage") => !narrow && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
     onClick={() => run({ kind: "toggle", pane })}>Hide</Button>;
@@ -456,7 +488,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <h2 className={`${G}title`}>manage accounts</h2>
           <Button aria-keyshortcuts="Escape" title="Back to the accounts (Esc)" onClick={() => run({ kind: "view", view: "accounts" })}>Back to accounts</Button>
         </header>
-        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked} /></div>}
+        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked}
+          onDraft={drafting => { presetDraft.current = drafting; }} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
         <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2></header>

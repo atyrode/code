@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import type { PanelReads } from "./read-clock.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import type { QuotaReading } from "../../domain/quota.ts";
 import { accountWord, ago, Button, hueOf } from "../ui.tsx";
 import { when, type BoardUsage } from "./board-model.ts";
-import { USAGE_FRESH_MS, usageState, type UsageAccountRow, type UsageGroup, type UsageState, type UsageWindowRow } from "./usage-model.ts";
+import { usageState, type UsageAccountRow, type UsageGroup, type UsageState, type UsageWindowRow } from "./usage-model.ts";
 
 /*
  * The usage pane: per provider, then per account, a block bar for each window with how much is used,
@@ -20,46 +21,30 @@ const REFRESH_HOLD_MS = 520;
 // ---------------------------------------------------------------- the refresh cadence
 
 /**
- * When the usage is read next, whether a read is in flight, and the way to read it now (`r`). One
- * cadence serves the whole panel, so a refresh by key, by cue or by the clock restarts the same countdown.
+ * When the usage is read next, whether a read is in flight or owed and held, and the way to read it
+ * now (Refresh now, `r`). One cadence serves the whole panel, so a refresh by key, by press or by the
+ * clock restarts the same countdown.
  */
-export type UsageCadence = { readonly nextAt: number; readonly refreshing: boolean; readonly now: () => void };
+export type UsageCadence = { readonly nextAt: number; readonly refreshing: boolean; readonly waiting: boolean; readonly now: () => void };
 
 /**
- * Reads the usage again every freshness window. The host's feeds read again only on events while their
- * channel is live, and provider readings change without one, so the pane keeps its own cadence; a
- * hidden tab waits until it shows again, as the feeds do.
+ * The usage's side of the panel's reads (read-clock.ts `usePanelReads`): it is read again every usage
+ * freshness window, since the host's feeds read again only on events while their channel is live and
+ * provider readings change without one. A read shows as refreshing for a moment however quick it is,
+ * so a press always answers.
  */
-export function useUsageCadence(usage: BoardUsage, refresh: () => void): UsageCadence {
-  const [nextAt, setNextAt] = useState(() => Date.now() + USAGE_FRESH_MS);
+export function useUsageCadence(usage: BoardUsage, reads: PanelReads): UsageCadence {
   const [holding, setHolding] = useState(false);
-  const latest = useRef(refresh);
-  latest.current = refresh;
-  const now = useCallback(() => {
-    setNextAt(Date.now() + USAGE_FRESH_MS);
-    setHolding(true);
-    latest.current();
-  }, []);
+  const nextAt = reads.nextAt.usage;
+  const first = useRef(nextAt);
   useEffect(() => {
-    if (!holding) return;
+    if (nextAt === first.current) return;
+    setHolding(true);
     const timer = window.setTimeout(() => setHolding(false), REFRESH_HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [holding]);
-  useEffect(() => {
-    let waiting = false;
-    const due = () => {
-      if (!document.hidden) { now(); return; }
-      waiting = true;
-      document.addEventListener("visibilitychange", due, { once: true });
-    };
-    const timer = window.setTimeout(due, Math.max(0, nextAt - Date.now()));
-    return () => {
-      window.clearTimeout(timer);
-      if (waiting) document.removeEventListener("visibilitychange", due);
-    };
-  }, [nextAt, now]);
+  }, [nextAt]);
   const refreshing = usage.refreshing || holding;
-  return useMemo(() => ({ nextAt, refreshing, now }), [nextAt, refreshing, now]);
+  return useMemo(() => ({ nextAt, refreshing, waiting: reads.waiting.usage, now: reads.now }), [nextAt, refreshing, reads.waiting.usage, reads.now]);
 }
 
 // ---------------------------------------------------------------- the clock the countdowns follow
@@ -236,6 +221,8 @@ export function UsageNote({ state }: { state: Exclude<UsageState, { kind: "group
 export function RefreshLine({ cadence, children }: { cadence: UsageCadence; children?: ReactNode }) {
   const text = useClockText(nowMs => {
     if (cadence.refreshing) return "refreshing…";
+    // Due while the person is in the middle of something: it reads once they are done.
+    if (cadence.waiting) return "refresh waits";
     const left = Math.max(0, cadence.nextAt - nowMs);
     return `next refresh ${Math.floor(left / 60_000)}:${String(Math.floor((left % 60_000) / 1000)).padStart(2, "0")}`;
   });
@@ -256,7 +243,7 @@ export function UsagePane({ usage, cadence }: { usage: BoardUsage; cadence: Usag
   return <div className={`${G}usage-body`} data-usage-pane="">
     {state.kind === "groups"
       ? <ProviderGrid groups={state.groups} filled={filled} identity={row => <span className={`${G}usage-who`}>
-        <span className={`${G}usage-name`}>{row.who}</span>{row.ageMs !== null && <span className={`${G}usage-age`}>{ageText(row.ageMs)}</span>}
+        <span className={`${G}usage-name`} title={row.who}>{row.who}</span>{row.ageMs !== null && <span className={`${G}usage-age`}>{ageText(row.ageMs)}</span>}
       </span>} />
       : <UsageNote state={state} />}
     <RefreshLine cadence={cadence} />
