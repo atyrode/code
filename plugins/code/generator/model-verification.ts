@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_VERSION, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import type { Selection } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import type { Configuration, Target, VerificationProvenance } from "../contract.ts";
@@ -20,8 +20,6 @@ export type ModelVerificationInput = {
   configurationCurrent: boolean;
   /** The selection the operator sees; a confirmed verification saves it, narrowed to what the verified catalog hosts. */
   selection: Selection | null;
-  /** The OMP version whose bundled model list OMP serves now, from its passive catalog read. */
-  ompVersion: string | null;
   setup: OmpResult<"describeDestination"> | null;
   writable: boolean;
   available: boolean;
@@ -81,7 +79,7 @@ type Session = {
  * stops it, which cancels a probe job still spending.
  */
 export function useModelVerification(input: ModelVerificationInput): ModelVerification {
-  const { host, target, record, revision, configurationCurrent, ompVersion, setup, writable, available } = input;
+  const { host, target, record, revision, configurationCurrent, setup, writable, available } = input;
   const latest = useRef(input);
   latest.current = input;
   // `pool: null` is an observed absence of any selected account; a null `data` is no observation yet.
@@ -98,7 +96,10 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     return () => { mounted.current = false; active.current?.controller.abort(); };
   }, []);
   const provenance = record?.active?.provenance ?? null;
-  const state = verificationState(provenance, { ompVersion, pool: pool.data === null ? null : pool.data.pool ?? "none" }, run !== null);
+  // A verification records its inventory receipt's OMP version, and this build reads receipts of
+  // `OMP_VERSION` only. OMP's bundled catalog is stamped with its separately pinned SDK version,
+  // so it cannot say whether a recorded verification still holds.
+  const state = verificationState(provenance, { ompVersion: OMP_VERSION, pool: pool.data === null ? null : pool.data.pool ?? "none" }, run !== null);
   const ready = operationReady(setup, INVENTORY_OPERATION_ID) && operationReady(setup, BENCHMARK_OPERATION_ID);
   const canPrepare = run === null && writable && available && configurationCurrent && ready && target !== null && host.containerId !== null;
 

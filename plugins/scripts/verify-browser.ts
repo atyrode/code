@@ -2038,7 +2038,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { containerId: first.containerId, expectedRevision: excludedRevision, accounts: observation });
   assert(probe.ok, "Code composes the saved pool from the passive observation");
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { containerId: first.containerId, expectedRevision: excludedRevision, document,
-    verification: { ompVersion: metadata.ompVersion, inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000,
+    verification: { ompVersion: OMP_VERSION, inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000,
       accounts: observation, poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest } });
   assert(staged.ok, "Writer stages a real shared catalog with its recorded verification, without native installation");
   const reviewInput = { containerId: first.containerId, expectedRevision: (staged.result as Configuration).revision, source: "draft" };

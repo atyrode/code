@@ -5,15 +5,15 @@ import type { VerificationProvenance } from "../contract.ts";
  *
  * `unverified`: no verification is recorded — no active catalog, or one authored, imported or
  * kept from before verification existed. `verifying`: a verification is in flight, including
- * while its charge awaits confirmation. `omp-changed`: OMP now serves another version's model
- * list than the one the catalog was probed against. `accounts-changed`: the saved choices now
+ * while its charge awaits confirmation. `omp-changed`: Code now reads another OMP version's
+ * inventory than the one the catalog was probed against. `accounts-changed`: the saved choices now
  * select another pool — a provider added or removed, or the same providers through different
  * accounts. `current`: none of those.
  */
 export type VerificationStatus = "unverified" | "verifying" | "current" | "accounts-changed" | "omp-changed";
 /** The present a recorded verification is compared with. A null field has not been observed. */
 export type VerificationObservation = {
-  /** The OMP version whose bundled model list OMP serves now. */
+  /** The OMP version whose inventory receipts this Code build reads. */
   ompVersion: string | null;
   /** The pool the saved choices select now, or `"none"` when they select no account at all. */
   pool: { providers: readonly string[]; poolIdentityDigest: string } | "none" | null;

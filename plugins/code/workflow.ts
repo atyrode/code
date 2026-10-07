@@ -208,8 +208,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
-  // The bundled list the render-only preview is drawn from, and whose `ompVersion` says which
-  // OMP a verified catalog is compared against. Never a source of a saved profile.
+  // The bundled list the render-only preview is drawn from. Never a source of a saved profile.
   const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
   async function readJob(node: JobNode) {
     if (!node.operationId.startsWith(`${OMP_PLUGIN_ID}.`)) throw new WorkflowError("omp_result_unavailable");

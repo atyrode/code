@@ -130,11 +130,13 @@ revision, the exact account pool and OMP defaults, and stops, naming itself, whe
 moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in OMP's
 history and a staged catalog stays staged. A confirmation is used once, and a failed
 or uncertain one is never replayed. The promoted catalog records its verification
-provenance (OMP version, inventory and benchmark times, the account providers and a
-digest of the exact account pool). A catalog stops being verified when OMP serves
-another model list or the saved choices select another pool. A model that draws a quota
-of its own (any OMP class but chat, Spark's for one) is left off the derived ladder and
-listed among the last verification's excluded models, since Code spends no such quota.
+provenance (its inventory's OMP version, inventory and benchmark times, the account
+providers and a digest of the exact account pool). A catalog stops being verified when
+Code reads another OMP inventory version or the saved choices select another pool; OMP's
+bundled catalog carries its own SDK version and does not decide this. A model that draws a
+quota of its own (any OMP class but chat, Spark's for one, as each inventory row states) is
+left off the derived ladder and listed among the last verification's excluded models,
+since Code spends no such quota.
 
 A stale or failed save is never retried or rebased. The local draft remains
 exportable until explicitly discarded. It also survives a reload: the main view keeps

@@ -128,11 +128,11 @@ files, service state, credentials or backups.
   sealed resource reads, restricted tools, native resume, explicit model/thinking
   precedence, missing/changed-state refusal and cancellation. Synthetic inference
   in isolated network namespaces is not paid-provider or live-fleet acceptance.
-- The credential runtime retains its 18.1.14 graph and existing patch; the SDK
-  host has an independent, unpatched 18.2.7 graph. Native lifecycle accounting
-  uses public SDK hooks and passes the retained deadline/quiescence regressions
-  without copying credential algorithms or changing that patch. This does not
-  qualify the separate unpatched credential migration in
+- The credential runtime uses OMP's published 18.7.0 graph with its retained
+  patch; the ordinary CLI and the independent, unpatched SDK host use 18.4.12.
+  Native lifecycle accounting uses public SDK hooks and passes the retained
+  deadline/quiescence regressions without copying credential algorithms. This
+  does not qualify the separate unpatched credential migration in
   [manifold-omp#72](https://github.com/atyrode/manifold-omp/issues/72).
   Code's existing-Run tools and one-shot sessions were qualified against OMP
   [`f67e4f1`](https://github.com/atyrode/manifold-omp/commit/f67e4f14fd0835d51ce0c5d54adeb8c43ec369f9)
@@ -151,16 +151,23 @@ files, service state, credentials or backups.
   workspace/session state and legacy directories are unchanged. Code retains its
   panel-free baseline web registration for the shared stylesheet and declares the
   portable Worker entry that the pinned SDK requires for hardened installation.
-  The gate runs real Code-to-native tool and bounded-material proof against these
-  pins. Source and disposable verification do not establish a released Code bundle
+  The gate runs real Code-to-native tool and bounded-material proof against Code's
+  current pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
-  The current OMP client pin is
-  [`5545584`](https://github.com/atyrode/manifold-omp/commit/55455840b35ae993a0260ba1ff76f60cbf28f409),
-  adding the passive bundled model-catalog API from
-  [manifold-omp#105](https://github.com/atyrode/manifold-omp/pull/105).
-  Its [current-head gate](https://github.com/atyrode/manifold-omp/actions/runs/37010247724)
-  passed before merge. Manifold remains at `0701320`; this model-source addition
-  is not a runtime-closure repin, provider observation or live custody change.
+  Code now pins Manifold
+  [`b53543d`](https://github.com/atyrode/manifold/commit/b53543d94548d7c3929ca45280bb8692f0fa402c),
+  protocol 57, and OMP
+  [`e2a0071`](https://github.com/atyrode/manifold-omp/commit/e2a00716c2b952035802f36eacadf353c6975344)
+  ([manifold-omp#114](https://github.com/atyrode/manifold-omp/pull/114)), whose own
+  `MANIFOLD_REV` is the same commit. A protocol 57 hub admits only bundles stamped 57
+  ([manifold#1068](https://github.com/atyrode/manifold/issues/1068)), so Code's four
+  bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained.
+  OMP's inventory receipt is now its 18.4.12 one, and each row carries the SDK's
+  `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
+  with its separately pinned 18.7.0 SDK, so a verification is compared with the
+  inventory version this build reads, and a catalog verified against 18.1.14 asks to
+  be verified again. This source repin is not a release, preview installation,
+  native deployment review or provider observation.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.
   Read, follow and cancel preserve the exact retained Run correlation.
