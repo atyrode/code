@@ -96,6 +96,16 @@ describe("the generator's rows", () => {
     expect(codexOnly.words.find(word => word.key === "anthropic")).toMatchObject({ available: false, option: null });
   });
 
+  test("a lead whose variant on the box's side cannot run lands on the one that can, and says so; it is struck only when neither can", () => {
+    // On Mixed with Claude unserved, GPT-led cannot run but GPT only can, so GPT stays pickable and says where it lands.
+    const codexOnly = lead(team({ lane: { kind: "mixed" } }), null, catalog, new Set(["openai-codex"]));
+    const gpt = codexOnly.words.find(word => word.key === "openai")!;
+    expect(gpt).toMatchObject({ available: true, reason: null });
+    expect(gpt.option?.selection?.lane).toEqual({ kind: "provider", family: "openai", blend: "only" });
+    expect(gpt.says).toMatch(/^GPT-led cannot run, so GPT only/);
+    expect(codexOnly.words.find(word => word.key === "anthropic")).toMatchObject({ available: false, option: null });
+  });
+
   test("an extra is a row of on then off: the chosen word says what it means, the other what turning it does or why it cannot", () => {
     const list = rows(team({ fallback: true }));
     const fallbacks = row(list, "fallbacks");

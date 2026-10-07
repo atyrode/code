@@ -286,8 +286,10 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   function choose(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
     if (!word.option?.selection || !commitTeam(word.option.selection, `${word.name}${word.says ? `: ${word.says}` : ""}`, value)) return;
-    // The keyboard says what it did where a pointer read it before choosing; a scrub says its whole way from where it began.
+    // The keyboard says what it did where a pointer read it before choosing; a scrub says its whole way from where it began,
+    // no longer a refusal it passed on the way.
     if (via === "keyboard") say(wordSaid(row, word));
+    else setScrub(current => current?.refused ? { ...current, refused: null } : current);
   }
   function refuseWord(row: GeneratorRow, word: RowWord, via: "pointer" | "keyboard" | "scrub") {
     if (word.available && !word.selected) {
@@ -304,6 +306,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       announce(`Verifying models: ${word.reason ?? ""}`);
       return;
     }
+    // A press holds the scrub's readout while the pointer is down and a moment after: it says why, as a scrub onto the word does.
+    if (via === "pointer") setScrub(current => current && { ...current, refused: word });
     say(wordSaid(row, word));
     announce(`${row.label} ${word.text}: ${word.reason ?? ""}`);
   }

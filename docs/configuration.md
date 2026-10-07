@@ -251,14 +251,15 @@ routing or usage is hidden, **Show routing** and **Show usage** stand in this he
   Claude, DeepSeek, then any other provider), with an **only** checkbox at the row's end.
   The stored lane is unchanged: `mixed`, or a family's led or only lane; checked means
   only. Changing the lead keeps the box, so GPT only with Claude pressed is Claude only;
-  a lead that does not offer that variant lands on the one it does, and the readout says
-  so. The box is its own Tab stop (Space toggles it); it is disabled for mixed and for a
-  lead with one variant, and struck as well when the variant it would select cannot run,
-  with the reason on point or focus. A lead is hidden only while its family has no
-  signed-in account at all, unless it is the lead in use; with no account signed in
-  anywhere every lead shows. A lead whose variant the included accounts cannot run stays,
-  struck, with the domain's reason. A family someone has signed in for but the model list
-  has no model of keeps its lead, struck, with "No <family> models in your model list";
+  a lead that does not offer that variant, or cannot run it while it can run the other,
+  lands on the other, and the readout says so. The box is its own Tab stop (Space
+  toggles it); it is disabled for mixed and for a lead with one variant, and struck as
+  well when the variant it would select cannot run, with the reason on point or focus.
+  A lead is hidden only while its family has no signed-in account at all, unless it is
+  the lead in use; with no account signed in anywhere every lead shows. A lead neither of
+  whose lanes the included accounts can run stays, struck, with the domain's reason. A
+  family someone has signed in for but the model list has no model of keeps its lead,
+  struck, with "No <family> models in your model list";
   pressing it starts **Verify models** (through its own gate, spending nothing before
   Confirm charge) and the readout says it finds the models the accounts reach.
 - **Model** is the capability tier (fast, normal, smart, elite), each tier read as the

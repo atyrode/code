@@ -52,8 +52,10 @@ foreign profile write does, a save refused for a lead no account serves, a write
 who saves but is told why launching waits, account switches saved through the real changeAccounts
 CAS, the accounts' management in place, saved sessions folded per folder into a drum, the panel
 reading its inputs again on its own when shown again but never while an edit is unsaved (until it
-is saved or discarded), a step runs or a sheet is open, and tiered usage windows that are their own
-rows and judge no provider's pool.
+is saved or discarded), a step runs or a sheet is open, tiered usage windows that are their own
+rows and judge no provider's pool, and the lead row's only box, toggled by a press and Space with
+focus kept on it, kept across a lead change and disabled under Mixed, with struck leads and boxes
+that say why.
 Separate synthetic RPC responses exercise the verification charge, a verified catalog made stale
 by an OMP upgrade alone, folder-only readiness, and launch/resume review invalidation and refusal;
 the spend, preparation and execution they lead to are refused, never native execution or consent
@@ -311,13 +313,17 @@ function row(id: RowId): string {
 function rowValue(id: RowId): string {
   return `${row(id)}?.querySelector('[role="radio"][aria-checked="true"]')?.getAttribute('aria-label')`;
 }
-/** One option word of a row, by its stable key (a dial value, or `on`/`off`). */
+/** One option word of a row, by its stable key (a dial value, the lead row's `mixed` or a lead's family, or `on`/`off`). */
 function word(id: RowId, key: string): string {
   return element(`${generator} [data-row="${id}"] .${G}word[data-key="${key}"]`);
 }
 function chosenKey(id: RowId): string {
   return `${row(id)}?.querySelector('.${G}word[data-selected]')?.dataset.key`;
 }
+/** The lead row's `only` box (#252): a checkbox after the lead words, checked while the lane keeps every role on its lead. */
+const onlyBox = element(`${generator} [data-row="lane"] [data-only]`);
+/** Each lead word and the `only` box by its layout box inside the row's words: what neither a lead change nor the box may move. */
+const LEAD_GEOMETRY = `[...${row("lane")}.querySelectorAll('[role="radio"], [data-only]')].map(el => [el.dataset.key ?? 'only', el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight].join(','))`;
 /** Every row's value, as one string: whatever a key, a press or the wheel changed shows here. */
 const profileValues = `[${ROWS.map(rowValue).join(", ")}].join(' / ')`;
 /** A fix beside the launch, by its stable key. */
@@ -1297,6 +1303,85 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await choose(browser, "tier", tier);
   assert.deepEqual(await readStarterDraft(browser), before, "A refused step and End return the exact profile");
 
+  // The lead row (#252): mixed, then GPT, Claude and DeepSeek, then an `only` box, a Tab stop of its own, checked while
+  // the lane keeps every role on its lead. A press and Space toggle the box and leave focus on it, a lead change keeps it,
+  // and Mixed disables it and says why. Every step is checked against the stored lane; neither a lead change nor the box
+  // moves a word of the row, and pointing at or focusing the box moves nothing on the stage.
+  assert.deepEqual(await browser.evaluate(`[...${row("lane")}.querySelectorAll('[role="radio"]')].map(el => el.dataset.key)`), ["mixed", "openai", "anthropic", "deepseek"],
+    "The lead row names mixed, then GPT, Claude and DeepSeek");
+  const leadGeometry = await browser.evaluate<string[]>(LEAD_GEOMETRY);
+  const leads = async (description: string, lane: Selection["lane"], focus: string | null = null) => {
+    const chosen = lane.kind === "mixed" ? "mixed" : lane.family, checked = lane.kind === "provider" && lane.blend === "only";
+    await until(browser, description, `${chosenKey("lane")} === ${JSON.stringify(chosen)} && ${onlyBox}.getAttribute('aria-checked') === '${checked}'${focus === null ? "" : ` && document.activeElement === ${focus}`}`);
+    assert.deepEqual((await readStarterDraft(browser)).selection.lane, lane, `${description}: the stored lane`);
+    assert.deepEqual(await browser.evaluate(LEAD_GEOMETRY), leadGeometry, `${description}: no word of the lead row moves`);
+  };
+  const gptLed = { kind: "provider", family: "openai", blend: "led" } as const, gptOnly = { ...gptLed, blend: "only" } as const;
+  await choose(browser, "lane", "mixed");
+  await leads("Mixed leads", { kind: "mixed" });
+  const mixedWhy = await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-description')`);
+  assert(mixedWhy, "Under Mixed the only box names why it is disabled");
+  assert.equal(await browser.evaluate(`${onlyBox}.getAttribute('aria-disabled') === 'true' && ${onlyBox}.dataset.off === undefined`), true,
+    "Under Mixed the only box is disabled, not struck");
+  await click(browser, onlyBox);
+  await until(browser, "a press on the disabled box says why in the readout and aloud, with focus on the box",
+    `document.activeElement === ${onlyBox} && ${readout}.dataset.tone === 'warn' && ${readout}.textContent.includes(${JSON.stringify(mixedWhy)}) &&
+    ${liveRegion}.textContent === ${JSON.stringify(`lead only: ${mixedWhy}`)}`);
+  await key(browser, " ", 32);
+  await settle(browser);
+  await leads("Neither a press nor Space on the disabled box leaves Mixed", { kind: "mixed" }, onlyBox);
+  await choose(browser, "lane", "openai");
+  await leads("GPT from Mixed is GPT-led", gptLed);
+  assert.equal(await browser.evaluate(`${onlyBox}.getAttribute('aria-disabled')`), null, "Under GPT the only box is enabled");
+  await click(browser, onlyBox);
+  await leads("A press on the box checks it: GPT only, with focus kept on the box", gptOnly, onlyBox);
+  await key(browser, " ", 32);
+  await leads("Space unchecks it: GPT-led, with focus kept on the box", gptLed, onlyBox);
+  await until(browser, "the readout says what Space did", `${readout}.querySelector('b')?.textContent === 'only'`);
+  await key(browser, " ", 32);
+  await leads("Space checks it again", gptOnly, onlyBox);
+  // A lead change keeps the box: checked, Claude and DeepSeek are their only lanes; unchecked, GPT is GPT-led again.
+  await choose(browser, "lane", "anthropic");
+  await leads("Claude keeps the box: Claude only", { kind: "provider", family: "anthropic", blend: "only" });
+  await choose(browser, "lane", "deepseek");
+  await leads("DeepSeek keeps it: DeepSeek only", { kind: "provider", family: "deepseek", blend: "only" });
+  await click(browser, onlyBox);
+  await leads("Unchecked under DeepSeek: DeepSeek-led", { kind: "provider", family: "deepseek", blend: "led" }, onlyBox);
+  await choose(browser, "lane", "openai");
+  await leads("GPT keeps it unchecked: GPT-led", gptLed);
+  // Pointing at the box, unchecked and checked, and keyboard focus on it, the Tab stop after the lead's, shift nothing.
+  for (const lane of [gptLed, gptOnly]) {
+    if (lane === gptOnly) {
+      await click(browser, onlyBox);
+      await leads("A press checks the box again", gptOnly, onlyBox);
+    }
+    await pointAway(browser);
+    await still(browser);
+    await browser.evaluate(BOXES);
+    await pointOf(browser, onlyBox);
+    await settle(browser);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at the ${lane.blend === "only" ? "checked" : "unchecked"} only box shifts nothing`);
+  }
+  await focusRow(browser, "lane");
+  await still(browser);
+  await browser.evaluate(BOXES);
+  await key(browser, "Tab", 9);
+  await until(browser, "Tab from the lead reaches the only box", `document.activeElement === ${onlyBox} && ${onlyBox}.matches(':focus-visible')`);
+  await settle(browser);
+  assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "Keyboard focus on the only box shifts nothing");
+  await key(browser, "Tab", 9);
+  await until(browser, "the next Tab leaves the lead row for the model row", `!!${row("tier")}.contains(document.activeElement)`);
+  await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  await still(browser);
+  await click(browser, onlyBox);
+  await leads("Under reduced motion a press unchecks the box", gptLed, onlyBox);
+  assert.equal(await browser.evaluate(running), 0, "Reduced motion: a press on the only box does not animate");
+  await browser.send("Emulation.setEmulatedMedia", { features: [] });
+  const start = before.selection.lane;
+  await choose(browser, "lane", start.kind === "mixed" ? "mixed" : start.family);
+  if (start.kind === "provider" && await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-checked')`) !== String(start.blend === "only")) await click(browser, onlyBox);
+  assert.deepEqual(await readStarterDraft(browser), before, "The lead row's round trips return the exact profile");
+
   // The wheel steps a row the keyboard has focused, or one the pointer has rested on; over a row the pointer only passes, it scrolls the panel.
   await panelWidth(browser, 860, 520);
   try {
@@ -2082,6 +2167,73 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     await fixture.stop();
   }
 }
+
+// ---------------------------------------------------------------- the lead row's struck choices
+
+/**
+ * The lead row with Claude's one account excluded by the saved choices (#252). No Claude lane can run, so Claude's lead is
+ * struck, cannot be picked and says why when pointed at, pressed and aloud. GPT-led would cross to Claude while GPT only
+ * runs, so GPT stays pickable, says beforehand that it lands on GPT only and does; there the `only` box is checked and
+ * struck, and pointing at it, focusing it or Space on it says why and leaves it checked. The observation and the reading
+ * are synthetic, a Claude slot beside a Codex one; the exclusion is the one save, made before the panel opens, and the
+ * panel saves nothing.
+ */
+async function leadStruckScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const workspace = await createContainer(server, "Struck leads", "canvas");
+  const target = { containerId: workspace.id };
+  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+  assert(created.ok);
+  const claude = fixtureAccounts([1]);
+  const excluded = await callAction(server, writer.token, "atyrode.code.changeAccounts", { ...target, expectedRevision: (created.result as Configuration).revision,
+    change: { kind: "set-account", enabled: false, reference: claude.accounts[0]!.reference } });
+  assert(excluded.ok, "The saved choices exclude Claude's one account");
+  const base = await readConfiguration(server, writer, target);
+  await arrangeWorkbench(server, writer);
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  const observation = (): OmpResult<"accounts"> => ({ ...claude, observedAt: Date.now() - 1_000, accounts: [...claude.accounts, codex] });
+  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
+    : name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
+  /** The readout warns with `why`. */
+  const warns = (why: string) => `${readout}.dataset.tone === 'warn' && ${readout}.textContent.includes(${JSON.stringify(why)})`;
+  try {
+    await openGenerator(browser, server, workspace.id);
+    const claudeLead = word("lane", "anthropic"), gptLead = word("lane", "openai");
+    await until(browser, "Claude's lead is struck and names why",
+      `${claudeLead}?.dataset.off !== undefined && ${claudeLead}.getAttribute('aria-disabled') === 'true' && !!${claudeLead}.getAttribute('aria-description')`);
+    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "The initialized profile leads Mixed");
+    const why = await browser.evaluate<string>(`${claudeLead}.getAttribute('aria-description')`);
+    await pointOf(browser, claudeLead);
+    await until(browser, "pointing at the struck lead says why", `${warns(why)} && ${readout}.querySelector('b')?.textContent === 'Claude'`);
+    await click(browser, claudeLead);
+    await until(browser, "a press on the struck lead says why at once, in the readout and aloud",
+      `${warns(why)} && ${liveRegion}.textContent === ${JSON.stringify(`lead Claude: ${why}`)}`);
+    assert.equal(await browser.evaluate(chosenKey("lane")), "mixed", "A struck lead cannot be picked");
+    assert.equal(await browser.evaluate(`${gptLead}.dataset.off === undefined && ${gptLead}.getAttribute('aria-label')`), "GPT only",
+      "GPT, whose GPT-led lane cannot run, is pickable as GPT only");
+    await pointOf(browser, gptLead);
+    await until(browser, "pointing at GPT says it lands on GPT only", `${readout}.textContent.includes('cannot run, so GPT only')`);
+    await click(browser, gptLead);
+    await until(browser, "GPT lands on GPT only, its box checked and struck with a reason", `${chosenKey("lane")} === 'openai' && ${rowValue("lane")} === 'GPT only' &&
+      ${onlyBox}.getAttribute('aria-checked') === 'true' && ${onlyBox}.getAttribute('aria-disabled') === 'true' && ${onlyBox}.dataset.off !== undefined &&
+      !!${onlyBox}.getAttribute('aria-description')`);
+    const boxWhy = await browser.evaluate<string>(`${onlyBox}.getAttribute('aria-description')`);
+    await pointOf(browser, onlyBox);
+    await until(browser, "pointing at the struck box says why", warns(boxWhy));
+    await focusRow(browser, "lane");
+    await key(browser, "Tab", 9);
+    await until(browser, "keyboard focus on the struck box says why", `document.activeElement === ${onlyBox} && ${warns(boxWhy)}`);
+    await key(browser, " ", 32);
+    await until(browser, "Space on the struck box says why aloud and leaves it checked, with focus on it",
+      `${liveRegion}.textContent === ${JSON.stringify(`lead only: ${boxWhy}`)} && document.activeElement === ${onlyBox} && ${onlyBox}.getAttribute('aria-checked') === 'true'`);
+    assert.equal(await browser.evaluate(rowValue("lane")), "GPT only", "A refused box leaves the lane");
+    assert.deepEqual(await readConfiguration(server, writer, target), base, "Struck choices, their refusals and a lead change save nothing");
+    fixture.check();
+  } finally {
+    await fixture.stop();
+  }
+}
+
 // ---------------------------------------------------------------- shared drafts across destinations
 
 /**
@@ -3588,6 +3740,8 @@ async function run(): Promise<void> {
     await ompUpgradeScenario(writerBrowser, server, writer, target);
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
+    phase = "struck leads and the only box say why";
+    await leadStruckScenario(writerBrowser, server, writer);
     phase = "manual catalog authoring and concurrent first-save refusal";
     await manualCatalogScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
@@ -3612,7 +3766,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();

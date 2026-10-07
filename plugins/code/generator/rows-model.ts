@@ -39,8 +39,6 @@ export type RowWord = {
   readonly tone: WordTone;
   /** Chosen, the row's glider dims: an off value. */
   readonly quiet: boolean;
-  /** The first lane of another provider's group, which starts its own line when the row wraps. */
-  readonly gap: boolean;
   /** Refused because the model list has no model of a family someone has signed in for: verifying models is what finds them. */
   readonly verifies: boolean;
 };
@@ -69,7 +67,7 @@ export type RowsInput = {
   readonly familyWord: (family: string) => string;
 };
 
-const NO_WORD = { sub: null, reason: null, quota: null, option: null, gap: false, verifies: false } as const;
+const NO_WORD = { sub: null, reason: null, quota: null, option: null, verifies: false } as const;
 
 function laneFamilies(mark: LaneMark | null): readonly string[] {
   return mark === null ? [] : mark.kind === "mixed" ? ["openai", "anthropic"] : [mark.family];
@@ -127,9 +125,10 @@ function laneWords({ slots, catalog, connected, familyWord }: RowsInput): { read
 /**
  * The lead row: Mixed, then each family the offered lanes lead on, with an `only` box at its end. A
  * lead word commits its lead's variant on the box's side (`gpt-only` with Claude pressed is
- * `claude-only`); where the lead does not offer that variant it commits the one it does, and says so.
- * A lead whose variant cannot run is struck with that variant's reason, as a lane was. A lead word's
- * key is its family, or `mixed`.
+ * `claude-only`); where the lead does not offer that variant, or it cannot run while the other can,
+ * it commits the other, and says so. A lead is struck, with its variant's reason as a lane was, only
+ * when neither of its lanes can run, so a runnable lane is never out of reach behind a struck lead.
+ * A lead word's key is its family, or `mixed`.
  */
 function leadRow(input: RowsInput): GeneratorRow {
   const { familyWord } = input;
@@ -144,13 +143,13 @@ function leadRow(input: RowsInput): GeneratorRow {
   const leads = [...variants.keys()].sort((left, right) => Number(right === "mixed") - Number(left === "mixed"));
   const words = leads.map((lead): RowWord => {
     const { only, led } = variants.get(lead)!;
-    const wanted = current.only ? only : led;
-    const word = (wanted ?? only ?? led)!;
+    const wanted = current.only ? only : led, other = current.only ? led : only;
+    const word = (wanted && (wanted.selected || wanted.available || !other?.available) ? wanted : other ?? wanted)!;
     const text = lead === "mixed" ? "mixed" : familyWord(lead);
-    // The nearest variant is said beside what choosing it does, so a lead change never moves the box silently.
-    const nearest = wanted === undefined && lead !== "mixed" && !word.selected
-      ? `no ${current.only ? `${text} only` : `${text}-led`} lane, so ${word.name}` : null;
-    return { ...word, key: lead, text, says: [nearest, word.says].filter(Boolean).join(" · "), gap: false };
+    // The other variant is said beside what choosing it does, so a lead change never moves the box silently.
+    const nearest = word === wanted || lead === "mixed" ? null
+      : wanted === undefined ? `no ${current.only ? `${text} only` : `${text}-led`} lane, so ${word.name}` : `${wanted.name} cannot run, so ${word.name}`;
+    return { ...word, key: lead, text, says: [nearest, word.says].filter(Boolean).join(" · ") };
   });
   const { only, led } = variants.get(current.lead) ?? {};
   const other = current.only ? led : only;
@@ -158,7 +157,7 @@ function leadRow(input: RowsInput): GeneratorRow {
   const why = current.lead === "mixed" ? "mixed leads on GPT and Claude together"
     : `no ${current.only ? `${leadText}-led` : `${leadText} only`} lane`;
   const word: RowWord = other
-    ? { ...other, key: "only", text: "only", gap: false }
+    ? { ...other, key: "only", text: "only" }
     : { ...NO_WORD, key: "only", text: "only", name: "only", selected: false, available: false, reason: why, says: why,
       tone: chosen?.word.tone ?? { kind: "mixed" }, quiet: false };
   return {

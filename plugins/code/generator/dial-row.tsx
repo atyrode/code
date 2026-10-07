@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
 import { Check, hueOf } from "../ui.tsx";
 import { edgeWord, stepWord, type GeneratorRow, type OnlyBox, type RowWord, type WordTone } from "./rows-model.ts";
@@ -100,7 +100,7 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     const words = box.current, row = element.current;
     if (!words || !row) return;
     if (!anchor) {
-      // A row whose words wrap starts each provider group on its own line (the lane's DeepSeek words).
+      // A row whose words wrap gives each line room for its glider (`data-wrapped`).
       delete row.dataset.wrapped;
       const tops = [...words.querySelectorAll<HTMLElement>(`.${G}word`)].map(word => word.offsetTop);
       if (tops.some(top => top !== tops[0])) row.dataset.wrapped = "";
@@ -323,16 +323,12 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
         <i className={`${G}fill`} />
         <i className={`${G}dot`} />
       </span>
-      {row.words.map(word => <Fragment key={word.key}>
-        {word.gap && <i className={`${G}word-break`} />}
-        <span className={`${G}word`} role="radio" aria-checked={word.selected} aria-disabled={!word.available || undefined} aria-label={word.name}
-          aria-description={word.available ? undefined : word.reason ?? undefined} tabIndex={word === stop ? 0 : -1}
-          data-key={word.key} data-selected={word.selected || undefined} data-off={!word.available || undefined}
-          data-gap={word.gap || undefined} style={{ "--wc": toneColor(word.tone) } as CSSProperties}>
-          <span className={`${G}word-text`} data-text={word.text}>{word.text}</span>
-          {word.sub !== null && <span className={`${G}word-sub`}>{word.sub}</span>}
-        </span>
-      </Fragment>)}
+      {row.words.map(word => <span key={word.key} className={`${G}word`} role="radio" aria-checked={word.selected} aria-disabled={!word.available || undefined}
+        aria-label={word.name} aria-description={word.available ? undefined : word.reason ?? undefined} tabIndex={word === stop ? 0 : -1}
+        data-key={word.key} data-selected={word.selected || undefined} data-off={!word.available || undefined} style={{ "--wc": toneColor(word.tone) } as CSSProperties}>
+        <span className={`${G}word-text`} data-text={word.text}>{word.text}</span>
+        {word.sub !== null && <span className={`${G}word-sub`}>{word.sub}</span>}
+      </span>)}
       {row.only && <OnlyCheck only={row.only} onToggle={toggleOnly} onPoint={on => onHover(on ? row.only!.word : null)} />}
     </div>
   </div>;
