@@ -100,18 +100,22 @@ export function splitLane(lane: Lane): { readonly lead: string; readonly only: b
 /**
  * Every lane the row can offer, as a word: its slot option, or, for a family someone has signed in
  * for that the model list lacks, a word struck with that reason, one verification away. A lane is
- * hidden only while its family has no signed-in account at all, unless it is the lane in use; a
- * family whose accounts are all excluded stays, refused with the domain's reason.
+ * hidden only while its family has no signed-in account at all, unless its lead is the one in use:
+ * that lead keeps both its lanes, so its box still says why the other cannot run. A family whose
+ * accounts are all excluded stays, refused with the domain's reason.
  */
 function laneWords({ slots, catalog, connected, familyWord }: RowsInput): { readonly lane: Lane; readonly word: RowWord }[] {
   const listed = new Set(catalog.families);
   const missing = connected === null ? [] : [...connected].filter(family => !listed.has(family));
-  return laneGroups(lanesOf([...catalog.families, ...missing])).flat().flatMap(lane => {
+  const lanes = laneGroups(lanesOf([...catalog.families, ...missing])).flat();
+  const inUse = lanes.find(lane => slots.lane.options.some(option => option.current && option.value === laneWord(lane)));
+  const leadInUse = inUse ? splitLane(inUse).lead : null;
+  return lanes.flatMap(lane => {
     const option = slots.lane.options.find(candidate => candidate.value === laneWord(lane));
     const mark: LaneMark = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "provider", family: lane.family, cross: null };
     const tone: WordTone = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "family", family: lane.family };
     if (option) {
-      if (!option.current && connected !== null && !laneFamilies(option.mark ?? mark).every(family => connected.has(family))) return [];
+      if (connected !== null && splitLane(lane).lead !== leadInUse && !laneFamilies(option.mark ?? mark).every(family => connected.has(family))) return [];
       return [{ lane, word: dialWord(option, option.value, option.label, tone, false) }];
     }
     const absent = familiesOf(lane).find(family => missing.includes(family));

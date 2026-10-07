@@ -106,6 +106,14 @@ describe("the generator's rows", () => {
     expect(codexOnly.words.find(word => word.key === "anthropic")).toMatchObject({ available: false, option: null });
   });
 
+  test("the lead in use keeps both its lanes, so its box says why the other cannot run once its family has no account left", () => {
+    // Claude only, with Claude's last account gone: Claude-led stays behind the box, struck with the account reason, not called missing.
+    const gone = lead(team({ lane: claudeOnly }), new Set(["openai"]), catalog, new Set(["openai-codex"]));
+    expect(gone.words.map(word => word.key)).toEqual(["openai", "anthropic"]);
+    expect(gone.only).toMatchObject({ checked: true, enabled: true, struck: true, word: { available: false, option: null } });
+    expect(gone.only!.word.reason).toMatch(/Claude account/);
+  });
+
   test("an extra is a row of on then off: the chosen word says what it means, the other what turning it does or why it cannot", () => {
     const list = rows(team({ fallback: true }));
     const fallbacks = row(list, "fallbacks");
