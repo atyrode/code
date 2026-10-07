@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { prefersReducedMotion } from "@manifold/ui";
-import { hueOf } from "../ui.tsx";
-import { edgeWord, stepWord, type GeneratorRow, type RowWord, type WordTone } from "./rows-model.ts";
+import { Check, hueOf } from "../ui.tsx";
+import { edgeWord, stepWord, type GeneratorRow, type OnlyBox, type RowWord, type WordTone } from "./rows-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -168,6 +168,13 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
     refocus.current = box.current?.contains(box.current.ownerDocument.activeElement) ?? false;
     onChoose(word, via);
   }
+  /** The lead row's `only` box commits its lead's other variant; it keeps focus, as a checkbox does, and says what the press did. */
+  function toggleOnly() {
+    const only = latest.current.only;
+    if (!only) return;
+    if (!only.word.available || locked) { onRefuse(only.word, "keyboard"); return; }
+    onChoose(only.word, "keyboard");
+  }
   function step(forward: boolean) {
     const next = stepWord(latest.current, forward);
     if (next) { choose(next, "keyboard"); return; }
@@ -209,6 +216,8 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
   }
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    // The `only` box sits at the end of the words and is a control of its own, never a detent.
+    if ((event.target as HTMLElement).closest("[data-only]")) return;
     onCursor();
     // The press focuses the row's value, never the word under the pointer: the value is the row's one Tab stop.
     event.preventDefault();
@@ -235,10 +244,11 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
       return;
     }
     if (held) return;
-    const key = (event.target as HTMLElement).closest<HTMLElement>(`.${G}word`)?.dataset.key ?? null;
+    const target = event.target as HTMLElement;
+    const key = target.closest<HTMLElement>(`.${G}word`)?.dataset.key ?? (target.closest("[data-only]") ? "only" : null);
     if (hovered.current === key) return;
     hovered.current = key;
-    onHover(latest.current.words.find(word => word.key === key) ?? null);
+    onHover(latest.current.words.find(word => word.key === key) ?? (key === "only" ? latest.current.only?.word ?? null : null));
   }
   function pointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const held = drag.current;
@@ -323,6 +333,22 @@ export function DialRow({ row, cursor, locked, onCursor, onChoose, onRefuse, onH
           {word.sub !== null && <span className={`${G}word-sub`}>{word.sub}</span>}
         </span>
       </Fragment>)}
+      {row.only && <OnlyCheck only={row.only} onToggle={toggleOnly} onPoint={on => onHover(on ? row.only!.word : null)} />}
     </div>
   </div>;
+}
+
+/**
+ * The lead row's `only` box, at the end of its words: checked while the lane keeps every role on its
+ * lead. Disabled where the lead has no other variant, struck as well where that variant cannot run;
+ * pressing it then says why. Its own Tab stop; Space toggles it, as any checkbox.
+ */
+function OnlyCheck({ only, onToggle, onPoint }: { only: OnlyBox; onToggle: () => void; onPoint: (on: boolean) => void }) {
+  // Every press goes through `onToggle`, which commits or refuses with the reason, so the box's own change never runs.
+  return <Check className={`${G}only`} checked={only.checked} onChange={onToggle} data-only="" data-off={only.struck || undefined}
+    aria-label={only.word.available ? `only: ${only.word.name}` : "only"} aria-disabled={!only.word.available || undefined}
+    aria-description={only.word.available ? undefined : only.word.reason ?? undefined}
+    onClick={event => { event.preventDefault(); onToggle(); }} onFocus={() => onPoint(true)} onBlur={() => onPoint(false)}>
+    <span className={`${G}only-text`}>only</span>
+  </Check>;
 }

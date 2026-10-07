@@ -14,8 +14,8 @@ import { laneLabel, type LaneMark, type QuotaNote, type Slot, type SlotOption, t
  */
 
 export type RowId = "lane" | "tier" | "thinking" | "advisor" | "fallbacks";
-/** A lane spectrum, a level whose fill grows from the first word, or an on/off switch. */
-export type RowKind = "lane" | "level" | "switch";
+/** Who leads (the lane row, with its `only` box), a level whose fill grows from the first word, or an on/off switch. */
+export type RowKind = "lead" | "level" | "switch";
 /** How a chosen word is coloured: its provider's hue, Mixed's, the lane's accent, or the text colour (an off value). */
 export type WordTone = { readonly kind: "family"; readonly family: string } | { readonly kind: "mixed" } | { readonly kind: "accent" } | { readonly kind: "plain" };
 
@@ -44,7 +44,18 @@ export type RowWord = {
   /** Refused because the model list has no model of a family someone has signed in for: verifying models is what finds them. */
   readonly verifies: boolean;
 };
-export type GeneratorRow = { readonly id: RowId; readonly word: Exclude<StatementWord, "machine">; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[] };
+/**
+ * The lead row's `only` box: whether the lane keeps every role on its lead, and the word a press
+ * commits, its lead's other variant. `enabled` is false where there is no other variant (Mixed, or a
+ * lead the catalog forms one way only); the word then carries why. Enabled with a variant that cannot
+ * run, it is struck and the word carries the variant's reason.
+ */
+export type OnlyBox = { readonly checked: boolean; readonly enabled: boolean; readonly struck: boolean; readonly word: RowWord };
+export type GeneratorRow = {
+  readonly id: RowId; readonly word: Exclude<StatementWord, "machine">; readonly label: string; readonly kind: RowKind; readonly words: readonly RowWord[];
+  /** The lead row's `only` box; null on every other row. */
+  readonly only: OnlyBox | null;
+};
 
 export type RowsInput = {
   readonly slots: Readonly<Record<StatementWord, Slot>>;
@@ -83,33 +94,77 @@ function lanesOf(families: readonly string[]): Lane[] {
 const familiesOf = (lane: Lane): string[] => lane.kind === "mixed" ? ["openai", "anthropic"]
   : lane.blend === "led" ? [lane.family, ...familyPolicy(lane.family).crossTo !== null ? [familyPolicy(lane.family).crossTo!] : []] : [lane.family];
 
+/** A lane as the lead row reads it: who leads (`mixed`, or a family) and whether that family runs every role. Mixed reads as led, so a lead change from it lands on a led lane. */
+export function splitLane(lane: Lane): { readonly lead: string; readonly only: boolean } {
+  return lane.kind === "mixed" ? { lead: "mixed", only: false } : { lead: lane.family, only: lane.blend === "only" };
+}
+
 /**
- * Lanes in their spectrum, then each other provider's group. A lane is hidden only while its
- * family has no signed-in account at all, unless it is the lane in use; a family whose accounts
- * are all excluded stays, refused with the domain's reason. A lane the model list cannot form
- * because it has no model of a family someone has signed in for stays too, struck with that
- * reason, so a short lane row explains itself; verifying models is what finds them.
+ * Every lane the row can offer, as a word: its slot option, or, for a family someone has signed in
+ * for that the model list lacks, a word struck with that reason, one verification away. A lane is
+ * hidden only while its family has no signed-in account at all, unless it is the lane in use; a
+ * family whose accounts are all excluded stays, refused with the domain's reason.
  */
-function laneRow({ slots, catalog, connected, familyWord }: RowsInput): GeneratorRow {
+function laneWords({ slots, catalog, connected, familyWord }: RowsInput): { readonly lane: Lane; readonly word: RowWord }[] {
   const listed = new Set(catalog.families);
   const missing = connected === null ? [] : [...connected].filter(family => !listed.has(family));
-  const groups = laneGroups(lanesOf([...catalog.families, ...missing]));
-  const entries = groups.flatMap((lanes, group) => lanes.flatMap((lane): { word: RowWord; group: number }[] => {
+  return laneGroups(lanesOf([...catalog.families, ...missing])).flat().flatMap(lane => {
     const option = slots.lane.options.find(candidate => candidate.value === laneWord(lane));
     const mark: LaneMark = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "provider", family: lane.family, cross: null };
     const tone: WordTone = lane.kind === "mixed" ? { kind: "mixed" } : { kind: "family", family: lane.family };
     if (option) {
       if (!option.current && connected !== null && !laneFamilies(option.mark ?? mark).every(family => connected.has(family))) return [];
-      return [{ word: dialWord(option, option.value, option.label, tone, false), group }];
+      return [{ lane, word: dialWord(option, option.value, option.label, tone, false) }];
     }
     const absent = familiesOf(lane).find(family => missing.includes(family));
     if (!absent) return [];
     const reason = `No ${familyWord(absent)} models in your model list`;
-    return [{ group, word: { ...NO_WORD, key: laneWord(lane), text: laneWord(lane), name: laneLabel(lane, familyWord), selected: false, available: false,
+    return [{ lane, word: { ...NO_WORD, key: laneWord(lane), text: laneWord(lane), name: laneLabel(lane, familyWord), selected: false, available: false,
       reason, says: reason, tone, quiet: false, verifies: true } }];
-  }));
-  const words = entries.map(({ word, group }, index) => ({ ...word, gap: index > 0 && entries[index - 1]!.group !== group }));
-  return { id: "lane", word: "lane", label: "lane", kind: "lane", words };
+  });
+}
+
+/**
+ * The lead row: Mixed, then each family the offered lanes lead on, with an `only` box at its end. A
+ * lead word commits its lead's variant on the box's side (`gpt-only` with Claude pressed is
+ * `claude-only`); where the lead does not offer that variant it commits the one it does, and says so.
+ * A lead whose variant cannot run is struck with that variant's reason, as a lane was. A lead word's
+ * key is its family, or `mixed`.
+ */
+function leadRow(input: RowsInput): GeneratorRow {
+  const { familyWord } = input;
+  const offered = laneWords(input);
+  const variants = new Map<string, { only?: RowWord; led?: RowWord }>();
+  for (const { lane, word } of offered) {
+    const { lead, only } = splitLane(lane);
+    variants.set(lead, { ...variants.get(lead), [only ? "only" : "led"]: word });
+  }
+  const chosen = offered.find(entry => entry.word.selected);
+  const current = chosen ? splitLane(chosen.lane) : { lead: "mixed", only: false };
+  const leads = [...variants.keys()].sort((left, right) => Number(right === "mixed") - Number(left === "mixed"));
+  const words = leads.map((lead): RowWord => {
+    const { only, led } = variants.get(lead)!;
+    const wanted = current.only ? only : led;
+    const word = (wanted ?? only ?? led)!;
+    const text = lead === "mixed" ? "mixed" : familyWord(lead);
+    // The nearest variant is said beside what choosing it does, so a lead change never moves the box silently.
+    const nearest = wanted === undefined && lead !== "mixed" && !word.selected
+      ? `no ${current.only ? `${text} only` : `${text}-led`} lane, so ${word.name}` : null;
+    return { ...word, key: lead, text, says: [nearest, word.says].filter(Boolean).join(" · "), gap: false };
+  });
+  const { only, led } = variants.get(current.lead) ?? {};
+  const other = current.only ? led : only;
+  const leadText = current.lead === "mixed" ? "mixed" : familyWord(current.lead);
+  const why = current.lead === "mixed" ? "mixed leads on GPT and Claude together"
+    : `no ${current.only ? `${leadText}-led` : `${leadText} only`} lane`;
+  const word: RowWord = other
+    ? { ...other, key: "only", text: "only", gap: false }
+    : { ...NO_WORD, key: "only", text: "only", name: "only", selected: false, available: false, reason: why, says: why,
+      tone: chosen?.word.tone ?? { kind: "mixed" }, quiet: false };
+  return {
+    id: "lane", word: "lane", label: "lead", kind: "lead", words,
+    only: { checked: current.only, enabled: other !== undefined, struck: other !== undefined && !other.available, word },
+  };
 }
 
 /**
@@ -127,14 +182,14 @@ function tierRow({ slots, catalog, shown, aliases }: RowsInput): GeneratorRow {
     if (!lead) return dialWord(option, option.value, option.value, { kind: "accent" }, false);
     return { ...dialWord(option, lead.alias, `${lead.alias}, ${option.value}`, { kind: "family", family: lead.family }, false), sub: option.value };
   });
-  return { id: "tier", word: "tier", label: "model", kind: "level", words };
+  return { id: "tier", word: "tier", label: "model", kind: "level", words, only: null };
 }
 
 function levelRow(slot: Slot, word: "thinking" | "advisor"): GeneratorRow {
   const words = slot.options.map(option => option.value === "off"
     ? dialWord(option, option.value, option.label, { kind: "plain" }, true)
     : dialWord(option, option.value, option.label, { kind: "accent" }, false));
-  return { id: word, word, label: word, kind: "level", words };
+  return { id: word, word, label: word, kind: "level", words, only: null };
 }
 
 /** An extra as its own row of two words, on then off; the chosen one says what it means, the other what turning it does. */
@@ -148,16 +203,16 @@ function switchRow(extra: SlotOption): GeneratorRow {
       tone: on ? { kind: "accent" } : { kind: "plain" }, quiet: !on,
     };
   };
-  return { id: extra.value as RowId, word: "extras", label: extra.label, kind: "switch", words: [side(true), side(false)] };
+  return { id: extra.value as RowId, word: "extras", label: extra.label, kind: "switch", words: [side(true), side(false)], only: null };
 }
 
 /** The extras the generator keeps as rows; the others are switches in the session options sheet. */
 export const ROW_EXTRAS: readonly string[] = ["fallbacks"];
 
-/** Every row, top to bottom: lane, model, thinking, advisor, fallbacks. The machine is the launch's own word (machine-picker.tsx). */
+/** Every row, top to bottom: lead, model, thinking, advisor, fallbacks. The machine is the launch's own word (machine-picker.tsx). */
 export function generatorRows(input: RowsInput): GeneratorRow[] {
   const { slots } = input;
-  return [laneRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"),
+  return [leadRow(input), tierRow(input), levelRow(slots.thinking, "thinking"), levelRow(slots.advisor, "advisor"),
     ...slots.extras.options.filter(extra => ROW_EXTRAS.includes(extra.value)).map(switchRow)];
 }
 

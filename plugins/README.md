@@ -28,8 +28,8 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   selection, freshness and Code-owned catalog/suggestion policy over typed OMP
   observations.
 - `atyrode.code/generator/`: the main view's rules are pure modules tested apart from
-  the DOM — `rows-model.ts` (rows, aliases, which lanes hide or strike),
-  `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
+  the DOM — `rows-model.ts` (rows, aliases, the lead row's leads and only box, and
+  which of them hide or strike), `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
   line and readout), `consequences.ts`, `launch-step.ts` (the one action gate),
   `panel-keys.ts` (every panel key as a decision over plain facts),
   `auto-read.ts` (what the panel reads again on its own, when, in one pass, and when it waits)

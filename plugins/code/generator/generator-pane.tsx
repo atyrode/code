@@ -263,7 +263,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       return { value: hovered.name, text: hovered.name === "cost" ? `${readout.word} · ${COST_NOTE}`
         : readout.level === null ? "unmeasured · verifying models measures it" : `${readout.word} · from measured throughput and first-token time`, warn: false, color: null };
     }
-    const row = rowOf(hovered.row), word = row?.words.find(entry => entry.key === hovered.key);
+    const row = rowOf(hovered.row), word = row?.words.find(entry => entry.key === hovered.key) ?? (row?.only?.word.key === hovered.key ? row.only.word : undefined);
     return row && word ? wordSaid(row, word) : null;
   }
   const said = scrubSaid() ?? keySaid ?? pointedSaid() ?? (focused ? chosenSaid(rowOf(focused)) : null);
