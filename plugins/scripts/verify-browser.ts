@@ -3431,8 +3431,9 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
         ${element(modal)}.querySelector('h2').textContent === ${JSON.stringify(`Review: ${fixLabel}`)}`);
       await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('[data-code-capability] input[type="checkbox"]').length === 7`);
       await key(browser, "Escape", 27);
-      await until(browser, "the review closes normally", `${element(modal)} === null`);
-      assert.equal(await browser.evaluate(`document.activeElement === ${element(`${setupSheet} [data-go]`)}`), true, "Escape returns focus to Setup's next action");
+      // Setup gives focus back to its next action in the frame after the review closes (setup-sheet.tsx `onClose`).
+      await until(browser, "the review closes normally, and Escape returns focus to Setup's next action",
+        `${element(modal)} === null && document.activeElement === ${element(`${setupSheet} [data-go]`)}`);
       await closeSheet(browser);
       await openSheet(browser, "models");
       await closeSheet(browser);
