@@ -56,7 +56,8 @@ export function PermissionReview(props: PermissionReviewProps) {
   </>;
 }
 
-function PermissionDialog({ host, target, intent, label, onReady, onClose, containerId }: PermissionReviewProps & { containerId: string; onClose: () => void }) {
+/** The native review itself, open from mount: a trigger of its own (`PermissionReview`) or a sheet's next action opens it. */
+export function PermissionDialog({ host, target, intent, label, onReady, onClose, containerId }: PermissionReviewProps & { containerId: string; onClose: () => void }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);

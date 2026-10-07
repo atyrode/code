@@ -6,22 +6,21 @@ import { quotaPools } from "../../domain/quota.ts";
 import { GENERATOR_PLUGIN_ID, LAUNCHER_PANEL, type Target } from "../contract.ts";
 import { useCodeTarget, type OmpPresence } from "../machine-web.ts";
 import { AccountsView } from "../accounts-view.tsx";
-import { PermissionReview } from "../permission-review.tsx";
 import { Button, familyWord, hueOf, SheetFrame } from "../ui.tsx";
 import { displayAliases } from "./aliases.ts";
 import { modelListFailure } from "./board-model.ts";
 import { AccountsPane } from "./accounts-pane.tsx";
-import { CatalogWorkbench } from "./catalog-editor.tsx";
+import { ModelsSheet } from "./models-sheet.tsx";
 import { EarlierStatements, usePinnedRecents } from "./earlier.tsx";
 import type { StatementWords } from "./earlier-model.ts";
 import { GeneratorPane, PANEL_VOCABULARY, type GeneratorControls, type GeneratorPlace, type LaunchState } from "./generator-pane.tsx";
 import { acceleratorFor, panelKey, type PanelAction, type PanelSheet, type PanelView } from "./panel-keys.ts";
 import { routeLedger } from "./routing-model.ts";
 import { RoutingPane } from "./routing-pane.tsx";
-import { RuntimeSettings } from "./runtime-settings.tsx";
 import { OptionalSkills } from "./skills.tsx";
 import { Automation } from "./automation.tsx";
 import { OptionSwitch } from "./option-switch.tsx";
+import { SetupSheet } from "./setup-sheet.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { readHeld } from "./auto-read.ts";
@@ -32,12 +31,8 @@ import { useWorkbench } from "./workbench-model.ts";
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const PANEL_ROOT = ".plugin-atyrode_code_generator";
-const SHEET_TITLES: Readonly<Record<PanelSheet, string>> = { models: "Models", setup: "Setup", options: "Session options" };
-/** Exclusion reasons in plain words, for the last verification's details in Setup. */
-const EXCLUSION_WORDS: Readonly<Record<string, string>> = {
-  superseded: "Superseded by a newer model", unstable_id: "Unstable id", not_found: "Not found through your accounts",
-  client_blocked: "Blocked for this client", regression: "Worse than a cheaper tier", separate_quota: "Draws a quota of its own, which Code does not spend",
-};
+/** The session options sheet's title; Models and Setup draw their own heads (models-sheet.tsx, setup-sheet.tsx). */
+const OPTIONS_TITLE = "Session options";
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
 /** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wide proportions. */
 const NARROW_BELOW_PX = 760, WIDE_FROM_PX = 1180;
@@ -125,7 +120,7 @@ function ShortcutsDialog({ dialog, narrow }: { dialog: RefObject<HTMLDialogEleme
 }
 
 type WorkbenchProps = {
-  host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null; machineId: string | null;
+  host: HostServices; target: Target | null; machine: MachineSummary | null; machines: readonly MachineSummary[] | null;
   rosterError: string | null; available: boolean; select: (id: string) => void; refreshMachines: () => void; presence: ReadonlyMap<string, OmpPresence> | null;
 };
 
@@ -136,10 +131,10 @@ type WorkbenchProps = {
  * Under 760px the generator stands alone, the team grouped under its rows, routing and usage each a
  * key away. Models, Setup and the session options open as sheets over the stage.
  */
-function Workbench({ host, target, machine, machines, machineId, rosterError, available, select, refreshMachines, presence }: WorkbenchProps) {
+function Workbench({ host, target, machine, machines, rosterError, available, select, refreshMachines, presence }: WorkbenchProps) {
   const model = useWorkbench({ host, target, machine, rosterError, available });
-  const { queries: { metadata, setup, skillCatalog }, record, observed, starterError, compiled, selection, profile, localDraft,
-    configurationCurrent, launchReady, launchReview, busy, writable, verification, usage, exportedDraft, actions } = model;
+  const { queries: { metadata, skillCatalog }, record, starterError, compiled, selection,
+    launchReview, busy, writable, usage, actions } = model;
   const recents = usePinnedRecents(model.recentTeams);
   const { region, announce } = useAnnouncer();
   const app = useRef<HTMLDivElement>(null);
@@ -241,7 +236,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       if (scroller) scroller.scrollTop = 0;
       const back = backButtons.current[sheet];
       back?.focus({ preventScroll: true });
-      const frame = back?.closest<HTMLElement>(".plugin-atyrode_code__sheet");
+      const frame = back?.closest<HTMLElement>(`.${G}sheet-host`);
       if (frame && !prefersReducedMotion()) frame.animate([{ transform: "translateX(24px)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 160, easing: "cubic-bezier(.2, 0, 0, 1)" });
       return;
     }
@@ -252,21 +247,19 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     if (opener?.isConnected && opener.offsetParent !== null) opener.focus({ preventScroll: true });
     else generator.current?.focusRows();
   }, [sheet]);
-  function finish(source: PanelSheet) {
-    if (currentSheet.current === source) closeSheet();
-    else refresh();
-  }
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
-    // Native dialogs and form fields own Escape inside legacy sheet content.
+    // Native dialogs and form fields own Escape; a sheet's own Escape (a run's cancel) is already handled.
     if (event.key !== "Escape" || event.defaultPrevented || element.closest("dialog") || element.matches("textarea, input, select")) return;
     event.preventDefault();
     closeSheet();
   }
-  /** Where a launch-line fix sends the person: a sheet, or the accounts view. */
+  /** Where a launch-line or sheet fix sends the person: a sheet, or the accounts view. */
   function open(place: GeneratorPlace) {
-    if (place === "accounts") changeView("accounts");
-    else openSheet(place);
+    if (place === "accounts") {
+      if (currentSheet.current) closeSheet();
+      changeView("accounts");
+    } else openSheet(place);
   }
 
   // ------------------------------------------------------------ reading again: on its own (auto-read.ts), and Refresh now (`r`)
@@ -299,7 +292,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
   // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
   const reads = usePanelReads({
-    configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: setup.refresh, defaults: model.queries.defaults.refresh,
+    configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: model.queries.setup.refresh, defaults: model.queries.defaults.refresh,
     skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
     usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
   }, visible, held);
@@ -505,42 +498,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     <ShortcutsDialog dialog={shortcuts} narrow={narrow} />
   </div>;
 
-  const sheetFrame = (name: PanelSheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name} onKeyDown={sheetKeys}>
-    <SheetFrame name={SHEET_TITLES[name]} onBack={closeSheet} backRef={element => { backButtons.current[name] = element; }}>
-      {/* Session options is in the panel's grammar; Models and Setup keep their original layout until their own pass. */}
-      <div className={name === "options" ? `${G}options` : `${G}legacy`}>{body}</div>
-    </SheetFrame>
-  </div>;
+  // A visited sheet stays mounted, so what it holds survives leaving it; each carries the lane's accent as the stage does.
+  const sheetHost = (name: PanelSheet, body: ReactNode) => visited.includes(name) && <div key={name} className={`${G}sheet-host`} hidden={sheet !== name}
+    onKeyDown={sheetKeys} style={{ "--tui-acc": accent } as CSSProperties}>{body}</div>;
+  const backRef = (name: PanelSheet) => (element: HTMLButtonElement | null) => { backButtons.current[name] = element; };
 
   return <>
     {region}
     {tui}
-    {sheetFrame("models", <CatalogWorkbench host={host} target={target} available={available} onDone={() => finish("models")} />)}
-    {sheetFrame("setup", <>
-      <RuntimeSettings host={host} target={target} available={available} onDone={() => finish("setup")} />
-      {record?.active && !launchReady && <div className={`${G}next-action`}>
-        <PermissionReview host={host} target={target} intent="session" label={setup.error ? "Check connection" : "Enable sessions"} onReady={actions.refresh} />
-      </div>}
-      {record?.active && setup.error && <details className="plugin-atyrode_code__details"><summary>Connection details</summary><pre>{setup.error}</pre></details>}
-      {profile && <details className="plugin-atyrode_code__details"><summary>Profile &amp; source details</summary>
-        <dl className={`${G}setup-facts`}>
-          <dt>Shared revision</dt><dd>{record?.revision ?? observed?.revision ?? "not observed"}{!configurationCurrent && " · last known, not current"}</dd>
-          <dt>Displayed catalog</dt><dd>{profile.document.models.length} models · {profile.source === "starter" ? "local bundled starter" : profile.source === "draft" ? "staged preview" : "stored policy"}</dd>
-          <dt>Saved historical provenance</dt><dd>Unrecorded · current metadata does not authenticate how a stored catalog was made</dd>
-          <dt>Current bundled source</dt><dd>{metadata.data ? `OMP ${metadata.data.ompVersion} · ${metadata.data.revision}` : "Not currently observed"}</dd>
-          <dt>Workspace</dt><dd>{host.containerId}</dd>
-          <dt>Destination</dt><dd>{machine?.name ?? "None"} · {machineId || "not selected"} · {available ? "connected" : "unavailable"}</dd>
-          {verification.exclusions && <><dt>Last verification</dt><dd>{compiled?.models.length ?? 0} models, {verification.exclusions.length} excluded</dd></>}
-        </dl>
-        {verification.exclusions && verification.exclusions.length > 0 && <ul className={`${G}exclusions`}>{verification.exclusions.map(exclusion =>
-          <li key={`${exclusion.provider}/${exclusion.id}`}><code>{exclusion.provider}/{exclusion.id}</code><span>{EXCLUSION_WORDS[exclusion.reason]}</span></li>)}</ul>}
-        {exportedDraft && <>
-          <p>Local profile, not persisted. {localDraft?.metadata ? `Bundled OMP ${localDraft.metadata.ompVersion} · metadata revision ${localDraft.metadata.revision}. Performance is unmeasured; availability and accounts require their own observations.` : "This draft retains the exact stored catalog it was based on."}</p>
-          <textarea data-profile-export readOnly rows={6} value={exportedDraft} aria-label="copy local profile" />
-        </>}
-      </details>}
-    </>)}
-    {sheetFrame("options", <>
+    {sheetHost("models", <ModelsSheet host={host} model={model} machine={machine} onBack={closeSheet} backRef={backRef("models")} onPlace={open} />)}
+    {sheetHost("setup", <SetupSheet host={host} model={model} target={target} machine={machine} machines={roster} rosterError={rosterError} presence={presence}
+      select={select} refreshMachines={refreshMachines} onBack={closeSheet} backRef={backRef("setup")} onPlace={open} open={sheet === "setup"} />)}
+    {sheetHost("options", <SheetFrame name={OPTIONS_TITLE} onBack={closeSheet} backRef={backRef("options")}><div className={`${G}options`}>
       {extras.length > 0 && <section className={`${G}options-group`} aria-label="Profile switches">
         <h3 className={`${G}options-head`}>profile</h3>
         <p className={`${G}options-note`}>Saved with the workspace profile, like the generator's rows.</p>
@@ -554,17 +523,17 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       <Automation choice={model.automation} reviewed={launchReview ? launchReview.native.automation : null} refusal={optionsRefusal} change={model.setAutomation} />
       <OptionalSkills catalog={skillCatalog.data} error={skillCatalog.error} choice={model.skillChoice} restricted={model.automation?.mode === "restricted"}
         reviewed={launchReview ? launchReview.native.skills : null} refusal={optionsRefusal} refresh={skillCatalog.refresh} change={model.setSkillChoice} />
-    </>)}
+    </div></SheetFrame>)}
   </>;
 }
 
 function Launcher({ host }: PanelProps) {
-  const { machines, machine, machineId, target, available, error, select, refresh, presence } = useCodeTarget(host);
+  const { machines, machine, target, available, error, select, refresh, presence } = useCodeTarget(host);
   // The panel root takes focus when the panel opens (Workbench), so its keys work before anything is clicked.
   return <div className="plugin-atyrode_code plugin-atyrode_code_generator" tabIndex={-1}>
     <ScrollRegion className={`${G}scroll`} aria-label="Code workspace">
       {host.containerId ? <Workbench key={JSON.stringify([host.principal.id, host.containerId])} host={host} target={target} machine={machine} machines={machines}
-        machineId={machineId} rosterError={error} available={available} select={select} refreshMachines={refresh} presence={presence} />
+        rosterError={error} available={available} select={select} refreshMachines={refresh} presence={presence} />
         : <div className={`${G}tui`} data-tui="">
           <h1 className="plugin-atyrode_code__sr">Code</h1>
           <p className={`${G}pane-note`}>Open or create a workspace in Manifold to use Code here.</p>

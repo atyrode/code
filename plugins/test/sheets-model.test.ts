@@ -1,0 +1,71 @@
+import { describe, expect, test } from "bun:test";
+import type { CatalogDocument } from "../domain/contracts.ts";
+import { listChanges, modelRows, modelsPhase, nextSetupRow, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+
+const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
+  key: `model-${tier}`, provider: "anthropic", id: `native-model${tier}`, api: "anthropic-messages", tier,
+  quotaBucket: null, inputCostPerMillion: tier, outputCostPerMillion: tier * 3, tokensPerSecond: 30 * tier, timeToFirstTokenMs: 900,
+  contextWindow: 200_000, thinkingLevels: ["low", "medium", "high"], images: true,
+})) };
+
+describe("the Models sheet", () => {
+  test("a staged list says what it changes against the list in use: a field, a model added, a model dropped", () => {
+    const active = modelRows(document);
+    expect(listChanges(active, active)).toEqual([]);
+    const faster = structuredClone(document);
+    faster.models[0]!.tokensPerSecond = 101;
+    faster.models.splice(2, 1, { ...faster.models[2]!, key: "model-new", id: "native-new" });
+    const changes = listChanges(active, modelRows(faster)).map(({ row, field, from, to }) => [row.key, field, from, to]);
+    expect(changes).toEqual([
+      ["model-1", "speed", "30 tok/s", "101 tok/s"],
+      ["model-new", "added", null, "native-new"],
+      ["model-3", "dropped", "native-model3", null],
+    ]);
+  });
+
+  test("Spark's retired rung takes no place on a ladder, and speed reads as five blocks, none when unmeasured", () => {
+    const spark = { ...document, models: [...document.models, { ...document.models[0]!, key: "spark", id: "spark", tier: 0 as const }] };
+    expect(modelRows(spark).map(row => row.key)).toEqual(["model-1", "model-2", "model-3"]);
+    expect([null, 29, 30, 45, 60, 90].map(speedLevel)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  test("the next action follows the step: a run first, then a staged list, then the verification and its refusal", () => {
+    const at = (changes: Partial<Parameters<typeof modelsPhase>[0]>) =>
+      modelsPhase({ run: null, step: null, staged: false, status: "unverified", verifyRefusal: null, ...changes });
+    expect(at({ run: "charge", staged: true })).toBe("charge");
+    expect(at({ run: "benchmark", step: "benchmark" })).toBe("benchmark");
+    expect(at({ run: "benchmark", step: "promote" })).toBe("finishing");
+    // A staged list is put in use without discovery, so a refused verification does not hide it.
+    expect(at({ staged: true, verifyRefusal: "verify-permissions" })).toBe("staged");
+    expect(at({ status: "current" })).toBe("verified");
+    expect(at({ verifyRefusal: "verify-permissions" })).toBe("refused");
+    expect(at({ status: "accounts-changed", verifyRefusal: "accounts" })).toBe("unverified");
+  });
+});
+
+describe("the Setup sheet", () => {
+  const ready: SetupFacts = { machine: { name: "Studio", online: true }, rosterError: false, omp: "ok", destinationError: false,
+    connection: true, discovery: true, sessions: true, folders: "ready", folderMode: "existing" };
+
+  test("rows that depend on OMP say so rather than claiming a state, and OMP is the fix pointed at", () => {
+    const rows = setupRows({ ...ready, omp: "absent", connection: false, discovery: false });
+    expect(rows.omp).toEqual({ state: "todo", word: "not on Studio" });
+    for (const id of ["connection", "discovery", "sessions", "folders"] as const) expect(rows[id]).toEqual({ state: "unknown", word: "needs omp" });
+    expect(nextSetupRow(rows)).toBe("omp");
+  });
+
+  test("an offline machine is the fix, everything after it unreachable", () => {
+    const rows = setupRows({ ...ready, machine: { name: "Laptop", online: false } });
+    expect(rows.machine).toEqual({ state: "todo", word: "offline" });
+    expect(rows.omp.word).toBe("unreachable");
+    expect(nextSetupRow(rows)).toBe("machine");
+  });
+
+  test("the first unready row is the next fix, a running folder job is no fix, and a ready machine has none", () => {
+    expect(nextSetupRow(setupRows({ ...ready, discovery: false, folders: "todo" }))).toBe("discovery");
+    expect(setupRows({ ...ready, folders: "busy", folderMode: "create" }).folders).toEqual({ state: "busy", word: "creating…" });
+    // Folder history not read yet is not claimed as unprepared.
+    expect(setupRows({ ...ready, folders: null }).folders.state).toBe("unknown");
+    expect(nextSetupRow(setupRows(ready))).toBeNull();
+  });
+});

@@ -55,9 +55,11 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   task-less: the task is typed in the session. Empty workspaces derive a render-only
   starter from OMP's passive bundled model metadata, so exploring needs no models,
   credentials or runtime setup; saving starts with **Verify models**. Stored active
-  policy always wins. Models (manual authoring, import/export, discovery and
-  measurement), Setup and Options (profile switches, skills and automation for one
-  launch) open as sheets. An unsaved profile survives a reload in the tab.
+  policy always wins. Models (the list as one ladder per provider, its verification
+  and charge, a staged list, import and export), Setup (one checklist of what the
+  machine needs, with the profile's facts and the classifier) and Options (profile
+  switches, skills and automation for one launch) open as sheets. An unsaved profile
+  survives a reload in the tab.
 - **Accounts / Usage:** include exact OMP-observed identities or credential slots
   with a switch per account in the Accounts view; choose the pool, manage reusable
   presets, sign in and manage credentials under **Manage accounts**. The usage pane

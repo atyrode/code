@@ -145,8 +145,6 @@ export type WorkbenchModel = {
   /** The launch status sentence; `nextLaunchStep`'s precedence (launch-step.ts). */
   launchStatus: string;
   message: WorkbenchMessage | null;
-  /** Copyable JSON of the local profile; empty when there is nothing local to export. */
-  exportedDraft: string;
   /**
    * Whether an action may start now: the one gate every action path asks (launch-step.ts
    * `actionGate`). A resume names the session it would resume, so a row can be judged before it is
@@ -452,9 +450,6 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setMessage({ text: "The profile is saved for the workspace.", failed: false });
     });
   }
-  const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
-    baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
-  }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
   function refresh() {
     configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
   }
@@ -615,7 +610,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
     configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
     configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, previewCurrent, busy, inFlight, chaining,
-    profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
+    profileState, stateLabel, launchStatus: launchStatusText(facts), message,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
     step, verb, served, unservedLead, outcome, usage,
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,

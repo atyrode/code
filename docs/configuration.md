@@ -156,7 +156,7 @@ left off the derived ladder and listed among the last verification's excluded mo
 since Code spends no such quota.
 
 A stale or failed save is never retried or rebased. The local draft remains
-exportable until explicitly discarded. It also survives a reload: the main view keeps
+until explicitly discarded. It also survives a reload: the main view keeps
 an unsaved team in the tab's session storage per principal and workspace, with what
 it was made from (base revision and team, the catalog digests, whether choices
 existed, and for a first-use draft the bundled model list), never the catalog itself.
@@ -185,8 +185,8 @@ mounted, and so does the accounts' management once opened, so profile, catalog,
 session-option and preset drafts survive moving between views and the empty-to-active
 transition. Opening a view or a sheet grants no permission and starts no inventory,
 benchmark or session. Blocked, offline, read-only, stale/conflict and failed-observation
-states stay visible in the launch line, with full error detail reachable deliberately
-in Setup's connection details.
+states stay visible in the launch line, and the exact failure of a destination read is
+said in Setup's readout while its OMP row is pointed or focused.
 
 Every action is a visible control; keys are accelerators for them, listed in the
 **Shortcuts** dialog by the view they act in. A control names its key in its tooltip and
@@ -629,18 +629,51 @@ profile stays as it is, the restrictions are not an OS or network sandbox, and a
 successful launch or resume clears them. The summary on More and its Options item
 retains restricted tool counts, skill selections or explicit disable-all.
 
-Setup (`u`) is optional runtime management: connection status, independent machine
-capabilities, folder preparation and the external suggestion classifier, and, under
-Profile & source details, the displayed catalog's source, the destination and the
-last verification's excluded models. Models (`m`) leads with authoring/discovery; the editor
-reveals pricing, performance, limits and thinking metadata independently.
-Editing/import needs no runtime or account setup. Manual catalog authoring retains its
-explicit first-save initialization, staging, owner review and separate exact-reviewed
-promotion. It is an advanced alternative, not a prerequisite for the bundled starter.
-A competing initialization preserves the local draft and refuses a stale first save
-instead of rebasing absence. Charge-bearing measurement keeps its warning beside the
-action. Destination changes still invalidate native reviews and clear
-destination-specific session choices.
+**Models** (`m`) shows the list as the generator uses it: one ladder per provider (fast,
+normal, smart, elite), as a matrix with tiers down and providers across from 760 px of
+sheet width and as one ladder under another below it. Each rung is its model's alias in
+the provider's hue with its measured speed as five blocks (under 30 tok/s one, then 45,
+60 and 90; none measured is a hairline track); an empty rung is a dash. The head says
+how many models are in use and when they were verified, or that a staged list waits
+beside them, that they are verifying, or that they are unverified or the bundled
+starter, with **import** (`i`) and **export** (`x`) as two quiet words. Beside the list
+is what the step is about: the charge per provider and the models not probed while
+verifying, a staged list's changes (field by field, a model added or dropped, the old
+value struck), or, after a verification in this panel, the models it left out, each
+with its reason in a word. Ids, prices, speeds, thinking ranges and reasons appear only
+in the readout line while a cell, a provider or a left-out model is pointed or focused.
+One next action sits where the launch sits and follows the step: **verify models**,
+**checking models…** (drawn with the checking hold the charge keeps), **confirm charge**
+(a single deliberate press of the exact charge shown, as in the launch line), **verifying…**
+with the requests measured, then **back to code** with **verify again** beside it, the
+same Verify a current verification can always renew, its charge confirmed the same way.
+A staged list offers **use staged list**, which reviews the staged list at its revision
+and promotes exactly that review, and **discard**. Verifying refused for want of
+discovery offers **enable in setup**; another refusal names itself with its fix (show
+accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,
+and otherwise returns to Code. Import takes a pasted or dropped Code model list, checks
+that it compiles, and stages it beside the list in use, initializing an absent workspace
+first; nothing is verified or put in use until **use staged list**, and a list put in
+use that way is unverified. Export copies the list in use. The per-field editor, the
+separate discovery and benchmark controls and job recovery are gone: verification runs
+discovery and benchmark as one step, and OMP's own history keeps every job.
+
+**Setup** (`u`) is one checklist for the chosen machine: machine, OMP, connection,
+discovery, sessions and folders, each a square mark, a label and its value. A row that
+depends on something missing says so ("needs omp", "unreachable") rather than claiming
+a state. The first row with a fix due is pointed (▸) and its fix is the one next action:
+**use** another machine where OMP answers, **check again**, **review connection**,
+**enable discovery**, **enable sessions**, **check folders** or **create folders** (the
+folders row's **existing** and **new** route), each review opening the native permission
+review of what it allows; once every row is ready, **back to code**. Folders count as
+prepared only by an OMP job matching the machine's current operation, installation,
+artifact and bindings. Beside the checklist are the profile's facts (revision, the
+models in use and when verified, what the last verification left out, the source and
+the workspace) and the optional classifier: **suggestions** off or ollama, with an
+origin and a model, reviewed then applied through `reviewServices` and
+`configureServices` as the next action; only the instance owner configures it.
+Destination changes still invalidate native reviews and clear destination-specific
+session choices.
 
 ## Ordinary Code/OMP workflow
 
