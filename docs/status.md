@@ -157,7 +157,7 @@ files, service state, credentials or backups.
   Code now pins Manifold
   [`b53543d`](https://github.com/atyrode/manifold/commit/b53543d94548d7c3929ca45280bb8692f0fa402c),
   protocol 57, and OMP
-  [`e2a0071`](https://github.com/atyrode/manifold-omp/commit/e2a00716c2b952035802f36eacadf353c6975344)
+  [`8848676`](https://github.com/atyrode/manifold-omp/commit/8848676ad6048cdd3e49fc5fce850043984e50a7)
   ([manifold-omp#114](https://github.com/atyrode/manifold-omp/pull/114)), whose own
   `MANIFOLD_REV` is the same commit. A protocol 57 hub admits only bundles stamped 57
   ([manifold#1068](https://github.com/atyrode/manifold/issues/1068)), so Code's four
