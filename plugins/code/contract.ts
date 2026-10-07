@@ -29,13 +29,13 @@ export const RevisionTargetSchema = TargetSchema.extend({ expectedRevision: revi
  * WHAT A CATALOG WAS VERIFIED AGAINST, so a later observation can say whether it still holds:
  * the OMP its inventory ran under — the artifact the destination's inventory operation was
  * installed from (the inventory job's `artifactSha256`) and the revision of the model catalog OMP
- * bundled then (`readModelCatalog`'s `revision`) — when inventory and benchmark answered, the
- * providers the account pool covered and the identity of that exact pool (`composeProbe`'s
- * `poolIdentityDigest`). The two OMP identities are content digests, so an upgrade of either is
- * seen whatever version it reports; `ompVersion` is the inventory receipt's own, recorded and
- * never compared. The pool facts are Code's own reading of the account observation
- * `stageCatalog` was given; the rest are the receipts' and OMP's as the caller read them. A
- * catalog with `provenance: null` was authored, imported or kept from before verification
+ * bundled when the inventory started (`readModelCatalog`'s `revision`) — when inventory and
+ * benchmark answered, the providers the account pool covered and the identity of that exact pool
+ * (`composeProbe`'s `poolIdentityDigest`). The two OMP identities are content digests, so an
+ * upgrade of either is seen whatever version it reports; `ompVersion` is the inventory receipt's
+ * own, recorded and never compared. The pool facts are Code's own reading of the account
+ * observation `stageCatalog` was given; the rest are the receipts' and OMP's as the caller read
+ * them. A catalog with `provenance: null` was authored, imported or kept from before verification
  * recorded these identities, and is unverified.
  */
 export const VerificationProvenanceSchema = z.strictObject({

@@ -132,8 +132,10 @@ OMP's history and a staged catalog stays staged. A confirmation is used once, an
 or uncertain one is never replayed. The promoted catalog records its verification
 provenance: the OMP its inventory ran under, as content identities — the artifact the
 inventory job ran from (`inventoryArtifactSha256`) and the revision of OMP's bundled model
-catalog then (`catalogRevision`) — the inventory's OMP version, inventory and benchmark
-times, the account providers and a digest of the exact account pool. A catalog stops
+catalog when the inventory started (`catalogRevision`), the list the inventory picks its
+models from — the inventory's OMP version, inventory and benchmark times, the account
+providers and a digest of the exact account pool. A catalog republished while the
+inventory runs stops the verification before its charge is answered. A catalog stops
 being verified when the selected destination's inventory operation is installed from
 another artifact (`describeDestination`'s pins), OMP bundles a catalog with another
 revision, or the saved choices select another pool. Because the identities are content

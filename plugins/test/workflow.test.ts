@@ -212,6 +212,17 @@ test("an OMP upgraded while the benchmark runs is never recorded as the one veri
   expect(f.calls).not.toContain("atyrode.code.stageCatalog");
 });
 
+test("a model list republished while the inventory runs stops the verification before its charge is answered", async () => {
+  const f = verificationFixture();
+  // OMP picked the inventory's models from the list it bundled when the inventory started; another list is published after.
+  f.hooks[actionDoor("startInventory")] = () => { f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) }; };
+  const stopped = await stopOf(f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }));
+  expect([stopped.step, stopped.reason]).toEqual(["draft", "code_omp_changed"]);
+  expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: [], revision: 1 });
+  expect(f.calls).not.toContain(actionDoor("startBenchmark"));
+  expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
+});
+
 test("a verification holds for the OMP runtime and model list it ran against, and an upgrade of either alone makes it stale", async () => {
   const f = verificationFixture();
   const { configuration } = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);

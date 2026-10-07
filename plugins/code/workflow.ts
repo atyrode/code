@@ -94,7 +94,7 @@ export type VerificationOptions = { isCurrent?: () => boolean; signal?: AbortSig
  * ladder (domain/probe.ts `probeSet`). `replacesDraft` says the staged
  * catalog this workspace holds will be replaced. `inventoryArtifactSha256` and `catalogRevision`
  * are the OMP the inventory ran under: the artifact its job ran from and the model catalog OMP
- * bundled then, which the verification records.
+ * bundled when it started, which the verification records.
  */
 export type ChargeReview = {
   target: Target;
@@ -319,14 +319,16 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     }
     const revision = record.revision, replacesDraft = record.draft !== null;
     run.enter("inventory");
-    const [defaults, pool] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision)]));
+    // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
+    // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
+    const [defaults, pool, catalogRevision] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
+      readCatalogRevision()]));
     // The start is checked by the job's own wait, so a stop that lands now cancels the job rather than abandoning it.
     const job = await run.call(() => omp("startInventory", { ...target, expectedDefaultsRevision: defaults.revision, accountPool: pool.accountPool }), false);
     evidence.inventoryJobId = job.jobId;
     await settledJob(job, { kind: "job", machineId: target.machineId, operationId: INVENTORY_OPERATION_ID, jobId: job.jobId }, run);
-    // The verification records the OMP this inventory ran under: its job's artifact, and the model catalog OMP bundles now.
-    const [{ job: inventoryJob, inventory }, catalogRevision] = await run.call(() =>
-      Promise.all([omp("readInventory", { ...target, jobId: job.jobId }), readCatalogRevision()]));
+    // The verification records the OMP this inventory ran under: its job's artifact, and the model list read before it started.
+    const { job: inventoryJob, inventory } = await run.call(() => omp("readInventory", { ...target, jobId: job.jobId }));
     run.enter("draft");
     const draft = await run.call(() => code("draftInventory", { inventory, budget: input.budget }));
     const requests = new Map<string, number>();
