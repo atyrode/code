@@ -17,7 +17,7 @@ import { NOT_CURRENT, SAVING } from "./account-switch.ts";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
@@ -85,6 +85,11 @@ export type WorkbenchActions = {
    * never an inclusion on a historical inventory; one edit at a time, through the accounts gate.
    */
   changeAccounts: (edit: AccountChoiceChange) => void;
+  /**
+   * Models staged, put in use or discarded a list from revision `from`: the receipt shows until its read
+   * arrives, and the local draft follows the write or gives way to the record (launch-step.ts `followCatalogWrite`).
+   */
+  catalogWritten: (from: number, written: Configuration) => void;
   /** Re-observe every query, accounts and usage included. */
   refresh: () => void;
   /** Re-observe the usage reading alone: the usage line's own cadence (auto-read.ts `PASS_READS`). */
@@ -450,6 +455,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setMessage({ text: "The profile is saved for the workspace.", failed: false });
     });
   }
+  function catalogWritten(from: number, written: Configuration) {
+    setSavedPolicy(written);
+    setDials(previous => followCatalogWrite(previous, from, { revision: written.revision, initialized: true,
+      catalogDigest: written.active?.digest ?? null, draftDigest: written.draft?.digest ?? null, selection: written.selection, metadataKey }));
+  }
   function refresh() {
     configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
   }
@@ -616,7 +626,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh, readUsage: reading.refresh },
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams,
   };
 }

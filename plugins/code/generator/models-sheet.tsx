@@ -6,6 +6,7 @@ import { compileCatalog } from "../../domain/catalog.ts";
 import { CatalogDocumentSchema, type CatalogDocument } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import { orderedFamilies, providerPolicy } from "../../domain/providers.ts";
+import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { WorkflowError } from "../workflow.ts";
@@ -97,16 +98,20 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const edits = model.gate("edit-team");
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
     : running ? "A verification is running." : !edits.open ? edits.refusal.text : working ? "Wait for the change in progress." : null;
-  /** Runs one write against the workspace this sheet was opened on; anything that moves it stops the write. */
-  async function write(kind: "use" | "discard" | "stage", work: (workflow: ReturnType<typeof codeWorkflow>) => Promise<Said>, failed: (text: string) => void) {
+  /**
+   * Runs one write against the workspace this sheet was opened on, from the revision it was read at; anything that moves it
+   * stops the write. The main view follows its receipt as this panel's own change (workbench-model.ts `catalogWritten`).
+   */
+  async function write(kind: "use" | "discard" | "stage", from: number, work: (workflow: ReturnType<typeof codeWorkflow>) => Promise<readonly [Said, Configuration]>,
+    failed: (text: string) => void) {
     if (pending.current) return;
     const started = host;
     const valid = () => mounted.current && latestHost.current.client === started.client && latestHost.current.principal.id === started.principal.id &&
       latestHost.current.containerId === started.containerId && canWriteCodeWorkspace(latestHost.current);
     pending.current = true; setWorking(kind); setFailure(null);
     try {
-      const said = await work(codeWorkflow(host, valid));
-      if (valid()) readout.say(said);
+      const [said, written] = await work(codeWorkflow(host, valid));
+      if (valid()) { model.actions.catalogWritten(from, written); readout.say(said); }
     } catch (reason) {
       if (valid()) failed(codeOperationFailure(reason));
     } finally {
@@ -117,19 +122,19 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function useStaged() {
     if (!record || !draft) return;
     const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
-    void write("use", async workflow => {
+    void write("use", revision, async workflow => {
       const review = await workflow.code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft" });
       if (review.catalogDigest !== digest) throw new WorkflowError("code_preview_changed");
-      await workflow.code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
-      return { value: "in use", text: verified ? "the staged list replaced the one in use" : "the staged list replaced the one in use; verify it next" };
+      const promoted = await workflow.code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
+      return [{ value: "in use", text: verified ? "the staged list replaced the one in use" : "the staged list replaced the one in use; verify it next" }, promoted];
     }, setFailure);
   }
   function discard() {
     if (!record || !draft || writeRefusal) return;
     const { containerId, revision } = record;
-    void write("discard", async workflow => {
-      await workflow.code("discardCatalog", { containerId, expectedRevision: revision });
-      return { value: "discarded", text: "the list in use is unchanged" };
+    void write("discard", revision, async workflow => {
+      const discarded = await workflow.code("discardCatalog", { containerId, expectedRevision: revision });
+      return [{ value: "discarded", text: "the list in use is unchanged" }, discarded];
     }, setFailure);
   }
 
@@ -150,12 +155,12 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     if (writeRefusal) { setImportError(writeRefusal); return; }
     const base = record, containerId = host.containerId!, absentAt = model.observed?.revision ?? 0;
     const added = listChanges(inUse, modelRows(document)).length;
-    void write("stage", async workflow => {
+    void write("stage", base?.revision ?? absentAt, async workflow => {
       // A workspace without Code choices gets them first, at the revision it was read at; nothing is verified.
       const initialized = base ?? await workflow.code("initializeConfiguration", { containerId, expectedRevision: absentAt });
-      await workflow.code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
+      const staged = await workflow.code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
       dialog.current?.close();
-      return { value: "staged", text: `${count(added, "change")} beside the list in use` };
+      return [{ value: "staged", text: `${count(added, "change")} beside the list in use` }, staged];
     }, setImportError);
   }
   async function exportList() {

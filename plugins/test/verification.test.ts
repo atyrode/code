@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { LAUNCH_OPERATION_ID, OMP_VERSION } from "@atyrode/manifold-omp";
 import type { VerificationProvenance } from "../code/contract.ts";
 import { operationReady } from "../code/permission-plan.ts";
-import { autoReviewDue, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import { autoReviewDue, draftStale, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
@@ -154,6 +154,44 @@ describe("a local edit of the saved team and later writes to the record", () => 
       expect(draftStale(edit, foreign)).toBe(true);
       expect(followRecord(edit, foreign)).toBe(edit);
     }
+  });
+});
+
+describe("this panel's own writes of the model list in Models", () => {
+  const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: true, priority: false, prewalk: false,
+    planYolo: false, fallback: true, budget: "any" } as const;
+  const imported = "i".repeat(64), inUse = "a".repeat(64), other = "d".repeat(64);
+  // The bundled first-use preview, frozen while the workspace had no shared choices (revision 0).
+  const starter: DraftBase = { source: "starter", revision: 0, initialized: false, catalogDigest: null, draftDigest: null, baseSelection: null, metadataKey: "bundled" };
+  // An imported list: the import initializes the workspace and stages the list (0 → 2), and use staged list promotes it (→ 3).
+  const staged: SharedBase = { revision: 2, initialized: true, catalogDigest: null, draftDigest: imported, selection: null, metadataKey: "bundled" };
+  const promoted: SharedBase = { revision: 3, initialized: true, catalogDigest: imported, draftDigest: null, selection, metadataKey: "bundled" };
+
+  test("a list imported on a first-use workspace replaces the bundled preview, staged and then in use", () => {
+    expect(followCatalogWrite(starter, 0, staged)).toBeNull();
+    // An edit of the staged list's preview gives way when that list is put in use, replaced or discarded.
+    const stagedEdit: DraftBase = { source: "draft", revision: 2, initialized: true, catalogDigest: null, draftDigest: imported, baseSelection: null, metadataKey: null };
+    expect(followCatalogWrite(stagedEdit, 2, promoted)).toBeNull();
+    expect(followCatalogWrite(stagedEdit, 2, { ...staged, revision: 3, draftDigest: other })).toBeNull();
+    expect(followCatalogWrite(stagedEdit, 2, { ...staged, revision: 3, draftDigest: null })).toBeNull();
+  });
+
+  test("a list staged or discarded beside the one in use leaves an edit of it on show, at the new revision; putting another in use replaces it", () => {
+    const edit: DraftBase = { source: "active", revision: 7, initialized: true, catalogDigest: inUse, draftDigest: null, baseSelection: selection, metadataKey: null };
+    const beside: SharedBase = { revision: 8, initialized: true, catalogDigest: inUse, draftDigest: other, selection, metadataKey: null };
+    const followed = followCatalogWrite(edit, 7, beside);
+    expect(followed).toEqual({ ...edit, revision: 8, draftDigest: other });
+    expect(draftStale(followed!, beside)).toBe(false);
+    const discarded: SharedBase = { ...beside, revision: 9, draftDigest: null };
+    expect(followCatalogWrite(followed, 8, discarded)).toEqual({ ...edit, revision: 9 });
+    expect(followCatalogWrite(followed, 8, { ...beside, revision: 9, catalogDigest: other, draftDigest: null })).toBeNull();
+  });
+
+  test("a draft that no longer rested on the record when the panel wrote stays a conflict", () => {
+    // Initialized elsewhere at revision 1; this panel then staged at 1 → 2.
+    expect(followCatalogWrite(starter, 1, staged)).toBe(starter);
+    expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null,
+      stale: draftStale(starter, staged) }, "unverified"))).toMatchObject({ step: "blocked", reason: { code: "conflict" } });
   });
 });
 
