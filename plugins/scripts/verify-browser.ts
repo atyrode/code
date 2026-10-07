@@ -2513,8 +2513,10 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     for (const run of benchmarks.values()) run.settled = true;
 
     // Verified: the measured list is put in use, the head says when, and beside it is what the verification left out, each with
-    // its reason in a word; Spark, in OMP's spark quota class, reads retired. Back to code is the next action, verify again beside it.
-    await until(browser, "the measured list is put in use and verified", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")}`);
+    // its reason in a word; Spark, in OMP's spark quota class, reads retired. Back to code is the next action, and verify again is
+    // beside it once the verification's own save has been read, since verifying needs a current read of the workspace.
+    const settled = `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")} && JSON.stringify(${goFixes(modelsSheet)}) === '["verify again"]'`;
+    await until(browser, "the measured list is put in use and verified", settled);
     const verified = derivedFrom(firstInventory);
     const afterFirst = await readConfiguration(server, writer, target);
     assert.deepEqual(afterFirst.configuration?.active?.document, verified.document, "The list in use is exactly the derivation of what was measured");
@@ -2590,7 +2592,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await click(browser, goFix(modelsSheet, "verify again"));
     await until(browser, "verify again waits on its charge", `${phaseIs("charge")} && ${goIs(modelsSheet, "confirm charge")}`);
     await click(browser, goButton);
-    await until(browser, "the list is measured again and verified", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")}`);
+    await until(browser, "the list is measured again and verified", settled);
     const again = derivedFrom("synthetic-inventory-3");
     const afterAgain = await readConfiguration(server, writer, target);
     assert.equal(benchmarks.size, 4, "Verify again spends one benchmark per provider");
