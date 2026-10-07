@@ -485,11 +485,16 @@ async function panelReads(browser: BrowserInstance, revision: number): Promise<v
  * installed where `localStorage["manifold:debug"]` is set before the page loads): the `manual` reads of the machine
  * list and of OMP's defaults, those a caller asks for outright. The feeds' own read on a page's return counts as
  * `resume`, apart. Only the panel's reads (read-clock.ts `usePanelReads`) ask for them: its inputs' clock on its own,
- * and a pass of everything at Refresh now, `r` or a sheet's opening or closing.
+ * and a pass of everything at Refresh now, `r` or a sheet's opening or closing. The machine list is the panel's own
+ * feed, keyed by its viewer (machine-web.ts `useCodeMachines`); the host's views, its canvas among them, read the same
+ * list through a feed of their own that the panel never asks.
  */
 const ownReads = `(() => {
   const feeds = globalThis.__manifoldFeeds?.() ?? [];
-  return ['core.machines.list|', 'atyrode.omp.readDefaults:'].map(prefix => feeds.find(feed => feed.key.startsWith(prefix))?.reads.manual ?? null);
+  const viewer = JSON.parse(localStorage.getItem('manifold.identity') ?? 'null')?.principal?.id;
+  const machines = feeds.find(feed => feed.key === 'core.machines.list|' + viewer);
+  const defaults = feeds.find(feed => feed.key.startsWith('atyrode.omp.readDefaults:'));
+  return [machines, defaults].map(feed => feed?.reads.manual ?? null);
 })()`;
 /**
  * The person looks at another tab and back: a tab opened in the panel's browser window hides the panel's page (its
