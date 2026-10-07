@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { tickClock, type ReadClock } from "./auto-read.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { nextReads, readAll, runReads, tickReads, type Observation, type PanelClocks, type ReadKind } from "./auto-read.ts";
 
 /*
- * The panel's own re-reads in React: whether the panel shows, and a clock that reads on its own by
- * the rules in auto-read.ts.
+ * The panel's own re-reads in React: whether the panel shows, and one coordinator that reads on its
+ * own by the rules in auto-read.ts.
  */
 
 /**
@@ -27,36 +27,42 @@ export function usePanelShown(element: RefObject<HTMLElement | null>): boolean {
   return pageShown && onScreen;
 }
 
-/** A clock's next read, whether one is owed and held, and the way to read now. */
-export type ReadCadence = { readonly nextAt: number; readonly waiting: boolean; readonly now: () => void };
+/** Each clock's next read, whether one is owed and held, and the way to read everything now. */
+export type PanelReads = {
+  readonly nextAt: Readonly<Record<ReadKind, number>>;
+  readonly waiting: Readonly<Record<ReadKind, boolean>>;
+  readonly now: () => void;
+};
 
 /**
- * Reads every `periodMs` while the panel shows, and once when it shows again unless `readOnShow` is
- * false, never while `held()` says the person is in the middle of something: such a read waits and
- * happens once the hold lifts (auto-read.ts `tickClock`). `held` is asked at the moment a read comes
- * due, so it may read the latest render's facts and the DOM. `now` reads at once, held or not, as a
- * person's own press does.
+ * Both of the panel's clocks, looked at together (auto-read.ts `tickReads`), so reads that come due
+ * at once share one pass and each observation is read once in it. Never while `held()` says the
+ * person is in the middle of something: such a read waits and happens once the hold lifts. `held` is
+ * asked at the moment a read comes due, so it may read the latest render's facts and the DOM. `now`
+ * reads everything at once, held or not, as a person's own press does, and restarts both clocks.
  */
-export function useReadClock(periodMs: number, read: () => void, visible: boolean, held: () => boolean, readOnShow = true): ReadCadence {
-  const [clock, setClock] = useState<ReadClock>(() => ({ at: Date.now(), owed: false }));
+export function usePanelReads(readers: Readonly<Record<Observation, () => void>>, visible: boolean, held: () => boolean): PanelReads {
+  const [clocks, setClocks] = useState<PanelClocks>(() => readAll(Date.now()).clocks);
   const [wake, setWake] = useState(0);
-  const latest = useRef({ read, held });
-  latest.current = { read, held };
+  const latest = useRef({ readers, held });
+  latest.current = { readers, held };
   const wasVisible = useRef(visible);
   useEffect(() => {
-    const shown = readOnShow && visible && !wasVisible.current;
+    const shown = visible && !wasVisible.current;
     wasVisible.current = visible;
     const nowMs = Date.now();
-    const step = tickClock(clock, { nowMs, periodMs, visible, shown, held: latest.current.held() });
-    if (step.read) latest.current.read();
-    if (step.clock.at !== clock.at || step.clock.owed !== clock.owed) setClock(step.clock);
+    const step = tickReads(clocks, { nowMs, visible, shown, held: latest.current.held() });
+    runReads(step.reads, latest.current.readers);
+    if (step.clocks !== clocks) setClocks(step.clocks);
     if (step.wakeAt === null) return;
     const timer = window.setTimeout(() => setWake(count => count + 1), Math.max(0, step.wakeAt - nowMs));
     return () => window.clearTimeout(timer);
-  }, [clock, visible, wake, periodMs, readOnShow]);
+  }, [clocks, visible, wake]);
   const now = useCallback(() => {
-    setClock({ at: Date.now(), owed: false });
-    latest.current.read();
+    const pass = readAll(Date.now());
+    setClocks(pass.clocks);
+    runReads(pass.reads, latest.current.readers);
   }, []);
-  return { nextAt: clock.at + periodMs, waiting: clock.owed && visible, now };
+  return useMemo(() => ({ nextAt: nextReads(clocks), waiting: { inputs: clocks.inputs.owed && visible, usage: clocks.usage.owed && visible }, now }),
+    [clocks, visible, now]);
 }

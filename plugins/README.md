@@ -32,7 +32,7 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
   line and readout), `consequences.ts`, `launch-step.ts` (the one action gate),
   `panel-keys.ts` (every panel key as a decision over plain facts),
-  `auto-read.ts` (when the panel reads its inputs again on its own, and when it waits)
+  `auto-read.ts` (what the panel reads again on its own, when, in one pass, and when it waits)
   and `draft-store.ts` (the unsaved profile kept per tab). `atyrode.code/destination.ts`
   decides where OMP answers and which machine a browser starts on. `web.tsx` is the
   shell (top bar, views, sheets, key line, Shortcuts dialog); `more-menu.tsx` is the

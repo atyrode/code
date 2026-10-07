@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { useReadClock } from "./read-clock.ts";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import type { PanelReads } from "./read-clock.ts";
 import { providerPolicy } from "../../domain/providers.ts";
 import type { QuotaReading } from "../../domain/quota.ts";
 import { accountWord, ago, Button, hueOf } from "../ui.tsx";
 import { when, type BoardUsage } from "./board-model.ts";
-import { USAGE_FRESH_MS, usageState, type UsageAccountRow, type UsageGroup, type UsageState, type UsageWindowRow } from "./usage-model.ts";
+import { usageState, type UsageAccountRow, type UsageGroup, type UsageState, type UsageWindowRow } from "./usage-model.ts";
 
 /*
  * The usage pane: per provider, then per account, a block bar for each window with how much is used,
@@ -28,29 +28,23 @@ const REFRESH_HOLD_MS = 520;
 export type UsageCadence = { readonly nextAt: number; readonly refreshing: boolean; readonly waiting: boolean; readonly now: () => void };
 
 /**
- * Reads everything again every usage freshness window, the usage among it. The host's feeds read
- * again only on events while their channel is live, and provider readings change without one, so the
- * pane keeps its own cadence, by the panel's rules for reading on its own (read-clock.ts): never
- * while the panel is hidden or the person is in the middle of something, and owed until then. A
- * panel shown again leaves the usage to its feed's own read on return, so the bars do not drain at
- * every look back.
+ * The usage's side of the panel's reads (read-clock.ts `usePanelReads`): it is read again every usage
+ * freshness window, since the host's feeds read again only on events while their channel is live and
+ * provider readings change without one. A read shows as refreshing for a moment however quick it is,
+ * so a press always answers.
  */
-export function useUsageCadence(usage: BoardUsage, refresh: () => void, visible: boolean, held: () => boolean): UsageCadence {
+export function useUsageCadence(usage: BoardUsage, reads: PanelReads): UsageCadence {
   const [holding, setHolding] = useState(false);
-  const latest = useRef(refresh);
-  latest.current = refresh;
-  const read = useCallback(() => {
-    setHolding(true);
-    latest.current();
-  }, []);
-  const clock = useReadClock(USAGE_FRESH_MS, read, visible, held, false);
+  const nextAt = reads.nextAt.usage;
+  const first = useRef(nextAt);
   useEffect(() => {
-    if (!holding) return;
+    if (nextAt === first.current) return;
+    setHolding(true);
     const timer = window.setTimeout(() => setHolding(false), REFRESH_HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [holding]);
+  }, [nextAt]);
   const refreshing = usage.refreshing || holding;
-  return useMemo(() => ({ nextAt: clock.nextAt, refreshing, waiting: clock.waiting, now: clock.now }), [clock.nextAt, refreshing, clock.waiting, clock.now]);
+  return useMemo(() => ({ nextAt, refreshing, waiting: reads.waiting.usage, now: reads.now }), [nextAt, refreshing, reads.waiting.usage, reads.now]);
 }
 
 // ---------------------------------------------------------------- the clock the countdowns follow

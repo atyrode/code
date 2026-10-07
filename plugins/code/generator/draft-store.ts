@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import { SelectionSchema } from "../../domain/contracts.ts";
+import { SelectionSchema, type Selection } from "../../domain/contracts.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import { CODE_PLUGIN_ID, digest, revision, type Configuration } from "../contract.ts";
+import { sameTeam } from "./statement-model.ts";
 import type { ProfileDraft } from "./workbench-model.ts";
 
 /*
@@ -46,6 +47,18 @@ export function readStoredDraft(storage: DraftStorage | null, key: string): Stor
   try { stored = JSON.parse(text); } catch { return null; }
   const parsed = StoredDraftSchema.safeParse(stored);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Whether a draft is a real edit: one whose team differs from the team the view shows without it,
+ * the saved team or, on first use, the bundled default. An untouched first-use preview or an edit
+ * turned back is not one; it holds nothing a read or a reload could lose, so it is neither kept nor
+ * holds the panel's reads on their own. A save or a discard ends a real edit.
+ */
+export function editedDraft(draft: ProfileDraft | null, initialSelection: Selection | null): boolean {
+  if (draft === null) return false;
+  const shownWithout = draft.baseSelection ?? initialSelection;
+  return shownWithout === null || !sameTeam(draft.selection, shownWithout);
 }
 
 /** Keep a draft, or forget the kept one with null. */

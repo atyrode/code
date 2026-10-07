@@ -202,9 +202,15 @@ current within a glance's patience for a handful of small reads, and a hidden pa
 reads nothing. Such a read never lands in the middle of something: while a step runs or
 a charge waits, a sheet, Shortcuts, More or the machine list is open, a row is being
 scrubbed, a text field is in use, an account change is saving, or within four seconds
-of a key or a press in the panel, it waits and happens once that is over. A failed read
-is named where it always is: the launch line, the usage line, the sessions. The usage
-reading keeps its own cadence (below); **Refresh now** (`r`) reads everything at once.
+of a key or a press in the panel, it waits and happens once that is over. An edit left
+unsaved holds it however long it is left, focused or not: a changed generator row until
+the profile is saved, verified or the change discarded or turned back, and a saved pool
+draft under Manage accounts until it is saved or discarded. An untouched first-use
+preview is no edit, so first use reads as usual. A failed read is named where it always
+is: the launch line, the usage line, the sessions. The usage reading keeps its own
+cadence (below). Both cadences are one schedule: reads that come due together share one
+pass that reads each observation once, and **Refresh now** (`r`) or opening or closing a
+sheet reads everything in one pass and restarts both.
 
 ### The generator
 
@@ -444,9 +450,10 @@ the usage again every five minutes, its freshness window: the host's feeds read 
 on events while their channel is live, and provider readings change without one, so the
 panel keeps its own cadence, by the same rules as its other reads on their own: a hidden
 panel reads when it shows again, and a read that comes due in the middle of something
-waits (the line says `refresh waits`). Refresh now and `r` read accounts, usage,
-machines, the workspace profile and the sessions already read again at once, and
-restart the same countdown. The line says `refreshing…` and the bars drain and refill
+waits (the line says `refresh waits`). That cadence reads the usage and the sessions
+already read, never the workspace profile or the machines, which keep the minute's
+cadence above. Refresh now and `r` read everything at once and restart both countdowns.
+The line says `refreshing…` and the bars drain and refill
 while a read is out, for at least half a second so the refresh reads as one gesture;
 under reduced motion nothing animates. The line reserves the width of its widest text,
 so the button never moves.
@@ -593,8 +600,8 @@ and auto plans) are saved with the workspace profile through the edit gate, and 
 with its reason or with the domain's ("Priority needs a GPT lane"). Below them,
 Automation and Optional skills apply to the next launch or resume only: the workspace
 profile stays as it is, the restrictions are not an OS or network sandbox, and a
-successful launch or resume clears them. The summary on the Options button retains
-restricted tool counts, skill selections or explicit disable-all.
+successful launch or resume clears them. The summary on More and its Options item
+retains restricted tool counts, skill selections or explicit disable-all.
 
 Setup (`u`) is optional runtime management: connection status, independent machine
 capabilities, folder preparation and the external suggestion classifier, and, under

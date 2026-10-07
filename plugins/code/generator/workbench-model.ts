@@ -21,8 +21,7 @@ import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followIni
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
-import { browserDraftStorage, readStoredDraft, restoreDraft, storeDraft, storedDraftKey } from "./draft-store.ts";
-import { sameTeam } from "./statement-model.ts";
+import { browserDraftStorage, editedDraft, readStoredDraft, restoreDraft, storeDraft, storedDraftKey } from "./draft-store.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
 import type { ConfirmActivation } from "./verification.ts";
 
@@ -88,8 +87,8 @@ export type WorkbenchActions = {
   changeAccounts: (edit: AccountChoiceChange) => void;
   /** Re-observe every query, accounts and usage included. */
   refresh: () => void;
-  /** Re-observe every query but the usage reading, whose own cadence is the usage line's: the workbench's quiet re-read. */
-  reread: () => void;
+  /** Re-observe the usage reading alone: the usage line's own cadence (auto-read.ts `PASS_READS`). */
+  readUsage: () => void;
 };
 
 export type WorkbenchModel = {
@@ -118,6 +117,8 @@ export type WorkbenchModel = {
   launchReview: SessionReview | null;
   configurationCurrent: boolean;
   unsaved: boolean;
+  /** The rows hold a real edit not yet saved or discarded (draft-store.ts `editedDraft`); the panel's reads on their own wait for it. */
+  edited: boolean;
   stale: boolean;
   writable: boolean;
   /** A container view is mounted beside the panel, so a launch or resume can place its terminal. */
@@ -301,11 +302,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }, [kept, dials, profile, configurationCurrent, record, metadata.data, metadata.error, metadataKey]);
   // Keep the draft for a reload, unless it only repeats the team the view shows without it (an
   // untouched first-use preview, or an edit turned back): a kept copy of that could only go stale.
+  const edited = editedDraft(dials, initialSelection);
   useEffect(() => {
     if (kept !== null) return;
-    const shownWithout = dials?.baseSelection ?? initialSelection;
-    storeDraft(browserDraftStorage(), draftKey, dials && !(shownWithout && sameTeam(dials.selection, shownWithout)) ? dials : null);
-  }, [kept, dials, initialSelection, draftKey]);
+    storeDraft(browserDraftStorage(), draftKey, edited ? dials : null);
+  }, [kept, dials, edited, draftKey]);
   const localReview = useMemo(() => {
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);
@@ -454,11 +455,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
     baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
   }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
-  function reread() {
-    configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh();
-  }
   function refresh() {
-    reread(); reading.refresh();
+    configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
   }
   async function perform(kind: WorkbenchStep | null, work: () => Promise<void>) {
     if (pending.current || !writable) return;
@@ -615,7 +613,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
     observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
-    configurationCurrent, unsaved, stale, writable, placeable, available, accounts: accountState, accountsProblem,
+    configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
     configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, previewCurrent, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
@@ -623,7 +621,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh, reread },
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh, readUsage: reading.refresh },
     verification, recentTeams,
   };
 }

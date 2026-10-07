@@ -24,9 +24,9 @@ import { Automation } from "./automation.tsx";
 import { OptionSwitch } from "./option-switch.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
-import { AUTO_READ_MS, readHeld } from "./auto-read.ts";
+import { readHeld } from "./auto-read.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
-import { usePanelShown, useReadClock } from "./read-clock.ts";
+import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -156,10 +156,12 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
   // The profile switches the generator keeps outside its rows, which the session options sheet draws.
   const [extras, setExtras] = useState<readonly SlotOption[]>([]);
-  // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
+  // Bumped by every read of the usage, by the clock or by a press, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
   const [managed, setManaged] = useState(false);
+  // Whether that management holds a saved pool draft, as it says itself: asked when a read comes due.
+  const presetDraft = useRef(false);
   const [sheet, setSheet] = useState<PanelSheet | null>(null);
   const [visited, setVisited] = useState<readonly PanelSheet[]>([]);
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
@@ -223,11 +225,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     }
     setSheet(next);
     setVisited(previous => previous.includes(next) ? previous : [...previous, next]);
-    actions.refresh();
+    refresh();
   }
   function closeSheet() {
     setSheet(null);
-    actions.refresh();
+    refresh();
   }
   const sheetChanged = useRef(sheet);
   useLayoutEffect(() => {
@@ -252,7 +254,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }, [sheet]);
   function finish(source: PanelSheet) {
     if (currentSheet.current === source) closeSheet();
-    else actions.refresh();
+    else refresh();
   }
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
@@ -268,11 +270,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
 
   // ------------------------------------------------------------ reading again: on its own (auto-read.ts), and Refresh now (`r`)
-  /** Everything the panel stands on, read again: Refresh now, `r`, and the usage line's cadence. */
+  /** Everything the panel stands on, read again in one pass, both clocks restarted: Refresh now, `r`, and a sheet's open or close. */
   function refresh() {
-    actions.refresh();
-    refreshMachines();
-    setRereads(count => count + 1);
+    reads.now();
   }
   const teamGate = model.gate("edit-team");
   const visible = usePanelShown(app);
@@ -281,8 +281,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   /**
    * Whether the person is in the middle of something a read on its own must not interrupt: a step
    * that runs or a charge that waits, a sheet, the shortcuts or a popup (the More menu, the machine
-   * list) open, a row being scrubbed, a text field in use, an account change saving, or a press a
-   * moment ago. Asked when a read comes due, so it reads the latest render and the DOM.
+   * list) open, a row being scrubbed, a text field in use, an account change saving, a profile edit or
+   * a saved pool draft left unsaved, or a press a moment ago. Asked when a read comes due, so it reads
+   * the latest render and the DOM.
    */
   const held = () => {
     const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
@@ -291,13 +292,18 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null,
       editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
         || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
+      unsaved: model.edited || presetDraft.current,
       inputAt: inputAt.current,
     }, Date.now());
   };
-  // The workbench's inputs, read again once a minute and when the panel shows again; the usage keeps the usage line's own cadence.
-  useReadClock(AUTO_READ_MS, () => { actions.reread(); refreshMachines(); }, visible, held);
-  // One cadence for the usage: Refresh now, `r` and the usage freshness window all restart the same countdown.
-  const cadence = useUsageCadence(usage, refresh, visible, held);
+  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
+  // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
+  const reads = usePanelReads({
+    configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: setup.refresh, defaults: model.queries.defaults.refresh,
+    skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
+    usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
+  }, visible, held);
+  const cadence = useUsageCadence(usage, reads);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
@@ -482,7 +488,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <h2 className={`${G}title`}>manage accounts</h2>
           <Button aria-keyshortcuts="Escape" title="Back to the accounts (Esc)" onClick={() => run({ kind: "view", view: "accounts" })}>Back to accounts</Button>
         </header>
-        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked} /></div>}
+        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked}
+          onDraft={drafting => { presetDraft.current = drafting; }} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
         <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2></header>
