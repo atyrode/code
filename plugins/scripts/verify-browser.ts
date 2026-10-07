@@ -3373,6 +3373,9 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
 /** Delay or refuse configuration transport only; successful reads still come from
  * the real server. These checks establish browser recovery, not native readiness. */
 async function configurationRecoveryScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, firstUse: { containerId: string }, configured: Target): Promise<void> {
+  // The workspace the last scenario left open still reads its own configuration; it is closed before the fixture
+  // starts answering, so every read the fixture sees is one of the two workspaces this scenario opens.
+  await browser.goto("about:blank");
   let holdConfiguration = true, failConfiguration = false;
   let failures = 0, recoveries = 0;
   const held = new Set<() => void>();
