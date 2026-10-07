@@ -50,8 +50,9 @@ Also: an unsaved edit kept across a reload, own account edits that never conflic
 foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
 who saves but is told why launching waits, account switches saved through the real changeAccounts
 CAS, the accounts' management in place, saved sessions folded per folder into a drum, the panel
-reading its inputs again on its own when shown again but never mid-edit, mid-step or behind a sheet,
-and tiered usage windows that are their own rows and judge no provider's pool.
+reading its inputs again on its own when shown again but never while an edit is unsaved (until it
+is saved or discarded), a step runs or a sheet is open, and tiered usage windows that are their own
+rows and judge no provider's pool.
 Separate synthetic RPC responses exercise the verification charge, folder-only readiness, and
 launch/resume review invalidation and refusal; the spend, preparation and execution they lead
 to are refused, never native execution or consent success.
@@ -481,8 +482,8 @@ async function panelReads(browser: BrowserInstance, revision: number): Promise<v
  * The panel's own reads of what it stands on, as the SDK's feed probe counts them (polled-resource.ts `__manifoldFeeds`,
  * installed where `localStorage["manifold:debug"]` is set before the page loads): the `manual` reads of the machine
  * list and of OMP's defaults, those a caller asks for outright. The feeds' own read on a page's return counts as
- * `resume`, apart. Only the panel's own read (read-clock.ts) and Refresh now ask for the machine list; OMP's defaults
- * are asked for by a sheet's opening and closing too.
+ * `resume`, apart. Only the panel's reads (read-clock.ts `usePanelReads`) ask for them: its inputs' clock on its own,
+ * and a pass of everything at Refresh now, `r` or a sheet's opening or closing.
  */
 const ownReads = `(() => {
   const feeds = globalThis.__manifoldFeeds?.() ?? [];
@@ -503,6 +504,31 @@ async function lookAway(browser: BrowserInstance): Promise<void> {
     await browser.send("Target.closeTarget", { targetId: opened }, false);
   }
   await until(browser, "closing that tab shows the panel's page again", "document.visibilityState === 'visible'");
+}
+/** Away at another tab and back once the panel's last read, at `readAt`, is old enough that showing again reads (SHOWN_AGAIN_MS). */
+async function lookAwayAfter(browser: BrowserInstance, readAt: number): Promise<void> {
+  await Bun.sleep(Math.max(0, readAt + SHOWN_AGAIN_MS + 1_000 - Date.now()));
+  await lookAway(browser);
+}
+/**
+ * With a read owed, waits until it would have come had nothing held it: past the quiet period after `since`, the last
+ * press, and two looks of the held clock (EDIT_QUIET_MS, HOLD_RECHECK_MS). The panel has still read the machine list
+ * `count` times.
+ */
+async function readsHeld(browser: BrowserInstance, description: string, since: number, count: number): Promise<void> {
+  await Bun.sleep(Math.max(2 * HOLD_RECHECK_MS, since + EDIT_QUIET_MS + 2 * HOLD_RECHECK_MS - Date.now()));
+  assert.equal((await browser.evaluate<number[]>(ownReads))[0], count, description);
+}
+/** The panel reads the machine list on its own up to `count` times, and no more over two looks of its clock. */
+async function readsOnce(browser: BrowserInstance, description: string, count: number): Promise<void> {
+  try {
+    await waitFor(async () => (await browser.evaluate<number[]>(ownReads))[0]! >= count, timeout, 50);
+  } catch {
+    throw new ProofFailure(`Timed out: ${description} (the machine list is read ${(await browser.evaluate<number[]>(ownReads))[0]} times, not ${count})`);
+  }
+  await Bun.sleep(2 * HOLD_RECHECK_MS);
+  const read = (await browser.evaluate<number[]>(ownReads))[0];
+  assert.equal(read, count, `${description}, once (the machine list is read ${read} times)`);
 }
 
 type Configuration = NonNullable<ActionResult<"readConfiguration">["configuration"]>;
@@ -1798,51 +1824,68 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     const reads = counted.map(count => count! + 1);
     await lookAway(browser);
     await until(browser, "back from another tab the panel reads the machine list and OMP's defaults again", `JSON.stringify(${ownReads}) === ${JSON.stringify(JSON.stringify(reads))}`);
-    const readAt = Date.now();
+    let readAt = Date.now();
     await Bun.sleep(2 * HOLD_RECHECK_MS);
     assert.deepEqual(await browser.evaluate(ownReads), reads, "Back from another tab the panel reads its inputs once");
-    /** A read a hold failed to stop would come once the last press is a moment old (EDIT_QUIET_MS) and the clock looks again. */
-    const readsNothing = async (description: string, since: number) => {
-      await Bun.sleep(Math.max(2 * HOLD_RECHECK_MS, since + EDIT_QUIET_MS + 2 * HOLD_RECHECK_MS - Date.now()));
-      assert.equal((await browser.evaluate<number[]>(ownReads))[0], reads[0], description);
-    };
-    // Away and back again a while later, in the middle of an edit (a pool named in the accounts' management, unsaved), it
-    // reads nothing; nor with a sheet open, nor while a step runs; once nothing holds it, the read it owes comes, once.
+    let machineReads = reads[0]!;
+    // Away and back again a while later in the middle of an edit, a pool named in the accounts' management and not saved,
+    // it reads nothing: while the name has focus, nor once focus has left it for the generator, past the quiet period.
+    // The pool's own Discard ends the edit, and the read it owes comes, once.
     await key(browser, "a", 65);
     await until(browser, "a opens the accounts", shownView("accounts"));
     await click(browser, element(`${generator} [data-manage]`));
     await until(browser, "Manage accounts opens the accounts' management", shownView("manage"));
     await control(browser, "a new pool can be named", workspaceButton("Save as preset…"), false);
     await click(browser, workspaceButton("Save as preset…"));
-    const poolName = element(`${generator} [data-pane="manage"] form[aria-label="Saved account pool editor"] input[required]`);
+    const poolEditor = element(`${generator} [data-pane="manage"] form[aria-label="Saved account pool editor"]`);
+    const poolName = `${poolEditor}?.querySelector('input[required]')`;
     await control(browser, "the new pool's name field opens", poolName, false);
     await click(browser, poolName);
     await browser.typeText("Unsaved pool");
     const typed = Date.now();
-    await Bun.sleep(Math.max(0, readAt + SHOWN_AGAIN_MS + 1_000 - Date.now()));
-    await lookAway(browser);
-    await readsNothing("Away and back in the middle of an unsaved edit, the panel reads nothing", typed);
+    await lookAwayAfter(browser, readAt);
+    await readsHeld(browser, "Away and back while an unsaved pool's name has focus, the panel reads nothing", typed, machineReads);
     assert.equal(await browser.evaluate(`document.activeElement === ${poolName} && ${poolName}.value === 'Unsaved pool'`), true, "The edit keeps its focus and its words");
+    await click(browser, element(`${generator} [data-view-tab="main"]`));
+    await until(browser, "the Generator tab shows the generator, focus off the pool's name", `${shownView("main")} && !${poolEditor}?.contains(document.activeElement)`);
+    await readsHeld(browser, "With the unsaved pool kept behind the generator, past the quiet period, the panel reads nothing", Date.now(), machineReads);
+    await key(browser, "a", 65);
+    await until(browser, "a opens the accounts", shownView("accounts"));
+    await click(browser, element(`${generator} [data-manage]`));
+    await until(browser, "the management shows the unsaved pool as it was left", `${shownView("manage")} && ${poolName}?.value === 'Unsaved pool'`);
+    await click(browser, `[...${poolEditor}.querySelectorAll('button')].find(el => el.textContent.trim() === 'Discard draft / revert')`);
+    await until(browser, "Discard ends the unsaved pool", `${poolEditor} === null`);
+    // Discard returns focus to the management's Active account pool selector, a field in use that holds the read too;
+    // with focus gone from it to the generator, nothing holds the read any more.
+    await click(browser, element(`${generator} [data-view-tab="main"]`));
+    await until(browser, "the Generator tab shows the generator, which offers Verify", `${shownView("main")} && ${verifyAgain}`);
+    await readsOnce(browser, "once the unsaved pool is discarded the panel reads its inputs again", ++machineReads);
+    readAt = Date.now();
+    // A sheet's opening and its closing each read everything, once. With the sheet open the panel reads nothing on its own,
+    // away and back or not.
     await openMenu(browser);
     await click(browser, menuItem("setup"));
     await until(browser, "More's Setup item opens Setup", sheetOpen("Setup"));
-    await readsNothing("With a sheet open the panel reads nothing", Date.now());
+    await readsOnce(browser, "opening a sheet reads the panel's inputs", ++machineReads);
+    await lookAwayAfter(browser, Date.now());
+    await readsHeld(browser, "With a sheet open the panel reads nothing on its own", Date.now(), machineReads);
     await closeSheet(browser);
-    await click(browser, element(`${generator} [data-view-tab="main"]`));
-    await until(browser, "the Generator tab shows the generator, which offers Verify", `${shownView("main")} && ${verifyAgain}`);
+    await readsOnce(browser, "closing the sheet reads the panel's inputs", ++machineReads);
+    readAt = Date.now();
+    // While a step runs (a verification's check, held in flight) the panel reads nothing, away and back or not; once the
+    // step and the charge it prepares have ended, it reads, once.
     holdNextInventory = true;
     await click(browser, launchButton);
     await waitFor(() => heldInventory.held, timeout, 50);
     await until(browser, "the verification's check runs", launchIs("checking…", "busy"));
-    await readsNothing("While a step runs the panel reads nothing", Date.now());
+    await lookAwayAfter(browser, readAt);
+    await readsHeld(browser, "While a step runs the panel reads nothing", Date.now(), machineReads);
     heldInventory.release();
     await until(browser, "the checked charge waits", `${launchIs("verify models", "waiting")} && ${confirmCharge} !== null`);
     await click(browser, cancelCharge);
     await until(browser, "the cancelled charge offers Verify again", verifyAgain);
-    await until(browser, "once nothing holds it the panel reads its inputs again", `${ownReads}[0] === ${reads[0]! + 1}`);
-    await Bun.sleep(2 * HOLD_RECHECK_MS);
-    assert.equal((await browser.evaluate<number[]>(ownReads))[0], reads[0]! + 1, "Once nothing holds it the panel reads its inputs once");
-    assert.deepEqual(await readConfiguration(server, writer, target), unread, "Reading on its own, an unsaved pool and a cancelled check write nothing");
+    await readsOnce(browser, "once the step has ended the panel reads its inputs again", ++machineReads);
+    assert.deepEqual(await readConfiguration(server, writer, target), unread, "Reading on its own, a discarded pool and a cancelled check write nothing");
     await browser.evaluate("localStorage.removeItem('manifold:debug')");
     fixture.check();
   } finally {
@@ -2292,7 +2335,10 @@ async function canvaslessWriterScenario(browser: BrowserInstance, server: TestSe
   const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: fixtureAccounts() } : undefined);
   const readOnly = `/read-only/i.test(${element(generator)}.textContent + ${launchButton}.title)`;
   try {
+    // From here the SDK's feed probe counts the panel's own reads (`ownReads`).
+    await browser.evaluate("localStorage.setItem('manifold:debug', '1')");
     await openGenerator(browser, server, target.containerId);
+    const openedAt = Date.now();
     assert.equal(await browser.evaluate(`${element(".react-flow")} === null`), true, "No workspace canvas is mounted beside the panel");
     await chooseMachine(browser, target.machineId, machineName);
     await until(browser, "without a canvas only the launch is refused, in neutral words that say what it needs",
@@ -2302,10 +2348,22 @@ async function canvaslessWriterScenario(browser: BrowserInstance, server: TestSe
     await focusRow(browser, "thinking");
     await key(browser, "ArrowLeft", 37);
     await until(browser, "an edit offers Save, with no launch to chain", launchIs("save", "ready"));
+    // A changed row is an unsaved edit however long it rests: with focus gone from the rows, away at another tab and back
+    // past the quiet period, the panel reads nothing until the edit is saved, and then reads, once.
+    await click(browser, generatorTitle);
+    await until(browser, "a press on the generator's title takes focus from the rows to the panel root", `document.activeElement === ${element(generator)}`);
+    const machineReads = (await browser.evaluate<(number | null)[]>(ownReads))[0];
+    assert(machineReads !== null && machineReads !== undefined, "The SDK's feed probe counts the panel's reads of the machine list");
+    await lookAwayAfter(browser, openedAt);
+    await readsHeld(browser, "With a changed row unsaved, away and back past the quiet period, the panel reads nothing", Date.now(), machineReads);
+    assert.equal(await browser.evaluate(`${launchIs("save", "ready")} && ${chosenKey("thinking")} !== ${JSON.stringify(thinking)}`), true, "The unsaved edit stays on show");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
     await until(browser, "after the save only the launch waits for a canvas", launchIs("launch", "refused"));
+    await readsOnce(browser, "once the edit is saved the panel reads its inputs again", machineReads + 1);
+    await browser.evaluate("localStorage.removeItem('manifold:debug')");
     assert.notEqual((await readConfiguration(server, writer, target)).configuration?.selection?.thinking, before.configuration?.selection?.thinking, "Save wrote the edit");
+    await focusRow(browser, "thinking");
     await key(browser, "ArrowRight", 39);
     await until(browser, "the edit back is another Save", `${launchIs("save", "ready")} && ${chosenKey("thinking")} === ${JSON.stringify(thinking)}`);
     await key(browser, "Enter", 13, { modifiers: CTRL });
@@ -3470,7 +3528,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. The panel reads its inputs again on its own when shown again, never mid-edit, mid-step or behind a sheet, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();
