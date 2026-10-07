@@ -248,8 +248,8 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
  * put 207 of an aggregator's models in a 232-request charge, for a family that takes four rungs.
  *
  * What is left unprobed is said where it has a reason (`superseded`, `regression`); a model that
- * is merely not chosen has none. The narrowing reads only the listing and the budget, never the
- * separate-quota classification, so a derivation probes exactly the set its draft charged.
+ * is merely not chosen has none. The narrowing reads only the listing and the budget; the
+ * separate-quota classification is applied after probing, by the ladder (`scaffold`).
  */
 function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { models: InventoryModel[]; unprobed: Exclusion[] } {
   const offered = inventory.models.filter(model => eligible(model) && admittedBy(budget, model));
