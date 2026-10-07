@@ -12,8 +12,8 @@ describe("the workbench reads its inputs again on its own", () => {
   });
 
   test("a read never happens while the person is mid-edit, a step runs or a sheet is open; it is owed and happens once the hold lifts", () => {
-    for (const hold of [{ step: true }, { open: true }, { editing: true }]) {
-      const facts = { step: false, open: false, editing: false, inputAt: -EDIT_QUIET_MS, ...hold };
+    for (const hold of [{ step: true }, { open: true }, { editing: true }, { unsaved: true }]) {
+      const facts = { step: false, open: false, editing: false, unsaved: false, inputAt: -EDIT_QUIET_MS, ...hold };
       const held = look(start, AUTO_READ_MS, { held: readHeld(facts, AUTO_READ_MS) });
       expect(held).toEqual({ read: false, clock: { at: 0, owed: true }, wakeAt: AUTO_READ_MS + HOLD_RECHECK_MS });
       // Still held a minute later: still owed, never read.
@@ -21,9 +21,11 @@ describe("the workbench reads its inputs again on its own", () => {
       expect(look(held.clock, 2 * AUTO_READ_MS, { held: false })).toMatchObject({ read: true, clock: { at: 2 * AUTO_READ_MS, owed: false } });
     }
     // A press a moment ago is an edit in progress; a few seconds later it is over.
-    const idle = { step: false, open: false, editing: false };
+    const idle = { step: false, open: false, editing: false, unsaved: false };
     expect(readHeld({ ...idle, inputAt: AUTO_READ_MS - 1000 }, AUTO_READ_MS)).toBe(true);
     expect(readHeld({ ...idle, inputAt: AUTO_READ_MS - EDIT_QUIET_MS }, AUTO_READ_MS)).toBe(false);
+    // An edit left unsaved, the field blurred and the panel quiet for minutes, still holds.
+    expect(readHeld({ ...idle, unsaved: true, inputAt: 0 }, 10 * AUTO_READ_MS)).toBe(true);
   });
 
   test("a hidden panel reads nothing, and reads once when it shows again unless it read a moment ago", () => {

@@ -29,13 +29,18 @@ export type ReadHoldFacts = {
   readonly open: boolean;
   /** A row is being scrubbed, a text field has focus or an account change is saving. */
   readonly editing: boolean;
+  /**
+   * An edit not yet saved or discarded: a changed profile (draft-store.ts `editedDraft`) or a saved
+   * pool's draft. It holds however long it is left, focused or not, so a read never lands under it.
+   */
+  readonly unsaved: boolean;
   /** When the person last pressed a key or the pointer in the panel. */
   readonly inputAt: number;
 };
 
 /** Whether a read on its own must wait now. */
 export function readHeld(facts: ReadHoldFacts, nowMs: number): boolean {
-  return facts.step || facts.open || facts.editing || nowMs - facts.inputAt < EDIT_QUIET_MS;
+  return facts.step || facts.open || facts.editing || facts.unsaved || nowMs - facts.inputAt < EDIT_QUIET_MS;
 }
 
 export type ClockFacts = {

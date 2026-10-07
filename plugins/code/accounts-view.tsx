@@ -12,8 +12,12 @@ import { AccountUsageReadings, useAccountUsage } from "./usage-view.tsx";
 
 type PresetDraft = { kind: "create-preset" | "update-preset"; preset: { id: string; name: string; disabled: AccountReference[] }; revision: number };
 type Confirmation = { title: string; action: "clearAccountBlocks" | "disableCredential"; input: OmpInput<"clearAccountBlocks"> };
-/** `locked`: why edits wait now, as when a workbench step is in flight or a verification charge waits; null or absent when they may proceed. */
-type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; locked?: string | null };
+/**
+ * `locked`: why edits wait now, as when a workbench step is in flight or a verification charge waits; null or absent when they may proceed.
+ * `onDraft`: told whether a saved pool draft is open, from its start until it is saved or discarded (and false once the view goes),
+ * so a host panel can hold its own reads meanwhile.
+ */
+type AccountsViewProps = { host: HostServices; target: Target | null; available: boolean; locked?: string | null; onDraft?: (drafting: boolean) => void };
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 function time(value: number | null): string { return value === null ? "Unknown" : dateFormat.format(new Date(value)); }
 function referenceKey(reference: AccountReference): string {
@@ -65,7 +69,7 @@ export function AccountsView(props: AccountsViewProps) {
   return <ScopedAccountsView key={JSON.stringify([props.host.principal.id, props.host.containerId])} {...props} />;
 }
 
-function ScopedAccountsView({ host, target, available, locked = null }: AccountsViewProps) {
+function ScopedAccountsView({ host, target, available, locked = null, onDraft }: AccountsViewProps) {
   const id = useId();
   const workspace = host.containerId ? { containerId: host.containerId } : null;
   const configuration = useCodeQuery(host, "readConfiguration", workspace);
@@ -108,6 +112,11 @@ function ScopedAccountsView({ host, target, available, locked = null }: Accounts
   const hadConfirmation = useRef(false);
   const draftId = draft?.preset.id;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const drafting = draft !== null;
+  const reportDraft = useRef(onDraft);
+  reportDraft.current = onDraft;
+  useEffect(() => { reportDraft.current?.(drafting); }, [drafting]);
+  useEffect(() => () => reportDraft.current?.(false), []);
   useEffect(() => {
     if (draftId) editorName.current?.focus();
     else if (hadDraft.current) activePool.current?.focus();

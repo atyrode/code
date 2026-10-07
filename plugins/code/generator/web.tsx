@@ -160,6 +160,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
   const [managed, setManaged] = useState(false);
+  // Whether that management holds a saved pool draft, as it says itself: asked when a read comes due.
+  const presetDraft = useRef(false);
   const [sheet, setSheet] = useState<PanelSheet | null>(null);
   const [visited, setVisited] = useState<readonly PanelSheet[]>([]);
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
@@ -281,8 +283,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   /**
    * Whether the person is in the middle of something a read on its own must not interrupt: a step
    * that runs or a charge that waits, a sheet, the shortcuts or a popup (the More menu, the machine
-   * list) open, a row being scrubbed, a text field in use, an account change saving, or a press a
-   * moment ago. Asked when a read comes due, so it reads the latest render and the DOM.
+   * list) open, a row being scrubbed, a text field in use, an account change saving, a profile edit or
+   * a saved pool draft left unsaved, or a press a moment ago. Asked when a read comes due, so it reads
+   * the latest render and the DOM.
    */
   const held = () => {
     const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
@@ -291,6 +294,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null,
       editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
         || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
+      unsaved: model.edited || presetDraft.current,
       inputAt: inputAt.current,
     }, Date.now());
   };
@@ -482,7 +486,8 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
           <h2 className={`${G}title`}>manage accounts</h2>
           <Button aria-keyshortcuts="Escape" title="Back to the accounts (Esc)" onClick={() => run({ kind: "view", view: "accounts" })}>Back to accounts</Button>
         </header>
-        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked} /></div>}
+        {managed && <div className={`${G}legacy`}><AccountsView host={host} target={target} available={available} locked={accountsLocked}
+          onDraft={drafting => { presetDraft.current = drafting; }} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
         <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2></header>

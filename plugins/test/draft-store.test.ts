@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import type { Configuration } from "../code/contract.ts";
-import { readStoredDraft, restoreDraft, storeDraft, storedDraftKey, type DraftStorage } from "../code/generator/draft-store.ts";
+import { editedDraft, readStoredDraft, restoreDraft, storeDraft, storedDraftKey, type DraftStorage } from "../code/generator/draft-store.ts";
 import { draftStale, followRecord, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 import { initialAccountChoices } from "../domain/accounts.ts";
@@ -73,5 +73,21 @@ describe("an unsaved draft after a reload", () => {
     expect(restored.selection).toEqual(edit.selection);
     expect(draftStale(restored, shared(selected))).toBe(true);
     expect(followRecord(restored, shared(selected))).toBe(restored);
+  });
+});
+
+describe("a real edit, which holds the panel's reads until it is saved or discarded", () => {
+  test("an untouched first-use preview is none, so first use never holds the reads; changing a row makes one", () => {
+    // The bundled default the preview shows before any edit.
+    const shownWithout = starter.selection;
+    expect(editedDraft(starter, shownWithout)).toBe(false);
+    expect(editedDraft({ ...starter, selection: { ...shownWithout, capability: 3 } }, shownWithout)).toBe(true);
+  });
+
+  test("an edit of the saved team is one however long it is left, until turned back, saved or discarded", () => {
+    expect(editedDraft(edit, null)).toBe(true);
+    expect(editedDraft({ ...edit, selection: saved }, null)).toBe(false);
+    // A save or a discard leaves no draft.
+    expect(editedDraft(null, saved)).toBe(false);
   });
 });

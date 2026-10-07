@@ -202,9 +202,13 @@ current within a glance's patience for a handful of small reads, and a hidden pa
 reads nothing. Such a read never lands in the middle of something: while a step runs or
 a charge waits, a sheet, Shortcuts, More or the machine list is open, a row is being
 scrubbed, a text field is in use, an account change is saving, or within four seconds
-of a key or a press in the panel, it waits and happens once that is over. A failed read
-is named where it always is: the launch line, the usage line, the sessions. The usage
-reading keeps its own cadence (below); **Refresh now** (`r`) reads everything at once.
+of a key or a press in the panel, it waits and happens once that is over. An edit left
+unsaved holds it however long it is left, focused or not: a changed generator row until
+the profile is saved, verified or the change discarded or turned back, and a saved pool
+draft under Manage accounts until it is saved or discarded. An untouched first-use
+preview is no edit, so first use reads as usual. A failed read is named where it always
+is: the launch line, the usage line, the sessions. The usage reading keeps its own
+cadence (below); **Refresh now** (`r`) reads everything at once.
 
 ### The generator
 
