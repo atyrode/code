@@ -155,7 +155,7 @@ comments, never another contributor's branch. Published tags are immutable.
 | `plugins/code/workflow.ts` | React-free ordinary Code/OMP/native-deployment workflow used by web and headless clients |
 | `plugins/code/service-{setup,policies}.ts` | Optional external suggestion classifier only |
 | `plugins/code/{machine-web,permission-plan,permission-review}.ts(x)` | OMP observation, native review and browser authority boundaries |
-| `plugins/code/generator/` | Workbench, catalog editor, four-level dials, onboarding and session launch presentation |
+| `plugins/code/generator/` | Workbench, the Models and Setup sheets, four-level dials, onboarding and session launch presentation |
 | `plugins/code/accounts/`, `usage/` | Shared account choices, OMP sign-in handoff and usage presentation |
 | `plugins/pack.ts` | In-memory compilation of four Code bundles; no source staging or runtime artifacts |
 | `plugins/scripts/prepare-integration.ts` | Exact OMP source/dependency preparation for the gate |

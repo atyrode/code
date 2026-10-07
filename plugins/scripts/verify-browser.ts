@@ -14,14 +14,17 @@ import type { TokenGrant } from "../../../manifold/packages/protocol/src/index.t
 import type { ActionResult, Target } from "../code/contract.ts";
 import type { CatalogDocument, Selection } from "../domain/contracts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
-import { catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
+import { catalogFromObservations, catalogFromMetadata, inventoryDraft } from "../domain/probe.ts";
+import { providerPolicy } from "../domain/providers.ts";
 import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
+import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/generator/draft-store.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
 import {
-  BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, ResumeSessionInputSchema,
-  actionSchemas as ompActionSchemas, type InventoryReceipt, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult,
+  BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION,
+  PREPARE_WORKSPACE_OPERATION_ID, ResumeSessionInputSchema, VALIDATE_WORKSPACE_OPERATION_ID, actionSchemas as ompActionSchemas,
+  type BenchmarkReceipt, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult,
 } from "@atyrode/manifold-omp";
 import type { PermissionPlan } from "../code/permission-plan.ts";
 import { inventoryArtifact } from "../code/workflow.ts";
@@ -39,27 +42,31 @@ host. No native job owner, native setup, terminals, OMP processes, inference or 
 Every Chromium runs supervised in its own process group: success, failure, SIGINT/SIGTERM/SIGHUP
 and the death of this process all end the whole browser and remove its profile.
 Proves Code's main view, the terminal UI evolved (the generator's rows, the launch with its machine
-picker, routing, usage, the accounts and sessions views, the key line and the bar's More menu), in real
-Chromium identities: render-only bundled-metadata starter composition, retained conflicted drafts,
-permission choices, writer/viewer authority and container-shared choices across two destinations,
-and the browser-provable acceptance of the main view: no horizontal overflow, cut text or colliding
-text from 170 to 1440px in every view, zero hover/focus layout shift, panel-local keys that never act
-from a sheet or an open popover, More as a menu button by pointer and keyboard, arrival keys, the
-wheel only on a focused or rested row, 44px targets on a coarse pointer, focus kept through the gate
-and reduced motion that animates nothing.
+picker, routing, usage, the accounts and sessions views, the key line and the bar's More menu), and
+its Models and Setup sheets, in real Chromium identities: render-only bundled-metadata starter
+composition, retained conflicted drafts, permission choices, writer/viewer authority and
+container-shared choices across two destinations, and the browser-provable acceptance of the main
+view and the sheets: no horizontal overflow, cut text or colliding text from 170 to 1440px in every
+view and sheet, zero hover/focus layout shift, panel-local keys that never act from a sheet or an
+open popover, More as a menu button by pointer and keyboard, arrival keys, the wheel only on a focused
+or rested row, 44px targets on a coarse pointer, focus kept through the gate and reduced motion that
+animates nothing.
 Also: an unsaved edit kept across a reload, own account edits that never conflict with it while a
 foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
 who saves but is told why launching waits, account switches saved through the real changeAccounts
 CAS, the accounts' management in place, saved sessions folded per folder into a drum, the panel
 reading its inputs again on its own when shown again but never while an edit is unsaved (until it
 is saved or discarded), a step runs or a sheet is open, tiered usage windows that are their own
-rows and judge no provider's pool, and the lead row's only box, toggled by a press and Space with
+rows and judge no provider's pool, the lead row's only box, toggled by a press and Space with
 focus kept on it, kept across a lead change and disabled under Mixed, with struck leads and boxes
-that say why.
-Separate synthetic RPC responses exercise the verification charge, a verified catalog made stale
-by an OMP upgrade alone, folder-only readiness, and launch/resume review invalidation and refusal;
-the spend, preparation and execution they lead to are refused, never native execution or consent
-success.
+that say why, and Models' pasted imports, discards and the exact review a staged list is used by,
+through the real Code server.
+Separate synthetic RPC responses exercise the verification charge and its refused spend; a verified
+catalog made stale by an OMP upgrade alone; a Models verification run end to end on fictional probe
+jobs that reach no provider, whose derivation, staging and promotion are the real server's; Setup's
+readiness rows, folder jobs and the owner's classifier (an owner-class identity minted for it alone);
+and launch/resume review invalidation and refusal. The preparation, configuration and execution they
+lead to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
   console.log(HELP);
@@ -298,7 +305,9 @@ const machinePicker = element(`${generator} [data-machine-picker]`);
 const machineList = element(`${generator} [role="listbox"][aria-label="machines"]`);
 const visibleSheet = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}sheet-host`)})].find(el => !el.hidden)`;
 const skillsSection = element(`${generator} [aria-label="Optional skills"]`);
-const profileExport = element(`${generator} textarea[data-profile-export]`);
+/** Models and Setup, each a sheet of its own over the stage (models-sheet.tsx, setup-sheet.tsx), by their selectors. */
+const modelsSheet = `${generator} [data-sheet="models"]`;
+const setupSheet = `${generator} [data-sheet="setup"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
 const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
@@ -441,9 +450,9 @@ const SHEETS: Readonly<Record<Sheet, { key: string; code: number; item: MenuItem
   models: { key: "m", code: 77, item: "models", title: "Models" }, setup: { key: "u", code: 85, item: "setup", title: "Setup" },
   options: { key: "o", code: 79, item: "options", title: "Session options" },
 };
-/** A sheet over the stage, by its title, with focus on its way back. */
+/** A sheet over the stage, by its title, with focus on its way back. Models and Setup are sections of their own; the session options keep the shared frame. */
 function sheetOpen(title: string): string {
-  return `${element(stage)}?.hidden === true && ${visibleSheet}?.querySelector('.plugin-atyrode_code__sheet')?.getAttribute('aria-label') === ${JSON.stringify(title)} &&
+  return `${element(stage)}?.hidden === true && ${visibleSheet}?.querySelector('[data-sheet], .plugin-atyrode_code__sheet')?.getAttribute('aria-label') === ${JSON.stringify(title)} &&
     document.activeElement === ${visibleSheet}.querySelector('[aria-label="Back to Code"]')`;
 }
 /** Opens a sheet by its key from the main view, remembering what had focus so its return can be checked. */
@@ -456,6 +465,41 @@ async function openSheet(browser: BrowserInstance, sheet: Sheet): Promise<void> 
 async function closeSheet(browser: BrowserInstance): Promise<void> {
   await click(browser, `${visibleSheet}?.querySelector('[aria-label="Back to Code"]')`);
   await until(browser, "the stage returns", `${element(stage)}?.hidden === false`);
+}
+/** Opens a sheet from More by real presses, More and then its item, remembering what had focus so its return can be checked. */
+async function openFromMore(browser: BrowserInstance, sheet: Sheet): Promise<void> {
+  await openMenu(browser);
+  await browser.evaluate(`(globalThis.__codeOpener = ${more}, true)`);
+  await click(browser, menuItem(SHEETS[sheet].item));
+  await until(browser, `More's ${sheet} item opens it with focus on its way back`, sheetOpen(SHEETS[sheet].title));
+}
+/**
+ * A sheet's one next action (sheet-frame.tsx `SheetGo`) is its label as drawn and its state: `busy` while a step runs,
+ * `refused` when a press now would refuse; it is never natively disabled, so focus stays on it through its states.
+ */
+function goIs(sheet: string, label: string, state: "ready" | "busy" | "refused" = "ready"): string {
+  const go = element(`${sheet} [data-go]`);
+  return `${go}?.querySelector('.${G}go-label')?.textContent === ${JSON.stringify(label)} && !${go}.disabled &&
+    (${go}.getAttribute('aria-busy') === 'true') === ${state === "busy"} && (${go}.getAttribute('aria-disabled') === 'true') === ${state !== "ready"}`;
+}
+/** The words beside a sheet's next action, part by part, each with its tone. */
+function goParts(sheet: string): string {
+  return `[...document.querySelectorAll('${sheet} .${G}go-line .${G}go-part')].map(el => [el.textContent, el.dataset.tone ?? null])`;
+}
+/** A fix beside a sheet's next action, by its words. */
+function goFix(sheet: string, label: string): string {
+  return `[...document.querySelectorAll('${sheet} .${G}go-line .${G}go-fix')].find(el => el.textContent.trim() === ${JSON.stringify(label)})`;
+}
+/** The fixes beside a sheet's next action, by their words. */
+function goFixes(sheet: string): string {
+  return `[...document.querySelectorAll('${sheet} .${G}go-line .${G}go-fix')].map(el => el.textContent.trim())`;
+}
+/** What a sheet's readout says, its bold value then why; and the head's state line. */
+function sheetSays(sheet: string): string {
+  return `(${element(`${sheet} [data-readout]`)}?.textContent ?? '')`;
+}
+function sheetState(sheet: string): string {
+  return `(${element(`${sheet} .${G}sheet-state[role="status"]`)}?.textContent ?? '')`;
 }
 async function openOptions(browser: BrowserInstance): Promise<void> {
   if (!await browser.evaluate<boolean>(`!!${visibleSheet}?.contains(${skillsSection})`)) await openSheet(browser, "options");
@@ -478,11 +522,11 @@ async function turn(browser: BrowserInstance, control: string, on: boolean): Pro
   if (await browser.evaluate<boolean>(`${control}?.getAttribute('aria-checked') !== '${on}'`)) await click(browser, control);
   await until(browser, `the switch turns ${on ? "on" : "off"}`, `${control}?.getAttribute('aria-checked') === '${on}'`);
 }
-/** Waits until the panel has read the record at `revision`, as Setup's profile details state it (opening a sheet reads again). */
+/** Waits until the panel has read the record at `revision`, as Setup's profile facts state it (opening a sheet reads again). */
 async function panelReads(browser: BrowserInstance, revision: number): Promise<void> {
   await openSheet(browser, "setup");
   await until(browser, `the panel reads revision ${revision}`,
-    `[...document.querySelectorAll('${generator} .${G}setup-facts dt')].find(el => el.textContent === 'Shared revision')?.nextElementSibling?.textContent === '${revision}'`);
+    `[...document.querySelectorAll('${setupSheet} .${G}setup-facts dt')].find(el => el.textContent === 'revision')?.nextElementSibling?.textContent === '${revision}'`);
   await closeSheet(browser);
 }
 
@@ -719,12 +763,12 @@ function fixtureUsage(observation: OmpResult<"accounts">): OmpResult<"usage"> {
     windows: [window("5h", null, 0.2, 3, 5 * 3_600_000), ...tiered[account.reference.provider] ? [tiered[account.reference.provider]!] : []],
   })) } };
 }
-/** A settled synthetic OMP probe job, in the public job shape the native job owner answers. */
-function probeJob(target: Target, jobId: string, operationId: string, requester: string): PublicJob {
+/** A synthetic OMP probe job in the public job shape the native job owner answers: settled, or still running with no result. */
+function probeJob(target: Target, jobId: string, operationId: string, requester: string, state: "exited" | "started" = "exited"): PublicJob {
   return PublicJobSchema.parse({ jobId, machineId: target.machineId, operationId, pluginId: "atyrode.omp",
     installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), inputDigest: "e".repeat(64),
-    resourceBindingDigest: "d".repeat(64), state: "exited", nextInputSeq: null,
-    result: { jobId, requestDigest: "f".repeat(64), ownerId: "synthetic-owner", ownerGeneration: 1, state: "exited", exitCode: 0, reason: null,
+    resourceBindingDigest: "d".repeat(64), state, nextInputSeq: null,
+    result: state === "started" ? null : { jobId, requestDigest: "f".repeat(64), ownerId: "synthetic-owner", ownerGeneration: 1, state: "exited", exitCode: 0, reason: null,
       startedAt: 1, finishedAt: 2, usage: null, outputs: [], limits: { timeoutMs: 600_000, memoryBytes: 1 << 30, processes: 64, outputBytes: 1 << 20 } },
     authority: { origin: { kind: "action", traceId: "synthetic-trace", door: "atyrode.omp.startInventory" }, requester, executor: null, decision: null } });
 }
@@ -742,16 +786,32 @@ function pinnedOmpArtifact(): string {
   return artifact;
 }
 
-/** What the workbench exports for its render-only bundled preview. */
-type StarterDraft = { baseRevision: number; metadata: ModelCatalogSnapshot; selection: Selection; document: CatalogDocument };
-async function readStarterDraft(browser: BrowserInstance): Promise<StarterDraft> {
-  // The export lives in Setup → Profile & source details; a visited sheet stays mounted while hidden.
-  if (!await browser.evaluate<boolean>(`${profileExport} instanceof HTMLTextAreaElement`)) {
-    await openSheet(browser, "setup");
+/**
+ * The profile the panel holds, as it shows it: the rows' values; the model list in Models, each rung by its model's key
+ * (Models opens once where it has not yet, since a visited sheet stays mounted while hidden); and the unsaved edit this
+ * tab keeps for a reload (draft-store.ts), exactly the selection, base revision, catalog digests and bundled list it
+ * rests on, and nothing while the rows repeat the team the list gives. Two equal readings are the same profile.
+ */
+type Profile = { rows: string; list: string[]; kept: string | null };
+/** Each rung Models draws, `family:tier key`, in order. */
+const modelList = `[...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].map(cell => cell.dataset.cell + ' ' + cell.dataset.key).sort()`;
+async function readProfile(browser: BrowserInstance, draftKey: string): Promise<Profile> {
+  if (!await browser.evaluate<boolean>(`${element(modelsSheet)} !== null`)) {
+    await openSheet(browser, "models");
     await closeSheet(browser);
   }
-  await until(browser, "local starter material remains exportable", `${profileExport} instanceof HTMLTextAreaElement && !!${profileExport}.value`);
-  return JSON.parse(await browser.evaluate<string>(`${profileExport}.value`)) as StarterDraft;
+  await until(browser, "the profile shows in the rows and in Models' list", `${row("lane")} !== null && ${modelList}.length > 0`);
+  return browser.evaluate<Profile>(`({ rows: ${profileValues}, list: ${modelList}, kept: sessionStorage.getItem(${JSON.stringify(draftKey)}) })`);
+}
+/** The rungs Models draws for a list: each model on a rung (tiers 1 to 4) of its family's ladder, by its key. */
+function listOf(document: { readonly models: readonly { readonly key: string; readonly provider: string; readonly tier: number }[] }): string[] {
+  return document.models.filter(model => model.tier >= 1 && model.tier <= 4).map(model => `${providerPolicy(model.provider).family}:${model.tier} ${model.key}`).sort();
+}
+/** The unsaved edit a profile keeps, as the panel itself reads it back. */
+function keptEdit(profile: Pick<Profile, "kept">): StoredDraft {
+  const kept = readStoredDraft({ getItem: () => profile.kept, setItem: () => undefined, removeItem: () => undefined }, "kept");
+  assert(kept, "The panel keeps the unsaved edit for a reload");
+  return kept;
 }
 /**
  * A profile this browser launched in the workspace before, as the panel keeps it (recent-teams.ts):
@@ -766,10 +826,10 @@ async function usableStarter(browser: BrowserInstance): Promise<void> {
   await until(browser, "the bundled preview fills the generator's rows", `${JSON.stringify(ROWS)}.every(id => document.querySelector('${generator} [data-row="' + id + '"]'))`);
   // A bundled preview is saved only by the verification that replaces it; the fixture reads no accounts and has no discovery, so that is refused.
   await until(browser, "the starter's only step is a refused verification", launchIs("verify models", "refused"));
-  // Before shared policy exists no row is locked.
-  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') === 'true').map(row => row.dataset.row)`), [],
+  // Before shared policy exists no row is locked. The generator's rows are the stage's; Setup's checklist rows are its own.
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${stage} [data-row]')].filter(row => row.getAttribute('aria-disabled') === 'true').map(row => row.dataset.row)`), [],
     "Every row is editable before shared policy exists");
-  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => {
+  assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${stage} [data-row]')].filter(row => {
     const stops = row.querySelectorAll('[role="radio"][tabindex="0"]');
     return stops.length !== 1 || stops[0].getAttribute('aria-checked') !== 'true';
   }).map(row => row.dataset.row)`), [], "Each row is one keyboard Tab stop: its chosen value");
@@ -815,17 +875,18 @@ async function showView(browser: BrowserInstance, view: View): Promise<void> {
 }
 
 /**
- * The shown view's text and controls, as painted. Glyphs paint inside the middle of a text box: a
- * font's ascent and descent may reach into a neighbouring line without any ink touching, so each box
- * is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips
- * it sideways is cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by
- * a clip is still overflow. Screen-reader text is clipped to a pixel on purpose and is left out. A
- * control narrower than 24px can no longer be read or pressed.
+ * The shown view's text and controls, as painted: the stage's (`[data-tui]`) or an open sheet's. Glyphs paint inside the
+ * middle of a text box: a font's ascent and descent may reach into a neighbouring line without any ink touching, so each
+ * box is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips it sideways is
+ * cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by a clip is still overflow.
+ * Screen-reader text is clipped to a pixel on purpose and is left out. A control (`controls`) narrower than 24px can no
+ * longer be read or pressed.
  */
 type Paint = { overflow: number; overlaps: string[]; outside: string[]; cut: string[]; small: string[]; texts: number };
-const PAINT = `(() => {
+function paintOf(view: string, controls: string): string {
+  return `(() => {
   const root = document.querySelector('${generator}');
-  const view = root.querySelector('[data-tui]');
+  const view = root.querySelector('${view}');
   const viewport = root.querySelector('.scroll-region__viewport');
   const bounds = root.getBoundingClientRect();
   const clips = new Map();
@@ -878,27 +939,34 @@ const PAINT = `(() => {
     if (across > 1 && down > 1) overlaps.push(JSON.stringify(a.text) + ' over ' + JSON.stringify(b.text));
   }
   const outside = boxes.filter(entry => entry.box.left < bounds.left - 1 || entry.box.right > bounds.right + 1).map(entry => entry.text);
-  const small = [...view.querySelectorAll('button, [role="tab"], [role="switch"], [role="checkbox"], [role="listbox"]')]
+  const small = [...view.querySelectorAll('${controls}')]
     .filter(el => el.checkVisibility({ visibilityProperty: true }) && el.getClientRects().length && el.getBoundingClientRect().width < 24)
     .map(el => (el.dataset.row ?? (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 32)) + ' ' + Math.round(el.getBoundingClientRect().width) + 'px');
   return { overflow: Math.max(0, viewport.scrollWidth - viewport.clientWidth, view.scrollWidth - view.clientWidth),
     overlaps: overlaps.slice(0, 6), outside: outside.slice(0, 6), cut: cut.slice(0, 6), small, texts: boxes.length };
 })()`;
+}
+const PAINT = paintOf("[data-tui]", `button, [role="tab"], [role="switch"], [role="checkbox"], [role="listbox"]`);
+/** The open sheet over the stage, and the controls it offers: every one a target, the list's cells and the left-out ids among them. */
+const openSheetHost = `.${G}sheet-host:not([hidden])`;
+const SHEET_CONTROLS = `button, select, input, textarea, [role="radio"], [role="gridcell"], [tabindex="0"]`;
 
 /**
- * Every laid-out element of the stage by its layout box: offsets summed up the offset parents and
- * taken from the stage's own, so a transform (the ▸ pointer sliding in, the launch glyph's nudge, the
- * glider) and a scroll are not shifts. Left out: what the readouts say, which by design changes inside
- * their fixed boxes with whatever is pointed or focused; the next-refresh line, which follows the clock
- * and the refresh cadence, never the pointer; and screen-reader text.
+ * Every laid-out element of a view by its layout box: offsets summed up the offset parents and taken from the view's own,
+ * so a transform (the ▸ pointer sliding in, the launch glyph's nudge, the glider) and a scroll are not shifts. Left out:
+ * what `skip` holds for an element. In the main view that is what the readouts say, which by design changes inside their
+ * fixed boxes with whatever is pointed or focused; the next-refresh line, which follows the clock and the refresh
+ * cadence, never the pointer; and screen-reader text. In a sheet it is what its readout line says, and the head's state
+ * line, which follows the clock ("verified 1m ago") and never the pointer.
  */
-const BOXES = `(() => {
-  const stage = document.querySelector('${stage}');
+function boxesOf(view: string, skip: string): string {
+  return `(() => {
+  const stage = document.querySelector('${view}');
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
   const [ox, oy] = at(stage);
   const boxes = new Map();
   for (const element of stage.querySelectorAll('*')) {
-    if (!(element instanceof HTMLElement) || element.offsetParent === null || element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')) continue;
+    if (!(element instanceof HTMLElement) || element.offsetParent === null || ${skip}) continue;
     const [x, y] = at(element);
     boxes.set(element, [x - ox, y - oy, element.offsetWidth, element.offsetHeight].join(','));
   }
@@ -906,6 +974,9 @@ const BOXES = `(() => {
   globalThis.__codeBoxes = boxes;
   return boxes.size;
 })()`;
+}
+const BOXES = boxesOf(stage, `element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')`);
+const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]')`);
 const SHIFTED = `(() => {
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
   const [ox, oy] = at(globalThis.__codeStage);
@@ -1071,16 +1142,121 @@ async function coarseTargets(browser: BrowserInstance, label: string): Promise<v
   await showView(browser, "main");
 }
 
+// ---------------------------------------------------------------- the Models and Setup sheets: geometry, shift, touch, motion
+
+/**
+ * From 170 to 1440px of panel width the open sheet paints inside the panel (`paintOf`): no horizontal overflow, cut text,
+ * text outside the panel or over other text and no control too narrow to press, in each of its three layouts
+ * (`data-mode`: tiny, narrow, wide). Every width is measured before the verdict, so one run names every place that fails.
+ */
+async function sheetGeometry(browser: BrowserInstance, sheet: string, label: string): Promise<void> {
+  const modes = new Set<string>();
+  const problems: string[] = [];
+  try {
+    for (const width of WIDTHS) {
+      await panelWidth(browser, width);
+      await still(browser);
+      modes.add(await browser.evaluate<string>(`${element(sheet)}.dataset.mode`));
+      const facts = await browser.evaluate<Paint>(paintOf(openSheetHost, SHEET_CONTROLS));
+      const where = `${label} at ${width}px`;
+      if (facts.texts <= 3) problems.push(`${where}: too little text paints (${facts.texts})`);
+      if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
+      problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the panel`),
+        ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: control ${entry} wide`));
+    }
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+  assert.deepEqual(problems, [], `The ${label} paints inside the panel from 170 to 1440px: no overflow, cut or colliding text and no squeezed control`);
+  assert.deepEqual([...modes].sort(), ["narrow", "tiny", "wide"], `The ${label} widths exercise the sheet's three layouts`);
+}
+
+/** Everything in a sheet a pointer or the keyboard can reach: its controls, Setup's row values, and the list's providers and left-out ids, which say their readout. */
+function sheetTargets(sheet: string): string {
+  return `[...document.querySelectorAll('${sheet} :is(${SHEET_CONTROLS}, [data-roving], .${G}models-pw, .${G}models-xid)')]
+    .filter(el => !el.closest('dialog') && el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getClientRects().length)`;
+}
+/** Pointing at or focusing anything in the open sheet moves no layout box (`SHEET_BOXES`); only the readout line's words change. */
+async function sheetZeroShift(browser: BrowserInstance, sheet: string, label: string): Promise<void> {
+  const targets = await browser.evaluate<number>(`(globalThis.__codeTargets = ${sheetTargets(sheet)}).length`);
+  assert(targets > 5, `The ${label} offers its pointer targets`);
+  for (let index = 0; index < targets; index++) {
+    const target = `globalThis.__codeTargets[${index}]`;
+    if (!await browser.evaluate<boolean>(`${target}.isConnected`)) continue;
+    await pointAway(browser);
+    await still(browser);
+    await browser.evaluate(SHEET_BOXES);
+    await pointOf(browser, target);
+    await settle(browser);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at ${label} target ${index} shifts no layout box`);
+  }
+  // A press on the sheet's title leaves focus on the panel root behind it, from where Tab walks the sheet.
+  await pointAway(browser);
+  await click(browser, element(`${sheet} .${G}sheet-title`));
+  await still(browser);
+  await browser.evaluate(SHEET_BOXES);
+  let stops = 0;
+  for (let step = 0; step < 80; step++) {
+    await key(browser, "Tab", 9);
+    await settle(browser);
+    if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${sheet}')`)) break;
+    stops++;
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${step} in the ${label} shifts no layout box`);
+  }
+  assert(stops > 3, `Tab walks the ${label}`);
+}
+
+/**
+ * On a coarse pointer every target of the open sheet is at least 44px, a word of a choice by its height and anything else
+ * both ways, and the key line, whose keys a touch screen does not have, is gone.
+ */
+async function sheetCoarseTargets(browser: BrowserInstance, sheet: string, label: string): Promise<void> {
+  const problems: string[] = [];
+  await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+  try {
+    assert.equal(await browser.evaluate("matchMedia('(pointer: coarse)').matches"), true);
+    for (const width of [1280, 860, 390, 240]) {
+      await panelWidth(browser, width);
+      await still(browser);
+      // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
+      problems.push(...(await browser.evaluate<string[]>(`${sheetTargets(sheet)}
+        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || (!el.matches('[role="radio"]') && rect.width < 43.5); })
+        .map(el => (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 32) + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`))
+        .map(entry => `${label} at ${width}px: ${entry}`));
+      if (await browser.evaluate<boolean>(`!!${element(`${sheet} .${G}sheet-keys`)}?.checkVisibility()`)) problems.push(`${label} at ${width}px: the key line shows`);
+    }
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+  }
+  assert.deepEqual(problems, [], `Every target of the ${label} is at least 44px on a coarse pointer, which has no key line`);
+}
+
+/** What in the open sheet would still move under reduced motion: an element, or its pseudo-element, whose transition or animation lasts. */
+const SHEET_MOTION = `[...document.querySelectorAll('${generator} ${openSheetHost} *')].flatMap(el => [null, '::before', '::after'].flatMap(pseudo => {
+  const style = getComputedStyle(el, pseudo);
+  return [...style.transitionDuration.split(','), ...style.animationDuration.split(',')].some(value => parseFloat(value) > 0) ? [(el.getAttribute('class') ?? el.tagName) + (pseudo ?? '')] : [];
+})).slice(0, 6)`;
+/** Under reduced motion nothing in the open sheet animates after `what`: no running animation, and no transition or animation lasts. */
+async function sheetStill(browser: BrowserInstance, what: string): Promise<void> {
+  await settle(browser);
+  assert.deepEqual(await browser.evaluate<string[]>(`${element(generator)}.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running')
+    .map(animation => (animation.animationName ?? animation.transitionProperty ?? 'script') + ' on ' + (animation.effect?.target?.getAttribute('class') ?? ''))`), [],
+    `Reduced motion: ${what} does not animate`);
+  assert.deepEqual(await browser.evaluate<string[]>(SHEET_MOTION), [], `Reduced motion: after ${what} every transition and animation in the sheet lasts 0s`);
+}
+
 /**
  * The browser-provable acceptance of the main view on a bundled preview, which keeps every effect
  * local: panel-local keys, keys an open popover owns, the full key line, keyboard edits and refusals,
  * the wheel, touch and coarse targets, reduced motion, zero hover/focus shift and width geometry.
- * `recent` is the browser's one recent profile, which the digit 1 recalls from the sessions view.
+ * `recent` is the browser's one recent profile, which the digit 1 recalls from the sessions view, and
+ * `draftKey` where this tab keeps an unsaved edit of the profile (`readProfile`).
  * Leaves the profile as it found it.
  */
-async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection): Promise<void> {
-  const before = await readStarterDraft(browser);
-  const thinking = await browser.evaluate<string>(chosenKey("thinking"));
+async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection, draftKey: string): Promise<void> {
+  const before = await readProfile(browser, draftKey);
+  const thinking = await browser.evaluate<string>(chosenKey("thinking")), advisor = await browser.evaluate<string>(chosenKey("advisor"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
   const routing = element(`${generator} [data-pane="routing"]`), usage = element(`${generator} [data-pane="usage"]`);
   // The main view as it rests: the generator with routing and usage, no sheet, no shortcuts dialog and the fallback chains hidden.
@@ -1093,7 +1269,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await Bun.sleep(300);
   assert.equal(await browser.evaluate(`${resting} && ${machineList} === null && !document.activeElement?.closest('${generator}')`), true,
     "A key pressed outside the panel changes none of its views, panes, key line, sheets or focus");
-  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed outside the panel never edit its profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Keys pressed outside the panel never edit its profile");
 
   // Behind a sheet the panel's keys do nothing, even with the panel root itself focused: not ↵ or Mod+↵ (the launch's
   // step, here a refusal it would say aloud), not a view, not the key line, not defaults.
@@ -1107,7 +1283,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: !!${shortcuts}?.open, sheet: ${element(stage)}.hidden, said: ${liveRegion}.textContent })`),
     { view: "main", shortcuts: false, sheet: true, said: quiet }, "No panel key acts behind a sheet: no view, shortcuts or step, nothing said");
   await closeSheet(browser);
-  assert.deepEqual(await readStarterDraft(browser), before, "No panel key behind a sheet edits the profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "No panel key behind a sheet edits the profile");
 
   // An open popover owns its keys: with the machine list open, the panel's keys leave it alone, and ↵ is the list's own choice.
   await focusRow(browser, "thinking");
@@ -1120,7 +1296,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await Bun.sleep(300);
   assert.equal(await browser.evaluate(`${resting} && document.activeElement === ${machineList}`), true,
     "With the machine list open no panel key changes a view, a pane, the key line, the chains or a sheet, and the list keeps focus");
-  assert.deepEqual(await readStarterDraft(browser), before, "With the machine list open no panel key edits the profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "With the machine list open no panel key edits the profile");
   await key(browser, "Enter", 13, { modifiers: CTRL });
   await until(browser, "↵ in the list chooses its machine and closes onto the machine's word", `${machineList} === null && document.activeElement === ${machinePicker}`);
   assert.deepEqual(await browser.evaluate(`({ machine: ${machinePicker}.textContent, said: ${liveRegion}.textContent })`), { machine, said: quiet },
@@ -1145,7 +1321,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, open: ${shortcuts}.open,
     behind: !!document.activeElement?.closest('${generator}') && !${shortcuts}.contains(document.activeElement), said: ${liveRegion}.textContent })`),
     { view: "main", open: true, behind: false, said: quiet }, "From the shortcuts no panel key acts, and Tab reaches no control behind them");
-  assert.deepEqual(await readStarterDraft(browser), before, "Keys pressed in the shortcuts never edit the profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Keys pressed in the shortcuts never edit the profile");
   await key(browser, "Escape", 27);
   await until(browser, "Esc closes the shortcuts onto the row they were opened from", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
   // Mod+↵ in the shortcuts is their Close button's own press: it closes them and takes no launch step.
@@ -1191,7 +1367,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "Esc closes More's menu onto More", `${menu} === null && ${more}.getAttribute('aria-expanded') === 'false' && document.activeElement === ${more}`);
   await settle(browser);
   assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "Closing More shifts nothing on the stage");
-  assert.deepEqual(await readStarterDraft(browser), before, "With More open no panel key edits the profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "With More open no panel key edits the profile");
   // From More the keyboard opens the menu (↵ and Space on its first item, ↓ too, ↑ on its last), ↵ or Space chooses an
   // item and an item's own key chooses it as well; what it opens gives focus back to More.
   await key(browser, "Enter", 13);
@@ -1233,7 +1409,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "a press outside closes More's menu", `${menu} === null && ${more}.getAttribute('aria-expanded') === 'false'`);
   await key(browser, "Escape", 27);
   await until(browser, "Esc goes back to the generator", shownView("main"));
-  assert.deepEqual(await readStarterDraft(browser), before, "More and what it opens change no setting");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "More and what it opens change no setting");
   // More flows after the last tab, on its line: the bar is one line at 1280 and 800px and two at 320px.
   try {
     for (const [width, lines] of [[1280, 1], [800, 1], [320, 2]] as const) {
@@ -1257,9 +1433,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     `${chosenKey("advisor")} === ${JSON.stringify(recent.advisor)} && ${chosenKey("thinking")} === ${JSON.stringify(recent.thinking)} && ${liveRegion}.textContent !== '' && ${liveRegion}.textContent !== ${JSON.stringify(listed)}`);
   await key(browser, "Escape", 27);
   await until(browser, "Esc goes back to the generator", shownView("main"));
-  await choose(browser, "advisor", before.selection.advisor);
-  await choose(browser, "thinking", before.selection.thinking);
-  assert.deepEqual(await readStarterDraft(browser), before, "Recalling a profile and choosing its settings back returns the exact profile");
+  await choose(browser, "advisor", advisor);
+  await choose(browser, "thinking", thinking);
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Recalling a profile and choosing its settings back returns the exact profile");
 
   // Keyboard edits: → is more, Home and End reach the row's ends, ↑/↓ move between rows, and the rows are one Tab stop.
   await focusRow(browser, "thinking");
@@ -1281,7 +1457,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await key(browser, "ArrowDown", 40);
   await until(browser, "↓ moves to the next row", `!!${row("advisor")}.contains(document.activeElement)`);
   await choose(browser, "thinking", thinking);
-  assert.deepEqual(await readStarterDraft(browser), before, "Keyboard round trips return the exact profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Keyboard round trips return the exact profile");
 
   // A step only a refused word could take does nothing and says why, in the readout and aloud.
   await focusRow(browser, "tier");
@@ -1301,7 +1477,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     `${liveRegion}.textContent.startsWith(${row("tier")}.querySelector('.${G}dial-label').textContent + ' ' + ${JSON.stringify(refusedText)} + ': ') && ${liveRegion}.textContent.length > ${refusedText.length + 10}`);
   assert.notEqual(await browser.evaluate(chosenKey("tier")), refusedTier, "A refused step leaves the row where it was");
   await choose(browser, "tier", tier);
-  assert.deepEqual(await readStarterDraft(browser), before, "A refused step and End return the exact profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "A refused step and End return the exact profile");
 
   // The lead row (#252): mixed, then GPT, Claude and DeepSeek, then an `only` box, a Tab stop of its own, checked while
   // the lane keeps every role on its lead. A press and Space toggle the box and leave focus on it, a lead change keeps it,
@@ -1310,10 +1486,12 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.deepEqual(await browser.evaluate(`[...${row("lane")}.querySelectorAll('[role="radio"]')].map(el => el.dataset.key)`), ["mixed", "openai", "anthropic", "deepseek"],
     "The lead row names mixed, then GPT, Claude and DeepSeek");
   const leadGeometry = await browser.evaluate<string[]>(LEAD_GEOMETRY);
+  // The lane the profile stores is the unsaved edit's, as the panel keeps it in the tab (the rows hold an edit throughout).
+  const keptLane = async () => keptEdit({ kept: await browser.evaluate<string | null>(`sessionStorage.getItem(${JSON.stringify(draftKey)})`) }).selection.lane;
   const leads = async (description: string, lane: Selection["lane"], focus: string | null = null) => {
     const chosen = lane.kind === "mixed" ? "mixed" : lane.family, checked = lane.kind === "provider" && lane.blend === "only";
     await until(browser, description, `${chosenKey("lane")} === ${JSON.stringify(chosen)} && ${onlyBox}.getAttribute('aria-checked') === '${checked}'${focus === null ? "" : ` && document.activeElement === ${focus}`}`);
-    assert.deepEqual((await readStarterDraft(browser)).selection.lane, lane, `${description}: the stored lane`);
+    assert.deepEqual(await keptLane(), lane, `${description}: the stored lane`);
     assert.deepEqual(await browser.evaluate(LEAD_GEOMETRY), leadGeometry, `${description}: no word of the lead row moves`);
   };
   const gptLed = { kind: "provider", family: "openai", blend: "led" } as const, gptOnly = { ...gptLed, blend: "only" } as const;
@@ -1377,10 +1555,10 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await leads("Under reduced motion a press unchecks the box", gptLed, onlyBox);
   assert.equal(await browser.evaluate(running), 0, "Reduced motion: a press on the only box does not animate");
   await browser.send("Emulation.setEmulatedMedia", { features: [] });
-  const start = before.selection.lane;
+  const start = keptEdit(before).selection.lane;
   await choose(browser, "lane", start.kind === "mixed" ? "mixed" : start.family);
   if (start.kind === "provider" && await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-checked')`) !== String(start.blend === "only")) await click(browser, onlyBox);
-  assert.deepEqual(await readStarterDraft(browser), before, "The lead row's round trips return the exact profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "The lead row's round trips return the exact profile");
 
   // The wheel steps a row the keyboard has focused, or one the pointer has rested on; over a row the pointer only passes, it scrolls the panel.
   await panelWidth(browser, 860, 520);
@@ -1402,7 +1580,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert.deepEqual(await readStarterDraft(browser), before, "Wheel round trips return the exact profile");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Wheel round trips return the exact profile");
 
   // Coarse pointers: a tap chooses the word under it, a touch that scrolls across the rows chooses nothing, and every target is 44px.
   await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
@@ -1420,7 +1598,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     await browser.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: start.x + 50, y: start.y + 90 }] });
     await browser.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await settle(browser);
-    assert.deepEqual(await readStarterDraft(browser), before, "A touch scroll across the rows never edits the profile");
+    assert.deepEqual(await readProfile(browser, draftKey), before, "A touch scroll across the rows never edits the profile");
     await coarseTargets(browser, label);
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
@@ -1464,15 +1642,25 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "Esc closes More's menu", `${menu} === null`);
   await click(browser, launchButton);
   await motionless("a refused launch press");
+  // The sheets: coming in, a refused press of the next action (no shake) and the way back animate nothing, and nothing in them lasts.
   await openSheet(browser, "models");
   await motionless("a sheet");
+  await sheetStill(browser, "Models coming in");
+  await click(browser, element(`${modelsSheet} [data-go]`));
+  await until(browser, "the starter's refused verify says why", `${element(`${modelsSheet} [data-readout]`)}.dataset.tone === 'warn'`);
+  assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-go]`)}.dataset.shake`), undefined, "Reduced motion: a refused press does not shake");
+  await sheetStill(browser, "a refused press of the next action");
   await closeSheet(browser);
-  assert.deepEqual(await readStarterDraft(browser), before, "Motion checks return the exact profile");
+  await motionless("the stage coming back from a sheet");
+  await openSheet(browser, "setup");
+  await sheetStill(browser, "Setup coming in");
+  await closeSheet(browser);
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Motion checks return the exact profile");
 
   await zeroShift(browser, label);
   await geometryAcrossWidths(browser, label);
   await browser.send("Emulation.setEmulatedMedia", { features: [] });
-  assert.deepEqual(await readStarterDraft(browser), before, "Hover, focus, views and resizing are presentation only");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "Hover, focus, views and resizing are presentation only");
 }
 
 // ---------------------------------------------------------------- the bundled starter
@@ -1508,25 +1696,34 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
       await openGenerator(browser, server, workspace.id);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${liveRegion}?.textContent`), "", "The live region is mounted empty");
-      const initialDraft = await readStarterDraft(browser);
-      assert.equal(initialDraft.baseRevision, base.revision);
-      assert.deepEqual(initialDraft.metadata, metadata, "Local routes are based on the exact real OMP metadata response");
+      // Models shows the policy derivation of the exact real OMP metadata response; untouched, the preview keeps no edit.
+      const draftKey = storedDraftKey(writer.principal.id, workspace.id);
+      const starter = catalogFromMetadata(metadata, "any"), initialSelection = defaultSelection(compileCatalog(starter));
+      const initialDraft = await readProfile(browser, draftKey);
+      assert.deepEqual(initialDraft.list, listOf(starter), "Models shows the starter the exact real OMP metadata response derives, each rung on its model");
+      assert.equal(initialDraft.kept, null, "An untouched preview keeps no edit");
+      assert.deepEqual(await browser.evaluate(`[${chosenKey("thinking")}, ${chosenKey("advisor")}]`), [initialSelection.thinking, initialSelection.advisor],
+        "The rows show that list's default profile");
       // The first workspace has one recent profile, which the panel reads as it mounts.
-      const recent = { ...initialDraft.selection, thinking: "high", advisor: "off" } satisfies Selection;
+      const recent = { ...initialSelection, thinking: "high", advisor: "off" } satisfies Selection;
       if (!initialized) {
         await rememberTeam(browser, writer.principal.id, workspace.id, recent);
         await openGenerator(browser, server, workspace.id);
         await usableStarter(browser);
-        assert.deepEqual(await readStarterDraft(browser), initialDraft, "An untouched preview is the same after a reload");
+        assert.deepEqual(await readProfile(browser, draftKey), initialDraft, "An untouched preview is the same after a reload");
       }
       await choose(browser, "thinking", "high");
       await choose(browser, "advisor", "audit");
       await until(browser, "the commit is announced", `${liveRegion}?.textContent.includes('audit')`);
       await assertRoutes(browser, true);
-      const chosen = await readStarterDraft(browser);
-      assert.notDeepEqual(chosen.selection, initialDraft.selection, "The first explicit choice is a nondefault selection");
-      assert.equal(chosen.selection.thinking, "high");
-      assert.equal(chosen.selection.advisor, "audit");
+      const chosen = await readProfile(browser, draftKey);
+      assert.notEqual(chosen.rows, initialDraft.rows, "The first explicit choice is a nondefault selection");
+      assert.deepEqual(chosen.list, initialDraft.list, "Choosing thinking and an advisor keeps the same list");
+      const edit = keptEdit(chosen);
+      assert.deepEqual(edit.selection, { ...initialSelection, thinking: "high", advisor: "audit" }, "The kept edit is exactly the chosen selection");
+      assert.deepEqual([edit.source, edit.revision, edit.initialized], ["starter", base.revision, initialized], "The edit rests on the bundled starter at the revision the panel read");
+      assert(edit.metadataKey, "A first-use edit names the bundled list it was made on");
+      assert.deepEqual(JSON.parse(edit.metadataKey), metadata, "Local routes are based on the exact real OMP metadata response");
       for (const sheet of ["models", "setup", "options"] as const) {
         await openSheet(browser, sheet);
         await closeSheet(browser);
@@ -1535,20 +1732,22 @@ async function starterWorkbenchScenario(browser: BrowserInstance, server: TestSe
         await showView(browser, view);
         await showView(browser, "main");
       }
-      assert.deepEqual(await readStarterDraft(browser), chosen, "Sheets and views do not regenerate or rebase starter choices");
+      assert.deepEqual(await readProfile(browser, draftKey), chosen, "Sheets and views do not regenerate or rebase starter choices");
       // The unsaved choices are kept in this tab: a reload brings them back on the same bundled list.
       await openGenerator(browser, server, workspace.id);
       await usableStarter(browser);
-      assert.deepEqual(await readStarterDraft(browser), chosen, "A reload keeps the unsaved starter choices");
-      if (!initialized) await acceptanceScenario(browser, "bundled starter", recent);
+      assert.deepEqual(await readProfile(browser, draftKey), chosen, "A reload keeps the unsaved starter choices");
+      if (!initialized) await acceptanceScenario(browser, "bundled starter", recent, draftKey);
       assert.deepEqual(await readConfiguration(server, writer, target), base,
         "Mount, rows, keys, wheel, touch, views, resizing and sheets never initialize or mutate policy");
       assert.deepEqual(trace.requests.slice(start).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|select|adoptStarterProfile|changeAccounts)$/.test(request.name)), []);
       // The preview is render-only: the exact OMP response's policy derivation, with no save.
-      const document = catalogFromMetadata(metadata, chosen.selection.budget);
-      assert.deepEqual(chosen.document, document, "The displayed/exported preview is the policy derivation of the real response");
+      const document = catalogFromMetadata(metadata, edit.selection.budget);
+      assert.deepEqual(chosen.list, listOf(document), "The displayed preview is the policy derivation of the real response");
+      assert.equal(await browser.evaluate(`[...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].every(cell => cell.dataset.unmeasured !== undefined)`), true,
+        "Models shows the starter unmeasured");
       await still(browser);
-      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, chosen.selection),
+      assert.deepEqual(await routedRoles(browser), expectedRoutes(document, edit.selection),
         "Every routed role, its model and its supported effort exactly match the policy derivation of the chosen selection");
       for (const model of document.models) {
         const source = metadata.models.find(row => row.provider === model.provider && row.id === model.id);
@@ -1583,7 +1782,9 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   await openGenerator(browser, server, workspace.id);
   await usableStarter(browser);
   await choose(browser, "thinking", "max");
-  const frozen = await readStarterDraft(browser);
+  const draftKey = storedDraftKey(writer.principal.id, workspace.id);
+  const frozen = await readProfile(browser, draftKey);
+  assert.equal(keptEdit(frozen).revision, 0, "The edit rests on the absent workspace, revision 0");
   await still(browser);
   const routes = await routedRoles(browser);
   const competing = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
@@ -1591,11 +1792,15 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   // A competing initializer moves the revision under the frozen preview: unlike a verification's own
   // initialization, it is a change made elsewhere, and the launch line offers theirs.
   await until(browser, "a revision-zero preview refuses to attach to a competing initializer", `${launchIs("verify models", "refused")} && !!${fix("conflict")}`);
+  // Models says the same refusal as its one next action, with the same fix beside it.
   await openSheet(browser, "models");
+  await until(browser, "Models refuses verifying a conflicted preview and offers theirs",
+    `${goIs(modelsSheet, "verify models", "refused")} && JSON.stringify(${goParts(modelsSheet)}) === ${JSON.stringify(JSON.stringify([["The workspace profile changed elsewhere", "attention"]]))} &&
+    JSON.stringify(${goFixes(modelsSheet)}) === '["use theirs"]'`);
   await closeSheet(browser);
   await showView(browser, "accounts");
   await showView(browser, "main");
-  assert.deepEqual(await readStarterDraft(browser), frozen, "The exact document, metadata, choices and original revision remain inspectable/exportable");
+  assert.deepEqual(await readProfile(browser, draftKey), frozen, "The exact list, choices, bundled list and original revision remain on show");
   await still(browser);
   assert.deepEqual(await routedRoles(browser), routes, "A conflict does not replace the shown routes");
   assert.equal((await readConfiguration(server, writer, target)).revision, 1, "Navigation cannot auto-rebase or replay a rejected first adoption");
@@ -1657,7 +1862,7 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
         await key(browser, "Escape", 27);
         await until(browser, "Esc closes it again", `${machineList} === null`);
         await click(browser, fix("list-models"));
-        await until(browser, "the Models fix opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+        await until(browser, "the Models fix opens Models, which has no list to show", `${sheetOpen("Models")} && !!document.querySelector('${modelsSheet} .${G}models-none')`);
         await closeSheet(browser);
       }
       assert.equal(await browser.evaluate(`${launchButton}.dataset.state !== 'ready'`), true, "An unavailable observation is not an empty configuration");
@@ -1667,7 +1872,8 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       await click(browser, retry);
       await usableStarter(browser);
       await choose(browser, "thinking", "max");
-      const frozen = await readStarterDraft(browser);
+      const draftKey = storedDraftKey(writer.principal.id, workspace.id);
+      const frozen = await readProfile(browser, draftKey);
       await still(browser);
       const routes = await routedRoles(browser);
       fail = true;
@@ -1679,7 +1885,7 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       await control(browser, "later observation failure remains separately retryable", retry, false);
       if (metadataFails) await until(browser, "beside the retained profile, the launch line names the failed model list with its retry and Models",
         `${listFailure("beside")} && !!document.querySelector('${generator} .${G}launch-line [data-fix]:not([data-fix^="list-"])')`);
-      assert.deepEqual(await readStarterDraft(browser), frozen, "Observation failure retains the original document, metadata and selected policy");
+      assert.deepEqual(await readProfile(browser, draftKey), frozen, "Observation failure retains the original list, bundled list and selected policy");
       assert.equal(await browser.evaluate(chosenKey("thinking")), "max", "The retained profile stays in the rows");
       await still(browser);
       assert.deepEqual(await routedRoles(browser), routes, "Retained routes remain inspectable when current observations fail");
@@ -1687,7 +1893,7 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
       fail = false;
       await click(browser, retry);
       await until(browser, "real observation recovery removes its retry control", `${retry} == null`);
-      assert.deepEqual(await readStarterDraft(browser), frozen, "Recovery never regenerates the local profile");
+      assert.deepEqual(await readProfile(browser, draftKey), frozen, "Recovery never regenerates the local profile");
       await still(browser);
       assert.deepEqual(await routedRoles(browser), routes, "Recovery shows the retained routes");
       assert.equal((await readConfiguration(server, writer, target)).revision, 0, "Observation recovery never implicitly saves retained choices");
@@ -1807,7 +2013,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     assert.equal(await browser.evaluate(`${lineText}.includes(${JSON.stringify(`Claude ${charge.length}`)})`), true, "The charge names its provider by family");
 
     // While the charge waits, no profile, machine or account edit may start: every row and the machine refuse with the gate's reason.
-    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-row]')].filter(row => row.getAttribute('aria-disabled') !== 'true').map(row => row.dataset.row)`), [],
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${stage} [data-row]')].filter(row => row.getAttribute('aria-disabled') !== 'true').map(row => row.dataset.row)`), [],
       "Every row is locked while the charge waits");
     assert.equal(await browser.evaluate(`${machinePicker}.getAttribute('aria-disabled')`), "true", "The machine is locked while the charge waits");
     const settings = await browser.evaluate<string>(profileValues), machine = await browser.evaluate<string>(`${machinePicker}.textContent`);
@@ -2060,6 +2266,368 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
   }
 }
 
+// ---------------------------------------------------------------- the Models sheet
+
+/**
+ * Models end to end on a first-use workspace. Synthetic OMP observations stand in for the destination, the accounts and
+ * the probe jobs: discovery and benchmark are ready, a fictional Claude and Codex account are observed, each inventory
+ * lists the pinned OMP's bundled Claude and Codex rows with OMP's quota class on each, and Spark in its `spark` class,
+ * and each provider's benchmark job answers every candidate reachable at fictional speeds. Everything Code decides is the real
+ * server's: the initialization, the probe pool, the charge (`draftInventory`), the derivation, staging with the recorded
+ * verification, reviews, promotions, imports and discards. No provider is reached, no native job runs and nothing is
+ * approved.
+ */
+async function modelsSheetScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
+  const workspace = await createContainer(server, "Models sheet", "canvas");
+  const target: Target = { containerId: workspace.id, machineId: destination.machineId };
+  const providers = ["anthropic", "openai-codex"];
+  const bundled = async (names: readonly string[]) => {
+    const outcome = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: names });
+    assert(outcome.ok, "The pinned OMP bundle supplies its passive model metadata");
+    return ModelCatalogSnapshotSchema.parse(outcome.result);
+  };
+  const metadata = await bundled(providers);
+  const starter = catalogFromMetadata(await bundled(starterProviders), "any");
+  // Where the pinned OMP's bundle lists no Codex model in Spark's quota class (OMP 18.7.0 dropped Spark), its inventory
+  // never reports one. The inventory here lists Spark anyway, as an earlier OMP's did: under the id the pinned SDK still
+  // classifies `spark`, with the facts of a bundled Codex row, so the left-out list shows how that class reads.
+  const bundledSpark = metadata.models.find(model => model.quotaTier === "spark");
+  const codexRow = metadata.models.find(model => model.provider === "openai-codex" && model.reasoning && model.contextWindow !== null);
+  assert(codexRow, "The pinned OMP bundles a Codex model that reasons");
+  const spark = bundledSpark ?? { ...codexRow, id: "gpt-5.3-codex-spark", quotaTier: "spark" };
+  const listed = bundledSpark ? metadata.models : [...metadata.models, spark];
+  const sparkId = `${spark.provider}/${spark.id}`;
+  const codex = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  const observation = (): OmpResult<"accounts"> => {
+    const claude = fixtureAccounts([1]);
+    return { ...claude, accounts: [...claude.accounts, codex] };
+  };
+  // The synthetic installation the probe jobs (`probeJob`) run from: a verification stops once the destination pins another.
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  /** Each inventory the destination answered, by its job: the bundled Claude and Codex rows and Spark, observed as the job started. */
+  const inventories = new Map<string, InventoryReceipt>();
+  const speed = (id: string) => [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  type Benchmark = { request: OmpInput<"startBenchmark">; startedAt: number; settled: boolean; receipt: BenchmarkReceipt | null };
+  const benchmarks = new Map<string, Benchmark>();
+  const started: OmpInput<"startInventory">[] = [], cancels: unknown[] = [];
+  const heldInventory = holdable();
+  let holdNextInventory = false, holdNextBenchmark = false;
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
+  const terminals = await ownerAction(server, "core.terminals.listAll", {});
+  await arrangeWorkbench(server, writer);
+  const trace = await watchActions(browser, server);
+  const fixture = await intercept(browser, server, async (name, input) => {
+    switch (name) {
+      case "atyrode.omp.describeDestination": {
+        if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+        const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null,
+          services: [{ serviceId: "omp", state: "ready", reason: null }],
+          operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: observation() };
+      case "atyrode.omp.accounts.usage": return { ok: true, result: fixtureUsage(observation()) };
+      case "atyrode.omp.startInventory": {
+        const request = ompActionSchemas.startInventory.input.parse(input);
+        assert.deepEqual([request.containerId, request.machineId], [target.containerId, target.machineId]);
+        assert.deepEqual(Object.keys(request.accountPool).sort(), providers, "The inventory runs with the pool Code composed from both observed accounts");
+        started.push(request);
+        const jobId = `synthetic-inventory-${started.length}`;
+        inventories.set(jobId, { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 1_000, models: listed });
+        if (holdNextInventory) { holdNextInventory = false; await heldInventory.wait(); }
+        return { ok: true, result: probeJob(target, jobId, INVENTORY_OPERATION_ID, writer.principal.id) };
+      }
+      case "atyrode.omp.readInventory": {
+        const inventory = inventories.get(String(input.jobId));
+        assert(inventory, "Only an inventory this fixture started is read");
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), INVENTORY_OPERATION_ID, writer.principal.id), inventory } };
+      }
+      case "atyrode.omp.startBenchmark": {
+        const request = ompActionSchemas.startBenchmark.input.parse(input);
+        const inventory = inventories.get(request.inventoryJobId);
+        assert(inventory, "A benchmark follows an inventory this fixture answered");
+        const charge = inventoryDraft(inventory, "any").benchmark, provider = request.candidates.candidates[0]?.provider;
+        assert.deepEqual(request.candidates, { ...charge, candidates: charge.candidates.filter(candidate => candidate.provider === provider) },
+          "Each benchmark spends exactly its provider's part of the charge shown");
+        const jobId = `synthetic-benchmark-${benchmarks.size + 1}`;
+        benchmarks.set(jobId, { request, startedAt: Date.now(), settled: !holdNextBenchmark, receipt: null });
+        holdNextBenchmark = false;
+        return { ok: true, result: probeJob(target, jobId, BENCHMARK_OPERATION_ID, writer.principal.id, "started") };
+      }
+      case "engine.jobs.status": {
+        const { node } = input as { node: { jobId: string; operationId: string } };
+        if (node.operationId === INVENTORY_OPERATION_ID && inventories.has(node.jobId)) return { ok: true, result: probeJob(target, node.jobId, INVENTORY_OPERATION_ID, writer.principal.id) };
+        const run = benchmarks.get(node.jobId);
+        assert(run && node.operationId === BENCHMARK_OPERATION_ID, "Only this fixture's probe jobs are followed");
+        return { ok: true, result: probeJob(target, node.jobId, BENCHMARK_OPERATION_ID, writer.principal.id, run.settled ? "exited" : "started") };
+      }
+      case "atyrode.omp.readBenchmark": {
+        const run = benchmarks.get(String(input.jobId));
+        assert(run?.settled, "A benchmark is read once its job has settled");
+        run.receipt ??= { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: run.request.candidates.inventoryObservedAt,
+          startedAt: run.startedAt, completedAt: Date.now(), results: run.request.candidates.candidates.map(candidate => ({ ...candidate, status: "reachable" as const,
+            tokensPerSecond: 25 + speed(candidate.id) % 90, timeToFirstTokenMs: 400 + speed(candidate.id) % 1_400 })) };
+        return { ok: true, result: { job: probeJob(target, String(input.jobId), BENCHMARK_OPERATION_ID, writer.principal.id), benchmark: run.receipt } };
+      }
+      case "engine.jobs.cancel": cancels.push(input); return refused("synthetic_cancel_unexpected");
+      case "atyrode.code.reviewCatalog": {
+        // The real server reviews; its answer is kept to check the promotion that follows names exactly that review.
+        const outcome = await callAction(server, writer.token, name, input);
+        if (!outcome.ok) return { ok: false, denial: outcome.denial };
+        reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+        return { ok: true, result: outcome.result };
+      }
+      default: return undefined;
+    }
+  });
+  const goButton = element(`${modelsSheet} [data-go]`);
+  const readoutLine = element(`${modelsSheet} [data-readout]`);
+  const phaseIs = (phase: string) => `${element(modelsSheet)}?.dataset.phase === ${JSON.stringify(phase)}`;
+  const sideIs = (side: string | null) => side === null ? `${element(`${modelsSheet} [data-side]`)} === null` : `${element(`${modelsSheet} [data-side="${side}"]`)} !== null`;
+  const writes = (from: number) => trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|reviewCatalog|promoteCatalog|discardCatalog|select)$/.test(request.name));
+  /** What a verification run leads to, by the derivation Code's server makes of it: the union of its providers' receipts. */
+  const derivedFrom = (inventoryJobId: string) => {
+    const inventory = inventories.get(inventoryJobId)!;
+    const receipts = [...benchmarks.values()].filter(run => run.request.inventoryJobId === inventoryJobId && run.receipt).map(run => run.receipt!);
+    const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: inventory.observedAt,
+      startedAt: Math.min(...receipts.map(receipt => receipt.startedAt)), completedAt: Math.max(...receipts.map(receipt => receipt.completedAt)),
+      results: receipts.flatMap(receipt => receipt.results) };
+    return { benchmark, ...catalogFromObservations(inventory, benchmark, { budget: "any" }) };
+  };
+  const dialog = element(`${modelsSheet} dialog`);
+  const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
+  const stageButton = element(`${modelsSheet} dialog [data-stage]`);
+  /** Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press. */
+  const stageList = async (list: CatalogDocument) => {
+    await until(browser, "the import opens as a modal dialog with focus in its field", `!!${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
+    await browser.send("Input.insertText", { text: JSON.stringify(list) });
+    await until(browser, "the pasted list can be staged", `!${stageButton}.hasAttribute('aria-disabled')`);
+    await click(browser, stageButton);
+    await until(browser, "the staged list waits beside the one in use", `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list")} && ${sideIs("staged changes")}`);
+  };
+  try {
+    await openGenerator(browser, server, workspace.id);
+    await chooseMachine(browser, target.machineId, machineName);
+    await until(browser, "with discovery ready the first step is to verify", launchIs("verify models", "ready"));
+
+    // More opens Models with focus on its way back. The head counts the bundled starter's models and says it is unverified;
+    // the list is the starter's ladders, unmeasured, and the one next action is to verify.
+    await openFromMore(browser, "models");
+    await until(browser, "Models shows the starter, unverified, with verify models its one next action", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} && ${sideIs(null)}`);
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)}, list: ${modelList} })`),
+      { state: `${listOf(starter).length} models · starter · unverified`, parts: [["unverified", "warn"]], fixes: [], list: listOf(starter) },
+      "The head counts the starter's models, each rung is its model and verifying is the one next action");
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].every(cell => cell.dataset.unmeasured !== undefined)`), true,
+      "Nothing is measured before a verification");
+    // Ids, prices and speeds are never drawn in the list; pointing at a rung says its model's exact id and prices in the readout.
+    const grid = element(`${modelsSheet} [role="grid"][aria-label="model list"]`);
+    assert.equal(await browser.evaluate(`/\\/|\\$|tok\\/s/.test(${grid}.textContent)`), false, "The list draws aliases only: no provider ids, prices or speeds");
+    assert.equal(await browser.evaluate(sheetSays(modelsSheet)), "", "The readout is empty while nothing is pointed or focused");
+    const pointedModel = starter.models.find(model => model.tier === 1 && model.provider === "anthropic")!;
+    await pointOf(browser, element(`${modelsSheet} [data-key="${pointedModel.key}"]`));
+    await until(browser, "pointing at a rung says its model's exact id and prices in the readout",
+      `${sheetSays(modelsSheet)}.includes(${JSON.stringify(` · ${pointedModel.provider}/${pointedModel.id} · `)}) && ${sheetSays(modelsSheet)}.includes(' out per M')`);
+    const empty = await browser.evaluate<string | null>(`document.querySelector('${modelsSheet} [data-cell][data-empty]')?.dataset.cell ?? null`);
+    assert(empty, "The starter leaves a rung of some ladder empty");
+    assert.equal(await browser.evaluate(`${element(`${modelsSheet} [data-cell="${empty}"]`)}.textContent`), "—", "An empty rung is a dash");
+    await pointOf(browser, element(`${modelsSheet} [data-cell="${empty}"]`));
+    await until(browser, "an empty rung gives its reason when pointed at", `${readoutLine}.dataset.tone === 'warn' && / · No \\w+ \\w+ model in the list/.test(${sheetSays(modelsSheet)})`);
+    await pointAway(browser);
+    await until(browser, "the readout empties once nothing is pointed", `${sheetSays(modelsSheet)} === ''`);
+
+    // The list is one Tab stop, its focused rung. Arrows walk the ladders: ↓ up a ladder, → across them in the matrix and on
+    // to the next rung in the ladders; the rung with focus is the one Tab stop and says itself in the readout.
+    assert.equal(await browser.evaluate(`document.querySelectorAll('${modelsSheet} [data-cell][tabindex="0"]').length`), 1, "The list is one Tab stop");
+    await tabTo(browser, "the list's one Tab stop", element(`${modelsSheet} [data-cell][tabindex="0"]`));
+    const grid0 = await browser.evaluate<{ mode: string; families: string[] }>(`({ mode: ${element(modelsSheet)}.dataset.mode,
+      families: [...new Set([...document.querySelectorAll('${modelsSheet} [data-cell]')].map(cell => cell.dataset.family))] })`);
+    const [f0, f1] = grid0.families;
+    assert(f0 && f1, "The starter's list has more than one ladder");
+    const wide = grid0.mode === "wide";
+    for (const [name, code, cell] of [["ArrowDown", 40, `${f0}:2`], ["ArrowRight", 39, wide ? `${f1}:2` : `${f0}:3`], ["ArrowUp", 38, wide ? `${f1}:1` : `${f0}:2`],
+      ["ArrowLeft", 37, `${f0}:1`], ["ArrowDown", 40, `${f0}:2`]] as const) {
+      await key(browser, name, code);
+      await until(browser, `${name} moves focus to rung ${cell}, the list's one Tab stop, which says itself`, `(() => {
+        const focused = document.activeElement, said = ${readoutLine}.querySelector('b')?.textContent;
+        if (focused?.dataset.cell !== '${cell}' || focused.tabIndex !== 0 || document.querySelectorAll('${modelsSheet} [data-cell][tabindex="0"]').length !== 1) return false;
+        const alias = focused.querySelector('.${G}models-alias').textContent;
+        return alias === '—' ? !!said : said === alias;
+      })()`);
+    }
+    await key(browser, "Tab", 9, { modifiers: SHIFT });
+    await until(browser, "Shift+Tab leaves the list", `!document.activeElement?.closest('[role="grid"]')`);
+    await key(browser, "Tab", 9);
+    await until(browser, "Tab comes back to the rung the list was left on", `document.activeElement?.dataset.cell === '${f0}:2'`);
+    await sheetZeroShift(browser, modelsSheet, "Models starter");
+    await sheetGeometry(browser, modelsSheet, "Models starter");
+
+    // A double-click on verify models starts one check: its second click lands on the busy check, which draws the hold the
+    // charge keeps before it can be confirmed, never on a confirm. Import and export refuse while it runs.
+    holdNextInventory = true;
+    const point = await pointOf(browser, goButton);
+    await press(browser, point, 1);
+    await press(browser, point, 2);
+    await until(browser, "the press checks the accounts' models, the checking hold drawn, focus kept",
+      `${phaseIs("inventory")} && ${goIs(modelsSheet, "checking models…", "busy")} && ${goButton}.dataset.hold !== undefined && document.activeElement === ${goButton}`);
+    await waitFor(() => heldInventory.held, timeout, 50);
+    assert.equal(started.length, 1, "A double-click on verify models starts exactly one inventory");
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}.endsWith(' · verifying'), cues: [...document.querySelectorAll('${modelsSheet} [data-cue]')].map(cue => cue.getAttribute('aria-disabled')), fixes: ${goFixes(modelsSheet)} })`),
+      { state: true, cues: ["true", "true"], fixes: ["cancel"] }, "While it checks the head says a verification runs, import and export refuse, and cancel is beside it");
+    heldInventory.release();
+    const firstInventory = "synthetic-inventory-1";
+    const charge = inventoryDraft(inventories.get(firstInventory)!, "any");
+    const requests = (provider: string) => charge.benchmark.candidates.filter(candidate => candidate.provider === provider).length;
+    const count = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+    await until(browser, "after the hold the charge waits on its own confirmation", `${phaseIs("charge")} && ${goIs(modelsSheet, "confirm charge")} && ${sideIs("charge")}`);
+    assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
+      providers: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
+      unprobed: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-xid')].map(el => el.textContent) })`), {
+      parts: [[count(charge.benchmark.candidates.length, "tiny request"), "strong"], ["nothing spent yet", null]], fixes: ["cancel"],
+      providers: [`Claude: ${count(requests("anthropic"), "request")}`, `Codex: ${count(requests("openai-codex"), "request")}`],
+      unprobed: charge.exclusions.map(exclusion => `${exclusion.provider}/${exclusion.id}`),
+    }, "The charge says exactly what it spends per provider, that nothing is spent yet, and which models are not probed");
+    await sheetGeometry(browser, modelsSheet, "Models charge");
+    // Only a deliberate single press spends: never the second click of a double-click, never a held key.
+    await press(browser, await pointOf(browser, goButton), 2);
+    await until(browser, "a double press confirms nothing and says so", `${readoutLine}.dataset.tone === 'warn' && ${sheetSays(modelsSheet)} === 'confirm charge · A double press confirms nothing; press once.'`);
+    assert.equal(await browser.evaluate(`document.activeElement === ${goButton}`), true, "The next action keeps focus");
+    await key(browser, "Enter", 13, { autoRepeat: true });
+    await key(browser, " ", 32, { autoRepeat: true });
+    await Bun.sleep(300);
+    assert.equal(benchmarks.size, 0, "Neither a second click nor a held key confirms the charge");
+    assert.equal(await browser.evaluate(phaseIs("charge")), true, "The charge still waits");
+
+    // One press spends: verifying, the requests measured per provider, the rungs of the providers still owed probing.
+    holdNextBenchmark = true;
+    await click(browser, goButton);
+    await until(browser, "one press confirms: verifying, measuring per provider", `${phaseIs("benchmark")} && ${goIs(modelsSheet, "verifying…", "busy")} && ${sideIs("measuring")}`);
+    await waitFor(() => benchmarks.size === 1, timeout, 50);
+    assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)},
+      providers: [...document.querySelectorAll('${modelsSheet} [data-side="measuring"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
+      probing: [...document.querySelectorAll('${modelsSheet} [data-cell][data-key]')].filter(cell => (cell.dataset.probing !== undefined) !== ['anthropic', 'openai'].includes(cell.dataset.family)).map(cell => cell.dataset.cell) })`), {
+      parts: [["measuring models", null], [`0 of ${charge.benchmark.candidates.length}`, "strong"]],
+      providers: [`Claude: 0 of ${requests("anthropic")} measured`, `Codex: 0 of ${requests("openai-codex")} measured`], probing: [],
+    }, "Verifying says what it has measured, and the rungs of every provider still owed are probing, no other");
+    for (const run of benchmarks.values()) run.settled = true;
+
+    // Verified: the measured list is put in use, the head says when, and beside it is what the verification left out, each with
+    // its reason in a word; Spark, in OMP's spark quota class, reads retired. Back to code is the next action, verify again beside it.
+    await until(browser, "the measured list is put in use and verified", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")}`);
+    const verified = derivedFrom(firstInventory);
+    const afterFirst = await readConfiguration(server, writer, target);
+    assert.deepEqual(afterFirst.configuration?.active?.document, verified.document, "The list in use is exactly the derivation of what was measured");
+    assert.equal(afterFirst.configuration?.active?.provenance?.benchmarkCompletedAt, verified.benchmark.completedAt, "The verification records when it was measured");
+    assert.equal(afterFirst.configuration?.draft, null);
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, fixes: ${goFixes(modelsSheet)}, list: ${modelList},
+      unmeasured: [...document.querySelectorAll('${modelsSheet} [data-cell][data-unmeasured]')].length })`),
+      { state: `${listOf(verified.document).length} models · verified just now`, fixes: ["verify again"], list: listOf(verified.document), unmeasured: 0 },
+      "Each rung is its measured model, and the head says it was verified just now");
+    const outs = await browser.evaluate<{ id: string; why: string; label: string }[]>(`[...document.querySelectorAll('${modelsSheet} [data-side="left out"] li')].map(li => ({
+      id: li.querySelector('.${G}models-xid').textContent, why: li.querySelector('.${G}models-why').textContent, label: li.querySelector('.${G}models-xid').getAttribute('aria-label') }))`);
+    assert.deepEqual(outs.map(entry => entry.id), verified.exclusions.map(exclusion => `${exclusion.provider}/${exclusion.id}`), "Left out are exactly the models the derivation left out");
+    assert.deepEqual(outs.find(entry => entry.id === sparkId), { id: sparkId, why: "retired", label: `${sparkId}: Retired: Code no longer routes to Spark` },
+      "Spark, in OMP's spark quota class, reads retired");
+    assert.deepEqual(outs.filter(entry => entry.id !== sparkId && entry.why === "retired"), [], "Only Spark's class reads retired");
+    await pointOf(browser, `[...document.querySelectorAll('${modelsSheet} [data-side="left out"] .${G}models-xid')].find(el => el.textContent === ${JSON.stringify(sparkId)})`);
+    await until(browser, "pointing at Spark says why in the readout", `${sheetSays(modelsSheet)} === ${JSON.stringify(`${spark.id} · Retired: Code no longer routes to Spark`)}`);
+    await pointAway(browser);
+    await sheetZeroShift(browser, modelsSheet, "Models verified list");
+    await sheetGeometry(browser, modelsSheet, "Models verified list");
+    await sheetCoarseTargets(browser, modelsSheet, "Models verified list");
+    // Back to code goes back to the stage, focus to More, which opened Models.
+    await click(browser, goButton);
+    await until(browser, "back to code returns to the stage and gives focus back to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
+
+    // Import, with i, stages a pasted list beside the one in use: one rung measured faster. Nothing is in use until it is used;
+    // discard drops it, and the verified list stays in use.
+    await openSheet(browser, "models");
+    const active = afterFirst.configuration!.active!.document;
+    const faster: CatalogDocument = { ...active, models: active.models.map((model, index) => index === 0 ? { ...model, tokensPerSecond: 101 } : model) };
+    let from = trace.requests.length;
+    await key(browser, "i", 73);
+    await stageList(faster);
+    const staged = await readConfiguration(server, writer, target);
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.stageCatalog", input: { containerId: target.containerId, expectedRevision: afterFirst.revision, document: faster } }],
+      "Import stages exactly the pasted list at the revision shown, initializing nothing");
+    assert.deepEqual([staged.configuration?.active, staged.configuration?.draft?.document], [afterFirst.configuration?.active, faster], "Staging puts nothing in use");
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
+      changes: [...document.querySelectorAll('${modelsSheet} [data-side="staged changes"] li')].map(li => [li.querySelector('.${G}models-cf').textContent, li.querySelector('.${G}models-cv').textContent]),
+      changed: [...document.querySelectorAll('${modelsSheet} [data-cell][data-changed]')].map(cell => cell.dataset.key) })`), {
+      state: `${listOf(active).length} models · staged list beside it`, parts: [["1 change", "strong"], ["staged", null]], fixes: ["discard"],
+      changes: [["speed", `${Math.round(active.models[0]!.tokensPerSecond!)} tok/s→101 tok/s`]], changed: [active.models[0]!.key],
+    }, "The staged list says what it changes against the list in use, on its rung and beside the list");
+    await sheetZeroShift(browser, modelsSheet, "Models staged list");
+    await sheetGeometry(browser, modelsSheet, "Models staged list");
+    from = trace.requests.length;
+    await click(browser, goFix(modelsSheet, "discard"));
+    await until(browser, "discard drops the staged list; the verified one stays in use", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")}`);
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.discardCatalog", input: { containerId: target.containerId, expectedRevision: staged.revision } }], "Discard drops the staged list at the revision shown");
+    const discarded = await readConfiguration(server, writer, target);
+    assert.deepEqual([discarded.configuration?.active, discarded.configuration?.draft], [afterFirst.configuration?.active, null], "Discarding leaves the list in use as it was");
+
+    // Verify again measures the verified list afresh. Under reduced motion its check and charge animate nothing, and Esc
+    // stops the run while its charge waits: the sheet stays open on the verified list and nothing is spent or cancelled.
+    await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    // A transition already under way when motion is reduced runs out its own duration; the check starts from rest.
+    await still(browser);
+    try {
+      await click(browser, goFix(modelsSheet, "verify again"));
+      await until(browser, "verify again checks the accounts' models again", `${phaseIs("inventory")} || ${phaseIs("charge")}`);
+      await sheetStill(browser, "the checking hold");
+      await until(browser, "its charge waits", `${phaseIs("charge")} && ${goIs(modelsSheet, "confirm charge")}`);
+      await sheetStill(browser, "the charge");
+      assert.equal(started.length, 2, "Verify again runs one more inventory");
+      await click(browser, element(`${modelsSheet} [data-cell][data-key]`));
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc stops the waiting charge, and the sheet stays open on the verified list", `${phaseIs("verified")} && ${element(stage)}.hidden === true`);
+      await sheetStill(browser, "a stopped run");
+    } finally {
+      await browser.send("Emulation.setEmulatedMedia", { features: [] });
+    }
+    assert.deepEqual([benchmarks.size, cancels.length], [2, 0], "A stopped charge spends nothing and has no job to cancel");
+    await click(browser, goFix(modelsSheet, "verify again"));
+    await until(browser, "verify again waits on its charge", `${phaseIs("charge")} && ${goIs(modelsSheet, "confirm charge")}`);
+    await click(browser, goButton);
+    await until(browser, "the list is measured again and verified", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")}`);
+    const again = derivedFrom("synthetic-inventory-3");
+    const afterAgain = await readConfiguration(server, writer, target);
+    assert.equal(benchmarks.size, 4, "Verify again spends one benchmark per provider");
+    assert.deepEqual(afterAgain.configuration?.active?.document, again.document, "Verified again, the list in use is the new derivation");
+    assert.equal(afterAgain.configuration?.active?.provenance?.benchmarkCompletedAt, again.benchmark.completedAt, "The new verification is recorded");
+    assert(again.benchmark.completedAt > verified.benchmark.completedAt);
+
+    // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
+    // the staged one, unverified, and verifying it is the next action.
+    const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
+    await click(browser, element(`${modelsSheet} [data-cue="import"]`));
+    await stageList(slower);
+    const before = await readConfiguration(server, writer, target);
+    from = trace.requests.length;
+    await click(browser, goButton);
+    await until(browser, "use staged list puts it in use, unverified, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} &&
+      ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · unverified`)} && ${sheetSays(modelsSheet)} === 'in use · the staged list replaced the one in use; verify it next'`);
+    const review = reviews.at(-1);
+    assert(review, "The real server reviewed the staged list");
+    assert.equal(review.catalogDigest, before.configuration?.draft?.digest, "The review is of exactly the staged list");
+    assert.deepEqual(writes(from), [
+      { name: "atyrode.code.reviewCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft" } },
+      { name: "atyrode.code.promoteCatalog", input: { containerId: target.containerId, expectedRevision: before.revision, source: "draft", reviewDigest: review.reviewDigest } },
+    ], "Use staged list reviews the staged list at the revision shown, then promotes exactly that review");
+    const used = await readConfiguration(server, writer, target);
+    assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.draft], [slower, null, null],
+      "The staged list is in use, unverified, and nothing is staged");
+    await closeSheet(browser);
+    fixture.check();
+  } finally {
+    heldInventory.release();
+    await fixture.stop();
+    trace.stop();
+  }
+  assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments, "Models never requests native approval");
+  assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), terminals);
+}
 // ---------------------------------------------------------------- tiered usage windows
 
 /**
@@ -2409,25 +2977,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "r", 82);
     await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & review", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
-    // Unsaved catalog and account drafts: Models a sheet, the accounts' management a view under the accounts.
+    // Models shows the workspace's verified list rung by rung; the accounts' management keeps an unsaved draft in its view under the accounts.
     await openSheet(browser, "models");
-    await click(browser, workspaceButton("Edit or import models"));
-    const catalog = `${generator} [aria-label="Model catalog"]`;
-    const pricingSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'Pricing')`;
-    const inputPrice = element(`${catalog} .plugin-atyrode_code_generator__model-editor fieldset details input[type="number"]`);
-    assert.equal(await browser.evaluate(`(() => { const el = ${inputPrice}; const rect = el.getBoundingClientRect(); return !el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)); })()`), true, "Undisclosed pricing is not a pointer target");
-    await click(browser, pricingSummary);
-    await click(browser, inputPrice);
-    await key(browser, "a", 65, { modifiers: CTRL });
-    await browser.typeText("12.5");
-    await click(browser, pricingSummary);
-    assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Closing metadata preserves the catalog edit");
-    const importSummary = `[...document.querySelectorAll('${catalog} summary')].find(el => el.textContent === 'JSON import / export')`;
-    await click(browser, importSummary);
-    const importField = element(`${catalog} textarea:not([readonly])`);
-    const importDraft = JSON.stringify({ ...document, models: document.models.map(model => ({ ...model, contextWindow: 180_000 })) });
-    await click(browser, importField);
-    await browser.typeText(importDraft);
+    await until(browser, "Models shows the saved list, verified", `${element(modelsSheet)}?.dataset.phase === 'verified' && ${goIs(modelsSheet, "back to code")}`);
+    assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models shows the saved verified list, each rung on its model");
     await closeSheet(browser);
     const manage = `${generator} [data-pane="manage"]`;
     await showView(browser, "accounts");
@@ -2451,12 +3004,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "a", 65);
     await until(browser, "a goes from the management to the generator", shownView("main"));
 
-    // The second destination: the drafts and the edited profile stay; the ad-hoc skill choice does not.
+    // The second destination: the account draft and the edited profile stay; the ad-hoc skill choice does not.
     await chooseMachine(browser, second.machineId, secondName);
-    await openSheet(browser, "models");
-    assert.equal(await browser.evaluate(`${importField}.value`), importDraft, "Unparsed JSON import stays local across machines");
-    assert.equal(await browser.evaluate(`${inputPrice}.value`), "12.5", "Advanced catalog values survive navigation and destination changes");
-    await closeSheet(browser);
     await openOptions(browser);
     await until(browser, "a new destination clears ad-hoc skill choices before they can be reused", `${skillsSection}.dataset.mode === 'preserve'`);
     await closeOptions(browser);
@@ -2489,9 +3038,6 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.deepEqual(saved.configuration?.active, initial.active, "Saving the profile leaves the verified catalog as it is");
     await chooseMachine(browser, first.machineId, machineName);
     assert.equal(await browser.evaluate(chosenKey("thinking")), localThinking, "Saved choices remain identical when returning to the first destination");
-    await openSheet(browser, "models");
-    assert.equal(await browser.evaluate(`${importField}.value`), importDraft);
-    await closeSheet(browser);
     assert(reads.length > 0 && reads.every(input => input.containerId === first.containerId && Object.keys(input).length === 1),
       "Ordinary browser configuration reads use only the container, never per-machine fanout or implicit legacy fallback");
 
@@ -2651,7 +3197,14 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   assert.notDeepEqual(await routedRoles(browser), expectedRoutes(document, defaultSelection(compileCatalog(document))),
     "An unresolved staged catalog is never silently replaced by the bundled starter's routes");
   await click(browser, launchButton);
-  await until(browser, "the launch opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
+  // Models shows the staged list with nothing in use: every model of it an addition, and use staged list its one next action.
+  await until(browser, "the launch opens Models on the staged list", `${sheetOpen("Models")} && ${element(modelsSheet)}.dataset.phase === 'staged' &&
+    ${goIs(modelsSheet, "use staged list")} && !!${element(`${modelsSheet} [data-side="staged changes"]`)}`);
+  const added = listOf(textOnly).length;
+  assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(modelsSheet)}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)}, list: ${modelList},
+    changes: [...document.querySelectorAll('${modelsSheet} [data-side="staged changes"] .${G}models-cf')].map(el => el.textContent) })`),
+    { state: `${added} models · staged, none in use`, parts: [[`${added} changes`, "strong"], ["staged", null]], fixes: ["discard"], list: listOf(textOnly),
+      changes: Array.from({ length: added }, () => "added") }, "A staged list with nothing in use is all additions, used or discarded from its one next action");
   assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.draft?.document, textOnly);
   await closeSheet(browser);
 
@@ -2687,72 +3240,132 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
   await pointAway(browser);
 }
 
-async function manualCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
-  const document = { schemaVersion: 1, models: [1, 2, 3, 4].map(tier => ({
+/**
+ * A Code model list of the person's own, pasted into Models' import on a first-use workspace (real input: the paste is
+ * CDP's text insertion into the field). What is not a list is said so and cannot be staged. A list is staged by the one
+ * explicit press, which initializes the absent workspace at the revision the panel read and stages once; nothing is
+ * verified or put in use until use staged list, which reviews the staged list at its revision and promotes exactly that
+ * review. A competing first save made meanwhile is never overwritten: the panel's configuration reads are held so it
+ * stages against the absent workspace it last read, and the real server refuses that initialization.
+ */
+async function importedCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
+  const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3, 4] as const).map(tier => ({
     key: `entry-model-tier-${tier}`, provider: "anthropic", id: `entry-native-tier-${tier}`, api: "anthropic-messages",
     tier, quotaBucket: null, inputCostPerMillion: tier, outputCostPerMillion: tier * 3,
     tokensPerSecond: 30, timeToFirstTokenMs: 100, contextWindow: 200_000,
     thinkingLevels: ["minimal", "low", "medium", "high"], images: true,
   })) };
-  const importField = element(`${generator} .plugin-atyrode_code_generator__model-editor textarea:not([readonly])`);
-  const exportField = element(`${generator} .plugin-atyrode_code_generator__model-editor textarea[readonly]`);
-  const importSummary = `[...document.querySelectorAll('${generator} summary')].find(node => node.getClientRects().length && node.textContent === 'JSON import / export')`;
+  const dialog = element(`${modelsSheet} dialog`);
+  const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
+  const stageButton = element(`${modelsSheet} dialog [data-stage]`);
+  const importSays = `${element(`${modelsSheet} .${G}models-import-error[role="status"]`)}.textContent`;
+  const absent = { configuration: null, legacyMachineId: null, revision: 0 };
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
-  for (const competing of [false, true]) {
-    const workspace = await createContainer(server, competing ? "Concurrent first catalog" : "Offline first catalog", "canvas");
-    const target = { containerId: workspace.id };
-    await openGenerator(browser, server, workspace.id);
-    await usableStarter(browser);
-    await openSheet(browser, "models");
-    await click(browser, workspaceButton("Edit or import models"));
-    await click(browser, importSummary);
-    await click(browser, importField);
-    await browser.typeText(JSON.stringify(document));
-    await click(browser, workspaceButton("Import into draft"));
-    assert.deepEqual(await readConfiguration(server, writer, target), { configuration: null, legacyMachineId: null, revision: 0 },
-      "Importing locally never initializes shared policy");
-    if (competing) {
-      const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
-      assert(initialized.ok);
-      await control(browser, "a competing initial save cannot rebase an absent-state draft", workspaceButton("Stage and review changes"), true);
-      assert.deepEqual(JSON.parse(await browser.evaluate<string>(`${exportField}.value`)), document, "The rejected first-save draft remains exportable");
-      assert.equal((await readConfiguration(server, writer, target)).revision, 1, "The stale first-save draft does not overwrite a competing initialization");
-      await closeSheet(browser);
-      continue;
+  const trace = await watchActions(browser, server);
+  const writes = (from: number) => trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|reviewCatalog|promoteCatalog|discardCatalog|select)$/.test(request.name));
+  const reviews: ActionResult<"reviewCatalog">[] = [];
+  let holdReads = false;
+  const held = new Set<() => void>();
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (name === "atyrode.code.readConfiguration" && holdReads) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const release = () => { held.delete(release); resolve(); };
+      held.add(release);
+      await promise;
+      return undefined;
     }
-    await click(browser, workspaceButton("Stage and review changes"));
-    await control(browser, "first catalog is reviewed without native runtime setup", workspaceButton("Use this catalog"), false);
-    const staged = await readConfiguration(server, writer, target);
-    assert.equal(staged.revision, 2, "One explicit first save initializes once and stages once");
-    assert.equal(staged.configuration?.active, null, "Review does not promote a catalog");
-    assert.deepEqual(staged.configuration?.draft?.document, document);
-    await closeSheet(browser);
-    assert.deepEqual(await readConfiguration(server, writer, target), staged, "Returning to the main view never replaces a successfully staged manual catalog");
-    // Reopen against the canonical saved draft, with no earlier local starter attached.
-    await openGenerator(browser, server, workspace.id);
-    // No selection is saved yet, so the preview uses the default profile, whose glance advisor is routed.
-    await assertRoutes(browser, true);
-    assert((await routedRoles(browser)).every(entry => document.models.some(model => model.key === entry.alias)),
-      "The saved draft's own models route its preview, not regenerated bundled choices");
-    await until(browser, "a staged catalog's launch is its review in Models", launchIs("review in models", "ready"));
-    assert.deepEqual(await readConfiguration(server, writer, target), staged, "Opening an existing draft does not stage, promote or overwrite it");
-    await focusRow(browser, "lane");
-    await key(browser, "Enter", 13, { modifiers: CTRL });
-    await until(browser, "Mod+↵ takes the launch's step: it opens Models", `${element(stage)}.hidden === true && !!${visibleSheet}?.querySelector('[aria-label="Model catalog"]')`);
-    await click(browser, element(`${generator} [aria-label="Model catalog"] [data-action="atyrode.code.reviewCatalog"]`));
-    await control(browser, "saved manual changes retain their existing review path", workspaceButton("Use this catalog"), false);
-    await click(browser, workspaceButton("Use this catalog"));
-    await waitFor(async () => (await readConfiguration(server, writer, target)).revision === 3, timeout, 50);
-    const promoted = await readConfiguration(server, writer, target);
-    assert.deepEqual(promoted.configuration?.active?.document, document, "Promotion uses the exact reviewed catalog");
-    await until(browser, "using the catalog returns to the main view", `${element(stage)}.hidden === false`);
-    await until(browser, "promoted models route the profile in the main view",
-      `[...document.querySelectorAll(${JSON.stringify(`${routeRows} .${G}tok-alias`)})].some(el => el.textContent.startsWith('entry-model-tier-'))`);
-    // An authored catalog is unverified; verifying it needs native discovery the fixture does not have.
-    await until(browser, "missing native runtime still prevents launch after local catalog authoring", launchIs("verify models", "refused"));
+    if (name !== "atyrode.code.reviewCatalog") return undefined;
+    // The real server reviews; its answer is kept to check the promotion that follows names exactly that review.
+    const outcome = await callAction(server, writer.token, name, input);
+    if (!outcome.ok) return { ok: false, denial: outcome.denial };
+    reviews.push(outcome.result as ActionResult<"reviewCatalog">);
+    return { ok: true, result: outcome.result };
+  });
+  try {
+    for (const competing of [false, true]) {
+      const workspace = await createContainer(server, competing ? "Concurrent first list" : "Imported first list", "canvas");
+      const target = { containerId: workspace.id };
+      await openGenerator(browser, server, workspace.id);
+      await usableStarter(browser);
+      await openSheet(browser, "models");
+      const from = trace.requests.length;
+      await click(browser, element(`${modelsSheet} [data-cue="import"]`));
+      await until(browser, "import opens from the head as a modal dialog with focus in its field", `${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
+      await browser.send("Input.insertText", { text: '{ "schemaVersion": 1, "models": [' });
+      await until(browser, "what is not a Code model list is said so, and stage refuses", `${importSays} === 'not a Code model list' && ${stageButton}.getAttribute('aria-disabled') === 'true'`);
+      await click(browser, stageButton);
+      await Bun.sleep(300);
+      assert.deepEqual(writes(from), [], "A list that does not parse stages nothing");
+      // The refused press left focus on stage; the person goes back into the field and replaces what they pasted.
+      await click(browser, field);
+      await key(browser, "a", 65, { modifiers: CTRL });
+      await browser.send("Input.insertText", { text: JSON.stringify(document) });
+      await until(browser, "a Code model list can be staged", `${importSays} === '' && !${stageButton}.hasAttribute('aria-disabled') && ${field}.value === ${JSON.stringify(JSON.stringify(document))}`);
+      assert.deepEqual(await readConfiguration(server, writer, target), absent, "Pasting a list writes nothing");
+      if (competing) {
+        holdReads = true;
+        const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
+        assert(initialized.ok);
+        await click(browser, stageButton);
+        await until(browser, "staging against the absent workspace the panel read is refused, and said in the dialog, which stays open",
+          `${dialog}.open && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
+        assert.deepEqual(writes(from), [{ name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } }],
+          "The import initializes at the revision the panel read and stages nothing once that is refused");
+        const after = await readConfiguration(server, writer, target);
+        assert.equal(after.revision, 1, "A stale first import does not overwrite a competing initialization");
+        assert.equal(after.configuration?.draft, null, "A refused import stages nothing");
+        holdReads = false;
+        for (const release of [...held]) release();
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes the import, and the sheet stays open", `!${dialog}.open && ${element(stage)}.hidden === true`);
+        await closeSheet(browser);
+        continue;
+      }
+      await click(browser, stageButton);
+      await until(browser, "the staged list waits with nothing in use, use staged list its one next action",
+        `!${dialog}.open && ${element(modelsSheet)}.dataset.phase === 'staged' && ${goIs(modelsSheet, "use staged list")}`);
+      const staged = await readConfiguration(server, writer, target);
+      assert.deepEqual(writes(from), [
+        { name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } },
+        { name: "atyrode.code.stageCatalog", input: { ...target, expectedRevision: 1, document } },
+      ], "One explicit stage initializes the absent workspace once and stages the pasted list once");
+      assert.equal(staged.revision, 2);
+      assert.equal(staged.configuration?.active, null, "Staging puts nothing in use");
+      assert.deepEqual(staged.configuration?.draft?.document, document);
+      assert.equal(staged.configuration?.draft?.provenance, null, "An imported list is not verified");
+      assert.deepEqual(await browser.evaluate(modelList), listOf(document), "Models shows the staged list, each rung on its model");
+      const using = trace.requests.length;
+      await click(browser, element(`${modelsSheet} [data-go]`));
+      await until(browser, "use staged list puts it in use, unverified, and says so",
+        `${element(modelsSheet)}.dataset.phase !== 'staged' && ${sheetState(modelsSheet)} === '4 models · unverified' &&
+        ${sheetSays(modelsSheet)} === 'in use · the staged list replaced the one in use; verify it next'`);
+      const review = reviews.at(-1);
+      assert(review, "The real server reviewed the staged list");
+      assert.equal(review.catalogDigest, staged.configuration?.draft?.digest, "The review is of exactly the staged list");
+      assert.deepEqual(writes(using), [
+        { name: "atyrode.code.reviewCatalog", input: { ...target, expectedRevision: 2, source: "draft" } },
+        { name: "atyrode.code.promoteCatalog", input: { ...target, expectedRevision: 2, source: "draft", reviewDigest: review.reviewDigest } },
+      ], "Use staged list reviews the staged list at the revision shown, then promotes exactly that review");
+      const promoted = await readConfiguration(server, writer, target);
+      assert.equal(promoted.revision, 3);
+      assert.deepEqual(promoted.configuration?.active?.document, document, "Promotion puts exactly the reviewed list in use");
+      assert.equal(promoted.configuration?.active?.provenance, null, "A list put in use without a verification is unverified");
+      assert.equal(promoted.configuration?.draft, null);
+      await closeSheet(browser);
+      await until(browser, "the list in use routes the profile in the main view",
+        `[...document.querySelectorAll(${JSON.stringify(`${routeRows} .${G}tok-alias`)})].some(el => el.textContent.startsWith('entry-model-tier-'))`);
+      // An imported list is unverified; verifying it needs native discovery the fixture does not have.
+      await until(browser, "missing native runtime still prevents launch after importing a list", launchIs("verify models", "refused"));
+    }
+    fixture.check();
+  } finally {
+    holdReads = false;
+    for (const release of [...held]) release();
+    await fixture.stop();
+    trace.stop();
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
-    "First catalog authoring and conflicts never approve native access");
+    "Importing a first list and a refused competing import never approve native access");
 }
 
 /** Delay or refuse configuration transport only; successful reads still come from
@@ -2806,17 +3419,18 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await until(browser, "Esc returns from the sheet to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
       await usableStarter(browser);
       assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
+      // A review opens only from Setup's next action, the fix of the row it points at; closing it approves nothing.
       await openSheet(browser, "setup");
-      await click(browser, workspaceButton("Machine"));
-      await click(browser, workspaceButton("Choose capabilities to review"));
-      await until(browser, "explicit capability review opens from its trigger", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0`);
-      await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('input[type="checkbox"]').length > 0`);
-      assert.equal(await browser.evaluate(`${element(modal)}.querySelectorAll('input[type="checkbox"]:checked').length`), 0,
-        "Opening capability review does not pre-accept native permissions");
+      await until(browser, "Setup points at its first unready row, whose fix is a review", `document.querySelectorAll('${setupSheet} [data-row][data-next]').length === 1 &&
+        /^(review|enable) /.test(${element(`${setupSheet} [data-go] .${G}go-label`)}?.textContent ?? '')`);
+      const fixLabel = await browser.evaluate<string>(`${element(`${setupSheet} [data-go] .${G}go-label`)}.textContent`);
+      await click(browser, element(`${setupSheet} [data-go]`));
+      await until(browser, "the next action opens its native review, titled for it", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0 &&
+        ${element(modal)}.querySelector('h2').textContent === ${JSON.stringify(`Review: ${fixLabel}`)}`);
+      await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('[data-code-capability] input[type="checkbox"]').length === 7`);
       await key(browser, "Escape", 27);
-      await until(browser, "explicit first-use review closes normally", `${element(modal)} === null`);
-      assert.equal(await browser.evaluate(`document.activeElement === ${workspaceButton("Choose capabilities to review")}`), true,
-        "Escape returns focus to the visible permission trigger");
+      await until(browser, "the review closes normally", `${element(modal)} === null`);
+      assert.equal(await browser.evaluate(`document.activeElement === ${element(`${setupSheet} [data-go]`)}`), true, "Escape returns focus to Setup's next action");
       await closeSheet(browser);
       await openSheet(browser, "models");
       await closeSheet(browser);
@@ -2912,96 +3526,285 @@ async function syntheticScopeRecoveryScenario(browser: BrowserInstance, server: 
   }
 }
 
-/** Synthetic OMP observations exercise folder controls only. The real upstream
- * owners are installed; no native consent or execution success is simulated. */
-async function syntheticFolderReadinessScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, target: Target): Promise<void> {
+/**
+ * Setup on the first destination of the shared workspace, its readiness synthetic: OMP is first absent there (the
+ * destination refuses as OMP does where it is not installed), then answers with the connection, discovery, sessions and
+ * folder operations made ready one fix at a time, and the folders' job history is empty until a check matching the
+ * machine's current pins is listed. Every fix is reviewed at its native owner: the permission reviews are the real ones
+ * and approve nothing, and OMP's folder job is refused. The classifier is the instance owner's: an owner-class identity is
+ * minted for it alone, the machine's service runtime is reported connected, its review is the real server's and its
+ * configuration is refused. Nothing changes the workspace's Code choices or native approvals.
+ */
+async function setupSheetScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, target: Target, second: Target): Promise<void> {
   const saved = await readConfiguration(server, writer, target);
   assert(saved.configuration?.active);
+  // The bundled list's own OMP version, which the facts name; under protocol 57 it is the SDK catalog's, not OMP_VERSION.
+  const catalog = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(catalog.ok, "The pinned OMP bundle supplies its passive model metadata");
+  const bundledVersion = ModelCatalogSnapshotSchema.parse(catalog.result).ompVersion;
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
     manifest: { machine: { operations: Record<string, unknown> } };
   };
-  const routes = [
-    { mode: "validate", operation: "atyrode.omp.validate-workspace", label: "Check existing folders" },
-    { mode: "create", operation: "atyrode.omp.prepare-workspace", label: "Create new folders" },
-  ] as const;
-  let selected: typeof routes[number] = routes[0];
-  let folderReady = false;
-  const pins = { installationRevision: "synthetic-folder-ui-only", artifactSha256: "e".repeat(64), resourceBindingDigest: "f".repeat(64) };
+  const operations = [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, LAUNCH_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, PREPARE_WORKSPACE_OPERATION_ID];
+  for (const operationId of operations) assert(packed.manifest.machine.operations[operationId], "Synthetic readiness names real upstream operations");
+  // The pins `probeJob` carries, so a listed folder job matches the machine's current operation, installation and bindings.
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) };
   const reviewDigest = "a".repeat(64);
-  const requested: Record<string, unknown>[] = [], unrelatedApprovals: string[] = [];
-  const fixture = await intercept(browser, server, (name, input) => {
-    if (["engine.jobs.applyDeployment", "engine.jobs.execute", "atyrode.omp.gateway.configureGateway", "atyrode.omp.accounts.promoteAccountRuntime", "atyrode.code.configureServices"].includes(name)) {
-      unrelatedApprovals.push(name);
+  let ompHere = true, connected = false;
+  const ready = new Set<string>();
+  const folderJobs: PublicJob[] = [];
+  const folderReviews: Record<string, unknown>[] = [], prepared: Record<string, unknown>[] = [], unrelated: string[] = [];
+  const serviceReviews: { input: Record<string, unknown>; result: ActionResult<"reviewServices"> }[] = [], configured: Record<string, unknown>[] = [];
+  let owner: TokenGrant | null = null;
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (["engine.jobs.applyDeployment", "engine.jobs.execute", "atyrode.omp.gateway.configureGateway", "atyrode.omp.accounts.promoteAccountRuntime"].includes(name)) {
+      unrelated.push(name);
       return refused("synthetic_ui_never_approves_native_access");
     }
-    if (name === "atyrode.omp.describeDestination") {
-      if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
-      const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "missing", reason: "synthetic_ui_only",
-        services: [], deployment: null, operations: routes.map(route => {
-          assert(packed.manifest.machine.operations[route.operation], "Synthetic scope must name a real upstream operation");
-          const ready = folderReady && route === selected;
-          return { operationId: route.operation, nativeReady: ready, callerRefusal: null, state: ready ? "ready" : "approval_required",
-            reason: ready ? null : "native_consent_required", pins };
-        }) };
-      return { ok: true, result };
+    switch (name) {
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts() };
+      case "atyrode.omp.describeDestination": {
+        if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+        if (!ompHere) return refused("omp_operation_unavailable");
+        const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null,
+          services: [{ serviceId: "omp", state: connected ? "ready" : "missing", reason: connected ? null : "synthetic_ui_only" }],
+          operations: operations.map(operationId => ({ operationId, pins, nativeReady: ready.has(operationId), callerRefusal: null,
+            state: ready.has(operationId) ? "ready" : "approval_required", reason: ready.has(operationId) ? null : "native_consent_required" })) };
+        return { ok: true, result };
+      }
+      case "engine.jobs.listRuns": {
+        if (input.pluginId !== "atyrode.omp" || input.machineId !== target.machineId) return undefined;
+        return { ok: true, result: { runs: folderJobs.filter(job => job.operationId === input.operationId).map(job => ({ job, occurrence: null })), nextCursor: null } };
+      }
+      case "atyrode.omp.reviewWorkspace": {
+        folderReviews.push(input);
+        const operationId = input.mode === "create" ? PREPARE_WORKSPACE_OPERATION_ID : VALIDATE_WORKSPACE_OPERATION_ID;
+        assert(ready.has(operationId), "Only a folder route its permission allows is reviewed for a job");
+        const result: OmpResult<"reviewWorkspace"> = { destination: target, operationId, pins, reviewDigest };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.prepareWorkspace": {
+        assert.deepEqual(input, { ...target, mode: input.mode, reviewDigest }, "Preparation keeps the exact native destination, mode and review");
+        prepared.push(input);
+        return refused("synthetic_folder_execution_refused");
+      }
+      case "atyrode.code.readServiceConfiguration": {
+        // The machine's service runtime is reported connected; the configuration itself is the real server's.
+        assert(owner, "Only the instance owner reads the classifier's policy");
+        const outcome = await callAction(server, owner.token, name, input);
+        return outcome.ok ? { ok: true, result: { ...outcome.result as object, connected: true } } : { ok: false, denial: outcome.denial };
+      }
+      case "atyrode.code.reviewServices": {
+        assert(owner, "Only the instance owner reviews the classifier's policy");
+        const outcome = await callAction(server, owner.token, name, input);
+        if (!outcome.ok) return { ok: false, denial: outcome.denial };
+        serviceReviews.push({ input, result: outcome.result as ActionResult<"reviewServices"> });
+        return { ok: true, result: outcome.result };
+      }
+      case "atyrode.code.configureServices": configured.push(input); return refused("synthetic_service_configuration_refused");
+      default: return undefined;
     }
-    if (name === "engine.jobs.listRuns" && input.pluginId === "atyrode.omp" && routes.some(route => input.operationId === route.operation)) {
-      assert.equal(input.machineId, target.machineId);
-      return { ok: true, result: { runs: [], nextCursor: null } };
-    }
-    if (name === "atyrode.omp.reviewWorkspace") {
-      assert.deepEqual(input, { ...target, mode: selected.mode });
-      assert(folderReady);
-      const result: OmpResult<"reviewWorkspace"> = { destination: target, operationId: selected.operation, pins, reviewDigest };
-      return { ok: true, result };
-    }
-    if (name === "atyrode.omp.prepareWorkspace") {
-      assert.deepEqual(input, { ...target, mode: selected.mode, reviewDigest }, "Preparation preserves the exact native destination, mode and review");
-      requested.push(input);
-      return refused("synthetic_folder_execution_refused");
-    }
-    return undefined;
   });
+  const go = element(`${setupSheet} [data-go]`);
+  const rows = `Object.fromEntries([...document.querySelectorAll('${setupSheet} li[data-row]')].map(row => [row.dataset.row, [row.dataset.state, row.querySelector('.${G}setup-st').textContent]]))`;
+  const pointed = `[...document.querySelectorAll('${setupSheet} li[data-row][data-next]')].map(row => row.dataset.row)`;
+  const rowsAre = (expected: Record<string, readonly [string, string]>, next: string | null) =>
+    `JSON.stringify(${rows}) === ${JSON.stringify(JSON.stringify(expected))} && JSON.stringify(${pointed}) === ${JSON.stringify(JSON.stringify(next ? [next] : []))}`;
+  const folderWord = (route: "existing" | "create") => element(`${setupSheet} [role="radiogroup"][aria-label="folders"] [data-word="${route}"]`);
+  const permissionDialog = "dialog.plugin-atyrode_code__permission-dialog[open]";
+  const plan = `JSON.parse(${element(`${permissionDialog} [aria-label="Typed headless permission plan"] pre`)}?.textContent ?? 'null')?.result`;
+  /** Back to the stage and Setup again, which reads everything once: what a person sees after a fix lands elsewhere. */
+  const reread = async () => {
+    await closeSheet(browser);
+    await openSheet(browser, "setup");
+  };
+  /** The next action is a review: it opens the real native review titled for it, choosing what its row needs and requesting
+   * exactly those operations; Esc closes it onto the next action, approving nothing. */
+  const review = async (label: string, chosen: readonly string[], operationIds: readonly (readonly string[])[]) => {
+    await until(browser, `the next action is ${label}`, goIs(setupSheet, label));
+    await click(browser, go);
+    await until(browser, `${label} opens its native review, modal and titled for it`,
+      `!!${element(permissionDialog)}?.matches(':modal') && ${element(`${permissionDialog} h2`)}?.textContent === ${JSON.stringify(`Review: ${label}`)}`);
+    await until(browser, `the review for ${label} chooses what its row needs and requests exactly its operations`,
+      `JSON.stringify([...document.querySelectorAll('${permissionDialog} [data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability).sort()) === ${JSON.stringify(JSON.stringify([...chosen].sort()))} &&
+      JSON.stringify(${plan}?.steps.map(step => step.request.operationIds)) === ${JSON.stringify(JSON.stringify(operationIds))}`);
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes the review and gives focus back to the next action", `${element(permissionDialog)} === null && document.activeElement === ${go}`);
+  };
+  const identity = (grant: TokenGrant) => `localStorage.setItem('manifold.identity', ${JSON.stringify(JSON.stringify({ token: grant.token, principal: grant.principal }))})`;
   try {
     await arrangeWorkbench(server, writer);
+    // The destination is chosen while OMP answers there: neither the machine list nor a fresh page starts on a machine
+    // that refuses OMP. OMP then goes absent under the open panel, and Setup, which reads everything as it opens, says so.
     await openGenerator(browser, server, target.containerId);
     await chooseMachine(browser, target.machineId, machineName);
-    await openSheet(browser, "setup");
-    await click(browser, workspaceButton("Folders"));
-    const onboarding = element(`${generator} [aria-label="Code setup"]`);
-    // Setup re-reads the destination through its own Refresh status, inside the runtime diagnostics.
-    const diagnostics = `[...document.querySelectorAll(${JSON.stringify(`${generator} [aria-label="Code setup"] details`)})].find(el => el.querySelector(':scope > summary')?.textContent === 'Runtime status and diagnostics')`;
-    await click(browser, `${diagnostics}.querySelector(':scope > summary')`);
-    for (const route of routes) {
-      selected = route; folderReady = false;
-      await click(browser, workspaceButton("Refresh status"));
-      for (const option of routes) {
-        await control(browser, "unapproved folders offer only explicit scope review", workspaceButton(`Review: ${option.label}`), false);
-        assert.equal(await browser.evaluate(`${element(`${generator} section[aria-label="${option.label}"] button[data-action="atyrode.omp.prepareWorkspace"]`)} === null`), true,
-          "Unapproved folder scope cannot be executed");
-      }
-      folderReady = true;
-      await click(browser, workspaceButton("Refresh status"));
-      await control(browser, "selected folder action resumes without discovery or session readiness", workspaceButton(route.label), false);
-      const unselected = routes.find(option => option !== route)!;
-      await control(browser, "unselected folder scope still requires its own review", workspaceButton(`Review: ${unselected.label}`), false);
-      assert.equal(await browser.evaluate(`${element(`${generator} section[aria-label="${unselected.label}"] button[data-action="atyrode.omp.prepareWorkspace"]`)} === null`), true);
-      await click(browser, workspaceButton(route.label));
-      await waitFor(() => requested.length === routes.indexOf(route) + 1, timeout, 50);
-      await until(browser, "synthetic folder execution refusal is visible", `!!${onboarding}?.querySelector('.plugin-atyrode_code__warning')?.textContent`);
-      await control(browser, "refused folder request can be reconsidered", workspaceButton(route.label), false);
+    ompHere = false;
+
+    // OMP absent here: its row says so, the rows that depend on it say they need it rather than claiming a state, and the
+    // next action is the other machine, where OMP answers.
+    await openFromMore(browser, "setup");
+    const needsOmp = ["unknown", "needs omp"] as const;
+    await until(browser, "Setup points at OMP, absent here, with the other machine as its fix",
+      `${rowsAre({ machine: ["ok", "online"], omp: ["todo", `not on ${machineName}`], connection: needsOmp, discovery: needsOmp, sessions: needsOmp, folders: needsOmp }, "omp")} &&
+      ${goIs(setupSheet, `use ${secondName}`)}`);
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(setupSheet)}, parts: ${goParts(setupSheet)} })`),
+      { state: `${machineName} · 1 to fix`, parts: [[`OMP isn't on ${machineName}`, "attention"]] }, "The head counts one fix, and the next action says why");
+    await click(browser, go);
+    await until(browser, "the fix moves Setup to the other machine", `${element(`${setupSheet} select[aria-label="machine"]`)}?.value === ${JSON.stringify(second.machineId)} &&
+      ${sheetState(setupSheet)}.startsWith(${JSON.stringify(`${secondName} · `)})`);
+    await selectDestination(browser, `${setupSheet} select[aria-label="machine"]`, target.machineId);
+    await until(browser, "the machine row's select moves Setup back, by keyboard", `${sheetState(setupSheet)}.startsWith(${JSON.stringify(`${machineName} · `)})`);
+
+    // OMP answers: every row has a state of its own, and the connection is the first fix due.
+    ompHere = true;
+    await reread();
+    await until(browser, "with OMP here the connection is pointed, every row stating its own state",
+      rowsAre({ machine: ["ok", "online"], omp: ["ok", "ready"], connection: ["todo", "review needed"], discovery: ["todo", "off"], sessions: ["todo", "off"], folders: ["todo", "not prepared"] }, "connection"));
+    assert.deepEqual(await browser.evaluate(`({ state: ${sheetState(setupSheet)}, parts: ${goParts(setupSheet)} })`),
+      { state: `${machineName} · 4 to fix`, parts: [[`on ${machineName}`, null]] });
+    // The profile's facts beside the checklist: the revision read, the list in use (a way to Models), its source and the workspace.
+    const facts = await browser.evaluate<Record<string, string>>(`Object.fromEntries([...document.querySelectorAll('${setupSheet} .${G}setup-facts dt')].map(dt => [dt.textContent, dt.nextElementSibling.textContent]))`);
+    assert.deepEqual({ ...facts, models: facts.models?.split(" · ")[0] }, {
+      revision: String(saved.revision), models: `${listOf(saved.configuration.active.document).length} in use`, source: `stored list · OMP ${bundledVersion} bundled list`, workspace: target.containerId,
+    }, "The facts state the revision read, the list in use, its source and the workspace");
+    // The classifier is the instance owner's: for a writer it says so, its reason in the readout.
+    await tabTo(browser, "the classifier's state", element(`${setupSheet} .${G}setup-classifier .${G}setup-st[tabindex]`));
+    await until(browser, "the classifier says why a writer cannot configure it", `${sheetSays(setupSheet)} === 'classifier · Only the instance owner configures the classifier.' &&
+      document.activeElement.textContent === 'owner only'`);
+    // The rows are one Tab stop after the machine, ↑ and ↓ walk them, and each says what it means in the readout. The stop
+    // is the row the walk last left (choosing the machine above went through it), so a press on OMP's value starts the walk.
+    assert.equal(await browser.evaluate(`document.querySelectorAll('${setupSheet} [data-roving][tabindex="0"]').length`), 1, "The checklist's values are one Tab stop");
+    await tabTo(browser, "the checklist's Tab stop", element(`${setupSheet} [data-roving][tabindex="0"]`), true);
+    await click(browser, element(`${setupSheet} li[data-row="omp"] [data-roving]`));
+    // A resting pointer would keep the readout on what it points at; the walk's readouts are the keyboard's.
+    await pointAway(browser);
+    await until(browser, "a press on OMP's value makes it the checklist's one Tab stop", `document.activeElement.closest('li[data-row]')?.dataset.row === 'omp' &&
+      document.activeElement.tabIndex === 0 && document.querySelectorAll('${setupSheet} [data-roving][tabindex="0"]').length === 1`);
+    for (const [name, code, row, says] of [
+      ["ArrowDown", 40, "connection", "connection · the model gateway connects OMP to your account broker; it moves no credentials and starts no request"],
+      ["ArrowDown", 40, "discovery", "discovery · lets Code read the models your accounts reach and measure them; verifying models needs it"],
+      ["ArrowUp", 38, "connection", null], ["ArrowUp", 38, "omp", `omp · OMP answers on ${machineName}`], ["ArrowUp", 38, "machine", null],
+    ] as const) {
+      await key(browser, name, code);
+      await until(browser, `${name} moves to the ${row} row${says ? ", which says what it means" : ""}`, `document.activeElement.closest('li[data-row]')?.dataset.row === '${row}' &&
+        ${row === "machine" ? `document.activeElement.matches('select')` : `document.activeElement.matches('[data-roving][tabindex="0"]')`}${says ? ` && ${sheetSays(setupSheet)} === ${JSON.stringify(says)}` : ""}`);
     }
-    assert.deepEqual(requested.map(input => input.mode), ["validate", "create"]);
-    assert.deepEqual(unrelatedApprovals, [], "Folder preparation never requests unrelated native approval or configuration");
-    await closeSheet(browser);
+    await sheetZeroShift(browser, setupSheet, "Setup checklist");
+    await sheetGeometry(browser, setupSheet, "Setup checklist");
+    await sheetCoarseTargets(browser, setupSheet, "Setup checklist");
+    // Under reduced motion Setup coming in, a folder route chosen and its native review opening animate nothing.
+    await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    try {
+      await still(browser);
+      await reread();
+      await sheetStill(browser, "Setup coming in");
+      await click(browser, folderWord("create"));
+      await sheetStill(browser, "choosing a folder route");
+      await click(browser, folderWord("existing"));
+      await click(browser, go);
+      await until(browser, "the native review opens", `!!${element(permissionDialog)}`);
+      await sheetStill(browser, "the native review opening");
+      await key(browser, "Escape", 27);
+      await until(browser, "Esc closes the review", `${element(permissionDialog)} === null`);
+    } finally {
+      await browser.send("Emulation.setEmulatedMedia", { features: [] });
+    }
+
+    // Each fix in turn: the connection, discovery (with the benchmark it needs), sessions, then the folders by either route.
+    await review("review connection", ["gateway"], [[GATEWAY_OPERATION_ID]]);
+    connected = true;
+    await reread();
+    await until(browser, "with the connection ready discovery is pointed", `${element(`${setupSheet} li[data-row="connection"]`)}?.dataset.state === 'ok' && JSON.stringify(${pointed}) === '["discovery"]'`);
+    await review("enable discovery", ["benchmark", "discovery"], [[INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID]]);
+    ready.add(INVENTORY_OPERATION_ID).add(BENCHMARK_OPERATION_ID);
+    await reread();
+    await until(browser, "with discovery on sessions are pointed", `JSON.stringify(${pointed}) === '["sessions"]'`);
+    await review("enable sessions", ["session"], [[LAUNCH_OPERATION_ID]]);
+    ready.add(LAUNCH_OPERATION_ID);
+    await reread();
+    await until(browser, "with sessions on the folders are pointed, on the existing route", `JSON.stringify(${pointed}) === '["folders"]' && ${folderWord("existing")}?.getAttribute('aria-checked') === 'true'`);
+    await review("enable folder check", ["workspace-existing"], [[VALIDATE_WORKSPACE_OPERATION_ID]]);
+    await click(browser, folderWord("create"));
+    await review("enable folder creation", ["workspace-create"], [[PREPARE_WORKSPACE_OPERATION_ID]]);
+    // The route's words take ← and → as well, focus following the choice.
+    await click(browser, folderWord("create"));
+    await key(browser, "ArrowLeft", 37);
+    await until(browser, "← chooses the existing route", `${folderWord("existing")}.getAttribute('aria-checked') === 'true' && document.activeElement === ${folderWord("existing")} && ${goIs(setupSheet, "enable folder check")}`);
+    await key(browser, "ArrowRight", 39);
+    await until(browser, "→ chooses the new route", `${folderWord("create")}.getAttribute('aria-checked') === 'true' && document.activeElement === ${folderWord("create")} && ${goIs(setupSheet, "enable folder creation")}`);
+
+    // Both routes allowed: each runs OMP's folder job as the next action, which the fixture refuses, and the refusal is said.
+    ready.add(VALIDATE_WORKSPACE_OPERATION_ID).add(PREPARE_WORKSPACE_OPERATION_ID);
+    await reread();
+    for (const [route, label, mode] of [["create", "create folders", "create"], ["existing", "check folders", "validate"]] as const) {
+      await click(browser, folderWord(route));
+      await until(browser, `the allowed route's job is the next action: ${label}`, goIs(setupSheet, label));
+      const before = prepared.length;
+      await click(browser, go);
+      await waitFor(() => prepared.length === before + 1, timeout, 50);
+      await until(browser, `the refused ${mode} job is said beside the next action`,
+        `${goIs(setupSheet, label)} && JSON.stringify(${goParts(setupSheet)}) === ${JSON.stringify(JSON.stringify([["refused", "attention"], [`on ${machineName}`, null]]))}`);
+    }
+    assert.deepEqual(folderReviews, [{ ...target, mode: "create" }, { ...target, mode: "validate" }], "Each folder job is reviewed at OMP for its exact route");
+    assert.deepEqual(prepared.map(input => input.mode), ["create", "validate"]);
+
+    // A folder check matching the machine's current pins: every row is ready, nothing is pointed, and the next action goes back to Code.
+    folderJobs.push(probeJob(target, "synthetic-folder-check", VALIDATE_WORKSPACE_OPERATION_ID, writer.principal.id));
+    await reread();
+    await until(browser, "with every row ready nothing is pointed and the next action is back to code",
+      `${rowsAre({ machine: ["ok", "online"], omp: ["ok", "ready"], connection: ["ok", "ready"], discovery: ["ok", "on"], sessions: ["ok", "on"], folders: ["ok", "ready"] }, null)} &&
+      ${goIs(setupSheet, "back to code")} && ${sheetState(setupSheet)} === ${JSON.stringify(`${machineName} · ready`)}`);
+    assert.deepEqual(await browser.evaluate(goParts(setupSheet)), [[`ready on ${machineName}`, "done"]]);
+    await click(browser, go);
+    await until(browser, "back to code returns to the stage", `${element(stage)}.hidden === false`);
+
+    // The classifier, as the instance owner: off, then an Ollama origin and model, reviewed at the real server, then applied,
+    // which the fixture refuses. Only the applying press would configure anything.
+    owner = await mintToken(server, { principal: { kind: "human", name: "Code owner", color: "#669933" }, caps: ["*"] });
+    await arrangeWorkbench(server, owner);
+    await browser.evaluate(identity(owner));
+    try {
+      await openGenerator(browser, server, target.containerId);
+      await chooseMachine(browser, target.machineId, machineName);
+      await openFromMore(browser, "setup");
+      const suggestions = (word: "off" | "ollama") => element(`${setupSheet} [role="radiogroup"][aria-label="suggestions"] [data-word="${word}"]`);
+      await until(browser, "the owner's Setup is ready, the classifier off", `${goIs(setupSheet, "back to code")} && ${suggestions("off")}?.getAttribute('aria-checked') === 'true'`);
+      await click(browser, suggestions("ollama"));
+      const origin = "http://127.0.0.1:11434", modelName = "qwen3:8b";
+      await click(browser, element(`${setupSheet} .${G}setup-fields input[type="url"]`));
+      await browser.typeText(origin);
+      await click(browser, element(`${setupSheet} .${G}setup-fields input[type="text"]`));
+      await browser.typeText(modelName);
+      await until(browser, "a changed classifier is the next action, reviewed before anything applies",
+        `${goIs(setupSheet, "review classifier")} && JSON.stringify(${goParts(setupSheet)}) === ${JSON.stringify(JSON.stringify([["classifier changed", "strong"], ["not applied", null]]))}`);
+      assert.deepEqual([serviceReviews.length, configured.length], [0, 0], "Drafting a classifier reviews and configures nothing");
+      await click(browser, go);
+      await until(browser, "the reviewed policy is shown, and applying it is the next action", `${goIs(setupSheet, "apply classifier")} &&
+        ${element(`${setupSheet} .${G}setup-policy`)}?.textContent === ${JSON.stringify(`policy: task descriptions to ${origin} · ${modelName} · OMP and its accounts unchanged`)}`);
+      assert.deepEqual(serviceReviews.map(entry => entry.input), [{ ...target, expectedServiceRevision: null, classifier: { origin, model: modelName } }],
+        "The real server reviews exactly the drafted classifier at the service revision read");
+      assert.deepEqual(configured, [], "A review applies nothing");
+      await click(browser, go);
+      await waitFor(() => configured.length === 1, timeout, 50);
+      assert.deepEqual(configured[0], { ...serviceReviews[0]!.input, reviewDigest: serviceReviews[0]!.result.reviewDigest }, "Applying configures exactly the reviewed policy");
+      await until(browser, "the refused configuration is said beside the next action",
+        `${goIs(setupSheet, "apply classifier")} && JSON.stringify(${goParts(setupSheet)}) === ${JSON.stringify(JSON.stringify([["refused", "attention"], ["policy reviewed", "strong"]]))}`);
+      const services = await callAction(server, owner.token, "atyrode.code.readServiceConfiguration", target);
+      assert(services.ok);
+      assert.deepEqual((services.result as ActionResult<"readServiceConfiguration">).configuration, { revision: null, policies: [] }, "Nothing configured the classifier");
+      await closeSheet(browser);
+    } finally {
+      await browser.evaluate(identity(writer));
+    }
+    assert.deepEqual(unrelated, [], "Setup never requests unrelated native approval or configuration");
     fixture.check();
   } finally {
     await fixture.stop();
   }
-  assert.deepEqual(await readConfiguration(server, writer, target), saved, "Synthetic folder transitions never mutate real Code choices");
+  assert.deepEqual(await readConfiguration(server, writer, target), saved, "Setup's fixes and the classifier never change the workspace's Code choices");
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
-    "Synthetic folder readiness is not native approval evidence and creates no deployments");
+    "Synthetic readiness is not native approval evidence and creates no deployments");
 }
 
 // ---------------------------------------------------------------- review, launch and resume
@@ -3710,22 +4513,24 @@ async function run(): Promise<void> {
     await usableStarter(writerBrowser);
     assert.equal(await writerBrowser.evaluate(`${element(permissionDialog)} === null`), true,
       "Bundled starter does not open a permission dialog");
-    // Enabling discovery is an explicit review in Setup; the first-use launch line's own fix is to read the accounts again.
-    await openSheet(writerBrowser, "setup");
-    await click(writerBrowser, workspaceButton("Machine"));
-    const firstUseReview = workspaceButton("Choose capabilities to review");
-    await until(writerBrowser, "first-use review remains an explicit choice", `${firstUseReview}?.getClientRects().length > 0 && ${element(permissionDialog)} === null`);
-    await click(writerBrowser, firstUseReview);
+    // Setup points at the first row with a fix due, and that fix is its one next action: the native review of what the row
+    // needs. Its choices are requests the person may change, never grants: the existing-folder check chosen alone requests
+    // exactly its operation, and nothing is approved.
+    await openFromMore(writerBrowser, "setup");
+    const setupNext = element(`${setupSheet} [data-go]`);
+    await until(writerBrowser, "Setup's next action is a review, and none is open", `/^(review|enable) /.test(${setupNext}?.querySelector('.${G}go-label')?.textContent ?? '') && ${element(permissionDialog)} === null`);
+    await click(writerBrowser, setupNext);
     await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${permissionDialog} [data-code-capability] input[type="checkbox"]').length === 7`);
-    assert.equal(await writerBrowser.evaluate(`document.querySelectorAll('${permissionDialog} input[type="checkbox"]:checked').length`), 0,
-      "Initial setup must not pre-accept permissions");
+    const requested = await writerBrowser.evaluate<string[]>(`[...document.querySelectorAll('${permissionDialog} [data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability)`);
+    assert(requested.length > 0, "Setup's review chooses what its row needs");
+    for (const id of requested) await click(writerBrowser, capability(id));
     await click(writerBrowser, capability("workspace-existing"));
     await until(writerBrowser, "workspace-only request keeps its exact operation", `(() => {
       const text = ${displayedPlan}?.textContent;
-      return !!text && JSON.stringify(JSON.parse(text).result.steps[0]?.request.operationIds) === JSON.stringify(["atyrode.omp.validate-workspace"]);
+      return !!text && JSON.stringify(JSON.parse(text).result.steps.map(step => step.request.operationIds)) === JSON.stringify([["atyrode.omp.validate-workspace"]]);
     })()`);
     await key(writerBrowser, "Escape", 27);
-    await until(writerBrowser, "onboarding can defer permission review", `${element(permissionDialog)} === null`);
+    await until(writerBrowser, "onboarding can defer permission review, and focus returns to the next action", `${element(permissionDialog)} === null && document.activeElement === ${setupNext}`);
     await closeSheet(writerBrowser);
     assert.equal((await readConfiguration(server, writer, { containerId: firstUse.id })).configuration, null,
       "Initial choices and closing review do not initialize or promote a profile");
@@ -3738,20 +4543,22 @@ async function run(): Promise<void> {
     await verificationChargeScenario(writerBrowser, server, writer, target);
     phase = "an OMP upgrade alone makes a verified catalog stale";
     await ompUpgradeScenario(writerBrowser, server, writer, target);
+    phase = "Models: verify, the charge's hold and deliberate confirm, measuring, left out, staged, imported, discarded and verified again";
+    await modelsSheetScenario(writerBrowser, server, writer, target);
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";
     await leadStruckScenario(writerBrowser, server, writer);
-    phase = "manual catalog authoring and concurrent first-save refusal";
-    await manualCatalogScenario(writerBrowser, server, writer);
+    phase = "an imported first list, a refused competing first import and the exact review a staged list is used by";
+    await importedCatalogScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
     await configurationRecoveryScenario(writerBrowser, server, writer, { containerId: firstUse.id }, target);
     phase = "staged catalogs keep model repair reachable";
     await stagedCatalogScenario(writerBrowser, server, writer);
     phase = "synthetic account-scope recovery retains referenced fresh evidence";
     await syntheticScopeRecoveryScenario(writerBrowser, server, writer);
-    phase = "synthetic independent folder-only UI readiness";
-    await syntheticFolderReadinessScenario(writerBrowser, server, writer, target);
+    phase = "Setup: its checklist, the first unready row's fix, folders and the classifier's review";
+    await setupSheetScenario(writerBrowser, server, writer, target, secondTarget);
     phase = "synthetic review, launch and resume gate";
     await syntheticPreviewScenario(writerBrowser, server, writer, target, secondTarget);
     phase = "proof complete";
@@ -3766,7 +4573,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: verify, the checking hold a double-click cannot pass, a charge confirmed only by one deliberate press, measuring per provider, verified with what it left out (Spark, by OMP's spark quota class, retired), back to code and verify again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();
