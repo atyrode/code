@@ -24,12 +24,14 @@ export function when(at: number, nowMs: number): string {
 export type ListFailure = "none" | "beside" | "instead";
 /**
  * Where a failed read of the bundled model list, or of the starter derived from it, shows. It
- * matters only while no catalog is stored, since a stored one never reads the list. The generator
- * keeps whatever profile the model already holds (a frozen starter, a local draft, a staged
- * catalog), with the failure said `beside` it; only with no profile does the failure take its place.
+ * matters while no catalog is stored (`stored`, the active one), since the starter is derived
+ * from it, and while the stored one carries a verification, since that holds only for the list's
+ * revision; a stored catalog without one never reads the list. The generator keeps whatever
+ * profile the model already holds (a frozen starter, a local draft, a staged or stored catalog),
+ * with the failure said `beside` it; only with no profile does the failure take its place.
  */
-export function modelListFailure(failed: boolean, stored: boolean, team: boolean): ListFailure {
-  if (!failed || stored) return "none";
+export function modelListFailure(failed: boolean, stored: { readonly provenance: object | null } | null, team: boolean): ListFailure {
+  if (!failed || stored?.provenance === null) return "none";
   return team ? "beside" : "instead";
 }
 

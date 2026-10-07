@@ -164,10 +164,15 @@ files, service state, credentials or backups.
   bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained.
   OMP's inventory receipt is now its 18.4.12 one, and each row carries the SDK's
   `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
-  with its separately pinned 18.7.0 SDK, so a verification is compared with the
-  inventory version this build reads, and a catalog verified against 18.1.14 asks to
-  be verified again. This source repin is not a release, preview installation,
-  native deployment review or provider observation.
+  with its separately pinned 18.7.0 SDK, so no version string decides whether a
+  verification holds: it records the artifact its inventory ran from and the bundled
+  catalog's revision, and goes stale when the destination pins another artifact or OMP
+  bundles another revision, with no Code rebuild. A verification recorded before this
+  change, without those identities, reads as unverified and asks to be verified again,
+  and a current one can be renewed on purpose. Unit tests and the disposable browser
+  prove this against a synthetic destination and the real bundled catalog; no
+  installed OMP upgrade has been observed. This source repin is not a release, preview
+  installation, native deployment review or provider observation.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.
   Read, follow and cancel preserve the exact retained Run correlation.

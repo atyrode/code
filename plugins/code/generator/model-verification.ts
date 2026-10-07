@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
-import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_VERSION, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import type { Selection } from "../../domain/contracts.ts";
 import type { Exclusion } from "../../domain/probe.ts";
 import type { Configuration, Target, VerificationProvenance } from "../contract.ts";
-import { VerificationError, WorkflowError, type ChargeReview, type PendingVerification, type VerificationEvidence,
+import { VerificationError, WorkflowError, inventoryArtifact, type ChargeReview, type PendingVerification, type VerificationEvidence,
   type VerificationProgress, type VerificationStep } from "../workflow.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
@@ -20,7 +20,10 @@ export type ModelVerificationInput = {
   configurationCurrent: boolean;
   /** The selection the operator sees; a confirmed verification saves it, narrowed to what the verified catalog hosts. */
   selection: Selection | null;
+  /** The destination as OMP describes it now; null until it answers. */
   setup: OmpResult<"describeDestination"> | null;
+  /** The revision of the model catalog OMP bundles now (`readModelCatalog`); null until it answers. */
+  catalogRevision: string | null;
   writable: boolean;
   available: boolean;
   /** The verified, saved configuration, as the final CAS acknowledged it. */
@@ -73,13 +76,14 @@ type Session = {
 
 /**
  * The first-use and re-verification flow of `createCodeWorkflowClient().verifyModels`, for the
- * workbench. Mounting observes only — OMP's account observation and Code's pool composition, to
- * compare with the recorded verification — and nothing runs until `prepare`. A run is bound to
- * the destination, principal, container and write authority it started under; losing any of them
- * stops it, which cancels a probe job still spending.
+ * workbench. Mounting observes only — OMP's account observation and Code's pool composition, and
+ * the destination and model catalog the workbench already reads, to compare with the recorded
+ * verification — and nothing runs until `prepare`. A run is bound to the destination, principal,
+ * container and write authority it started under; losing any of them stops it, which cancels a
+ * probe job still spending.
  */
 export function useModelVerification(input: ModelVerificationInput): ModelVerification {
-  const { host, target, record, revision, configurationCurrent, setup, writable, available } = input;
+  const { host, target, record, revision, configurationCurrent, setup, catalogRevision, writable, available } = input;
   const latest = useRef(input);
   latest.current = input;
   // `pool: null` is an observed absence of any selected account; a null `data` is no observation yet.
@@ -96,10 +100,11 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     return () => { mounted.current = false; active.current?.controller.abort(); };
   }, []);
   const provenance = record?.active?.provenance ?? null;
-  // A verification records its inventory receipt's OMP version, and this build reads receipts of
-  // `OMP_VERSION` only. OMP's bundled catalog is stamped with its separately pinned SDK version,
-  // so it cannot say whether a recorded verification still holds.
-  const state = verificationState(provenance, { ompVersion: OMP_VERSION, pool: pool.data === null ? null : pool.data.pool ?? "none" }, run !== null);
+  // The OMP a verification recorded is compared by content: the artifact the destination's inventory
+  // operation is installed from and the bundled model catalog's revision, so an upgrade of either is
+  // seen whatever version it reports and without a new Code build.
+  const state = verificationState(provenance, { inventoryArtifactSha256: setup === null ? null : inventoryArtifact(setup), catalogRevision,
+    pool: pool.data === null ? null : pool.data.pool ?? "none" }, run !== null);
   const ready = operationReady(setup, INVENTORY_OPERATION_ID) && operationReady(setup, BENCHMARK_OPERATION_ID);
   const canPrepare = run === null && writable && available && configurationCurrent && ready && target !== null && host.containerId !== null;
 

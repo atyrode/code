@@ -1,5 +1,5 @@
 import { JobDeploymentRequestSchema, PublicJobSchema, ServiceConfigurationReadSchema, ServiceConfigurationSchema, ServicePolicySchema } from "@manifold/protocol";
-import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, ModelCatalogSnapshotSchema,
+import { AccountRecordSchema, AccountsObservationSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, ModelCatalogSnapshotSchema, ResourcePinsSchema,
   JobInputBindingSchema, OverlaySchema, PostingKeySchema, RuntimeAccountPoolSchema, SessionInputSchema, SessionReceiptSchema,
   SessionSilenceSchema, SessionActivitySchema,
   ThinkingLevelSchema, epochMilliseconds, identifier, modelId, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
@@ -27,15 +27,21 @@ export type Target = z.infer<typeof TargetSchema>;
 export const RevisionTargetSchema = TargetSchema.extend({ expectedRevision: revision });
 /**
  * WHAT A CATALOG WAS VERIFIED AGAINST, so a later observation can say whether it still holds:
- * the OMP version whose inventory and benchmark answered, when they answered, the providers the
- * account pool covered and the identity of that exact pool (`composeProbe`'s
- * `poolIdentityDigest`). The pool facts are Code's own reading of the account observation
- * `stageCatalog` was given; the version and times are the receipts' as the caller read them from
- * OMP. A catalog with `provenance: null` was authored, imported or kept from before verification
- * existed, and is unverified.
+ * the OMP its inventory ran under — the artifact the destination's inventory operation was
+ * installed from (the inventory job's `artifactSha256`) and the revision of the model catalog OMP
+ * bundled then (`readModelCatalog`'s `revision`) — when inventory and benchmark answered, the
+ * providers the account pool covered and the identity of that exact pool (`composeProbe`'s
+ * `poolIdentityDigest`). The two OMP identities are content digests, so an upgrade of either is
+ * seen whatever version it reports; `ompVersion` is the inventory receipt's own, recorded and
+ * never compared. The pool facts are Code's own reading of the account observation
+ * `stageCatalog` was given; the rest are the receipts' and OMP's as the caller read them. A
+ * catalog with `provenance: null` was authored, imported or kept from before verification
+ * recorded these identities, and is unverified.
  */
 export const VerificationProvenanceSchema = z.strictObject({
   ompVersion: ModelCatalogSnapshotSchema.shape.ompVersion,
+  inventoryArtifactSha256: ResourcePinsSchema.shape.artifactSha256,
+  catalogRevision: ModelCatalogSnapshotSchema.shape.revision,
   inventoryObservedAt: epochMilliseconds,
   benchmarkCompletedAt: epochMilliseconds,
   providers: z.array(identifier).min(1).max(64),
@@ -64,10 +70,13 @@ export type CatalogReview = z.infer<typeof CatalogReviewSchema>;
  * read from, and `poolIdentityDigest` the pool the caller probed with: Code recomputes the pool
  * from this observation and the saved choices and refuses `code_accounts_changed` unless it is
  * that exact pool, so the recorded pool is the one the benchmark ran against, not whatever it
- * became before staging. The OMP version and times are copied from the receipts the caller read.
+ * became before staging. The OMP version, artifact, catalog revision and times are copied from
+ * what the caller read of OMP for this inventory and benchmark.
  */
 export const CatalogVerificationSchema = z.strictObject({
   ompVersion: ModelCatalogSnapshotSchema.shape.ompVersion,
+  inventoryArtifactSha256: ResourcePinsSchema.shape.artifactSha256,
+  catalogRevision: ModelCatalogSnapshotSchema.shape.revision,
   inventoryObservedAt: epochMilliseconds,
   benchmarkCompletedAt: epochMilliseconds,
   accounts: AccountsObservationSchema,

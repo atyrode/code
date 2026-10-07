@@ -24,6 +24,7 @@ import {
   actionSchemas as ompActionSchemas, type InventoryReceipt, type ModelCatalogSnapshot, type ActionInput as OmpInput, type ActionResult as OmpResult,
 } from "@atyrode/manifold-omp";
 import type { PermissionPlan } from "../code/permission-plan.ts";
+import { inventoryArtifact } from "../code/workflow.ts";
 import { formatManifoldUri, PublicJobSchema, type MachineSummary, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 
 const HELP = `Usage: bun plugins/scripts/verify-browser.ts [bundle-directory]
@@ -53,9 +54,10 @@ CAS, the accounts' management in place, saved sessions folded per folder into a 
 reading its inputs again on its own when shown again but never while an edit is unsaved (until it
 is saved or discarded), a step runs or a sheet is open, and tiered usage windows that are their own
 rows and judge no provider's pool.
-Separate synthetic RPC responses exercise the verification charge, folder-only readiness, and
-launch/resume review invalidation and refusal; the spend, preparation and execution they lead
-to are refused, never native execution or consent success.
+Separate synthetic RPC responses exercise the verification charge, a verified catalog made stale
+by an OMP upgrade alone, folder-only readiness, and launch/resume review invalidation and refusal;
+the spend, preparation and execution they lead to are refused, never native execution or consent
+success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
   console.log(HELP);
@@ -714,6 +716,19 @@ function probeJob(target: Target, jobId: string, operationId: string, requester:
     result: { jobId, requestDigest: "f".repeat(64), ownerId: "synthetic-owner", ownerGeneration: 1, state: "exited", exitCode: 0, reason: null,
       startedAt: 1, finishedAt: 2, usage: null, outputs: [], limits: { timeoutMs: 600_000, memoryBytes: 1 << 30, processes: 64, outputBytes: 1 << 20 } },
     authority: { origin: { kind: "action", traceId: "synthetic-trace", door: "atyrode.omp.startInventory" }, requester, executor: null, decision: null } });
+}
+/**
+ * The artifact an installation of the pinned OMP bundle runs from on a linux-x64 machine, as the bundle declares it: the
+ * hub pins an installation to its platform's declared artifact, so this is what an inventory there runs from and what its
+ * destination pins.
+ */
+function pinnedOmpArtifact(): string {
+  const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
+    manifest: { machine: { artifacts: Record<string, { sha256: string }> } };
+  };
+  const artifact = packed.manifest.machine.artifacts["linux-x64"]?.sha256;
+  assert(artifact, "The pinned OMP bundle declares a linux-x64 artifact");
+  return artifact;
 }
 
 /** What the workbench exports for its render-only bundled preview. */
@@ -1614,7 +1629,8 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
     manifest: { machine: { operations: Record<string, unknown> } };
   };
   for (const operationId of [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID]) assert(packed.manifest.machine.operations[operationId], "Synthetic readiness names real upstream operations");
-  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "b".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  // The synthetic installation the probe jobs (`probeJob`) run from: a verification stops once the destination pins another.
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
   const model = (id: string, input: number, levels: ("low" | "medium" | "high" | "xhigh" | "max")[]) => ({ provider: "anthropic", id, api: "anthropic-messages",
     inputCostPerMillion: input, outputCostPerMillion: input * 5, contextWindow: 200_000, maxTokens: 64_000, reasoning: true, thinkingLevels: levels, images: true, quotaTier: null });
   const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 5_000, models: [
@@ -1897,6 +1913,63 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
   assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), terminals);
 }
 
+/**
+ * A verified catalog holds for the OMP it ran under. Recorded as the workflow records it — the pinned OMP's artifact and
+ * the real bundled catalog's revision — on a destination whose synthetic readiness pins that artifact, the verification is
+ * current and the launch is the step. The same destination upgraded alone, with the same accounts and the same Code
+ * bundles, makes Verify the step again, ready to run. Nothing is probed, spent, saved or installed.
+ */
+async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
+  const workspace = await createContainer(server, "OMP upgrade", "canvas");
+  const target: Target = { containerId: workspace.id, machineId: destination.machineId };
+  const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { containerId: workspace.id, expectedRevision: 0 });
+  assert(created.ok);
+  const bundled = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic"] });
+  assert(bundled.ok);
+  const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
+  const observation = fixtureAccounts([1]), revision = (created.result as Configuration).revision;
+  const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { containerId: workspace.id, expectedRevision: revision, accounts: observation });
+  assert(probe.ok);
+  let runtime = pinnedOmpArtifact();
+  const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { containerId: workspace.id, expectedRevision: revision,
+    document: catalogFromMetadata(metadata, "any"), verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: metadata.revision,
+      inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observation,
+      poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest } });
+  assert(staged.ok, "A verification records the pinned OMP's artifact and the real catalog revision");
+  const reviewInput = { containerId: workspace.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
+  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
+  assert(reviewed.ok);
+  const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+  assert(promoted.ok);
+  const saved = await readConfiguration(server, writer, target);
+  await arrangeWorkbench(server, writer);
+  let described = 0;
+  const fixture = await intercept(browser, server, (name, input) => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: fixtureAccounts([1]) };
+    if (name !== "atyrode.omp.describeDestination" || input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+    described++;
+    const pins = { installationRevision: "synthetic-ui-only", artifactSha256: runtime, resourceBindingDigest: "c".repeat(64) };
+    const result: OmpResult<"describeDestination"> = { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null, services: [],
+      operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId => ({ operationId, pins, nativeReady: true, callerRefusal: null, state: "ready", reason: null })) };
+    return { ok: true, result };
+  });
+  try {
+    await openGenerator(browser, server, workspace.id);
+    await waitFor(() => described > 0, timeout, 50);
+    await Bun.sleep(500);
+    // Discovery is ready, so a stale verification would make Verify the step; the launch this machine has no permission for is.
+    await until(browser, "on the OMP it ran under, the verification is current and the next step is the launch", launchIs("launch", "refused"));
+    // OMP upgraded on the machine, and nothing else: its runtime is another artifact, whatever version it reports.
+    runtime = "9".repeat(64);
+    await openGenerator(browser, server, workspace.id);
+    await until(browser, "an OMP upgrade alone makes Verify the step again, ready to run", launchIs("verify models", "ready"));
+    assert.deepEqual(await readConfiguration(server, writer, target), saved, "Observing an upgraded OMP saves nothing");
+    fixture.check();
+  } finally {
+    await fixture.stop();
+  }
+}
+
 // ---------------------------------------------------------------- tiered usage windows
 
 /**
@@ -2004,7 +2077,6 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     await fixture.stop();
   }
 }
-
 // ---------------------------------------------------------------- shared drafts across destinations
 
 /**
@@ -2037,8 +2109,11 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const excludedRevision = (excluded.result as Configuration).revision;
   const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { containerId: first.containerId, expectedRevision: excludedRevision, accounts: observation });
   assert(probe.ok, "Code composes the saved pool from the passive observation");
+  // Recorded as the workflow records it: the artifact an installation of the pinned OMP runs an inventory from, and the
+  // revision of the real bundled catalog the browser compares it with.
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { containerId: first.containerId, expectedRevision: excludedRevision, document,
-    verification: { ompVersion: OMP_VERSION, inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000,
+    verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(), catalogRevision: metadata.revision,
+      inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000,
       accounts: observation, poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest } });
   assert(staged.ok, "Writer stages a real shared catalog with its recorded verification, without native installation");
   const reviewInput = { containerId: first.containerId, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
@@ -2052,6 +2127,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   const refusalCode = !destination.ok && /^omp_[a-z_]+$/.test(destination.denial.message) ? destination.denial.message : "unknown";
   assert(destination.ok, `A caller with native readiness authority can inspect the OMP destination (${refusalCode})`);
   assert((destination.result as OmpResult<"describeDestination">).operations.every(operation => !operation.nativeReady), "The real fixture has no native installation");
+  assert.equal(inventoryArtifact(destination.result as OmpResult<"describeDestination">), null,
+    "Uninstalled, the real destination pins no OMP runtime, so what the browser compares with the record here is the catalog revision");
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
 
   // The viewer's own Code view: every write refuses on authority, and edits stay a local preview.
@@ -3502,6 +3579,8 @@ async function run(): Promise<void> {
     await starterObservationScenario(writerBrowser, server, writer);
     phase = "verification charge gate";
     await verificationChargeScenario(writerBrowser, server, writer, target);
+    phase = "an OMP upgrade alone makes a verified catalog stale";
+    await ompUpgradeScenario(writerBrowser, server, writer, target);
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "manual catalog authoring and concurrent first-save refusal";
@@ -3528,7 +3607,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing is exactly the policy derivation; conflicted local material stays exportable without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. Manual Models import, staging and exact promotion remain reachable, a staged-only workspace's launch opens Models, and More and its Models item mark a staged list exactly when it waits beside the active one. Profile, catalog and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px; reduced motion animates nothing. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
 }
 
 await run();

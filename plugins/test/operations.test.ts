@@ -454,22 +454,41 @@ describe("pure client-supplied policy composition", () => {
 describe("verified catalogs and launch-time honesty", () => {
   async function verification(f: Fixture, revision: number, observation = accounts()) {
     const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: revision, accounts: observation });
-    return { ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, accounts: observation,
-      poolIdentityDigest: probe.poolIdentityDigest };
+    return { ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64), inventoryObservedAt: now - 2000,
+      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest };
   }
 
   test("a verification records the pool Code reads itself, and review and promotion carry exactly that provenance", async () => {
     const f = fixture(), record = await initialize(f);
     const verified = await verification(f, record.revision);
     const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: record.revision, document: document(), verification: verified });
-    expect(staged.draft?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000,
-      providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
+    expect(staged.draft?.provenance).toEqual({ ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64),
+      inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
     expect(review.provenance).toEqual(staged.draft!.provenance);
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
     expect(promoted.active).toEqual(staged.draft);
     // Manual authorship stays exactly that: the same document staged without a verification is unverified.
     expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
+  });
+
+  test("a verification recorded without the OMP runtime and model catalog it ran against reads as unverified, without a schema change", async () => {
+    const f = fixture(), record = await initialize(f);
+    const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: record.revision, document: document(), verification: await verification(f, record.revision) });
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
+    // The record as schema 4 was first written: the same verification, without either identity.
+    const { inventoryArtifactSha256: _artifact, catalogRevision: _catalog, ...unidentified } = promoted.active!.provenance!;
+    const key = `configuration/${digestOf(workspace)}`, raw = JSON.stringify({ ...promoted, active: { ...promoted.active, provenance: unidentified } });
+    f.store.set(key, raw);
+    // Nothing compares it with the OMP present now, so it is no verification at all, and a read writes nothing.
+    expect((await configuration(f))?.active?.provenance).toBeNull();
+    expect(f.store.get(key)).toBe(raw);
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: promoted.revision, source: "active" })).provenance).toBeNull();
+    // The next CAS persists the same schema version, unverified.
+    const next = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection: { ...promoted.selection!, planYolo: !promoted.selection!.planYolo } });
+    expect(JSON.parse(f.store.get(key)!)).toMatchObject({ schemaVersion: 4, active: { provenance: null } });
+    expect(next.active?.provenance).toBeNull();
   });
 
   test("a verification whose pool moved, or that claims what its pool and receipts cannot, stages nothing", async () => {

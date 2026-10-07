@@ -49,7 +49,6 @@ describe("one gate for every action", () => {
 
   test("verify is judged by its own preconditions, save by the save's", () => {
     expect(code(actionGate(facts({}, "accounts-changed"), "verify"))).toBe("open");
-    expect(code(actionGate(facts(), "verify"))).toBe("verified");
     expect(code(actionGate(facts({ writable: false }, "unverified"), "verify"))).toBe("read-only");
     expect(code(actionGate(facts({ configurationCurrent: false }, "unverified"), "verify"))).toBe("configuration");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
@@ -57,6 +56,20 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" } }), "save"))).toBe("unsaved");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }, "omp-changed"), "save"))).toBe("not-next");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" }, writable: false }), "save"))).toBe("read-only");
+  });
+
+  test("a current verification can still be renewed on purpose, through the same account, destination, readiness and authority checks", () => {
+    // What OMP or the accounts reach can change in ways no observation proves, so Verify stays reachable; its charge still waits on Confirm.
+    expect(code(actionGate(facts(), "verify"))).toBe("open");
+    expect(code(actionGate(facts({ writable: false }), "verify"))).toBe("read-only");
+    expect(code(actionGate(facts({ stale: true }), "verify"))).toBe("conflict");
+    expect(code(actionGate(facts({ available: false }), "verify"))).toBe("unavailable");
+    expect(code(actionGate(facts({ accounts: "unreadable" }), "verify"))).toBe("accounts");
+    expect(code(actionGate(facts({ accounts: "none" }), "verify"))).toBe("no-accounts");
+    expect(code(actionGate(facts({ queries: { setup: { error: "unreadable" } } }), "verify"))).toBe("verify-status");
+    expect(code(actionGate(facts({ verification: { status: "current", ready: false } }), "verify"))).toBe("verify-permissions");
+    expect(code(actionGate(facts({ charge: { requests: 3 } }), "verify"))).toBe("charge");
+    expect(code(actionGate(facts({ charge: { requests: 3 } }), "confirm"))).toBe("open");
   });
 
   test("resuming needs write access, the machine and a chosen session; with the team, the team a launch would compose", () => {
