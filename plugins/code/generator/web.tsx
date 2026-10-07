@@ -24,9 +24,9 @@ import { Automation } from "./automation.tsx";
 import { OptionSwitch } from "./option-switch.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
-import { AUTO_READ_MS, readHeld } from "./auto-read.ts";
+import { readHeld } from "./auto-read.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
-import { usePanelShown, useReadClock } from "./read-clock.ts";
+import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -156,7 +156,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   const [launch, setLaunch] = useState<LaunchState>({ label: "", ready: false, reason: null });
   // The profile switches the generator keeps outside its rows, which the session options sheet draws.
   const [extras, setExtras] = useState<readonly SlotOption[]>([]);
-  // Bumped by every panel refresh, so the sessions view reads again the machines it has read.
+  // Bumped by every read of the usage, by the clock or by a press, so the sessions view reads again the machines it has read.
   const [rereads, setRereads] = useState(0);
   // The accounts' management stays mounted once opened, so a preset draft survives a look back at the accounts.
   const [managed, setManaged] = useState(false);
@@ -225,11 +225,11 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
     }
     setSheet(next);
     setVisited(previous => previous.includes(next) ? previous : [...previous, next]);
-    actions.refresh();
+    refresh();
   }
   function closeSheet() {
     setSheet(null);
-    actions.refresh();
+    refresh();
   }
   const sheetChanged = useRef(sheet);
   useLayoutEffect(() => {
@@ -254,7 +254,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }, [sheet]);
   function finish(source: PanelSheet) {
     if (currentSheet.current === source) closeSheet();
-    else actions.refresh();
+    else refresh();
   }
   function sheetKeys(event: KeyboardEvent<HTMLDivElement>) {
     const element = event.target as HTMLElement;
@@ -270,11 +270,9 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }
 
   // ------------------------------------------------------------ reading again: on its own (auto-read.ts), and Refresh now (`r`)
-  /** Everything the panel stands on, read again: Refresh now, `r`, and the usage line's cadence. */
+  /** Everything the panel stands on, read again in one pass, both clocks restarted: Refresh now, `r`, and a sheet's open or close. */
   function refresh() {
-    actions.refresh();
-    refreshMachines();
-    setRereads(count => count + 1);
+    reads.now();
   }
   const teamGate = model.gate("edit-team");
   const visible = usePanelShown(app);
@@ -298,10 +296,14 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
       inputAt: inputAt.current,
     }, Date.now());
   };
-  // The workbench's inputs, read again once a minute and when the panel shows again; the usage keeps the usage line's own cadence.
-  useReadClock(AUTO_READ_MS, () => { actions.reread(); refreshMachines(); }, visible, held);
-  // One cadence for the usage: Refresh now, `r` and the usage freshness window all restart the same countdown.
-  const cadence = useUsageCadence(usage, refresh, visible, held);
+  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
+  // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
+  const reads = usePanelReads({
+    configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: setup.refresh, defaults: model.queries.defaults.refresh,
+    skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
+    usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
+  }, visible, held);
+  const cadence = useUsageCadence(usage, reads);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
   const accountsGate = model.gate("edit-accounts");
   const accountsLocked = !accountsGate.open && (accountsGate.refusal.code === "running" || accountsGate.refusal.code === "charge") ? accountsGate.refusal.text : null;
