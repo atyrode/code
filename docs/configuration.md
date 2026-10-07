@@ -230,7 +230,7 @@ sheet reads everything in one pass and restarts both.
 
 ### The generator
 
-Rows run top to bottom: **lane**, **model**, **thinking**, **advisor** and
+Rows run top to bottom: **lead**, **model**, **thinking**, **advisor** and
 **fallbacks**. Each is a radio group of its words in order, with one Tab stop, on its
 chosen word; the chosen word is bold in its provider's hue (the lane's accent for
 thinking and advisor), with a glider under the words and a detent tick under each word
@@ -247,14 +247,21 @@ edit of the saved workspace profile, which discards it. Both go through the edit
 and the readout says the route changes they made ("no route changes" when none). When
 routing or usage is hidden, **Show routing** and **Show usage** stand in this head.
 
-- **Lane** is a spectrum: each provider's lanes, **Mixed** between GPT and Claude, then
-  every other provider's lanes as a group of its own. A lane is hidden only while its
-  family has no signed-in account at all, unless it is the lane in use; with no account
-  signed in anywhere every lane shows. A lane whose accounts are all excluded stays,
-  refused with the domain's reason. A family someone has signed in for but the model
-  list has no model of keeps its lanes, struck, with "No <family> models in your model
-  list"; pressing one starts **Verify models** (through its own gate, spending nothing
-  before Confirm charge) and the readout says it finds the models the accounts reach.
+- **Lead** is who leads: **mixed**, then each family the catalog's lanes lead on (GPT,
+  Claude, DeepSeek, then any other provider), with an **only** checkbox at the row's end.
+  The stored lane is unchanged: `mixed`, or a family's led or only lane; checked means
+  only. Changing the lead keeps the box, so GPT only with Claude pressed is Claude only;
+  a lead that does not offer that variant, or cannot run it while it can run the other,
+  lands on the other, and the readout says so. The box is its own Tab stop (Space
+  toggles it); it is disabled for mixed and for a lead with one variant, and struck as
+  well when the variant it would select cannot run, with the reason on point or focus.
+  A lead is hidden only while its family has no signed-in account at all, unless it is
+  the lead in use; with no account signed in anywhere every lead shows. A lead neither of
+  whose lanes the included accounts can run stays, struck, with the domain's reason. A
+  family someone has signed in for but the model list has no model of keeps its lead,
+  struck, with "No <family> models in your model list";
+  pressing it starts **Verify models** (through its own gate, spending nothing before
+  Confirm charge) and the readout says it finds the models the accounts reach.
 - **Model** is the capability tier (fast, normal, smart, elite), each tier read as the
   model alias its `default` role would lead on in the profile that choosing it forms,
   with the tier's word under the alias. A tier no model fills reads as its word alone,
@@ -592,8 +599,8 @@ The layout answers the panel's own measured width, never the window's, since Cod
 shares the window with its canvas. From 1180 px the generator and routing stand side by
 side with usage under both; from 760 px the same in slightly different proportions.
 Below 760 px the generator stands alone with the grouped team under its rows, and routing
-and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lane's words drop under its label so the
-spectrum stays on one line, and below 380 px usage windows use thinner blocks and drop
+and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lead's words drop under its label so the
+leads and the only box keep one line, and below 380 px usage windows use thinner blocks and drop
 the word "used". Nothing scrolls sideways at any width. Hiding routing or usage is
 local to the open panel and not kept. The first layout and every resize place things
 without motion; a pane that comes into view slides in, and under reduced motion nothing
