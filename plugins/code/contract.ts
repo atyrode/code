@@ -215,6 +215,8 @@ export const rootActionSchemas = {
   stageCatalog: { input: RevisionWorkspaceSchema.extend({ document: CatalogDocumentSchema, verification: CatalogVerificationSchema.optional() }), result: ConfigurationSchema },
   reviewCatalog: { input: CatalogReviewInputSchema, result: CatalogReviewSchema },
   promoteCatalog: { input: CatalogReviewInputSchema.extend({ reviewDigest: digest }), result: ConfigurationSchema },
+  // Clears the staged list, at the revision it was seen in; the list in use and the saved team stay as they are.
+  discardCatalog: { input: RevisionWorkspaceSchema, result: ConfigurationSchema },
   select: { input: RevisionWorkspaceSchema.extend({ selection: SelectionSchema }), result: ConfigurationSchema },
   changeAccounts: { input: RevisionWorkspaceSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
   // `poolIdentityDigest` names this exact pool, independent of the order OMP lists accounts in:

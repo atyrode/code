@@ -68,7 +68,7 @@ is the optional external suggestion classifier.
 | Workflow | Current source path and authority |
 | --- | --- |
 | Initialize and edit shared choices | Code `initializeConfiguration`, `select`, `changeAccounts`; `{ containerId }`, revision checks and native CAS |
-| Catalog edit/review/promotion | Code `stageCatalog`, `reviewCatalog`, `promoteCatalog`; typed document and exact review digest, no machine process |
+| Catalog edit/review/promotion | Code `stageCatalog`, `reviewCatalog`, `promoteCatalog`, `discardCatalog`; typed document and exact review digest, no machine process |
 | Native permission review | Headless Code client composes exact `engine.jobs` deployment requests from OMP owner observations; no checked choice grants authority |
 | Suggestion setup | Code `readServiceConfiguration`, `reviewServices`, `configureServices` bind only the optional external classifier |
 | Accounts and usage | OMP accounts/usage/control doors own observations and effects; Code projects shared exact-slot choices |

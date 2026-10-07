@@ -45,15 +45,18 @@ All Code actions are `atyrode.code.<name>`:
 | Purpose               | Actions                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
-| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`                             |
+| Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`, `discardCatalog`           |
 | Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`           |
 | External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
-`initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `select` and
-`changeAccounts` take `expectedRevision`. A catalog review takes
+`initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `discardCatalog`, `select`
+and `changeAccounts` take `expectedRevision`. A catalog review takes
 `{ containerId, expectedRevision, source: "active" | "draft" }` and returns the
 exact catalog digest, compiled route/estimate review and `reviewDigest`.
-Promotion supplies that digest against the same source and revision.
+Promotion supplies that digest against the same source and revision. Discarding clears
+the staged list at the revision it was seen in and refuses `code_catalog_missing`
+when none is staged; the active list, the saved team and the account choices stay as
+they are.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
