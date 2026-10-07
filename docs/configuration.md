@@ -600,8 +600,8 @@ and auto plans) are saved with the workspace profile through the edit gate, and 
 with its reason or with the domain's ("Priority needs a GPT lane"). Below them,
 Automation and Optional skills apply to the next launch or resume only: the workspace
 profile stays as it is, the restrictions are not an OS or network sandbox, and a
-successful launch or resume clears them. The summary on the Options button retains
-restricted tool counts, skill selections or explicit disable-all.
+successful launch or resume clears them. The summary on More and its Options item
+retains restricted tool counts, skill selections or explicit disable-all.
 
 Setup (`u`) is optional runtime management: connection status, independent machine
 capabilities, folder preparation and the external suggestion classifier, and, under
