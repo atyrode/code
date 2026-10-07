@@ -126,15 +126,31 @@ rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provid
 such a rung that does not answer leaves that family shorter. Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
-revision, the exact account pool and OMP defaults, and stops, naming itself, when one
-moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in OMP's
-history and a staged catalog stays staged. A confirmation is used once, and a failed
+revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
+when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
+OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed
 or uncertain one is never replayed. The promoted catalog records its verification
-provenance (OMP version, inventory and benchmark times, the account providers and a
-digest of the exact account pool). A catalog stops being verified when OMP serves
-another model list or the saved choices select another pool. A model that draws a quota
-of its own (any OMP class but chat, Spark's for one) is left off the derived ladder and
-listed among the last verification's excluded models, since Code spends no such quota.
+provenance: the OMP its inventory ran under, as content identities — the artifact the
+inventory job ran from (`inventoryArtifactSha256`) and the revision of OMP's bundled model
+catalog when the inventory started (`catalogRevision`), the list the inventory picks its
+models from — the inventory's OMP version, inventory and benchmark times, the account
+providers and a digest of the exact account pool. A catalog republished while the
+inventory runs stops the verification before its charge is answered. A catalog stops
+being verified when the selected destination's inventory operation is installed from
+another artifact (`describeDestination`'s pins), OMP bundles a catalog with another
+revision, or the saved choices select another pool. Because the identities are content
+digests, an OMP upgrade, its SDK's or its model list's, is seen whatever version it
+reports and without a new Code build; no version string is compared. A catalog recorded
+before verification carried these identities reads as unverified. An identity not yet
+observed, or whose read failed, claims no change: the destination's failure keeps the
+launch refused, a failed model list read is named in the launch line with Retry and
+Models, and the session door re-checks that every routed model is still published. A
+current verification can still be renewed: Verify needs only its own preconditions
+(write access, the machine, readable accounts that include one, discovery and benchmark
+readiness), and its charge still waits on Confirm. A model that draws a
+quota of its own (any OMP class but chat, Spark's for one, as each inventory row states) is
+left off the derived ladder and listed among the last verification's excluded models,
+since Code spends no such quota.
 
 A stale or failed save is never retried or rebased. The local draft remains
 exportable until explicitly discarded. It also survives a reload: the main view keeps

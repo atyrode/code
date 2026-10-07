@@ -344,7 +344,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
-    configurationCurrent, selection, ompVersion: metadata.data?.ompVersion ?? null, setup: setup.data, writable, available,
+    configurationCurrent, selection, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts, and the profile saved for the workspace.", failed: false });

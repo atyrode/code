@@ -1,35 +1,58 @@
 import { describe, expect, test } from "bun:test";
+import { LAUNCH_OPERATION_ID, OMP_VERSION } from "@atyrode/manifold-omp";
 import type { VerificationProvenance } from "../code/contract.ts";
+import { operationReady } from "../code/permission-plan.ts";
 import { autoReviewDue, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
-const provenance: VerificationProvenance = { ompVersion: "18.1.14", inventoryObservedAt: 1, benchmarkCompletedAt: 2,
-  providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
+const runtime = "c".repeat(64), catalog = "e".repeat(64);
+const provenance: VerificationProvenance = { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: catalog,
+  inventoryObservedAt: 1, benchmarkCompletedAt: 2, providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
 const same = { providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
+const present = { inventoryArtifactSha256: runtime, catalogRevision: catalog };
 
 describe("whether a recorded verification still holds", () => {
-  test("the present OMP version and pool decide, and an OMP change outranks an account change", () => {
-    expect(verificationState(provenance, { ompVersion: "18.1.14", pool: same }, false)).toMatchObject({ status: "current", observed: true });
-    expect(verificationState(null, { ompVersion: "18.1.14", pool: same }, false).status).toBe("unverified");
-    expect(verificationState(provenance, { ompVersion: "18.1.14", pool: same }, true).status).toBe("verifying");
-    const upgraded = verificationState(provenance, { ompVersion: "18.4.4", pool: { ...same, poolIdentityDigest: "b".repeat(64) } }, false);
-    expect(upgraded.status).toBe("omp-changed");
-    expect(upgraded.changes.ompVersion).toEqual({ verified: "18.1.14", current: "18.4.4" });
+  test("the present OMP runtime, model catalog and pool decide, and an OMP change outranks an account change", () => {
+    expect(verificationState(provenance, { ...present, pool: same }, false)).toMatchObject({ status: "current", observed: true });
+    expect(verificationState(null, { ...present, pool: same }, false).status).toBe("unverified");
+    expect(verificationState(provenance, { ...present, pool: same }, true).status).toBe("verifying");
+    const upgraded = verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: { ...same, poolIdentityDigest: "b".repeat(64) } }, false);
+    expect([upgraded.status, upgraded.changes.runtimeChanged, upgraded.changes.identitiesChanged]).toEqual(["omp-changed", true, true]);
+  });
+
+  test("an OMP-only upgrade with the same accounts makes the verification stale, and Verify is the next step", () => {
+    // The runtime is upgraded on the destination; Code is the same build, so its compiled OMP version has not moved.
+    const upgraded = verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: same }, false);
+    expect(upgraded).toMatchObject({ status: "omp-changed", observed: true, changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
+    expect(nextLaunchStep(facts({}, upgraded.status)).step).toBe("verify");
+    expect(launchStatusText(facts({}, upgraded.status))).toBe("OMP changed since models were verified. Verify again.");
+  });
+
+  test("a new model catalog revision makes the verification stale, whatever version OMP reports", () => {
+    const republished = verificationState(provenance, { ...present, catalogRevision: "f".repeat(64), pool: same }, false);
+    expect(republished).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: false, catalogChanged: true } });
   });
 
   test("a provider added or removed, the same providers through other accounts, or no account at all is an account change", () => {
-    const added = verificationState(provenance, { ompVersion: "18.1.14", pool: { providers: [...same.providers, "deepseek"], poolIdentityDigest: "c".repeat(64) } }, false);
+    const added = verificationState(provenance, { ...present, pool: { providers: [...same.providers, "deepseek"], poolIdentityDigest: "c".repeat(64) } }, false);
     expect([added.status, added.changes.providersAdded, added.changes.identitiesChanged]).toEqual(["accounts-changed", ["deepseek"], false]);
-    const removed = verificationState(provenance, { ompVersion: "18.1.14", pool: { providers: ["anthropic"], poolIdentityDigest: "c".repeat(64) } }, false);
+    const removed = verificationState(provenance, { ...present, pool: { providers: ["anthropic"], poolIdentityDigest: "c".repeat(64) } }, false);
     expect([removed.status, removed.changes.providersRemoved]).toEqual(["accounts-changed", ["openai-codex"]]);
-    const reidentified = verificationState(provenance, { ompVersion: "18.1.14", pool: { ...same, poolIdentityDigest: "d".repeat(64) } }, false);
+    const reidentified = verificationState(provenance, { ...present, pool: { ...same, poolIdentityDigest: "d".repeat(64) } }, false);
     expect([reidentified.status, reidentified.changes.identitiesChanged]).toEqual(["accounts-changed", true]);
-    expect(verificationState(provenance, { ompVersion: "18.1.14", pool: "none" }, false).changes.providersRemoved).toEqual(["anthropic", "openai-codex"]);
+    expect(verificationState(provenance, { ...present, pool: "none" }, false).changes.providersRemoved).toEqual(["anthropic", "openai-codex"]);
   });
 
-  test("a missing observation never claims a change, and says the comparison is incomplete", () => {
-    expect(verificationState(provenance, { ompVersion: null, pool: null }, false)).toMatchObject({ status: "current", observed: false });
-    expect(verificationState(provenance, { ompVersion: "18.4.4", pool: null }, false)).toMatchObject({ status: "omp-changed", observed: false });
+  test("an observation not yet answered or failed never claims a change, and says the comparison is incomplete", () => {
+    expect(verificationState(provenance, { inventoryArtifactSha256: null, catalogRevision: null, pool: null }, false)).toMatchObject({ status: "current", observed: false });
+    expect(verificationState(provenance, { ...present, catalogRevision: null, pool: same }, false)).toMatchObject({ status: "current", observed: false });
+    expect(verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: null }, false)).toMatchObject({ status: "omp-changed", observed: false });
+  });
+
+  test("while the destination has not answered, the launch is not ready, so a gap in the observation never opens one", () => {
+    expect(operationReady(null, LAUNCH_OPERATION_ID)).toBe(false);
+    expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
+    expect(nextLaunchStep(facts({ queries: { setup: { error: "unreadable" } } })).reason?.code).toBe("sessions");
   });
 });
 

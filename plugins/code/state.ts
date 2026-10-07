@@ -55,7 +55,18 @@ function unverified(record: Omit<z.infer<typeof Version3ConfigurationSchema>, "s
   return ConfigurationSchema.parse({ ...record, schemaVersion: 4,
     draft: record.draft && { ...record.draft, provenance: null }, active: record.active && { ...record.active, provenance: null } });
 }
-const StoredConfigurationSchema = z.union([ConfigurationSchema, Version3ConfigurationSchema.transform(unverified),
+/**
+ * Schema 4 as first written recorded a verification without the OMP runtime artifact and model
+ * catalog revision it ran against. Nothing can compare such a record with the OMP present now, so
+ * it reads as unverified, like a schema-3 catalog, and the next CAS write persists `null`. The
+ * schema version does not move: schema 4 already admits `provenance: null`.
+ */
+const { inventoryArtifactSha256: _artifact, catalogRevision: _catalog, ...unidentified } = VerificationProvenanceSchema.shape;
+const StoredCatalogSchema = CatalogRevisionSchema.extend({
+  provenance: z.union([VerificationProvenanceSchema, z.strictObject(unidentified).transform(() => null)]).nullable(),
+});
+const StoredVersion4Schema = ConfigurationSchema.extend({ draft: StoredCatalogSchema.nullable(), active: StoredCatalogSchema.nullable() });
+const StoredConfigurationSchema = z.union([StoredVersion4Schema, Version3ConfigurationSchema.transform(unverified),
   Version2To3Schema.transform(unverified)]);
 const ConfigurationVersionSchema = z.object({ schemaVersion: z.number().int() });
 
@@ -189,6 +200,7 @@ export function verificationProvenance(ctx: CodeContext, record: Configuration, 
   if (pool.poolIdentityDigest !== verification.poolIdentityDigest) throw new CodeRefusal("accounts_changed");
   if (document.models.some(model => !pool.providers.includes(model.provider))) throw new CodeRefusal("invalid_provenance");
   const provenance = VerificationProvenanceSchema.safeParse({ ompVersion: verification.ompVersion,
+    inventoryArtifactSha256: verification.inventoryArtifactSha256, catalogRevision: verification.catalogRevision,
     inventoryObservedAt: verification.inventoryObservedAt, benchmarkCompletedAt: verification.benchmarkCompletedAt, ...pool });
   if (!provenance.success) throw new CodeRefusal("invalid_provenance");
   return provenance.data;

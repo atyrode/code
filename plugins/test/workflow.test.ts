@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID,
+import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID, OMP_VERSION,
   type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient, VerificationError, type VerificationProgress } from "../code/workflow.ts";
+import { createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationProgress } from "../code/workflow.ts";
+import { verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
@@ -31,11 +32,13 @@ function probeJob(jobId: string, operationId: string, state: PublicJob["state"])
 }
 function row(provider: string, id: string, input: number, context: number, levels: readonly ("low" | "medium" | "high" | "xhigh" | "max")[], images: boolean) {
   return { provider, id, api: provider === "anthropic" ? "anthropic-messages" : "openai-completions", inputCostPerMillion: input,
-    outputCostPerMillion: input * 5, contextWindow: context, maxTokens: 64_000, reasoning: true, thinkingLevels: [...levels], images };
+    outputCostPerMillion: input * 5, contextWindow: context, maxTokens: 64_000, reasoning: true, thinkingLevels: [...levels], images, quotaTier: null };
 }
 /**
  * Real Code doors over an in-memory container, and an OMP that answers inventory and benchmark
- * jobs from fixed facts. `states` scripts what `engine.jobs.status` answers for a job, and
+ * jobs from fixed facts. Its runtime artifact (`omp.artifact`, which the inventory runs from and
+ * the destination pins) and its bundled catalog are those of OMP 18.4.12's command line beside the
+ * 18.7.0 SDK's model list. `states` scripts what `engine.jobs.status` answers for a job, and
  * `hooks` run when a door answers, which is where the world moves under a verification.
  */
 function verificationFixture() {
@@ -66,9 +69,11 @@ function verificationFixture() {
   const slot = (provider: string, credentialId: number): AccountsObservation["accounts"][number] => ({
     reference: { kind: "credential", scope, provider, credentialId }, credentialId, identityKey: null, type: "api_key", email: null, disabled: false, blocks: [] });
   const omp = {
+    artifact: "c".repeat(64),
+    catalog: { schemaVersion: 1, source: "bundled", ompVersion: "18.7.0", revision: "a".repeat(64), models: [] } as OmpResult<"readModelCatalog">,
     accounts: { scope, observedAt: 5_000, status: "fresh", accounts: [slot("anthropic", 1), slot("deepseek", 2)] } as AccountsObservation,
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null } as OmpResult<"readDefaults">,
-    inventory: { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: 6_000, models: [
+    inventory: { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 6_000, models: [
       row("anthropic", "claude-haiku-5", 1, 200_000, ["low", "medium", "high"], true),
       row("anthropic", "claude-sonnet-5", 3, 200_000, ["low", "medium", "high", "xhigh"], true),
       row("anthropic", "claude-opus-5", 5, 200_000, ["low", "medium", "high", "xhigh", "max"], true),
@@ -88,11 +93,12 @@ function verificationFixture() {
   async function answer(door: string, raw: unknown): Promise<unknown> {
     if (door === actionDoor("accounts")) return structuredClone(omp.accounts);
     if (door === actionDoor("readDefaults")) return omp.defaults;
+    if (door === actionDoor("describeDestination")) return { ...target, pluginId: OMP_PLUGIN_ID, state: "ready", reason: null, deployment: null, services: [],
+      operations: [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID].map(operationId => ({ operationId, state: "ready", reason: null, nativeReady: true, callerRefusal: null,
+        pins: { installationRevision: "native-installation", artifactSha256: omp.artifact, resourceBindingDigest: "d".repeat(64) } })) } satisfies OmpResult<"describeDestination">;
+    if (door === actionDoor("readModelCatalog")) return omp.catalog;
     if (door === actionDoor("startInventory")) return job("inventory-1", INVENTORY_OPERATION_ID);
-    if (door === actionDoor("readInventory")) return { job: probeJob("inventory-1", INVENTORY_OPERATION_ID, "exited"), inventory: omp.inventory };
-    // The bundled classification the derivation joins: every listed model is chat.
-    if (door === actionDoor("readModelCatalog")) return { schemaVersion: 1, source: "bundled", ompVersion: omp.inventory.ompVersion, revision: "a".repeat(64),
-      models: omp.inventory.models.map(model => ({ ...model, quotaTier: null })) };
+    if (door === actionDoor("readInventory")) return { job: { ...probeJob("inventory-1", INVENTORY_OPERATION_ID, "exited"), artifactSha256: omp.artifact }, inventory: omp.inventory };
     if (door === actionDoor("startBenchmark")) {
       benchmarked.push(ompActionSchemas.startBenchmark.input.parse(raw).candidates);
       return job(`benchmark-${++benchmarks}`, BENCHMARK_OPERATION_ID);
@@ -100,7 +106,7 @@ function verificationFixture() {
     if (door === actionDoor("readBenchmark")) {
       const { jobId } = ompActionSchemas.readBenchmark.input.parse(raw);
       const candidates = benchmarked[Number(jobId.slice("benchmark-".length)) - 1]!.candidates;
-      return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
+      return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
         inventoryObservedAt: omp.inventory.observedAt, startedAt: 7_000 + benchmarks, completedAt: 8_000 + benchmarks,
         results: candidates.map(candidate => verdicts[candidate.id]
           ? { ...candidate, status: verdicts[candidate.id], tokensPerSecond: null, timeToFirstTokenMs: null }
@@ -136,7 +142,7 @@ test("verification prepares a charge without spending, and one confirmation save
   expect(pending.charge).toMatchObject({ target, revision: 1, budget: "any", inventoryJobId: "inventory-1", requests: 5, replacesDraft: false,
     defaultsRevision: 3, providers: [{ provider: "anthropic", requests: 3 }, { provider: "deepseek", requests: 2 }],
     exclusions: [{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }],
-    pool: { providers: ["anthropic", "deepseek"] } });
+    pool: { providers: ["anthropic", "deepseek"] }, inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64) });
   // Preparing initialized the workspace and ran OMP's inventory; no benchmark request was made.
   expect(f.calls.filter(door => effects.includes(door))).toEqual(["atyrode.code.initializeConfiguration", actionDoor("startInventory")]);
   expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
@@ -147,8 +153,8 @@ test("verification prepares a charge without spending, and one confirmation save
   expect(f.benchmarked.map(input => [...new Set(input.candidates.map(candidate => candidate.provider))])).toEqual([["anthropic"], ["deepseek"]]);
   const saved = verified.configuration;
   expect((await f.configuration()).configuration).toEqual(saved);
-  expect(saved.active?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: 6_000, benchmarkCompletedAt: 8_002,
-    providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
+  expect(saved.active?.provenance).toEqual({ ompVersion: OMP_VERSION, inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64),
+    inventoryObservedAt: 6_000, benchmarkCompletedAt: 8_002, providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
   expect(saved.draft).toBeNull();
   // No OpenAI so no mixed lane, no fourth Anthropic rung and no Spark: those narrow to the catalog's
   // own default lane and highest capability; every other choice is the operator's.
@@ -162,18 +168,21 @@ test("verification prepares a charge without spending, and one confirmation save
   expect(f.calls.filter(door => door === actionDoor("startBenchmark"))).toHaveLength(2);
 });
 
-test("a confirmation refuses to spend against a revision, pool or OMP defaults that moved since the charge", async () => {
-  for (const move of ["revision", "pool", "defaults"] as const) {
+test("a confirmation refuses to spend against a revision, pool, OMP defaults or OMP that moved since the charge", async () => {
+  for (const move of ["revision", "pool", "defaults", "runtime", "catalog"] as const) {
     const f = verificationFixture();
     const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
     if (move === "revision") await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: 1,
       change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
     if (move === "pool") f.omp.accounts.accounts = [f.slot("anthropic", 1)];
     if (move === "defaults") f.omp.defaults = { ...f.omp.defaults, revision: 4 };
+    if (move === "runtime") f.omp.artifact = "9".repeat(64);
+    if (move === "catalog") f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) };
     const before = (await f.configuration()).configuration;
     const stopped = await stopOf(pending.confirm(preview));
     expect(stopped.step).toBe("benchmark");
-    expect(stopped.reason).toContain({ revision: "code_stale_preferences", pool: "code_accounts_changed", defaults: "omp_defaults_changed" }[move]);
+    expect(stopped.reason).toContain({ revision: "code_stale_preferences", pool: "code_accounts_changed", defaults: "omp_defaults_changed",
+      runtime: "code_omp_changed", catalog: "code_omp_changed" }[move]);
     expect(f.calls).not.toContain(actionDoor("startBenchmark"));
     expect((await f.configuration()).configuration).toEqual(before);
   }
@@ -192,6 +201,46 @@ test("a pool that moves while the benchmark runs is never recorded as the verifi
   // The spent jobs are named for inspection; nothing was staged.
   expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: ["benchmark-1", "benchmark-2"], revision: 1 });
   expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+});
+
+test("an OMP upgraded while the benchmark runs is never recorded as the one verified", async () => {
+  const f = verificationFixture();
+  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  f.hooks[actionDoor("readBenchmark")] = () => { f.omp.artifact = "9".repeat(64); };
+  const stopped = await stopOf(pending.confirm(preview));
+  expect([stopped.step, stopped.reason]).toEqual(["stage", "code_omp_changed"]);
+  expect(f.calls).not.toContain("atyrode.code.stageCatalog");
+});
+
+test("a model list republished while the inventory runs stops the verification before its charge is answered", async () => {
+  const f = verificationFixture();
+  // OMP picked the inventory's models from the list it bundled when the inventory started; another list is published after.
+  f.hooks[actionDoor("startInventory")] = () => { f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) }; };
+  const stopped = await stopOf(f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }));
+  expect([stopped.step, stopped.reason]).toEqual(["draft", "code_omp_changed"]);
+  expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: [], revision: 1 });
+  expect(f.calls).not.toContain(actionDoor("startBenchmark"));
+  expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
+});
+
+test("a verification holds for the OMP runtime and model list it ran against, and an upgrade of either alone makes it stale", async () => {
+  const f = verificationFixture();
+  const { configuration } = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  // What the workbench compares the saved verification with: the destination's pins, the bundled list's revision and the pool.
+  const present = async () => verificationState(configuration.active!.provenance, {
+    inventoryArtifactSha256: inventoryArtifact(await f.workflow.omp("describeDestination", target)),
+    catalogRevision: (await f.workflow.omp("readModelCatalog", { providers: [] })).revision,
+    pool: await f.workflow.observeVerification(target.containerId, configuration.revision, configuration.accounts) ?? "none" }, false);
+  // The 18.4.12 command line answered the inventory while the 18.7.0 SDK bundles the list: one present OMP, so a fresh verification is current.
+  expect([configuration.active?.provenance?.ompVersion, f.omp.catalog.ompVersion]).toEqual([OMP_VERSION, "18.7.0"]);
+  expect(await present()).toMatchObject({ status: "current", observed: true });
+  // OMP upgraded on the machine, with the same accounts and the same Code build: only the runtime artifact moved.
+  f.omp.artifact = "9".repeat(64);
+  expect(await present()).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
+  // The model list published under another revision, on the same runtime.
+  f.omp.artifact = "c".repeat(64);
+  f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) };
+  expect(await present()).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: false, catalogChanged: true } });
 });
 
 test("a stop cancels the probe job in flight, and a failed one names its step and leaves its work inspectable", async () => {

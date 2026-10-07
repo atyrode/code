@@ -6,7 +6,7 @@ import manifestJson from "./manifest.json";
 import { reduceAccountChoices, selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError } from "../domain/contracts.ts";
-import { catalogFromObservations, inventoryDraft, separateQuota } from "../domain/probe.ts";
+import { catalogFromObservations, inventoryDraft } from "../domain/probe.ts";
 import { reviewCatalog } from "../domain/routing.ts";
 import { buildSuggestionRequest, parseSuggestionResponse, SuggestionError } from "../domain/suggestions.ts";
 import { RefusalSchema, rootActionSchemas, type ActionInput, type ActionResult, type RootAction } from "./contract.ts";
@@ -90,7 +90,7 @@ const productHandlers: ProductHandlers = {
     return { revision: record.revision, accountPool, poolIdentityDigest: poolIdentity(accountPool).poolIdentityDigest };
   },
   async draftInventory(_ctx, args) { return inventoryDraft(args.inventory, args.budget); },
-  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { separate: separateQuota(args.inventory, args.metadata), budget: args.budget }); },
+  async deriveCatalog(_ctx, args) { return catalogFromObservations(args.inventory, args.benchmark, { budget: args.budget }); },
   composeSession,
   listProfiles,
   runSession,

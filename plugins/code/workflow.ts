@@ -9,7 +9,7 @@ import { observePermissionPlan, operationReady, type PermissionPlanInput } from 
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
-import { quotaProviders, type Exclusion } from "../domain/probe.ts";
+import type { Exclusion } from "../domain/probe.ts";
 import { clampSelection } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
@@ -23,6 +23,7 @@ const messages: Readonly<Record<string, string>> = {
   code_catalog_missing: "No model list is in use yet. Review one in Models.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
+  code_omp_changed: "OMP or its model list changed on the machine since the inventory. Verify again.",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
   code_invalid_selection: "This profile cannot be formed from the current models.",
   code_budget_unsatisfiable: "No free route serves this profile.",
@@ -91,7 +92,9 @@ export type VerificationOptions = { isCurrent?: () => boolean; signal?: AbortSig
  * used. `exclusions` are the ids never probed, with their reason: unstable ids, and in a family
  * Code does not require, the versions its newest supersedes and the models that would regress its
  * ladder (domain/probe.ts `probeSet`). `replacesDraft` says the staged
- * catalog this workspace holds will be replaced.
+ * catalog this workspace holds will be replaced. `inventoryArtifactSha256` and `catalogRevision`
+ * are the OMP the inventory ran under: the artifact its job ran from and the model catalog OMP
+ * bundled when it started, which the verification records.
  */
 export type ChargeReview = {
   target: Target;
@@ -99,6 +102,8 @@ export type ChargeReview = {
   budget: Selection["budget"];
   inventoryJobId: string;
   inventory: InventoryReceipt;
+  inventoryArtifactSha256: string;
+  catalogRevision: string;
   candidates: BenchmarkInput;
   providers: { provider: string; requests: number }[];
   requests: number;
@@ -113,6 +118,14 @@ export type PendingVerification = {
   charge: ChargeReview;
   confirm: (selection: Selection | null, options?: VerificationOptions) => Promise<VerifiedModels>;
 };
+/**
+ * The artifact a destination's OMP inventory operation is installed from, as `describeDestination`
+ * pins it: the identity of the OMP runtime an inventory there runs, whatever version it reports.
+ * Null when the operation is not installed.
+ */
+export function inventoryArtifact(destination: OmpResult<"describeDestination">): string | null {
+  return destination.operations.find(operation => operation.operationId === INVENTORY_OPERATION_ID)?.pins?.artifactSha256 ?? null;
+}
 /** How often a verification re-reads the probe job it waits on. OMP reports no progress inside
  * a job, so the per-provider progress a verification reports is the provider jobs it finished. */
 const PROBE_POLL_MS = 1_000;
@@ -208,8 +221,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
   }
-  // The bundled list the render-only preview is drawn from, and whose `ompVersion` says which
-  // OMP a verified catalog is compared against. Never a source of a saved profile.
+  // The bundled list the render-only preview is drawn from. Never a source of a saved profile.
   const readStarterCatalog = () => omp("readModelCatalog", { providers: ["anthropic", "deepseek", "openai-codex"] });
   async function readJob(node: JobNode) {
     if (!node.operationId.startsWith(`${OMP_PLUGIN_ID}.`)) throw new WorkflowError("omp_result_unavailable");
@@ -217,12 +229,6 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     if (job.machineId !== node.machineId || job.pluginId !== OMP_PLUGIN_ID || job.operationId !== node.operationId || job.jobId !== node.jobId)
       throw new WorkflowError("omp_result_unavailable");
     return job;
-  }
-  // Inventory rows carry no quota class yet, so which models draw a quota of their own (Spark) is
-  // read from OMP's bundled metadata; the derivation joins it only at the inventory's OMP version.
-  async function quotaMetadata(inventory: OmpResult<"readInventory">["inventory"]): Promise<{ metadata?: OmpResult<"readModelCatalog"> }> {
-    const providers = quotaProviders(inventory);
-    return providers.length === 0 ? {} : { metadata: await omp("readModelCatalog", { providers }) };
   }
   // The budget is the one already selected, not a separate choice: deriving a catalog under a
   // free budget while the selection asks for free is the same question asked once. Required
@@ -234,7 +240,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   }
   async function readBenchmark(input: OmpInput<"readBenchmark">, budget: Selection["budget"]) {
     const [inventory, receipt] = await Promise.all([omp("readInventory", { containerId: input.containerId, machineId: input.machineId, jobId: input.inventoryJobId }), omp("readBenchmark", input)]);
-    const derived = await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark, budget, ...await quotaMetadata(inventory.inventory) });
+    const derived = await code("deriveCatalog", { inventory: inventory.inventory, benchmark: receipt.benchmark, budget });
     // The bare document is what gets staged; the exclusions say why each other offered model is absent.
     return { ...receipt, catalog: derived.document, exclusions: derived.exclusions };
   }
@@ -271,11 +277,17 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     if (current.state !== "exited" || current.result?.exitCode !== 0)
       throw run.fail(`job ${job.jobId} ${current.state}${current.result?.exitCode == null ? "" : ` with exit code ${current.result.exitCode}`}`);
   }
+  // An empty filter selects no rows; the revision still covers OMP's whole unfiltered model catalog.
+  const readCatalogRevision = async () => (await omp("readModelCatalog", { providers: [] })).revision;
   /** The world a charge was reviewed in, still: the same Code revision, the same exact account
-   * pool and the same OMP defaults. Anything else would spend or save against a different one. */
+   * pool, the same OMP defaults and the same OMP — the destination's inventory operation installed
+   * from the artifact the inventory ran from, and the same bundled model catalog. Anything else
+   * would spend or save against a different one. */
   async function unchangedCharge(charge: ChargeReview, run: VerificationRun) {
-    const [defaults, pool] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(charge.target.containerId, charge.revision)]));
+    const [defaults, pool, destination, catalogRevision] = await run.call(() => Promise.all([omp("readDefaults", {}),
+      observePool(charge.target.containerId, charge.revision), omp("describeDestination", charge.target), readCatalogRevision()]));
     if (defaults.revision !== charge.defaultsRevision) throw run.fail("omp_defaults_changed");
+    if (inventoryArtifact(destination) !== charge.inventoryArtifactSha256 || catalogRevision !== charge.catalogRevision) throw run.fail("code_omp_changed");
     if (pool.poolIdentityDigest !== charge.pool.poolIdentityDigest) throw run.fail("code_accounts_changed");
     return pool;
   }
@@ -287,8 +299,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
    * or paid for yet. Only `confirm` spends: one benchmark job per provider, then derive, stage,
    * review, promote, and save the caller's selection narrowed to what the verified catalog hosts.
    *
-   * Every step re-observes before it acts and stops, naming itself, on a moved revision, pool or
-   * OMP defaults, a refusal, a cancelled `signal` or a revoked `isCurrent`. A stop never undoes:
+   * Every step re-observes before it acts and stops, naming itself, on a moved revision, pool,
+   * OMP defaults or OMP, a refusal, a cancelled `signal` or a revoked `isCurrent`. A stop never undoes:
    * probe jobs stay in OMP's history and a staged catalog stays staged, both named in the error's
    * evidence. A failed or uncertain confirmation is never replayed; observe the workspace first.
    */
@@ -307,22 +319,27 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     }
     const revision = record.revision, replacesDraft = record.draft !== null;
     run.enter("inventory");
-    const [defaults, pool] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision)]));
+    // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
+    // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
+    const [defaults, pool, catalogRevision] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
+      readCatalogRevision()]));
     // The start is checked by the job's own wait, so a stop that lands now cancels the job rather than abandoning it.
     const job = await run.call(() => omp("startInventory", { ...target, expectedDefaultsRevision: defaults.revision, accountPool: pool.accountPool }), false);
     evidence.inventoryJobId = job.jobId;
     await settledJob(job, { kind: "job", machineId: target.machineId, operationId: INVENTORY_OPERATION_ID, jobId: job.jobId }, run);
-    const { inventory } = await run.call(() => omp("readInventory", { ...target, jobId: job.jobId }));
+    // The verification records the OMP this inventory ran under: its job's artifact, and the model list read before it started.
+    const { job: inventoryJob, inventory } = await run.call(() => omp("readInventory", { ...target, jobId: job.jobId }));
     run.enter("draft");
     const draft = await run.call(() => code("draftInventory", { inventory, budget: input.budget }));
     const requests = new Map<string, number>();
     for (const candidate of draft.benchmark.candidates) requests.set(candidate.provider, (requests.get(candidate.provider) ?? 0) + 1);
     const charge: ChargeReview = { target: { ...target }, revision, budget: input.budget, inventoryJobId: job.jobId, inventory,
+      inventoryArtifactSha256: inventoryJob.artifactSha256, catalogRevision,
       candidates: draft.benchmark, providers: [...requests].sort(([left], [right]) => left < right ? -1 : 1).map(([provider, count]) => ({ provider, requests: count })),
       requests: draft.benchmark.candidates.length, exclusions: draft.exclusions,
       pool: { providers: pool.providers, poolIdentityDigest: pool.poolIdentityDigest }, defaultsRevision: defaults.revision, replacesDraft };
     // The charge is answered only for a world that still holds, so the operator never confirms a
-    // spend against a pool or defaults that moved while the inventory ran.
+    // spend against a pool, defaults or OMP that moved while the inventory ran.
     await unchangedCharge(charge, run);
     run.progress(charge.providers.map(({ provider, requests: total }) => ({ provider, done: 0, total })));
     let confirmed = false;
@@ -359,7 +376,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: charge.inventory.ompVersion,
       inventoryObservedAt: charge.inventory.observedAt, startedAt: Math.min(...receipts.map(receipt => receipt.startedAt)),
       completedAt: Math.max(...receipts.map(receipt => receipt.completedAt)), results: receipts.flatMap(receipt => receipt.results) };
-    const derived = await run.call(async () => code("deriveCatalog", { inventory: charge.inventory, benchmark, budget: charge.budget, ...await quotaMetadata(charge.inventory) }));
+    const derived = await run.call(() => code("deriveCatalog", { inventory: charge.inventory, benchmark, budget: charge.budget }));
     // Narrowed before anything is written, so a selection the verified catalog cannot serve stops
     // here with nothing staged, rather than after a promotion saved its default instead.
     let selection: Selection;
@@ -368,8 +385,9 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     run.enter("stage");
     const pool = await unchangedCharge(charge, run);
     const staged = await run.call(() => code("stageCatalog", { containerId: target.containerId, expectedRevision: charge.revision, document: derived.document,
-      verification: { ompVersion: charge.inventory.ompVersion, inventoryObservedAt: charge.inventory.observedAt,
-        benchmarkCompletedAt: benchmark.completedAt, accounts: pool.accounts, poolIdentityDigest: charge.pool.poolIdentityDigest } }));
+      verification: { ompVersion: charge.inventory.ompVersion, inventoryArtifactSha256: charge.inventoryArtifactSha256, catalogRevision: charge.catalogRevision,
+        inventoryObservedAt: charge.inventory.observedAt, benchmarkCompletedAt: benchmark.completedAt, accounts: pool.accounts,
+        poolIdentityDigest: charge.pool.poolIdentityDigest } }));
     run.evidence.revision = staged.revision;
     run.enter("review");
     const review = await run.call(() => code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft" }));

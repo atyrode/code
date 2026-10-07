@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceConfigurationSchema, ServiceReplySchema, type ServiceConfiguration } from "@manifold/protocol";
 import { planDataMigration, type DataPlan } from "@manifold/plugin";
-import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt, ModelCatalogSnapshot } from "@atyrode/manifold-omp";
+import { OMP_VERSION, type AccountsObservation, type BenchmarkReceipt, type InventoryReceipt, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
@@ -409,16 +409,16 @@ describe("pure client-supplied policy composition", () => {
 
   test("inventory policy remains an unmeasured draft; deriving a catalog requires exact matching benchmark candidates", async () => {
     const f = fixture();
-    const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: now,
+    const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: now,
       models: document().models.map(model => ({ provider: model.provider, id: model.id, api: model.api,
         inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
         contextWindow: model.tier * 200_000, maxTokens: 8192, reasoning: true,
-        thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images })) };
+        thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images, quotaTier: null })) };
     const draft = await accepted(f, "draftInventory", { inventory, budget: "any" });
     // The charge, and nothing a caller could stage before a single model was probed.
     expect("document" in draft).toBe(false);
     expect(draft.benchmark.candidates.map(candidate => candidate.id)).toEqual(["native-model1", "native-model2", "native-model3"]);
-    const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
+    const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
       inventoryObservedAt: now, startedAt: now, completedAt: now + 1,
       results: draft.benchmark.candidates.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) };
     const derived = await accepted(f, "deriveCatalog", { inventory, benchmark, budget: "any" });
@@ -454,22 +454,41 @@ describe("pure client-supplied policy composition", () => {
 describe("verified catalogs and launch-time honesty", () => {
   async function verification(f: Fixture, revision: number, observation = accounts()) {
     const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: revision, accounts: observation });
-    return { ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, accounts: observation,
-      poolIdentityDigest: probe.poolIdentityDigest };
+    return { ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64), inventoryObservedAt: now - 2000,
+      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest };
   }
 
   test("a verification records the pool Code reads itself, and review and promotion carry exactly that provenance", async () => {
     const f = fixture(), record = await initialize(f);
     const verified = await verification(f, record.revision);
     const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: record.revision, document: document(), verification: verified });
-    expect(staged.draft?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000,
-      providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
+    expect(staged.draft?.provenance).toEqual({ ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64),
+      inventoryObservedAt: now - 2000, benchmarkCompletedAt: now - 1000, providers: ["anthropic"], poolIdentityDigest: verified.poolIdentityDigest });
     const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
     expect(review.provenance).toEqual(staged.draft!.provenance);
     const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
     expect(promoted.active).toEqual(staged.draft);
     // Manual authorship stays exactly that: the same document staged without a verification is unverified.
     expect((await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: document() })).draft?.provenance).toBeNull();
+  });
+
+  test("a verification recorded without the OMP runtime and model catalog it ran against reads as unverified, without a schema change", async () => {
+    const f = fixture(), record = await initialize(f);
+    const staged = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: record.revision, document: document(), verification: await verification(f, record.revision) });
+    const review = await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft" });
+    const promoted = await accepted(f, "promoteCatalog", { ...workspace, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
+    // The record as schema 4 was first written: the same verification, without either identity.
+    const { inventoryArtifactSha256: _artifact, catalogRevision: _catalog, ...unidentified } = promoted.active!.provenance!;
+    const key = `configuration/${digestOf(workspace)}`, raw = JSON.stringify({ ...promoted, active: { ...promoted.active, provenance: unidentified } });
+    f.store.set(key, raw);
+    // Nothing compares it with the OMP present now, so it is no verification at all, and a read writes nothing.
+    expect((await configuration(f))?.active?.provenance).toBeNull();
+    expect(f.store.get(key)).toBe(raw);
+    expect((await accepted(f, "reviewCatalog", { ...workspace, expectedRevision: promoted.revision, source: "active" })).provenance).toBeNull();
+    // The next CAS persists the same schema version, unverified.
+    const next = await accepted(f, "select", { ...workspace, expectedRevision: promoted.revision, selection: { ...promoted.selection!, planYolo: !promoted.selection!.planYolo } });
+    expect(JSON.parse(f.store.get(key)!)).toMatchObject({ schemaVersion: 4, active: { provenance: null } });
+    expect(next.active?.provenance).toBeNull();
   });
 
   test("a verification whose pool moved, or that claims what its pool and receipts cannot, stages nothing", async () => {

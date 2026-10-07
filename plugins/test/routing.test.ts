@@ -154,13 +154,15 @@ describe("what a team would strand, as a recent row says it", () => {
 describe("the model list failing once a profile is shown", () => {
   test("a profile the model holds keeps its routes, with the failure said beside them", () => {
     // A frozen bundled starter, a local draft or a staged catalog: the list failing later takes none of it away.
-    expect(modelListFailure(true, false, true)).toBe("beside");
+    expect(modelListFailure(true, null, true)).toBe("beside");
+    // A stored verification holds only for the list's revision, so a failed read of it is never passed over in silence.
+    expect(modelListFailure(true, { provenance: {} }, true)).toBe("beside");
   });
 
-  test("only with no profile does the failure take its place, and a stored catalog never needs the list", () => {
-    expect(modelListFailure(true, false, false)).toBe("instead");
-    expect(modelListFailure(true, true, true)).toBe("none");
-    expect(modelListFailure(true, true, false)).toBe("none");
-    expect(modelListFailure(false, false, true)).toBe("none");
+  test("only with no profile does the failure take its place, and a stored catalog without a verification never needs the list", () => {
+    expect(modelListFailure(true, null, false)).toBe("instead");
+    expect(modelListFailure(true, { provenance: null }, true)).toBe("none");
+    expect(modelListFailure(true, { provenance: null }, false)).toBe("none");
+    expect(modelListFailure(false, null, true)).toBe("none");
   });
 });

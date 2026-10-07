@@ -191,7 +191,7 @@ function Workbench({ host, target, machine, machines, machineId, rosterError, av
   }, [usage.view]);
   const fallbacks = selection?.fallback ?? false;
   // The bundled list's failure is said in the launch line, with its retry and Models, whatever else it says.
-  const listFailure = modelListFailure(Boolean(metadata.error || starterError), Boolean(record?.active), model.document !== null);
+  const listFailure = modelListFailure(Boolean(metadata.error || starterError), record?.active ?? null, model.document !== null);
   const lane = selection?.lane;
   const accent = !lane || lane.kind === "mixed" ? "var(--tui-mixed)" : `var(--code-${hueOf(lane.family)})`;
 

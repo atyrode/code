@@ -129,14 +129,12 @@ function blockerReason(code: LaunchBlockerCode): LaunchBlocker {
 function blocked(code: LaunchBlockerCode): LaunchStep {
   return { step: "blocked", reason: blockerReason(code) };
 }
-/** Verification preconditions while the verification is not current; `verify` when it may run.
- * A verification writes shared policy and spends through the destination and the saved account
- * pool, so it needs what a write, a probe and that pool need — not a mounted canvas, launch
- * permission, skills or a local model review. A pool that cannot be read or holds no account is
- * refused here rather than by the run it would stop. */
-function verifyGate(facts: LaunchFacts): LaunchBlockerCode | "verify" | null {
-  if (facts.verification.status === "current") return null;
-  if (facts.verification.status === "verifying") return "verifying";
+/** What a verification needs to run, whatever the recorded one's status: the first unmet
+ * precondition, or null. A verification writes shared policy and spends through the destination
+ * and the saved account pool, so it needs what a write, a probe and that pool need — not a
+ * mounted canvas, launch permission, skills or a local model review. A pool that cannot be read
+ * or holds no account is refused here rather than by the run it would stop. */
+function verifyPreconditions(facts: LaunchFacts): LaunchBlockerCode | null {
   if (!facts.writable) return "read-only";
   if (facts.stale) return "conflict";
   if (!facts.available) return "unavailable";
@@ -144,7 +142,13 @@ function verifyGate(facts: LaunchFacts): LaunchBlockerCode | "verify" | null {
   if (facts.accounts === "none") return "no-accounts";
   if (facts.queries.setup.error) return "verify-status";
   if (!facts.verification.ready) return "verify-permissions";
-  return "verify";
+  return null;
+}
+/** Verification as the next step: null once it is current, else `verify` when it may run or what blocks it. */
+function verifyGate(facts: LaunchFacts): LaunchBlockerCode | "verify" | null {
+  if (facts.verification.status === "current") return null;
+  if (facts.verification.status === "verifying") return "verifying";
+  return verifyPreconditions(facts) ?? "verify";
 }
 /** Launch preconditions once the verification is current: the first unmet one, or null when review/launch may proceed. */
 function launchGate(facts: LaunchFacts): LaunchBlockerCode | null {
@@ -239,7 +243,7 @@ export type GateFacts = LaunchFacts & {
  */
 export type WorkbenchIntent = "verify" | "confirm" | "save" | "review" | "launch" | "resume" | "resume-with-team" | "open"
   | "edit-team" | "edit-options" | "edit-machine" | "edit-accounts";
-export type GateRefusalCode = LaunchBlockerCode | "running" | "charge" | "no-charge" | "no-account" | "no-session" | "plans" | "verified" | "not-next";
+export type GateRefusalCode = LaunchBlockerCode | "running" | "charge" | "no-charge" | "no-account" | "no-session" | "plans" | "not-next";
 export type GateRefusal = { code: GateRefusalCode; text: string; action?: LaunchBlockerAction; gap?: ServiceGap };
 export type GateVerdict = { open: true } | { open: false; refusal: GateRefusal };
 
@@ -251,7 +255,6 @@ const refusalText: Readonly<Record<Exclude<GateRefusalCode, LaunchBlockerCode | 
   "no-account": "No included account serves a provider this profile leads on.",
   "no-session": "Choose a saved session to resume.",
   plans: "Resuming with the current profile cannot approve plans automatically.",
-  verified: "Models are verified with the present accounts and OMP.",
 };
 function refuse(code: Exclude<GateRefusalCode, LaunchBlockerCode | "not-next">, gap?: ServiceGap): GateVerdict {
   return { open: false, refusal: gap ? { code, text: refusalText[code], gap } : { code, text: refusalText[code] } };
@@ -273,7 +276,9 @@ function stopped(code: LaunchBlockerCode): GateVerdict {
  * edits of the team, session options, machine or accounts wait too, so a step never completes on a
  * premise changed under it. Confirm needs a charge of at least one request. The verb's steps follow
  * `nextLaunchStep`, except that a verification is judged by its own preconditions and a save by
- * `saveGate`; save, review and launch also refuse a lead no included account serves, as the session
+ * `saveGate`. A verification that is current may still be renewed on purpose — what OMP or the
+ * accounts can reach changes in ways no observation proves — and its charge still waits on its own
+ * Confirm. Save, review and launch also refuse a lead no included account serves, as the session
  * door does, so a team the door refuses is never saved on the way to a launch it cannot reach.
  * Resuming needs write access, a canvas to place the terminal, the machine and a chosen session;
  * with the team, the team must be what a launch would compose. Opening a running terminal and
@@ -291,8 +296,9 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
     case "edit-accounts": return facts.writable ? OPEN : stopped("read-only");
     case "verify": {
       if (!facts.configurationCurrent) return stopped("configuration");
-      const verify = verifyGate(facts);
-      return verify === "verify" ? OPEN : verify === null ? refuse("verified") : stopped(verify);
+      if (facts.verification.status === "verifying") return stopped("verifying");
+      const blocker = verifyPreconditions(facts);
+      return blocker === null ? OPEN : stopped(blocker);
     }
     case "save": {
       if (!facts.configurationCurrent) return stopped("configuration");

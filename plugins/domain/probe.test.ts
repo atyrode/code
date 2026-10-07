@@ -1,17 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt, type ModelCatalogSnapshot,
-  type ThinkingLevel } from "@atyrode/manifold-omp";
-import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, separateQuota, type ScaffoldOptions } from "./probe.ts";
+import { OMP_VERSION, PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObservation, parseInventoryObservation, type InventoryReceipt,
+  type ModelCatalogSnapshot, type QuotaTierOf, type ThinkingLevel } from "@atyrode/manifold-omp";
+import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, type ScaffoldOptions } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
 
 const identity = { provider: "anthropic", id: "claude-sonnet-5", api: "anthropic-messages" };
+/** The SDK's quota classification of every identity these observations list: none. */
+const unclassified: QuotaTierOf = () => null;
 function row(provider = identity.provider, id = identity.id) {
   return { provider, id, selector: `${provider}/${id}`, name: "not part of the receipt", contextWindow: 200000, maxTokens: 64000,
     reasoning: true, thinking: ["low", "high"], input: ["text", "image"],
     cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } };
 }
-const inventory = (): InventoryReceipt => parseInventoryObservation({ models: [row()] }, [identity], 100, "18.1.14");
+const inventory = (): InventoryReceipt => parseInventoryObservation({ models: [row()] }, [identity], 100, OMP_VERSION, unclassified);
 function report(input = benchmarkCandidates(inventory())) {
   return { runs: 1, maxTokens: 4, profile: "chat", failures: 0,
     models: input.candidates.map(candidate => ({ selector: `${candidate.provider}/${candidate.id}`, model: `${candidate.provider}/${candidate.id}`,
@@ -29,7 +31,7 @@ function fullInventory(): InventoryReceipt {
     { provider: "openai-codex", id: "gpt-pro-6", cost: 5, level: "max" },
   ];
   return parseInventoryObservation({ models: models.map(model => ({ ...row(model.provider, model.id), thinking: [model.level], cost: { input: model.cost, output: model.cost * 5, cacheRead: 0, cacheWrite: 0 } })) },
-    models.map(({ provider, id }) => ({ provider, id, api: provider === "anthropic" ? "anthropic-messages" : "openai-codex-responses" })), 100, "18.1.14");
+    models.map(({ provider, id }) => ({ provider, id, api: provider === "anthropic" ? "anthropic-messages" : "openai-codex-responses" })), 100, OMP_VERSION, unclassified);
 }
 
 function fourLevelInventory(): InventoryReceipt {
@@ -48,27 +50,27 @@ function fourLevelInventory(): InventoryReceipt {
 type Row = InventoryReceipt["models"][number];
 const apis: Record<string, string> = { "openai-codex": "openai-codex-responses", anthropic: "anthropic-messages", deepseek: "openai-completions" };
 /** A row with the input price, context window, thinking range and image support OMP 18.1.14's
- * bundled `pi-catalog` lists for it; no rule here reads the output price. */
+ * bundled `pi-catalog` lists for it, in no quota class; no rule here reads the output price. */
 function listed(provider: string, id: string, input: number, context: number, low: ThinkingLevel, high: ThinkingLevel, images = true): Row {
   const scale = ThinkingLevelSchema.options;
   return { provider, id, api: apis[provider]!, inputCostPerMillion: input, outputCostPerMillion: input * 5, contextWindow: context,
-    maxTokens: 128000, reasoning: true, thinkingLevels: scale.slice(scale.indexOf(low), scale.indexOf(high) + 1), images };
+    maxTokens: 128000, reasoning: true, thinkingLevels: scale.slice(scale.indexOf(low), scale.indexOf(high) + 1), images, quotaTier: null };
 }
 function receiptOf(models: Row[]): InventoryReceipt {
-  return { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: 100, models };
+  return { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 100, models };
 }
 /** A benchmark of every candidate: reachable, except the ids given another verdict. */
 function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {},
-  options: ScaffoldOptions = { separate: [], budget: "any" }) {
+  options: ScaffoldOptions = { budget: "any" }) {
   const input = benchmarkCandidates(inv, options), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
   return { ...receipt, results: receipt.results.map(result => verdicts[result.id]
     ? { ...result, status: verdicts[result.id], tokensPerSecond: null, timeToFirstTokenMs: null } : result) };
 }
 /** The catalog an inventory derives when every candidate answers: the ladder rules alone. */
-function derived(inv: InventoryReceipt, options: ScaffoldOptions = { separate: [], budget: "any" }) {
+function derived(inv: InventoryReceipt, options: ScaffoldOptions = { budget: "any" }) {
   return catalogFromObservations(inv, observed(inv, {}, options), options);
 }
-/** OMP 18.1.14's bundled OpenAI chat rows: what the starter and today's pinned inventory list. */
+/** OMP 18.1.14's bundled OpenAI chat rows, which the starter and that version's inventory listed. */
 function openai1814(): Row[] {
   return [
     listed("openai-codex", "gpt-5.4", 2.5, 272_000, "low", "xhigh"),
@@ -117,7 +119,7 @@ describe("pure typed scaffolding", () => {
     const inv = parseInventoryObservation({ models: [{
       ...row(genericIdentity.provider, genericIdentity.id), reasoning: false, thinking: null,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    }] }, [genericIdentity], 100, "18.1.14");
+    }] }, [genericIdentity], 100, OMP_VERSION, unclassified);
     const draft = inventoryDraft(inv, "any");
     expect(draft.benchmark.candidates).toEqual([{ ...genericIdentity, key: "vendor-example.free-model" }]);
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
@@ -263,14 +265,12 @@ describe("pure typed scaffolding", () => {
   });
   test("a model drawing a quota of its own never takes a rung, however cheap; an optional family can supply one rung", () => {
     const inv = fullInventory();
-    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01 });
+    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01, quotaTier: "spark" });
     inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
-    const separate = { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6" };
-    const result = derived(inv, { separate: [separate], budget: "any" });
-    expect(result.document.models.some(model => model.id === separate.id)).toBe(false);
+    const result = derived(inv);
+    expect(result.document.models.some(model => model.id === "gpt-spark-6")).toBe(false);
     expect(result.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota" });
     expect(result.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
-    expect(() => derived(inv, { separate: [{ ...separate, id: "gpt-missing-6" }], budget: "any" })).toThrow("probe_invalid_input");
   });
 
   /**
@@ -293,7 +293,7 @@ describe("pure typed scaffolding", () => {
     return parseInventoryObservation(
       { models: models.map(model => ({ ...row("openrouter", model.id), thinking: [model.level], contextWindow: model.context,
         cost: { input: model.cost, output: model.cost * 5, cacheRead: 0, cacheWrite: 0 } })) },
-      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, "18.1.14");
+      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, OMP_VERSION, unclassified);
   }
   function freeLadderInventory(): InventoryReceipt {
     // The same listing's free tier, which does carry separating evidence of its own.
@@ -305,7 +305,7 @@ describe("pure typed scaffolding", () => {
     return parseInventoryObservation(
       { models: models.map(model => ({ ...row("openrouter", model.id), thinking: [model.level], contextWindow: model.context,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })) },
-      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, "18.1.14");
+      models.map(({ id }) => ({ provider: "openrouter", id, api: "openai-completions" })), 100, OMP_VERSION, unclassified);
   }
 
   test("a free budget ladders only what costs nothing, and a variant address is not a disqualification", () => {
@@ -313,14 +313,14 @@ describe("pure typed scaffolding", () => {
 
     // Derived under `any`, the free model is tier 1 and every tier above it is paid, so the
     // constraint cannot be met by a catalog that was laddered without it.
-    const paid = compileCatalog(derived(mixed, { separate: [], budget: "any" }).document);
+    const paid = compileCatalog(derived(mixed, { budget: "any" }).document);
     expect(paid.models.filter(model => model.inputCostPerMillion === 0).map(model => model.tier)).toEqual([1]);
     expect(() => reviewCatalog(paid, { ...defaultSelection(paid), budget: "free" }, 101)).toThrow("budget_unsatisfiable");
 
     // Derived under `free`, the same free tier ladders on its own evidence — variant addresses
     // and all — and the constraint is met rather than refused.
     const inv = freeLadderInventory();
-    const result = derived(inv, { separate: [], budget: "free" });
+    const result = derived(inv, { budget: "free" });
     expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "alpha-1:free"], [2, "beta-2:free"], [3, "gamma-3:free"]]);
     const free = compileCatalog(result.document);
     const review = reviewCatalog(free, { ...defaultSelection(free), budget: "free" }, 101);
@@ -331,9 +331,9 @@ describe("pure typed scaffolding", () => {
     expect(routed.every(choice => free.model(choice.key).inputCostPerMillion === 0 && free.model(choice.key).outputCostPerMillion === 0)).toBe(true);
 
     // The budget also bounds what a benchmark would probe, which is what a probe run spends.
-    expect(benchmarkCandidates(mixed, { separate: [], budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
+    expect(benchmarkCandidates(mixed, { budget: "free" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free"]);
     // Under `any` the family's newest `delta` supersedes the older two, which are never probed.
-    expect(benchmarkCandidates(mixed, { separate: [], budget: "any" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free", "delta-4"]);
+    expect(benchmarkCandidates(mixed, { budget: "any" }).candidates.map(candidate => candidate.id)).toEqual(["alpha-1:free", "delta-4"]);
   });
 
   test("addresses differing only by a character outside the key alphabet keep distinct keys", () => {
@@ -342,7 +342,7 @@ describe("pure typed scaffolding", () => {
     // distinct models produced one key. Folding made them indistinguishable; escaping does not.
     // The second is the listing's most capable model, so both are rungs and both are probed.
     inv.models = [inv.models[0]!, { ...inv.models[3]!, id: "alpha-1-free" }];
-    const keys = benchmarkCandidates(inv, { separate: [], budget: "any" }).candidates.map(candidate => candidate.key);
+    const keys = benchmarkCandidates(inv, { budget: "any" }).candidates.map(candidate => candidate.key);
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toContain("openrouter.alpha-1_3Afree");
     expect(keys).toContain("openrouter.alpha-1-free");
@@ -355,7 +355,7 @@ describe("what a verification charges", () => {
     const inv = fullInventory();
     inv.models.push(...Array.from({ length: 40 }, (_, index): Row => ({ provider: "openrouter", id: `vendor${index}/model`, api: "openai-completions",
       inputCostPerMillion: index + 1, outputCostPerMillion: (index + 1) * 5, contextWindow: 100_000 + index * 1_000, maxTokens: 128000,
-      reasoning: true, thinkingLevels: ["low", "high"], images: true })));
+      reasoning: true, thinkingLevels: ["low", "high"], images: true, quotaTier: null })));
     return inv;
   }
   const ids = (input: { candidates: readonly { provider: string; id: string }[] }, provider: string) =>
@@ -483,22 +483,18 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     expect(() => catalogFromObservations(inv, observed(inv, verdicts)))
       .toThrow("code_ladder_regression: openai: openai-codex/gpt-5.5 regresses on openai-codex/gpt-5.6-luna");
   });
-  test("OMP's Spark quota class, joined to an inventory, keeps Spark off the ladder and out of every route", () => {
-    const inv = receiptOf([...openai1814(), listed("openai-codex", "gpt-5.3-codex-spark", 1.75, 128_000, "low", "xhigh", false), ...anthropic1814()]);
-    const metadata: ModelCatalogSnapshot = { schemaVersion: 1, source: "bundled", ompVersion: "18.1.14", revision: "a".repeat(64),
-      models: inv.models.map(model => ({ ...model,
-        quotaTier: model.id === "gpt-5.3-codex-spark" ? "spark" : model.provider === "openai-codex" ? "chat" : null })) };
-    const separate = separateQuota(inv, metadata);
-    expect(separate).toEqual([{ provider: "openai-codex", id: "gpt-5.3-codex-spark", api: "openai-codex-responses" }]);
-    const { document } = catalogFromObservations(inv, observed(inv), { separate, budget: "any" });
+  test("OMP's Spark quota class on an inventory row keeps Spark off the ladder and out of every route", () => {
+    const rows = [...openai1814(), listed("openai-codex", "gpt-5.3-codex-spark", 1.75, 128_000, "low", "xhigh", false), ...anthropic1814()];
+    const inv = receiptOf(rows.map(model => ({ ...model,
+      quotaTier: model.id === "gpt-5.3-codex-spark" ? "spark" : model.provider === "openai-codex" ? "chat" : null })));
+    const { document, exclusions } = catalogFromObservations(inv, observed(inv));
     expect(document.models.some(model => model.id === "gpt-5.3-codex-spark")).toBe(false);
+    expect(exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-5.3-codex-spark", reason: "separate_quota" });
     const catalog = compileCatalog(document), review = reviewCatalog(catalog, defaultSelection(catalog), 200);
     expect(review.selection.spark).toBe(false);
     expect(review.routes.some(route => [route.lead, ...route.fallback].some(choice => choice.key.includes("spark")))).toBe(false);
     // A stored selection that still asks for Spark is read with it off, never refused.
     expect(reviewCatalog(catalog, { ...defaultSelection(catalog), spark: true }, 200).selection.spark).toBe(false);
-    // Another OMP version's classification does not describe this inventory, so nothing is joined.
-    expect(separateQuota(inv, { ...metadata, ompVersion: "18.4.4" })).toEqual([]);
   });
 });
 
