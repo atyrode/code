@@ -9,13 +9,6 @@ import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
 export const ScaffoldOptionsSchema = z.strictObject({
   /**
-   * Identities a sanctioned quota classification puts in a quota of their own (OMP's bundled
-   * `quotaTier`, any class but chat, joined by `separateQuota`): Code spends no such quota, so
-   * they never become a rung. No usage IO here. Every one is an inventory identity, so the
-   * inventory bounds the list.
-   */
-  separate: z.array(ProbeIdentitySchema).max(PROBE_MODEL_LIMIT),
-  /**
    * WHAT THE LADDER MAY BE BUILT FROM, because a budget applied afterwards can be unsatisfiable
    * even when the observation could satisfy it.
    *
@@ -131,7 +124,7 @@ function candidateKey(model: InventoryModel): string {
  * the difference between a benchmark worth pricing and one worth stopping. Each family then
  * narrows it to what its ladder can use (`probeSet`).
  */
-export function benchmarkCandidates(inventoryValue: unknown, optionsValue: unknown = { separate: [], budget: "any" }): BenchmarkInput {
+export function benchmarkCandidates(inventoryValue: unknown, optionsValue: unknown = { budget: "any" }): BenchmarkInput {
   const inventory = parse(InventoryReceiptSchema, inventoryValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
   unique(inventory.models);
@@ -256,8 +249,7 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
  *
  * What is left unprobed is said where it has a reason (`superseded`, `regression`); a model that
  * is merely not chosen has none. The narrowing reads only the listing and the budget, never the
- * separate-quota classification, so the draft, which has no metadata, and the derivation probe the
- * same set.
+ * separate-quota classification, so a derivation probes exactly the set its draft charged.
  */
 function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { models: InventoryModel[]; unprobed: Exclusion[] } {
   const offered = inventory.models.filter(model => eligible(model) && admittedBy(budget, model));
@@ -274,21 +266,21 @@ function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { m
   }
   return { models, unprobed };
 }
-/** A row's static quota class puts it in a quota of its own: any class but chat (Spark's, for one). */
+/** A row's static quota class puts it in a quota of its own: any class but chat (Spark's, for one).
+ * Inventory and bundled metadata rows carry the same OMP SDK classification. */
 function separateClass(row: { readonly quotaTier: string | null }): boolean {
   return row.quotaTier !== null && row.quotaTier !== "chat";
 }
 function exclusion(model: Pick<ProbeIdentity, "provider" | "id">, reason: Exclusion["reason"]): Exclusion {
   return { provider: model.provider, id: model.id, reason };
 }
-function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, excluded: readonly Exclusion[],
+function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
   facts?: Map<string, BenchmarkReceipt["results"][number]>): DerivedCatalog {
   const models: CatalogModel[] = [];
   const exclusions = [...excluded];
-  const separate = unique(options.separate);
-  const own = (model: InventoryModel) => separate.get(probeAddress(model))?.api === model.api;
-  for (const model of allowed.filter(own)) exclusions.push(exclusion(model, "separate_quota"));
-  const laddered = allowed.filter(model => !own(model));
+  // Code spends no quota of its own, so a model drawing one never competes for a rung.
+  for (const model of allowed.filter(separateClass)) exclusions.push(exclusion(model, "separate_quota"));
+  const laddered = allowed.filter(model => !separateClass(model));
   for (const family of orderedFamilies(laddered.map(model => providerPolicy(model.provider).family))) {
     const policy = familyPolicy(family);
     const members = laddered.filter(model => providerPolicy(model.provider).family === family);
@@ -319,38 +311,13 @@ function scaffold(allowed: InventoryModel[], options: ScaffoldOptions, excluded:
   try { compileCatalog(document); } catch { throw new ProbeError("insufficient_ladder"); }
   return { document, exclusions: exclusions.sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
-/** Separate-quota identities are classifications of listed models, never models of their own. */
-function requireListed(separate: ScaffoldOptions["separate"], models: readonly InventoryModel[]): void {
-  const listed = unique(models);
-  for (const identity of separate) if (listed.get(probeAddress(identity))?.api !== identity.api) throw new ProbeError("invalid_input");
-}
-
-/**
- * THE QUOTA CLASSIFICATION AN INVENTORY DOES NOT CARRY YET. OMP's inventory rows have no
- * `quotaTier`, so a model drawing a quota of its own (Spark) would otherwise compete for a rung.
- * OMP's bundled metadata does classify them, and it describes these identities only when it is the
- * same OMP version's metadata: another version's classification is not joined, and the result is
- * simply none. The join is by exact provider, id and API.
- */
-export function separateQuota(inventoryValue: unknown, metadataValue: unknown): ScaffoldOptions["separate"] {
-  if (metadataValue === undefined) return [];
-  const inventory = parse(InventoryReceiptSchema, inventoryValue), metadata = parse(ModelCatalogSnapshotSchema, metadataValue);
-  if (metadata.ompVersion !== inventory.ompVersion) return [];
-  const listed = unique(inventory.models);
-  return metadata.models.flatMap(row => separateClass(row) && listed.get(probeAddress(row))?.api === row.api ? [{ provider: row.provider, id: row.id, api: row.api }] : []);
-}
-/** The providers whose bundled metadata `separateQuota` reads: every provider the inventory lists. */
-export function quotaProviders(inventory: InventoryReceipt): string[] {
-  return [...new Set(inventory.models.map(model => model.provider))].sort(compare);
-}
-
 /** Passive metadata is policy input, never inventory, reachability or measured performance.
  * Check the whole submitted identity set before narrowing it; silently choosing between
  * aliases would make the same response mean different policies to different callers. */
 export function catalogFromMetadata(snapshotValue: unknown, budget: Selection["budget"]): CatalogDocument {
   const snapshot = parse(ModelCatalogSnapshotSchema, snapshotValue);
   if (budget === undefined) throw new ProbeError("invalid_input");
-  const options = parse(ScaffoldOptionsSchema, { separate: [], budget }, "invalid_input");
+  const options = parse(ScaffoldOptionsSchema, { budget }, "invalid_input");
   unique(snapshot.models);
   // A class other than chat (Spark's, for one) is a quota Code does not spend, and stays out.
   const allowed = snapshot.models.filter(model => !separateClass(model) && eligible(model) && admittedBy(options.budget, model));
@@ -363,7 +330,7 @@ export function catalogFromMetadata(snapshotValue: unknown, budget: Selection["b
     if (keys.has(key)) throw new ProbeError("ambiguous_identity");
     keys.add(key);
   }
-  return scaffold(allowed, options, []).document;
+  return scaffold(allowed, []).document;
 }
 /** Ids a budget admits that are never probed or laddered because they name no fixed model. */
 function unstableExclusions(inventory: InventoryReceipt, budget: Selection["budget"]): Exclusion[] {
@@ -377,14 +344,14 @@ function unstableExclusions(inventory: InventoryReceipt, budget: Selection["budg
  */
 export function inventoryDraft(inventoryValue: unknown, budget: Selection["budget"]): CatalogDraft {
   const inventory = parse(InventoryReceiptSchema, inventoryValue);
-  const options = parse(ScaffoldOptionsSchema, { separate: [], budget }, "invalid_input");
+  const options = parse(ScaffoldOptionsSchema, { budget }, "invalid_input");
   unique(inventory.models);
   const { models, unprobed } = probeSet(inventory, options.budget);
   return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt, benchmark: benchmarkInput(inventory, models),
     exclusions: [...unstableExclusions(inventory, options.budget), ...unprobed].sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
 /** Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions. */
-export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { separate: [], budget: "any" }): DerivedCatalog {
+export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { budget: "any" }): DerivedCatalog {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
   unique(inventory.models);
@@ -398,12 +365,11 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
     if (!fact || fact.api !== candidate.api || fact.key !== candidate.key) throw new ProbeError("missing_probe");
     if (fact.status === "unmatched" || fact.status === "unresolved") throw new ProbeError("inconclusive_probe");
   }
-  requireListed(options.separate, inventory.models);
   const refused: Exclusion[] = [];
   for (const model of offered) {
     const status = facts.get(probeAddress(model))!.status;
     if (status === "not_found" || status === "client_blocked") refused.push(exclusion(model, status));
   }
-  return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"), options,
+  return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"),
     [...unstableExclusions(inventory, options.budget), ...unprobed, ...refused], facts);
 }

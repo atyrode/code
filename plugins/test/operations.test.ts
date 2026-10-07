@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceConfigurationSchema, ServiceReplySchema, type ServiceConfiguration } from "@manifold/protocol";
 import { planDataMigration, type DataPlan } from "@manifold/plugin";
-import type { AccountsObservation, BenchmarkReceipt, InventoryReceipt, ModelCatalogSnapshot } from "@atyrode/manifold-omp";
+import { OMP_VERSION, type AccountsObservation, type BenchmarkReceipt, type InventoryReceipt, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
 import { actionDoor, actionSchemas, createCodeClient, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Configuration, type Target } from "../code/contract.ts";
 import { digestOf, type CodeContext } from "../code/context.ts";
@@ -409,16 +409,16 @@ describe("pure client-supplied policy composition", () => {
 
   test("inventory policy remains an unmeasured draft; deriving a catalog requires exact matching benchmark candidates", async () => {
     const f = fixture();
-    const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: now,
+    const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: now,
       models: document().models.map(model => ({ provider: model.provider, id: model.id, api: model.api,
         inputCostPerMillion: model.inputCostPerMillion, outputCostPerMillion: model.outputCostPerMillion,
         contextWindow: model.tier * 200_000, maxTokens: 8192, reasoning: true,
-        thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images })) };
+        thinkingLevels: [(["low", "medium", "high"] as const)[model.tier - 1]!], images: model.images, quotaTier: null })) };
     const draft = await accepted(f, "draftInventory", { inventory, budget: "any" });
     // The charge, and nothing a caller could stage before a single model was probed.
     expect("document" in draft).toBe(false);
     expect(draft.benchmark.candidates.map(candidate => candidate.id)).toEqual(["native-model1", "native-model2", "native-model3"]);
-    const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
+    const benchmark: BenchmarkReceipt = { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
       inventoryObservedAt: now, startedAt: now, completedAt: now + 1,
       results: draft.benchmark.candidates.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) };
     const derived = await accepted(f, "deriveCatalog", { inventory, benchmark, budget: "any" });

@@ -1616,7 +1616,7 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
   for (const operationId of [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID]) assert(packed.manifest.machine.operations[operationId], "Synthetic readiness names real upstream operations");
   const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "b".repeat(64), resourceBindingDigest: "c".repeat(64) };
   const model = (id: string, input: number, levels: ("low" | "medium" | "high" | "xhigh" | "max")[]) => ({ provider: "anthropic", id, api: "anthropic-messages",
-    inputCostPerMillion: input, outputCostPerMillion: input * 5, contextWindow: 200_000, maxTokens: 64_000, reasoning: true, thinkingLevels: levels, images: true });
+    inputCostPerMillion: input, outputCostPerMillion: input * 5, contextWindow: 200_000, maxTokens: 64_000, reasoning: true, thinkingLevels: levels, images: true, quotaTier: null });
   const inventory: InventoryReceipt = { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: Date.now() - 5_000, models: [
     model("claude-haiku-5", 1, ["low", "medium", "high"]), model("claude-sonnet-5", 3, ["low", "medium", "high", "xhigh"]),
     model("claude-opus-5", 5, ["low", "medium", "high", "xhigh", "max"]) ] };

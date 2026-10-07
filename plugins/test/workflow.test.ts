@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID,
+import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID, OMP_VERSION,
   type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient, VerificationError, type VerificationProgress } from "../code/workflow.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
@@ -31,7 +31,7 @@ function probeJob(jobId: string, operationId: string, state: PublicJob["state"])
 }
 function row(provider: string, id: string, input: number, context: number, levels: readonly ("low" | "medium" | "high" | "xhigh" | "max")[], images: boolean) {
   return { provider, id, api: provider === "anthropic" ? "anthropic-messages" : "openai-completions", inputCostPerMillion: input,
-    outputCostPerMillion: input * 5, contextWindow: context, maxTokens: 64_000, reasoning: true, thinkingLevels: [...levels], images };
+    outputCostPerMillion: input * 5, contextWindow: context, maxTokens: 64_000, reasoning: true, thinkingLevels: [...levels], images, quotaTier: null };
 }
 /**
  * Real Code doors over an in-memory container, and an OMP that answers inventory and benchmark
@@ -68,7 +68,7 @@ function verificationFixture() {
   const omp = {
     accounts: { scope, observedAt: 5_000, status: "fresh", accounts: [slot("anthropic", 1), slot("deepseek", 2)] } as AccountsObservation,
     defaults: { revision: 3, overlay: {}, updatedAt: null, updatedBy: null } as OmpResult<"readDefaults">,
-    inventory: { schemaVersion: 1, kind: "inventory", ompVersion: "18.1.14", observedAt: 6_000, models: [
+    inventory: { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 6_000, models: [
       row("anthropic", "claude-haiku-5", 1, 200_000, ["low", "medium", "high"], true),
       row("anthropic", "claude-sonnet-5", 3, 200_000, ["low", "medium", "high", "xhigh"], true),
       row("anthropic", "claude-opus-5", 5, 200_000, ["low", "medium", "high", "xhigh", "max"], true),
@@ -90,9 +90,6 @@ function verificationFixture() {
     if (door === actionDoor("readDefaults")) return omp.defaults;
     if (door === actionDoor("startInventory")) return job("inventory-1", INVENTORY_OPERATION_ID);
     if (door === actionDoor("readInventory")) return { job: probeJob("inventory-1", INVENTORY_OPERATION_ID, "exited"), inventory: omp.inventory };
-    // The bundled classification the derivation joins: every listed model is chat.
-    if (door === actionDoor("readModelCatalog")) return { schemaVersion: 1, source: "bundled", ompVersion: omp.inventory.ompVersion, revision: "a".repeat(64),
-      models: omp.inventory.models.map(model => ({ ...model, quotaTier: null })) };
     if (door === actionDoor("startBenchmark")) {
       benchmarked.push(ompActionSchemas.startBenchmark.input.parse(raw).candidates);
       return job(`benchmark-${++benchmarks}`, BENCHMARK_OPERATION_ID);
@@ -100,7 +97,7 @@ function verificationFixture() {
     if (door === actionDoor("readBenchmark")) {
       const { jobId } = ompActionSchemas.readBenchmark.input.parse(raw);
       const candidates = benchmarked[Number(jobId.slice("benchmark-".length)) - 1]!.candidates;
-      return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: "18.1.14",
+      return { job: probeJob(jobId, BENCHMARK_OPERATION_ID, "exited"), benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION,
         inventoryObservedAt: omp.inventory.observedAt, startedAt: 7_000 + benchmarks, completedAt: 8_000 + benchmarks,
         results: candidates.map(candidate => verdicts[candidate.id]
           ? { ...candidate, status: verdicts[candidate.id], tokensPerSecond: null, timeToFirstTokenMs: null }
@@ -147,7 +144,7 @@ test("verification prepares a charge without spending, and one confirmation save
   expect(f.benchmarked.map(input => [...new Set(input.candidates.map(candidate => candidate.provider))])).toEqual([["anthropic"], ["deepseek"]]);
   const saved = verified.configuration;
   expect((await f.configuration()).configuration).toEqual(saved);
-  expect(saved.active?.provenance).toEqual({ ompVersion: "18.1.14", inventoryObservedAt: 6_000, benchmarkCompletedAt: 8_002,
+  expect(saved.active?.provenance).toEqual({ ompVersion: OMP_VERSION, inventoryObservedAt: 6_000, benchmarkCompletedAt: 8_002,
     providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
   expect(saved.draft).toBeNull();
   // No OpenAI so no mixed lane, no fourth Anthropic rung and no Spark: those narrow to the catalog's
