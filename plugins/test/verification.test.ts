@@ -176,6 +176,19 @@ describe("this panel's own writes of the model list in Models", () => {
     expect(followCatalogWrite(stagedEdit, 2, { ...staged, revision: 3, draftDigest: null })).toBeNull();
   });
 
+  test("an import whose stage is refused after its own initialization leaves the preview on that initialization, never a conflict", () => {
+    // The import initialized the absent workspace (0 → 1); its stage was then refused, so nothing is staged.
+    const initialized: SharedBase = { revision: 1, initialized: true, catalogDigest: null, draftDigest: null, selection: null, metadataKey: "bundled" };
+    const followed = followCatalogWrite(starter, 0, initialized);
+    // The preview follows it as it follows a stopped first verification's initialization.
+    expect(followed).toEqual(followInitialization(starter, 0, 1));
+    const step = (draft: DraftBase) => nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null,
+      stale: draftStale(draft, initialized) }, "unverified"));
+    expect(step(followed!).step).toBe("verify");
+    // Not followed, the panel's own initialization would read as a change made elsewhere.
+    expect(step(starter)).toMatchObject({ step: "blocked", reason: { code: "conflict" } });
+  });
+
   test("a list staged or discarded beside the one in use leaves an edit of it on show, at the new revision; putting another in use replaces it", () => {
     const edit: DraftBase = { source: "active", revision: 7, initialized: true, catalogDigest: inUse, draftDigest: null, baseSelection: selection, metadataKey: null };
     const beside: SharedBase = { revision: 8, initialized: true, catalogDigest: inUse, draftDigest: other, selection, metadataKey: null };

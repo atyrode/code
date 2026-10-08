@@ -3248,7 +3248,9 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
  * explicit press, which initializes the absent workspace at the revision the panel read and stages once; nothing is
  * verified or put in use until use staged list, which reviews the staged list at its revision and promotes exactly that
  * review. A competing first save made meanwhile is never overwritten: the panel's configuration reads are held so it
- * stages against the absent workspace it last read, and the real server refuses that initialization.
+ * stages against the absent workspace it last read, and the real server refuses that initialization. An import whose own
+ * initialization succeeds and whose stage is then refused leaves the bundled preview on that initialization, never a
+ * change made elsewhere.
  */
 async function importedCatalogScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3, 4] as const).map(tier => ({
@@ -3266,7 +3268,9 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
   const trace = await watchActions(browser, server);
   const writes = (from: number) => trace.requests.slice(from).filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|reviewCatalog|promoteCatalog|discardCatalog|select)$/.test(request.name));
   const reviews: ActionResult<"reviewCatalog">[] = [];
-  let holdReads = false;
+  let holdReads = false, refuseStage = false;
+  /** The revisions the panel's configuration reads are answered with, while they are watched. */
+  let readsAnswered: number[] | null = null;
   const held = new Set<() => void>();
   const fixture = await intercept(browser, server, async (name, input) => {
     if (name === "atyrode.code.readConfiguration" && holdReads) {
@@ -3276,6 +3280,14 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       await promise;
       return undefined;
     }
+    if (name === "atyrode.code.readConfiguration" && readsAnswered) {
+      const outcome = await callAction(server, writer.token, name, input);
+      if (!outcome.ok) return { ok: false, denial: outcome.denial };
+      readsAnswered.push((outcome.result as ActionResult<"readConfiguration">).revision);
+      return { ok: true, result: outcome.result };
+    }
+    // A stage refused after its own initialization, as one too large for the record would be.
+    if (name === "atyrode.code.stageCatalog" && refuseStage) return refused("synthetic_stage_refused");
     if (name !== "atyrode.code.reviewCatalog") return undefined;
     // The real server reviews; its answer is kept to check the promotion that follows names exactly that review.
     const outcome = await callAction(server, writer.token, name, input);
@@ -3284,8 +3296,8 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
     return { ok: true, result: outcome.result };
   });
   try {
-    for (const competing of [false, true]) {
-      const workspace = await createContainer(server, competing ? "Concurrent first list" : "Imported first list", "canvas");
+    for (const mode of ["imported", "competing", "refused"] as const) {
+      const workspace = await createContainer(server, mode === "competing" ? "Concurrent first list" : mode === "refused" ? "Refused first stage" : "Imported first list", "canvas");
       const target = { containerId: workspace.id };
       await openGenerator(browser, server, workspace.id);
       await usableStarter(browser);
@@ -3304,7 +3316,34 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       await browser.send("Input.insertText", { text: JSON.stringify(document) });
       await until(browser, "a Code model list can be staged", `${importSays} === '' && !${stageButton}.hasAttribute('aria-disabled') && ${field}.value === ${JSON.stringify(JSON.stringify(document))}`);
       assert.deepEqual(await readConfiguration(server, writer, target), absent, "Pasting a list writes nothing");
-      if (competing) {
+      if (mode === "refused") {
+        refuseStage = true;
+        readsAnswered = [];
+        await click(browser, stageButton);
+        await until(browser, "a stage refused after the import's own initialization is said in the dialog, which stays open",
+          `${dialog}.open && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
+        refuseStage = false;
+        assert.deepEqual(writes(from), [
+          { name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } },
+          { name: "atyrode.code.stageCatalog", input: { ...target, expectedRevision: 1, document } },
+        ], "The import initializes the absent workspace once, then stages once from that initialization");
+        const after = await readConfiguration(server, writer, target);
+        assert.deepEqual([after.revision, after.configuration?.draft], [1, null], "The initialization stands and nothing is staged");
+        // Once the panel has read its own initialization, the preview rests on it: verifying is refused for what the fixture
+        // lacks, never as a change made elsewhere with theirs to use.
+        await waitFor(() => readsAnswered!.includes(1), timeout, 50);
+        await Bun.sleep(300);
+        readsAnswered = null;
+        const verifyLine = await browser.evaluate<{ refused: boolean; parts: [string, string | null][]; fixes: string[] }>(
+          `({ refused: ${goIs(modelsSheet, "verify models", "refused")}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)} })`);
+        assert(verifyLine.refused && !verifyLine.parts.some(([text]) => text === "The workspace profile changed elsewhere") && !verifyLine.fixes.includes("use theirs"),
+          `The panel's own initialization is no conflict: ${JSON.stringify(verifyLine)}`);
+        await key(browser, "Escape", 27);
+        await until(browser, "Esc closes the import, and the sheet stays open", `!${dialog}.open && ${element(stage)}.hidden === true`);
+        await closeSheet(browser);
+        continue;
+      }
+      if (mode === "competing") {
         holdReads = true;
         const initialized = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
         assert(initialized.ok);
@@ -4555,7 +4594,7 @@ async function run(): Promise<void> {
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";
     await leadStruckScenario(writerBrowser, server, writer);
-    phase = "an imported first list, a refused competing first import and the exact review a staged list is used by";
+    phase = "an imported first list, a refused competing first import, a refused first stage and the exact review a staged list is used by";
     await importedCatalogScenario(writerBrowser, server, writer);
     phase = "deferred first-use and standalone Usage configuration recovery";
     await configurationRecoveryScenario(writerBrowser, server, writer, { containerId: firstUse.id }, target);

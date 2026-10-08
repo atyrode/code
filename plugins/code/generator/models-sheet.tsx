@@ -9,7 +9,7 @@ import { orderedFamilies, providerPolicy } from "../../domain/providers.ts";
 import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
-import { WorkflowError } from "../workflow.ts";
+import { WorkflowError, type CodeCall } from "../workflow.ts";
 import type { GateRefusal } from "./launch-step.ts";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
@@ -99,19 +99,21 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
     : running ? "A verification is running." : !edits.open ? edits.refusal.text : working ? "Wait for the change in progress." : null;
   /**
-   * Runs one write against the workspace this sheet was opened on, from the revision it was read at; anything that moves it
-   * stops the write. The main view follows its receipt as this panel's own change (workbench-model.ts `catalogWritten`).
+   * Runs one press's writes against the workspace this sheet was opened on, from the revision it was read at; anything that
+   * moves it stops them. The main view follows each receipt as this panel's own change from the revision that write was made
+   * at (workbench-model.ts `catalogWritten`), an import's initialization included when its stage is then refused.
    */
-  async function write(kind: "use" | "discard" | "stage", from: number, work: (workflow: ReturnType<typeof codeWorkflow>) => Promise<readonly [Said, Configuration]>,
+  async function write(kind: "use" | "discard" | "stage", work: (code: CodeCall, wrote: (from: number, written: Configuration) => void) => Promise<Said>,
     failed: (text: string) => void) {
     if (pending.current) return;
     const started = host;
     const valid = () => mounted.current && latestHost.current.client === started.client && latestHost.current.principal.id === started.principal.id &&
       latestHost.current.containerId === started.containerId && canWriteCodeWorkspace(latestHost.current);
+    const wrote = (from: number, written: Configuration) => { if (valid()) model.actions.catalogWritten(from, written); };
     pending.current = true; setWorking(kind); setFailure(null);
     try {
-      const [said, written] = await work(codeWorkflow(host, valid));
-      if (valid()) { model.actions.catalogWritten(from, written); readout.say(said); }
+      const said = await work(codeWorkflow(host, valid).code, wrote);
+      if (valid()) readout.say(said);
     } catch (reason) {
       if (valid()) failed(codeOperationFailure(reason));
     } finally {
@@ -122,19 +124,21 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function useStaged() {
     if (!record || !draft) return;
     const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
-    void write("use", revision, async workflow => {
-      const review = await workflow.code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft" });
+    void write("use", async (code, wrote) => {
+      const review = await code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft" });
       if (review.catalogDigest !== digest) throw new WorkflowError("code_preview_changed");
-      const promoted = await workflow.code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
-      return [{ value: "in use", text: verified ? "the staged list replaced the one in use" : "the staged list replaced the one in use; verify it next" }, promoted];
+      const promoted = await code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
+      wrote(revision, promoted);
+      return { value: "in use", text: verified ? "the staged list replaced the one in use" : "the staged list replaced the one in use; verify it next" };
     }, setFailure);
   }
   function discard() {
     if (!record || !draft || writeRefusal) return;
     const { containerId, revision } = record;
-    void write("discard", revision, async workflow => {
-      const discarded = await workflow.code("discardCatalog", { containerId, expectedRevision: revision });
-      return [{ value: "discarded", text: "the list in use is unchanged" }, discarded];
+    void write("discard", async (code, wrote) => {
+      const discarded = await code("discardCatalog", { containerId, expectedRevision: revision });
+      wrote(revision, discarded);
+      return { value: "discarded", text: "the list in use is unchanged" };
     }, setFailure);
   }
 
@@ -155,12 +159,15 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     if (writeRefusal) { setImportError(writeRefusal); return; }
     const base = record, containerId = host.containerId!, absentAt = model.observed?.revision ?? 0;
     const added = listChanges(inUse, modelRows(document)).length;
-    void write("stage", base?.revision ?? absentAt, async workflow => {
-      // A workspace without Code choices gets them first, at the revision it was read at; nothing is verified.
-      const initialized = base ?? await workflow.code("initializeConfiguration", { containerId, expectedRevision: absentAt });
-      const staged = await workflow.code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
+    void write("stage", async (code, wrote) => {
+      // A workspace without Code choices gets them first, at the revision it was read at; nothing is verified. The main view
+      // follows that initialization at once, so a stage refused after it never reads as a change made elsewhere.
+      const initialized = base ?? await code("initializeConfiguration", { containerId, expectedRevision: absentAt });
+      if (!base) wrote(absentAt, initialized);
+      const staged = await code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
+      wrote(initialized.revision, staged);
       dialog.current?.close();
-      return [{ value: "staged", text: `${count(added, "change")} beside the list in use` }, staged];
+      return { value: "staged", text: `${count(added, "change")} beside the list in use` };
     }, setImportError);
   }
   async function exportList() {

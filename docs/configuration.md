@@ -167,7 +167,10 @@ its team and catalogs alone moves its base forward, and a foreign team or catalo
 write is a conflict. A list this panel stages, puts in use or discards in Models is its
 own change, never a conflict: a draft made on the list in use follows a list staged or
 discarded beside it, and a draft whose list the write replaces gives way to the record,
-as the bundled preview does to a list imported into a workspace without one. A draft
+as the bundled preview does to a list imported into a workspace without one. An
+import's own initialization is followed the same way, so a stage refused after it
+leaves the draft resting on that initialization, as a stopped first verification does,
+never a change made elsewhere. A draft
 that only repeats the team the view shows without it is not kept. Skills and
 automation (the session options) are independent ephemeral
 launch choices, never part of the saved profile. The main view has no task: it opens

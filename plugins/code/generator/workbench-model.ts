@@ -86,8 +86,8 @@ export type WorkbenchActions = {
    */
   changeAccounts: (edit: AccountChoiceChange) => void;
   /**
-   * Models staged, put in use or discarded a list from revision `from`: the receipt shows until its read
-   * arrives, and the local draft follows the write or gives way to the record (launch-step.ts `followCatalogWrite`).
+   * Models wrote from revision `from`: an import's initialization, or a list staged, put in use or discarded. The receipt
+   * shows until its read arrives, and the local draft follows the write or gives way to the record (launch-step.ts `followCatalogWrite`).
    */
   catalogWritten: (from: number, written: Configuration) => void;
   /** Re-observe every query, accounts and usage included. */

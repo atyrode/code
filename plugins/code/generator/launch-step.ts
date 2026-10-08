@@ -56,13 +56,14 @@ export function followInitialization<T extends DraftBase>(draft: T | null, from:
   return draft && !draft.initialized && draft.revision === from ? { ...draft, revision: to, initialized: true } : draft;
 }
 /**
- * A list this panel wrote in Models (staged, put in use or discarded, from revision `from`) is the
- * person's own change, never one made elsewhere. A draft that rested on the record at `from` follows
- * the write while the list it was made on is untouched, as when a list is staged or discarded beside
- * the one in use. Once that list is replaced, the draft gives way (null) and the profile is read from
- * the record: the bundled preview of a workspace without a list gives way to the list staged there,
- * and an edit of the list in use to the list put in use after it. A draft that no longer rested on the
- * record at `from` keeps its base and stays a conflict.
+ * A list this panel wrote in Models (an initialization, or a list staged, put in use or discarded,
+ * from revision `from`) is the person's own change, never one made elsewhere. A draft that rested on
+ * the record at `from` follows the write while the list it was made on is untouched: an import's own
+ * initialization, or a list staged or discarded beside the one in use. Once that list is replaced, the
+ * draft gives way (null) and the profile is read from the record: the bundled preview of a workspace
+ * without a list gives way to the list staged there, and an edit of the list in use to the list put
+ * in use after it. A draft that no longer rested on the record at `from` keeps its base and stays a
+ * conflict.
  */
 export function followCatalogWrite<T extends DraftBase>(draft: T | null, from: number, written: SharedBase): T | null {
   if (!draft || draft.revision !== from) return draft;
