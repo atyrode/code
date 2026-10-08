@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CatalogDocument } from "../domain/contracts.ts";
 import { exclusionWords, listChanges, modelRows, modelsPhase, nextSetupRow, saveFailure, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+import { followRecord } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 
 const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
@@ -52,22 +53,36 @@ describe("the Models sheet", () => {
     expect(at({ status: "accounts-changed", verifyRefusal: "accounts" })).toBe("unverified");
   });
 
+  const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: false, priority: false, prewalk: false,
+    planYolo: false, fallback: true, budget: "any" } as const;
+  // An edit of the saved team at revision 7, with a list staged beside the one in use: what holds "use staged list".
+  const edit: ProfileDraft = { source: "active", document, selection: { ...selection, advisor: "audit" }, revision: 7, initialized: true,
+    baseSelection: selection, catalogDigest: "a".repeat(64), draftDigest: "d".repeat(64), metadata: null, metadataKey: null };
+  // A recalled team that could not be formed left a failed message, and the edit stayed.
+  const recall = { text: "That profile cannot be formed from the current models; nothing changed.", failed: true };
+  const stale = { text: "The workspace profile changed. Read it again before saving your edit.", failed: true };
+
   test("the held action says only its own save's failure: never a message that stood before it, nor one left once the edit changed", () => {
-    const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: false, priority: false, prewalk: false,
-      planYolo: false, fallback: true, budget: "any" } as const;
-    const edit: ProfileDraft = { source: "active", document, selection: { ...selection, advisor: "audit" }, revision: 7, initialized: true,
-      baseSelection: selection, catalogDigest: "a".repeat(64), draftDigest: "d".repeat(64), metadata: null, metadataKey: null };
-    // A recalled team that could not be formed left a failed message, and the edit stayed.
-    const recall = { text: "That profile cannot be formed from the current models; nothing changed.", failed: true };
     expect(saveFailure(null, edit, recall)).toBeNull();
     const press = { draft: edit, before: recall };
     // The save has not answered, or its gate refused it and it set nothing: the older message is not its answer.
     expect(saveFailure(press, edit, null)).toBeNull();
     expect(saveFailure(press, edit, recall)).toBeNull();
-    const failed = { text: "The workspace changed while saving. Nothing was retried.", failed: true };
-    expect(saveFailure(press, edit, failed)).toBe(failed.text);
-    // Once the edit changes, its earlier save's failure is no longer said.
-    expect(saveFailure(press, { ...edit, selection: { ...selection, advisor: "off" } }, failed)).toBeNull();
+    expect(saveFailure(press, edit, stale)).toBe(stale.text);
+    // Once the edit changes, or is discarded, its earlier save's failure is no longer said.
+    expect(saveFailure(press, { ...edit, selection: { ...selection, advisor: "off" } }, stale)).toBeNull();
+    expect(saveFailure(press, null, stale)).toBeNull();
+  });
+
+  test("a save refused as stale is still said once the same team is followed to a new revision", () => {
+    // Another tab changed the account choices (revision 8) while the save of revision 7 was in flight. The read that
+    // brings revision 8 moves the edit's base forward (launch-step.ts `followRecord`): a new draft holding the same team.
+    const followed = followRecord(edit, { revision: 8, initialized: true, catalogDigest: edit.catalogDigest, draftDigest: edit.draftDigest,
+      selection: edit.baseSelection, metadataKey: null });
+    expect(followed).not.toBe(edit);
+    expect(followed.revision).toBe(8);
+    // The save's refusal arrives after that read, and the held action says it.
+    expect(saveFailure({ draft: edit, before: null }, followed, stale)).toBe(stale.text);
   });
 });
 

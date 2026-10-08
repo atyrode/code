@@ -8,6 +8,7 @@ import { displayAliases } from "./aliases.ts";
 import { CAPABILITY_WORDS } from "./dial-space.ts";
 import type { GateRefusalCode } from "./launch-step.ts";
 import type { VerificationPhase } from "./model-verification.ts";
+import { sameTeam } from "./statement-model.ts";
 import type { VerificationStatus } from "./verification.ts";
 import type { ProfileDraft, WorkbenchMessage } from "./workbench-model.ts";
 
@@ -125,13 +126,16 @@ export function modelsPhase(facts: {
 
 /**
  * A save pressed beside Models' held action: the edit it saved and the workbench message standing
- * when it was pressed. Only that save's own failure is said there. A message that already stood,
- * such as a recalled team that could not be formed, is not its answer, and neither is one left once
- * the edit has changed.
+ * when it was pressed. Only that save's own failure is said there, for as long as the same team from
+ * the same list is on show. A read that only moves the edit's base to a newer revision (launch-step.ts
+ * `followRecord`) leaves it that edit, so a save refused as stale is still said. A message that already
+ * stood, such as a recalled team that could not be formed, is not its answer, and neither is one left
+ * once the edit has changed or been discarded.
  */
 export type SavePress = { readonly draft: ProfileDraft | null; readonly before: WorkbenchMessage | null };
 export function saveFailure(press: SavePress | null, draft: ProfileDraft | null, message: WorkbenchMessage | null): string | null {
-  return press !== null && press.draft === draft && message !== press.before && message?.failed ? message.text : null;
+  if (!press?.draft || !draft || press.draft.source !== draft.source || !sameTeam(press.draft.selection, draft.selection)) return null;
+  return message !== press.before && message?.failed ? message.text : null;
 }
 
 // ---------------------------------------------------------------- Setup: what the machine needs
