@@ -2311,8 +2311,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
   type Benchmark = { request: OmpInput<"startBenchmark">; startedAt: number; settled: boolean; receipt: BenchmarkReceipt | null };
   const benchmarks = new Map<string, Benchmark>();
   const started: OmpInput<"startInventory">[] = [], cancels: unknown[] = [];
-  const heldInventory = holdable();
-  let holdNextInventory = false, holdNextBenchmark = false;
+  const heldInventory = holdable(), heldReview = holdable();
+  let holdNextInventory = false, holdNextBenchmark = false, holdNextReview = false;
   const reviews: ActionResult<"reviewCatalog">[] = [];
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
@@ -2374,6 +2374,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       case "engine.jobs.cancel": cancels.push(input); return refused("synthetic_cancel_unexpected");
       case "atyrode.code.reviewCatalog": {
         // The real server reviews; its answer is kept to check the promotion that follows names exactly that review.
+        if (holdNextReview) { holdNextReview = false; await heldReview.wait(); }
         const outcome = await callAction(server, writer.token, name, input);
         if (!outcome.ok) return { ok: false, denial: outcome.denial };
         reviews.push(outcome.result as ActionResult<"reviewCatalog">);
@@ -2617,13 +2618,16 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     assert(again.benchmark.completedAt > verified.benchmark.completedAt);
 
     // An unsaved edit of the team in use holds putting a staged list in use, which would replace the list it was made on:
-    // the next action says so with save and discard edit beside it, and a press writes nothing. Saving the edit on the list
-    // it was made on lifts the hold.
+    // the next action says so, and what each fix does, with save and discard edit beside it; a press writes nothing. Saving
+    // the edit on the list it was made on lifts the hold. The edit is one the staged list's own default team does not
+    // repeat, so the reset that follows is seen.
+    const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
+    const stagedDefault = defaultSelection(compileCatalog(slower));
+    const draftKey = storedDraftKey(writer.principal.id, workspace.id);
     await closeSheet(browser);
-    const advisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined).dataset.key`);
+    const advisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined && el.dataset.key !== ${JSON.stringify(stagedDefault.advisor)}).dataset.key`);
     await choose(browser, "advisor", advisor);
     await openSheet(browser, "models");
-    const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
     await click(browser, element(`${modelsSheet} [data-cue="import"]`));
     await stageList(slower, "refused");
     assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)} })`),
@@ -2631,8 +2635,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const held = await readConfiguration(server, writer, target);
     from = trace.requests.length;
     await click(browser, goButton);
-    await until(browser, "a held press says which list the edit was made on",
-      `${sheetSays(modelsSheet)} === 'use staged list · Your unsaved profile edit was made on the list in use; save or discard it first.'`);
+    await until(browser, "a held press says what using the staged list and each fix do", `${sheetSays(modelsSheet)} === ${JSON.stringify(
+      "use staged list · Your unsaved edit is on the list in use, and using the staged list starts from its own default team. Save keeps the edit on the list in use; discard edit drops it.")}`);
     assert.deepEqual(writes(from), [], "A held press writes nothing");
     await click(browser, goFix(modelsSheet, "save"));
     await until(browser, "saved, the edit lets the staged list be used", `${goIs(modelsSheet, "use staged list")} && JSON.stringify(${goFixes(modelsSheet)}) === '["discard"]'`);
@@ -2642,11 +2646,25 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       "Save writes exactly the edit at the revision shown");
 
     // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
-    // the staged one, unverified, and verifying it is the next action.
+    // the staged one with its own default team, unverified, and verifying it is the next action. While those writes are in
+    // flight the main view takes no edit, so their receipt never lands on one: Esc goes back to Code, a row press there is
+    // refused, and nothing is kept.
     from = trace.requests.length;
+    holdNextReview = true;
     await click(browser, goButton);
-    await until(browser, "use staged list puts it in use, unverified, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} &&
-      ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · unverified`)} && ${sheetSays(modelsSheet)} === 'in use · the staged list replaced the one in use; verify it next'`);
+    await waitFor(() => heldReview.held, timeout, 50);
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc goes back to Code while the list is being put in use", `${element(stage)}.hidden === false`);
+    const otherAdvisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined).dataset.key`);
+    await click(browser, word("advisor", otherAdvisor));
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate(`[${chosenKey("advisor")}, sessionStorage.getItem(${JSON.stringify(draftKey)})]`), [advisor, null],
+      "No edit lands, or is kept, while Models' writes are in flight");
+    await openSheet(browser, "models");
+    heldReview.release();
+    await until(browser, "use staged list puts it in use with its own default team, unverified, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} &&
+      ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · unverified`)} &&
+      ${sheetSays(modelsSheet)} === 'in use · the staged list replaced the one in use; the profile is its default team now; verify it next'`);
     const review = reviews.at(-1);
     assert(review, "The real server reviewed the staged list");
     assert.equal(review.catalogDigest, before.configuration?.draft?.digest, "The review is of exactly the staged list");
@@ -2657,10 +2675,13 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const used = await readConfiguration(server, writer, target);
     assert.deepEqual([used.configuration?.active?.document, used.configuration?.active?.provenance, used.configuration?.draft], [slower, null, null],
       "The staged list is in use, unverified, and nothing is staged");
+    assert.deepEqual(used.configuration?.selection, review.review.selection, "The staged list goes in use with the team its review chose, its own default");
+    assert.notEqual(used.configuration?.selection?.advisor, advisor, "The saved edit does not carry over to the staged list");
     await closeSheet(browser);
     fixture.check();
   } finally {
     heldInventory.release();
+    heldReview.release();
     await fixture.stop();
     trace.stop();
   }
@@ -3362,7 +3383,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       await browser.send("Input.insertText", { text: JSON.stringify(document) });
       if (edited) {
         await until(browser, "the edited preview holds the import, which says so with discard edit beside stage",
-          `${importSays} === 'Your unsaved profile edit was made on the bundled starter; discard it first.' && ${stageButton}.getAttribute('aria-disabled') === 'true' && !!${discardEdit}`);
+          `${importSays} === 'Your unsaved edit is on the bundled starter, and an import replaces that list. Discard edit drops the edit.' && ${stageButton}.getAttribute('aria-disabled') === 'true' && !!${discardEdit}`);
         await click(browser, stageButton);
         await Bun.sleep(300);
         assert.deepEqual(writes(from), [], "A held import stages nothing");

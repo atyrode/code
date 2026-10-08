@@ -77,9 +77,10 @@ export function editHoldsCatalogWrite(draft: DraftBase | null, edited: boolean, 
  * initialization, or a list staged or discarded beside the one in use. Once that list is replaced, the
  * draft gives way (null) and the profile is read from the record: the bundled preview of a workspace
  * without a list gives way to the list staged there, and the team in use to the list put in use after
- * it. Only an untouched draft reaches that point, since an edit holds such a write
- * (`editHoldsCatalogWrite`). A draft that no longer rested on the record at `from` keeps its base and
- * stays a conflict.
+ * it. Only an untouched draft reaches that point: an edit holds such a write
+ * (`editHoldsCatalogWrite`), and none can be made while the write is in flight, which the gate counts
+ * as a running step (`GateFacts.running`). A draft that no longer rested on the record at `from`
+ * keeps its base and stays a conflict.
  */
 export function followCatalogWrite<T extends DraftBase>(draft: T | null, from: number, written: SharedBase): T | null {
   if (!draft || draft.revision !== from) return draft;
@@ -255,7 +256,7 @@ export function launchStatusText(facts: LaunchFacts): string {
 
 /** What the gate reads beyond the launch facts. */
 export type GateFacts = LaunchFacts & {
-  /** A step is in flight: a save, review, launch or resume, a chain between its steps, or a verification checking or spending. */
+  /** A step is in flight: a save, review, launch or resume, a chain between its steps, a verification checking or spending, or Models writing the model list. */
   running: boolean;
   /** The charge a prepared verification shows and waits on, until it is confirmed or cancelled. */
   charge: { readonly requests: number } | null;

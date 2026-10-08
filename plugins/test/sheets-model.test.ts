@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CatalogDocument } from "../domain/contracts.ts";
-import { exclusionWords, listChanges, modelRows, modelsPhase, nextSetupRow, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+import { exclusionWords, listChanges, modelRows, modelsPhase, nextSetupRow, saveFailure, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 
 const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
   key: `model-${tier}`, provider: "anthropic", id: `native-model${tier}`, api: "anthropic-messages", tier,
@@ -49,6 +50,24 @@ describe("the Models sheet", () => {
     expect(at({ status: "current" })).toBe("verified");
     expect(at({ verifyRefusal: "verify-permissions" })).toBe("refused");
     expect(at({ status: "accounts-changed", verifyRefusal: "accounts" })).toBe("unverified");
+  });
+
+  test("the held action says only its own save's failure: never a message that stood before it, nor one left once the edit changed", () => {
+    const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: false, priority: false, prewalk: false,
+      planYolo: false, fallback: true, budget: "any" } as const;
+    const edit: ProfileDraft = { source: "active", document, selection: { ...selection, advisor: "audit" }, revision: 7, initialized: true,
+      baseSelection: selection, catalogDigest: "a".repeat(64), draftDigest: "d".repeat(64), metadata: null, metadataKey: null };
+    // A recalled team that could not be formed left a failed message, and the edit stayed.
+    const recall = { text: "That profile cannot be formed from the current models; nothing changed.", failed: true };
+    expect(saveFailure(null, edit, recall)).toBeNull();
+    const press = { draft: edit, before: recall };
+    // The save has not answered, or its gate refused it and it set nothing: the older message is not its answer.
+    expect(saveFailure(press, edit, null)).toBeNull();
+    expect(saveFailure(press, edit, recall)).toBeNull();
+    const failed = { text: "The workspace changed while saving. Nothing was retried.", failed: true };
+    expect(saveFailure(press, edit, failed)).toBe(failed.text);
+    // Once the edit changes, its earlier save's failure is no longer said.
+    expect(saveFailure(press, { ...edit, selection: { ...selection, advisor: "off" } }, failed)).toBeNull();
   });
 });
 

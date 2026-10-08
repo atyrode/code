@@ -13,8 +13,9 @@ import { WorkflowError, type CodeCall } from "../workflow.ts";
 import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
-import { contextWords, exclusionWords, listChanges, modelRows, modelsPhase, money, speedLevel, thinkingRange, TIERS,
-  type ListChange, type ModelRow } from "./sheets-model.ts";
+import { contextWords, exclusionWords, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
+  type ListChange, type ModelRow, type SavePress } from "./sheets-model.ts";
+import { sameTeam } from "./statement-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -97,17 +98,25 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const edits = model.gate("edit-team");
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
-    : running ? "A verification is running." : !edits.open ? edits.refusal.text : working ? "Wait for the change in progress." : null;
+    : running ? "A verification is running." : working ? "Wait for the change in progress." : !edits.open ? edits.refusal.text : null;
   // An unsaved edit made on the list a write would replace holds that write until it is saved or discarded (launch-step.ts
-  // `editHoldsCatalogWrite`). Only an edit of the team in use saves, through the workbench's own save gate.
+  // `editHoldsCatalogWrite`), saying what the write does to that list and what each fix does with the edit. A list put in
+  // use starts from its own default team (state.ts `catalogReview`), so a saved edit stays with the list in use. Only an
+  // edit of the team in use saves, through the workbench's own save gate.
   const savable = model.gate("save").open;
   const madeOn = model.localDraft?.source === "active" ? "the list in use" : model.localDraft?.source === "draft" ? "the staged list" : "the bundled starter";
-  const editHold = (kind: CatalogWrite): string | null => editHoldsCatalogWrite(model.localDraft, model.edited, kind)
-    ? `Your unsaved profile edit was made on ${madeOn}; ${savable ? "save or discard" : "discard"} it first.` : null;
-  const editFixes: readonly GoFix[] = [...savable ? [{ label: "save", run: () => void model.actions.save() }] : [],
+  const editHold = (kind: CatalogWrite): string | null => {
+    if (!editHoldsCatalogWrite(model.localDraft, model.edited, kind)) return null;
+    const effect = kind === "use" ? `using ${model.localDraft?.source === "draft" ? "it" : "the staged list"} starts from its own default team`
+      : kind === "discard" ? "discarding drops that list" : "an import replaces that list";
+    return `Your unsaved edit is on ${madeOn}, and ${effect}. ${savable ? "Save keeps the edit on the list in use; discard edit drops it." : "Discard edit drops the edit."}`;
+  };
+  // A save pressed here is said here, its own failure only (sheets-model.ts `saveFailure`).
+  const [savePress, setSavePress] = useState<SavePress | null>(null);
+  const failedSave = saveFailure(savePress, model.localDraft, model.message);
+  const editFixes: readonly GoFix[] = [
+    ...savable ? [{ label: "save", run: () => { setSavePress({ draft: model.localDraft, before: model.message }); void model.actions.save(); } }] : [],
     { label: "discard edit", run: () => model.actions.discardChanges() }];
-  // A save pressed here fails into the workbench's message, which the held action then says.
-  const saveFailure = model.message?.failed ? model.message.text : null;
   /**
    * Runs one press's writes against the workspace this sheet was opened on, from the revision it was read at; anything that
    * moves it stops them. The main view follows each receipt as this panel's own change from the revision that write was made
@@ -120,7 +129,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     const valid = () => mounted.current && latestHost.current.client === started.client && latestHost.current.principal.id === started.principal.id &&
       latestHost.current.containerId === started.containerId && canWriteCodeWorkspace(latestHost.current);
     const wrote = (from: number, written: Configuration) => { if (valid()) model.actions.catalogWritten(from, written); };
-    pending.current = true; setWorking(kind); setFailure(null);
+    pending.current = true; setWorking(kind); setFailure(null); model.actions.writingCatalog(true);
     try {
       const said = await work(codeWorkflow(host, valid).code, wrote);
       if (valid()) readout.say(said);
@@ -128,18 +137,21 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       if (valid()) failed(codeOperationFailure(reason));
     } finally {
       pending.current = false;
+      model.actions.writingCatalog(false);
       if (mounted.current) { setWorking(null); model.actions.refresh(); }
     }
   }
   function useStaged() {
     if (!record || !draft) return;
-    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null;
+    const { containerId, revision } = record, digest = draft.digest, verified = draft.provenance !== null, saved = record.selection;
     void write("use", async (code, wrote) => {
       const review = await code("reviewCatalog", { containerId, expectedRevision: revision, source: "draft" });
       if (review.catalogDigest !== digest) throw new WorkflowError("code_preview_changed");
       const promoted = await code("promoteCatalog", { containerId, expectedRevision: revision, source: "draft", reviewDigest: review.reviewDigest });
       wrote(revision, promoted);
-      return { value: "in use", text: verified ? "the staged list replaced the one in use" : "the staged list replaced the one in use; verify it next" };
+      // The staged list goes in use with its own default team; a saved team it does not repeat is said to be gone.
+      const reset = saved !== null && promoted.selection !== null && !sameTeam(promoted.selection, saved);
+      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is its default team now"] : [], ...verified ? [] : ["verify it next"]].join("; ") };
     }, setFailure);
   }
   function discard() {
@@ -258,8 +270,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       case "staged": {
         // An unsaved edit made on the list this replaces holds it, with what lifts the hold beside it.
         const held = writeRefusal ? null : editHold("use");
-        if (held) return { label: "use staged list", disabled: true, parts: [[saveFailure ? "not saved" : "unsaved profile edit", "attention"]], fixes: editFixes,
-          said: { value: "use staged list", text: saveFailure ?? held, warn: true }, press: () => held };
+        if (held) return { label: "use staged list", disabled: true, parts: [[failedSave ? "not saved" : "unsaved profile edit", "attention"]], fixes: editFixes,
+          said: { value: "use staged list", text: failedSave ?? held, warn: true }, press: () => held };
         return { label: "use staged list", busy: working !== null, disabled: writeRefusal !== null,
           parts: [...refused, [count(changes.length, "change"), "strong"], ["staged", null]], fixes: writeRefusal ? [] : [{ label: "discard", run: discard }],
           said: failure ? { value: "use staged list", text: failure, warn: true } : writeRefusal ? { value: "use staged list", text: writeRefusal, warn: true }

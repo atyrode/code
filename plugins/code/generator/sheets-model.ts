@@ -9,6 +9,7 @@ import { CAPABILITY_WORDS } from "./dial-space.ts";
 import type { GateRefusalCode } from "./launch-step.ts";
 import type { VerificationPhase } from "./model-verification.ts";
 import type { VerificationStatus } from "./verification.ts";
+import type { ProfileDraft, WorkbenchMessage } from "./workbench-model.ts";
 
 /*
  * The Models and Setup sheets as rules, apart from React: the model list as the ladders the
@@ -120,6 +121,17 @@ export function modelsPhase(facts: {
   if (facts.staged) return "staged";
   if (facts.status === "current") return "verified";
   return facts.verifyRefusal === "verify-permissions" ? "refused" : "unverified";
+}
+
+/**
+ * A save pressed beside Models' held action: the edit it saved and the workbench message standing
+ * when it was pressed. Only that save's own failure is said there. A message that already stood,
+ * such as a recalled team that could not be formed, is not its answer, and neither is one left once
+ * the edit has changed.
+ */
+export type SavePress = { readonly draft: ProfileDraft | null; readonly before: WorkbenchMessage | null };
+export function saveFailure(press: SavePress | null, draft: ProfileDraft | null, message: WorkbenchMessage | null): string | null {
+  return press !== null && press.draft === draft && message !== press.before && message?.failed ? message.text : null;
 }
 
 // ---------------------------------------------------------------- Setup: what the machine needs

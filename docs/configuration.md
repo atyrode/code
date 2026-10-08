@@ -172,10 +172,14 @@ staged list replaces the list in use and the staged one, discarding or importing
 replaces the staged one, and an import replaces the bundled list a workspace without
 one previews) never drops an unsaved edit. A list put in use brings its own default
 team, so no team made on the replaced list carries over; instead Models holds that
-write, says which list the edit was made on, and offers **save** for an edit of the
-team in use (it is saved on that list) and **discard edit**, which the import dialog
-offers too. Only an untouched draft gives way to the record, as the bundled
-preview does to a list imported into a workspace without one. A draft
+write and says which list the edit is on, what the write does to that list and what
+each fix does: **save**, for an edit of the team in use, keeps the edit on the list in
+use, and **discard edit**, which the import dialog offers too, drops it. Once a staged
+list is put in use, the readout says when the saved team gave way to that list's
+default team. While a Models write is in flight the gate counts it as a step in
+progress, so no edit lands before its receipt does. Only an untouched draft gives way
+to the record, as the bundled preview does to a list imported into a workspace
+without one. A draft
 that only repeats the team the view shows without it is not kept. Skills and
 automation (the session options) are independent ephemeral
 launch choices, never part of the saved profile. The main view has no task: it opens
@@ -663,9 +667,11 @@ One next action sits where the launch sits and follows the step: **verify models
 with the requests measured, then **back to code** with **verify again** beside it, the
 same Verify a current verification can always renew, its charge confirmed the same way.
 A staged list offers **use staged list**, which reviews the staged list at its revision
-and promotes exactly that review, and **discard**. An unsaved edit made on the list a
-write would replace holds it, with **save** (an edit of the team in use) and **discard
-edit** beside it. Verifying refused for want of
+and promotes exactly that review with the list's own default team, and **discard**. An
+unsaved edit made on the list a write would replace holds it, saying what the write does
+to that list (a staged list put in use starts from its own default team), with **save**
+(an edit of the team in use, kept on the list in use) and **discard edit** beside it.
+Verifying refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
 accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,
 and otherwise returns to Code. Import takes a pasted or dropped Code model list, checks

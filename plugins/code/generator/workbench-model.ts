@@ -86,6 +86,11 @@ export type WorkbenchActions = {
    */
   changeAccounts: (edit: AccountChoiceChange) => void;
   /**
+   * Models starts (true) or ends (false) one press's list writes. While they run the gate counts them as a step in flight,
+   * so no edit of the team lands before their receipts (`catalogWritten`) do.
+   */
+  writingCatalog: (writing: boolean) => void;
+  /**
    * Models wrote from revision `from`: an import's initialization, or a list staged, put in use or discarded. The receipt
    * shows until its read arrives, and the local draft follows the write or gives way to the record (launch-step.ts `followCatalogWrite`).
    */
@@ -244,6 +249,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [busy, setBusy] = useState(false);
   const [inFlight, setInFlight] = useState<WorkbenchStep | null>(null);
   const [chaining, setChaining] = useState(false);
+  const [writingCatalog, setWritingCatalog] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
@@ -393,7 +399,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
   const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, placeable, available, accounts: accountState,
     launchReady, previewCurrent, localReview, skillProblems, queries: { setup }, verification,
-    running: busy || chaining || verifyRunning, charge: verification.phase === "charge" ? verification.charge : null,
+    running: busy || chaining || verifyRunning || writingCatalog, charge: verification.phase === "charge" ? verification.charge : null,
     unservedLead, savedSessionId, planYolo: record?.selection?.planYolo ?? false };
   // A chain's later steps ask the gate again on the facts of the latest render, its own step set aside.
   const latestFacts = useRef(facts);
@@ -626,7 +632,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), catalogWritten, refresh, readUsage: reading.refresh },
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit),
+      writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams,
   };
 }
