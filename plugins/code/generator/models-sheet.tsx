@@ -160,6 +160,9 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const importRefusal = writeRefusal;
   // Import opens over an edit it would replace; the dialog says so and offers to discard the edit.
   const stageHold = writeRefusal ? null : editHold("stage");
+  // An import over a staged list replaces it, a verified one with its verification.
+  const importEffect = !draft ? "It is staged beside the list in use; nothing changes until you use it."
+    : `It replaces the ${draft.provenance ? "verified " : ""}staged list; ${active ? "the list in use changes only when you use it." : "nothing is in use until you use it."}`;
   const exportRefusal = running ? "A verification is running." : !(active?.document ?? inUseDocument) ? "There is no list to export." : null;
   function openImport() {
     setPaste(""); setImportError(null);
@@ -171,6 +174,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     const refusal = writeRefusal ?? stageHold;
     if (refusal) { setImportError(refusal); return; }
     const base = record, containerId = host.containerId!, absentAt = model.observed?.revision ?? 0;
+    const replacing = base?.draft ?? null;
     const added = listChanges(inUse, modelRows(document)).length;
     void write("stage", async (code, wrote) => {
       // A workspace without Code choices gets them first, at the revision it was read at; nothing is verified. The main view
@@ -180,7 +184,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       const staged = await code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
       wrote(initialized.revision, staged);
       dialog.current?.close();
-      return { value: "staged", text: `${count(added, "change")} beside the list in use` };
+      const beside = `${count(added, "change")} beside the list in use`;
+      return { value: "staged", text: replacing ? `${beside}; it replaced the ${replacing.provenance ? "verified " : ""}list staged before` : beside };
     }, setImportError);
   }
   async function exportList() {
@@ -477,7 +482,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     <SheetKeys keys={[["↑↓←→", "move"], ["⏎", next.label.replace("…", "")], ["i", "import"], ["esc", running && phase !== "finishing" ? "cancel" : "code"]]} />
     <dialog ref={dialog} className={`${G}sheet-dialog`} aria-labelledby={`${G}import-title`} onClose={() => setPaste("")}>
       <h2 id={`${G}import-title`}>import a model list</h2>
-      <p>Paste a Code model list, or drop its file here. It is staged beside the list in use; nothing changes until you use it.</p>
+      <p>Paste a Code model list, or drop its file here. {importEffect}</p>
       <textarea aria-label="model list JSON" spellCheck={false} value={paste} placeholder={'{ "schemaVersion": 1, "models": [ … ] }'}
         onChange={event => { setPaste(event.target.value); setImportError(null); }}
         onDragOver={event => event.preventDefault()}

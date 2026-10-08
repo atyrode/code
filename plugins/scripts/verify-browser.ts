@@ -2399,6 +2399,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
   const dialog = element(`${modelsSheet} dialog`);
   const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
   const stageButton = element(`${modelsSheet} dialog [data-stage]`);
+  /** What the import says it does with the pasted list. */
+  const importEffect = `${dialog}?.querySelector('h2 + p')?.textContent`;
   /** Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press; using it is then `use`. */
   const stageList = async (list: CatalogDocument, use: "ready" | "refused" = "ready") => {
     await until(browser, "the import opens as a modal dialog with focus in its field", `!!${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
@@ -2543,12 +2545,14 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await until(browser, "back to code returns to the stage and gives focus back to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
 
     // Import, with i, stages a pasted list beside the one in use: one rung measured faster. Nothing is in use until it is used;
-    // discard drops it, and the verified list stays in use.
+    // an import over it says it replaces it, in the dialog and once staged; discard drops it, and the verified list stays in use.
     await openSheet(browser, "models");
     const active = afterFirst.configuration!.active!.document;
     const faster: CatalogDocument = { ...active, models: active.models.map((model, index) => index === 0 ? { ...model, tokensPerSecond: 101 } : model) };
     let from = trace.requests.length;
     await key(browser, "i", 73);
+    await until(browser, "with nothing staged, the import says it stages the list beside the one in use",
+      `!!${dialog}?.open && ${importEffect} === 'Paste a Code model list, or drop its file here. It is staged beside the list in use; nothing changes until you use it.'`);
     await stageList(faster);
     const staged = await readConfiguration(server, writer, target);
     assert.deepEqual(writes(from), [{ name: "atyrode.code.stageCatalog", input: { containerId: target.containerId, expectedRevision: afterFirst.revision, document: faster } }],
@@ -2562,10 +2566,22 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     }, "The staged list says what it changes against the list in use, on its rung and beside the list");
     await sheetZeroShift(browser, modelsSheet, "Models staged list");
     await sheetGeometry(browser, modelsSheet, "Models staged list");
+    const fastest: CatalogDocument = { ...faster, models: faster.models.map((model, index) => index === 0 ? { ...model, tokensPerSecond: 120 } : model) };
+    from = trace.requests.length;
+    await click(browser, element(`${modelsSheet} [data-cue="import"]`));
+    await until(browser, "an import over the staged list says it replaces it",
+      `!!${dialog}?.open && ${importEffect} === 'Paste a Code model list, or drop its file here. It replaces the staged list; the list in use changes only when you use it.'`);
+    await stageList(fastest);
+    await until(browser, "once staged, the readout says it replaced the list staged before",
+      `${sheetSays(modelsSheet)} === 'staged · 1 change beside the list in use; it replaced the list staged before'`);
+    const restaged = await readConfiguration(server, writer, target);
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.stageCatalog", input: { containerId: target.containerId, expectedRevision: staged.revision, document: fastest } }],
+      "The import over the staged list stages exactly the pasted list at the revision shown");
+    assert.deepEqual([restaged.configuration?.active, restaged.configuration?.draft?.document], [afterFirst.configuration?.active, fastest], "It replaces the staged list, and nothing is in use");
     from = trace.requests.length;
     await click(browser, goFix(modelsSheet, "discard"));
     await until(browser, "discard drops the staged list; the verified one stays in use", `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")}`);
-    assert.deepEqual(writes(from), [{ name: "atyrode.code.discardCatalog", input: { containerId: target.containerId, expectedRevision: staged.revision } }], "Discard drops the staged list at the revision shown");
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.discardCatalog", input: { containerId: target.containerId, expectedRevision: restaged.revision } }], "Discard drops the staged list at the revision shown");
     const discarded = await readConfiguration(server, writer, target);
     assert.deepEqual([discarded.configuration?.active, discarded.configuration?.draft], [afterFirst.configuration?.active, null], "Discarding leaves the list in use as it was");
 

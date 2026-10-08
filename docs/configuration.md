@@ -671,7 +671,9 @@ accounts, retry, open Setup, use theirs). Esc cancels a run that can still be st
 and otherwise returns to Code. Import takes a pasted or dropped Code model list, checks
 that it compiles, and stages it beside the list in use, initializing an absent workspace
 first; nothing is verified or put in use until **use staged list**, and a list put in
-use that way is unverified. Export copies the list in use. The per-field editor, the
+use that way is unverified. An import over a staged list replaces it, a verified one
+included, and says so in its dialog and in the readout once staged. Export copies the
+list in use. The per-field editor, the
 separate discovery and benchmark controls and job recovery are gone: verification runs
 discovery and benchmark as one step, and OMP's own history keeps every job.
 
