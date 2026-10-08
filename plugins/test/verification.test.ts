@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { LAUNCH_OPERATION_ID, OMP_VERSION } from "@atyrode/manifold-omp";
 import type { VerificationProvenance } from "../code/contract.ts";
 import { operationReady } from "../code/permission-plan.ts";
-import { autoReviewDue, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import type { Selection } from "../domain/contracts.ts";
+import { editedDraft } from "../code/generator/draft-store.ts";
+import { autoReviewDue, draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
+  type CatalogWrite, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
@@ -154,6 +158,91 @@ describe("a local edit of the saved team and later writes to the record", () => 
       expect(draftStale(edit, foreign)).toBe(true);
       expect(followRecord(edit, foreign)).toBe(edit);
     }
+  });
+});
+
+describe("this panel's own writes of the model list in Models", () => {
+  const selection = { lane: { kind: "mixed" }, capability: 3, thinking: "high", advisor: "glance", spark: true, priority: false, prewalk: false,
+    planYolo: false, fallback: true, budget: "any" } as const;
+  const imported = "i".repeat(64), inUse = "a".repeat(64), other = "d".repeat(64);
+  // The bundled first-use preview, frozen while the workspace had no shared choices (revision 0).
+  const starter: DraftBase = { source: "starter", revision: 0, initialized: false, catalogDigest: null, draftDigest: null, baseSelection: null, metadataKey: "bundled" };
+  // An imported list: the import initializes the workspace (0 → 1) and stages the list (→ 2), and use staged list promotes it (→ 3).
+  const initialized: SharedBase = { revision: 1, initialized: true, catalogDigest: null, draftDigest: null, selection: null, metadataKey: "bundled" };
+  const staged: SharedBase = { revision: 2, initialized: true, catalogDigest: null, draftDigest: imported, selection: null, metadataKey: "bundled" };
+  const promoted: SharedBase = { revision: 3, initialized: true, catalogDigest: imported, draftDigest: null, selection, metadataKey: "bundled" };
+  // A draft showing a team: an edit when that team is not the one shown without it (draft-store.ts `editedDraft`), here
+  // the saved team or, with none saved, the list's default `selection`.
+  const edited: Selection = { ...selection, thinking: "max" };
+  const showing = (draft: DraftBase, team: Selection): ProfileDraft => ({ ...draft, selection: team, document: { schemaVersion: 1, models: [] }, metadata: null });
+  const holds = (draft: ProfileDraft, write: CatalogWrite) => editHoldsCatalogWrite(draft, editedDraft(draft, selection), write);
+
+  test("a list imported on a first-use workspace replaces the untouched bundled preview, staged and then in use", () => {
+    expect(followCatalogWrite(followCatalogWrite(starter, 0, initialized), 1, staged)).toBeNull();
+    // An untouched preview of the staged list gives way when that list is put in use, replaced or discarded.
+    const stagedPreview: DraftBase = { source: "draft", revision: 2, initialized: true, catalogDigest: null, draftDigest: imported, baseSelection: null, metadataKey: null };
+    expect(followCatalogWrite(stagedPreview, 2, promoted)).toBeNull();
+    expect(followCatalogWrite(stagedPreview, 2, { ...staged, revision: 3, draftDigest: other })).toBeNull();
+    expect(followCatalogWrite(stagedPreview, 2, { ...staged, revision: 3, draftDigest: null })).toBeNull();
+  });
+
+  test("an import whose stage is refused after its own initialization leaves the preview on that initialization, never a conflict", () => {
+    // The import initialized the absent workspace (0 → 1); its stage was then refused, so nothing is staged.
+    const followed = followCatalogWrite(starter, 0, initialized);
+    // The preview follows it as it follows a stopped first verification's initialization.
+    expect(followed).toEqual(followInitialization(starter, 0, 1));
+    const step = (draft: DraftBase) => nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null,
+      stale: draftStale(draft, initialized) }, "unverified"));
+    expect(step(followed!).step).toBe("verify");
+    // Not followed, the panel's own initialization would read as a change made elsewhere.
+    expect(step(starter)).toMatchObject({ step: "blocked", reason: { code: "conflict" } });
+  });
+
+  test("an unsaved edit of the team in use holds putting the staged list in use, and only that, until it is saved or discarded", () => {
+    // The team was changed on the list in use at revision 7, with a list staged beside it.
+    const base: DraftBase = { source: "active", revision: 7, initialized: true, catalogDigest: inUse, draftDigest: other, baseSelection: selection, metadataKey: null };
+    const edit = showing(base, edited);
+    expect(holds(edit, "use")).toBe(true);
+    // Staging or discarding beside the list in use leaves it, so those writes go and the edit follows them.
+    expect(holds(edit, "stage")).toBe(false);
+    expect(holds(edit, "discard")).toBe(false);
+    // Turned back to the saved team, or saved or discarded (which leave no draft), nothing holds the promotion, and an
+    // untouched draft gives way to the list put in use.
+    const untouched = showing(base, selection);
+    expect(holds(untouched, "use")).toBe(false);
+    expect(editHoldsCatalogWrite(null, false, "use")).toBe(false);
+    expect(followCatalogWrite(untouched, 7, { revision: 8, initialized: true, catalogDigest: other, draftDigest: null, selection, metadataKey: null })).toBeNull();
+  });
+
+  test("an edited bundled preview holds an import, which replaces the list it was made on; an untouched one gives way", () => {
+    expect(holds(showing(starter, edited), "stage")).toBe(true);
+    expect(holds(showing(starter, selection), "stage")).toBe(false);
+  });
+
+  test("on a workspace with only a staged list, an edit of its preview holds using, discarding and replacing that list", () => {
+    const base: DraftBase = { source: "draft", revision: 2, initialized: true, catalogDigest: null, draftDigest: imported, baseSelection: null, metadataKey: null };
+    for (const write of ["use", "discard", "stage"] as const) {
+      expect(holds(showing(base, edited), write)).toBe(true);
+      expect(holds(showing(base, selection), write)).toBe(false);
+    }
+  });
+
+  test("a list staged or discarded beside the one in use leaves an edit of it on show, at the new revision; putting another in use replaces an untouched one", () => {
+    const edit: DraftBase = { source: "active", revision: 7, initialized: true, catalogDigest: inUse, draftDigest: null, baseSelection: selection, metadataKey: null };
+    const beside: SharedBase = { revision: 8, initialized: true, catalogDigest: inUse, draftDigest: other, selection, metadataKey: null };
+    const followed = followCatalogWrite(edit, 7, beside);
+    expect(followed).toEqual({ ...edit, revision: 8, draftDigest: other });
+    expect(draftStale(followed!, beside)).toBe(false);
+    const discarded: SharedBase = { ...beside, revision: 9, draftDigest: null };
+    expect(followCatalogWrite(followed, 8, discarded)).toEqual({ ...edit, revision: 9 });
+    expect(followCatalogWrite(followed, 8, { ...beside, revision: 9, catalogDigest: other, draftDigest: null })).toBeNull();
+  });
+
+  test("a draft that no longer rested on the record when the panel wrote stays a conflict", () => {
+    // Initialized elsewhere at revision 1; this panel then staged at 1 → 2.
+    expect(followCatalogWrite(starter, 1, staged)).toBe(starter);
+    expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null,
+      stale: draftStale(starter, staged) }, "unverified"))).toMatchObject({ step: "blocked", reason: { code: "conflict" } });
   });
 });
 

@@ -17,7 +17,7 @@ import { cancelSession, composeSession, followSession, listProfiles, readSession
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, select: true, changeAccounts: true,
+  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, discardCatalog: true, select: true, changeAccounts: true,
   configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
@@ -67,6 +67,12 @@ const productHandlers: ProductHandlers = {
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
     return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
       draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection });
+  },
+  async discardCatalog(ctx, args) {
+    const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
+    const record = requireConfiguration(previous);
+    if (!record.draft) throw new CodeRefusal("catalog_missing");
+    return commitConfiguration(ctx, previous, { ...record, draft: null });
   },
   async select(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);

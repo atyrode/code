@@ -17,7 +17,7 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
 | Directory | Plugin / surface |
 | --- | --- |
 | `atyrode.code/` | `atyrode.code`: shared catalog, routing, account-choice and suggestion policy |
-| `atyrode.code/generator/` | `atyrode.code.generator`: the main view (top bar, generator rows, routing, usage, launch with its machine dropdown, and the accounts, their management and sessions views), Models/Setup/Options sheets and catalog editor, workspace/probe/session flows |
+| `atyrode.code/generator/` | `atyrode.code.generator`: the main view (top bar, generator rows, routing, usage, launch with its machine dropdown, and the accounts, their management and sessions views), the Models, Setup and Options sheets, workspace/probe/session flows |
 | `atyrode.code/accounts/` | `atyrode.code.accounts`: account-pool choices and OMP sign-in presentation |
 | `atyrode.code/usage/` | `atyrode.code.usage`: selected-capacity and OMP usage presentation |
 
@@ -32,14 +32,16 @@ declares the OMP root, accounts and gateway plugins as required dependencies.
   which of them hide or strike), `routing-model.ts`, `usage-model.ts`, `statement-model.ts` (settings, verb, launch
   line and readout), `consequences.ts`, `launch-step.ts` (the one action gate),
   `panel-keys.ts` (every panel key as a decision over plain facts),
-  `auto-read.ts` (what the panel reads again on its own, when, in one pass, and when it waits)
-  and `draft-store.ts` (the unsaved profile kept per tab). `atyrode.code/destination.ts`
-  decides where OMP answers and which machine a browser starts on. `web.tsx` is the
-  shell (top bar, views, sheets, key line, Shortcuts dialog); `more-menu.tsx` is the
-  bar's More menu and `read-clock.ts` the timers and visibility behind the panel's own
-  re-reads; `generator-pane.tsx`, `routing-pane.tsx`, `usage-pane.tsx`,
-  `accounts-pane.tsx`, `earlier.tsx` and `machine-picker.tsx` draw the panes and
-  `styles.css` is the one stylesheet.
+  `auto-read.ts` (what the panel reads again on its own, when, in one pass, and when it waits),
+  `draft-store.ts` (the unsaved profile kept per tab) and `sheets-model.ts` (the Models
+  sheet's ladders, staged changes and step, and what Setup's machine still needs).
+  `atyrode.code/destination.ts` decides where OMP answers and which machine a browser
+  starts on. `web.tsx` is the shell (top bar, views, sheets, key line, Shortcuts dialog);
+  `more-menu.tsx` is the bar's More menu and `read-clock.ts` the timers and visibility
+  behind the panel's own re-reads; `generator-pane.tsx`, `routing-pane.tsx`,
+  `usage-pane.tsx`, `accounts-pane.tsx`, `earlier.tsx` and `machine-picker.tsx` draw the
+  panes, `models-sheet.tsx` and `setup-sheet.tsx` the Models and Setup sheets on the parts
+  they share (`sheet-frame.tsx`), and `styles.css` is the one stylesheet.
 - `atyrode.code/contract.ts`, `server.ts`, `state.ts`: container-scoped
   configuration actions, compare-and-set and the named schema-2-to-3 migration.
 - `atyrode.code/workflow.ts`, `machine-web.ts`, `permission-plan.ts`: one

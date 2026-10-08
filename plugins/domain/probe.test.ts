@@ -265,11 +265,11 @@ describe("pure typed scaffolding", () => {
   });
   test("a model drawing a quota of its own never takes a rung, however cheap; an optional family can supply one rung", () => {
     const inv = fullInventory();
-    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01, quotaTier: "spark" });
+    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01, quotaTier: "future-resource" });
     inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
     const result = derived(inv);
     expect(result.document.models.some(model => model.id === "gpt-spark-6")).toBe(false);
-    expect(result.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota" });
+    expect(result.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota", quotaTier: "future-resource" });
     expect(result.document.models.find(model => model.provider === "deepseek")).toMatchObject({ tier: 1, quotaBucket: null });
   });
 
@@ -489,7 +489,8 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       quotaTier: model.id === "gpt-5.3-codex-spark" ? "spark" : model.provider === "openai-codex" ? "chat" : null })));
     const { document, exclusions } = catalogFromObservations(inv, observed(inv));
     expect(document.models.some(model => model.id === "gpt-5.3-codex-spark")).toBe(false);
-    expect(exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-5.3-codex-spark", reason: "separate_quota" });
+    // The exclusion keeps OMP's class, so a reader names Spark from it rather than from its id.
+    expect(exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-5.3-codex-spark", reason: "separate_quota", quotaTier: "spark" });
     const catalog = compileCatalog(document), review = reviewCatalog(catalog, defaultSelection(catalog), 200);
     expect(review.selection.spark).toBe(false);
     expect(review.routes.some(route => [route.lead, ...route.fallback].some(choice => choice.key.includes("spark")))).toBe(false);

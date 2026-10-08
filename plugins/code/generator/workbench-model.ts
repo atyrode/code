@@ -17,7 +17,7 @@ import { NOT_CURRENT, SAVING } from "./account-switch.ts";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
+import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
@@ -85,6 +85,16 @@ export type WorkbenchActions = {
    * never an inclusion on a historical inventory; one edit at a time, through the accounts gate.
    */
   changeAccounts: (edit: AccountChoiceChange) => void;
+  /**
+   * Models starts (true) or ends (false) one press's list writes. While they run the gate counts them as a step in flight,
+   * so no edit of the team lands before their receipts (`catalogWritten`) do.
+   */
+  writingCatalog: (writing: boolean) => void;
+  /**
+   * Models wrote from revision `from`: an import's initialization, or a list staged, put in use or discarded. The receipt
+   * shows until its read arrives, and the local draft follows the write or gives way to the record (launch-step.ts `followCatalogWrite`).
+   */
+  catalogWritten: (from: number, written: Configuration) => void;
   /** Re-observe every query, accounts and usage included. */
   refresh: () => void;
   /** Re-observe the usage reading alone: the usage line's own cadence (auto-read.ts `PASS_READS`). */
@@ -145,8 +155,6 @@ export type WorkbenchModel = {
   /** The launch status sentence; `nextLaunchStep`'s precedence (launch-step.ts). */
   launchStatus: string;
   message: WorkbenchMessage | null;
-  /** Copyable JSON of the local profile; empty when there is nothing local to export. */
-  exportedDraft: string;
   /**
    * Whether an action may start now: the one gate every action path asks (launch-step.ts
    * `actionGate`). A resume names the session it would resume, so a row can be judged before it is
@@ -241,6 +249,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [busy, setBusy] = useState(false);
   const [inFlight, setInFlight] = useState<WorkbenchStep | null>(null);
   const [chaining, setChaining] = useState(false);
+  const [writingCatalog, setWritingCatalog] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
@@ -390,7 +399,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
   const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, placeable, available, accounts: accountState,
     launchReady, previewCurrent, localReview, skillProblems, queries: { setup }, verification,
-    running: busy || chaining || verifyRunning, charge: verification.phase === "charge" ? verification.charge : null,
+    running: busy || chaining || verifyRunning || writingCatalog, charge: verification.phase === "charge" ? verification.charge : null,
     unservedLead, savedSessionId, planYolo: record?.selection?.planYolo ?? false };
   // A chain's later steps ask the gate again on the facts of the latest render, its own step set aside.
   const latestFacts = useRef(facts);
@@ -452,9 +461,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setMessage({ text: "The profile is saved for the workspace.", failed: false });
     });
   }
-  const exportedDraft = useMemo(() => profile?.metadata ? JSON.stringify({
-    baseRevision: profile.revision, metadata: profile.metadata, document: profile.document, selection: profile.selection,
-  }, null, 2) : profile && dials ? JSON.stringify({ baseRevision: profile.revision, document: profile.document, selection: profile.selection }, null, 2) : "", [profile, dials]);
+  function catalogWritten(from: number, written: Configuration) {
+    setSavedPolicy(written);
+    setDials(previous => followCatalogWrite(previous, from, { revision: written.revision, initialized: true,
+      catalogDigest: written.active?.digest ?? null, draftDigest: written.draft?.digest ?? null, selection: written.selection, metadataKey }));
+  }
   function refresh() {
     configuration.refresh(); metadata.refresh(); setup.refresh(); defaults.refresh(); skillCatalog.refresh(); accounts.refresh(); reading.refresh();
   }
@@ -615,13 +626,14 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
     configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
     configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, previewCurrent, busy, inFlight, chaining,
-    profileState, stateLabel, launchStatus: launchStatusText(facts), message, exportedDraft,
+    profileState, stateLabel, launchStatus: launchStatusText(facts), message,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
     step, verb, served, unservedLead, outcome, usage,
     skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
-    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit), refresh, readUsage: reading.refresh },
+    actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit),
+      writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams,
   };
 }

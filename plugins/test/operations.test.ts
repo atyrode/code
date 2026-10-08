@@ -346,6 +346,19 @@ describe("container-owned policy configuration", () => {
     expect(await invoke(second, "promoteCatalog", { ...workspace, expectedRevision: 2, source: "draft", reviewDigest: other.reviewDigest }))
       .toEqual({ refused: "code_stale_preferences" });
   });
+
+  test("discarding a staged list clears it at the revision it was seen in, keeping the list in use and the team", async () => {
+    const f = fixture(), promoted = await active(f);
+    const changed = document(); changed.models[0]!.contextWindow = 199_999;
+    const withDraft = await accepted(f, "stageCatalog", { ...workspace, expectedRevision: promoted.revision, document: changed });
+    expect(await invoke(f, "discardCatalog", { ...workspace, expectedRevision: promoted.revision })).toEqual({ refused: "code_stale_preferences" });
+    f.access.writable.clear();
+    expect(await invoke(f, "discardCatalog", { ...workspace, expectedRevision: withDraft.revision })).toEqual({ refused: "code_scope_refused" });
+    f.access.writable.add(target.containerId);
+    const discarded = await accepted(f, "discardCatalog", { ...workspace, expectedRevision: withDraft.revision });
+    expect(discarded).toMatchObject({ revision: withDraft.revision + 1, draft: null, active: promoted.active, selection: promoted.selection, accounts: promoted.accounts });
+    expect(await invoke(f, "discardCatalog", { ...workspace, expectedRevision: discarded.revision })).toEqual({ refused: "code_catalog_missing" });
+  });
 });
 
 describe("pure client-supplied policy composition", () => {

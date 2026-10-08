@@ -211,12 +211,15 @@ const serviceObservation = z.object({ machineId: ServiceReadArgsSchema.shape.mac
   services: z.array(z.object({ serviceId: ServiceReadArgsSchema.shape.serviceId, revision: ServiceReadArgsSchema.shape.revision,
     operations: z.array(z.object({ operationId: ServiceReadArgsSchema.shape.operationId, ready: z.boolean(), invocable: z.boolean() })) })) });
 
+/** One Code action through the ordinary caller transport: its result, or its refusal thrown in a person's words. */
+export type CodeCall = <K extends CodeAction>(name: K, input: ActionInput<K>) => Promise<ActionResult<K>>;
+
 /** Ordinary caller transport only. No server contexts, credentials, shell descriptors,
  * grants or React state are available to this browser/headless decision path. */
 export function createCodeWorkflowClient(dispatch: Dispatch) {
   const codeClient = createCodeClient(dispatch);
   const ompClient = createOmpClient(dispatch);
-  const code = async <K extends CodeAction>(name: K, input: ActionInput<K>): Promise<ActionResult<K>> => accepted(await codeClient.call(name, input));
+  const code: CodeCall = async (name, input) => accepted(await codeClient.call(name, input));
   const omp = async <K extends OmpAction>(name: K, input: OmpInput<K>): Promise<OmpResult<K>> => accepted(await ompClient.call(name, input));
   async function native<K extends keyof typeof nativeActions>(name: K, input: z.infer<(typeof nativeActions)[K]["input"]>): Promise<z.infer<(typeof nativeActions)[K]["result"]>> {
     return nativeActions[name].result.parse(await dispatch(`engine.jobs.${name}`, nativeActions[name].input.parse(input))) as z.infer<(typeof nativeActions)[K]["result"]>;
