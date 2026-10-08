@@ -128,7 +128,7 @@ files, service state, credentials or backups.
   sealed resource reads, restricted tools, native resume, explicit model/thinking
   precedence, missing/changed-state refusal and cancellation. Synthetic inference
   in isolated network namespaces is not paid-provider or live-fleet acceptance.
-- The credential runtime uses OMP's published 18.7.0 graph with its retained
+- The credential runtime uses OMP's published 18.8.0 graph with its retained
   patch; the ordinary CLI and the independent, unpatched SDK host use 18.4.12.
   Native lifecycle accounting uses public SDK hooks and passes the retained
   deadline/quiescence regressions without copying credential algorithms. This
@@ -155,16 +155,20 @@ files, service state, credentials or backups.
   current pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
   Code now pins Manifold
-  [`b53543d`](https://github.com/atyrode/manifold/commit/b53543d94548d7c3929ca45280bb8692f0fa402c),
+  [`cd75fbb`](https://github.com/atyrode/manifold/commit/cd75fbba6d4601fee14267f17e1594429ae17bc3),
   protocol 57, and OMP
-  [`8848676`](https://github.com/atyrode/manifold-omp/commit/8848676ad6048cdd3e49fc5fce850043984e50a7)
-  ([manifold-omp#114](https://github.com/atyrode/manifold-omp/pull/114)), whose own
+  [`8eb556a`](https://github.com/atyrode/manifold-omp/commit/8eb556a5751d833ab527e64a4526aebd087b1d1f)
+  ([manifold-omp#117](https://github.com/atyrode/manifold-omp/pull/117)), whose own
   `MANIFOLD_REV` is the same commit. A protocol 57 hub admits only bundles stamped 57
   ([manifold#1068](https://github.com/atyrode/manifold/issues/1068)), so Code's four
   bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained.
+  These pins add OMP's TUI Agent harness and `atyrode.omp.controlRun`
+  ([manifold-omp#116](https://github.com/atyrode/manifold-omp/pull/116)) and Manifold's
+  pending-Run lifecycle doors ([manifold#1072](https://github.com/atyrode/manifold/pull/1072));
+  Code calls neither and launches no Agent.
   OMP's inventory receipt is now its 18.4.12 one, and each row carries the SDK's
   `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
-  with its separately pinned 18.7.0 SDK, so no version string decides whether a
+  with its separately pinned 18.8.0 SDK, so no version string decides whether a
   verification holds: it records the artifact its inventory ran from and the bundled
   catalog's revision, and goes stale when the destination pins another artifact or OMP
   bundles another revision, with no Code rebuild. A verification recorded before this
