@@ -10,7 +10,7 @@ import type { Configuration } from "../contract.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { WorkflowError, type CodeCall } from "../workflow.ts";
-import type { GateRefusal } from "./launch-step.ts";
+import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, listChanges, modelRows, modelsPhase, money, speedLevel, thinkingRange, TIERS,
@@ -88,7 +88,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const changed = (row: ModelRow): ListChange[] => phase === "staged" ? changes.filter(change => change.row.key === row.key) : [];
 
   // ------------------------------------------------------------ the sheet's own writes: exact, revision-checked, one at a time
-  const [working, setWorking] = useState<"use" | "discard" | "stage" | null>(null);
+  const [working, setWorking] = useState<CatalogWrite | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
@@ -98,12 +98,22 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const edits = model.gate("edit-team");
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
     : running ? "A verification is running." : !edits.open ? edits.refusal.text : working ? "Wait for the change in progress." : null;
+  // An unsaved edit made on the list a write would replace holds that write until it is saved or discarded (launch-step.ts
+  // `editHoldsCatalogWrite`). Only an edit of the team in use saves, through the workbench's own save gate.
+  const savable = model.gate("save").open;
+  const madeOn = model.localDraft?.source === "active" ? "the list in use" : model.localDraft?.source === "draft" ? "the staged list" : "the bundled starter";
+  const editHold = (kind: CatalogWrite): string | null => editHoldsCatalogWrite(model.localDraft, model.edited, kind)
+    ? `Your unsaved profile edit was made on ${madeOn}; ${savable ? "save or discard" : "discard"} it first.` : null;
+  const editFixes: readonly GoFix[] = [...savable ? [{ label: "save", run: () => void model.actions.save() }] : [],
+    { label: "discard edit", run: () => model.actions.discardChanges() }];
+  // A save pressed here fails into the workbench's message, which the held action then says.
+  const saveFailure = model.message?.failed ? model.message.text : null;
   /**
    * Runs one press's writes against the workspace this sheet was opened on, from the revision it was read at; anything that
    * moves it stops them. The main view follows each receipt as this panel's own change from the revision that write was made
    * at (workbench-model.ts `catalogWritten`), an import's initialization included when its stage is then refused.
    */
-  async function write(kind: "use" | "discard" | "stage", work: (code: CodeCall, wrote: (from: number, written: Configuration) => void) => Promise<Said>,
+  async function write(kind: CatalogWrite, work: (code: CodeCall, wrote: (from: number, written: Configuration) => void) => Promise<Said>,
     failed: (text: string) => void) {
     if (pending.current) return;
     const started = host;
@@ -133,7 +143,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     }, setFailure);
   }
   function discard() {
-    if (!record || !draft || writeRefusal) return;
+    if (!record || !draft || writeRefusal || editHold("discard")) return;
     const { containerId, revision } = record;
     void write("discard", async (code, wrote) => {
       const discarded = await code("discardCatalog", { containerId, expectedRevision: revision });
@@ -148,6 +158,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const [importError, setImportError] = useState<string | null>(null);
   const imported = useMemo(() => paste.trim() ? parseList(paste) : null, [paste]);
   const importRefusal = writeRefusal;
+  // Import opens over an edit it would replace; the dialog says so and offers to discard the edit.
+  const stageHold = writeRefusal ? null : editHold("stage");
   const exportRefusal = running ? "A verification is running." : !(active?.document ?? inUseDocument) ? "There is no list to export." : null;
   function openImport() {
     setPaste(""); setImportError(null);
@@ -156,7 +168,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   function stageImport() {
     const document = imported;
     if (!document) return;
-    if (writeRefusal) { setImportError(writeRefusal); return; }
+    const refusal = writeRefusal ?? stageHold;
+    if (refusal) { setImportError(refusal); return; }
     const base = record, containerId = host.containerId!, absentAt = model.observed?.revision ?? 0;
     const added = listChanges(inUse, modelRows(document)).length;
     void write("stage", async (code, wrote) => {
@@ -237,11 +250,17 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
         said: { value: "verifying", text: "cancel stops the probe; what it measured so far stays in OMP's history" }, press: busy };
       case "finishing": return { label: "verifying…", busy: true, parts: [["putting the model list in use", null]], fixes: [],
         said: { value: "verifying", text: "saving the verified list and the profile" }, press: () => "The verified list is being saved." };
-      case "staged": return { label: "use staged list", busy: working !== null, disabled: writeRefusal !== null,
-        parts: [...refused, [count(changes.length, "change"), "strong"], ["staged", null]], fixes: writeRefusal ? [] : [{ label: "discard", run: discard }],
-        said: failure ? { value: "use staged list", text: failure, warn: true } : writeRefusal ? { value: "use staged list", text: writeRefusal, warn: true }
-          : { value: "use staged list", text: draft?.provenance ? "replaces the list in use with this verified one" : "replaces the list in use; it needs verifying after" },
-        press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
+      case "staged": {
+        // An unsaved edit made on the list this replaces holds it, with what lifts the hold beside it.
+        const held = writeRefusal ? null : editHold("use");
+        if (held) return { label: "use staged list", disabled: true, parts: [[saveFailure ? "not saved" : "unsaved profile edit", "attention"]], fixes: editFixes,
+          said: { value: "use staged list", text: saveFailure ?? held, warn: true }, press: () => held };
+        return { label: "use staged list", busy: working !== null, disabled: writeRefusal !== null,
+          parts: [...refused, [count(changes.length, "change"), "strong"], ["staged", null]], fixes: writeRefusal ? [] : [{ label: "discard", run: discard }],
+          said: failure ? { value: "use staged list", text: failure, warn: true } : writeRefusal ? { value: "use staged list", text: writeRefusal, warn: true }
+            : { value: "use staged list", text: draft?.provenance ? "replaces the list in use with this verified one" : "replaces the list in use; it needs verifying after" },
+          press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
+      }
       case "verified":
         // The head already says when the list was verified; beside the action, only its alternative: verifying again, through
         // the same gate as a first verification, whose charge still waits on its own confirmation.
@@ -467,12 +486,13 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           const file = event.dataTransfer.files[0];
           if (file) void file.text().then(text => { setPaste(text); setImportError(null); });
         }} />
-      <p className={`${G}models-import-error`} role="status">{importError ?? (paste.trim() && !imported ? "not a Code model list" : "")}</p>
+      <p className={`${G}models-import-error`} role="status">{importError ?? (paste.trim() && !imported ? "not a Code model list" : stageHold ?? "")}</p>
       <div className={`${G}sheet-dialog-row`}>
-        <button type="button" className={`${G}go`} data-stage="" aria-disabled={!imported || working !== null || undefined} aria-busy={working === "stage" || undefined}
+        <button type="button" className={`${G}go`} data-stage="" aria-disabled={!imported || working !== null || stageHold !== null || undefined} aria-busy={working === "stage" || undefined}
           onClick={() => { if (imported && working === null) stageImport(); }}>
           <span className={`${G}go-label`}>stage</span>
         </button>
+        {stageHold && <button type="button" className={`${G}go-fix`} onClick={() => { setImportError(null); model.actions.discardChanges(); }}>discard edit</button>}
         <button type="button" className={`${G}go-fix`} onClick={() => dialog.current?.close()}>cancel</button>
       </div>
     </dialog>

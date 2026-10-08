@@ -2399,13 +2399,13 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
   const dialog = element(`${modelsSheet} dialog`);
   const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
   const stageButton = element(`${modelsSheet} dialog [data-stage]`);
-  /** Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press. */
-  const stageList = async (list: CatalogDocument) => {
+  /** Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press; using it is then `use`. */
+  const stageList = async (list: CatalogDocument, use: "ready" | "refused" = "ready") => {
     await until(browser, "the import opens as a modal dialog with focus in its field", `!!${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
     await browser.send("Input.insertText", { text: JSON.stringify(list) });
     await until(browser, "the pasted list can be staged", `!${stageButton}.hasAttribute('aria-disabled')`);
     await click(browser, stageButton);
-    await until(browser, "the staged list waits beside the one in use", `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list")} && ${sideIs("staged changes")}`);
+    await until(browser, "the staged list waits beside the one in use", `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list", use)} && ${sideIs("staged changes")}`);
   };
   try {
     await openGenerator(browser, server, workspace.id);
@@ -2600,12 +2600,33 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     assert.equal(afterAgain.configuration?.active?.provenance?.benchmarkCompletedAt, again.benchmark.completedAt, "The new verification is recorded");
     assert(again.benchmark.completedAt > verified.benchmark.completedAt);
 
-    // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
-    // the staged one, unverified, and verifying it is the next action.
+    // An unsaved edit of the team in use holds putting a staged list in use, which would replace the list it was made on:
+    // the next action says so with save and discard edit beside it, and a press writes nothing. Saving the edit on the list
+    // it was made on lifts the hold.
+    await closeSheet(browser);
+    const advisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined).dataset.key`);
+    await choose(browser, "advisor", advisor);
+    await openSheet(browser, "models");
     const slower: CatalogDocument = { ...again.document, models: again.document.models.map((model, index) => index === 1 ? { ...model, tokensPerSecond: 77 } : model) };
     await click(browser, element(`${modelsSheet} [data-cue="import"]`));
-    await stageList(slower);
+    await stageList(slower, "refused");
+    assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)} })`),
+      { parts: [["unsaved profile edit", "attention"]], fixes: ["save", "discard edit"] }, "Use staged list waits on the unsaved edit, with save and discard edit beside it");
+    const held = await readConfiguration(server, writer, target);
+    from = trace.requests.length;
+    await click(browser, goButton);
+    await until(browser, "a held press says which list the edit was made on",
+      `${sheetSays(modelsSheet)} === 'use staged list · Your unsaved profile edit was made on the list in use; save or discard it first.'`);
+    assert.deepEqual(writes(from), [], "A held press writes nothing");
+    await click(browser, goFix(modelsSheet, "save"));
+    await until(browser, "saved, the edit lets the staged list be used", `${goIs(modelsSheet, "use staged list")} && JSON.stringify(${goFixes(modelsSheet)}) === '["discard"]'`);
     const before = await readConfiguration(server, writer, target);
+    assert.equal(before.configuration?.selection?.advisor, advisor, "The saved team is the edit");
+    assert.deepEqual(writes(from), [{ name: "atyrode.code.select", input: { containerId: target.containerId, expectedRevision: held.revision, selection: before.configuration?.selection } }],
+      "Save writes exactly the edit at the revision shown");
+
+    // Use staged list reviews the staged list at the revision shown and promotes exactly that review; the list in use is then
+    // the staged one, unverified, and verifying it is the next action.
     from = trace.requests.length;
     await click(browser, goButton);
     await until(browser, "use staged list puts it in use, unverified, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} &&
@@ -3244,7 +3265,8 @@ async function stagedCatalogScenario(browser: BrowserInstance, server: TestServe
 
 /**
  * A Code model list of the person's own, pasted into Models' import on a first-use workspace (real input: the paste is
- * CDP's text insertion into the field). What is not a list is said so and cannot be staged. A list is staged by the one
+ * CDP's text insertion into the field). What is not a list is said so and cannot be staged. An edit of the bundled preview,
+ * which the import would replace, holds it until the edit is discarded in the dialog. A list is staged by the one
  * explicit press, which initializes the absent workspace at the revision the panel read and stages once; nothing is
  * verified or put in use until use staged list, which reviews the staged list at its revision and promotes exactly that
  * review. A competing first save made meanwhile is never overwritten: the panel's configuration reads are held so it
@@ -3263,6 +3285,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
   const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
   const stageButton = element(`${modelsSheet} dialog [data-stage]`);
   const importSays = `${element(`${modelsSheet} .${G}models-import-error[role="status"]`)}.textContent`;
+  const discardEdit = `[...document.querySelectorAll('${modelsSheet} dialog .${G}go-fix')].find(el => el.textContent.trim() === 'discard edit')`;
   const absent = { configuration: null, legacyMachineId: null, revision: 0 };
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const trace = await watchActions(browser, server);
@@ -3301,6 +3324,13 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       const target = { containerId: workspace.id };
       await openGenerator(browser, server, workspace.id);
       await usableStarter(browser);
+      // The first import is made over an edit of the bundled preview, which it would replace: the dialog holds it until the
+      // edit is discarded there.
+      const edited = mode === "imported";
+      if (edited) {
+        const advisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined).dataset.key`);
+        await choose(browser, "advisor", advisor);
+      }
       await openSheet(browser, "models");
       const from = trace.requests.length;
       await click(browser, element(`${modelsSheet} [data-cue="import"]`));
@@ -3314,6 +3344,14 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       await click(browser, field);
       await key(browser, "a", 65, { modifiers: CTRL });
       await browser.send("Input.insertText", { text: JSON.stringify(document) });
+      if (edited) {
+        await until(browser, "the edited preview holds the import, which says so with discard edit beside stage",
+          `${importSays} === 'Your unsaved profile edit was made on the bundled starter; discard it first.' && ${stageButton}.getAttribute('aria-disabled') === 'true' && !!${discardEdit}`);
+        await click(browser, stageButton);
+        await Bun.sleep(300);
+        assert.deepEqual(writes(from), [], "A held import stages nothing");
+        await click(browser, discardEdit);
+      }
       await until(browser, "a Code model list can be staged", `${importSays} === '' && !${stageButton}.hasAttribute('aria-disabled') && ${field}.value === ${JSON.stringify(JSON.stringify(document))}`);
       assert.deepEqual(await readConfiguration(server, writer, target), absent, "Pasting a list writes nothing");
       if (mode === "refused") {

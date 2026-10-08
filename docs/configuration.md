@@ -155,9 +155,8 @@ quota of its own (any OMP class but chat, Spark's for one, as each inventory row
 left off the derived ladder and listed among the last verification's excluded models as
 `separate_quota` with OMP's class for it (`quotaTier`), since Code spends no such quota.
 
-A stale or failed save is never retried or rebased. The local draft remains
-until explicitly discarded, or until this panel replaces in Models the list it was
-made on. It also survives a reload: the main view keeps
+A stale or failed save is never retried or rebased. An unsaved edit remains
+until it is saved or explicitly discarded. It also survives a reload: the main view keeps
 an unsaved team in the tab's session storage per principal and workspace, with what
 it was made from (base revision and team, the catalog digests, whether choices
 existed, and for a first-use draft the bundled model list), never the catalog itself.
@@ -166,11 +165,17 @@ dropped without a word. A returned draft is judged like any other: a write that 
 its team and catalogs alone moves its base forward, and a foreign team or catalog
 write is a conflict. A list this panel stages, puts in use or discards in Models is its
 own change, never a conflict: a draft made on the list in use follows a list staged or
-discarded beside it, and a draft whose list the write replaces gives way to the record,
-as the bundled preview does to a list imported into a workspace without one. An
-import's own initialization is followed the same way, so a stage refused after it
-leaves the draft resting on that initialization, as a stopped first verification does,
-never a change made elsewhere. A draft
+discarded beside it, and a first-use draft follows an import's own initialization, so a
+stage refused after it leaves the draft resting on that initialization, as a stopped
+first verification does. A write that replaces the list a draft was made on (using the
+staged list replaces the list in use and the staged one, discarding or importing
+replaces the staged one, and an import replaces the bundled list a workspace without
+one previews) never drops an unsaved edit. A list put in use brings its own default
+team, so no team made on the replaced list carries over; instead Models holds that
+write, says which list the edit was made on, and offers **save** for an edit of the
+team in use (it is saved on that list) and **discard edit**, which the import dialog
+offers too. Only an untouched draft gives way to the record, as the bundled
+preview does to a list imported into a workspace without one. A draft
 that only repeats the team the view shows without it is not kept. Skills and
 automation (the session options) are independent ephemeral
 launch choices, never part of the saved profile. The main view has no task: it opens
@@ -658,7 +663,9 @@ One next action sits where the launch sits and follows the step: **verify models
 with the requests measured, then **back to code** with **verify again** beside it, the
 same Verify a current verification can always renew, its charge confirmed the same way.
 A staged list offers **use staged list**, which reviews the staged list at its revision
-and promotes exactly that review, and **discard**. Verifying refused for want of
+and promotes exactly that review, and **discard**. An unsaved edit made on the list a
+write would replace holds it, with **save** (an edit of the team in use) and **discard
+edit** beside it. Verifying refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
 accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,
 and otherwise returns to Code. Import takes a pasted or dropped Code model list, checks

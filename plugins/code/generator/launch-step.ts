@@ -55,15 +55,31 @@ export function followRecord<T extends DraftBase>(draft: T, shared: SharedBase):
 export function followInitialization<T extends DraftBase>(draft: T | null, from: number, to: number): T | null {
   return draft && !draft.initialized && draft.revision === from ? { ...draft, revision: to, initialized: true } : draft;
 }
+/** A Models write of the model list: the staged list put in use or discarded, or a list imported and staged. */
+export type CatalogWrite = "use" | "discard" | "stage";
+/**
+ * Whether a Models write waits for the local draft. Putting the staged list in use replaces the list
+ * in use and the staged one; discarding replaces the staged one; staging replaces the staged one and
+ * the bundled list a workspace without a list previews. A draft made on the list a write replaces is
+ * left with nothing to rest on (`followCatalogWrite`), and a list put in use brings its own default
+ * team (state.ts `catalogReview`), so no team made on the replaced list carries over. An untouched
+ * draft gives way to the record; an edit (draft-store.ts `editedDraft`) holds the write until the
+ * person saves it on its own list or discards it, so their own write never drops it without a word.
+ */
+export function editHoldsCatalogWrite(draft: DraftBase | null, edited: boolean, write: CatalogWrite): boolean {
+  if (!draft || !edited) return false;
+  return draft.source === "draft" || (draft.source === "active" ? write === "use" : write === "stage");
+}
 /**
  * A list this panel wrote in Models (an initialization, or a list staged, put in use or discarded,
  * from revision `from`) is the person's own change, never one made elsewhere. A draft that rested on
  * the record at `from` follows the write while the list it was made on is untouched: an import's own
  * initialization, or a list staged or discarded beside the one in use. Once that list is replaced, the
  * draft gives way (null) and the profile is read from the record: the bundled preview of a workspace
- * without a list gives way to the list staged there, and an edit of the list in use to the list put
- * in use after it. A draft that no longer rested on the record at `from` keeps its base and stays a
- * conflict.
+ * without a list gives way to the list staged there, and the team in use to the list put in use after
+ * it. Only an untouched draft reaches that point, since an edit holds such a write
+ * (`editHoldsCatalogWrite`). A draft that no longer rested on the record at `from` keeps its base and
+ * stays a conflict.
  */
 export function followCatalogWrite<T extends DraftBase>(draft: T | null, from: number, written: SharedBase): T | null {
   if (!draft || draft.revision !== from) return draft;
