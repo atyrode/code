@@ -2284,7 +2284,8 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
  * Models end to end on a first-use workspace. Synthetic OMP observations stand in for the destination, the accounts and
  * the probe jobs: discovery and benchmark are ready, a fictional Claude and Codex account are observed, each inventory
  * lists the pinned OMP's bundled Claude and Codex rows with OMP's quota class on each, and Spark in its `spark` class,
- * and each provider's benchmark job answers every candidate reachable at fictional speeds. Everything Code decides is the real
+ * and each provider's benchmark job answers every candidate reachable at fictional speeds, except the Codex models the
+ * plan does not serve (`unserved`), which it answers `client_blocked`. Everything Code decides is the real
  * server's: the initialization, the probe pool, the charge (`draftInventory`), the derivation, staging with the recorded
  * verification, reviews, promotions, imports and discards. No provider is reached, no native job runs and nothing is
  * approved.
@@ -2325,6 +2326,8 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
   const started: OmpInput<"startInventory">[] = [], cancels: unknown[] = [];
   const heldInventory = holdable(), heldReview = holdable();
   let holdNextInventory = false, holdNextBenchmark = false, holdNextReview = false;
+  /** The Codex ids the next benchmarks find the plan does not serve. */
+  let unserved: ReadonlySet<string> = new Set();
   const reviews: ActionResult<"reviewCatalog">[] = [];
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
@@ -2379,8 +2382,9 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
         const run = benchmarks.get(String(input.jobId));
         assert(run?.settled, "A benchmark is read once its job has settled");
         run.receipt ??= { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: run.request.candidates.inventoryObservedAt,
-          startedAt: run.startedAt, completedAt: Date.now(), results: run.request.candidates.candidates.map(candidate => ({ ...candidate, status: "reachable" as const,
-            tokensPerSecond: 25 + speed(candidate.id) % 90, timeToFirstTokenMs: 400 + speed(candidate.id) % 1_400 })) };
+          startedAt: run.startedAt, completedAt: Date.now(), results: run.request.candidates.candidates.map(candidate => unserved.has(candidate.id)
+            ? { ...candidate, status: "client_blocked" as const, tokensPerSecond: null, timeToFirstTokenMs: null }
+            : { ...candidate, status: "reachable" as const, tokensPerSecond: 25 + speed(candidate.id) % 90, timeToFirstTokenMs: 400 + speed(candidate.id) % 1_400 }) };
         return { ok: true, result: { job: probeJob(target, String(input.jobId), BENCHMARK_OPERATION_ID, writer.principal.id), benchmark: run.receipt } };
       }
       case "engine.jobs.cancel": cancels.push(input); return refused("synthetic_cancel_unexpected");
@@ -2620,6 +2624,11 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual([benchmarks.size, cancels.length], [2, 0], "A stopped charge spends nothing and has no job to cancel");
     await click(browser, goFix(modelsSheet, "verify again"));
     await until(browser, "verify again waits on its charge", `${phaseIs("charge")} && ${goIs(modelsSheet, "confirm charge")}`);
+    // This time the plan serves one GPT model, the one the first verification put on GPT's first rung.
+    const servedId = verified.document.models.find(model => model.provider === "openai-codex" && model.tier === 1)!.id;
+    unserved = new Set(inventoryDraft(inventories.get("synthetic-inventory-3")!, "any").benchmark.candidates
+      .filter(candidate => candidate.provider === "openai-codex" && candidate.id !== servedId).map(candidate => candidate.id));
+    assert(unserved.size > 0, "The plan leaves some Codex model unserved");
     await click(browser, goButton);
     await until(browser, "the list is measured again and verified", settled);
     const again = derivedFrom("synthetic-inventory-3");
@@ -2628,6 +2637,24 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual(afterAgain.configuration?.active?.document, again.document, "Verified again, the list in use is the new derivation");
     assert.equal(afterAgain.configuration?.active?.provenance?.benchmarkCompletedAt, again.benchmark.completedAt, "The new verification is recorded");
     assert(again.benchmark.completedAt > verified.benchmark.completedAt);
+
+    // GPT is laddered on the one model its plan serves, short rather than refused, and says so beside its name; the models
+    // the plan does not serve are left out as not on plan, and an empty GPT rung names the rung it lands on.
+    assert.deepEqual([again.document.models.filter(model => model.provider === "openai-codex").map(model => [model.tier, model.id]), again.short],
+      [[[1, servedId]], ["openai"]], "One GPT model answers, so the derivation ladders GPT short");
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${modelsSheet} .${G}models-prov')].map(el => [el.textContent, el.dataset.short !== undefined])`),
+      [["GPT · short", true], ["Claude", false]], "GPT's head says it is short, and Claude's, whole, does not");
+    const notOnPlan = await browser.evaluate<{ id: string; why: string; label: string }[]>(`[...document.querySelectorAll('${modelsSheet} [data-side="left out"] li')].map(li => ({
+      id: li.querySelector('.${G}models-xid').textContent, why: li.querySelector('.${G}models-why').textContent, label: li.querySelector('.${G}models-xid').getAttribute('aria-label') }))
+      .filter(entry => entry.why === 'not on plan')`);
+    assert.deepEqual(notOnPlan, [...unserved].sort().map(id => ({ id: `openai-codex/${id}`, why: "not on plan",
+      label: `openai-codex/${id}: Your accounts' plan or settings do not serve it` })), "Every Codex model the plan does not serve is left out as not on plan");
+    const lands = await browser.evaluate<string>(`${element(`${modelsSheet} [data-cell="openai:1"] .${G}models-alias`)}.textContent`);
+    await pointOf(browser, element(`${modelsSheet} [data-cell="openai:3"]`));
+    await until(browser, "an empty rung of the short family names the rung it lands on",
+      `${sheetSays(modelsSheet)} === ${JSON.stringify(`smart GPT · No smart GPT model in the list · the model row lands on ${lands}`)}`);
+    await pointAway(browser);
+    await sheetGeometry(browser, modelsSheet, "Models short list");
 
     // An unsaved edit of the team in use holds putting a staged list in use, which would replace the list it was made on:
     // the next action says so, and what each fix does, with save and discard edit beside it; a press writes nothing. Saving

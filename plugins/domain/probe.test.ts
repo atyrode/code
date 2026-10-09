@@ -3,7 +3,8 @@ import { OMP_VERSION, PROBE_MODEL_LIMIT, ThinkingLevelSchema, parseBenchmarkObse
   type ModelCatalogSnapshot, type QuotaTierOf, type ThinkingLevel } from "@atyrode/manifold-omp";
 import { benchmarkCandidates, catalogFromMetadata, catalogFromObservations, inventoryDraft, type ScaffoldOptions } from "./probe.ts";
 import { compileCatalog } from "./catalog.ts";
-import { compileOmpOverlay, defaultSelection, reviewCatalog } from "./routing.ts";
+import type { Selection } from "./contracts.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, type Review } from "./routing.ts";
 
 const identity = { provider: "anthropic", id: "claude-sonnet-5", api: "anthropic-messages" };
 /** The SDK's quota classification of every identity these observations list: none. */
@@ -102,10 +103,12 @@ describe("pure typed scaffolding", () => {
     const inv = fullInventory(), draft = inventoryDraft(inv, "any");
     expect(draft).toEqual({ schemaVersion: 1, kind: "draft", inventoryObservedAt: 100, benchmark: benchmarkCandidates(inv), exclusions: [] });
     expect(inventoryDraft({ ...inv, models: [...inv.models].reverse() }, "any")).toEqual(draft);
-    // One Anthropic row cannot form a required ladder, yet what probing it costs is still stated.
-    const single = { ...inv, models: inv.models.filter(model => model.id === "claude-haiku-5") };
-    expect(inventoryDraft(single, "any").benchmark.candidates.map(candidate => candidate.id)).toEqual(["claude-haiku-5"]);
-    expect(() => derived(single)).toThrow("probe_insufficient_ladder");
+    // Two Anthropic rows whose dearer one loses context on the cheaper form no ladder, not even a
+    // short one, yet what probing them costs is still stated.
+    const narrow = { ...inv, models: inv.models.filter(model => model.id === "claude-haiku-5" || model.id === "claude-sonnet-5")
+      .map(model => model.id === "claude-sonnet-5" ? { ...model, contextWindow: 100_000 } : model) };
+    expect(inventoryDraft(narrow, "any").benchmark.candidates.map(candidate => candidate.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
+    expect(() => derived(narrow)).toThrow("code_ladder_regression: anthropic: anthropic/claude-sonnet-5 regresses on anthropic/claude-haiku-5");
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
     const { document } = catalogFromObservations(inv, receipt);
     expect(document.models.filter(model => model.provider === "anthropic").map(model => [model.tier, model.id, model.quotaBucket])).toEqual([
@@ -228,7 +231,10 @@ describe("pure typed scaffolding", () => {
     expect(derived(inv).document.models.map(model => [model.provider, model.tier])).toEqual([
       ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
     ]);
-    expect(() => derived({ ...inv, models: inv.models.slice(1) })).toThrow("probe_insufficient_ladder");
+    // Two rows of a family Code requires are a short ladder: laddered, said short, never refused.
+    const short = derived({ ...inv, models: inv.models.slice(1) });
+    expect([tiers(short.document, "anthropic"), short.short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
+    expect(derived(inv).short).toEqual([]);
   });
   test("a shorter valid ladder beats extra rungs that lose context or thinking", () => {
     const inv = fullInventory(), model = inv.models.find(value => value.provider === "openai-codex")!;
@@ -496,6 +502,149 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     expect(review.routes.some(route => [route.lead, ...route.fallback].some(choice => choice.key.includes("spark")))).toBe(false);
     // A stored selection that still asks for Spark is read with it off, never refused.
     expect(reviewCatalog(catalog, { ...defaultSelection(catalog), spark: true }, 200).selection.spark).toBe(false);
+  });
+});
+
+/*
+  The operator's verification of 2026-10-09 under OMP 18.8.6, through three Codex accounts, one
+  Claude account and one DeepSeek key: every row its inventory listed and, where the benchmark probed
+  it, that probe's verdict. Ids, verdicts, OMP's quota class, thinking levels, context and image
+  support are the receipts' own. Each input price is replaced by its rank among the inventory's
+  prices, since the ladder reads only their order (`tierOrder`, `validTierPair`); speeds and
+  anything about the accounts are not kept.
+*/
+type Verdict = "reachable" | "not_found" | "client_blocked";
+const lowToMax: readonly ThinkingLevel[] = ["low", "medium", "high", "xhigh", "max"];
+const minimalToXhigh: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh"];
+const lowHighMax: readonly ThinkingLevel[] = ["low", "high", "max"];
+const operatorRows: readonly (readonly [provider: string, id: string, priceRank: number, context: number, thinking: readonly ThinkingLevel[],
+  images: boolean, quotaTier: string | null, verdict: Verdict | null])[] = [
+  ["anthropic", "claude-3-5-sonnet-20240620", 8, 200_000, [], true, null, null],
+  ["anthropic", "claude-3-5-sonnet-20241022", 8, 200_000, [], true, null, null],
+  ["anthropic", "claude-3-haiku-20240307", 3, 200_000, [], true, null, null],
+  ["anthropic", "claude-fable-5", 11, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-fable-5-1", 11, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-haiku-4-5", 5, 200_000, minimalToXhigh, true, null, "reachable"],
+  ["anthropic", "claude-haiku-4-5-20251001", 5, 200_000, minimalToXhigh, true, null, null],
+  ["anthropic", "claude-haiku-5-5", 1, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-mythos-5", 11, 1_000_000, lowToMax, true, null, "not_found"],
+  ["anthropic", "claude-mythos-5-1", 11, 1_000_000, lowToMax, true, null, "not_found"],
+  ["anthropic", "claude-opus-4-0", 12, 200_000, minimalToXhigh, true, null, "not_found"],
+  ["anthropic", "claude-opus-4-1", 12, 200_000, minimalToXhigh, true, null, "not_found"],
+  ["anthropic", "claude-opus-4-1-20250805", 12, 200_000, [], true, null, null],
+  ["anthropic", "claude-opus-4-20250514", 12, 200_000, [], true, null, null],
+  ["anthropic", "claude-opus-4-5", 10, 200_000, minimalToXhigh, true, null, "reachable"],
+  ["anthropic", "claude-opus-4-5-20251101", 10, 200_000, minimalToXhigh, true, null, null],
+  ["anthropic", "claude-opus-4-6", 10, 1_000_000, ["low", "medium", "high", "max"], true, null, "reachable"],
+  ["anthropic", "claude-opus-4-7", 10, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-opus-4-8", 10, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-opus-5", 10, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-opus-5-5", 9, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-sonnet-4-0", 8, 200_000, minimalToXhigh, true, null, "not_found"],
+  ["anthropic", "claude-sonnet-4-20250514", 8, 200_000, [], true, null, null],
+  ["anthropic", "claude-sonnet-4-5", 8, 1_000_000, minimalToXhigh, true, null, "reachable"],
+  ["anthropic", "claude-sonnet-4-5-20250929", 8, 1_000_000, minimalToXhigh, true, null, null],
+  ["anthropic", "claude-sonnet-4-6", 8, 1_000_000, ["low", "medium", "high"], true, null, "reachable"],
+  ["anthropic", "claude-sonnet-5", 7, 1_000_000, lowToMax, true, null, "reachable"],
+  ["anthropic", "claude-sonnet-5-5", 7, 1_000_000, lowToMax, true, null, "reachable"],
+  ["deepseek", "deepseek-flash", 4, 1_000_000, lowHighMax, true, null, "reachable"],
+  ["deepseek", "deepseek-v4-flash", 4, 1_000_000, lowHighMax, true, null, null],
+  ["deepseek", "deepseek-v4-flash-vision-exp", 4, 1_000_000, lowHighMax, true, null, null],
+  ["deepseek", "deepseek-v4-pro", 6, 1_000_000, lowHighMax, false, null, "reachable"],
+  ["openai-codex", "gpt-5.6-luna", 2, 1_000_000, lowToMax, true, "chat", "reachable"],
+  ["openai-codex", "gpt-5.6-sol", 9, 1_000_000, lowToMax, true, "chat", "client_blocked"],
+  ["openai-codex", "gpt-5.6-terra", 7, 1_000_000, lowToMax, true, "chat", "reachable"],
+  ["openai-codex", "gpt-6-astra", 11, 922_000, lowToMax, true, "chat", "client_blocked"],
+  ["openai-codex", "gpt-6-luna", 1, 872_000, lowToMax, true, "chat", "reachable"],
+  ["openai-codex", "gpt-6-sol", 7, 872_000, lowToMax, true, "chat", "client_blocked"],
+  ["openai-codex", "gpt-6.1-sol", 7, 922_000, lowToMax, true, "chat", "client_blocked"],
+];
+/** The receipts as one inventory and the union of its providers' benchmarks, with some verdicts changed where a test says so. */
+function operatorReceipts(changed: Readonly<Record<string, Verdict>> = {}) {
+  const inventory = receiptOf(operatorRows.map(([provider, id, rank, context, thinking, images, quotaTier]): Row => ({
+    provider, id, api: apis[provider]!, inputCostPerMillion: rank, outputCostPerMillion: rank * 5, contextWindow: context,
+    maxTokens: 128000, reasoning: thinking.length > 0, thinkingLevels: [...thinking], images, quotaTier })));
+  const verdicts = new Map(operatorRows.flatMap(([, id, , , , , , verdict]) => verdict ? [[id, changed[id] ?? verdict] as const] : []));
+  const input = benchmarkCandidates(inventory);
+  const results = input.candidates.map(candidate => {
+    const status = verdicts.get(candidate.id)!;
+    return status === "reachable" ? { ...candidate, status, tokensPerSecond: 62, timeToFirstTokenMs: 700 }
+      : { ...candidate, status, tokensPerSecond: null, timeToFirstTokenMs: null };
+  });
+  return { inventory, candidates: input.candidates.map(candidate => candidate.id), verdicts,
+    benchmark: { schemaVersion: 1, kind: "benchmark", ompVersion: OMP_VERSION, inventoryObservedAt: inventory.observedAt, startedAt: 101, completedAt: 200, results } };
+}
+
+describe("a family Code requires that the accounts reach only in part", () => {
+  test("the operator's receipts ladder Claude whole, GPT short and DeepSeek, and every route leads on a model they reach", () => {
+    const { inventory, candidates, verdicts, benchmark } = operatorReceipts();
+    // Rebuilt from the receipts, the charge probes exactly what the operator's benchmark probed.
+    expect(candidates.toSorted()).toEqual([...verdicts.keys()].toSorted());
+    const derived = catalogFromObservations(inventory, benchmark);
+    expect([tiers(derived.document, "openai-codex"), tiers(derived.document, "anthropic"), tiers(derived.document, "deepseek")]).toEqual([
+      [[1, "gpt-6-luna"], [2, "gpt-5.6-terra"]],
+      [[1, "claude-haiku-5-5"], [2, "claude-sonnet-5-5"], [3, "claude-opus-5-5"], [4, "claude-fable-5-1"]],
+      [[1, "deepseek-flash"], [2, "deepseek-v4-pro"]],
+    ]);
+    expect(derived.short).toEqual(["openai"]);
+    // What is left out, each with its reason: the plan's unserved GPT models among them.
+    expect(derived.exclusions.map(exclusion => [exclusion.id, exclusion.reason])).toEqual([
+      ["claude-fable-5", "superseded"], ["claude-haiku-4-5", "superseded"], ["claude-mythos-5", "not_found"], ["claude-mythos-5-1", "not_found"],
+      ["claude-opus-4-0", "not_found"], ["claude-opus-4-1", "not_found"], ["claude-opus-4-5", "superseded"], ["claude-opus-4-6", "superseded"],
+      ["claude-opus-4-7", "superseded"], ["claude-opus-4-8", "superseded"], ["claude-opus-5", "superseded"], ["claude-sonnet-4-0", "not_found"],
+      ["claude-sonnet-4-5", "superseded"], ["claude-sonnet-4-6", "superseded"], ["claude-sonnet-5", "superseded"],
+      ["deepseek-v4-flash-vision-exp", "unstable_id"],
+      ["gpt-5.6-luna", "superseded"], ["gpt-5.6-sol", "client_blocked"], ["gpt-6-astra", "client_blocked"], ["gpt-6-sol", "client_blocked"],
+      ["gpt-6.1-sol", "client_blocked"],
+    ]);
+
+    const catalog = compileCatalog(derived.document), team = defaultSelection(catalog);
+    const review = (changes: Partial<Selection>) => reviewCatalog(catalog, { ...team, ...changes }, 200);
+    const lead = (value: Review, role: string) => catalog.model(value.routes.find(route => route.role === role)!.lead.key).id;
+    const gpt: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
+    expect(team).toMatchObject({ lane: { kind: "mixed" }, capability: 3 });
+    // GPT's smart tier is filled from its nearest rung: it routes to terra itself, and elite is not offered.
+    expect(([1, 2, 3] as const).map(capability => lead(review({ lane: gpt, capability }), "default"))).toEqual(["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-terra"]);
+    const smart = review({ lane: gpt, capability: 3 });
+    expect(smart.available.capabilities).toEqual([1, 2, 3]);
+    expect([lead(smart, "plan"), smart.routes.find(route => route.role === "plan")!.fallback.map(choice => catalog.model(choice.key).id)])
+      .toEqual(["gpt-5.6-terra", ["gpt-6-luna"]]);
+    expect(compileOmpOverlay(catalog, smart.selection, smart.routes).modelRoles?.default).toBe("openai-codex/gpt-5.6-terra:medium");
+    expect(() => review({ lane: gpt, capability: 4 })).toThrow("code_invalid_selection");
+    // Claude keeps its four tiers, and Mixed crosses to them where its deliberative roles reach past GPT's top.
+    expect(([1, 2, 3, 4] as const).map(capability => lead(review({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability }), "default")))
+      .toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"]);
+    expect([lead(review({}), "default"), lead(review({}), "plan")]).toEqual(["gpt-5.6-terra", "claude-fable-5-1"]);
+    // No lane at any tier it offers routes, leads or falls back on, a model the receipts left out.
+    const left = new Set(derived.exclusions.map(exclusion => exclusion.id));
+    const routed = new Set(review({}).available.lanes.flatMap(lane => review({ lane, capability: 1 }).available.capabilities
+      .flatMap(capability => review({ lane, capability }).routes.flatMap(route => [route.lead, ...route.fallback].map(choice => catalog.model(choice.key).id)))));
+    expect([...routed].filter(id => left.has(id))).toEqual([]);
+    expect([...routed].toSorted()).toEqual(derived.document.models.map(model => model.id).toSorted());
+  });
+
+  test("a family Code requires that no account reaches is left out as a family with no account is, and refused only where a selection needs it", () => {
+    const gptIds = operatorRows.filter(([provider, , , , , , , verdict]) => provider === "openai-codex" && verdict !== null).map(([, id]) => id);
+    const { inventory, benchmark } = operatorReceipts(Object.fromEntries(gptIds.map(id => [id, "client_blocked"])));
+    const derived = catalogFromObservations(inventory, benchmark), catalog = compileCatalog(derived.document);
+    expect([catalog.families, derived.short]).toEqual([["anthropic", "deepseek"], []]);
+    expect(derived.exclusions.filter(exclusion => exclusion.provider === "openai-codex"))
+      .toEqual(gptIds.toSorted().map(id => ({ provider: "openai-codex", id, reason: "client_blocked" })));
+    // A selection that needs GPT is refused where it is reviewed; the preview a verification carries moves to a lane this catalog hosts.
+    for (const lane of [{ kind: "mixed" }, { kind: "provider", family: "openai", blend: "only" }] as const)
+      expect(() => reviewCatalog(catalog, { ...defaultSelection(catalog), lane }, 200)).toThrow("code_invalid_selection");
+    expect(clampSelection(catalog, { ...defaultSelection(catalog), lane: { kind: "mixed" }, capability: 4 }))
+      .toMatchObject({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 4 });
+    // With nothing reachable at all there is no catalog for any selection.
+    const nothing = operatorReceipts(Object.fromEntries(operatorRows.flatMap(([, id, , , , , , verdict]) => verdict ? [[id, "not_found"]] : [])));
+    expect(() => catalogFromObservations(nothing.inventory, nothing.benchmark)).toThrow("probe_insufficient_ladder");
+  });
+
+  test("a short family still refuses a regression, naming both models", () => {
+    // A plan serving terra and astra alone: astra, the dearer, has less context than terra.
+    const { inventory, benchmark } = operatorReceipts({ "gpt-6-luna": "client_blocked", "gpt-5.6-luna": "client_blocked", "gpt-6-astra": "reachable" });
+    expect(() => catalogFromObservations(inventory, benchmark))
+      .toThrow("code_ladder_regression: openai: openai-codex/gpt-6-astra regresses on openai-codex/gpt-5.6-terra");
   });
 });
 

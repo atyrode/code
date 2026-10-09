@@ -40,6 +40,12 @@ describe("the Models sheet", () => {
     expect(exclusionWords({ provider: "anthropic", id: "claude-opus-4", reason: "superseded" })[0]).toBe("superseded");
   });
 
+  test("a model the accounts' plan does not serve reads not on plan, apart from one no account finds", () => {
+    expect(exclusionWords({ provider: "openai-codex", id: "gpt-6-sol", reason: "client_blocked" }))
+      .toEqual(["not on plan", "Your accounts' plan or settings do not serve it"]);
+    expect(exclusionWords({ provider: "anthropic", id: "claude-mythos-5", reason: "not_found" })[0]).toBe("not reachable");
+  });
+
   test("the next action follows the step: a run first, then a staged list, then the verification and its refusal", () => {
     const at = (changes: Partial<Parameters<typeof modelsPhase>[0]>) =>
       modelsPhase({ run: null, step: null, staged: false, status: "unverified", verifyRefusal: null, ...changes });

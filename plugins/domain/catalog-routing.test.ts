@@ -66,8 +66,12 @@ describe("catalog capabilities and identity", () => {
     expect(review.available.lanes).toEqual([{ kind: "provider", family: "anthropic", blend: "only" }]);
     expect(review.routes.every(value => catalog.family(value.lead.key) === "anthropic")).toBe(true);
     expect(() => reviewCatalog(catalog, selection(), daytime)).toThrow("code_invalid_selection");
+    expect(catalog.short).toEqual([]);
+    // A family Code requires that lacks a tier fills it from its nearest rung, lower on a tie, and is said short.
     single.models = single.models.filter(value => value.tier !== 2);
-    expect(() => compileCatalog(single)).toThrow("code_invalid_catalog");
+    const short = compileCatalog(single);
+    expect([short.short, [1, 2, 3, 4].map(tier => short.rung("anthropic", tier))]).toEqual([["anthropic"], ["a1", "a1", "a3", "a4"]]);
+    expect(route(reviewCatalog(short, selection({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 2 }), daytime).routes, "default").lead.key).toBe("a1");
   });
 
   test("optional missing rungs borrow the nearest declared rung, with lower ties", () => {
@@ -79,6 +83,8 @@ describe("catalog capabilities and identity", () => {
     expect(route(review.routes, "default").lead.key).toBe("d1");
     expect(route(review.routes, "plan").lead.key).toBe("d3");
     expect(route(review.routes, "default").fallback).toEqual([]);
+    // Short is said only of a family Code requires; any other family is as long as its listing.
+    expect(catalog.short).toEqual([]);
   });
 
   test("context and thinking regressions include tier four but never use price as capability rank", () => {

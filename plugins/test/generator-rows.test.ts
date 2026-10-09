@@ -48,6 +48,15 @@ describe("the generator's rows", () => {
     expect(row(rows(team({ lane: { kind: "provider", family: "anthropic", blend: "only" } })), "tier").words.map(word => word.text)).toEqual(["a1", "a2", "a3", "elite"]);
   });
 
+  test("a short family's filled tier reads as the real model it routes to, and claims no model the list lacks", () => {
+    // GPT has two rungs: smart routes to o2 itself, and elite is not offered.
+    const short = compileCatalog({ schemaVersion: 1, models: catalog.models.filter(entry => entry.key !== "o3").map(entry => model(entry.key, entry.provider, entry.tier)) });
+    const tier = row(rows(team(), null, short), "tier");
+    expect(tier.words.map(word => [word.text, word.sub, word.available, word.reason])).toEqual([
+      ["o1", "fast", true, null], ["o2", "normal", true, null], ["o2", "smart", true, null], ["elite", null, false, "No elite GPT model"],
+    ]);
+  });
+
   test("a lead is hidden only while its family has no signed-in account at all, and never the lead in use", () => {
     expect(lead(team()).words.map(word => word.key)).toEqual(["mixed", "openai", "anthropic"]);
     expect(lead(team(), new Set(["openai"])).words.map(word => word.key)).toEqual(["openai"]);

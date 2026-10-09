@@ -19,6 +19,12 @@ export function validTierPair(lower: TierCandidate, higher: TierCandidate): bool
 export class CompiledCatalog {
   readonly models: readonly Model[];
   readonly families: readonly string[];
+  /**
+   * The families Code requires (`requiredLadder`) that lack a rung of their own at tier 1, 2 or 3,
+   * in family order. Such a family is filled like any other, so its missing tiers route to its
+   * nearest real rung; this says so, where the ladder alone would only show the gap.
+   */
+  readonly short: readonly string[];
   readonly #models: ReadonlyMap<string, Model>;
   readonly #ladders: ReadonlyMap<string, Ladder>;
 
@@ -45,20 +51,20 @@ export class CompiledCatalog {
         .sort((a, b) => ThinkingLevelSchema.options.indexOf(a) - ThinkingLevelSchema.options.indexOf(b));
       models.set(model.key, Object.freeze({ ...model, thinkingLevels: Object.freeze(thinkingLevels) }));
     }
+    const short = new Set<string>();
     for (const [family, ladder] of ladders) {
-      const policy = familyPolicy(family);
-      if (policy.requiredLadder) {
-        if ([1, 2, 3].some(tier => ladder[tier] === undefined)) throw new DomainError("invalid_catalog");
-      } else {
-        // Borrow only from declared rungs, not an earlier synthetic fill. Ties prefer lower tiers.
-        const declared = [1, 2, 3, 4].filter(tier => ladder[tier] !== undefined);
-        if (declared.length === 0) throw new DomainError("invalid_catalog");
-        for (const tier of [1, 2, 3]) {
-          if (ladder[tier] !== undefined) continue;
-          const nearest = declared.reduce((best, candidate) =>
-            Math.abs(candidate - tier) < Math.abs(best - tier) ? candidate : best);
-          ladder[tier] = ladder[nearest];
-        }
+      // A family Code requires fills like any other. The accounts may reach only part of it, a
+      // plan serving two GPT tiers for one, and its nearest real rung is a profile where refusing
+      // the whole catalog left none. Borrow only from declared rungs, not an earlier synthetic
+      // fill. Ties prefer lower tiers.
+      const declared = [1, 2, 3, 4].filter(tier => ladder[tier] !== undefined);
+      if (declared.length === 0) throw new DomainError("invalid_catalog");
+      for (const tier of [1, 2, 3]) {
+        if (ladder[tier] !== undefined) continue;
+        const nearest = declared.reduce((best, candidate) =>
+          Math.abs(candidate - tier) < Math.abs(best - tier) ? candidate : best);
+        ladder[tier] = ladder[nearest];
+        if (familyPolicy(family).requiredLadder) short.add(family);
       }
       for (let lower = 1; lower < 4; lower++) {
         for (let higher = lower + 1; higher <= 4; higher++) {
@@ -74,6 +80,7 @@ export class CompiledCatalog {
     this.#ladders = ladders;
     this.models = Object.freeze([...models.values()]);
     this.families = orderedFamilies(ladders.keys());
+    this.short = orderedFamilies(short);
     Object.freeze(this);
   }
 

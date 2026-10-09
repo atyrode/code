@@ -82,6 +82,9 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     if (!shownDocument) return null;
     try { return compileCatalog(shownDocument); } catch { return null; }
   }, [shownDocument]);
+  // A family Code requires that lacks a rung of its own at fast, normal or smart is said short in its head (catalog.ts
+  // `short`); each gap routes to its nearest real rung, which pointing at the gap names.
+  const shortFamilies = compiled?.short ?? [];
   const families = useMemo(() => orderedFamilies(shown.map(row => row.family)), [shown]);
   const at = (family: string, tier: number) => shown.find(row => row.family === family && row.tier === tier) ?? null;
   const progress = verification.progress?.providers ?? [];
@@ -431,7 +434,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     : mode === "wide" ? <div className={`${G}models-matrix`} role="grid" aria-label="model list" style={{ "--cols": families.length } as CSSProperties}>
       <div className={`${G}models-mrow`} data-top="" role="row">
         <span className={`${G}models-tier`} role="columnheader" />
-        {families.map(family => <span key={family} className={`${G}models-prov`} role="columnheader" style={{ "--h": hue(family) } as CSSProperties}>{familyWord(family)}</span>)}
+        {families.map(family => <span key={family} className={`${G}models-prov`} role="columnheader" data-short={shortFamilies.includes(family) || undefined}
+          style={{ "--h": hue(family) } as CSSProperties}>{familyWord(family)}{shortFamilies.includes(family) && <span className={`${G}models-short`}> · short</span>}</span>)}
       </div>
       {TIERS.map((word, index) => <div key={word} className={`${G}models-mrow`} role="row">
         <span className={`${G}models-tier`} role="rowheader">{word}</span>
@@ -440,7 +444,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
     </div>
     : <div className={`${G}models-ladders`} role="grid" aria-label="model list">
       {families.map(family => <div key={family} className={`${G}models-ladder`} role="rowgroup">
-        <div className={`${G}models-prov`} style={{ "--h": hue(family) } as CSSProperties}>{familyWord(family)}</div>
+        <div className={`${G}models-prov`} data-short={shortFamilies.includes(family) || undefined} style={{ "--h": hue(family) } as CSSProperties}>
+          {familyWord(family)}{shortFamilies.includes(family) && <span className={`${G}models-short`}> · short</span>}</div>
         {TIERS.map((word, index) => <div key={word} className={`${G}models-rung`} role="row">
           <span className={`${G}models-tier`} role="rowheader">{word}</span>
           {cell(family, index + 1)}
