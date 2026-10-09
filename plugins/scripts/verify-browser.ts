@@ -4270,7 +4270,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     heldList.release();
     await until(browser, "the read again lands", `${firstRead} !== null && ${savedRow(first.machineId)} !== null`);
     // What a sighted person sees of a resume: the sessions view's own line, shown in a real box (never screen-reader-only
-    // text), warm, saying the refusal's own words; and the rows where they were, since the line keeps its room.
+    // text), warm, saying the refusal's own words; and the rows where they were, since the line sits on the view's head.
     const saidLine = element(`${generator} [data-pane="sessions"] [data-session-said]`);
     const sessionSays = (words: string) => `(() => {
       const el = ${saidLine};
@@ -4827,12 +4827,18 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
         assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${steps} across the Runs shifts no layout box`);
       }
       assert(steps >= 8, `Tab walks the Runs' verbs, dials and send again (${steps} steps)`);
-      // The said line starts where the dials' words do, at every layout.
+      // The said line starts where the dials' words do, at every layout. The view's own line sits on its head's row, so the
+      // sessions start right under the head with no room kept for it.
       for (const width of [1280, 620, 360]) {
         await panelWidth(browser, width);
         assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id][data-open]')].map(run =>
           Math.round(run.querySelector('.${G}run-said').getBoundingClientRect().left - run.querySelector('[data-run-dial] .${G}words').getBoundingClientRect().left))
           .filter(gap => Math.abs(gap) > 1)`), [], `The said line lines up with the dials' words at ${width}px`);
+        assert.deepEqual(await browser.evaluate(`(() => {
+          const pane = document.querySelector('${sessionsPane}'), head = pane.querySelector(':scope > .${G}head').getBoundingClientRect();
+          const said = pane.querySelector('[data-session-said]').getBoundingClientRect(), group = pane.querySelector('.${G}earlier-group').getBoundingClientRect();
+          return { said: said.top >= head.top - 0.5 && said.bottom <= head.bottom + 0.5 && said.left > head.left, under: Math.round(group.top - head.bottom) };
+        })()`), { said: true, under: 14 }, `At ${width}px the view's line shares its head's row and the sessions start 14px under the head`);
       }
       // Under reduced motion every Run mark rests, so each width and view is measured still.
       await geometryAcrossWidths(browser, "agent launch");

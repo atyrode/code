@@ -566,7 +566,9 @@ unsaved preset draft survives a look back at the accounts.
 ### Sessions
 
 The **Sessions** tab (`e`) replaces the stage with two groups, each said only where it
-differs from the generator.
+differs from the generator. What a row verb came to is said beside the view's name, on
+one line that ends in an ellipsis (its words whole in its tooltip and announced), so it
+never moves a row.
 
 **Sessions.** Rows are grouped under their machine, whose head names it once with its
 read. Running sessions (terminals that carry an OMP session reference on their own

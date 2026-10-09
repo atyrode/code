@@ -457,51 +457,57 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     </li>;
   }
 
-  // The view's own head names it; each group heads only what it says of itself. The line keeps its room when empty, so a press never moves a row.
+  // The view's head names it and, beside the name, says what its last verb came to: one line that ends in an ellipsis, its
+  // words whole in its title and said aloud, so a press never moves a row. Each group heads only what it says of itself.
   return <>
-    <p className={`${G}earlier-said`} data-session-said="" data-tone={said?.failed ? "warn" : undefined}>{said?.text}</p>
-    {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
-    <div ref={sessions} className={`${G}earlier-group`} role="group" aria-label="sessions on your machines" tabIndex={-1}>
-      <div className={`${G}earlier-head`}>
-        <span className={`${G}earlier-meta`}>{sessionsNote(terminals.terminals === null || terminals.error !== null ? null : rows.running.length + openRuns, rows.saved.length, readOnly)}</span>
-        {rosterError !== null ? <span className={`${G}earlier-meta`}>{rosterError}</span> : <>
-          {reading.unread.map(machine => <button key={machine.id} type="button" className={`${G}earlier-link`} data-read={machine.id}
-            aria-label={`Read saved sessions on ${machine.name}`} onClick={() => read(machine.id, true)}>Read {machine.name}</button>)}
-          {/* A machine with rows says its read in its group's head; here only those without rows. */}
-          {reading.reading.filter(machine => !byMachine.has(machine.id)).map(machine => <span key={machine.id} className={`${G}earlier-meta`}
-            data-read-state="reading" data-machine-id={machine.id}>reading {machine.name}…</span>)}
-          {reading.read.filter(({ machine }) => !byMachine.has(machine.id)).map(({ machine, at }) => <span key={machine.id} className={`${G}earlier-meta`}
-            data-read-state="empty" data-machine-id={machine.id}>
-            nothing saved on {machine.name} · read {since(now - at)} ·{" "}
-            <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
-              onClick={() => read(machine.id, true)}>read again</button>
-          </span>)}
-          {reading.offline.map(machine => <span key={machine.id} className={`${G}earlier-meta`} data-read-state="offline" data-machine-id={machine.id}>{machine.name} offline</span>)}
-        </>}
+    <header className={`${G}head`}>
+      <h2 className={`${G}title`}>sessions</h2>
+      <p className={`${G}earlier-said`} data-session-said="" data-tone={said?.failed ? "warn" : undefined} title={said?.text}>{said?.text}</p>
+    </header>
+    <div className={`${G}earlier`}>
+      {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
+      <div ref={sessions} className={`${G}earlier-group`} role="group" aria-label="sessions on your machines" tabIndex={-1}>
+        <div className={`${G}earlier-head`}>
+          <span className={`${G}earlier-meta`}>{sessionsNote(terminals.terminals === null || terminals.error !== null ? null : rows.running.length + openRuns, rows.saved.length, readOnly)}</span>
+          {rosterError !== null ? <span className={`${G}earlier-meta`}>{rosterError}</span> : <>
+            {reading.unread.map(machine => <button key={machine.id} type="button" className={`${G}earlier-link`} data-read={machine.id}
+              aria-label={`Read saved sessions on ${machine.name}`} onClick={() => read(machine.id, true)}>Read {machine.name}</button>)}
+            {/* A machine with rows says its read in its group's head; here only those without rows. */}
+            {reading.reading.filter(machine => !byMachine.has(machine.id)).map(machine => <span key={machine.id} className={`${G}earlier-meta`}
+              data-read-state="reading" data-machine-id={machine.id}>reading {machine.name}…</span>)}
+            {reading.read.filter(({ machine }) => !byMachine.has(machine.id)).map(({ machine, at }) => <span key={machine.id} className={`${G}earlier-meta`}
+              data-read-state="empty" data-machine-id={machine.id}>
+              nothing saved on {machine.name} · read {since(now - at)} ·{" "}
+              <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
+                onClick={() => read(machine.id, true)}>read again</button>
+            </span>)}
+            {reading.offline.map(machine => <span key={machine.id} className={`${G}earlier-meta`} data-read-state="offline" data-machine-id={machine.id}>{machine.name} offline</span>)}
+          </>}
+        </div>
+        {terminals.error && <p className={`${G}earlier-note`}>{terminals.error}</p>}
+        {reading.failed.map(({ machine, error }) => <p key={machine.id} className={`${G}earlier-note`} data-read-state="failed" data-machine-id={machine.id}>
+          Couldn't read {machine.name}: {error}{" "}
+          <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
+            onClick={() => read(machine.id, true)}>read again</button>
+        </p>)}
+        {model.agentRuns.error && <p className={`${G}earlier-note`} data-runs-error="">Runs unread: {model.agentRuns.error}</p>}
+        {byMachine.size > 0 && <ul className={`${G}earlier-rows`} data-sessions="">
+          {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId),
+            ...group.runs.length ? [<li key={`runs:${machineId}`} data-runs="">
+              <RunsBlock runs={group.runs} dials={dials} catalog={model.compiled} aliases={aliases} place={runPlace} verb={runVerb} now={now} />
+            </li>] : [],
+            ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
+        </ul>}
       </div>
-      {terminals.error && <p className={`${G}earlier-note`}>{terminals.error}</p>}
-      {reading.failed.map(({ machine, error }) => <p key={machine.id} className={`${G}earlier-note`} data-read-state="failed" data-machine-id={machine.id}>
-        Couldn't read {machine.name}: {error}{" "}
-        <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
-          onClick={() => read(machine.id, true)}>read again</button>
-      </p>)}
-      {model.agentRuns.error && <p className={`${G}earlier-note`} data-runs-error="">Runs unread: {model.agentRuns.error}</p>}
-      {byMachine.size > 0 && <ul className={`${G}earlier-rows`} data-sessions="">
-        {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId),
-          ...group.runs.length ? [<li key={`runs:${machineId}`} data-runs="">
-            <RunsBlock runs={group.runs} dials={dials} catalog={model.compiled} aliases={aliases} place={runPlace} verb={runVerb} now={now} />
-          </li>] : [],
-          ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
-      </ul>}
+      <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>
+        <div className={`${G}earlier-head`}>
+          <h3 id={`${id}-recent`} className={`${G}earlier-title`}>recent profiles</h3>
+          <span className={`${G}earlier-meta`}>this device{recents.length ? ` · 1–${recents.length} recall` : ""}</span>
+        </div>
+        {recents.length === 0 && <p className={`${G}earlier-empty`}>nothing launched from this browser yet</p>}
+        {provenance && <p className={`${G}earlier-note`}>{provenance}</p>}
+        {recents.length > 0 && <ol className={`${G}earlier-rows`}>{recents.map(recentRow)}</ol>}
+      </section>
     </div>
-    <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>
-      <div className={`${G}earlier-head`}>
-        <h3 id={`${id}-recent`} className={`${G}earlier-title`}>recent profiles</h3>
-        <span className={`${G}earlier-meta`}>this device{recents.length ? ` · 1–${recents.length} recall` : ""}</span>
-      </div>
-      {recents.length === 0 && <p className={`${G}earlier-empty`}>nothing launched from this browser yet</p>}
-      {provenance && <p className={`${G}earlier-note`}>{provenance}</p>}
-      {recents.length > 0 && <ol className={`${G}earlier-rows`}>{recents.map(recentRow)}</ol>}
-    </section>
   </>;
 }
