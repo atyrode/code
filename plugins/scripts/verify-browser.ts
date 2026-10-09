@@ -3206,6 +3206,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   } finally {
     offReads();
     await fixture.stop();
+    // Reduced motion was this scenario's own; the scenarios after it prove the panel under default motion.
+    await browser.send("Emulation.setEmulatedMedia", { features: [] });
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
