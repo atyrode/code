@@ -16,6 +16,9 @@ try {
   const source = await realpath(join(plugins, ".integration/omp"));
   if (source !== await realpath(join(plugins, ".integration", revision, "omp"))) throw new Error("unprepared-omp");
   process.env.OMP_VERIFY_CONSUMER_MODULE = resolve(import.meta.dir, "native-tool-consumer.ts");
+  // OMP's native proof re-packs its family inside the unit and refuses unless that pack reproduces
+  // these sums, the bundles prepare:integration packed and the earlier verify steps installed.
+  process.env.OMP_VERIFY_EXPECTED_SUMS = join(source, "plugins/dist/SHA256SUMS");
   // The exact prepared Git source selects the launcher at runtime. Import it in
   // this process so its existing isolation/cleanup owns every child directly.
   await import(pathToFileURL(join(source, "plugins/scripts/verify.ts")).href);

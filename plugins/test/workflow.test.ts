@@ -37,8 +37,9 @@ function row(provider: string, id: string, input: number, context: number, level
 /**
  * Real Code doors over an in-memory container, and an OMP that answers inventory and benchmark
  * jobs from fixed facts. Its runtime artifact (`omp.artifact`, which the inventory runs from and
- * the destination pins) and its bundled catalog are those of OMP 18.4.12's command line beside the
- * 18.7.0 SDK's model list. `states` scripts what `engine.jobs.status` answers for a job, and
+ * the destination pins) and its bundled catalog belong to one OMP whose command line and model
+ * list report different versions, as OMP 18.4.12's command line beside its 18.7.0 SDK's list once
+ * did. `states` scripts what `engine.jobs.status` answers for a job, and
  * `hooks` run when a door answers, which is where the world moves under a verification.
  */
 function verificationFixture() {
@@ -231,7 +232,8 @@ test("a verification holds for the OMP runtime and model list it ran against, an
     inventoryArtifactSha256: inventoryArtifact(await f.workflow.omp("describeDestination", target)),
     catalogRevision: (await f.workflow.omp("readModelCatalog", { providers: [] })).revision,
     pool: await f.workflow.observeVerification(target.containerId, configuration.revision, configuration.accounts) ?? "none" }, false);
-  // The 18.4.12 command line answered the inventory while the 18.7.0 SDK bundles the list: one present OMP, so a fresh verification is current.
+  // The command line answered the inventory as `OMP_VERSION` while the bundled list reports another version: one present OMP,
+  // so a fresh verification is current.
   expect([configuration.active?.provenance?.ompVersion, f.omp.catalog.ompVersion]).toEqual([OMP_VERSION, "18.7.0"]);
   expect(await present()).toMatchObject({ status: "current", observed: true });
   // OMP upgraded on the machine, with the same accounts and the same Code build: only the runtime artifact moved.
