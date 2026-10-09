@@ -2423,15 +2423,22 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
   const dialog = element(`${modelsSheet} dialog`);
   const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
   const stageButton = element(`${modelsSheet} dialog [data-stage]`);
+  const importCue = element(`${modelsSheet} [data-cue="import"]`);
   /** What the import says it does with the pasted list. */
   const importEffect = `${dialog}?.querySelector('h2 + p')?.textContent`;
-  /** Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press; using it is then `use`. */
+  /**
+   * Pastes a list into the open import (CDP's text insertion into its focused field) and stages it by a press; using it is then
+   * `use`. The staged list rests once the sheet takes writes again (its import is no longer refused): the stage is written and
+   * the panel has read it back (models-sheet.tsx `writeRefusal`). Until that read lands, using the list is refused for want
+   * of it, whatever `use` it will rest on.
+   */
   const stageList = async (list: CatalogDocument, use: "ready" | "refused" = "ready") => {
     await until(browser, "the import opens as a modal dialog with focus in its field", `!!${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
     await browser.send("Input.insertText", { text: JSON.stringify(list) });
     await until(browser, "the pasted list can be staged", `!${stageButton}.hasAttribute('aria-disabled')`);
     await click(browser, stageButton);
-    await until(browser, "the staged list waits beside the one in use", `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list", use)} && ${sideIs("staged changes")}`);
+    await until(browser, "the staged list waits beside the one in use, written and read back",
+      `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list", use)} && ${sideIs("staged changes")} && !${importCue}.hasAttribute('aria-disabled')`);
   };
   try {
     await openGenerator(browser, server, workspace.id);
@@ -2592,7 +2599,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await sheetGeometry(browser, modelsSheet, "Models staged list");
     const fastest: CatalogDocument = { ...faster, models: faster.models.map((model, index) => index === 0 ? { ...model, tokensPerSecond: 120 } : model) };
     from = trace.requests.length;
-    await click(browser, element(`${modelsSheet} [data-cue="import"]`));
+    await click(browser, importCue);
     await until(browser, "an import over the staged list says it replaces it",
       `!!${dialog}?.open && ${importEffect} === 'Paste a Code model list, or drop its file here. It replaces the staged list; the list in use changes only when you use it.'`);
     await stageList(fastest);
@@ -2679,7 +2686,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const advisor = await browser.evaluate<string>(`[...${row("advisor")}.querySelectorAll('.${G}word')].find(el => el.dataset.off === undefined && el.dataset.selected === undefined && el.dataset.key !== ${JSON.stringify(stagedDefault.advisor)}).dataset.key`);
     await choose(browser, "advisor", advisor);
     await openSheet(browser, "models");
-    await click(browser, element(`${modelsSheet} [data-cue="import"]`));
+    await click(browser, importCue);
     await stageList(slower, "refused");
     assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)} })`),
       { parts: [["unsaved profile edit", "attention"]], fixes: ["save", "discard edit"] }, "Use staged list waits on the unsaved edit, with save and discard edit beside it");
