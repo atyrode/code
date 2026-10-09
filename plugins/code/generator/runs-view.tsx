@@ -38,13 +38,18 @@ export function useRunDials(host: HostServices): RunDialsHandle {
   const latest = useRef(states);
   const timers = useRef(new Map<string, number>());
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; for (const timer of timers.current.values()) window.clearTimeout(timer); }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; for (const timer of timers.current.values()) window.clearTimeout(timer); };
+  }, []);
   const stateOf = (runId: string) => latest.current.get(runId) ?? NO_DIALS;
   function write(runId: string, next: RunDialState) {
     latest.current = new Map(latest.current).set(runId, next);
     if (mounted.current) setStates(latest.current);
   }
-  async function press(entry: CodeRun, change: DialChange, levels: readonly string[] | null) {
+  async function press(entry: CodeRun, change: DialChange, levels: readonly string[] | null): Promise<void> {
+    // Only a live Run's dials turn: a starting one has no session to answer yet, and a detached or settled one has no Run input left.
+    if (runPhase(entry) !== "live") return;
     const runId = entry.run.id, before = shownDials(stateOf(runId), runDials(entry.run.model));
     const { state, send } = pressDial(stateOf(runId), change, before, level => levels !== null && !levels.includes(level));
     write(runId, state);
@@ -57,6 +62,12 @@ export function useRunDials(host: HostServices): RunDialsHandle {
       timers.current.set(runId, window.setTimeout(() => write(runId, settleDial(stateOf(runId))), SAID_MS));
     } catch (reason) {
       write(runId, refuseDial(stateOf(runId), change, reason instanceof WorkflowError ? refusalToken(reason.message) : null, codeOperationFailure(reason)));
+    }
+    // The latest press made while this one waited goes now, on the dials the answer left.
+    const queued = stateOf(runId).queued;
+    if (queued) {
+      write(runId, { ...stateOf(runId), queued: null });
+      await press(entry, queued, levels);
     }
   }
   return { stateOf: (runId: string) => states.get(runId) ?? NO_DIALS, press };
@@ -92,7 +103,11 @@ function placeGlider(box: HTMLElement) {
 type RunDialProps = {
   readonly runId: string; readonly field: DialField; readonly label: string; readonly glyph: string;
   readonly words: readonly (DialWord & { readonly off: boolean })[]; readonly shown: string | null; readonly state: RunDialState; readonly locked: boolean;
-  readonly onSend: (value: string) => void; readonly onPoint: (pointed: RunPointed | null) => void; readonly onMove: (from: HTMLElement, delta: -1 | 1) => void;
+  /** A press, ↵ or Space: sent at once. */
+  readonly onSend: (value: string) => void;
+  /** ←/→ resting on a word: sent once the keys rest (the Run's one settle timer). */
+  readonly onArm: (value: string) => void;
+  readonly onPoint: (pointed: RunPointed | null) => void; readonly onMove: (from: HTMLElement, delta: -1 | 1) => void;
 };
 /**
  * One live dial of a Run, in the generator's row grammar: glyph, label and every option word, the
@@ -100,10 +115,8 @@ type RunDialProps = {
  * A click or ↵/Space sends at once; ←/→ move between the words that can be chosen and send the one
  * they rest on half a second after they stop; ↑/↓ go to the next dial of any Run.
  */
-function RunDial({ runId, field, label, glyph, words, shown, state, locked, onSend, onPoint, onMove }: RunDialProps) {
+function RunDial({ runId, field, label, glyph, words, shown, state, locked, onSend, onArm, onPoint, onMove }: RunDialProps) {
   const box = useRef<HTMLDivElement>(null);
-  const settle = useRef(0);
-  useEffect(() => () => window.clearTimeout(settle.current), []);
   useLayoutEffect(() => { if (box.current) placeGlider(box.current); });
   useEffect(() => {
     const node = box.current;
@@ -130,7 +143,7 @@ function RunDial({ runId, field, label, glyph, words, shown, state, locked, onSe
       case "Home": next = usable[0]; break;
       case "End": next = usable.at(-1); break;
       case "Enter": case " ":
-        if (!event.repeat) { window.clearTimeout(settle.current); onSend(word.dataset.value!); }
+        if (!event.repeat) onSend(word.dataset.value!);
         break;
       case "ArrowUp": case "ArrowDown": onMove(box.current!, event.key === "ArrowDown" ? 1 : -1); break;
       default: return;
@@ -141,12 +154,11 @@ function RunDial({ runId, field, label, glyph, words, shown, state, locked, onSe
     for (const candidate of box.current!.querySelectorAll<HTMLElement>(`.${G}word`)) candidate.tabIndex = candidate === next ? 0 : -1;
     next.focus({ preventScroll: true });
     onPoint({ kind: "word", field, value: next.dataset.value! });
-    window.clearTimeout(settle.current);
-    const value = next.dataset.value!;
-    settle.current = window.setTimeout(() => onSend(value), SETTLE_MS);
+    onArm(next.dataset.value!);
   }
   return <div className={`${G}dial`} data-row={field === "model" ? "tier" : "thinking"} data-run-dial={runId} data-locked={locked || undefined}
-    role="radiogroup" aria-label={label} onKeyDown={keys}>
+    role="radiogroup" aria-label={label} onKeyDown={keys}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onPoint(null); }}>
     <span className={`${G}dial-ptr`} aria-hidden="true">▸</span>
     <span className={`${G}dial-glyph`}><Glyph path={glyph} /></span>
     <span className={`${G}dial-label`}>{label}</span>
@@ -227,7 +239,17 @@ function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onM
   const lease = leaseOf(entry), words = leaseWords(entry, now, VOCAB);
   const token = name(shown.model);
   const title = place.title ?? "new session";
-  const send = (field: DialField) => (value: string) => onSend({ field, value }, levels);
+  // One settle timer per Run: ←/→ arm it, and any explicit press, a send again or the dials locking cancels it, so a later
+  // choice is never overtaken by an earlier resting one.
+  const settle = useRef(0);
+  useEffect(() => () => window.clearTimeout(settle.current), []);
+  useEffect(() => { if (lock) window.clearTimeout(settle.current); }, [lock]);
+  const sendNow = (change: DialChange) => { window.clearTimeout(settle.current); onSend(change, levels); };
+  const send = (field: DialField) => (value: string) => sendNow({ field, value });
+  const arm = (field: DialField) => (value: string) => {
+    window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => onSend({ field, value }, levels), SETTLE_MS);
+  };
   const point = (next: RunPointed | null) => setPointed(next);
   return <div className={`${G}run`} data-a={act} data-run-id={entry.run.id} data-open={open || undefined} data-locked={(open && lock) || undefined}>
     <div className={`${G}run-line`}>
@@ -247,10 +269,10 @@ function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onM
     </div>
     {open && <div className={`${G}run-dials`} role="group" aria-label={`dials of ${title}`}>
       <RunDial runId={entry.run.id} field="model" label="model" glyph={GLYPHS.tier} shown={shown.model} state={state} locked={lock}
-        words={models.map(word => ({ ...word, off: state.unserved.includes(word.value) }))} onSend={send("model")} onPoint={point} onMove={onMove} />
+        words={models.map(word => ({ ...word, off: state.unserved.includes(word.value) }))} onSend={send("model")} onArm={arm("model")} onPoint={point} onMove={onMove} />
       <RunDial runId={entry.run.id} field="thinking" label="thinking" glyph={GLYPHS.thinking} shown={shown.thinking} state={state} locked={lock}
         words={THINKING_LEVELS.map((level, index) => ({ value: level, text: level, family: null, familyStart: index === 0, off: levels !== null && !levels.includes(level) }))}
-        onSend={send("thinking")} onPoint={point} onMove={onMove} />
+        onSend={send("thinking")} onArm={arm("thinking")} onPoint={point} onMove={onMove} />
       <div className={`${G}dial ${G}lease-row`} data-row="lease">
         <span className={`${G}dial-ptr`} aria-hidden="true" />
         <span className={`${G}dial-glyph`}><Glyph path={LEASE} /></span>
@@ -266,9 +288,8 @@ function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onM
     </div>}
     {open && <div className={`${G}run-said`} data-said={entry.run.id} data-tone={said?.warn ? "warn" : undefined} title={said?.title ?? undefined} aria-live="polite"
       style={said?.family ? { "--rc": `var(--code-${hueOf(said.family)})` } as CSSProperties : undefined}>
-      {said && <><b>{said.value}</b>{said.text && ` · ${said.text}`}
-        {said.again && state.unconfirmed && <button type="button" className={`${G}run-again`}
-          onClick={() => onSend(state.unconfirmed!, levels)}>send again</button>}</>}
+      {said && <span className={`${G}run-said-text`}><b>{said.value}</b>{said.text && ` · ${said.text}`}</span>}
+      {said?.again && state.unconfirmed && <button type="button" className={`${G}run-again`} onClick={() => sendNow(state.unconfirmed!)}>send again</button>}
     </div>}
   </div>;
 }

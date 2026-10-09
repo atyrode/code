@@ -12,6 +12,7 @@ import { chooseOption, laneWord, SPECS, type DialId, type MoreDial, type OptionR
 import type { GateRefusal, GateVerdict, LaunchStep, ProfileSource } from "./launch-step.ts";
 import type { VerificationPhase } from "./model-verification.ts";
 import type { VerificationStatus } from "./verification.ts";
+import type { AgentLaunchBlocker } from "../workflow.ts";
 
 /*
  * The profile as data: its settings, each setting's values with what choosing one would do, the
@@ -705,7 +706,7 @@ export type StatusFacts = {
   readonly configurationFailed: boolean;
   readonly message: { readonly text: string; readonly failed: boolean } | null;
   /** The last launch or resume; a launch says whether it runs as an Agent Run (`run`, its dials in Sessions) or why not. */
-  readonly outcome: { readonly kind: "launched"; readonly machine: string; readonly dials: string } | { readonly kind: "resumed"; readonly machine: string } | null;
+  readonly outcome: { readonly kind: "launched"; readonly machine: string; readonly dials: "run" | AgentLaunchBlocker } | { readonly kind: "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
   readonly fix: FixView | null;
   /** A Save & launch press stopped at a review that differs from the projection: what differs, in the statement's words. */
@@ -887,7 +888,7 @@ export type LaunchReadoutFacts = {
   /** The launch review on display, with its pool, until the team, machine or pool changes. */
   readonly reviewed: { readonly machine: string; readonly pool: readonly { readonly family: string; readonly count: number }[] } | null;
   /** Whether the reviewed launch runs as an Agent Run (`run`) or why not (workflow.ts `AgentLaunchBlocker`); null with no review on display. */
-  readonly dials: string | null;
+  readonly dials: "run" | AgentLaunchBlocker | null;
   /** The projection rests on present readings (`grounded`). */
   readonly grounded: boolean;
   /** The model's status sentence (`launchStatusText`). */
@@ -916,12 +917,13 @@ export function launchReadout(facts: LaunchReadoutFacts, vocab: Vocabulary): { r
 }
 
 /** Why a launch runs without live dials, in the launch line's words (workflow.ts `AgentLaunchBlocker`). */
-export function noDials(blocker: string, machine: string): string {
+export function noDials(blocker: AgentLaunchBlocker, machine: string): string {
   switch (blocker) {
     case "plans": return "no live dials: auto plans are on";
     case "options": return "no live dials: session options are set";
     case "harness": return `no live dials: not enabled on ${machine}`;
+    case "machine": return `no live dials: ${machine} cannot launch agent runs`;
     case "sponsor": return "no live dials: your access sponsors no agents here";
-    default: return "no live dials: agents unread";
+    case "agents": return "no live dials: agents unread";
   }
 }

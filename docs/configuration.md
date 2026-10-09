@@ -588,7 +588,10 @@ hollow dot ("sent · terra until it answers"), then the session's answer shows (
 now", or "running now · thinking xhigh" when the model clamped it). A model the session
 does not serve is struck ("not served here · terra stays"); no answer within 20 s says
 so and offers **send again**; a caller the door refuses reads "its launcher's or
-sponsor's alone". `←` `→` rest on a word half a second before sending it, `↵` and
+sponsor's alone". A press while a change waits is said as next ("high · next · once terra
+answers") and sent once the answer lands, the latest such press replacing an earlier one.
+A starting or detached Run's dials are shown off and send nothing. `←` `→` rest on a word
+half a second before sending it, and any press in that half second sends only itself; `↵` and
 `Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
 what choosing it sends, the lease its next renewal and the activity what it means, all on
 the said line, so nothing moves; the word just pressed keeps saying what its press came
@@ -790,9 +793,15 @@ Manifold action transport as the web. It composes `createCodeClient` with
   hands the harness only its destination), a destination without the harness
   operation, a caller without `canRegister`, or unread Agents. A sponsorship refusal
   at registration or Run creation, before any Run exists, does the same for the
-  panel's life. `readRuns(containerId)` lists the caller's Code Agents for the
+  panel's life; so does a machine whose `launchRun` refuses agent runs
+  (`run_launch_protocol_unsupported`, `omp_harness_runtime_unsupported`), for that
+  machine ("no live dials: <machine> cannot launch agent runs"). In either case the
+  same press, once the Run is cancelled, launches the reviewed session while its review
+  still stands. `readRuns(containerId)` lists the visible Code Agents named for the
   workspace, their Runs, each listed Run's inspection (renewals, settlement, exit code)
-  and the terminal inventory; `controlRun(runId, { model?, thinking? })` is OMP's door.
+  and the terminal inventory; a Run's TUI is a running terminal of its session opened
+  while the Run stood, so a later Run-less resume of that session is an ordinary running
+  row. `controlRun(runId, { model?, thinking? })` is OMP's door.
   A Run whose lease ends, after a missed renewal or the 24th, settles `expired`, but
   its terminal job runs under the opener's credential and goes on, so Code shows it
   as detached while that terminal runs; Run input, and therefore its dials, then

@@ -167,9 +167,11 @@ export function useCodeAgentRuns(host: HostServices) {
     key: `${CODE_PLUGIN_ID}.agent-runs:${host.containerId}`, restartKey: host.principal.id, initial: null,
     enabled: host.containerId !== null, topics: [ACCESS_TOPIC, ...host.topics.terminals], events: host.client,
   });
-  const last = useRef<CodeRuns | null>(null);
-  if (feed.value?.runs) last.current = feed.value.runs;
-  return { runs: feed.value?.runs ?? last.current, error: feed.value?.error ?? null, refresh: feed.refresh };
+  // The last good read is kept only for the workspace and principal it was read for.
+  const feedKey = `${host.containerId}\n${host.principal.id}`;
+  const last = useRef<{ key: string; runs: CodeRuns } | null>(null);
+  if (feed.value?.runs) last.current = { key: feedKey, runs: feed.value.runs };
+  return { runs: feed.value?.runs ?? (last.current?.key === feedKey ? last.current.runs : null), error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 export const ACCOUNT_REFRESH_MS = 1_000;
 export type CodeQuery = "readConfiguration" | "readServiceConfiguration";

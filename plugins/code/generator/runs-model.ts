@@ -47,7 +47,7 @@ export function activitySaid(word: ActivityWord, renewals: number | null): strin
     case "detached": return renewals !== null && renewals >= AGENT_RENEWALS ? "renewals ran out; the TUI goes on" : "a renewal was missed; the TUI goes on";
     case "completed": return "the TUI exited; session saved";
     case "failed": return "the TUI exited with an error";
-    case "cancelled": return "cancelled before it started";
+    case "cancelled": return "cancelled from Code or Agents";
     case "expired": return "its lease ran out; the TUI has exited";
     case "revoked": return "revoked in Agents";
   }
@@ -170,7 +170,6 @@ function outcomeSaid(outcome: DialOutcome, shown: Dials, name: (reference: strin
       return said(value.text, `not served here · ${name(shown.model).text} stays`, { warn: true, family: value.family });
     }
     case "lacks": return said(outcome.change.value, `${name(shown.model).text} has none`, { warn: true });
-    case "busy": return said(valueOf(outcome.change).text, "still waiting for its answer", { family: valueOf(outcome.change).family });
     case "forbidden": return said("dials", "its launcher's or sponsor's alone", { warn: true });
     case "gone": return said("dials", "no running session answers", { warn: true });
     case "unsupported": return said("dials", "this run has none", { warn: true });
@@ -189,7 +188,7 @@ export function runSaid(entry: CodeRun, state: RunDialState, pointed: RunPointed
 }): RunSaid | null {
   const { vocab, name, levels } = context;
   const shown = shownDials(state, runDials(entry.run.model));
-  const pressed = state.pending?.value ?? state.unconfirmed?.value ?? (state.outcome && "change" in state.outcome ? state.outcome.change.value : null);
+  const pressed = state.queued?.value ?? state.pending?.value ?? state.unconfirmed?.value ?? (state.outcome && "change" in state.outcome ? state.outcome.change.value : null);
   const pointer = pointed?.kind === "word" && pointed.value === pressed ? null : pointed;
   const phase = runPhase(entry), lock = dialsLock(entry, state, vocab);
   if (pointer?.kind === "word") {
@@ -206,6 +205,11 @@ export function runSaid(entry: CodeRun, state: RunDialState, pointed: RunPointed
   if (pointer?.kind === "activity") {
     const word = activityWord(entry);
     return said(word, activitySaid(word, entry.inspection?.renewals ?? null));
+  }
+  if (state.pending && state.queued) {
+    const value = state.queued.field === "model" ? name(state.queued.value) : { text: state.queued.value, family: null };
+    const waiting = state.pending.field === "model" ? name(state.pending.value).text : state.pending.value;
+    return said(value.text, `next · once ${waiting} answers`, { family: value.family });
   }
   if (state.pending) {
     const value = state.pending.field === "model" ? name(state.pending.value) : { text: state.pending.value, family: null };

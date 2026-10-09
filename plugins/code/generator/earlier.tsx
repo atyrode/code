@@ -199,11 +199,12 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
   // A read stands only while its machine is permitted and online; an offline machine's last answer is not offered.
   const standing = new Map([...reads].filter(([machineId]) => readers.some(machine => machine.id === machineId)));
   const reading = machineReads(machines, rosterError, standing);
-  // Code's Runs head their machine's group; a terminal one of them holds is theirs, not an ordinary running row.
+  // Code's Runs head their machine's group; a Run's own TUI is theirs, not an ordinary running row. A later terminal of the same
+  // session (a Run-less resume) stays an ordinary running row.
   const runs = model.agentRuns.runs?.runs ?? [];
-  const held = new Set(runs.flatMap(entry => entry.run.session ? [`${entry.run.session.machineId}\n${entry.run.session.sessionId}`] : []));
+  const held = new Set(runs.flatMap(entry => entry.terminal ? [entry.terminal.id] : []));
   const listed = sessionRows(terminals.terminals ?? [], standing, OMP_PLUGIN_ID);
-  const rows = { running: listed.running.filter(row => !held.has(`${row.machineId}\n${row.sessionId}`)), saved: listed.saved };
+  const rows = { running: listed.running.filter(row => row.terminalId === null || !held.has(row.terminalId)), saved: listed.saved };
   const openRuns = runs.filter(entry => runOpen(runPhase(entry))).length;
   const folders = savedFolders(rows.saved);
   const dials = useRunDials(host);

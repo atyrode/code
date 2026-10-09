@@ -4,7 +4,7 @@ import { formatManifoldUri, type TerminalSummary } from "@manifold/protocol";
 import type { ActionResult } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
-import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, sponsorRefused, WorkflowError,
+import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
 import { answerDial, NO_DIALS, pressDial, refuseDial, settleDial } from "../code/generator/run-dials.ts";
 import { leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
@@ -158,13 +158,14 @@ describe("the agent door sequence", () => {
 
   test("automatic plans, session options, a missing harness or a caller who cannot sponsor keep the launch a reviewed session", async () => {
     const f = agentFixture();
-    expect(agentLaunchBlocker(f.review, true, true)).toBeNull();
-    expect(agentLaunchBlocker(reviewOf({ ...f.value, planYolo: true }), true, true)).toBe("plans");
-    expect(agentLaunchBlocker(reviewOf(f.value, { skills: { mode: "disabled", catalogRevision: null, selected: [] } }), true, true)).toBe("options");
-    expect(agentLaunchBlocker(reviewOf(f.value, { automation: { mode: "restricted", toolNames: [], delegation: "disabled" } }), true, true)).toBe("options");
-    expect(agentLaunchBlocker(f.review, false, true)).toBe("harness");
-    expect(agentLaunchBlocker(f.review, true, false)).toBe("sponsor");
-    expect(agentLaunchBlocker(f.review, true, null)).toBe("agents");
+    expect(agentLaunchBlocker(f.review, true, false, true)).toBeNull();
+    expect(agentLaunchBlocker(reviewOf({ ...f.value, planYolo: true }), true, false, true)).toBe("plans");
+    expect(agentLaunchBlocker(reviewOf(f.value, { skills: { mode: "disabled", catalogRevision: null, selected: [] } }), true, false, true)).toBe("options");
+    expect(agentLaunchBlocker(reviewOf(f.value, { automation: { mode: "restricted", toolNames: [], delegation: "disabled" } }), true, false, true)).toBe("options");
+    expect(agentLaunchBlocker(f.review, false, false, true)).toBe("harness");
+    expect(agentLaunchBlocker(f.review, true, true, true)).toBe("machine");
+    expect(agentLaunchBlocker(f.review, true, false, false)).toBe("sponsor");
+    expect(agentLaunchBlocker(f.review, true, false, null)).toBe("agents");
     // The workflow refuses such a launch itself, before any door.
     await expect(f.workflow.launchAgent(reviewOf(f.value, { skills: { mode: "disabled", catalogRevision: null, selected: [] } }))).rejects.toThrow("code_agent_options_unsupported");
     expect(f.doors()).toEqual([]);
@@ -174,6 +175,12 @@ describe("the agent door sequence", () => {
     expect(sponsorRefused(denied("core.access.createRunV2", "agent_registration_requires_human"))).toBe(true);
     expect(sponsorRefused(denied("core.access.launchRun", "sponsor_authority_unavailable"))).toBe(false);
     expect(sponsorRefused(denied("core.access.registerAgentV2", "agent_disabled"))).toBe(false);
+    // A machine that cannot carry agent runs refuses at launchRun only, after the Run exists; its launches are then the reviewed session.
+    expect(runsRefused(denied("core.access.launchRun", "run_launch_protocol_unsupported"))).toBe(true);
+    expect(runsRefused(denied("core.access.launchRun", "omp_harness_runtime_unsupported"))).toBe(true);
+    expect(runsRefused(denied("core.access.launchRun", "run_launch_owner_unavailable"))).toBe(false);
+    expect(runsRefused(denied("core.access.createRunV2", "run_launch_protocol_unsupported"))).toBe(false);
+    expect(runsRefused(new WorkflowError("A failure that names no door."))).toBe(false);
   });
 
   test("the runs read lists open, detached and recently ended Runs of this workspace's Code Agents only", async () => {
@@ -189,7 +196,7 @@ describe("the agent door sequence", () => {
       return { observedAt: now, truncated: false, runs: [
         entry("live", { session: session(sessionId), createdAt: now - 10 * 60_000 }),
         entry("detached", { session: session(detachedSession), state: "expired", createdAt: now - 20 * HOUR }),
-        entry("expired-gone", { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR }),
+        entry("expired-gone", { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR, expiresAt: now - 2 * HOUR }),
         entry("never-launched", { state: "cancelled", createdAt: now - 2 * HOUR }),
         entry("old", { session: session(sessionId), state: "completed", createdAt: now - 30 * HOUR }),
         ...[1, 2, 3].map(index => entry(`ended-${index}`, { session: session(sessionId), state: "completed", createdAt: now - index * HOUR - 1 })),
@@ -197,12 +204,15 @@ describe("the agent door sequence", () => {
     };
     const running: TerminalSummary = { id: "tui", machineId: target.machineId, name: "OMP", createdAt: now - 20 * HOUR, status: "running", exitCode: null,
       homeId: target.containerId, unplaced: false, session: session(detachedSession) };
-    f.answers["core.terminals.listAll"] = () => ({ terminals: [running] });
+    // The expired Run's session was resumed without a Run after it ended: that terminal is not the Run's TUI, so the Run is not detached.
+    const resumed: TerminalSummary = { ...running, id: "resumed", createdAt: now - 10 * 60_000, session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559") };
+    f.answers["core.terminals.listAll"] = () => ({ terminals: [running, resumed] });
     f.answers["core.access.inspectRunV2"] = input => f.deny("core.access.inspectRunV2", `inspection of ${String(input.runId)} unavailable`);
     const read = await f.workflow.readRuns(target.containerId);
     expect(read.canSponsor).toBe(true);
     expect(read.runs.map(run => run.run.id)).toEqual(["live", "detached", "ended-1", "ended-2", "expired-gone"]);
     expect(read.runs.find(run => run.run.id === "detached")!.terminal?.id).toBe("tui");
+    expect(read.runs.find(run => run.run.id === "expired-gone")!.terminal).toBeNull();
     expect(read.runs.every(run => run.inspection === null)).toBe(true);
   });
 });
@@ -210,13 +220,19 @@ describe("the agent door sequence", () => {
 describe("a Run's dials", () => {
   const launched: Dials = { model: "anthropic/claude-sonnet-5", thinking: "medium" };
   const none = () => false;
-  test("a press sends one change and waits; the same word, or a press while one waits, sends nothing", () => {
+  test("a press sends one change and waits; the same word sends nothing, and a press while one waits is queued, the latest replacing the earlier", () => {
     const sent = pressDial(NO_DIALS, { field: "model", value: "anthropic/claude-opus-5" }, launched, none);
     expect(sent.send).toBe(true);
     expect(sent.state.pending).toEqual({ field: "model", value: "anthropic/claude-opus-5" });
     expect(pressDial(NO_DIALS, { field: "thinking", value: "medium" }, launched, none).send).toBe(false);
-    const busy = pressDial(sent.state, { field: "thinking", value: "high" }, launched, none);
-    expect([busy.send, busy.state.outcome?.kind]).toEqual([false, "busy"]);
+    const queued = pressDial(sent.state, { field: "thinking", value: "high" }, launched, none);
+    expect([queued.send, queued.state.queued]).toEqual([false, { field: "thinking", value: "high" }]);
+    const latest = pressDial(queued.state, { field: "thinking", value: "low" }, launched, none);
+    expect(latest.state.queued).toEqual({ field: "thinking", value: "low" });
+    expect(pressDial(latest.state, sent.state.pending!, launched, none).state.queued).toBeNull();
+    // An answer keeps the queued change for the hook to send; a refusal that ends the dials drops it.
+    expect(answerDial(latest.state, sent.state.pending!, { model: "anthropic/claude-opus-5", thinking: "medium" }, launched).queued).toEqual({ field: "thinking", value: "low" });
+    expect(refuseDial(latest.state, sent.state.pending!, "omp_run_control_forbidden", "").queued).toBeNull();
   });
 
   test("an answer confirms the session's dials, and a thinking level the model moved is said as clamped", () => {
@@ -297,6 +313,10 @@ describe("a Run's lease and words", () => {
     const context = { vocab, name, levels: null };
     const pending = { ...NO_DIALS, pending: { field: "model" as const, value: "anthropic/claude-opus-5" } };
     expect(runSaid(run, pending, null, now, context)).toMatchObject({ value: "opus", text: "sent · terra until it answers", warn: false });
+    // A press while that one waits is said as next, the pointer on it included, rather than lost.
+    const queued = { ...pending, queued: { field: "thinking" as const, value: "high" } };
+    expect(runSaid(run, queued, null, now, context)).toMatchObject({ value: "high", text: "next · once opus answers", warn: false });
+    expect(runSaid(run, queued, { kind: "word", field: "thinking", value: "high" }, now, context)).toMatchObject({ text: "next · once opus answers" });
     const unconfirmed = refuseDial(pending, pending.pending, "omp_run_control_unconfirmed", "");
     expect(runSaid(run, unconfirmed, null, now, context)).toMatchObject({ value: "opus", text: "no answer in 20 s", warn: true, again: true });
     const unserved = refuseDial(pending, pending.pending, "omp_model_unavailable", "");

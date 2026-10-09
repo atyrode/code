@@ -8,7 +8,7 @@ import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import { agentLaunchBlocker, sponsorRefused, WorkflowError, type AgentLaunchBlocker, type ChargeReview, type CodeRuns, type SessionReview } from "../workflow.ts";
+import { agentLaunchBlocker, runsRefused, sponsorRefused, WorkflowError, type AgentLaunchBlocker, type ChargeReview, type CodeRuns, type SessionReview } from "../workflow.ts";
 import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeAgentRuns, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { HARNESS_OPERATION_ID, operationReady } from "../permission-plan.ts";
 import { useMinuteTick } from "../ui.tsx";
@@ -260,6 +260,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
   // Once Manifold refused this caller's sponsorship of Code's Agent here, launches are the reviewed session (workflow.ts `sponsorRefused`).
   const [unsponsored, setUnsponsored] = useState(false);
+  // The machines that refused an agent run here (workflow.ts `runsRefused`): launches there are the reviewed session from then on.
+  const [refusedMachines, setRefusedMachines] = useState<ReadonlySet<string>>(() => new Set());
   const agentRuns = useCodeAgentRuns(host);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
   const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
@@ -402,7 +404,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     preview.native.defaultsRevision === defaults.data?.revision && !unsaved &&
     skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
   // Whether the reviewed launch can run as an Agent Run, or why not (workflow.ts `agentLaunchBlocker`).
-  const agentBlocker = previewCurrent ? agentLaunchBlocker(preview, harnessReady, unsponsored ? false : agentRuns.runs?.canSponsor ?? null) : null;
+  const agentBlocker = previewCurrent ? agentLaunchBlocker(preview, harnessReady, refusedMachines.has(preview.destination.machineId),
+    unsponsored ? false : agentRuns.runs?.canSponsor ?? null) : null;
   const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
   const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
   const shownReview = previewCurrent ? preview.composition.review : localReview;
@@ -510,15 +513,24 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!target || !record || !reviewed) return;
     await perform("launch", async () => {
       try {
+        let fallback: AgentLaunchBlocker | null = blocker;
         if (blocker === null) {
           try { await launchRun(reviewed); return; }
           catch (reason) {
-            if (!sponsorRefused(reason)) throw reason;
-            // Manifold refused this caller's sponsorship before any Run existed: the reviewed session is the launch, now and from here on.
-            if (mounted.current) setUnsponsored(true);
+            // Manifold refused this caller's sponsorship before any Run existed, or the machine refused the Run, which was
+            // cancelled: the reviewed session is the launch, in this same press while its review still stands, and from here on.
+            if (sponsorRefused(reason)) {
+              if (mounted.current) setUnsponsored(true);
+              fallback = "sponsor";
+            } else if (runsRefused(reason)) {
+              const machineId = reviewed.destination.machineId;
+              if (mounted.current) setRefusedMachines(machines => new Set(machines).add(machineId));
+              fallback = "machine";
+            } else throw reason;
+            if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch) throw reason;
           }
         }
-        await launchSession(reviewed, blocker ?? "sponsor");
+        await launchSession(reviewed, fallback ?? "sponsor");
       } finally {
         if (mounted.current) setPreview(null);
       }
@@ -547,10 +559,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     const workflow = codeWorkflow(host);
     const { run, launched: prepared } = await workflow.launchAgent(reviewed,
       () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+    let opened: { machine: string } | null = null;
     try {
       const { machine, authoring } = placement(prepared.destination.machineId, reviewed.destination.containerId);
       if (await authoring.createTerminal(machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
-      launched(reviewed, machine.name, "run", "OMP's terminal UI opened under an agent run. Its dials, activity and lease are in Sessions.");
+      opened = { machine: machine.name };
     } catch (reason) {
       // The Run never got its terminal: cancel it, so it does not stand as starting until its lease ends.
       try { await workflow.cancelRun(run.id); }
@@ -559,6 +572,8 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     } finally {
       agentRuns.refresh();
     }
+    // The TUI is open under its Run: what is remembered of the launch never cancels it.
+    launched(reviewed, opened.machine, "run", "OMP's terminal UI opened under an agent run. Its dials, activity and lease are in Sessions.");
   }
   async function launchSession(reviewed: SessionReview, blocker: AgentLaunchBlocker) {
     const prepared = await codeWorkflow(host).prepareSession(reviewed);

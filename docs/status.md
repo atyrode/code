@@ -76,10 +76,11 @@ files, service state, credentials or backups.
   gate's browser verifier presses the launch as a human sponsor with `agents:delegate`
   on its disposable server: Code registers its Agent and creates a Run, the machine
   (no native job owner) refuses `launchRun`, Code cancels the Run (`listRunsV2` reads
-  it cancelled) and the launch line says the refusal. Without the harness operation
-  the press is the reviewed session. Sessions' Runs (activity, the lease to 24 of 24
-  and detached, the dials' pending, confirmed, clamped, not served, unanswered and
-  forbidden states) are rendered from fixtures shaped on that real Agent and Run, with
+  it cancelled), the same press goes on to the reviewed session, and from then on that
+  machine's launches are the reviewed session with "no live dials: <machine> cannot
+  launch agent runs". Sessions' Runs (activity, the lease to 24 of 24
+  and detached, the dials' pending, queued, confirmed, clamped, not served, unanswered and
+  forbidden states, and locked dials that send nothing) are rendered from fixtures shaped on that real Agent and Run, with
   a synthetic `controlRun`. No launched Run, renewal, activity report or `controlRun`
   answer has been exercised through Code or on any preview; those are proven end to
   end only by OMP's own native harness gate. The launch line after a launch

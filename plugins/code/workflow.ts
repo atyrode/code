@@ -320,21 +320,36 @@ export function runDials(model: RunModel | undefined): Dials {
 }
 
 /** Why a reviewed launch cannot be an Agent Run, or null when it can. */
-export type AgentLaunchBlocker = "plans" | "options" | "harness" | "sponsor" | "agents";
+export type AgentLaunchBlocker = "plans" | "options" | "harness" | "machine" | "sponsor" | "agents";
 /**
  * Whether an Agent Run can carry this launch. OMP's TUI harness refuses automatic plans
  * (`omp_tui_plan_unsupported`); `core.access.launchRun` hands the harness only its destination,
- * so optional skills and restricted automation cannot reach it; the destination must have OMP's
- * harness operation ready; and the caller must be able to sponsor an Agent (`canRegister`, null
- * while the Agents are unread). Any of them leaves the launch to OMP's ordinary reviewed terminal,
- * without a Run or live dials.
+ * so optional skills, restricted automation and inference limits cannot reach it; the destination
+ * must have OMP's harness operation ready and must not have refused agent runs already
+ * (`runsRefused`); and the caller must be able to sponsor an Agent (`canRegister`, null while the
+ * Agents are unread). Any of them leaves the launch to OMP's ordinary reviewed terminal, without a
+ * Run or live dials.
  */
-export function agentLaunchBlocker(review: SessionReview, harnessReady: boolean, canSponsor: boolean | null): AgentLaunchBlocker | null {
+export function agentLaunchBlocker(review: SessionReview, harnessReady: boolean, machineRefused: boolean, canSponsor: boolean | null): AgentLaunchBlocker | null {
   if (review.composition.planYolo) return "plans";
-  if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted") return "options";
+  if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted" || review.native.inferenceLimits !== undefined) return "options";
   if (!harnessReady) return "harness";
+  if (machineRefused) return "machine";
   if (canSponsor === null) return "agents";
   return canSponsor ? null : "sponsor";
+}
+/**
+ * Whether a launch failed because its machine cannot carry an agent run: Manifold's job owner there
+ * predates Run launches (`run_launch_protocol_unsupported`), or OMP's harness there predates live
+ * dials (`omp_harness_runtime_unsupported`). OMP reports the harness ready either way, so only the
+ * refusal tells; the Run it created was cancelled before this is thrown, and the reviewed session
+ * remains the way to launch on that machine.
+ */
+export function runsRefused(error: unknown): boolean {
+  if (!(error instanceof WorkflowError)) return false;
+  const denial = DOOR_DENIAL.exec(error.message);
+  return denial !== null && error.message.startsWith("core.access.launchRun:") &&
+    ["run_launch_protocol_unsupported", "omp_harness_runtime_unsupported"].includes(denial[1]!);
 }
 /**
  * Whether a launch failed because this caller cannot sponsor Code's Agent here. Manifold refuses
@@ -829,7 +844,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
      * before it is thrown, so no unlaunched Run is left behind, and a cancellation that fails is named.
      */
     async launchAgent(review: SessionReview, isCurrent: () => boolean = () => true): Promise<AgentLaunch> {
-      if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted") throw new WorkflowError("code_agent_options_unsupported");
+      if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted" || review.native.inferenceLimits !== undefined)
+        throw new WorkflowError("code_agent_options_unsupported");
       const { composition } = await reviewedComposition(review);
       const agent = await ensureAgent(review.destination, composition);
       const target = { machineId: review.destination.machineId, containerId: review.destination.containerId };
@@ -840,8 +856,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
         const launched = await access("launchRun", { runId: run.id, target }, LaunchRunResultSchema);
         const { runtime, session } = launched;
         if (launched.destination.machineId !== target.machineId || runtime.machineId !== target.machineId || runtime.pluginId !== OMP_PLUGIN_ID ||
-          runtime.operationId !== HARNESS_OPERATION_ID || runtime.input.tui !== true || session.harness !== OMP_PLUGIN_ID || session.machineId !== target.machineId ||
-          runtime.session?.harness !== session.harness || runtime.session.machineId !== session.machineId || runtime.session.sessionId !== session.sessionId)
+          runtime.operationId !== HARNESS_OPERATION_ID || runtime.input.tui !== true || runtime.input.sessionId !== session.sessionId || session.harness !== OMP_PLUGIN_ID ||
+          session.machineId !== target.machineId || runtime.session?.harness !== session.harness || runtime.session.machineId !== session.machineId || runtime.session.sessionId !== session.sessionId)
           throw new WorkflowError("code_run_changed");
         if (!isCurrent()) throw new WorkflowError("code_destination_changed");
         return { run, launched };
@@ -868,8 +884,10 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       const agents = listed.agents.filter(agent => agent.harness === OMP_PLUGIN_ID && codeAgentGeneration(agent.name, base));
       const lists = await Promise.all(agents.map(agent => access("listRunsV2", { agentId: agent.agentId }, ListRunsV2ResultSchema)));
       const observedAt = lists.reduce((latest, list) => Math.max(latest, list.observedAt), 0) || Date.now();
+      // A Run's TUI is a terminal of its session opened while the Run stood: a later one on the same session is a Run-less resume.
       const entries = lists.flatMap((list, index) => list.runs.map(run => ({ run, leaseMs: agents[index]!.grant.maxRunLifetimeMs,
-        terminal: run.session === null ? null : runningSessionTerminals(run.session, inventory)[0] ?? null })));
+        terminal: run.session === null ? null : runningSessionTerminals(run.session, inventory)
+          .find(terminal => terminal.createdAt >= run.createdAt && terminal.createdAt < run.expiresAt) ?? null })));
       const shown = listedRuns(entries, entry => entry.terminal !== null, observedAt);
       const inspections = await Promise.all(shown.map(entry => access("inspectRunV2", { runId: entry.run.id, limit: 1 }, InspectRunV2ResultSchema)
         .then(inspected, () => null)));

@@ -8,7 +8,8 @@ import type { Dials } from "../workflow.ts";
  * one `controlRun`, which answers with the session's dials, refuses, or is not answered within its
  * 20 s. Nothing here reads a session: `Run.model` keeps its launch value (atyrode/manifold#1071), so
  * the dials shown are the last answer this browser received, else the launch's. One change is in
- * flight per Run at a time; a press while one waits says so and sends nothing.
+ * flight per Run at a time; a press while one waits is queued, the latest replacing any earlier one,
+ * and sent once the answer lands.
  */
 
 export type DialField = "model" | "thinking";
@@ -19,7 +20,6 @@ export type DialOutcome =
   | { readonly kind: "confirmed"; readonly change: DialChange; readonly clamped: string | null }
   | { readonly kind: "unserved"; readonly change: DialChange }
   | { readonly kind: "lacks"; readonly change: DialChange }
-  | { readonly kind: "busy"; readonly change: DialChange }
   | { readonly kind: "forbidden" }
   | { readonly kind: "gone" }
   | { readonly kind: "unsupported" }
@@ -29,6 +29,8 @@ export type RunDialState = {
   readonly reply: Dials | null;
   /** The change sent and not yet answered. */
   readonly pending: DialChange | null;
+  /** The latest change pressed while another waited, sent once that one is answered. */
+  readonly queued: DialChange | null;
   /** The change whose answer did not come within the door's 20 s: it may still apply, and can be sent again. */
   readonly unconfirmed: DialChange | null;
   /** Models the session said it does not serve, struck from then on. */
@@ -37,7 +39,7 @@ export type RunDialState = {
   /** The door refuses this caller's dials outright (`omp_run_control_forbidden`), so every press is refused here. */
   readonly forbidden: boolean;
 };
-export const NO_DIALS: RunDialState = { reply: null, pending: null, unconfirmed: null, unserved: [], outcome: null, forbidden: false };
+export const NO_DIALS: RunDialState = { reply: null, pending: null, queued: null, unconfirmed: null, unserved: [], outcome: null, forbidden: false };
 
 /** The dials a Run shows: the last answer this browser received, else the launch's. */
 export function shownDials(state: RunDialState, launched: Dials): Dials {
@@ -48,16 +50,19 @@ export function shownDials(state: RunDialState, launched: Dials): Dials {
  * A press on a dial word: whether it is sent, and the state it leaves. The word already shown is
  * no change unless its last sending went unanswered; a model the session refused before, or a
  * thinking level the shown model lacks (`lacks`), is refused here, as is any press while the door
- * refuses this caller or another change waits for its answer.
+ * refuses this caller. A press while another change waits is queued, replacing an earlier queued one.
  */
 export function pressDial(state: RunDialState, change: DialChange, shown: Dials, lacks: (level: string) => boolean): { readonly state: RunDialState; readonly send: boolean } {
   if (state.forbidden) return { state: { ...state, outcome: { kind: "forbidden" } }, send: false };
-  if (state.pending) return { state: { ...state, outcome: { kind: "busy", change: state.pending } }, send: false };
   if (change.field === "model" && state.unserved.includes(change.value)) return { state: { ...state, outcome: { kind: "unserved", change } }, send: false };
   if (change.field === "thinking" && lacks(change.value)) return { state: { ...state, outcome: { kind: "lacks", change } }, send: false };
+  if (state.pending) {
+    const same = state.pending.field === change.field && state.pending.value === change.value;
+    return { state: { ...state, queued: same ? null : change, outcome: null }, send: false };
+  }
   const again = state.unconfirmed?.field === change.field && state.unconfirmed.value === change.value;
-  if (!again && shown[change.field] === change.value) return { state, send: false };
-  return { state: { ...state, pending: change, unconfirmed: null, outcome: null }, send: true };
+  if (!again && shown[change.field] === change.value) return { state: { ...state, queued: null }, send: false };
+  return { state: { ...state, pending: change, queued: null, unconfirmed: null, outcome: null }, send: true };
 }
 
 /**
@@ -70,16 +75,16 @@ export function answerDial(state: RunDialState, change: DialChange, dials: Dials
   return { ...state, reply: dials, pending: null, unconfirmed: null, outcome: { kind: "confirmed", change, clamped } };
 }
 
-/** The door's refusal of the change in flight, by its token. */
+/** The door's refusal of the change in flight, by its token. A refusal that ends the dials drops the queued change too. */
 export function refuseDial(state: RunDialState, change: DialChange, token: string | null, words: string): RunDialState {
   const settled = { ...state, pending: null };
   switch (token) {
     case "omp_model_unavailable":
       return { ...settled, unserved: [...new Set([...state.unserved, change.value])], outcome: { kind: "unserved", change } };
     case "omp_run_control_unconfirmed": return { ...settled, unconfirmed: change, outcome: null };
-    case "omp_run_control_forbidden": return { ...settled, forbidden: true, outcome: { kind: "forbidden" } };
-    case "omp_session_unavailable": return { ...settled, outcome: { kind: "gone" } };
-    case "omp_run_control_unsupported": return { ...settled, outcome: { kind: "unsupported" } };
+    case "omp_run_control_forbidden": return { ...settled, queued: null, forbidden: true, outcome: { kind: "forbidden" } };
+    case "omp_session_unavailable": return { ...settled, queued: null, outcome: { kind: "gone" } };
+    case "omp_run_control_unsupported": return { ...settled, queued: null, outcome: { kind: "unsupported" } };
     default: return { ...settled, outcome: { kind: "failed", words } };
   }
 }

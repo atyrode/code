@@ -4483,7 +4483,6 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   });
   const agentName = await codeAgentName(workspace.id);
   const actions = await watchActions(browser, server);
-  const attention = `(document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})?.textContent ?? '')`;
   /** The Run doors the browser called since `from`, reads left out. */
   const runDoors = (from: number) => actions.requests.slice(from).map(request => request.name)
     .filter(name => name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name));
@@ -4493,20 +4492,18 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await openGenerator(browser, server, workspace.id);
     await chooseMachine(browser, target.machineId, machineName);
 
-    // One press: the real doors register Code's Agent and create its Run; this machine refuses to launch it, and Code cancels it.
+    // One press: the real doors register Code's Agent and create its Run; this machine refuses to launch it, Code cancels it,
+    // and the same press goes on to the reviewed session, which the fixture refuses at its preparation.
     await until(browser, "the sponsor's saved profile is reviewed without a press", launchIs("launch", "ready"));
     await pointOf(browser, launchButton);
     await until(browser, "pointed, the launch says its dials will be live in Sessions", `${readout}.textContent.includes('live dials in Sessions')`);
     await pointAway(browser);
     const beforeLaunch = actions.requests.length;
     await click(browser, launchButton);
-    await until(browser, "the machine's refusal of the run is said beside the launch", `${failureLine} && /agent run/.test(${attention})`);
-    assert(["That machine cannot launch an agent run: its native job owner is missing or predates agent runs.",
-      "That machine's native job owner is not ready to launch an agent run."].includes(await browser.evaluate<string>(attention)),
-    `The launch line says the machine's own refusal: ${await browser.evaluate<string>(attention)}`);
+    await waitFor(() => prepares === 1, timeout, 50);
+    await until(browser, "the same press goes on to the reviewed session, whose refusal is said beside the launch", failureLine);
     assert.deepEqual(runDoors(beforeLaunch), ["core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun", "core.access.finishAgentRunV2"],
       "One press registers the Agent, creates its Run, asks Manifold to launch it and cancels it once refused");
-    assert.equal(prepares, 0, "An agent launch prepares no reviewed session");
     const agentsRead = await callAction(server, sponsor.token, "core.access.listAgentsV2", {});
     assert(agentsRead.ok);
     const agents = ListAgentsV2ResultSchema.parse(agentsRead.result);
@@ -4523,11 +4520,27 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     assert(inspectRead.ok);
     const realInspection = InspectRunV2ResultSchema.parse(inspectRead.result);
     await showView(browser, "sessions");
-    await settle(browser);
+    const readsAfter = actions.requests.length;
+    await key(browser, "r", 82);
+    await waitFor(async () => actions.requests.slice(readsAfter).some(request => request.name === "core.access.listAgentsV2"), timeout, 50);
+    await Bun.sleep(500);
     assert.equal(await browser.evaluate(`${element(`${generator} [data-run-id]`)} === null`), true, "A Run cancelled before it launched is not listed");
 
-    // OMP's harness not ready: the same press is the reviewed session, and the pointed launch says why it has no live dials.
+    // From then on this machine's launch is the reviewed session, and the pointed launch says why it has no live dials.
     await showView(browser, "main");
+    await until(browser, "the launch offers its next review", `${launchIs("review", "ready")} || ${launchIs("launch", "ready")}`);
+    if (await browser.evaluate<boolean>(launchIs("review", "ready"))) await click(browser, launchButton);
+    await until(browser, "the launch is reviewed again", launchIs("launch", "ready"));
+    await pointOf(browser, launchButton);
+    await until(browser, "pointed, the launch says this machine cannot launch agent runs",
+      `${readout}.textContent.includes(${JSON.stringify(`no live dials: ${machineName} cannot launch agent runs`)})`);
+    await pointAway(browser);
+    const beforeFallback = actions.requests.length;
+    await click(browser, launchButton);
+    await waitFor(() => prepares === 2, timeout, 50);
+    await until(browser, "the reviewed session's refusal is said beside the launch", failureLine);
+    assert.deepEqual(runDoors(beforeFallback), [], "A machine that refused a Run gets the reviewed session: no Agent or Run door is called");
+    // OMP's harness not ready is said before it.
     harnessReady = false;
     await key(browser, "r", 82);
     await until(browser, "the launch offers its next review", `${launchIs("review", "ready")} || ${launchIs("launch", "ready")}`);
@@ -4537,11 +4550,6 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await until(browser, "pointed, the launch says it has no live dials because the harness is not enabled",
       `${readout}.textContent.includes(${JSON.stringify(`no live dials: not enabled on ${machineName}`)})`);
     await pointAway(browser);
-    const beforeFallback = actions.requests.length;
-    await click(browser, launchButton);
-    await waitFor(() => prepares === 1, timeout, 50);
-    await until(browser, "the reviewed session's refusal is said beside the launch", failureLine);
-    assert.deepEqual(runDoors(beforeFallback), [], "Without the harness the launch is the reviewed session: no Agent or Run door is called");
 
     // Runs this machine cannot start, shaped on the real ones: open, at 24 of 24, renewal due, detached, starting and ended.
     const now = Date.now(), MINUTE = 60_000, HOUR = 60 * MINUTE;
@@ -4622,6 +4630,14 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     "A detached Run's dials rest while its TUI goes on; a starting one's wait for its first report; an ended one says when it ended");
     assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-locked]')].every(el => el.closest('[data-run-id]'))`), true,
       "Only a Run's own dials are ever locked");
+    // A starting or detached Run's dials are shown off, and a press on them sends nothing: a click, ↵, or a rested ←→.
+    const beforeLocked = controls.length;
+    await click(browser, dialWord("run-starting", "thinking", "high"));
+    await click(browser, dialWord("run-detached", "thinking", "high"));
+    await key(browser, "ArrowRight", 39);
+    await key(browser, "Enter", 13);
+    await Bun.sleep(700);
+    assert.equal(controls.length, beforeLocked, "A starting or detached Run's dials send nothing");
 
     // The dials: pending until the session answers, then confirmed; a clamped level; a model not served, struck from then on.
     const thinkingShown = launched.thinking ?? "medium";
@@ -4643,8 +4659,18 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await browser.send("Emulation.setEmulatedMedia", { features: [] });
     await settle(browser);
     assert((await browser.evaluate<number>(running)) > 0, "Otherwise a working Run's mark and a waiting dot breathe");
+    // A press while that change waits is said as next and sent once the answer lands; only the latest such press goes.
+    const beforeQueue = controls.length;
+    await click(browser, dialWord("run-working", "thinking", "max"));
+    await click(browser, dialWord("run-working", "thinking", "xhigh"));
+    await until(browser, "a press while one waits is said as next", `${said("run-working")} === ${JSON.stringify(`xhigh · next · once ${other} answers`)}`);
+    assert.equal(controls.length, beforeQueue, "Nothing more is sent while a change waits");
     heldControl.release();
-    await until(browser, "the answer confirms the change", `${dialWord("run-working", "thinking", other)}.getAttribute('aria-checked') === 'true' && ${said("run-working")} === ${JSON.stringify(`${other} · running now`)}`);
+    await waitFor(() => controls.length === beforeQueue + 1 && heldControl.held, timeout, 20);
+    assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: "xhigh" }, "Once the answer lands, the latest queued press is sent, and only it");
+    heldControl.release();
+    await until(browser, "the queued change is confirmed", `${dialWord("run-working", "thinking", "xhigh")}.getAttribute('aria-checked') === 'true' && ${said("run-working")} === 'xhigh · running now'`);
+    assert.equal(controls.length, beforeQueue + 1, "The earlier queued press is never sent");
     control = input => ({ ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking === "max" ? "xhigh" : input.thinking ?? other } });
     await click(browser, dialWord("run-working", "thinking", "max"));
     await until(browser, "a level the session clamps is said with the one it runs", `${said("run-working")} === 'max · running now · thinking xhigh' && ${dialWord("run-working", "thinking", "xhigh")}.getAttribute('aria-checked') === 'true'`);
@@ -4664,6 +4690,20 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await click(browser, dialWord("run-working", "model", reference(unanswered)));
     await until(browser, "an unanswered change is said with send again", `${dialWord("run-working", "model", reference(unanswered))}.dataset.unconfirmed !== undefined &&
       ${said("run-working")} === ${JSON.stringify(`${alias(unanswered)} · no answer in 20 ssend again`)} && !!${element(`${runRow("run-working")} .${G}run-again`)}`);
+    // On a coarse pointer send again has a 44px target around it, and the said line keeps its 20px with nothing in it clipped.
+    await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    try {
+      await settle(browser);
+      assert.deepEqual(await browser.evaluate(`(() => {
+        const line = ${element(`${runRow("run-working")} .${G}run-said`)}, again = line.querySelector('.${G}run-again'), text = line.querySelector('.${G}run-said-text');
+        const box = line.getBoundingClientRect(), inside = el => { const rect = el.getBoundingClientRect(); return rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5; };
+        const target = getComputedStyle(again, '::after');
+        return { coarse: matchMedia('(pointer: coarse)').matches, height: Math.round(box.height), text: inside(text), again: inside(again),
+          target: Math.round(again.getBoundingClientRect().height) - parseFloat(target.top) - parseFloat(target.bottom), cut: text.scrollWidth > text.clientWidth + 1 };
+      })()`), { coarse: true, height: 20, text: true, again: true, target: 44, cut: false }, "Send again's coarse target leaves the said line whole");
+    } finally {
+      await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    }
     control = input => ({ ok: true, result: { model: input.model ?? launched.model, thinking: "xhigh" } });
     await click(browser, element(`${runRow("run-working")} .${G}run-again`));
     await until(browser, "sent again, the answer confirms it", `${dialWord("run-working", "model", reference(unanswered))}.getAttribute('aria-checked') === 'true' &&
@@ -4673,8 +4713,11 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     // Keyboard: ←→ rest half a second before one change goes; ↵ and Space send at once; ↑↓ go to the next dial of any Run.
     control = input => ({ ok: true, result: { model: input.model ?? reference(unanswered), thinking: input.thinking ?? "xhigh" } });
     // A press on the word already shown sends nothing and leaves focus on it.
+    const beforeShown = controls.length;
     await click(browser, dialWord("run-working", "thinking", "xhigh"));
     await until(browser, "focus rests on the working Run's shown thinking", `document.activeElement === ${dialWord("run-working", "thinking", "xhigh")}`);
+    await Bun.sleep(300);
+    assert.equal(controls.length, beforeShown, "A press on the word already shown sends nothing");
     const beforeKeys = controls.length;
     await key(browser, "ArrowLeft", 37);
     await key(browser, "ArrowLeft", 37);
@@ -4697,6 +4740,13 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: "high" }, "Space sends the focused word at once");
     await Bun.sleep(700);
     assert.equal(controls.length, beforeKeys + 3, "A word sent at once is not sent again when the keys rest");
+    // A press within the half second a ←→ rests cancels it: exactly one change goes, the one pressed.
+    const beforeRace = controls.length;
+    await key(browser, "ArrowLeft", 37);
+    await click(browser, dialWord("run-working", "thinking", "low"));
+    await Bun.sleep(900);
+    assert.deepEqual(controls.slice(beforeRace), [{ runId: "run-working", thinking: "low" }], "A press after ←→ sends only the pressed word");
+    await until(browser, "the pressed level is confirmed", `${dialWord("run-working", "thinking", "low")}.getAttribute('aria-checked') === 'true'`);
     await key(browser, "ArrowDown", 40);
     await until(browser, "↓ goes to the next Run's first dial", `!!document.activeElement?.closest('${runRow("run-blocked")} [data-run-dial][data-row="tier"]')`);
     await key(browser, "ArrowUp", 38);
@@ -4738,11 +4788,13 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       await pointAway(browser);
       await tabTo(browser, "the first Run's verb", element(`${runRow("run-starting")} [data-verb]`), true);
       await browser.evaluate(runBoxes);
-      for (let step = 0; step < 40 && await browser.evaluate<boolean>(`!!document.activeElement?.closest('${sessionsPane} [data-runs]')`); step++) {
+      let steps = 0;
+      for (; steps < 40 && await browser.evaluate<boolean>(`!!document.activeElement?.closest('${sessionsPane} [data-runs]')`); steps++) {
         await key(browser, "Tab", 9);
         await settle(browser);
-        assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${step} across the Runs shifts no layout box`);
+        assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${steps} across the Runs shifts no layout box`);
       }
+      assert(steps >= 8, `Tab walks the Runs' verbs, dials and send again (${steps} steps)`);
       // The said line starts where the dials' words do, at every layout.
       for (const width of [1280, 620, 360]) {
         await panelWidth(browser, width);
@@ -5096,7 +5148,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: verify, the checking hold a double-click cannot pass, a charge confirmed only by one deliberate press, measuring per provider, verified with what it left out (Spark, by OMP's spark quota class, retired), back to code and verify again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and is said, and without the harness the press is the reviewed session, its readout saying why it has no live dials. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, confirmed, clamped, not served, unanswered then sent again, and forbidden; ←→ settle before one send, ↵ and Space send at once, ↑↓ cross Runs; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: verify, the checking hold a double-click cannot pass, a charge confirmed only by one deliberate press, measuring per provider, verified with what it left out (Spark, by OMP's spark quota class, retired), back to code and verify again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does, its readout saying the machine cannot launch agent runs (or, before it, that the harness is not enabled). Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
 }
 
 await run();
