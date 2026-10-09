@@ -322,7 +322,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   function keepFocus() {
     requestAnimationFrame(() => {
       const node = app.current, shown = viewRef.current;
-      if (!node) return;
+      // A sheet opened within the frame (Esc, then a sheet's key) owns focus and gives it back itself.
+      if (!node || currentSheet.current) return;
       const active = node.ownerDocument.activeElement;
       const pane = node.querySelector<HTMLElement>(`[data-pane="${shown === "main" ? "generator" : shown}"]`);
       if (active && pane?.contains(active) && (active as HTMLElement).offsetParent !== null) return;

@@ -868,15 +868,22 @@ type View = "main" | "accounts" | "sessions" | "routing" | "usage";
 const VIEW_KEYS: Readonly<Record<Exclude<View, "main">, { key: string; code: number }>> = {
   accounts: { key: "a", code: 65 }, sessions: { key: "e", code: 69 }, routing: { key: "p", code: 80 }, usage: { key: "s", code: 83 },
 };
+/**
+ * A view changed by a key keeps focus in the panel a frame later (web.tsx `keepFocus`), never on a control the view hid;
+ * the next step waits for that, so what it reads as focused is what a person would have focused.
+ */
+const focusShown = `(() => { const active = document.activeElement; return !active?.closest('${stage}') || active.offsetParent !== null; })()`;
 async function showView(browser: BrowserInstance, view: View): Promise<void> {
+  let pressed = false;
   for (let step = 0; step < 2 && !await browser.evaluate<boolean>(shownView("main")) && !await browser.evaluate<boolean>(shownView(view)); step++) {
     await key(browser, "Escape", 27);
+    pressed = true;
   }
-  await until(browser, `Esc goes back towards ${view}`, `${shownView("main")} || ${shownView(view)}`);
+  await until(browser, `Esc goes back towards ${view}, focus kept on what shows`, `(${shownView("main")} || ${shownView(view)}) && ${pressed ? focusShown : "true"}`);
   if (view === "main" || await browser.evaluate<boolean>(shownView(view))) return;
   if (!await browser.evaluate<boolean>(`!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`)) await click(browser, generatorTitle);
   await key(browser, VIEW_KEYS[view].key, VIEW_KEYS[view].code);
-  await until(browser, `${view} takes the stage`, shownView(view));
+  await until(browser, `${view} takes the stage, focus kept on what shows`, `${shownView(view)} && ${focusShown}`);
 }
 
 /**
