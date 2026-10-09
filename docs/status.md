@@ -80,17 +80,23 @@ files, service state, credentials or backups.
   machine's launches are the reviewed session with "no live dials: <machine> cannot
   launch agent runs". Sessions' Runs (activity, the lease to 24 of 24
   and detached, the dials' pending, queued, confirmed, clamped, not served, unanswered and
-  forbidden states, and locked dials that send nothing, a queued change included) are rendered from fixtures shaped on that real Agent and Run, with
-  a synthetic `controlRun`. No launched Run, renewal, activity report or `controlRun`
-  answer has been exercised through Code or on any preview; those are proven end to
-  end only by OMP's own native harness gate. The launch line after a launch
+  forbidden states, locked dials that send nothing, a queued change included, a model
+  switched in the TUI and a stale kept answer dropped) are rendered from fixtures shaped
+  on that real Agent and Run, with a synthetic `controlRun` whose model switches the
+  fixture reports as OMP's harness would. No launched Run, renewal, activity or model
+  report or `controlRun` answer has been exercised through Code or on any preview; those
+  are proven end to end only by OMP's own native harness gate. The launch line after a launch
   ("Launched on … · dials", or "· no live dials: …" with **Enable in Setup**) needs an
   opened terminal, which the disposable server cannot open, so only unit tests cover
-  it. Code shows only the last
-  `controlRun` answer this browser received, else the launch's model, because
-  `Run.model` is written once (atyrode/manifold#1071). A Run is attributed for at
-  most about 13 leases. After that, or after a missed renewal, its TUI goes on
-  detached and unattributed, with no dials.
+  it. A Run's model is its live `Run.model`, which follows the model its TUI session
+  serves once the Run's harness confirms it
+  ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)). The last `controlRun`
+  answer this browser received bridges a dial until the next read and then stays only
+  for the model the Run reports, as the one word on its thinking. `Run.model` carries no
+  thinking once the harness reports, so a browser without that answer reads the level as
+  `?`, and a level changed in the TUI alone is not seen.
+  A Run is attributed for at most about 13 leases. After that, or after a missed
+  renewal, its TUI goes on detached and unattributed, with no dials.
 - The main view's presentation has these bounds. Cost is a relative list-price index,
   not billing, and the speed meter stays unlit and says "unmeasured" until every lead
   model has measured throughput. The usage pane reads again every five minutes
@@ -174,17 +180,19 @@ files, service state, credentials or backups.
   current pins. Source and disposable verification do not establish a released Code bundle
   or deployed production capability, and no transition-ledger row advances.
   Code now pins Manifold
-  [`cd75fbb`](https://github.com/atyrode/manifold/commit/cd75fbba6d4601fee14267f17e1594429ae17bc3),
-  protocol 57, and OMP
-  [`9fdbed9`](https://github.com/atyrode/manifold-omp/commit/9fdbed9906e3a87172b873064c0b3422cb4e2b45)
-  ([manifold-omp#120](https://github.com/atyrode/manifold-omp/pull/120)), whose own
+  [`8260541`](https://github.com/atyrode/manifold/commit/82605419ea9a67198d9ea0dae1257a8fd812ecd8)
+  ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)), protocol 57, and OMP
+  [`0639a16`](https://github.com/atyrode/manifold-omp/commit/0639a16900ae145677370a4ced669afcc5d19faf)
+  ([manifold-omp#125](https://github.com/atyrode/manifold-omp/pull/125), OMP 0.2.0), whose own
   `MANIFOLD_REV` is the same commit. A protocol 57 hub admits only bundles stamped 57
   ([manifold#1068](https://github.com/atyrode/manifold/issues/1068)), so Code's four
-  bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained.
-  These pins add OMP's TUI Agent harness and `atyrode.omp.controlRun`
-  ([manifold-omp#116](https://github.com/atyrode/manifold-omp/pull/116)) and Manifold's
-  pending-Run lifecycle doors ([manifold#1072](https://github.com/atyrode/manifold/pull/1072));
-  Code calls neither and launches no Agent.
+  bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained. That
+  SDK stamps them hardened contract 13, which no hub older than `8260541` admits, so they
+  need a hub at that commit or later. The Manifold pin lets a Run's own harness report the
+  model its session serves, which the harness's `resolveModel` confirms before it replaces
+  `Run.model`; it also budgets 1024 activity reports per lease and reports the adopted
+  Run's expiry at bind. The OMP pin's TUI harness reports the model at ready and on every
+  switch, and Code shows it as each Run's live model.
   The OMP pin also scopes accounts by custody of the broker's credential store
   ([manifold-omp#121](https://github.com/atyrode/manifold-omp/pull/121)); the one
   scope change its adoption causes is described under

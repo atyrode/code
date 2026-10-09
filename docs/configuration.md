@@ -619,10 +619,19 @@ half a second before sending it, and any press in that half second sends only it
 `Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
 what choosing it sends, the lease its next renewal and the activity what it means, all on
 the said line, so nothing moves; the word just pressed keeps saying what its press came
-to. The dials shown are the
-last answer this browser received, kept per workspace in local storage, else the
-launch's, because `Run.model` is written once. The Sessions tab carries one square
-for the open Runs, never a count: blocked, then working, then starting, else quiet.
+to. The model shown is the Run's own `Run.model` as `listRunsV2` reads it. OMP's harness
+reports the model its session serves, whatever switched it (a dial, the operator in the
+TUI, another tab), and Manifold records it once the Run's harness confirms its launch
+serves it. The last answer this browser received, kept per workspace in local storage,
+bridges a confirmed dial until the next read. After that read the answer stays only while
+it names the model the Run reports, since `Run.model` carries no thinking once the harness
+reports; an answer for another model is stale, and that read drops it, here and from
+storage. The thinking is then `?` until the next answer, and before the Run's first
+report it is the launch's; a level changed in the TUI alone is not seen. A model the
+Run's harness cannot confirm, such as an OpenRouter one, leaves `Run.model` on its last
+confirmed value, so a dial to it shows only until the next read. The Sessions tab carries
+one square for the open Runs, never a count: blocked, then working, then starting, else
+quiet.
 
 **Recent profiles.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).

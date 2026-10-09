@@ -4,9 +4,10 @@ import { formatManifoldUri, type TerminalSummary } from "@manifold/protocol";
 import type { ActionResult } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
-import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
+import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runDials, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
-import { answerDial, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readKeptAnswers, refuseDial, settleDial } from "../code/generator/run-dials.ts";
+import { answerDial, forgetAnswer, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
+  type AnswerStorage } from "../code/generator/run-dials.ts";
 import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
 const target = { containerId: "workspace", machineId: "destination" };
@@ -349,6 +350,44 @@ describe("a Run's dials", () => {
     expect(readKeptAnswers(refusing, key).size).toBe(0);
     expect(() => keepAnswer(refusing, key, "run-1", launched)).not.toThrow();
     expect(readKeptAnswers(null, key).size).toBe(0);
+  });
+
+  test("a model switched in the TUI shows once read: the live Run.model wins over the answer kept for another model, and one for the reported model keeps its thinking", () => {
+    // Code records the launch as `id:thinking`; OMP's harness then reports the model its session serves as `provider` and `id` alone.
+    expect(runDials({ provider: "anthropic", model: "claude-sonnet-5:medium" })).toEqual(launched);
+    const switched = runDials({ provider: "anthropic", model: "claude-opus-5" });
+    expect(switched).toEqual({ model: "anthropic/claude-opus-5", thinking: null });
+    const thinking = { field: "thinking" as const, value: "high" };
+    const confirmed = answerDial(pressDial(NO_DIALS, thinking, launched, none).state, thinking, { model: launched.model, thinking: "high" }, launched);
+    // Until the next read the answer bridges; a read of its own model keeps it, the one word on the thinking.
+    expect(shownDials(confirmed, switched)).toEqual({ model: launched.model, thinking: "high" });
+    expect(readDials(confirmed, { model: launched.model, thinking: null })).toBe(confirmed);
+    // Read after the operator switched in the TUI: the answer and its confirmation go, the reported model shows and its thinking is unknown.
+    const read = readDials(confirmed, switched);
+    expect([read.reply, read.outcome, shownDials(read, switched)]).toEqual([null, null, switched]);
+    // A refusal still said stays, and a Run that reports no model contradicts nothing.
+    const unserved = refuseDial(confirmed, { field: "model", value: "anthropic/claude-fable-5" }, "omp_model_unavailable", "");
+    expect(readDials(unserved, switched).outcome).toEqual(unserved.outcome);
+    expect(readDials(confirmed, runDials(undefined))).toBe(confirmed);
+  });
+
+  test("a stale kept answer the live model contradicts is dropped, from storage too, unless another tab kept one for the reported model", () => {
+    const stored = new Map<string, string>();
+    const storage: AnswerStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), opus: Dials = { model: "anthropic/claude-opus-5", thinking: "high" };
+    keepAnswer(storage, key, "run-1", opus);
+    keepAnswer(storage, key, "run-2", launched);
+    // A reload restores both; the first read reports the launch's model for run-1, so its answer for opus is stale.
+    const restored = readKeptAnswers(storage, key);
+    const live = runDials({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(readDials({ ...NO_DIALS, reply: restored.get("run-1")! }, live).reply).toBeNull();
+    forgetAnswer(storage, key, "run-1", live.model!);
+    expect([...readKeptAnswers(storage, key)]).toEqual([["run-2", launched]]);
+    // Another tab kept an answer for the reported model meanwhile: it is not forgotten.
+    forgetAnswer(storage, key, "run-2", launched.model!);
+    expect(readKeptAnswers(storage, key).get("run-2")).toEqual(launched);
+    const refusing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
+    expect(() => forgetAnswer(refusing, key, "run-2", live.model!)).not.toThrow();
   });
 });
 

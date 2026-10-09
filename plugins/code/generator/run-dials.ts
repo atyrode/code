@@ -6,10 +6,12 @@ import type { Dials } from "../workflow.ts";
 /*
  * A running Run's two live dials, model and thinking, as this browser has turned them. Each press is
  * one `controlRun`, which answers with the session's dials, refuses, or is not answered within its
- * 20 s. Nothing here reads a session: `Run.model` keeps its launch value (atyrode/manifold#1071), so
- * the dials shown are the last answer this browser received, else the launch's. One change is in
- * flight per Run at a time; a press while one waits is queued, the latest replacing any earlier one,
- * and sent once the answer lands.
+ * 20 s. The model shown is the Run's live `Run.model`, which OMP's harness moves with its session
+ * whatever turned it, a dial, the operator in the TUI or another tab (atyrode/manifold#1078). The
+ * answer this browser kept bridges a confirmed dial until the next read; after it, the answer stays
+ * only while it names the model the Run reports, as the one word on its thinking, since `Run.model`
+ * carries none once the harness reports. One change is in flight per Run at a time; a press while one
+ * waits is queued, the latest replacing any earlier one, and sent once the answer lands.
  */
 
 export type DialField = "model" | "thinking";
@@ -41,9 +43,20 @@ export type RunDialState = {
 };
 export const NO_DIALS: RunDialState = { reply: null, pending: null, queued: null, unconfirmed: null, unserved: [], outcome: null, forbidden: false };
 
-/** The dials a Run shows: the last answer this browser received, else the launch's. */
-export function shownDials(state: RunDialState, launched: Dials): Dials {
-  return state.reply ?? launched;
+/** The dials a Run shows: the answer this browser kept, else the Run's live model, whose thinking only the launch's record names. */
+export function shownDials(state: RunDialState, live: Dials): Dials {
+  return state.reply ?? live;
+}
+
+/**
+ * A read of the Run judges the answer kept before it, and the live `Run.model` wins: an answer for
+ * another model is stale (the TUI, another tab or a later change moved the session), so it is
+ * dropped with the confirmation it said. One for the model the Run reports stays. A Run that
+ * reports no model contradicts nothing.
+ */
+export function readDials(state: RunDialState, live: Dials): RunDialState {
+  if (state.reply === null || live.model === null || state.reply.model === live.model) return state;
+  return { ...state, reply: null, outcome: state.outcome?.kind === "confirmed" ? null : state.outcome };
 }
 
 /**
@@ -119,4 +132,10 @@ export function readKeptAnswers(storage: AnswerStorage | null, key: string): Rea
 export function keepAnswer(storage: AnswerStorage | null, key: string, runId: string, dials: Dials): void {
   const kept = [...readKeptAnswers(storage, key)].filter(([id]) => id !== runId);
   try { storage?.setItem(key, JSON.stringify([...kept, [runId, dials]].slice(-KEPT_ANSWERS))); } catch { /* A full or refused store keeps this page's answers only. */ }
+}
+/** Forget a Run's kept answer a read contradicted, unless another tab has since kept one for `live`, the model the Run reports. */
+export function forgetAnswer(storage: AnswerStorage | null, key: string, runId: string, live: string): void {
+  const kept = readKeptAnswers(storage, key);
+  if (!kept.has(runId) || kept.get(runId)!.model === live) return;
+  try { storage?.setItem(key, JSON.stringify([...kept].filter(([id]) => id !== runId))); } catch { /* A refused store forgets on this page only. */ }
 }

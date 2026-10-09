@@ -6,7 +6,7 @@ import { codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { hhmm, hueOf } from "../ui.tsx";
 import { AGENT_RENEWALS, refusalToken, runDials, WorkflowError, type CodeRun } from "../workflow.ts";
 import { Glyph, GLYPHS } from "./dial-row.tsx";
-import { answerDial, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readKeptAnswers, refuseDial, settleDial, shownDials,
+import { answerDial, forgetAnswer, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
   type AnswerStorage, type DialChange, type DialField, type RunDialState } from "./run-dials.ts";
 import { activityWord, leaseOf, leaseWords, modelLevels, modelName, modelWords, runOpen, runPhase, runSaid, runVerb, THINKING_LEVELS,
   type DialWord, type RunPointed } from "./runs-model.ts";
@@ -32,7 +32,10 @@ export type RunDialsHandle = {
   readonly press: (entry: CodeRun, change: DialChange, levelsOf: (model: string | null) => readonly string[] | null) => Promise<void>;
   readonly unqueue: (runId: string) => void;
 };
-/** Every Run's dials as this browser turns them (`runs`: the Runs as last read): one `controlRun` per press, its answer kept per workspace. */
+/**
+ * Every Run's dials as this browser turns them (`runs`: the Runs as last read): one `controlRun` per press, its answer kept per
+ * workspace until a read of the Run's live model contradicts it.
+ */
 export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDialsHandle {
   const key = keptAnswersKey(host.principal.id, host.containerId!);
   const [states, setStates] = useState<ReadonlyMap<string, RunDialState>>(() =>
@@ -51,6 +54,19 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     latest.current = new Map(latest.current).set(runId, next);
     if (mounted.current) setStates(latest.current);
   }
+  // Each new read judges the answers kept before it (`readDials`): one for another model than the Run reports is dropped, here
+  // and from storage. A remount or a failed read keeps the read in hand, which may predate an answer whose report is on its way.
+  const judged = useRef(runs);
+  useLayoutEffect(() => {
+    if (judged.current === runs) return;
+    judged.current = runs;
+    for (const entry of runs) {
+      const runId = entry.run.id, live = runDials(entry.run.model), state = stateOf(runId), next = readDials(state, live);
+      if (next === state) continue;
+      forgetAnswer(browserStorage(), key, runId, live.model!);
+      write(runId, next);
+    }
+  }, [runs]);
   async function press(entry: CodeRun, change: DialChange, levelsOf: (model: string | null) => readonly string[] | null): Promise<void> {
     // Only a live Run's dials turn: a starting one has no session to answer yet, and a detached or settled one has no Run input left.
     if (runPhase(entry) !== "live") return;

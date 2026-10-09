@@ -20,6 +20,7 @@ import { defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/generator/draft-store.ts";
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
+import { keptAnswersKey } from "../code/generator/run-dials.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
 import {
   BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, OmpHarnessProfileSchema,
@@ -4497,9 +4498,12 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
  * cancels the Run and the launch says why. With OMP's harness not ready the same press is the reviewed session, and the
  * pointed launch says it has no live dials and why. In Sessions, synthetic Runs say their activity, their lease up to 24
  * of 24 and detached; a synthetic `controlRun` takes their dials through pending, confirmed, clamped, not served,
- * unanswered and sent again, and refused. ←→ settle before sending, ↵ and Space send at once, ↑↓ cross dials; a pointed
- * word, lease or activity says itself and moves nothing; reduced motion stills every mark; nothing overflows from 170 to
- * 1440px. No terminal opens and no provider is asked; a live Run, its renewals and its TUI remain unexercised here.
+ * unanswered and sent again, and refused, and a model it switches to becomes the Run's live `Run.model`, as OMP's harness
+ * reports it. A model switched in the TUI shows once read, dropping the answer kept for the earlier one, and after a
+ * reload the first read drops a kept answer the live model contradicts. ←→ settle before sending, ↵ and Space send at
+ * once, ↑↓ cross dials; a pointed word, lease or activity says itself and moves nothing; reduced motion stills every
+ * mark; nothing overflows from 170 to 1440px. No terminal opens and no provider is asked; a live Run, its renewals and
+ * its TUI remain unexercised here.
  */
 async function agentLaunchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Agent launch", "canvas");
@@ -4550,7 +4554,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   const realTerminals = await ownerAction(server, "core.terminals.listAll", {});
   let harnessReady = true, prepares = 0;
   // The Runs Sessions reads once the real launch has been refused: null leaves every core.access door and the terminal inventory to the real server.
-  let runs: { list: () => ListRunsV2Result; inspect: (runId: string) => InspectRunV2Result | null; terminals: TerminalSummary[] } | null = null;
+  // `report` is OMP's harness reporting the model a Run's session switched to, which `Run.model` then follows.
+  let runs: { list: () => ListRunsV2Result; inspect: (runId: string) => InspectRunV2Result | null; terminals: TerminalSummary[]; report: (runId: string, reference: string) => void } | null = null;
   const controls: Record<string, unknown>[] = [];
   const heldControl = holdable();
   let control: (input: Record<string, unknown>) => Outcome | Promise<Outcome> = () => refused("synthetic_control_unset");
@@ -4563,7 +4568,13 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
         return inspection ? { ok: true, result: inspection } : refused("agent_run_unavailable");
       }
       case "core.terminals.listAll": return { ok: true, result: { terminals: runs.terminals } };
-      case "atyrode.omp.controlRun": controls.push(input); return control(input);
+      case "atyrode.omp.controlRun": {
+        controls.push(input);
+        const outcome = await control(input);
+        // The session's model switch reaches `Run.model` through the harness's next activity report.
+        if (outcome.ok && typeof input.model === "string") runs.report(input.runId as string, input.model);
+        return outcome;
+      }
     }
     switch (name) {
       case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts() };
@@ -4660,7 +4671,9 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     const lead = reviewCatalog(compiled, saved.selection!, Date.now()).routes.find(route => route.role === "default")!.lead;
     assert.deepEqual(launched, { model: `anthropic/${compiled.model(lead.key).id}`, thinking: lead.thinking }, "The Run records the launch's main-agent model and thinking");
     type ListedRun = ListRunsV2Result["runs"][number];
-    type Shape = { id: string; state: ListedRun["state"]; activity: ListedRun["activity"]; age: number; left: number; renewals: number; ended: number | null; tui: boolean; title: string; cwd: string };
+    // `model`: the one its harness last reported, as `provider` and `id`; unset, the Run keeps the launch's record.
+    type Shape = { id: string; state: ListedRun["state"]; activity: ListedRun["activity"]; age: number; left: number; renewals: number; ended: number | null; tui: boolean; title: string; cwd: string;
+      model?: ListedRun["model"] };
     const shapes: Shape[] = [
       { id: "run-working", state: "pending_policy", activity: "working", age: 10 * MINUTE, left: 40 * MINUTE, renewals: 1, ended: null, tui: true, title: "Trace the CAS conflict", cwd: "/home/alex/code-statement/code" },
       { id: "run-blocked", state: "pending_policy", activity: "blocked", age: 4 * HOUR, left: 25 * MINUTE, renewals: 7, ended: null, tui: true, title: "Measure the seat grid", cwd: "/home/alex/manifold" },
@@ -4671,7 +4684,7 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     ];
     const sessionOf = (index: number) => ({ harness: "atyrode.omp", machineId: target.machineId, sessionId: `9cb82ad4-8c9e-4166-8130-47200000000${index}` });
     const fields = (shape: Shape, index: number) => ({ id: shape.id, state: shape.state, activity: shape.activity,
-      session: shape.id === "run-starting" ? null : sessionOf(index), createdAt: now - shape.age, expiresAt: now + shape.left });
+      session: shape.id === "run-starting" ? null : sessionOf(index), createdAt: now - shape.age, expiresAt: now + shape.left, ...shape.model && { model: shape.model } });
     sessions.push(...shapes.flatMap((shape, index) => shape.title ? [{ id: sessionOf(index).sessionId, title: shape.title, cwd: shape.cwd, updatedAt: now - shape.age }] : []));
     runs = {
       list: () => ({ ...realRuns, observedAt: Date.now(), runs: shapes.map((shape, index): ListedRun => ({ ...realRuns.runs[0]!, ...fields(shape, index) })) }),
@@ -4683,6 +4696,10 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       },
       terminals: shapes.flatMap((shape, index) => shape.tui ? [{ id: `tui-${shape.id}`, machineId: target.machineId, name: "OMP", createdAt: now - shape.age,
         status: "running" as const, exitCode: null, homeId: target.containerId, unplaced: false, session: sessionOf(index), cwd: shape.cwd }] : []),
+      report: (runId, reference) => {
+        const index = shapes.findIndex(shape => shape.id === runId), slash = reference.indexOf("/");
+        shapes[index] = { ...shapes[index]!, model: { provider: reference.slice(0, slash), model: reference.slice(slash + 1) } };
+      },
     };
     const runRow = (id: string) => `${generator} [data-run-id="${id}"]`;
     const said = (id: string) => `(${element(`${runRow(id)} .${G}run-said`)}?.textContent ?? '')`;
@@ -4873,6 +4890,21 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await key(browser, "ArrowUp", 38);
     await until(browser, "↑ comes back", `!!document.activeElement?.closest('${runRow("run-working")} [data-run-dial][data-row="thinking"]')`);
 
+    // Switched in the TUI itself: OMP's harness reports the session's new model and the next read shows it. The answer this
+    // browser kept names the earlier model, so it is stale: dropped, here and from storage, and the thinking reads unknown.
+    const keptKey = keptAnswersKey(sponsor.principal.id, workspace.id);
+    const keptRuns = `JSON.parse(localStorage.getItem(${JSON.stringify(keptKey)}) ?? '[]').map(([id]) => id)`;
+    assert((await browser.evaluate<string[]>(keptRuns)).includes("run-working"), "The working Run's confirmed answer is kept");
+    const switched = published.findIndex((_, index) => index !== unserved && index !== unanswered && reference(index) !== launched.model);
+    assert(switched >= 0, "A fourth model is left to switch to in the TUI");
+    runs.report("run-working", reference(switched));
+    await key(browser, "r", 82);
+    await until(browser, "a model switched in the TUI shows once read, its thinking unknown",
+      `${dialWord("run-working", "model", reference(switched))}.getAttribute('aria-checked') === 'true' &&
+      !${element(`${runRow("run-working")} [data-run-dial][data-row="thinking"] [aria-checked="true"]`)} &&
+      ${element(`${runRow("run-working")} .${G}run-tok`)}.textContent === ${JSON.stringify(`${alias(switched)}:?`)}`);
+    assert.equal((await browser.evaluate<string[]>(keptRuns)).includes("run-working"), false, "The answer kept for the earlier model is dropped from storage");
+
     // Refused outright: the dials of a Run this caller may not turn rest, and say whose they are.
     control = () => refused("omp_run_control_forbidden");
     await click(browser, dialWord("run-blocked", "thinking", "low"));
@@ -4934,6 +4966,19 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       await browser.send("Emulation.setEmulatedMedia", { features: [] });
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
     }
+    // A reload brings back the answers this browser kept, and the first read judges them against each Run's live model:
+    // run-blocked's names a model it does not report, so it is stale and dropped from storage too, and the Run shows the
+    // launch's record; run-full's names the model it reports and keeps its thinking.
+    await browser.evaluate(`localStorage.setItem(${JSON.stringify(keptKey)}, ${JSON.stringify(JSON.stringify([
+      ["run-blocked", { model: reference(switched), thinking: "max" }], ["run-full", { model: launched.model, thinking: other }]]))})`);
+    await openGenerator(browser, server, workspace.id);
+    await chooseMachine(browser, target.machineId, machineName);
+    await showView(browser, "sessions");
+    await until(browser, "after a reload the first read drops a kept answer the live model contradicts and keeps one it agrees with",
+      `${dialWord("run-blocked", "model", launched.model!)}?.getAttribute('aria-checked') === 'true' &&
+      ${element(`${runRow("run-blocked")} .${G}tok-thinking`)}?.textContent === ${JSON.stringify(`:${launched.thinking ?? "?"}`)} &&
+      ${dialWord("run-full", "thinking", other)}?.getAttribute('aria-checked') === 'true'`);
+    assert.deepEqual(await browser.evaluate(keptRuns), ["run-full"], "The stale kept answer is dropped from storage and the agreeing one stays");
     fixture.check();
   } finally {
     heldControl.release();

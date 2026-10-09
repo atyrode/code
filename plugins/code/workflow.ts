@@ -301,9 +301,9 @@ export function agentProfile(composition: Pick<ActionResult<"composeSession">, "
 /** The main agent's dials as `controlRun` answers them: a `provider/id` and a thinking selector, either unknown. */
 export type Dials = { readonly model: string | null; readonly thinking: ThinkingSelector | null };
 /**
- * The launch's main-agent selector, recorded on the Run as OMP spells it (`provider` and `id:thinking`):
- * `Run.model` is written once at creation, and only its sponsor's browser hears what `controlRun`
- * changes afterwards, so the launch value is what every other reader is left with.
+ * The launch's main-agent selector, recorded on the Run as OMP spells it (`provider` and `id:thinking`).
+ * Once the Run's TUI is up, its harness reports the model the session serves and `Run.model` follows
+ * it (atyrode/manifold#1078), as `provider` and `id` alone, so no later read names the thinking.
  */
 export function runModel(composition: Pick<ActionResult<"composeSession">, "overlay">): RunModel {
   const reference = composition.overlay.modelRoles?.default;
@@ -311,7 +311,7 @@ export function runModel(composition: Pick<ActionResult<"composeSession">, "over
   if (!reference || slash < 1) throw new WorkflowError("code_composition_changed");
   return { provider: reference.slice(0, slash), model: reference.slice(slash + 1) };
 }
-/** A Run's recorded model as dials: the `provider/id`, and the thinking a trailing `:selector` names. */
+/** A Run's recorded model as dials: the `provider/id`, and the thinking a trailing `:selector` names (only the launch's record has one). */
 export function runDials(model: RunModel | undefined): Dials {
   if (!model) return { model: null, thinking: null };
   const reference = `${model.provider}/${model.model}`, colon = reference.lastIndexOf(":");
