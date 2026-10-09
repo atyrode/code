@@ -559,8 +559,9 @@ test("ordinary session readiness does not require owner-only account or gateway 
     if (door === actionDoor("accounts")) return { scope: "shared", observedAt: 1000, status: "fresh", accounts: [] } satisfies OmpResult<"accounts">;
     if (door === actionDoor("describeDestination")) return { ...target, pluginId: "atyrode.omp", state: "ready", reason: null, deployment: null,
       services: [{ serviceId: "omp", state: "ready", reason: null }],
-      operations: [{ operationId: "atyrode.omp.launch", state: "ready", nativeReady: true, callerRefusal: null, reason: null,
-        pins: { installationRevision: "native", artifactSha256: "a".repeat(64), resourceBindingDigest: "b".repeat(64) } }] } satisfies OmpResult<"describeDestination">;
+      // Sessions are the reviewed launch and OMP's TUI harness for agent runs, enabled together.
+      operations: ["atyrode.omp.launch", "atyrode.omp.harness"].map(operationId => ({ operationId, state: "ready" as const, nativeReady: true, callerRefusal: null, reason: null,
+        pins: { installationRevision: "native", artifactSha256: "a".repeat(64), resourceBindingDigest: "b".repeat(64) } })) } satisfies OmpResult<"describeDestination">;
     throw new Error(`Ordinary readiness must not require ${door}`);
   });
   const input = { ...target, intent: "session" as const, choices: null, requestId: "ordinary-client" };

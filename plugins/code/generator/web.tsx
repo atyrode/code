@@ -27,6 +27,7 @@ import { readHeld } from "./auto-read.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
+import { tabMark } from "./runs-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -256,9 +257,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   }
   /** Where a launch-line or sheet fix sends the person: a sheet, or the accounts view. */
   function open(place: GeneratorPlace) {
-    if (place === "accounts") {
+    if (place === "accounts" || place === "sessions") {
       if (currentSheet.current) closeSheet();
-      changeView("accounts");
+      changeView(place);
     } else openSheet(place);
   }
 
@@ -289,12 +290,12 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       inputAt: inputAt.current,
     }, Date.now());
   };
-  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
-  // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
+  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage,
+  // the sessions already read and the Runs on the usage line's cadence, and all of it in one pass at a press.
   const reads = usePanelReads({
     configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: model.queries.setup.refresh, defaults: model.queries.defaults.refresh,
     skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
-    usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
+    usage: actions.readUsage, sessions: () => setRereads(count => count + 1), runs: model.agentRuns.refresh,
   }, visible, held);
   const cadence = useUsageCadence(usage, reads);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.
@@ -321,7 +322,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   function keepFocus() {
     requestAnimationFrame(() => {
       const node = app.current, shown = viewRef.current;
-      if (!node) return;
+      // A sheet opened within the frame (Esc, then a sheet's key) owns focus and gives it back itself.
+      if (!node || currentSheet.current) return;
       const active = node.ownerDocument.activeElement;
       const pane = node.querySelector<HTMLElement>(`[data-pane="${shown === "main" ? "generator" : shown}"]`);
       if (active && pane?.contains(active) && (active as HTMLElement).offsetParent !== null) return;
@@ -395,11 +397,15 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     const key = acceleratorFor(view, narrow, keys, does);
     return { "aria-keyshortcuts": key ?? undefined, title: key === null ? title : `${title} (${key === "Escape" ? "Esc" : key})` };
   };
+  const runsMark = tabMark(model.agentRuns.runs?.runs ?? []);
   const tab = (to: PanelView, label: string) => {
     const selected = view === to || (to === "accounts" && view === "manage");
-    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected}
-      {...keyed(label, TAB_KEYS, action => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to)}
-      tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}</button>;
+    const mark = to === "sessions" ? runsMark : null;
+    const markWords = mark === "blocked" ? "a run waits for you" : mark === "working" ? "a run is working" : mark === "starting" ? "a run is starting" : "runs wait for you";
+    const keys = keyed(mark ? `${label}: ${markWords}` : label, TAB_KEYS, action => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to);
+    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected} {...keys} data-marked={mark ? "" : undefined}
+      tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}
+      {mark && <span className={`${G}run-mark ${G}tab-mark`} data-a={mark} aria-hidden="true" />}</button>;
   };
   /** The tabs answer ←/→ among themselves, as a tab list does. */
   function tabKeys(event: KeyboardEvent<HTMLDivElement>) {

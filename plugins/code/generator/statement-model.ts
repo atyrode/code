@@ -12,6 +12,7 @@ import { chooseOption, laneWord, SPECS, type DialId, type MoreDial, type OptionR
 import type { GateRefusal, GateVerdict, LaunchStep, ProfileSource } from "./launch-step.ts";
 import type { VerificationPhase } from "./model-verification.ts";
 import type { VerificationStatus } from "./verification.ts";
+import type { AgentLaunchBlocker } from "../workflow.ts";
 
 /*
  * The profile as data: its settings, each setting's values with what choosing one would do, the
@@ -662,7 +663,7 @@ export type StatusPart = { readonly text: string; readonly tone: StatusTone };
 export type StatusFix =
   | { readonly kind: "team"; readonly selection: Selection; readonly review: Review | null }
   | { readonly kind: "machine"; readonly machineId: string }
-  | { readonly kind: "open"; readonly place: "models" | "setup" | "options" | "accounts"; readonly family?: string }
+  | { readonly kind: "open"; readonly place: "models" | "setup" | "options" | "accounts" | "sessions"; readonly family?: string }
   | { readonly kind: "refresh" }
   | { readonly kind: "discard" };
 export type StatusAction =
@@ -704,7 +705,8 @@ export type StatusFacts = {
   /** The workspace profile's read failed, rather than merely being older than its last write. */
   readonly configurationFailed: boolean;
   readonly message: { readonly text: string; readonly failed: boolean } | null;
-  readonly outcome: { readonly kind: "launched" | "resumed"; readonly machine: string } | null;
+  /** The last launch or resume; a launch says whether it runs as an Agent Run (`run`, its dials in Sessions) or why not. */
+  readonly outcome: { readonly kind: "launched"; readonly machine: string; readonly dials: "run" | AgentLaunchBlocker } | { readonly kind: "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
   readonly fix: FixView | null;
   /** A Save & launch press stopped at a review that differs from the projection: what differs, in the statement's words. */
@@ -862,7 +864,13 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   if (facts.differs) return [line([part("The review differs", "warn"), ...facts.differs.map(text => part(text))]),
     line([part("launch to use the reviewed pool, or change a setting first", "meta")])];
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
-  if (facts.outcome) return [line([part(`${facts.outcome.kind === "launched" ? "Launched" : "Resumed"} on ${facts.outcome.machine}`, "done")]), EMPTY];
+  if (facts.outcome?.kind === "resumed") return [line([part(`Resumed on ${facts.outcome.machine}`, "done")]), EMPTY];
+  if (facts.outcome) {
+    const { machine, dials } = facts.outcome;
+    if (dials === "run") return [line([part(`Launched on ${machine}`, "done")], [{ kind: "fix", key: "dials", label: "dials", fix: { kind: "open", place: "sessions" } }]), EMPTY];
+    return [line([part(`Launched on ${machine}`, "done"), part(noDials(dials, machine))],
+      dials === "harness" ? [{ kind: "fix", key: "dials-setup", label: "Enable in Setup", fix: { kind: "open", place: "setup" } }] : []), EMPTY];
+  }
   if (facts.message) return [line([part(facts.message.text, "done")]), EMPTY];
   // Verifying comes first: the verb's own label says so, and a stop judged on unverified models would be premature.
   if (verb.label === "Verify models" || !facts.stop) return null;
@@ -879,6 +887,8 @@ export type LaunchReadoutFacts = {
   readonly edits: readonly TeamEdit[];
   /** The launch review on display, with its pool, until the team, machine or pool changes. */
   readonly reviewed: { readonly machine: string; readonly pool: readonly { readonly family: string; readonly count: number }[] } | null;
+  /** Whether the reviewed launch runs as an Agent Run (`run`) or why not (workflow.ts `AgentLaunchBlocker`); null with no review on display. */
+  readonly dials: "run" | AgentLaunchBlocker | null;
   /** The projection rests on present readings (`grounded`). */
   readonly grounded: boolean;
   /** The model's status sentence (`launchStatusText`). */
@@ -901,6 +911,19 @@ export function launchReadout(facts: LaunchReadoutFacts, vocab: Vocabulary): { r
   if (reviewed) {
     const pool = reviewed.pool.map(({ family, count }) => `${vocab.family(family)} ${count}`).join(" · ");
     parts.push(`reviewed on ${reviewed.machine}${pool ? `: ${pool}` : ""}`);
+    if (facts.dials) parts.push(facts.dials === "run" ? "live dials in Sessions" : noDials(facts.dials, reviewed.machine));
   } else if (!facts.grounded && (verb.label === "Review" || verb.label === "Save & review")) parts.push("the review shows the pool before anything runs");
   return { text: parts.length ? parts.join(" · ") : facts.launchStatus, warn: false };
+}
+
+/** Why a launch runs without live dials, in the launch line's words (workflow.ts `AgentLaunchBlocker`). */
+export function noDials(blocker: AgentLaunchBlocker, machine: string): string {
+  switch (blocker) {
+    case "plans": return "no live dials: auto plans are on";
+    case "options": return "no live dials: session options are set";
+    case "harness": return `no live dials: not enabled on ${machine}`;
+    case "machine": return `no live dials: ${machine} cannot launch agent runs`;
+    case "sponsor": return "no live dials: your access sponsors no agents here";
+    case "agents": return "no live dials: agents unread";
+  }
 }

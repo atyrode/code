@@ -60,6 +60,16 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   machine needs, with the profile's facts and the classifier) and Options (profile
   switches, skills and automation for one launch) open as sheets. An unsaved profile
   survives a reload in the tab.
+- **Agent launch:** the launch is still one press. Where an Agent Run can carry it,
+  Code registers one Manifold Agent per sponsor and workspace profile with OMP's TUI
+  harness, updates it when the profile changes, and launches a Run whose terminal is
+  OMP's own terminal UI. **Sessions** heads each machine's group with these Runs: their
+  activity, live `model:thinking`, a lease of Manifold's 24 renewals and one verb, plus
+  model and thinking dials that turn the running session through OMP's `controlRun`.
+  Auto plans, session options, a destination without the harness operation, or a
+  caller who cannot sponsor an Agent there keep the launch the reviewed session, and
+  the launch line says why it has no dials. A Run whose lease ends leaves its TUI
+  running, detached; a settled Run resumes through OMP's Agent-free resume.
 - **Accounts / Usage:** include exact OMP-observed identities or credential slots
   with a switch per account in the Accounts view; choose the pool, manage reusable
   presets, sign in and manage credentials under **Manage accounts**. The usage pane

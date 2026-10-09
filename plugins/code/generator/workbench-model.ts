@@ -8,9 +8,9 @@ import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
 import { LAUNCH_OPERATION_ID, OMP_PLUGIN_ID, type ActionResult as OmpResult, type ModelCatalogSnapshot } from "@atyrode/manifold-omp";
-import { WorkflowError, type ChargeReview, type SessionReview } from "../workflow.ts";
-import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
-import { operationReady } from "../permission-plan.ts";
+import { agentLaunchBlocker, runsRefused, sponsorRefused, WorkflowError, type AgentLaunchBlocker, type ChargeReview, type CodeRuns, type SessionReview } from "../workflow.ts";
+import { ACCOUNT_REFRESH_MS, callCodeAction, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure, useCodeAgentRuns, useCodeQuery, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
+import { HARNESS_OPERATION_ID, operationReady } from "../permission-plan.ts";
 import { useMinuteTick } from "../ui.tsx";
 import { useAccountUsage } from "../usage-view.tsx";
 import { NOT_CURRENT, SAVING } from "./account-switch.ts";
@@ -53,8 +53,10 @@ export type WorkbenchQueries = {
 export type WorkbenchMessage = { text: string; failed: boolean };
 /** A step in flight, for the verb to name it. */
 export type WorkbenchStep = "save" | "review" | "launch" | "resume";
-/** What the last launch or resume opened, until the team, machine or pool changes. */
-export type WorkbenchOutcome = { kind: "launched" | "resumed"; machine: string };
+/** Whether a launch has live dials: `run` when it runs as an Agent Run, else why it cannot (workflow.ts `agentLaunchBlocker`). */
+export type LaunchDials = "run" | AgentLaunchBlocker;
+/** What the last launch or resume opened, until the team, machine or pool changes; a launch says whether it has live dials. */
+export type WorkbenchOutcome = { kind: "launched"; machine: string; dials: LaunchDials } | { kind: "resumed"; machine: string };
 export type ProfileState = "conflict" | "local" | "saved";
 export type EffectiveSkillMode = SessionReview["native"]["skills"]["mode"] | NonNullable<SkillChoice>["mode"];
 export type WorkbenchInput = { host: HostServices; target: Target | null; machine: MachineSummary | null; rosterError: string | null; available: boolean };
@@ -188,6 +190,10 @@ export type WorkbenchModel = {
   verification: ModelVerification;
   /** Teams this browser launched in this workspace, newest first. Device-local and never shared (recent-teams.ts). */
   recentTeams: readonly RecentTeam[];
+  /** Code's Agent Runs in this workspace (machine-web.ts `useCodeAgentRuns`): the last good read, its error, and a read again. */
+  agentRuns: { readonly runs: CodeRuns | null; readonly error: string | null; readonly refresh: () => void };
+  /** Whether the reviewed launch would run as an Agent Run (`run`) or why not; null while nothing is reviewed. */
+  launchDials: LaunchDials | null;
 };
 
 /** How long one failed read of the account observation leaves the last good one standing for the gate. */
@@ -252,6 +258,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [writingCatalog, setWritingCatalog] = useState(false);
   const [message, setMessage] = useState<WorkbenchMessage | null>(null);
   const [outcome, setOutcome] = useState<WorkbenchOutcome | null>(null);
+  // Once Manifold refused this caller's sponsorship of Code's Agent here, launches are the reviewed session (workflow.ts `sponsorRefused`).
+  const [unsponsored, setUnsponsored] = useState(false);
+  // The machines that refused an agent run here (workflow.ts `runsRefused`): launches there are the reviewed session from then on.
+  const [refusedMachines, setRefusedMachines] = useState<ReadonlySet<string>>(() => new Set());
+  const agentRuns = useCodeAgentRuns(host);
   const recentKey = recentTeamsKey(host.principal.id, host.containerId!);
   const [recentTeams, setRecentTeams] = useState(() => readRecentTeams(browserTeamStorage(), recentKey));
   const draftKey = storedDraftKey(host.principal.id, host.containerId!);
@@ -350,6 +361,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const accountsProblem: WorkbenchModel["accountsProblem"] = accountState !== "unreadable" ? null
     : accountsFailed ? { kind: "failed", text: accounts.error! } : judgedAccounts !== null && judgedAccounts.status !== "fresh" ? { kind: "stale" } : { kind: "choices" };
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
+  const harnessReady = operationReady(setup.data, HARNESS_OPERATION_ID);
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
@@ -391,6 +403,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
     preview.native.defaultsRevision === defaults.data?.revision && !unsaved &&
     skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
+  // Whether the reviewed launch can run as an Agent Run, or why not (workflow.ts `agentLaunchBlocker`).
+  const agentBlocker = previewCurrent ? agentLaunchBlocker(preview, harnessReady, refusedMachines.has(preview.destination.machineId),
+    unsponsored ? false : agentRuns.runs?.canSponsor ?? null) : null;
   const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
   const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
   const shownReview = previewCurrent ? preview.composition.review : localReview;
@@ -488,31 +503,83 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); }
     });
   }
+  /**
+   * The launch: an Agent Run when one can carry it (workflow.ts `agentLaunchBlocker`), so the session
+   * has live dials, activity and a lease in Sessions; else the reviewed session as before, the line
+   * saying why it has no dials. Either way one review is one attempt: the next launch reviews again.
+   */
   async function launch() {
-    const reviewed = preview;
+    const reviewed = preview, blocker = agentBlocker;
     if (!target || !record || !reviewed) return;
     await perform("launch", async () => {
       try {
-        const prepared = await codeWorkflow(host).prepareSession(reviewed);
-        // Asked again on the latest facts: a team, machine, pool or authority change while preparing stops the launch here.
-        const verdict = stillOpen("launch");
-        if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
-        const latest = current.current;
-        if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || prepared.destination.machineId !== latest.target?.machineId || prepared.destination.containerId !== latest.host.containerId ||
-          latest.host.principal.id !== host.principal.id || latest.machine?.id !== prepared.destination.machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new WorkflowError("Nothing was opened: the destination changed.");
-        if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
-        const teams = rememberLaunch(browserTeamStorage(), recentKey, reviewed.composition.review.selection, Date.now());
-        if (mounted.current) setRecentTeams(teams);
-        if (destinationCurrent()) {
-          setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
-          setMessage({ text: "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.", failed: false });
-          setOutcome({ kind: "launched", machine: latest.machine.name });
+        let fallback: AgentLaunchBlocker | null = blocker;
+        if (blocker === null) {
+          try { await launchRun(reviewed); return; }
+          catch (reason) {
+            // Manifold refused this caller's sponsorship before any Run existed, or the machine refused the Run, which was
+            // cancelled: the reviewed session is the launch, in this same press while its review still stands, and from here on.
+            if (sponsorRefused(reason)) {
+              if (mounted.current) setUnsponsored(true);
+              fallback = "sponsor";
+            } else if (runsRefused(reason)) {
+              const machineId = reviewed.destination.machineId;
+              if (mounted.current) setRefusedMachines(machines => new Set(machines).add(machineId));
+              fallback = "machine";
+            } else throw reason;
+            if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch) throw reason;
+          }
         }
+        await launchSession(reviewed, fallback ?? "sponsor");
       } finally {
-        // One review, one launch attempt: whether it opened a terminal or was refused, the next launch reviews again.
         if (mounted.current) setPreview(null);
       }
     });
+  }
+  /** Asked again on the latest facts before a terminal opens: a team, machine, pool or authority change while preparing stops the launch here. */
+  function placement(machineId: string, containerId: string) {
+    const verdict = stillOpen("launch");
+    if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
+    const latest = current.current;
+    if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || machineId !== latest.target?.machineId || containerId !== latest.host.containerId ||
+      latest.host.principal.id !== host.principal.id || latest.machine?.id !== machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host))
+      throw new WorkflowError("Nothing was opened: the destination changed.");
+    return { machine: latest.machine, authoring: latest.host.authoring };
+  }
+  function launched(reviewed: SessionReview, machine: string, dials: LaunchDials, text: string) {
+    const teams = rememberLaunch(browserTeamStorage(), recentKey, reviewed.composition.review.selection, Date.now());
+    if (mounted.current) setRecentTeams(teams);
+    if (destinationCurrent()) {
+      setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
+      setMessage({ text, failed: false });
+      setOutcome({ kind: "launched", machine, dials });
+    }
+  }
+  async function launchRun(reviewed: SessionReview) {
+    const workflow = codeWorkflow(host);
+    const { run, launched: prepared } = await workflow.launchAgent(reviewed,
+      () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+    let opened: { machine: string } | null = null;
+    try {
+      const { machine, authoring } = placement(prepared.destination.machineId, reviewed.destination.containerId);
+      if (await authoring.createTerminal(machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
+      opened = { machine: machine.name };
+    } catch (reason) {
+      // The Run never got its terminal: cancel it, so it does not stand as starting until its lease ends.
+      try { await workflow.cancelRun(run.id); }
+      catch (cancel) { throw new WorkflowError(`${codeOperationFailure(reason)} The run could not be cancelled (${codeOperationFailure(cancel)}); it ends with its lease.`); }
+      throw reason;
+    } finally {
+      agentRuns.refresh();
+    }
+    // The TUI is open under its Run: what is remembered of the launch never cancels it.
+    launched(reviewed, opened.machine, "run", "OMP's terminal UI opened under an agent run. Its dials, activity and lease are in Sessions.");
+  }
+  async function launchSession(reviewed: SessionReview, blocker: AgentLaunchBlocker) {
+    const prepared = await codeWorkflow(host).prepareSession(reviewed);
+    const { machine, authoring } = placement(prepared.destination.machineId, prepared.destination.containerId);
+    if (await authoring.createTerminal(machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
+    launched(reviewed, machine.name, blocker, "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.");
   }
   function verify() {
     if (allowed("verify")) void verification.prepare();
@@ -634,6 +701,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     savedSessionId, setSavedSessionId,
     actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit),
       writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
-    verification, recentTeams,
+    verification, recentTeams, agentRuns,
+    launchDials: previewCurrent ? agentBlocker ?? "run" : null,
   };
 }

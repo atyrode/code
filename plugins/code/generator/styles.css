@@ -905,10 +905,11 @@
 /*
  * Sessions, grouped under their machine's head: each row is folder, title (a folder's drum), when
  * and its place among the folder's sessions, then the verbs. The rows share one grid (`subgrid`)
- * sized to what they hold, so the verbs follow the content and never park at the panel's far edge.
+ * sized to what they hold, so the verbs follow the content and never park at the panel's far edge;
+ * a last flexible track takes the rest, so a head or a machine's Runs spans the whole list.
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] {
-  grid-template-columns: fit-content(14rem) fit-content(28rem) max-content max-content;
+  grid-template-columns: fit-content(14rem) fit-content(28rem) max-content max-content minmax(0, 1fr);
   column-gap: 16px;
   justify-content: start;
 }
@@ -1022,6 +1023,8 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows[data-sessions] { grid-template-columns: fit-content(6rem) minmax(0, 1fr); column-gap: 12px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-where { flex-wrap: wrap; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs { column-gap: 8px; }
+  /* Too narrow for "with current profile" on one line, the verb wraps inside its column rather than run past the panel. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-verbs > .plugin-atyrode_code_generator__earlier-with { flex: 0 1 auto; min-width: 0; white-space: normal; }
 }
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-drum-word { align-items: center; min-height: 44px; }
@@ -1248,4 +1251,110 @@
   .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__usage-bar > i > b, .plugin-atyrode_code_generator__accounts-sw, .plugin-atyrode_code_generator__accounts-who) { transition: none; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__accounts-who::after { transition: none; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__usage-acct :is(.plugin-atyrode_code_generator__usage-who, .plugin-atyrode_code_generator__usage-wl, .plugin-atyrode_code_generator__usage-pct, .plugin-atyrode_code_generator__usage-used, .plugin-atyrode_code_generator__usage-rst, .plugin-atyrode_code_generator__usage-word, .plugin-atyrode_code_generator__usage-bl, .plugin-atyrode_code_generator__usage-bv) { transition: none; }
+}
+
+/* ---------------------------------------------------------------- runs: what an agent launch started, at the head of its machine's sessions
+ * A Run is a line in the generator's row grammar: its activity mark and word on the glyph and label columns, then its title,
+ * folder, live `model:thinking` and one verb. While open, its two dials are the generator's rows acting on the session, its
+ * lease is 24 blocks, one per renewal Manifold allows, and one said line of fixed height says what a press came to, so a reply
+ * or a pointed word moves nothing. Hover and focus change colour or draw a ring that takes no room.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li[data-runs] { contain: inline-size; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__runs { --labw: 92px; display: grid; min-width: 0; margin: 2px 0 6px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run { position: relative; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run + .plugin-atyrode_code_generator__run { margin-top: 4px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-line { display: grid; grid-template-columns: 16px 24px var(--labw) minmax(0, 1fr); align-items: start; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-toggle { display: grid; grid-column: 2 / 4; grid-template-columns: 24px var(--labw); align-items: start; min-width: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-toggle > .plugin-atyrode_code_generator__run-mark { margin: 10px 0 0 4px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark { display: inline-block; flex: none; width: 8px; height: 8px; color: var(--tui-dim); box-shadow: inset 0 0 0 1.5px currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="working"] { color: var(--tui-acc); background: currentColor; animation: plugin-atyrode_code_generator__breathe 1.4s ease-in-out infinite; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="blocked"] { color: var(--tui-warn); background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="done"] { background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="starting"] { color: var(--tui-acc); animation: plugin-atyrode_code_generator__breathe 1.1s ease-in-out infinite; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark:is([data-a="completed"], [data-a="cancelled"], [data-a="expired"], [data-a="revoked"]) { color: var(--tui-quiet); background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="failed"] { color: var(--tui-bad); background: currentColor; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-mark[data-a="detached"] { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-act { justify-self: start; padding: 4px 0; color: var(--tui-dim); white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run[data-a="working"] .plugin-atyrode_code_generator__run-act { color: var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run[data-a="blocked"] .plugin-atyrode_code_generator__run-act { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run[data-a="failed"] .plugin-atyrode_code_generator__run-act { color: var(--tui-bad); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-what { grid-column: 4; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 14px; min-width: 0; padding: 4px 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-name { min-width: 0; max-width: 100%; overflow: hidden; color: var(--tui-fg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-name[data-untitled] { color: var(--tui-dim); font-weight: 400; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-folder { min-width: 0; max-width: 100%; overflow: hidden; color: var(--tui-mid); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-tok { min-width: 0; max-width: 100%; overflow: hidden; color: var(--h, var(--tui-fg)); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-tok[data-quiet] { color: var(--tui-quiet); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-tok .plugin-atyrode_code_generator__tok-alias { font-weight: 560; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-tok .plugin-atyrode_code_generator__tok-thinking { opacity: .8; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-lease { color: var(--tui-dim); font-size: 13px; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-what > .plugin-atyrode_code_generator__earlier-verb { margin: 0 -4px; padding: 0 4px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run[data-a="blocked"] .plugin-atyrode_code_generator__earlier-verb[data-verb="open"] { color: var(--tui-warn); }
+/* The live dials: the generator's rows, on the session; a rule in the accent marks whose they are, faint once they cannot turn. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials { position: relative; display: grid; row-gap: 1px; padding: 2px 0 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials::before { content: ""; position: absolute; top: 4px; bottom: 6px; left: calc(var(--pad) / -2); width: 2px; background: var(--tui-acc); opacity: .55; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run[data-locked] .plugin-atyrode_code_generator__run-dials::before { background: var(--tui-faint); opacity: 1; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial-ptr { visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__word[data-family-start] { margin-left: 10px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial[data-locked] .plugin-atyrode_code_generator__word { color: var(--tui-quiet); cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial[data-locked] .plugin-atyrode_code_generator__word[data-selected] { color: var(--tui-mid); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial[data-locked] :is(.plugin-atyrode_code_generator__dot, .plugin-atyrode_code_generator__fill) { background: var(--tui-faint); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial[data-locked] .plugin-atyrode_code_generator__dial-glyph { color: var(--tui-quiet); }
+/* Pending: the session has not answered; the hollow dot waits under the word asked for, warm once no answer came. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__word[data-pending] { color: color-mix(in srgb, var(--wc, var(--tui-acc)) 62%, var(--code-panel)); font-weight: 700; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__word[data-unconfirmed] { color: var(--tui-warn-text); font-weight: 700; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dot[data-pending] { background: var(--code-panel); box-shadow: inset 0 0 0 1.5px var(--dc, var(--tui-acc)); animation: plugin-atyrode_code_generator__breathe 1.1s ease-in-out infinite; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dot[data-unconfirmed] { background: var(--code-panel); box-shadow: inset 0 0 0 1.5px var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__word[data-confirmed] { animation: plugin-atyrode_code_generator__confirm 760ms var(--tui-ease); }
+@keyframes plugin-atyrode_code_generator__confirm { 0%, 25% { color: var(--code-text-bright); } }
+/* The lease: one block per renewal Manifold allows, filled as they are used; the blocks give way before anything is cut. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-row .plugin-atyrode_code_generator__dial-glyph { color: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-row .plugin-atyrode_code_generator__words { align-items: center; column-gap: 12px; padding-bottom: 9px; cursor: default; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar { display: flex; flex: 0 1 auto; gap: 2px; min-width: 0; padding-top: 4px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar > i { flex: 0 1 auto; width: 4px; min-width: 2px; height: 12px; background: var(--tui-well); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar > i[data-on] { background: var(--tui-dim); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar[data-tone="warn"] > i[data-on] { background: var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar[data-tone="off"] > i[data-on] { background: var(--tui-faint); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__lease-words, .plugin-atyrode_code_generator__run-lease)[data-tone="warn"] { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-words { min-width: 0; color: var(--tui-dim); font-size: 13px; white-space: nowrap; }
+/* The said line: one line tall whatever it says, its sentences written to fit a 360px panel. Only its words clip; send again
+ * stays whole beside them, its focus ring and coarse hit area free of the clip. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said { display: flex; align-items: baseline; column-gap: 10px; height: 20px; margin: 0 0 4px calc(16px + 24px + var(--labw)); color: var(--tui-dim); font-size: 13px; line-height: 20px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said b { color: var(--rc, var(--tui-acc)); font-weight: 650; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said[data-tone="warn"] { color: var(--tui-warn-text); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said[data-tone="warn"] b { color: var(--tui-warn); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-again { position: relative; flex: none; margin: 0; border: 0; padding: 0; background: none; color: var(--tui-fg); font: inherit; font-weight: 600; line-height: inherit; cursor: pointer; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-again:hover { color: var(--code-text-bright); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-again:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
+/* The Sessions tab's square: the state of the open Runs, never a count, beside the word without moving it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[data-marked] { margin-right: 30px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__tab[data-marked]:last-child { margin-right: 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tab-mark { position: absolute; top: 12px; right: -11px; width: 6px; height: 6px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] :is(.plugin-atyrode_code_generator__run-line, .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial) { grid-template-columns: 12px 22px var(--labw) minmax(0, 1fr); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-toggle { grid-template-columns: 22px var(--labw); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-said { margin-left: calc(12px + 22px + var(--labw)); }
+/* Under 430px a Run's facts go under its activity word, and its dials' words under their labels, so nothing is squeezed. */
+@container code (width < 430px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] :is(.plugin-atyrode_code_generator__run-line, .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial) { grid-template-columns: 0 20px var(--labw) minmax(0, 1fr); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-toggle { grid-template-columns: 20px var(--labw); }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-what { grid-row: 2; grid-column: 3 / -1; padding-top: 0; column-gap: 10px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__dial .plugin-atyrode_code_generator__words { grid-row: 2; grid-column: 3 / -1; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__run-said { margin-left: 20px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-dials .plugin-atyrode_code_generator__word[data-family-start] { margin-left: 6px; }
+}
+/* Under 300px the blocks thin and the said line may take two lines, so a sentence and its send again both show. */
+@container code (width < 300px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-bar { gap: 1px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__lease-words { white-space: normal; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said { height: 40px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said-text { display: -webkit-box; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+}
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-line { min-height: 44px; }
+  /* The 44px target is a hit area around send again, so the said line keeps its 20px and nothing in it moves or clips. */
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said .plugin-atyrode_code_generator__run-again { height: 20px; min-width: 44px; min-height: 0; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__run-said .plugin-atyrode_code_generator__run-again::after { content: ""; position: absolute; inset: -12px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__run-mark, .plugin-atyrode_code_generator__dot, .plugin-atyrode_code_generator__word) { animation: none !important; }
 }

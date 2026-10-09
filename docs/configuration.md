@@ -398,6 +398,14 @@ with the reviewed pool or change a setting first. **Save & review** stops at the
 review so the pool is seen first. Outcome and refusal lines clear whenever the team,
 machine or account pool changes.
 
+**Live dials.** An agent launch (see the workflow below) ends "Launched on <machine> ·
+**dials**", the fix opening Sessions (`e`); a launch the reviewed session carried ends
+"Launched on <machine> · no live dials: <reason>" (auto plans are on, session options
+are set, not enabled on <machine> with **Enable in Setup**, your access sponsors no
+agents here, agents unread). While the launch is pointed after its review, the readout
+says the same ("live dials in Sessions" or the reason). Setup's sessions row, and the
+"Open coding sessions" review, enable OMP's launch and harness operations together.
+
 **The launch line** sits beside the launch and keeps to facts and one-press fixes, each
 a button; its asides ("changes stay a local preview", "nothing is spent until you
 confirm", and, while a staged model list waits beside the active one, "a staged model
@@ -493,8 +501,9 @@ the usage again every five minutes, its freshness window: the host's feeds read 
 on events while their channel is live, and provider readings change without one, so the
 panel keeps its own cadence, by the same rules as its other reads on their own: a hidden
 panel reads when it shows again, and a read that comes due in the middle of something
-waits (the line says `refresh waits`). That cadence reads the usage and the sessions
-already read, never the workspace profile or the machines, which keep the minute's
+waits (the line says `refresh waits`). That cadence reads the usage, the sessions
+already read and Code's Runs (which also read again on every Agent, Run or terminal
+event), never the workspace profile or the machines, which keep the minute's
 cadence above. Refresh now and `r` read everything at once and restart both countdowns.
 The line says `refreshing…` and the bars drain and refill
 while a read is out, for at least half a second so the refresh reads as one gesture;
@@ -561,6 +570,35 @@ focusable and gives its reason, including that a saved session on another machin
 until that machine is chosen beside the launch ("choose it on the line to resume
 here"), since resuming runs on the launch's machine, and that a read-only workspace
 allows open only.
+
+**Runs.** An agent launch's Run heads its machine's group, one line per Run: an
+activity mark and word (`working`, `blocked`, `done`, `idle`; `starting` before the
+harness's first report; `detached` once its lease ran out while its terminal still
+runs; `completed`, `failed`, `cancelled`, `expired` or `revoked` once settled), its
+title from the machine's saved read (else "new session"), its folder, its live
+`model:thinking` in the provider's hue and one verb. **open** goes to its terminal;
+**cancel** finishes a Run whose terminal never opened (it never stops a running TUI);
+**resume** resumes a settled Run's saved session through OMP's Agent-free resume, as
+the saved rows do, without a new Run or dials. An open Run also shows its **model** and
+**thinking** dials, its **lease** as 24 blocks (one per renewal Manifold allows) with
+"renews in 18m", "renewal due · expires 14:40", "expires 14:40" once no renewal is left,
+or "detached since 12:50", and one said line of fixed height. A dial press is one
+`atyrode.omp.controlRun` on the main agent: the word asked for waits paler with a
+hollow dot ("sent · terra until it answers"), then the session's answer shows ("running
+now", or "running now · thinking xhigh" when the model clamped it). A model the session
+does not serve is struck ("not served here · terra stays"); no answer within 20 s says
+so and offers **send again**; a caller the door refuses reads "its launcher's or
+sponsor's alone". A press while a change waits is said as next ("high · next · once terra
+answers") and sent once the answer lands, the latest such press replacing an earlier one.
+A starting or detached Run's dials are shown off and send nothing. `←` `→` rest on a word
+half a second before sending it, and any press in that half second sends only itself; `↵` and
+`Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
+what choosing it sends, the lease its next renewal and the activity what it means, all on
+the said line, so nothing moves; the word just pressed keeps saying what its press came
+to. The dials shown are the
+last answer this browser received, kept per workspace in local storage, else the
+launch's, because `Run.model` is written once. The Sessions tab carries one square
+for the open Runs, never a count: blocked, then working, then starting, else quiet.
 
 **Recent profiles.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).
@@ -733,6 +771,41 @@ Manifold action transport as the web. It composes `createCodeClient` with
   while a refresh is pending or refused and labels source age separately from a
   quota reset. The main view also reads usage again every five minutes, Code's
   freshness window, and on `r`; a reading older than that is shown as history.
+- **Agent launch:** `launchAgent(review)` re-composes the reviewed session (same Code
+  digest and OMP defaults revision), then makes Code's Agent carry it: one Agent per
+  sponsor and workspace, named `Code <first 16 hex of SHA-256(containerId)>` (a
+  retired one passes the name to `… 2` and on), registered through
+  `core.access.registerAgentV2` with harness `atyrode.omp`, profile
+  `{ accountPool, overlay, planYolo: false, tui: true }` and a grant of one scope
+  rectangle (the container, `subtree`, `containers:read`), a 1 h lease, delegation 0/0
+  and an expiry of 14 h. Registration is idempotent per sponsor and name;
+  `updateAgentV2` follows only a changed profile or a grant that no longer covers a
+  full Run window (13 h). The one-time runner credential is never kept. It then calls
+  `createRunV2` with `{ agentId, target: { machineId, containerId }, reach: "subtree",
+  lifetimeMs, scope, model }`, where `model` records the launch's main-agent selector
+  as `provider` and `id:thinking`, and `launchRun`. It accepts only OMP's
+  `atyrode.omp.harness` runtime with `tui: true` for that machine and session; the web
+  opens it with `host.authoring.createTerminal` within the minute Manifold binds it
+  for. Any refusal or mismatch once the Run exists, a refused placement included,
+  cancels the Run (`finishAgentRunV2`, `cancelled`), and a failed cancellation is
+  named. `agentLaunchBlocker` keeps the launch the reviewed session for automatic
+  plans (`omp_tui_plan_unsupported`), skills or restricted automation (`launchRun`
+  hands the harness only its destination), a destination without the harness
+  operation, a caller without `canRegister`, or unread Agents. A sponsorship refusal
+  at registration or Run creation, before any Run exists, does the same for the
+  panel's life; so does a machine whose `launchRun` refuses agent runs
+  (`run_launch_protocol_unsupported`, `omp_harness_runtime_unsupported`), for that
+  machine ("no live dials: <machine> cannot launch agent runs"). In either case the
+  same press, once the Run is cancelled, launches the reviewed session while its review
+  still stands. `readRuns(containerId)` lists the visible Code Agents named for the
+  workspace, their Runs, each listed Run's inspection (renewals, settlement, exit code)
+  and the terminal inventory; a Run's TUI is a running terminal of its session opened
+  while the Run stood, so a later Run-less resume of that session is an ordinary running
+  row. `controlRun(runId, { model?, thinking? })` is OMP's door.
+  A Run whose lease ends, after a missed renewal or the 24th, settles `expired`, but
+  its terminal job runs under the opener's credential and goes on, so Code shows it
+  as detached while that terminal runs; Run input, and therefore its dials, then
+  refuses.
 
 Workspace, inventory and benchmark results are OMP-owned native job records.
 Code accepts only exact OMP plugin/operation/machine/job identities when reading

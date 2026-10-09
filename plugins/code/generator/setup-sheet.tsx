@@ -5,7 +5,7 @@ import { BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, PR
 import type { ActionInput, ActionResult, PermissionFeatureId, Target } from "../contract.ts";
 import type { OmpPresence } from "../destination.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useCodeQuery, useOmpRuns } from "../machine-web.ts";
-import { operationReady } from "../permission-plan.ts";
+import { HARNESS_OPERATION_ID, operationReady } from "../permission-plan.ts";
 import { PermissionDialog } from "../permission-review.tsx";
 import { since, useMinuteTick } from "../ui.tsx";
 import { Glyph } from "./dial-row.tsx";
@@ -126,7 +126,7 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
     destinationError: setup.error !== null && !ompAbsent,
     connection: setup.data?.services.some(service => service.serviceId === "omp" && service.state === "ready") === true,
     discovery: operationReady(setup.data, INVENTORY_OPERATION_ID) && operationReady(setup.data, BENCHMARK_OPERATION_ID),
-    sessions: operationReady(setup.data, LAUNCH_OPERATION_ID),
+    sessions: operationReady(setup.data, LAUNCH_OPERATION_ID) && operationReady(setup.data, HARNESS_OPERATION_ID),
     folders: prepared ? "ready" : preparing || working === "folders" ? "busy" : historyKnown && setup.data ? "todo" : null,
     folderMode,
   };

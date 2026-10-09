@@ -5,6 +5,8 @@ import { ACCOUNTS_PLUGIN_ID, GATEWAY_PLUGIN_ID, OMP_PLUGIN_ID, BROKER_OPERATION_
 import type { z } from "zod";
 import { PermissionPlanInputSchema, PermissionPlanSchema, type PermissionFeatureId } from "./contract.ts";
 
+/** OMP's terminal operation for an Agent Run, which `core.access.launchRun` prepares through OMP's harness; OMP's API names no constant for it. */
+export const HARNESS_OPERATION_ID = `${OMP_PLUGIN_ID}.harness`;
 export type PermissionPlanInput = z.infer<typeof PermissionPlanInputSchema>;
 export type PermissionPlan = z.infer<typeof PermissionPlanSchema>;
 type Call = <K extends OmpAction>(name: K, input: ActionInput<K>) => Promise<ActionResult<K>>;
@@ -38,8 +40,8 @@ const features: readonly {
     effect: "Allow model measurements using your accounts. Running a benchmark is a separate explicit action and may incur provider charges; measurements never replace a catalog automatically.",
     deferredEffect: "No benchmark is run. Existing benchmark access is unchanged, and benchmarks can be reviewed later from Setup." },
   { id: "session", title: "Open coding sessions", pluginId: OMP_PLUGIN_ID,
-    operations: [LAUNCH_OPERATION_ID], configuration: "none", prerequisites: ["gateway"],
-    effect: "Allow OMP sessions to read and write the reviewed workspace and session locations using your model connection. Launch and its account pool are reviewed separately; your prompt stays a draft.",
+    operations: [LAUNCH_OPERATION_ID, HARNESS_OPERATION_ID], configuration: "none", prerequisites: ["gateway"],
+    effect: "Allow OMP sessions, and OMP's terminal UI under an agent run with live dials, to read and write the reviewed workspace and session locations using your model connection. Launch and its account pool are reviewed separately; your prompt stays a draft.",
     deferredEffect: "No session is opened. Saved profiles and prompts remain available while session prerequisites await review." },
 ];
 export function operationReady(destination: ActionResult<"describeDestination"> | null | undefined, operationId: string): boolean {

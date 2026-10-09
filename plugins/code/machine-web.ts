@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HostServices } from "@manifold/plugin";
 import { FALLBACK_POLL_MS, MACHINES_RESOURCE, usePolledResource } from "@manifold/plugin/hooks";
 import { hasCap, ListJobRunsResultSchema, PublicJobSchema, type MachineSummary, type TerminalSummary } from "@manifold/protocol";
 import { actionDoor, CODE_JOB_TOPIC, CODE_PLUGIN_ID,
   type ActionInput, type ActionResult, type CodeAction, type Target } from "./contract.ts";
 import { actionDoor as ompDoor, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient, failureWords, refusalToken, WorkflowError } from "./workflow.ts";
+import { createCodeWorkflowClient, failureWords, refusalToken, WorkflowError, type CodeRuns } from "./workflow.ts";
 import { initialDestination, ompPresence, type OmpPresence } from "./destination.ts";
 
 const CODE_PREFERENCES_TOPIC = { kind: "plugin", pluginId: CODE_PLUGIN_ID } as const;
@@ -151,6 +151,27 @@ export function useOmpRuns(host: HostServices, target: Target | null, operationI
     initial: null, enabled: target !== null, topics: [CODE_JOB_TOPIC, ...host.topics.machines], events: host.client,
   });
   return { runs: feed.value?.runs ?? null, error: feed.value?.error ?? null, refresh: feed.refresh };
+}
+/** Manifold announces every Agent and Run change on its access plugin's topic, with no payload. */
+const ACCESS_TOPIC = { kind: "plugin", pluginId: "core.access" } as const;
+/**
+ * Code's Agent Runs in this workspace (workflow.ts `readRuns`), read again on every Agent or Run
+ * change and terminal change, and polled besides. A read that fails keeps the last one on show
+ * beside its error, so a Run's dials never vanish under a passing failure; their doors decide.
+ */
+export function useCodeAgentRuns(host: HostServices) {
+  const feed = usePolledResource<{ runs: CodeRuns | null; error: string | null } | null>(async () => {
+    try { return { runs: await codeWorkflow(host).readRuns(host.containerId!), error: null }; }
+    catch (reason) { return { runs: null, error: codeOperationFailure(reason) }; }
+  }, FALLBACK_POLL_MS, {
+    key: `${CODE_PLUGIN_ID}.agent-runs:${host.containerId}`, restartKey: host.principal.id, initial: null,
+    enabled: host.containerId !== null, topics: [ACCESS_TOPIC, ...host.topics.terminals], events: host.client,
+  });
+  // The last good read is kept only for the workspace and principal it was read for.
+  const feedKey = `${host.containerId}\n${host.principal.id}`;
+  const last = useRef<{ key: string; runs: CodeRuns } | null>(null);
+  if (feed.value?.runs) last.current = { key: feedKey, runs: feed.value.runs };
+  return { runs: feed.value?.runs ?? (last.current?.key === feedKey ? last.current.runs : null), error: feed.value?.error ?? null, refresh: feed.refresh };
 }
 export const ACCOUNT_REFRESH_MS = 1_000;
 export type CodeQuery = "readConfiguration" | "readServiceConfiguration";
