@@ -207,7 +207,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
   const rows = { running: listed.running.filter(row => row.terminalId === null || !held.has(row.terminalId)), saved: listed.saved };
   const openRuns = runs.filter(entry => runOpen(runPhase(entry))).length;
   const folders = savedFolders(rows.saved);
-  const dials = useRunDials(host);
+  const dials = useRunDials(host, runs);
   const aliases = useMemo(() => model.compiled && displayAliases(model.compiled), [model.compiled]);
   const resumeGate = model.gate("resume");
   const readOnly = !resumeGate.open && resumeGate.refusal.code === "read-only";

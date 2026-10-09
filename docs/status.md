@@ -80,7 +80,7 @@ files, service state, credentials or backups.
   machine's launches are the reviewed session with "no live dials: <machine> cannot
   launch agent runs". Sessions' Runs (activity, the lease to 24 of 24
   and detached, the dials' pending, queued, confirmed, clamped, not served, unanswered and
-  forbidden states, and locked dials that send nothing) are rendered from fixtures shaped on that real Agent and Run, with
+  forbidden states, and locked dials that send nothing, a queued change included) are rendered from fixtures shaped on that real Agent and Run, with
   a synthetic `controlRun`. No launched Run, renewal, activity report or `controlRun`
   answer has been exercised through Code or on any preview; those are proven end to
   end only by OMP's own native harness gate. The launch line after a launch

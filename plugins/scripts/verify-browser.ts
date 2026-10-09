@@ -4703,6 +4703,23 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     heldControl.release();
     await until(browser, "the queued change is confirmed", `${dialWord("run-working", "thinking", "xhigh")}.getAttribute('aria-checked') === 'true' && ${said("run-working")} === 'xhigh · running now'`);
     assert.equal(controls.length, beforeQueue + 1, "The earlier queued press is never sent");
+    // A Run whose dials lock while a change waits drops the change queued behind it: settled with its TUI going on, it reads
+    // detached, the line no longer says next, and once the answer lands nothing more is sent.
+    await click(browser, dialWord("run-full", "thinking", other));
+    await waitFor(() => heldControl.held, timeout, 50);
+    await click(browser, dialWord("run-full", "thinking", "xhigh"));
+    await pointAway(browser);
+    await until(browser, "a press behind the full Run's change is said as next", `${said("run-full")} === ${JSON.stringify(`xhigh · next · once ${other} answers`)}`);
+    const beforeLock = controls.length;
+    const full = shapes.findIndex(shape => shape.id === "run-full");
+    shapes[full] = { ...shapes[full]!, state: "expired", left: -MINUTE, ended: now - MINUTE };
+    await key(browser, "r", 82);
+    await until(browser, "the full Run reads detached, its dials locked and its queued change dropped",
+      `${element(runRow("run-full"))}.dataset.locked !== undefined && ${said("run-full")}.startsWith(${JSON.stringify(`${other} · sent · `)})`);
+    heldControl.release();
+    await until(browser, "the full Run's answer lands", `${dialWord("run-full", "thinking", other)}.dataset.pending === undefined`);
+    await Bun.sleep(300);
+    assert.equal(controls.length, beforeLock, "A queued change is never sent to a Run whose dials locked");
     control = input => ({ ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking === "max" ? "xhigh" : input.thinking ?? other } });
     await click(browser, dialWord("run-working", "thinking", "max"));
     await until(browser, "a level the session clamps is said with the one it runs", `${said("run-working")} === 'max · running now · thinking xhigh' && ${dialWord("run-working", "thinking", "xhigh")}.getAttribute('aria-checked') === 'true'`);

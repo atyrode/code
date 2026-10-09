@@ -25,17 +25,20 @@ function browserStorage(): AnswerStorage | null {
   try { return globalThis.localStorage ?? null; } catch { return null; }
 }
 
-/** A panel's live dials: each Run's state, and the press that sends one change. */
+/** A panel's live dials: each Run's state, the press that sends one change, and the drop of a change queued as the Run's dials lock. */
 export type RunDialsHandle = {
   readonly stateOf: (runId: string) => RunDialState;
   readonly press: (entry: CodeRun, change: DialChange, levels: readonly string[] | null) => Promise<void>;
+  readonly unqueue: (runId: string) => void;
 };
-/** Every Run's dials as this browser turns them: one `controlRun` per press, its answer kept per workspace. */
-export function useRunDials(host: HostServices): RunDialsHandle {
+/** Every Run's dials as this browser turns them (`runs`: the Runs as last read): one `controlRun` per press, its answer kept per workspace. */
+export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDialsHandle {
   const key = keptAnswersKey(host.principal.id, host.containerId!);
   const [states, setStates] = useState<ReadonlyMap<string, RunDialState>>(() =>
     new Map([...readKeptAnswers(browserStorage(), key)].map(([runId, dials]) => [runId, { ...NO_DIALS, reply: dials }])));
   const latest = useRef(states);
+  const read = useRef(runs);
+  read.current = runs;
   const timers = useRef(new Map<string, number>());
   const mounted = useRef(true);
   useEffect(() => {
@@ -63,14 +66,18 @@ export function useRunDials(host: HostServices): RunDialsHandle {
     } catch (reason) {
       write(runId, refuseDial(stateOf(runId), change, reason instanceof WorkflowError ? refusalToken(reason.message) : null, codeOperationFailure(reason)));
     }
-    // The latest press made while this one waited goes now, on the dials the answer left.
+    // The latest press made while this one waited goes now, on the dials the answer left, to the Run as last read: one no
+    // longer live (or no longer listed) sends nothing.
     const queued = stateOf(runId).queued;
-    if (queued) {
-      write(runId, { ...stateOf(runId), queued: null });
-      await press(entry, queued, levels);
-    }
+    if (!queued) return;
+    write(runId, { ...stateOf(runId), queued: null });
+    const current = read.current.find(candidate => candidate.run.id === runId);
+    if (current) await press(current, queued, levels);
   }
-  return { stateOf: (runId: string) => states.get(runId) ?? NO_DIALS, press };
+  function unqueue(runId: string) {
+    if (stateOf(runId).queued) write(runId, { ...stateOf(runId), queued: null });
+  }
+  return { stateOf: (runId: string) => states.get(runId) ?? NO_DIALS, press, unqueue };
 }
 
 /** Where a dial's glider goes: under its target word, the fill from the first word of that word's family. */
@@ -220,14 +227,15 @@ export function RunsBlock({ runs, dials, catalog, aliases, place, verb, now }: R
   const words = catalog && aliases ? modelWords(catalog, aliases) : [];
   return <div ref={block} className={`${G}runs`} data-place="sessions" role="group" aria-label="running">
     {runs.map(entry => <RunItem key={entry.run.id} entry={entry} state={dials.stateOf(entry.run.id)} models={words} catalog={catalog} aliases={aliases}
-      place={place(entry)} now={now} verb={verb} onMove={move} onSend={(change, levels) => void dials.press(entry, change, levels)} />)}
+      place={place(entry)} now={now} verb={verb} onMove={move} onSend={(change, levels) => void dials.press(entry, change, levels)}
+      onLock={() => dials.unqueue(entry.run.id)} />)}
   </div>;
 }
 
-function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onMove, onSend }: {
+function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onMove, onSend, onLock }: {
   entry: CodeRun; state: RunDialState; models: readonly DialWord[]; catalog: CompiledCatalog | null; aliases: ReadonlyMap<string, string> | null;
   place: { title: string | null; folder: string | null }; now: number; verb: RunsBlockProps["verb"];
-  onMove: (from: HTMLElement, delta: -1 | 1) => void; onSend: (change: DialChange, levels: readonly string[] | null) => void;
+  onMove: (from: HTMLElement, delta: -1 | 1) => void; onSend: (change: DialChange, levels: readonly string[] | null) => void; onLock: () => void;
 }) {
   const [pointed, setPointed] = useState<RunPointed | null>(null);
   const phase = runPhase(entry), open = runOpen(phase), act = activityWord(entry), oneVerb = runVerb(entry);
@@ -240,10 +248,14 @@ function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onM
   const token = name(shown.model);
   const title = place.title ?? "new session";
   // One settle timer per Run: ←/→ arm it, and any explicit press, a send again or the dials locking cancels it, so a later
-  // choice is never overtaken by an earlier resting one.
+  // choice is never overtaken by an earlier resting one. Locking also drops a change queued behind the one in flight.
   const settle = useRef(0);
   useEffect(() => () => window.clearTimeout(settle.current), []);
-  useEffect(() => { if (lock) window.clearTimeout(settle.current); }, [lock]);
+  useEffect(() => {
+    if (!lock) return;
+    window.clearTimeout(settle.current);
+    onLock();
+  }, [lock]);
   const sendNow = (change: DialChange) => { window.clearTimeout(settle.current); onSend(change, levels); };
   const send = (field: DialField) => (value: string) => sendNow({ field, value });
   const arm = (field: DialField) => (value: string) => {

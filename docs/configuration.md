@@ -609,8 +609,9 @@ now", or "running now · thinking xhigh" when the model clamped it). A model the
 does not serve is struck ("not served here · terra stays"); no answer within 20 s says
 so and offers **send again**; a caller the door refuses reads "its launcher's or
 sponsor's alone". A press while a change waits is said as next ("high · next · once terra
-answers") and sent once the answer lands, the latest such press replacing an earlier one.
-A starting or detached Run's dials are shown off and send nothing. `←` `→` rest on a word
+answers") and sent once the answer lands, the latest such press replacing an earlier one;
+a Run whose dials lock meanwhile drops it. A starting or detached Run's dials are shown
+off and send nothing. `←` `→` rest on a word
 half a second before sending it, and any press in that half second sends only itself; `↵` and
 `Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
 what choosing it sends, the lease its next renewal and the activity what it means, all on
