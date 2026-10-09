@@ -27,6 +27,7 @@ import { readHeld } from "./auto-read.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
+import { tabMark } from "./runs-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -256,9 +257,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   }
   /** Where a launch-line or sheet fix sends the person: a sheet, or the accounts view. */
   function open(place: GeneratorPlace) {
-    if (place === "accounts") {
+    if (place === "accounts" || place === "sessions") {
       if (currentSheet.current) closeSheet();
-      changeView("accounts");
+      changeView(place);
     } else openSheet(place);
   }
 
@@ -395,11 +396,15 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     const key = acceleratorFor(view, narrow, keys, does);
     return { "aria-keyshortcuts": key ?? undefined, title: key === null ? title : `${title} (${key === "Escape" ? "Esc" : key})` };
   };
+  const runsMark = tabMark(model.agentRuns.runs?.runs ?? []);
   const tab = (to: PanelView, label: string) => {
     const selected = view === to || (to === "accounts" && view === "manage");
-    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected}
-      {...keyed(label, TAB_KEYS, action => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to)}
-      tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}</button>;
+    const mark = to === "sessions" ? runsMark : null;
+    const markWords = mark === "blocked" ? "a run waits for you" : mark === "working" ? "a run is working" : mark === "starting" ? "a run is starting" : "runs wait for you";
+    const keys = keyed(mark ? `${label}: ${markWords}` : label, TAB_KEYS, action => action.kind === "back" ? to === "main" : action.kind === "view" && action.view === to);
+    return <button key={to} type="button" role="tab" className={`${G}tab`} aria-selected={selected} {...keys} data-marked={mark ? "" : undefined}
+      tabIndex={selected ? 0 : -1} data-view-tab={to} onClick={() => run({ kind: "view", view: to })}>{label}
+      {mark && <span className={`${G}run-mark ${G}tab-mark`} data-a={mark} aria-hidden="true" />}</button>;
   };
   /** The tabs answer ←/→ among themselves, as a tab list does. */
   function tabKeys(event: KeyboardEvent<HTMLDivElement>) {

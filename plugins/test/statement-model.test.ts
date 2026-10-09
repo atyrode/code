@@ -242,7 +242,7 @@ describe("the launch line, in precedence", () => {
   });
 
   test("a waiting charge outranks the last outcome, and offers Confirm only for a charge of at least one request", () => {
-    const line = said({ phase: "charge", charge, outcome: { kind: "launched", machine: "Studio" } });
+    const line = said({ phase: "charge", charge, outcome: { kind: "launched", machine: "Studio", dials: "run" } });
     expect(line.parts.map(part => part.text).join(" ")).toContain("19");
     expect(line.actions).toContainEqual({ kind: "confirm", requests: 19 });
     expect(fixes(said({ phase: "charge", charge: { requests: 0, providers: [] } }))).toEqual(["cancel"]);
@@ -250,7 +250,19 @@ describe("the launch line, in precedence", () => {
 
   test("a refusal outranks the outcome of the last step, and read-only is said in neutral grey", () => {
     const refused = { ...ready, state: "refused" as const, refusal: { code: "read-only" as const, text: "Edit access needed." } };
-    expect(said({ verb: refused, outcome: { kind: "launched", machine: "Studio" } }).parts[0]).toEqual({ text: "Read-only workspace", tone: "neutral" });
+    expect(said({ verb: refused, outcome: { kind: "launched", machine: "Studio", dials: "run" } }).parts[0]).toEqual({ text: "Read-only workspace", tone: "neutral" });
+  });
+
+  test("an agent launch offers its dials in Sessions; one without says why, and where Setup can enable them, offers it", () => {
+    const run = said({ outcome: { kind: "launched", machine: "Studio", dials: "run" } });
+    expect(run.parts).toEqual([{ text: "Launched on Studio", tone: "done" }]);
+    expect(run.actions).toEqual([{ kind: "fix", key: "dials", label: "dials", fix: { kind: "open", place: "sessions" } }]);
+    const plans = said({ outcome: { kind: "launched", machine: "Studio", dials: "plans" } });
+    expect(plans.parts.map(part => part.text)).toEqual(["Launched on Studio", "no live dials: auto plans are on"]);
+    expect(plans.actions).toEqual([]);
+    const harness = said({ outcome: { kind: "launched", machine: "Studio", dials: "harness" } });
+    expect(harness.parts.map(part => part.text)).toEqual(["Launched on Studio", "no live dials: not enabled on Studio"]);
+    expect(harness.actions).toEqual([{ kind: "fix", key: "dials-setup", label: "Enable in Setup", fix: { kind: "open", place: "setup" } }]);
   });
 
   test("a machine list that cannot be read is said as such, never as a machine being offline, and offers no other machine", () => {
@@ -342,20 +354,25 @@ describe("what the launch says while it is pointed", () => {
 
   test("a press that saves says what it changes on the workspace profile; a refused one says only its reason", () => {
     const edits = [{ word: "thinking" as const, from: "medium", to: "high" }];
-    expect(launchReadout({ verb: verb(), edits, reviewed: null, grounded: true, launchStatus: "Ready." }, vocab))
+    expect(launchReadout({ verb: verb(), edits, reviewed: null, dials: null, grounded: true, launchStatus: "Ready." }, vocab))
       .toEqual({ text: "1 change to the profile: thinking medium → high", warn: false });
     const refusal: GateRefusal = { code: "read-only", text: "Edit access needed." };
-    expect(launchReadout({ verb: verb({ verdict: { open: false, refusal } }), edits, reviewed: null, grounded: true, launchStatus: "Ready." }, vocab))
+    expect(launchReadout({ verb: verb({ verdict: { open: false, refusal } }), edits, reviewed: null, dials: null, grounded: true, launchStatus: "Ready." }, vocab))
       .toEqual({ text: "Edit access needed.", warn: true });
   });
 
   test("a reviewed launch names the pool it reviewed; an unreviewed one on readings not current says the review shows it", () => {
     const launch = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
       draft: false, phase: null, verification: "current", stranded: false, grounded: true, placeable: true, launching: false });
-    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [{ family: "openai", count: 2 }] }, grounded: true, launchStatus: "Ready." }, vocab).text)
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [{ family: "openai", count: 2 }] }, dials: null, grounded: true, launchStatus: "Ready." }, vocab).text)
       .toBe("reviewed on Studio: GPT 2");
+    // Pointed, the launch says whether it runs with live dials, or why not.
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "run", grounded: true, launchStatus: "Ready." }, vocab).text)
+      .toBe("reviewed on Studio · live dials in Sessions");
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "options", grounded: true, launchStatus: "Ready." }, vocab).text)
+      .toBe("reviewed on Studio · no live dials: session options are set");
     const review = verbView({ step: { step: "review", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
       draft: false, phase: null, verification: "current", stranded: false, grounded: false, placeable: true, launching: false });
-    expect(launchReadout({ verb: review, edits: [], reviewed: null, grounded: false, launchStatus: "Ready." }, vocab).text).toBe("the review shows the pool before anything runs");
+    expect(launchReadout({ verb: review, edits: [], reviewed: null, dials: null, grounded: false, launchStatus: "Ready." }, vocab).text).toBe("the review shows the pool before anything runs");
   });
 });

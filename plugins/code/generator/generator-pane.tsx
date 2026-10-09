@@ -46,7 +46,7 @@ const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
 /** What the cost meter is, said in the readout while it is pointed. */
 const COST_NOTE = "a relative list-price index; subscriptions spend quota windows, which usage shows";
 /** The key a fix answers to as well, where one opens the same place. */
-const FIX_KEYS: Readonly<Record<string, string>> = { accounts: "a", models: "m", setup: "u", options: "o", refresh: "r" };
+const FIX_KEYS: Readonly<Record<string, string>> = { accounts: "a", models: "m", setup: "u", options: "o", sessions: "e", refresh: "r" };
 
 /** How the panel names providers and times: a reopening today by its clock time, a later one with its weekday. */
 export const PANEL_VOCABULARY: Vocabulary = { family: familyWord, time: at => at - Date.now() > 20 * HOUR ? clock(at) : hhmm(at) };
@@ -55,7 +55,7 @@ export const PANEL_VOCABULARY: Vocabulary = { family: familyWord, time: at => at
 export type LaunchState = { readonly label: string; readonly ready: boolean; readonly reason: string | null };
 
 /** Where a fix or the launch sends the person: a sheet, or the accounts view (by family). */
-export type GeneratorPlace = "models" | "setup" | "options" | "accounts";
+export type GeneratorPlace = "models" | "setup" | "options" | "accounts" | "sessions";
 /** What the panel's keys ask of the generator. */
 export type GeneratorControls = {
   /** ↵: the launch's press, with its charge and check. */
@@ -211,8 +211,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     machine: machine?.name ?? model.launchReview.destination.machineId,
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
   } : null;
-  const readout = launchReadout({ verb, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [], reviewed, grounded: quota?.grounded ?? false,
-    launchStatus: model.launchStatus }, vocab);
+  const readout = launchReadout({ verb, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [], reviewed, dials: reviewed ? model.launchDials : null,
+    grounded: quota?.grounded ?? false, launchStatus: model.launchStatus }, vocab);
   // The line beside the launch keeps to its facts and fixes; its asides ("changes stay a local preview") are said only when the launch is pointed.
   const asides = line?.parts.filter(entry => entry.tone === "meta").map(entry => entry.text) ?? [];
   // A staged model list beside the active one changes nothing until it is reviewed in Models; the launch's words say it waits there.

@@ -6,7 +6,10 @@ import { OMP_PLUGIN_ID } from "@atyrode/manifold-omp";
 import type { Lane } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import { codeOperationFailure, codeWorkflow, useCodeMachines, useCodeTerminals, useWorkflowQuery } from "../machine-web.ts";
-import { WorkflowError } from "../workflow.ts";
+import { WorkflowError, type CodeRun } from "../workflow.ts";
+import { displayAliases } from "./aliases.ts";
+import { RunsBlock, useRunDials } from "./runs-view.tsx";
+import { runOpen, runPhase } from "./runs-model.ts";
 import { familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { when } from "./board-model.ts";
 import type { RecentTeam } from "./recent-teams.ts";
@@ -25,7 +28,7 @@ const G = "plugin-atyrode_code_generator__";
  * The part of the workbench the earlier statements read and act through; a `WorkbenchModel`
  * satisfies it. A row's Resume asks `gate` with its own session, so its refusal shows before it is pressed.
  */
-export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "machineId" | "record" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "message" | "gate"> & {
+export type EarlierModel = Pick<WorkbenchModel, "compiled" | "profile" | "selection" | "machineId" | "record" | "savedSessionId" | "setSavedSessionId" | "inFlight" | "message" | "gate" | "agentRuns"> & {
   actions: Pick<WorkbenchActions, "resume">;
 };
 export type EarlierProps = {
@@ -196,8 +199,15 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
   // A read stands only while its machine is permitted and online; an offline machine's last answer is not offered.
   const standing = new Map([...reads].filter(([machineId]) => readers.some(machine => machine.id === machineId)));
   const reading = machineReads(machines, rosterError, standing);
-  const rows = sessionRows(terminals.terminals ?? [], standing, OMP_PLUGIN_ID);
+  // Code's Runs head their machine's group; a terminal one of them holds is theirs, not an ordinary running row.
+  const runs = model.agentRuns.runs?.runs ?? [];
+  const held = new Set(runs.flatMap(entry => entry.run.session ? [`${entry.run.session.machineId}\n${entry.run.session.sessionId}`] : []));
+  const listed = sessionRows(terminals.terminals ?? [], standing, OMP_PLUGIN_ID);
+  const rows = { running: listed.running.filter(row => !held.has(`${row.machineId}\n${row.sessionId}`)), saved: listed.saved };
+  const openRuns = runs.filter(entry => runOpen(runPhase(entry))).length;
   const folders = savedFolders(rows.saved);
+  const dials = useRunDials(host);
+  const aliases = useMemo(() => model.compiled && displayAliases(model.compiled), [model.compiled]);
   const resumeGate = model.gate("resume");
   const readOnly = !resumeGate.open && resumeGate.refusal.code === "read-only";
 
@@ -286,6 +296,48 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     if (model.savedSessionId === row.sessionId) void finishResume(withTeam);
     else { model.setSavedSessionId(row.sessionId); setPending({ sessionId: row.sessionId, withTeam }); }
   }
+  /** Cancels a Run whose terminal never opened; the view's line says what it came to. */
+  async function cancelRun(entry: CodeRun) {
+    if (acting.current) return;
+    acting.current = true;
+    setActive(`cancel:${entry.run.id}`);
+    try {
+      await codeWorkflow(host).cancelRun(entry.run.id);
+      if (mounted.current) setPress({ kind: "said", said: { text: "Run cancelled. Nothing was opened.", failed: false } });
+      announce("Run cancelled. Nothing was opened.");
+    } catch (reason) {
+      say(codeOperationFailure(reason));
+    } finally {
+      settle();
+      model.agentRuns.refresh();
+    }
+  }
+  /** A Run's title from its machine's read, and its folder from its terminal or that read. */
+  function runPlace(entry: CodeRun) {
+    const session = entry.run.session;
+    const read = session ? standing.get(session.machineId) : undefined;
+    const saved = session && read?.state === "read" ? read.sessions.find(candidate => candidate.id === session.sessionId) : undefined;
+    return { title: saved?.title || null, folder: entry.terminal?.cwd ?? saved?.cwd ?? null };
+  }
+  /** A Run's one verb, as a row's: open its terminal, cancel it before it opened, or resume its saved session without a Run. */
+  function runVerb(entry: CodeRun, verb: "open" | "cancel" | "resume", title: string) {
+    const session = entry.run.session;
+    const row: SessionRow = { kind: verb === "open" ? "running" : "saved", sessionId: session?.sessionId ?? "", machineId: session?.machineId ?? model.machineId,
+      terminalId: entry.terminal?.id ?? null, title, folder: null, at: entry.run.createdAt };
+    if (verb === "cancel") {
+      const busy = active === `cancel:${entry.run.id}`;
+      return <Verb className={`${G}earlier-verb`} name={`Cancel ${title}`} verdict={acting.current && !busy ? { open: false, reason: "Wait for the step in progress." } : { open: true }}
+        busy={busy} data-verb="cancel" onPress={() => void cancelRun(entry)} announce={say}>{busy ? "cancelling…" : "cancel"}</Verb>;
+    }
+    if (verb === "open") {
+      const busy = active === `open:${row.terminalId}`;
+      return <Verb className={`${G}earlier-verb`} name={`Open ${title}`} verdict={row.terminalId ? verdict("open", row) : { open: false, reason: "Its terminal is not running." }}
+        busy={busy} data-verb="open" onPress={() => void open(row)} announce={say}>{busy ? "opening…" : "open"}</Verb>;
+    }
+    const busy = active === `resume:${row.sessionId}`;
+    return <Verb className={`${G}earlier-verb`} name={`Resume ${title} without a run`} verdict={verdict("resume", row)} busy={busy} data-verb="resume"
+      onPress={() => resume(row, false)} announce={say}>{busy && model.inFlight === "resume" ? "resuming…" : "resume"}</Verb>;
+  }
   useEffect(() => {
     if (!pending) return;
     setPending(null);
@@ -348,9 +400,11 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
       </span>
     </li>;
   }
-  // One group per machine with rows, its head saying the machine once with its read; running sessions first, then folders, newest first.
-  const byMachine = new Map<string, { running: SessionRow[]; folders: { folder: SavedFolder; index: number }[] }>();
-  const machineGroup = (machineId: string) => byMachine.get(machineId) ?? byMachine.set(machineId, { running: [], folders: [] }).get(machineId)!;
+  // One group per machine with rows, its head saying the machine once with its read; Code's Runs first, then running sessions, then folders, newest first.
+  const byMachine = new Map<string, { runs: CodeRun[]; running: SessionRow[]; folders: { folder: SavedFolder; index: number }[] }>();
+  const machineGroup = (machineId: string) => byMachine.get(machineId) ?? byMachine.set(machineId, { runs: [], running: [], folders: [] }).get(machineId)!;
+  // A Run that never launched has no session yet; it heads the line's machine, where it was launched from.
+  for (const entry of runs) machineGroup(entry.run.session?.machineId ?? model.machineId).runs.push(entry);
   for (const row of rows.running) machineGroup(row.machineId).running.push(row);
   folders.forEach((folder, index) => machineGroup(folder.machineId).folders.push({ folder, index }));
   function machineHead(machineId: string) {
@@ -408,7 +462,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}
     <div ref={sessions} className={`${G}earlier-group`} role="group" aria-label="sessions on your machines" tabIndex={-1}>
       <div className={`${G}earlier-head`}>
-        <span className={`${G}earlier-meta`}>{sessionsNote(terminals.terminals === null || terminals.error !== null ? null : rows.running.length, rows.saved.length, readOnly)}</span>
+        <span className={`${G}earlier-meta`}>{sessionsNote(terminals.terminals === null || terminals.error !== null ? null : rows.running.length + openRuns, rows.saved.length, readOnly)}</span>
         {rosterError !== null ? <span className={`${G}earlier-meta`}>{rosterError}</span> : <>
           {reading.unread.map(machine => <button key={machine.id} type="button" className={`${G}earlier-link`} data-read={machine.id}
             aria-label={`Read saved sessions on ${machine.name}`} onClick={() => read(machine.id, true)}>Read {machine.name}</button>)}
@@ -430,8 +484,13 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
         <button type="button" className={`${G}earlier-link`} data-read={machine.id} aria-label={`Read saved sessions on ${machine.name} again`}
           onClick={() => read(machine.id, true)}>read again</button>
       </p>)}
+      {model.agentRuns.error && <p className={`${G}earlier-note`} data-runs-error="">Runs unread: {model.agentRuns.error}</p>}
       {byMachine.size > 0 && <ul className={`${G}earlier-rows`} data-sessions="">
-        {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId), ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
+        {[...byMachine].flatMap(([machineId, group]) => [machineHead(machineId),
+          ...group.runs.length ? [<li key={`runs:${machineId}`} data-runs="">
+            <RunsBlock runs={group.runs} dials={dials} catalog={model.compiled} aliases={aliases} place={runPlace} verb={runVerb} now={now} />
+          </li>] : [],
+          ...group.running.map(row => sessionRow(row, null)), ...group.folders.map(folderRow)])}
       </ul>}
     </div>
     <section className={`${G}earlier-group`} aria-labelledby={`${id}-recent`}>

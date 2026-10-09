@@ -12,7 +12,7 @@ const REST_MS = 450;
 const WHEEL_STEP = 60;
 
 /** The row glyphs, drawn on a 16px grid with a 1.5px stroke. */
-const GLYPHS: Readonly<Record<GeneratorRow["id"], string>> = {
+export const GLYPHS: Readonly<Record<GeneratorRow["id"], string>> = {
   lane: "M2.5 5.5h10.5M10.5 3l2.5 2.5-2.5 2.5M13.5 10.5H3M5.5 8 3 10.5 5.5 13",
   tier: "M5.25 4.25h5.5a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-5.5a1 1 0 0 1-1-1v-5.5a1 1 0 0 1 1-1ZM6.5 1.75v2.5M9.5 1.75v2.5M6.5 11.75v2.5M9.5 11.75v2.5M1.75 6.5h2.5M1.75 9.5h2.5M11.75 6.5h2.5M11.75 9.5h2.5",
   thinking: "M5.6 10.6A4.6 4.6 0 1 1 10.4 10.6V12H5.6ZM6.2 14.25h3.6",
