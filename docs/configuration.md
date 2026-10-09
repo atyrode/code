@@ -1017,6 +1017,17 @@ A paused broker remains disabled during reads and sign-in preparation. Its
 owner can review and explicitly promote recovery against the exact paused
 revision, native permissions and retained client-access declaration.
 
+OMP derives the service scope from custody of the broker's credential store: the
+broker service, its owner machine and a custody id kept inside the store, never
+the broker's configuration revision. Restarts, disable and enable, and broker
+promotion (including the one each OMP accounts upgrade needs) keep saved choices
+resolving. A new, purged or replaced store, or another owner machine, changes the
+scope as a cutover does. Adopting the OMP release that introduces this changes
+every scope once, at the promotion that first stamps the store; take the
+`previous` observation for `rebind-scope` before that OMP version is admitted,
+because reads refuse `omp_account_runtime_outdated` from admission until the
+promotion.
+
 A move from an older Code-owned broker changes the service scope by design.
 Operational cutover must first prove the same concrete provider, credential id
 and identity slots under the new OMP owner, then update saved choices through

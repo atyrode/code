@@ -128,8 +128,8 @@ files, service state, credentials or backups.
   sealed resource reads, restricted tools, native resume, explicit model/thinking
   precedence, missing/changed-state refusal and cancellation. Synthetic inference
   in isolated network namespaces is not paid-provider or live-fleet acceptance.
-- The credential runtime uses OMP's published 18.8.0 graph with its retained
-  patch; the ordinary CLI and the independent, unpatched SDK host use 18.4.12.
+- The credential runtime uses OMP's published 18.8.6 graph with its retained
+  patch; the ordinary CLI and the independent, unpatched SDK host use 18.8.6 too.
   Native lifecycle accounting uses public SDK hooks and passes the retained
   deadline/quiescence regressions without copying credential algorithms. This
   does not qualify the separate unpatched credential migration in
@@ -157,8 +157,8 @@ files, service state, credentials or backups.
   Code now pins Manifold
   [`cd75fbb`](https://github.com/atyrode/manifold/commit/cd75fbba6d4601fee14267f17e1594429ae17bc3),
   protocol 57, and OMP
-  [`8eb556a`](https://github.com/atyrode/manifold-omp/commit/8eb556a5751d833ab527e64a4526aebd087b1d1f)
-  ([manifold-omp#117](https://github.com/atyrode/manifold-omp/pull/117)), whose own
+  [`9fdbed9`](https://github.com/atyrode/manifold-omp/commit/9fdbed9906e3a87172b873064c0b3422cb4e2b45)
+  ([manifold-omp#120](https://github.com/atyrode/manifold-omp/pull/120)), whose own
   `MANIFOLD_REV` is the same commit. A protocol 57 hub admits only bundles stamped 57
   ([manifold#1068](https://github.com/atyrode/manifold/issues/1068)), so Code's four
   bundles and OMP's three are rebuilt on that SDK and no earlier stamp is retained.
@@ -166,10 +166,21 @@ files, service state, credentials or backups.
   ([manifold-omp#116](https://github.com/atyrode/manifold-omp/pull/116)) and Manifold's
   pending-Run lifecycle doors ([manifold#1072](https://github.com/atyrode/manifold/pull/1072));
   Code calls neither and launches no Agent.
-  OMP's inventory receipt is now its 18.4.12 one, and each row carries the SDK's
+  The OMP pin also scopes accounts by custody of the broker's credential store
+  ([manifold-omp#121](https://github.com/atyrode/manifold-omp/pull/121)); the one
+  scope change its adoption causes is described under
+  [Accounts and custody](configuration.md#accounts-and-custody). Its gateway names a
+  provider's definite refusal of a model, which a benchmark settles as `not_found` or
+  `client_blocked` rather than `unresolved`
+  ([manifold-omp#122](https://github.com/atyrode/manifold-omp/pull/122)). Its native
+  proof refuses unless the family it re-packs inside its unit reproduces the
+  `SHA256SUMS` of the family under verification
+  ([manifold-omp#119](https://github.com/atyrode/manifold-omp/pull/119)); Code's
+  `verify:native` names the sums of the OMP bundles its gate prepared and installed.
+  OMP's inventory receipt is now its 18.8.6 one, and each row carries the SDK's
   `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
-  with its separately pinned 18.8.0 SDK, so no version string decides whether a
-  verification holds: it records the artifact its inventory ran from and the bundled
+  with its separately pinned SDK's version, now also 18.8.6. No version string decides
+  whether a verification holds: it records the artifact its inventory ran from and the bundled
   catalog's revision, and goes stale when the destination pins another artifact or OMP
   bundles another revision, with no Code rebuild. A verification recorded before this
   change, without those identities, reads as unverified and asks to be verified again,
