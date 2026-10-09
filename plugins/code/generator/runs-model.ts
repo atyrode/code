@@ -179,16 +179,17 @@ function outcomeSaid(outcome: DialOutcome, shown: Dials, name: (reference: strin
 }
 /**
  * The said line of an open Run, in precedence: what the pointer rests on (a word other than the one
- * just pressed: what choosing it sends, or why it cannot; the lease; the activity), a change waiting
+ * last pressed: what choosing it sends, or why it cannot; the lease; the activity), a change waiting
  * for its answer, one that went unanswered with its send again, what the last press came to, then
  * the Run's own state where it has something to say. Null leaves the line empty, keeping its room.
+ * A click leaves the pointer on the word it pressed, so that word says what the press came to.
  */
 export function runSaid(entry: CodeRun, state: RunDialState, pointed: RunPointed | null, now: number, context: {
   readonly vocab: RunVocabulary; readonly name: (reference: string | null) => { text: string; family: string | null }; readonly levels: readonly string[] | null;
 }): RunSaid | null {
   const { vocab, name, levels } = context;
   const shown = shownDials(state, runDials(entry.run.model));
-  const pressed = state.pending?.value ?? state.unconfirmed?.value ?? null;
+  const pressed = state.pending?.value ?? state.unconfirmed?.value ?? (state.outcome && "change" in state.outcome ? state.outcome.change.value : null);
   const pointer = pointed?.kind === "word" && pointed.value === pressed ? null : pointed;
   const phase = runPhase(entry), lock = dialsLock(entry, state, vocab);
   if (pointer?.kind === "word") {

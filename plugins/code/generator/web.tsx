@@ -290,12 +290,12 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       inputAt: inputAt.current,
     }, Date.now());
   };
-  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage
-  // and the sessions already read on the usage line's cadence, and all of it in one pass at a press.
+  // What each read is (auto-read.ts `PASS_READS`): the workbench's inputs once a minute and when the panel shows again, the usage,
+  // the sessions already read and the Runs on the usage line's cadence, and all of it in one pass at a press.
   const reads = usePanelReads({
     configuration: model.queries.configuration.refresh, metadata: metadata.refresh, setup: model.queries.setup.refresh, defaults: model.queries.defaults.refresh,
     skills: skillCatalog.refresh, accounts: model.queries.accounts.refresh, machines: refreshMachines,
-    usage: actions.readUsage, sessions: () => setRereads(count => count + 1),
+    usage: actions.readUsage, sessions: () => setRereads(count => count + 1), runs: model.agentRuns.refresh,
   }, visible, held);
   const cadence = useUsageCadence(usage, reads);
   // The accounts' own edits wait while a step runs or a charge waits, as the switches do; read-only, the view says itself.

@@ -302,5 +302,10 @@ describe("a Run's lease and words", () => {
     const unserved = refuseDial(pending, pending.pending, "omp_model_unavailable", "");
     expect(runSaid(run, unserved, null, now, context)).toMatchObject({ text: "not served here · terra stays", warn: true });
     expect(runSaid(entry({ state: "expired" }, 24, null), NO_DIALS, null, now, context)).toBeNull();
+    // A click leaves the pointer on the word it sent: what the press came to is said, not the word's own readout.
+    const pointed = { kind: "word" as const, field: "model" as const, value: "anthropic/claude-opus-5" };
+    const confirmed = answerDial(pending, pending.pending, { model: "anthropic/claude-opus-5", thinking: "medium" }, { model: "anthropic/claude-terra-5", thinking: "medium" });
+    expect(runSaid(run, confirmed, pointed, now, context)).toMatchObject({ value: "opus", text: "running now" });
+    expect(runSaid(run, unserved, pointed, now, context)).toMatchObject({ text: "not served here · terra stays" });
   });
 });

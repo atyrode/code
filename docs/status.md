@@ -72,11 +72,20 @@ files, service state, credentials or backups.
   stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
-- Agent launch is source-, unit- and design-level only. Neither the gate nor any
-  preview has exercised a live Agent Run through Code: registration, Run creation,
-  `launchRun`, renewal, activity and `controlRun` are proven end to end only by
-  OMP's own native harness gate. The browser verifier's disposable server has no
-  native job owner, so its launchRun refuses. Code shows only the last
+- Agent launch through Code reaches Manifold's real doors only up to `launchRun`. The
+  gate's browser verifier presses the launch as a human sponsor with `agents:delegate`
+  on its disposable server: Code registers its Agent and creates a Run, the machine
+  (no native job owner) refuses `launchRun`, Code cancels the Run (`listRunsV2` reads
+  it cancelled) and the launch line says the refusal. Without the harness operation
+  the press is the reviewed session. Sessions' Runs (activity, the lease to 24 of 24
+  and detached, the dials' pending, confirmed, clamped, not served, unanswered and
+  forbidden states) are rendered from fixtures shaped on that real Agent and Run, with
+  a synthetic `controlRun`. No launched Run, renewal, activity report or `controlRun`
+  answer has been exercised through Code or on any preview; those are proven end to
+  end only by OMP's own native harness gate. The launch line after a launch
+  ("Launched on … · dials", or "· no live dials: …" with **Enable in Setup**) needs an
+  opened terminal, which the disposable server cannot open, so only unit tests cover
+  it. Code shows only the last
   `controlRun` answer this browser received, else the launch's model, because
   `Run.model` is written once (atyrode/manifold#1071). A Run is attributed for at
   most about 13 leases. After that, or after a missed renewal, its TUI goes on

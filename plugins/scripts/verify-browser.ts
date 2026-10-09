@@ -22,13 +22,14 @@ import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/gener
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
 import {
-  BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION,
+  BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, OmpHarnessProfileSchema,
   PREPARE_WORKSPACE_OPERATION_ID, ResumeSessionInputSchema, VALIDATE_WORKSPACE_OPERATION_ID, actionSchemas as ompActionSchemas,
   type BenchmarkReceipt, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult,
 } from "@atyrode/manifold-omp";
-import type { PermissionPlan } from "../code/permission-plan.ts";
-import { inventoryArtifact } from "../code/workflow.ts";
-import { formatManifoldUri, PublicJobSchema, type MachineSummary, type PublicJob, type TerminalSummary } from "@manifold/protocol";
+import { HARNESS_OPERATION_ID, type PermissionPlan } from "../code/permission-plan.ts";
+import { codeAgentName, inventoryArtifact, runDials } from "../code/workflow.ts";
+import { formatManifoldUri, InspectRunV2ResultSchema, ListAgentsV2ResultSchema, ListRunsV2ResultSchema, PublicJobSchema,
+  type InspectRunV2Result, type ListRunsV2Result, type MachineSummary, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 
 const HELP = `Usage: bun plugins/scripts/verify-browser.ts [bundle-directory]
 Uses four prepacked Code bundles (default: plugins/dist) and three real upstream OMP bundles
@@ -640,6 +641,10 @@ async function arrangeWorkbench(server: TestServer, grant: TokenGrant): Promise<
     workbench: { id: "workbench", dir: null, ratios: [], children: [], ref: { kind: "panel", panelId: "atyrode.code.generator.launcher" } },
   } });
   assert(arranged.ok);
+}
+/** Makes the page's next load act as `grant`, as a person signing in as another identity would. */
+function identity(grant: TokenGrant): string {
+  return `localStorage.setItem('manifold.identity', ${JSON.stringify(JSON.stringify({ token: grant.token, principal: grant.principal }))})`;
 }
 async function openGenerator(browser: BrowserInstance, server: TestServer, containerId: string): Promise<void> {
   await browser.goto(`${server.httpUrl}/p/${containerId}`);
@@ -3666,7 +3671,7 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
   const packed = JSON.parse(readFileSync(join(ompBundleDirectory, "atyrode.omp.manifold-plugin.json"), "utf8")) as {
     manifest: { machine: { operations: Record<string, unknown> } };
   };
-  const operations = [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, LAUNCH_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, PREPARE_WORKSPACE_OPERATION_ID];
+  const operations = [INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, LAUNCH_OPERATION_ID, HARNESS_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID, PREPARE_WORKSPACE_OPERATION_ID];
   for (const operationId of operations) assert(packed.manifest.machine.operations[operationId], "Synthetic readiness names real upstream operations");
   // The pins `probeJob` carries, so a listed folder job matches the machine's current operation, installation and bindings.
   const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "d".repeat(64) };
@@ -3752,7 +3757,6 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the review and gives focus back to the next action", `${element(permissionDialog)} === null && document.activeElement === ${go}`);
   };
-  const identity = (grant: TokenGrant) => `localStorage.setItem('manifold.identity', ${JSON.stringify(JSON.stringify({ token: grant.token, principal: grant.principal }))})`;
   try {
     await arrangeWorkbench(server, writer);
     // The destination is chosen while OMP answers there: neither the machine list nor a fresh page starts on a machine
@@ -3840,8 +3844,9 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
     ready.add(INVENTORY_OPERATION_ID).add(BENCHMARK_OPERATION_ID);
     await reread();
     await until(browser, "with discovery on sessions are pointed", `JSON.stringify(${pointed}) === '["sessions"]'`);
-    await review("enable sessions", ["session"], [[LAUNCH_OPERATION_ID]]);
-    ready.add(LAUNCH_OPERATION_ID);
+    // Sessions need both of OMP's terminals: the reviewed session's launch, and the harness an agent run's live dials come through.
+    await review("enable sessions", ["session"], [[LAUNCH_OPERATION_ID, HARNESS_OPERATION_ID]]);
+    ready.add(LAUNCH_OPERATION_ID).add(HARNESS_OPERATION_ID);
     await reread();
     await until(browser, "with sessions on the folders are pointed, on the existing route", `JSON.stringify(${pointed}) === '["folders"]' && ${folderWord("existing")}?.getAttribute('aria-checked') === 'true'`);
     await review("enable folder check", ["workspace-existing"], [[VALIDATE_WORKSPACE_OPERATION_ID]]);
@@ -4050,8 +4055,9 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(reviews[0]!.skills, undefined, "An ordinary launch carries no skill choice");
     // Pointed, the launch says where the profile was reviewed and the reviewed pool by family.
     await pointOf(browser, launchButton);
-    await until(browser, "the launch's readout says where it was reviewed and its pool by family",
-      `${readout}.textContent.includes(${JSON.stringify(machineName)}) && /Claude \\d+/.test(${readout}.textContent)`);
+    // A writer who saved automatic plans launches the reviewed session, so the readout says why it will have no live dials.
+    await until(browser, "the launch's readout says where it was reviewed, its pool by family and why it has no live dials",
+      `${readout}.textContent.includes(${JSON.stringify(machineName)}) && /Claude \\d+/.test(${readout}.textContent) && ${readout}.textContent.includes('no live dials: auto plans are on')`);
     await pointAway(browser);
 
     // Skills: a set and an individual choice review as one effective selection.
@@ -4372,6 +4378,394 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   assert.deepEqual(await readConfiguration(server, writer, first), saved, "Synthetic observations never change real saved choices");
 }
 
+// ---------------------------------------------------------------- an agent launch and the Runs it starts
+
+/**
+ * A launch as an Agent Run through Manifold's real doors, then Runs this fixture cannot start, read from fixtures shaped
+ * on that real Agent's and Run's own reads. A human sponsor who may delegate presses the launch once: Code registers its
+ * Agent and creates a Run at the real server, whose `launchRun` this machine refuses for want of a native job owner; Code
+ * cancels the Run and the launch says why. With OMP's harness not ready the same press is the reviewed session, and the
+ * pointed launch says it has no live dials and why. In Sessions, synthetic Runs say their activity, their lease up to 24
+ * of 24 and detached; a synthetic `controlRun` takes their dials through pending, confirmed, clamped, not served,
+ * unanswered and sent again, and refused. ←→ settle before sending, ↵ and Space send at once, ↑↓ cross dials; a pointed
+ * word, lease or activity says itself and moves nothing; reduced motion stills every mark; nothing overflows from 170 to
+ * 1440px. No terminal opens and no provider is asked; a live Run, its renewals and its TUI remain unexercised here.
+ */
+async function agentLaunchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
+  const workspace = await createContainer(server, "Agent launch", "canvas");
+  const target: Target = { containerId: workspace.id, machineId: destination.machineId };
+  const sponsor = await mintToken(server, { principal: { kind: "human", name: "Code sponsor", color: "#339966" },
+    caps: ["containers:read", "containers:write", "machines:read", "machines:run", "jobs:read", "services:read", "agents:delegate"] });
+  // The sponsor's profile: four published anthropic models without minimal thinking, verified as the workflow records it.
+  const created = await callAction(server, sponsor.token, "atyrode.code.initializeConfiguration", { containerId: workspace.id, expectedRevision: 0 });
+  assert(created.ok, "A sponsor initializes its workspace's Code profile");
+  const bundled = await callAction(server, sponsor.token, "atyrode.omp.readModelCatalog", { providers: starterProviders });
+  assert(bundled.ok);
+  const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
+  const published = metadata.models.filter(model => model.provider === "anthropic").sort((left, right) => left.inputCostPerMillion - right.inputCostPerMillion).slice(0, 4);
+  assert.equal(published.length, 4, "The pinned OMP publishes four anthropic models for the sponsor's tiers");
+  // Short keys, as a person names their models, so the Run tokens read like the generator's own.
+  const keys = ["luna", "sol", "terra", "fable"];
+  const document = { schemaVersion: 1, models: published.map((model, index) => ({
+    key: keys[index]!, provider: "anthropic", id: model.id, api: model.api, tier: index + 1,
+    quotaBucket: null, inputCostPerMillion: index + 1, outputCostPerMillion: (index + 1) * 3, tokensPerSecond: 30,
+    timeToFirstTokenMs: 100, contextWindow: 200_000, thinkingLevels: ["low", "medium", "high", "xhigh", "max"], images: true,
+  })) };
+  const observation = fixtureAccounts();
+  const initialRevision = (created.result as Configuration).revision;
+  const probe = await callAction(server, sponsor.token, "atyrode.code.composeProbe", { containerId: workspace.id, expectedRevision: initialRevision, accounts: observation });
+  assert(probe.ok, "Code composes the sponsor's pool from the passive observation");
+  const staged = await callAction(server, sponsor.token, "atyrode.code.stageCatalog", { containerId: workspace.id, expectedRevision: initialRevision, document,
+    verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(), catalogRevision: metadata.revision,
+      inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000,
+      accounts: observation, poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest } });
+  assert(staged.ok, "The sponsor stages a verified list");
+  const reviewInput = { containerId: workspace.id, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
+  const reviewedList = await callAction(server, sponsor.token, "atyrode.code.reviewCatalog", reviewInput);
+  assert(reviewedList.ok);
+  const promoted = await callAction(server, sponsor.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewedList.result as ActionResult<"reviewCatalog">).reviewDigest });
+  assert(promoted.ok, "The verified list is in use");
+  const saved = promoted.result as Configuration;
+  assert.equal(saved.selection?.planYolo, false, "A new profile approves no plan automatically, so an agent run can carry it");
+  const compiled = compileCatalog(document as CatalogDocument);
+  const aliases = displayAliases(compiled);
+  const reference = (index: number) => `anthropic/${published[index]!.id}`;
+  const alias = (index: number) => aliases.get(keys[index]!)!;
+
+  const defaults = await callAction(server, sponsor.token, "atyrode.omp.readDefaults", {});
+  assert(defaults.ok);
+  const defaultsRevision = (defaults.result as OmpResult<"readDefaults">).revision;
+  const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "b".repeat(64), resourceBindingDigest: "c".repeat(64) };
+  const reviewDigest = "d".repeat(64);
+  const realTerminals = await ownerAction(server, "core.terminals.listAll", {});
+  let harnessReady = true, prepares = 0;
+  // The Runs Sessions reads once the real launch has been refused: null leaves every core.access door and the terminal inventory to the real server.
+  let runs: { list: () => ListRunsV2Result; inspect: (runId: string) => InspectRunV2Result | null; terminals: TerminalSummary[] } | null = null;
+  const controls: Record<string, unknown>[] = [];
+  const heldControl = holdable();
+  let control: (input: Record<string, unknown>) => Outcome | Promise<Outcome> = () => refused("synthetic_control_unset");
+  const sessions: { id: string; title: string; cwd: string; updatedAt: number }[] = [];
+  const fixture = await intercept(browser, server, async (name, input) => {
+    if (runs) switch (name) {
+      case "core.access.listRunsV2": return { ok: true, result: runs.list() };
+      case "core.access.inspectRunV2": {
+        const inspection = runs.inspect(input.runId as string);
+        return inspection ? { ok: true, result: inspection } : refused("agent_run_unavailable");
+      }
+      case "core.terminals.listAll": return { ok: true, result: { terminals: runs.terminals } };
+      case "atyrode.omp.controlRun": controls.push(input); return control(input);
+    }
+    switch (name) {
+      case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts() };
+      case "atyrode.omp.describeDestination": {
+        if (input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
+        const operation = (operationId: string, ready: boolean) => ({ operationId, pins, nativeReady: ready, callerRefusal: null,
+          state: ready ? "ready" as const : "approval_required" as const, reason: ready ? null : "native_consent_required" });
+        const result: OmpResult<"describeDestination"> = { containerId: target.containerId, machineId: target.machineId, pluginId: "atyrode.omp", state: "ready",
+          reason: null, deployment: null, services: [], operations: [operation(LAUNCH_OPERATION_ID, true), operation(HARNESS_OPERATION_ID, harnessReady)] };
+        return { ok: true, result };
+      }
+      case "atyrode.omp.readSkillCatalog": return { ok: true, result: { revision: 0, skills: [], sets: [], updatedAt: null, updatedBy: null } };
+      case "atyrode.omp.reviewSession":
+        return { ok: true, result: { destination: target, operationId: LAUNCH_OPERATION_ID, pins, reviewDigest, defaultsRevision, effectiveOverlay: input.overlay,
+          accountPool: input.accountPool, automation: input.automation ?? { mode: "ordinary" }, skills: { mode: "preserve", catalogRevision: null, selected: [] } } };
+      case "atyrode.omp.prepareSession": prepares++; return refused("omp_review_changed");
+      case "atyrode.omp.listSessions": return { ok: true, result: input.machineId === target.machineId ? sessions : [] };
+      default: return undefined;
+    }
+  });
+  const agentName = await codeAgentName(workspace.id);
+  const actions = await watchActions(browser, server);
+  const attention = `(document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})?.textContent ?? '')`;
+  /** The Run doors the browser called since `from`, reads left out. */
+  const runDoors = (from: number) => actions.requests.slice(from).map(request => request.name)
+    .filter(name => name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name));
+  try {
+    await arrangeWorkbench(server, sponsor);
+    await browser.evaluate(identity(sponsor));
+    await openGenerator(browser, server, workspace.id);
+    await chooseMachine(browser, target.machineId, machineName);
+
+    // One press: the real doors register Code's Agent and create its Run; this machine refuses to launch it, and Code cancels it.
+    await until(browser, "the sponsor's saved profile is reviewed without a press", launchIs("launch", "ready"));
+    await pointOf(browser, launchButton);
+    await until(browser, "pointed, the launch says its dials will be live in Sessions", `${readout}.textContent.includes('live dials in Sessions')`);
+    await pointAway(browser);
+    const beforeLaunch = actions.requests.length;
+    await click(browser, launchButton);
+    await until(browser, "the machine's refusal of the run is said beside the launch", `${failureLine} && /agent run/.test(${attention})`);
+    assert(["That machine cannot launch an agent run: its native job owner is missing or predates agent runs.",
+      "That machine's native job owner is not ready to launch an agent run."].includes(await browser.evaluate<string>(attention)),
+    `The launch line says the machine's own refusal: ${await browser.evaluate<string>(attention)}`);
+    assert.deepEqual(runDoors(beforeLaunch), ["core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun", "core.access.finishAgentRunV2"],
+      "One press registers the Agent, creates its Run, asks Manifold to launch it and cancels it once refused");
+    assert.equal(prepares, 0, "An agent launch prepares no reviewed session");
+    const agentsRead = await callAction(server, sponsor.token, "core.access.listAgentsV2", {});
+    assert(agentsRead.ok);
+    const agents = ListAgentsV2ResultSchema.parse(agentsRead.result);
+    assert.equal(agents.canRegister, true, "The sponsor may register agents");
+    const agent = agents.agents.find(entry => entry.name === agentName);
+    assert(agent && agent.harness === "atyrode.omp", "Code's Agent is registered under its workspace's name with OMP's harness");
+    const profile = OmpHarnessProfileSchema.parse(agent.context.profile);
+    assert.deepEqual([profile.tui, profile.planYolo], [true, false], "Its profile asks for OMP's TUI without automatic plans");
+    const runsRead = await callAction(server, sponsor.token, "core.access.listRunsV2", { agentId: agent.agentId });
+    assert(runsRead.ok);
+    const realRuns = ListRunsV2ResultSchema.parse(runsRead.result);
+    assert.deepEqual(realRuns.runs.map(run => [run.state, run.session]), [["cancelled", null]], "The refused Run is cancelled at the real server and never bound a session");
+    const inspectRead = await callAction(server, sponsor.token, "core.access.inspectRunV2", { runId: realRuns.runs[0]!.id, limit: 1 });
+    assert(inspectRead.ok);
+    const realInspection = InspectRunV2ResultSchema.parse(inspectRead.result);
+    await showView(browser, "sessions");
+    await settle(browser);
+    assert.equal(await browser.evaluate(`${element(`${generator} [data-run-id]`)} === null`), true, "A Run cancelled before it launched is not listed");
+
+    // OMP's harness not ready: the same press is the reviewed session, and the pointed launch says why it has no live dials.
+    await showView(browser, "main");
+    harnessReady = false;
+    await key(browser, "r", 82);
+    await until(browser, "the launch offers its next review", `${launchIs("review", "ready")} || ${launchIs("launch", "ready")}`);
+    if (await browser.evaluate<boolean>(launchIs("review", "ready"))) await click(browser, launchButton);
+    await until(browser, "the launch is reviewed again", launchIs("launch", "ready"));
+    await pointOf(browser, launchButton);
+    await until(browser, "pointed, the launch says it has no live dials because the harness is not enabled",
+      `${readout}.textContent.includes(${JSON.stringify(`no live dials: not enabled on ${machineName}`)})`);
+    await pointAway(browser);
+    const beforeFallback = actions.requests.length;
+    await click(browser, launchButton);
+    await waitFor(() => prepares === 1, timeout, 50);
+    await until(browser, "the reviewed session's refusal is said beside the launch", failureLine);
+    assert.deepEqual(runDoors(beforeFallback), [], "Without the harness the launch is the reviewed session: no Agent or Run door is called");
+
+    // Runs this machine cannot start, shaped on the real ones: open, at 24 of 24, renewal due, detached, starting and ended.
+    const now = Date.now(), MINUTE = 60_000, HOUR = 60 * MINUTE;
+    const launched = runDials(realRuns.runs[0]!.model);
+    assert(launched.model === reference(0) || published.some((_, index) => launched.model === reference(index)), "The Run records the launch's model");
+    type ListedRun = ListRunsV2Result["runs"][number];
+    type Shape = { id: string; state: ListedRun["state"]; activity: ListedRun["activity"]; age: number; left: number; renewals: number; ended: number | null; tui: boolean; title: string; cwd: string };
+    const shapes: Shape[] = [
+      { id: "run-working", state: "pending_policy", activity: "working", age: 10 * MINUTE, left: 40 * MINUTE, renewals: 1, ended: null, tui: true, title: "Trace the CAS conflict", cwd: "/home/alex/code-statement/code" },
+      { id: "run-blocked", state: "pending_policy", activity: "blocked", age: 4 * HOUR, left: 25 * MINUTE, renewals: 7, ended: null, tui: true, title: "Measure the seat grid", cwd: "/home/alex/manifold" },
+      { id: "run-full", state: "pending_policy", activity: "done", age: 12 * HOUR, left: 35 * MINUTE, renewals: 24, ended: null, tui: true, title: "Write the operator brief", cwd: "/srv/notes" },
+      { id: "run-detached", state: "expired", activity: "idle", age: 14 * HOUR, left: -25 * MINUTE, renewals: 24, ended: now - 25 * MINUTE, tui: true, title: "Sweep the flaky tests", cwd: "/home/alex/babel" },
+      { id: "run-starting", state: "pending_policy", activity: "unknown", age: MINUTE / 2, left: 60 * MINUTE, renewals: 0, ended: null, tui: false, title: "", cwd: "" },
+      { id: "run-ended", state: "completed", activity: "done", age: 3 * HOUR, left: -HOUR, renewals: 4, ended: now - 62 * MINUTE, tui: false, title: "Make the settings easier to understand", cwd: "/workspace/example" },
+    ];
+    const sessionOf = (index: number) => ({ harness: "atyrode.omp", machineId: target.machineId, sessionId: `9cb82ad4-8c9e-4166-8130-47200000000${index}` });
+    const fields = (shape: Shape, index: number) => ({ id: shape.id, state: shape.state, activity: shape.activity,
+      session: shape.id === "run-starting" ? null : sessionOf(index), createdAt: now - shape.age, expiresAt: now + shape.left });
+    sessions.push(...shapes.flatMap((shape, index) => shape.title ? [{ id: sessionOf(index).sessionId, title: shape.title, cwd: shape.cwd, updatedAt: now - shape.age }] : []));
+    runs = {
+      list: () => ({ ...realRuns, observedAt: Date.now(), runs: shapes.map((shape, index): ListedRun => ({ ...realRuns.runs[0]!, ...fields(shape, index) })) }),
+      inspect: runId => {
+        const index = shapes.findIndex(shape => shape.id === runId);
+        if (index < 0) return null;
+        return { ...realInspection, run: { ...realInspection.run, ...fields(shapes[index]!, index), renewals: shapes[index]!.renewals,
+          cleanup: { ...realInspection.run.cleanup, finishedAt: shapes[index]!.ended } }, terminals: [], jobs: [] };
+      },
+      terminals: shapes.flatMap((shape, index) => shape.tui ? [{ id: `tui-${shape.id}`, machineId: target.machineId, name: "OMP", createdAt: now - shape.age,
+        status: "running" as const, exitCode: null, homeId: target.containerId, unplaced: false, session: sessionOf(index), cwd: shape.cwd }] : []),
+    };
+    const runRow = (id: string) => `${generator} [data-run-id="${id}"]`;
+    const said = (id: string) => `(${element(`${runRow(id)} .${G}run-said`)}?.textContent ?? '')`;
+    const dialWord = (id: string, field: "model" | "thinking", value: string) =>
+      element(`${runRow(id)} [data-run-dial][data-row="${field === "model" ? "tier" : "thinking"}"] [role="radio"][data-value="${value}"]`);
+    await showView(browser, "sessions");
+    await click(browser, element(`${generator} [data-read="${target.machineId}"]`));
+    // Manifold announces Run changes on its access topic; these fixtures announce nothing, so once any read already under way
+    // has landed, the panel's read again reads them.
+    await Bun.sleep(1_000);
+    await key(browser, "r", 82);
+    const listing = `({ runs: [...document.querySelectorAll('${generator} [data-run-id]')].map(el => el.dataset.runId),
+      error: ${element(`${generator} [data-runs-error]`)}?.textContent ?? null })`;
+    const order = { runs: ["run-starting", "run-working", "run-blocked", "run-full", "run-detached", "run-ended"], error: null };
+    try {
+      await waitFor(async () => JSON.stringify(await browser.evaluate(listing)) === JSON.stringify(order), timeout, 50);
+    } catch {
+      assert.deepEqual(await browser.evaluate(listing), order, "Every Run is listed, open ones first and newest first, the ended one last");
+    }
+    await until(browser, "each Run is titled from its machine's saved read", `${element(`${runRow("run-working")} .${G}run-name`)}?.textContent === 'Trace the CAS conflict'`);
+
+    // Activity: a mark and a word each; the Sessions tab's one square says the most urgent open Run, beside its word without touching it.
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id]')].map(el => [el.dataset.runId, el.querySelector('.${G}run-act').textContent, el.querySelector('.${G}run-mark').dataset.a])`), [
+      ["run-starting", "starting", "starting"], ["run-working", "working", "working"], ["run-blocked", "blocked", "blocked"],
+      ["run-full", "done", "done"], ["run-detached", "detached", "detached"], ["run-ended", "completed", "completed"]], "Each Run says its activity, or its phase once not live");
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id]')].map(el => [el.dataset.runId, el.querySelector('[data-verb]')?.dataset.verb ?? null, !!el.querySelector('[data-run-dial]')])`), [
+      ["run-starting", "cancel", true], ["run-working", "open", true], ["run-blocked", "open", true], ["run-full", "open", true], ["run-detached", "open", true], ["run-ended", "resume", false]],
+    "One verb each: cancel before a terminal, open while its TUI runs, resume once settled; dials while open, detached included");
+    const tab = element(`${generator} [data-view-tab="sessions"]`);
+    assert.deepEqual(await browser.evaluate(`(() => {
+      const tab = ${tab}, mark = tab?.querySelector('.${G}tab-mark'), text = document.createRange();
+      text.selectNodeContents(tab.firstChild);
+      const word = text.getBoundingClientRect(), box = mark.getBoundingClientRect(), bar = tab.closest('.${G}bar').getBoundingClientRect();
+      return { marked: tab.dataset.marked !== undefined, a: mark.dataset.a, title: tab.title.startsWith('Sessions: a run waits for you'),
+        beside: box.left >= word.right + 2 && box.top >= bar.top && box.bottom <= bar.bottom && box.width === 6 && box.height === 6 };
+    })()`), { marked: true, a: "blocked", title: true, beside: true }, "The Sessions tab's square says a Run waits, beside its word and inside the bar");
+
+    // The lease: one block per renewal, the words beside them; 24 of 24 is warm, detached is faint and its dials rest.
+    assert.deepEqual(await browser.evaluate(`['run-working', 'run-blocked', 'run-full', 'run-detached'].map(id => [
+      document.querySelectorAll('${generator} [data-run-id="' + id + '"] .${G}lease-bar > i[data-on]').length,
+      document.querySelector('${generator} [data-run-id="' + id + '"] .${G}lease-bar').dataset.tone ?? null,
+      document.querySelector('${generator} [data-run-id="' + id + '"] .${G}lease-words').textContent.replace(/\\d{1,2}:\\d{2}/, 'HH:MM').replace(/\\d+m$/, 'Nm')])`), [
+      [1, null, "renews in Nm"], [7, "warn", "renewal due · expires HH:MM"], [24, "warn", "expires HH:MM"], [24, "off", "detached since HH:MM"]],
+    "The lease counts renewals of 24 and says when it renews, that a renewal is due, that none is left, or since when it is detached");
+    assert.equal(await browser.evaluate(`document.querySelectorAll('${runRow("run-full")} .${G}lease-bar > i').length`), 24, "The bar has one block per renewal Manifold allows");
+    assert.deepEqual(await browser.evaluate(`[${element(runRow("run-detached"))}.dataset.locked !== undefined, ${said("run-detached")}.replace(/\\d{1,2}:\\d{2}/, 'HH:MM'),
+      ${element(runRow("run-starting"))}.dataset.locked !== undefined, ${said("run-starting")}, ${element(`${runRow("run-ended")} .${G}run-lease`)}?.textContent.replace(/\\d+m /, 'Nm ')]`),
+    [true, "dials · off since HH:MM · the TUI goes on", true, "starting · policy pending; no report yet", "1h Nm ago"],
+    "A detached Run's dials rest while its TUI goes on; a starting one's wait for its first report; an ended one says when it ended");
+    assert.equal(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-locked]')].every(el => el.closest('[data-run-id]'))`), true,
+      "Only a Run's own dials are ever locked");
+
+    // The dials: pending until the session answers, then confirmed; a clamped level; a model not served, struck from then on.
+    const thinkingShown = launched.thinking ?? "medium";
+    const other = ["low", "medium", "high"].find(level => level !== thinkingShown)!;
+    control = async input => {
+      await heldControl.wait();
+      return { ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking ?? thinkingShown } };
+    };
+    await click(browser, dialWord("run-working", "thinking", other));
+    await waitFor(() => heldControl.held, timeout, 50);
+    await until(browser, "the asked-for word waits with its hollow dot, and the said line says what stays meanwhile",
+      `${dialWord("run-working", "thinking", other)}.dataset.pending !== undefined && ${said("run-working")} === ${JSON.stringify(`${other} · sent · ${thinkingShown} until it answers`)}`);
+    assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: other }, "One press sends one change to the Run");
+    // Under reduced motion nothing breathes, not even a change in flight.
+    await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    // A transition already under way when motion is reduced runs out its own duration; after it nothing moves, not even the waiting dot.
+    await still(browser);
+    assert.equal(await browser.evaluate(running), 0, "Reduced motion: no Run mark or waiting dot animates");
+    await browser.send("Emulation.setEmulatedMedia", { features: [] });
+    await settle(browser);
+    assert((await browser.evaluate<number>(running)) > 0, "Otherwise a working Run's mark and a waiting dot breathe");
+    heldControl.release();
+    await until(browser, "the answer confirms the change", `${dialWord("run-working", "thinking", other)}.getAttribute('aria-checked') === 'true' && ${said("run-working")} === ${JSON.stringify(`${other} · running now`)}`);
+    control = input => ({ ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking === "max" ? "xhigh" : input.thinking ?? other } });
+    await click(browser, dialWord("run-working", "thinking", "max"));
+    await until(browser, "a level the session clamps is said with the one it runs", `${said("run-working")} === 'max · running now · thinking xhigh' && ${dialWord("run-working", "thinking", "xhigh")}.getAttribute('aria-checked') === 'true'`);
+    const unserved = published.findIndex((_, index) => reference(index) !== launched.model);
+    control = () => refused("omp_model_unavailable");
+    await click(browser, dialWord("run-working", "model", reference(unserved)));
+    await until(browser, "a model the session does not serve is struck, and what stays is said",
+      `${dialWord("run-working", "model", reference(unserved))}.dataset.off !== undefined && ${said("run-working")}.startsWith(${JSON.stringify(`${alias(unserved)} · not served here · `)})`);
+    const sent = controls.length;
+    await click(browser, dialWord("run-working", "model", reference(unserved)));
+    await Bun.sleep(300);
+    assert.equal(controls.length, sent, "A struck model is never sent again");
+
+    // No answer within the door's 20 s: the word stays warm with send again, which sends the same change once more.
+    const unanswered = published.findIndex((_, index) => index !== unserved && reference(index) !== launched.model);
+    control = () => refused("omp_run_control_unconfirmed");
+    await click(browser, dialWord("run-working", "model", reference(unanswered)));
+    await until(browser, "an unanswered change is said with send again", `${dialWord("run-working", "model", reference(unanswered))}.dataset.unconfirmed !== undefined &&
+      ${said("run-working")} === ${JSON.stringify(`${alias(unanswered)} · no answer in 20 ssend again`)} && !!${element(`${runRow("run-working")} .${G}run-again`)}`);
+    control = input => ({ ok: true, result: { model: input.model ?? launched.model, thinking: "xhigh" } });
+    await click(browser, element(`${runRow("run-working")} .${G}run-again`));
+    await until(browser, "sent again, the answer confirms it", `${dialWord("run-working", "model", reference(unanswered))}.getAttribute('aria-checked') === 'true' &&
+      ${said("run-working")} === ${JSON.stringify(`${alias(unanswered)} · running now`)}`);
+    assert.deepEqual(controls.slice(-2), [{ runId: "run-working", model: reference(unanswered) }, { runId: "run-working", model: reference(unanswered) }], "Send again sends the same change once");
+
+    // Keyboard: ←→ rest half a second before one change goes; ↵ and Space send at once; ↑↓ go to the next dial of any Run.
+    control = input => ({ ok: true, result: { model: input.model ?? reference(unanswered), thinking: input.thinking ?? "xhigh" } });
+    // A press on the word already shown sends nothing and leaves focus on it.
+    await click(browser, dialWord("run-working", "thinking", "xhigh"));
+    await until(browser, "focus rests on the working Run's shown thinking", `document.activeElement === ${dialWord("run-working", "thinking", "xhigh")}`);
+    const beforeKeys = controls.length;
+    await key(browser, "ArrowLeft", 37);
+    await key(browser, "ArrowLeft", 37);
+    await key(browser, "ArrowRight", 39);
+    const swept = Date.now();
+    await Bun.sleep(300);
+    assert.equal(controls.length, beforeKeys, "←→ send nothing while they move");
+    await waitFor(() => controls.length === beforeKeys + 1, timeout, 20);
+    assert(Date.now() - swept >= 400, "The change goes once the keys rest");
+    assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: "high" }, "A sweep sends the one word it rests on");
+    await until(browser, "the swept level is confirmed", `${dialWord("run-working", "thinking", "high")}.getAttribute('aria-checked') === 'true'`);
+    await key(browser, "ArrowLeft", 37);
+    await key(browser, "Enter", 13);
+    await waitFor(() => controls.length === beforeKeys + 2, 300, 10);
+    assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: "medium" }, "↵ sends the focused word at once");
+    await until(browser, "the level sent by ↵ is confirmed", `${dialWord("run-working", "thinking", "medium")}.getAttribute('aria-checked') === 'true'`);
+    await key(browser, "ArrowRight", 39);
+    await key(browser, " ", 32);
+    await waitFor(() => controls.length === beforeKeys + 3, 300, 10);
+    assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: "high" }, "Space sends the focused word at once");
+    await Bun.sleep(700);
+    assert.equal(controls.length, beforeKeys + 3, "A word sent at once is not sent again when the keys rest");
+    await key(browser, "ArrowDown", 40);
+    await until(browser, "↓ goes to the next Run's first dial", `!!document.activeElement?.closest('${runRow("run-blocked")} [data-run-dial][data-row="tier"]')`);
+    await key(browser, "ArrowUp", 38);
+    await until(browser, "↑ comes back", `!!document.activeElement?.closest('${runRow("run-working")} [data-run-dial][data-row="thinking"]')`);
+
+    // Refused outright: the dials of a Run this caller may not turn rest, and say whose they are.
+    control = () => refused("omp_run_control_forbidden");
+    await click(browser, dialWord("run-blocked", "thinking", "low"));
+    await until(browser, "a forbidden change locks that Run's dials and says whose they are",
+      `${element(runRow("run-blocked"))}.dataset.locked !== undefined && ${said("run-blocked")} === "dials · its launcher's or sponsor's alone"`);
+    const forbidden = controls.length;
+    await click(browser, dialWord("run-blocked", "thinking", "high"));
+    await Bun.sleep(300);
+    assert.equal(controls.length, forbidden, "Locked dials send nothing");
+
+    // Pointed, a word, the lease and the activity say themselves on the said line, and nothing moves.
+    await pointOf(browser, dialWord("run-working", "model", reference(unanswered)));
+    await until(browser, "a pointed model says itself", `${said("run-working")} === ${JSON.stringify(`${alias(unanswered)} · ${published[unanswered]!.id} · main agent`)}`);
+    await pointOf(browser, element(`${runRow("run-working")} .${G}lease-row .${G}words`));
+    await until(browser, "the pointed lease says its next renewal", `/^renewal 2 of 24 · \\d{1,2}:\\d{2} · expires \\d{1,2}:\\d{2}$/.test(${said("run-working")})`);
+    await pointOf(browser, element(`${runRow("run-working")} .${G}run-toggle`));
+    await until(browser, "the pointed activity says what it means", `${said("run-working")} === 'working · a turn is running'`);
+    await pointAway(browser);
+    const sessionsPane = `${generator} [data-pane="sessions"]`;
+    const runBoxes = boxesOf(sessionsPane, `element.closest('.plugin-atyrode_code__sr') || element.parentElement?.closest('.${G}run-said')`);
+    await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    try {
+      const targets = await browser.evaluate<number>(`(globalThis.__codeTargets = [...document.querySelectorAll('${sessionsPane} [data-run-id] :is([role="radio"], button, .${G}run-toggle, .${G}lease-row .${G}words)')]
+        .filter(el => el.getClientRects().length)).length`);
+      assert(targets > 40, "The Runs offer their pointer targets");
+      for (let index = 0; index < targets; index++) {
+        await pointAway(browser);
+        await settle(browser);
+        await browser.evaluate(runBoxes);
+        await pointOf(browser, `globalThis.__codeTargets[${index}]`);
+        await settle(browser);
+        assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at Run target ${index} shifts no layout box`);
+      }
+      await pointAway(browser);
+      await tabTo(browser, "the first Run's verb", element(`${runRow("run-starting")} [data-verb]`), true);
+      await browser.evaluate(runBoxes);
+      for (let step = 0; step < 40 && await browser.evaluate<boolean>(`!!document.activeElement?.closest('${sessionsPane} [data-runs]')`); step++) {
+        await key(browser, "Tab", 9);
+        await settle(browser);
+        assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${step} across the Runs shifts no layout box`);
+      }
+      // The said line starts where the dials' words do, at every layout.
+      for (const width of [1280, 620, 360]) {
+        await panelWidth(browser, width);
+        assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id][data-open]')].map(run =>
+          Math.round(run.querySelector('.${G}run-said').getBoundingClientRect().left - run.querySelector('[data-run-dial] .${G}words').getBoundingClientRect().left))
+          .filter(gap => Math.abs(gap) > 1)`), [], `The said line lines up with the dials' words at ${width}px`);
+      }
+      // Under reduced motion every Run mark rests, so each width and view is measured still.
+      await geometryAcrossWidths(browser, "agent launch");
+    } finally {
+      await browser.send("Emulation.setEmulatedMedia", { features: [] });
+      await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    }
+    fixture.check();
+  } finally {
+    heldControl.release();
+    actions.stop();
+    await fixture.stop();
+    await browser.evaluate(identity(writer));
+  }
+  const after = await callAction(server, sponsor.token, "core.access.listAgentsV2", {});
+  assert(after.ok);
+  const agentId = ListAgentsV2ResultSchema.parse(after.result).agents.find(entry => entry.name === agentName)?.agentId;
+  const finalRuns = await callAction(server, sponsor.token, "core.access.listRunsV2", { agentId });
+  assert(finalRuns.ok);
+  assert.deepEqual(ListRunsV2ResultSchema.parse(finalRuns.result).runs.map(run => run.state), ["cancelled"], "Dials, reads and the reviewed launch create no Run");
+  assert.deepEqual(await ownerAction(server, "core.terminals.listAll", {}), realTerminals, "Nothing in the agent launch opened a terminal");
+  assert.deepEqual((await readConfiguration(server, sponsor, { containerId: workspace.id })).configuration, saved, "Launches and dials never change the saved profile");
+}
+
 // ---------------------------------------------------------------- the run
 
 const resources: {
@@ -4681,6 +5075,8 @@ async function run(): Promise<void> {
     await setupSheetScenario(writerBrowser, server, writer, target, secondTarget);
     phase = "synthetic review, launch and resume gate";
     await syntheticPreviewScenario(writerBrowser, server, writer, target, secondTarget);
+    phase = "an agent launch through the real doors, then its Runs' activity, lease and dials";
+    await agentLaunchScenario(writerBrowser, server, writer, target);
     phase = "proof complete";
   } catch (error) {
     // Driver diagnostics can contain admission URLs. Report only the phase and local
@@ -4693,7 +5089,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: verify, the checking hold a double-click cannot pass, a charge confirmed only by one deliberate press, measuring per provider, verified with what it left out (Spark, by OMP's spark quota class, retired), back to code and verify again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. The verification charge is never confirmed by a double-click, a second click, key repeat or ↵ at the panel root, waits as the next Tab stop after the launch with every row and the machine locked, and a refused spend saves nothing; an account switch saves through the real changeAccounts CAS and keeps focus. A verified catalog recorded against the pinned OMP's artifact and the real catalog revision is current, and an OMP upgrade alone, with the same accounts and Code, makes Verify the step again. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: verify, the checking hold a double-click cannot pass, a charge confirmed only by one deliberate press, measuring per provider, verified with what it left out (Spark, by OMP's spark quota class, retired), back to code and verify again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and is said, and without the harness the press is the reviewed session, its readout saying why it has no live dials. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, confirmed, clamped, not served, unanswered then sent again, and forbidden; ←→ settle before one send, ↵ and Space send at once, ↑↓ cross Runs; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
 }
 
 await run();

@@ -74,12 +74,13 @@ export function tickClock(clock: ReadClock, facts: ClockFacts): { readonly read:
 /**
  * What a pass reads, by the clock that asks for it. `inputs`, once a minute and when the panel shows
  * again: the workbench's observations and the machine list. `usage`, every usage freshness window:
- * the usage reading and the sessions already read. A panel shown again leaves the usage to its
- * feed's own read on return, so the bars do not drain at every look back.
+ * the usage reading, the sessions already read and Code's Runs, whose access-topic events can be
+ * missed across a reconnect. A panel shown again leaves the usage to its feed's own read on return,
+ * so the bars do not drain at every look back.
  */
 export const PASS_READS = {
   inputs: ["configuration", "metadata", "setup", "defaults", "skills", "accounts", "machines"],
-  usage: ["usage", "sessions"],
+  usage: ["usage", "sessions", "runs"],
 } as const;
 export type ReadKind = keyof typeof PASS_READS;
 /** One underlying read: a query or feed read again. */

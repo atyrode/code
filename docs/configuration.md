@@ -501,8 +501,9 @@ the usage again every five minutes, its freshness window: the host's feeds read 
 on events while their channel is live, and provider readings change without one, so the
 panel keeps its own cadence, by the same rules as its other reads on their own: a hidden
 panel reads when it shows again, and a read that comes due in the middle of something
-waits (the line says `refresh waits`). That cadence reads the usage and the sessions
-already read, never the workspace profile or the machines, which keep the minute's
+waits (the line says `refresh waits`). That cadence reads the usage, the sessions
+already read and Code's Runs (which also read again on every Agent, Run or terminal
+event), never the workspace profile or the machines, which keep the minute's
 cadence above. Refresh now and `r` read everything at once and restart both countdowns.
 The line says `refreshing…` and the bars drain and refill
 while a read is out, for at least half a second so the refresh reads as one gesture;
@@ -588,7 +589,10 @@ now", or "running now · thinking xhigh" when the model clamped it). A model the
 does not serve is struck ("not served here · terra stays"); no answer within 20 s says
 so and offers **send again**; a caller the door refuses reads "its launcher's or
 sponsor's alone". `←` `→` rest on a word half a second before sending it, `↵` and
-`Space` send at once, `↑` `↓` go to the next dial of any Run. The dials shown are the
+`Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
+what choosing it sends, the lease its next renewal and the activity what it means, all on
+the said line, so nothing moves; the word just pressed keeps saying what its press came
+to. The dials shown are the
 last answer this browser received, kept per workspace in local storage, else the
 launch's, because `Run.model` is written once. The Sessions tab carries one square
 for the open Runs, never a count: blocked, then working, then starting, else quiet.
