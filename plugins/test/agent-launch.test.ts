@@ -251,6 +251,10 @@ describe("the agent door sequence", () => {
       // Completed, then resumed without a Run: its inspection names no running terminal, so it stays an ended Run.
       listedRun("completed-resumed", now, { session: session(resumedSession), state: "completed", createdAt: now - 2 * HOUR }),
       listedRun("ended", now, { session: session("aab82ad4-8c9e-4166-8130-472c7cae1559"), state: "completed", createdAt: now - HOUR }),
+      // Ended without a running terminal of their session: only the newest three of the last day are read, never a fourth or an older one.
+      ...[3, 4, 5].map((hours, index) => listedRun(`ended-${index + 2}`, now, { session: session(`${"bcd"[index]}ab82ad4-8c9e-4166-8130-472c7cae1559`), state: "completed",
+        createdAt: now - hours * HOUR })),
+      listedRun("old", now, { session: session("fab82ad4-8c9e-4166-8130-472c7cae1559"), state: "completed", createdAt: now - 30 * HOUR }),
     ];
     f.answers["core.access.listAgentsV2"] = () => ({ agents: [agentOf(base)], truncated: false, canRegister: true });
     f.answers["core.access.listRunsV2"] = () => ({ observedAt: now, truncated: false, runs });
@@ -264,12 +268,13 @@ describe("the agent door sequence", () => {
       return inspectionOf(run, run.state === "revoked" ? finishedAt : null, run.id === "revoked" ? ["tui-revoked"] : run.id === "live" ? ["tui-live"] : []);
     };
     const read = await f.workflow.readRuns(target.containerId);
-    expect(read.runs.map(entry => entry.run.id)).toEqual(["live", "revoked", "ended", "completed-resumed"]);
+    expect(read.runs.map(entry => entry.run.id)).toEqual(["live", "revoked", "ended", "completed-resumed", "ended-2"]);
     const revoked = read.runs.find(entry => entry.run.id === "revoked")!;
     expect([revoked.terminal?.id, runPhase(revoked), detachedAt(revoked)]).toEqual(["tui-revoked", "detached", finishedAt]);
     const resumed = read.runs.find(entry => entry.run.id === "completed-resumed")!;
     expect([resumed.terminal, runPhase(resumed)]).toEqual([null, "completed"]);
-    expect(f.calls.filter(call => call.door === "core.access.inspectRunV2").map(call => call.input.runId).sort()).toEqual(["completed-resumed", "ended", "live", "revoked"]);
+    expect(f.calls.filter(call => call.door === "core.access.inspectRunV2").map(call => call.input.runId).sort())
+      .toEqual(["completed-resumed", "ended", "ended-2", "ended-3", "live", "revoked"]);
   });
 });
 

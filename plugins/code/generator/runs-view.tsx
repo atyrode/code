@@ -28,7 +28,8 @@ function browserStorage(): AnswerStorage | null {
 /** A panel's live dials: each Run's state, the press that sends one change, and the drop of a change queued as the Run's dials lock. */
 export type RunDialsHandle = {
   readonly stateOf: (runId: string) => RunDialState;
-  readonly press: (entry: CodeRun, change: DialChange, levels: readonly string[] | null) => Promise<void>;
+  /** `levelsOf` names a model's thinking levels, so a queued level is judged against the model shown when it is sent. */
+  readonly press: (entry: CodeRun, change: DialChange, levelsOf: (model: string | null) => readonly string[] | null) => Promise<void>;
   readonly unqueue: (runId: string) => void;
 };
 /** Every Run's dials as this browser turns them (`runs`: the Runs as last read): one `controlRun` per press, its answer kept per workspace. */
@@ -50,10 +51,11 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     latest.current = new Map(latest.current).set(runId, next);
     if (mounted.current) setStates(latest.current);
   }
-  async function press(entry: CodeRun, change: DialChange, levels: readonly string[] | null): Promise<void> {
+  async function press(entry: CodeRun, change: DialChange, levelsOf: (model: string | null) => readonly string[] | null): Promise<void> {
     // Only a live Run's dials turn: a starting one has no session to answer yet, and a detached or settled one has no Run input left.
     if (runPhase(entry) !== "live") return;
     const runId = entry.run.id, before = shownDials(stateOf(runId), runDials(entry.run.model));
+    const levels = levelsOf(before.model);
     const { state, send } = pressDial(stateOf(runId), change, before, level => levels !== null && !levels.includes(level));
     write(runId, state);
     if (!send) return;
@@ -72,7 +74,7 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     if (!queued) return;
     write(runId, { ...stateOf(runId), queued: null });
     const current = read.current.find(candidate => candidate.run.id === runId);
-    if (current) await press(current, queued, levels);
+    if (current) await press(current, queued, levelsOf);
   }
   function unqueue(runId: string) {
     if (stateOf(runId).queued) write(runId, { ...stateOf(runId), queued: null });
@@ -227,7 +229,7 @@ export function RunsBlock({ runs, dials, catalog, aliases, place, verb, now }: R
   const words = catalog && aliases ? modelWords(catalog, aliases) : [];
   return <div ref={block} className={`${G}runs`} data-place="sessions" role="group" aria-label="running">
     {runs.map(entry => <RunItem key={entry.run.id} entry={entry} state={dials.stateOf(entry.run.id)} models={words} catalog={catalog} aliases={aliases}
-      place={place(entry)} now={now} verb={verb} onMove={move} onSend={(change, levels) => void dials.press(entry, change, levels)}
+      place={place(entry)} now={now} verb={verb} onMove={move} onSend={change => void dials.press(entry, change, model => modelLevels(model, catalog))}
       onLock={() => dials.unqueue(entry.run.id)} />)}
   </div>;
 }
@@ -235,7 +237,7 @@ export function RunsBlock({ runs, dials, catalog, aliases, place, verb, now }: R
 function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onMove, onSend, onLock }: {
   entry: CodeRun; state: RunDialState; models: readonly DialWord[]; catalog: CompiledCatalog | null; aliases: ReadonlyMap<string, string> | null;
   place: { title: string | null; folder: string | null }; now: number; verb: RunsBlockProps["verb"];
-  onMove: (from: HTMLElement, delta: -1 | 1) => void; onSend: (change: DialChange, levels: readonly string[] | null) => void; onLock: () => void;
+  onMove: (from: HTMLElement, delta: -1 | 1) => void; onSend: (change: DialChange) => void; onLock: () => void;
 }) {
   const [pointed, setPointed] = useState<RunPointed | null>(null);
   const phase = runPhase(entry), open = runOpen(phase), act = activityWord(entry), oneVerb = runVerb(entry);
@@ -256,11 +258,11 @@ function RunItem({ entry, state, models, catalog, aliases, place, now, verb, onM
     window.clearTimeout(settle.current);
     onLock();
   }, [lock]);
-  const sendNow = (change: DialChange) => { window.clearTimeout(settle.current); onSend(change, levels); };
+  const sendNow = (change: DialChange) => { window.clearTimeout(settle.current); onSend(change); };
   const send = (field: DialField) => (value: string) => sendNow({ field, value });
   const arm = (field: DialField) => (value: string) => {
     window.clearTimeout(settle.current);
-    settle.current = window.setTimeout(() => onSend({ field, value }, levels), SETTLE_MS);
+    settle.current = window.setTimeout(() => onSend({ field, value }), SETTLE_MS);
   };
   const point = (next: RunPointed | null) => setPointed(next);
   return <div className={`${G}run`} data-a={act} data-run-id={entry.run.id} data-open={open || undefined} data-locked={(open && lock) || undefined}>
