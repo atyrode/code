@@ -141,8 +141,8 @@ answers is left out as a family with no account is; a selection that needs it is
 where it is reviewed. `deriveCatalog` returns the document and every other offered model
 with its reason; the document's compiled catalog names its short families. It refuses only a
 family Code requires whose most capable model regresses on its cheapest
-(`ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
-and nothing reachable at all (`probe_insufficient_ladder`). Only the returned `confirm`
+(`code_ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
+and nothing laddered at all (`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
@@ -566,7 +566,11 @@ unsaved preset draft survives a look back at the accounts.
 ### Sessions
 
 The **Sessions** tab (`e`) replaces the stage with two groups, each said only where it
-differs from the generator.
+differs from the generator. What a row verb came to is said beside the view's name, on
+one line that ends in an ellipsis, so it never moves a row. A refused verb says only its
+reason, since the press named the row. Cut, the line is a Tab stop: focused, tapped or
+pointed, it lays its whole words over the rows below without moving them, and `Esc` puts
+them away.
 
 **Sessions.** Rows are grouped under their machine, whose head names it once with its
 read. Running sessions (terminals that carry an OMP session reference on their own
@@ -591,8 +595,9 @@ allows open only.
 
 **Runs.** An agent launch's Run heads its machine's group, one line per Run: an
 activity mark and word (`working`, `blocked`, `done`, `idle`; `starting` before the
-harness's first report; `detached` once its lease ran out while its terminal still
-runs; `completed`, `failed`, `cancelled`, `expired` or `revoked` once settled), its
+harness's first report; `detached` once it settled, by expiry, revocation or
+cancellation, while its own terminal still runs, listed with the open Runs;
+`completed`, `failed`, `cancelled`, `expired` or `revoked` once settled), its
 title from the machine's saved read (else "new session"), its folder, its live
 `model:thinking` in the provider's hue and one verb. **open** goes to its terminal;
 **cancel** finishes a Run whose terminal never opened (it never stops a running TUI);
@@ -607,8 +612,9 @@ now", or "running now · thinking xhigh" when the model clamped it). A model the
 does not serve is struck ("not served here · terra stays"); no answer within 20 s says
 so and offers **send again**; a caller the door refuses reads "its launcher's or
 sponsor's alone". A press while a change waits is said as next ("high · next · once terra
-answers") and sent once the answer lands, the latest such press replacing an earlier one.
-A starting or detached Run's dials are shown off and send nothing. `←` `→` rest on a word
+answers") and sent once the answer lands, the latest such press replacing an earlier one;
+a Run whose dials lock meanwhile drops it. A starting or detached Run's dials are shown
+off and send nothing. `←` `→` rest on a word
 half a second before sending it, and any press in that half second sends only itself; `↵` and
 `Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
 what choosing it sends, the lease its next renewal and the activity what it means, all on
@@ -823,9 +829,11 @@ Manifold action transport as the web. It composes `createCodeClient` with
   same press, once the Run is cancelled, launches the reviewed session while its review
   still stands. `readRuns(containerId)` lists the visible Code Agents named for the
   workspace, their Runs, each listed Run's inspection (renewals, settlement, exit code)
-  and the terminal inventory; a Run's TUI is a running terminal of its session opened
-  while the Run stood, so a later Run-less resume of that session is an ordinary running
-  row. `controlRun(runId, { model?, thinking? })` is OMP's door.
+  and the terminal inventory. An open or expired Run's TUI is a running terminal of its
+  session opened while the Run stood, so a later Run-less resume of that session is an
+  ordinary running row; a Run settled otherwise keeps a future expiry, so its TUI is only
+  a terminal its inspection names. Every Run whose session still runs a terminal is
+  inspected, whatever its age. `controlRun(runId, { model?, thinking? })` is OMP's door.
   A Run whose lease ends, after a missed renewal or the 24th, settles `expired`, but
   its terminal job runs under the opener's credential and goes on, so Code shows it
   as detached while that terminal runs; Run input, and therefore its dials, then

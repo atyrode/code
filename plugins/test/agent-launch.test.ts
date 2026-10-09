@@ -6,8 +6,8 @@ import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
-import { answerDial, NO_DIALS, pressDial, refuseDial, settleDial } from "../code/generator/run-dials.ts";
-import { leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
+import { answerDial, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readKeptAnswers, refuseDial, settleDial } from "../code/generator/run-dials.ts";
+import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
 const target = { containerId: "workspace", machineId: "destination" };
 const containerUri = formatManifoldUri({ kind: "container", containerId: target.containerId });
@@ -49,6 +49,25 @@ function launchedOf(runtime: Record<string, unknown> = {}) {
   return { runtime: { machineId: target.machineId, pluginId: "atyrode.omp", operationId: "atyrode.omp.harness", installationRevision: "native",
     artifactSha256: "c".repeat(64), input: { sessionId, tui: true }, resourceBindingDigest: "d".repeat(64), launchBinding: "binding-1", session, ...runtime },
     destination: { machineId: target.machineId }, session, reviewDigest: "f".repeat(64) };
+}
+const session = (id: string) => ({ harness: "atyrode.omp", sessionId: id, machineId: target.machineId });
+/** A Run as `listRunsV2` lists it: open, created an hour before `now` and expiring an hour after, unless `overrides` say otherwise. */
+function listedRun(id: string, now: number, overrides: Record<string, unknown>) {
+  return { id, principalId: "agent-principal", agentId: "agent-1", session: null, activity: "idle", name: "Code", state: "pending_policy", purpose: "Code",
+    createdAt: now - HOUR, expiresAt: now + HOUR, parentRunId: null, actionCount: 0, refusalCount: 0, scope, ...overrides };
+}
+type ListedRun = { readonly id: string; readonly principalId: string; readonly agentId: string; readonly session: unknown; readonly activity: string;
+  readonly name: string; readonly state: string; readonly purpose: string; readonly createdAt: number; readonly expiresAt: number };
+/** `inspectRunV2`'s answer for a listed Run: settled at `finishedAt` (null while open), naming the running terminals it opened. */
+function inspectionOf(run: ListedRun, finishedAt: number | null, terminalIds: readonly string[]) {
+  return { availability: "available", observedAt: run.createdAt, run: { id: run.id, principalId: run.principalId, agentId: run.agentId, session: run.session,
+    activity: run.activity, name: run.name, state: run.state, rootRunId: run.id, parentRunId: null, sponsorPrincipalId: "writer", authorizationPath: "principal",
+    purpose: run.purpose, target: containerUri, reach: "subtree", caps: ["containers:read"], createdAt: run.createdAt, expiresAt: run.expiresAt, renewals: 2,
+    depth: 0, maxDepth: 0, maxDescendants: 0, policyRevision: "e".repeat(64), acknowledgedPolicyRevision: null, policyAcknowledgedAt: null,
+    cleanup: { ownerPrincipalId: "writer", revokedCredentials: 1, revokedGrants: 0, finishedAt, status: finishedAt === null ? "pending" : "finished" }, scope },
+    lineage: [], lineageComplete: true, credentials: [], connections: [], traces: [], nextBeforeTraceId: null, requestedTrace: "not_requested",
+    history: "retained_only", jobs: [], nativeTruncated: false, terminals: terminalIds.map(terminalId => ({ terminalId, machineId: target.machineId,
+      containerId: target.containerId, createdAt: run.createdAt, state: "running", exitCode: null, traceId: null, retention: "retained" })) };
 }
 
 /**
@@ -149,6 +168,11 @@ describe("the agent door sequence", () => {
       await expect(g.workflow.launchAgent(g.review)).rejects.toThrow();
       expect(g.doors().at(-1)).toBe("core.access.finishAgentRunV2");
     }
+    // A TUI that would write a session other than the one the Run is bound to is cancelled too.
+    const other = agentFixture();
+    other.answers["core.access.launchRun"] = () => launchedOf({ input: { sessionId: "8ab82ad4-8c9e-4166-8130-472c7cae1559", tui: true } });
+    await expect(other.workflow.launchAgent(other.review)).rejects.toThrow("code_run_changed");
+    expect(other.doors().at(-1)).toBe("core.access.finishAgentRunV2");
     // A cancellation that fails is named beside what stopped the launch.
     const h = agentFixture();
     h.answers["core.access.launchRun"] = () => h.deny("core.access.launchRun", "run_launch_owner_unavailable");
@@ -186,20 +210,17 @@ describe("the agent door sequence", () => {
   test("the runs read lists open, detached and recently ended Runs of this workspace's Code Agents only", async () => {
     const f = agentFixture();
     const base = await codeAgentName(target.containerId), now = Date.now();
-    const session = (id: string) => ({ harness: "atyrode.omp", sessionId: id, machineId: target.machineId });
-    const entry = (id: string, overrides: Record<string, unknown>) => ({ id, principalId: "agent-principal", agentId: "agent-1", session: null, activity: "idle",
-      name: "Code", state: "pending_policy", purpose: "Code", createdAt: now - HOUR, expiresAt: now + HOUR, parentRunId: null, actionCount: 0, refusalCount: 0, scope, ...overrides });
     const detachedSession = "8ab82ad4-8c9e-4166-8130-472c7cae1559";
     f.answers["core.access.listAgentsV2"] = () => ({ agents: [agentOf(base), agentOf("Code someone-else", { agentId: "agent-2" })], truncated: false, canRegister: true });
     f.answers["core.access.listRunsV2"] = input => {
       expect(input).toEqual({ agentId: "agent-1" });
       return { observedAt: now, truncated: false, runs: [
-        entry("live", { session: session(sessionId), createdAt: now - 10 * 60_000 }),
-        entry("detached", { session: session(detachedSession), state: "expired", createdAt: now - 20 * HOUR }),
-        entry("expired-gone", { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR, expiresAt: now - 2 * HOUR }),
-        entry("never-launched", { state: "cancelled", createdAt: now - 2 * HOUR }),
-        entry("old", { session: session(sessionId), state: "completed", createdAt: now - 30 * HOUR }),
-        ...[1, 2, 3].map(index => entry(`ended-${index}`, { session: session(sessionId), state: "completed", createdAt: now - index * HOUR - 1 })),
+        listedRun("live", now, { session: session(sessionId), createdAt: now - 10 * 60_000 }),
+        listedRun("detached", now, { session: session(detachedSession), state: "expired", createdAt: now - 20 * HOUR }),
+        listedRun("expired-gone", now, { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR, expiresAt: now - 2 * HOUR }),
+        listedRun("never-launched", now, { state: "cancelled", createdAt: now - 2 * HOUR }),
+        listedRun("old", now, { session: session(sessionId), state: "completed", createdAt: now - 30 * HOUR }),
+        ...[1, 2, 3].map(index => listedRun(`ended-${index}`, now, { session: session(sessionId), state: "completed", createdAt: now - index * HOUR - 1 })),
       ] };
     };
     const running: TerminalSummary = { id: "tui", machineId: target.machineId, name: "OMP", createdAt: now - 20 * HOUR, status: "running", exitCode: null,
@@ -217,6 +238,43 @@ describe("the agent door sequence", () => {
     expect(read.runs.find(run => run.run.id === "expired-gone")!.terminal).toBeNull();
     expect(read.runs.find(run => run.run.id === "ended-1")!.terminal).toBeNull();
     expect(read.runs.every(run => run.inspection === null)).toBe(true);
+  });
+
+  test("a revoked Run whose inspection names its running TUI is detached and listed with the open Runs, whatever its age", async () => {
+    const f = agentFixture();
+    const base = await codeAgentName(target.containerId), now = Date.now();
+    const revokedSession = "8ab82ad4-8c9e-4166-8130-472c7cae1559", resumedSession = "9ab82ad4-8c9e-4166-8130-472c7cae1559";
+    const runs = [
+      listedRun("live", now, { session: session(sessionId), createdAt: now - 10 * 60_000 }),
+      // Revoked in Agents more than a day ago while its TUI ran on: only its inspection says that terminal is its own.
+      listedRun("revoked", now, { session: session(revokedSession), state: "revoked", createdAt: now - 30 * HOUR }),
+      // Completed, then resumed without a Run: its inspection names no running terminal, so it stays an ended Run.
+      listedRun("completed-resumed", now, { session: session(resumedSession), state: "completed", createdAt: now - 2 * HOUR }),
+      listedRun("ended", now, { session: session("aab82ad4-8c9e-4166-8130-472c7cae1559"), state: "completed", createdAt: now - HOUR }),
+      // Ended without a running terminal of their session: only the newest three of the last day are read, never a fourth or an older one.
+      ...[3, 4, 5].map((hours, index) => listedRun(`ended-${index + 2}`, now, { session: session(`${"bcd"[index]}ab82ad4-8c9e-4166-8130-472c7cae1559`), state: "completed",
+        createdAt: now - hours * HOUR })),
+      listedRun("old", now, { session: session("fab82ad4-8c9e-4166-8130-472c7cae1559"), state: "completed", createdAt: now - 30 * HOUR }),
+    ];
+    f.answers["core.access.listAgentsV2"] = () => ({ agents: [agentOf(base)], truncated: false, canRegister: true });
+    f.answers["core.access.listRunsV2"] = () => ({ observedAt: now, truncated: false, runs });
+    const terminal = (id: string, of: string, createdAt: number): TerminalSummary => ({ id, machineId: target.machineId, name: "OMP", createdAt, status: "running",
+      exitCode: null, homeId: target.containerId, unplaced: false, session: session(of) });
+    f.answers["core.terminals.listAll"] = () => ({ terminals: [terminal("tui-revoked", revokedSession, now - 29 * HOUR), terminal("resumed", resumedSession, now - 10 * 60_000),
+      terminal("tui-live", sessionId, now - 9 * 60_000)] });
+    const finishedAt = now - 20 * 60_000;
+    f.answers["core.access.inspectRunV2"] = input => {
+      const run = runs.find(candidate => candidate.id === input.runId)!;
+      return inspectionOf(run, run.state === "revoked" ? finishedAt : null, run.id === "revoked" ? ["tui-revoked"] : run.id === "live" ? ["tui-live"] : []);
+    };
+    const read = await f.workflow.readRuns(target.containerId);
+    expect(read.runs.map(entry => entry.run.id)).toEqual(["live", "revoked", "ended", "completed-resumed", "ended-2"]);
+    const revoked = read.runs.find(entry => entry.run.id === "revoked")!;
+    expect([revoked.terminal?.id, runPhase(revoked), detachedAt(revoked)]).toEqual(["tui-revoked", "detached", finishedAt]);
+    const resumed = read.runs.find(entry => entry.run.id === "completed-resumed")!;
+    expect([resumed.terminal, runPhase(resumed)]).toEqual([null, "completed"]);
+    expect(f.calls.filter(call => call.door === "core.access.inspectRunV2").map(call => call.input.runId).sort())
+      .toEqual(["completed-resumed", "ended", "ended-2", "ended-3", "live", "revoked"]);
   });
 });
 
@@ -271,6 +329,26 @@ describe("a Run's dials", () => {
     expect(forbidden.forbidden).toBe(true);
     expect(pressDial(forbidden, { field: "thinking", value: "high" }, launched, none).send).toBe(false);
     expect(refuseDial(pending, change, "omp_session_unavailable", "").outcome).toEqual({ kind: "gone" });
+  });
+
+  test("the answers kept per workspace come back after a reload, newest last and at most 32; malformed or refused storage keeps none and throws nothing", () => {
+    const stored = new Map<string, string>();
+    const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), changed: Dials = { model: "anthropic/claude-opus-5", thinking: "high" };
+    for (let index = 0; index < 34; index++) keepAnswer(storage, key, `run-${index}`, launched);
+    // Kept again, a Run's answer is its newest, never a second entry.
+    keepAnswer(storage, key, "run-2", changed);
+    const kept = readKeptAnswers(storage, key);
+    expect([kept.size, [...kept.keys()][0], [...kept.keys()].at(-1), kept.get("run-2")]).toEqual([32, "run-3", "run-2", changed]);
+    expect(readKeptAnswers(storage, keptAnswersKey("writer", "another-workspace")).size).toBe(0);
+    for (const text of ["{", JSON.stringify([["run-1", { model: 1, thinking: null }]])]) {
+      stored.set(key, text);
+      expect(readKeptAnswers(storage, key).size).toBe(0);
+    }
+    const refusing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
+    expect(readKeptAnswers(refusing, key).size).toBe(0);
+    expect(() => keepAnswer(refusing, key, "run-1", launched)).not.toThrow();
+    expect(readKeptAnswers(null, key).size).toBe(0);
   });
 });
 

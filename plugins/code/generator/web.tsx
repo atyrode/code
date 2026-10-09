@@ -354,7 +354,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       case "recall": generator.current?.recall(action.index); return true;
       case "enter":
         if (view === "main") generator.current?.focusRows();
-        else app.current?.querySelector<HTMLElement>(`[data-pane="${view}"] :is(button, [tabindex="0"]):not([aria-disabled="true"])`)?.focus();
+        else app.current?.querySelector<HTMLElement>(`[data-pane="${view}"] :is(button, [tabindex="0"]):not([aria-disabled="true"], [data-session-said])`)?.focus();
         return true;
     }
   }
@@ -491,11 +491,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
           onDraft={drafting => { presetDraft.current = drafting; }} /></div>}
       </section>
       <section className={`${G}pane`} data-pane="sessions" aria-label="sessions" hidden={view !== "sessions"} tabIndex={-1}>
-        <header className={`${G}head`}><h2 className={`${G}title`}>sessions</h2></header>
-        <div className={`${G}earlier`}>
-          <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} onRecall={index => generator.current?.recall(index)}
-            rereads={rereads} announce={announce} />
-        </div>
+        <EarlierStatements host={host} model={model} line={line} recents={recents} pools={pools} onRecall={index => generator.current?.recall(index)}
+          rereads={rereads} announce={announce} />
       </section>
     </main>
     <footer className={`${G}keys`} aria-label="keys">

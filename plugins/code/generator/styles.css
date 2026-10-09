@@ -898,10 +898,32 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-rows > li:has([data-open]) { z-index: 3; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note { margin: 0; padding: 4px 0; color: var(--tui-dim); overflow-wrap: anywhere; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-note > .plugin-atyrode_code_generator__earlier-link { margin-left: 0; }
+/* The view's own line, on its head beside the name: what its last verb came to, warm when it failed or was refused.
+ * It takes the head's free width and ends in an ellipsis rather than wrapping, so its words never move a row. Cut, its
+ * focus, a tap or the pointer lays the whole words over the rows under the head, on the panel ground between hairlines
+ * as an open drum is, moving nothing; Esc puts them away. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__pane[data-pane="sessions"] > .plugin-atyrode_code_generator__head { position: relative; align-items: baseline; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said { flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; color: var(--tui-dim); font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said:focus-visible { outline: none; box-shadow: inset 0 -1px 0 var(--tui-acc); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said-whole {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: none;
+  margin: 0;
+  border-block: 1px solid var(--tui-rule);
+  padding: 4px 0;
+  background: var(--code-panel);
+  color: var(--tui-dim);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said[data-cut]:is(:hover, :focus):not([data-away]) + .plugin-atyrode_code_generator__earlier-said-whole { display: block; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__earlier-said, .plugin-atyrode_code_generator__earlier-said-whole)[data-tone="warn"] { color: var(--tui-warn-text); }
 /* An empty list is a sentence, not a framed row. */
-/* The view's own line: what its last verb came to, warm when it failed or was refused. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said { min-height: 20px; margin: 0 0 6px; color: var(--tui-dim); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-said[data-tone="warn"] { color: var(--tui-warn-text); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__earlier-empty { margin: 0; color: var(--tui-dim); overflow-wrap: anywhere; }
 
 /*
