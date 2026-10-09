@@ -4284,6 +4284,16 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       const pane = document.querySelector('${generator} [data-pane="sessions"]'), top = pane.getBoundingClientRect().top;
       return [...pane.querySelectorAll('.${G}earlier-group, .${G}earlier-rows > li')].map(el => Math.round((el.getBoundingClientRect().top - top) * 2) / 2);
     })()`;
+    // A refusal's words must move no row at any width either: each width's rows are measured with the line still empty.
+    const saidWidths = [1280, 620, 360, 320] as const;
+    assert.equal(await browser.evaluate(`${saidLine}.textContent`), "", "The view's line is empty before its first verb");
+    const emptyTops = new Map<number, number[]>();
+    for (const width of saidWidths) {
+      await panelWidth(browser, width);
+      emptyTops.set(width, await browser.evaluate<number[]>(rowTops));
+    }
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    await settle(browser);
     const tops = await browser.evaluate<number[]>(rowTops);
     const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await click(browser, rowVerb(first.machineId, "resume"));
@@ -4295,10 +4305,55 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "automatic plans refuse resuming with this profile before native resume",
       `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') === 'true'`);
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
-    await until(browser, "the refused row verb says what and why, on the view's own line and aloud",
-      `${sessionSays(`${rowVerb(first.machineId, "resume-with-team")}.getAttribute('aria-label') + ' · ' + ${rowVerb(first.machineId, "resume-with-team")}.title`)} &&
-      ${liveRegion}.textContent === ${saidLine}.textContent`);
+    // The press already names the row, so the line says the reason alone and its start shows at every width.
+    const reason = await browser.evaluate<string>(`${rowVerb(first.machineId, "resume-with-team")}.title`);
+    await until(browser, "the refused row verb says why, on the view's own line and aloud",
+      `${sessionSays(JSON.stringify(reason))} && ${liveRegion}.textContent === ${saidLine}.textContent`);
     assert.deepEqual(await browser.evaluate<number[]>(rowTops), tops, "A refused verb's words move no row of the sessions view");
+    for (const width of saidWidths) {
+      await panelWidth(browser, width);
+      assert.deepEqual(await browser.evaluate(`(() => {
+        const rect = ${saidLine}.getBoundingClientRect();
+        return { words: ${saidLine}.textContent === ${JSON.stringify(reason)}, height: Math.round(rect.height), wide: rect.width >= 120 };
+      })()`), { words: true, height: 20, wide: true }, `At ${width}px the refusal's reason starts the view's one 20px line`);
+      assert.deepEqual(await browser.evaluate<number[]>(rowTops), emptyTops.get(width), `At ${width}px a refusal's words move no row of the sessions view`);
+    }
+    // Cut, the line is a Tab stop whose focus or tap lays its whole words over the rows, inside the panel, moving nothing.
+    const wholeSaid = element(`${generator} [data-pane="sessions"] .${G}earlier-said-whole`);
+    const wholeShows = `(() => {
+      const el = ${wholeSaid};
+      if (!el?.checkVisibility()) return false;
+      const panel = document.querySelector('${generator}').getBoundingClientRect(), rect = el.getBoundingClientRect();
+      return el.textContent === ${JSON.stringify(reason)} && rect.left >= panel.left - 0.5 && rect.right <= panel.right + 0.5 && rect.top >= ${saidLine}.getBoundingClientRect().bottom - 0.5;
+    })()`;
+    for (const width of [360, 320] as const) {
+      await panelWidth(browser, width);
+      assert.equal(await browser.evaluate(`${saidLine}.dataset.cut !== undefined && ${saidLine}.tabIndex === 0 && !${wholeSaid}.checkVisibility()`), true,
+        `At ${width}px the cut line is a Tab stop, its whole words put away`);
+    }
+    await tabTo(browser, "the cut line, a Tab stop before the rows", saidLine, true);
+    await until(browser, "focused, the cut line lays its whole words over the rows", wholeShows);
+    assert.deepEqual(await browser.evaluate<number[]>(rowTops), emptyTops.get(320), "The whole words move no row");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc puts the whole words away and leaves the sessions view on show",
+      `!${wholeSaid}.checkVisibility() && ${shownView("sessions")} && document.activeElement === ${saidLine}`);
+    await panelWidth(browser, 360);
+    await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    try {
+      // A coarse pointer gives the verbs their 44px, so the rows the tap must not move are measured under it.
+      await settle(browser);
+      const coarseTops = await browser.evaluate<number[]>(rowTops);
+      await tap(browser, element(`${generator} [data-pane="sessions"] .${G}title`));
+      await until(browser, "a tap elsewhere leaves the line", `document.activeElement !== ${saidLine}`);
+      await tap(browser, saidLine);
+      await until(browser, "a tap on the cut line lays its whole words over the rows", wholeShows);
+      assert.deepEqual(await browser.evaluate<number[]>(rowTops), coarseTops, "The whole words move no row under a tap");
+      await tap(browser, element(`${generator} [data-pane="sessions"] .${G}title`));
+      await until(browser, "a tap elsewhere puts them away", `!${wholeSaid}.checkVisibility()`);
+    } finally {
+      await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+      await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    }
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
 
@@ -4845,8 +4900,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
         assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus step ${steps} across the Runs shifts no layout box`);
       }
       assert(steps >= 8, `Tab walks the Runs' verbs, dials and send again (${steps} steps)`);
-      // The said line starts where the dials' words do, at every layout. The view's own line sits on its head's row, so the
-      // sessions start right under the head with no room kept for it.
+      // The said line starts where the dials' words do, at every layout. No room is kept under the head for the view's own line
+      // (it sits on the head's row; the sessions scenario fills it), so the sessions start right under the head.
       for (const width of [1280, 620, 360]) {
         await panelWidth(browser, width);
         assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id][data-open]')].map(run =>
@@ -4854,9 +4909,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
           .filter(gap => Math.abs(gap) > 1)`), [], `The said line lines up with the dials' words at ${width}px`);
         assert.deepEqual(await browser.evaluate(`(() => {
           const pane = document.querySelector('${sessionsPane}'), head = pane.querySelector(':scope > .${G}head').getBoundingClientRect();
-          const said = pane.querySelector('[data-session-said]').getBoundingClientRect(), group = pane.querySelector('.${G}earlier-group').getBoundingClientRect();
-          return { said: said.top >= head.top - 0.5 && said.bottom <= head.bottom + 0.5 && said.left > head.left, under: Math.round(group.top - head.bottom) };
-        })()`), { said: true, under: 14 }, `At ${width}px the view's line shares its head's row and the sessions start 14px under the head`);
+          return Math.round(pane.querySelector('.${G}earlier-group').getBoundingClientRect().top - head.bottom);
+        })()`), 14, `At ${width}px the sessions start 14px under the head`);
       }
       // Under reduced motion every Run mark rests, so each width and view is measured still.
       await geometryAcrossWidths(browser, "agent launch");

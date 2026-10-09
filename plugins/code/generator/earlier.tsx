@@ -17,7 +17,7 @@ import type { WorkbenchActions, WorkbenchModel } from "./workbench-model.ts";
 import {
   differences, formRecent, machineReads, machineState, phrase, pinRecents, rowVerdict, savedFolders, sessionName, sessionRows, sessionSaid, sessionsNote, sessionTitle,
   strandsNote, teamProvenance, teamSentence, type RecentForm, type RowIntent, type RowVerdict, type SavedFolder, type SessionPress, type SessionRead, type SessionRow,
-  type StatementWords,
+  type SessionSaid, type StatementWords,
 } from "./earlier-model.ts";
 import { teamWords, type Vocabulary } from "./statement-model.ts";
 
@@ -85,18 +85,50 @@ function LaneMark({ lane }: { lane: Lane }) {
 
 /**
  * A row's verb, named with its object. Always focusable: a refused one is `aria-disabled`, carries
- * its reason as its description and tooltip, and says it when pressed (`say`: the view's line and the live region).
+ * its reason as its description and tooltip, and says only that reason when pressed (`say`: the view's line and the live
+ * region), since the press already named the row.
  */
-function Verb({ className, name, subject, verdict, busy = false, onPress, announce, children, ...data }: {
-  className: string; name: string; subject?: string; verdict: RowVerdict; busy?: boolean; onPress: () => void;
+function Verb({ className, name, verdict, busy = false, onPress, announce, children, ...data }: {
+  className: string; name: string; verdict: RowVerdict; busy?: boolean; onPress: () => void;
   announce: (text: string) => void; children: ReactNode; [attribute: `data-${string}`]: string | number | true | undefined;
 }) {
   const reason = useId();
   return <>
     <button type="button" className={className} aria-label={name} aria-disabled={verdict.open ? undefined : "true"} aria-busy={busy || undefined}
       aria-describedby={verdict.open ? undefined : reason} title={verdict.open ? undefined : verdict.reason} {...data}
-      onClick={() => { if (verdict.open) onPress(); else announce(`${subject ?? name} · ${verdict.reason}`); }}>{children}</button>
+      onClick={() => { if (verdict.open) onPress(); else announce(verdict.reason); }}>{children}</button>
     {!verdict.open && <span id={reason} hidden>{verdict.reason}</span>}
+  </>;
+}
+
+/**
+ * The view's own line, beside its name: what its last verb came to, on one line that ends in an ellipsis, so its words never
+ * move a row. Cut, it is a Tab stop: focused, tapped or pointed, it lays its whole words over the rows under the head,
+ * moving nothing, until it loses focus or Esc puts them away. Focused with its words shown, it owns its keys, as an open
+ * drum does, so Esc never also leaves the view.
+ */
+function SaidLine({ said }: { said: SessionSaid | null }) {
+  const line = useRef<HTMLParagraphElement>(null);
+  const [cut, setCut] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [away, setAway] = useState(false);
+  const text = said?.text ?? "";
+  useLayoutEffect(() => {
+    const node = line.current;
+    if (!node) return;
+    const measure = () => setCut(node.scrollWidth > node.clientWidth + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+  const tone = said?.failed ? "warn" : undefined;
+  return <>
+    <p ref={line} className={`${G}earlier-said`} data-session-said="" data-tone={tone} data-cut={cut || undefined} data-away={away || undefined}
+      data-popover={(cut && focused && !away) || undefined} tabIndex={cut ? 0 : undefined}
+      onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); setAway(false); }}
+      onKeyDown={event => { if (event.key === "Escape" && cut && !away) { event.preventDefault(); setAway(true); } }}>{text}</p>
+    {cut && <p className={`${G}earlier-said-whole`} data-tone={tone} aria-hidden="true">{text}</p>}
   </>;
 }
 
@@ -271,7 +303,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
       if (!running.some(terminal => terminal.id === terminalId)) throw new WorkflowError("That terminal is no longer running. Nothing was opened.");
       // Asked again on the latest facts: a step that started while looking stops here.
       const again = rowVerdict("open", latest.current.gate("open"), machineState(row.machineId, machines, rosterError), row.machineId, latest.current.machineId);
-      if (!again.open) throw new WorkflowError(`Nothing was opened: ${again.reason}`);
+      if (!again.open) throw new WorkflowError(`Not opened: ${again.reason}`);
       if (mounted.current) host.navigate(formatManifoldUri({ kind: "terminal", terminalId }));
     } catch (reason) {
       say(codeOperationFailure(reason));
@@ -345,7 +377,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     // The choice landed, unless the destination changed under it and cleared it.
     if (model.savedSessionId !== pending.sessionId) { settle(); say("The line's machine changed. Nothing was resumed."); return; }
     const again = model.gate(pending.withTeam ? "resume-with-team" : "resume");
-    if (!again.open) { model.setSavedSessionId(""); settle(); say(`Nothing was resumed: ${again.refusal.text}`); return; }
+    if (!again.open) { model.setSavedSessionId(""); settle(); say(`Not resumed: ${again.refusal.text}`); return; }
     void finishResume(pending.withTeam);
   }, [pending, model.savedSessionId]);
 
@@ -440,7 +472,7 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
       : recallGate.open ? recallGate : { open: false, reason: recallGate.refusal.text };
     return <li key={digit}>
       <Verb className={`${G}earlier-team`} name={`Recall profile ${digit}: ${teamSentence(teamWords(team.selection, familyWord))}${fate ? `; ${fate}` : ""}`}
-        subject={`Recall profile ${digit}`} verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
+        verdict={allowed} data-digit={digit} data-here={here || undefined} data-refused={refused ? "" : undefined}
         onPress={() => onRecall(index)} announce={say}>
         <span className={`${G}earlier-digit`} aria-hidden="true">{digit}</span>
         <span className={`${G}earlier-words`}>
@@ -457,12 +489,12 @@ export function EarlierStatements({ host, model, line, recents, pools, onRecall,
     </li>;
   }
 
-  // The view's head names it and, beside the name, says what its last verb came to: one line that ends in an ellipsis, its
-  // words whole in its title and said aloud, so a press never moves a row. Each group heads only what it says of itself.
+  // The view's head names it and, beside the name, says what its last verb came to on one line (`SaidLine`), so a press never
+  // moves a row. Each group heads only what it says of itself.
   return <>
     <header className={`${G}head`}>
       <h2 className={`${G}title`}>sessions</h2>
-      <p className={`${G}earlier-said`} data-session-said="" data-tone={said?.failed ? "warn" : undefined} title={said?.text}>{said?.text}</p>
+      <SaidLine said={said} />
     </header>
     <div className={`${G}earlier`}>
       {readers.map(machine => <MachineRead key={machine.id} host={host} machineId={machine.id} attempt={attempts.get(machine.id)!} report={report} />)}

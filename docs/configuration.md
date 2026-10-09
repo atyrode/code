@@ -567,8 +567,10 @@ unsaved preset draft survives a look back at the accounts.
 
 The **Sessions** tab (`e`) replaces the stage with two groups, each said only where it
 differs from the generator. What a row verb came to is said beside the view's name, on
-one line that ends in an ellipsis (its words whole in its tooltip and announced), so it
-never moves a row.
+one line that ends in an ellipsis, so it never moves a row. A refused verb says only its
+reason, since the press named the row. Cut, the line is a Tab stop: focused, tapped or
+pointed, it lays its whole words over the rows below without moving them, and `Esc` puts
+them away.
 
 **Sessions.** Rows are grouped under their machine, whose head names it once with its
 read. Running sessions (terminals that carry an OMP session reference on their own

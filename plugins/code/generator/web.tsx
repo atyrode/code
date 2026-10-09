@@ -354,7 +354,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       case "recall": generator.current?.recall(action.index); return true;
       case "enter":
         if (view === "main") generator.current?.focusRows();
-        else app.current?.querySelector<HTMLElement>(`[data-pane="${view}"] :is(button, [tabindex="0"]):not([aria-disabled="true"])`)?.focus();
+        else app.current?.querySelector<HTMLElement>(`[data-pane="${view}"] :is(button, [tabindex="0"]):not([aria-disabled="true"], [data-session-said])`)?.focus();
         return true;
     }
   }
