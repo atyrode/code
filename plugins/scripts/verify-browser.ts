@@ -1267,6 +1267,10 @@ async function sheetStill(browser: BrowserInstance, what: string): Promise<void>
  * Leaves the profile as it found it.
  */
 async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection, draftKey: string): Promise<void> {
+  // The main view rests once its destination is judged. Until every online machine has said whether OMP answers there, the
+  // launch names no machine, and the judgement then changes the word with nothing pressed (machine-web.ts `useCodeTarget`):
+  // landing while the machine list was open below, it read as Mod+↵ in the list changing the machine.
+  await until(browser, "the launch names the machine the panel judged", `${machinePicker}?.textContent === ${JSON.stringify(machineName)}`);
   const before = await readProfile(browser, draftKey);
   const thinking = await browser.evaluate<string>(chosenKey("thinking")), advisor = await browser.evaluate<string>(chosenKey("advisor"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
