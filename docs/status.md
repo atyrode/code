@@ -72,6 +72,15 @@ files, service state, credentials or backups.
   stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
+- Agent launch is source-, unit- and design-level only. Neither the gate nor any
+  preview has exercised a live Agent Run through Code: registration, Run creation,
+  `launchRun`, renewal, activity and `controlRun` are proven end to end only by
+  OMP's own native harness gate. The browser verifier's disposable server has no
+  native job owner, so its launchRun refuses. Code shows only the last
+  `controlRun` answer this browser received, else the launch's model, because
+  `Run.model` is written once (atyrode/manifold#1071). A Run is attributed for at
+  most about 13 leases. After that, or after a missed renewal, its TUI goes on
+  detached and unattributed, with no dials.
 - The main view's presentation has these bounds. Cost is a relative list-price index,
   not billing, and the speed meter stays unlit and says "unmeasured" until every lead
   model has measured throughput. The usage pane reads again every five minutes
