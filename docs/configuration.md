@@ -67,10 +67,19 @@ lane, capability, thinking, advisor, priority, prewalk, plan-yolo, fallback and 
 (always the domain's default, `any`, in the panel), and still parses a `spark` flag,
 which is read as off. Code never recovers these semantics from terminal output.
 
+A family's declared rungs fill its missing tiers 1–3, each gap from the nearest declared
+rung (the lower on a tie), so a filled tier routes to a real model of that family; tier 4
+is never filled. A lead on a filled tier is that rung's model and routes as it: its
+fallbacks step down from the rung's own tier and cross to another family at that tier,
+not the one chosen (GPT smart on `terra`, a normal rung, crosses to Claude's normal). A
+family Code requires (OpenAI, Anthropic) fills the same way: one that lacks a rung of its
+own at tier 1, 2 or 3 is **short**, and the compiled catalog names it (`short`) rather
+than refusing it.
+
 Known providers may add named families, quota metadata, priority
 or off-peak behavior. A provider without such a policy is still a complete
-provider family: its exact provider identifier is the family, its declared
-rungs may fill missing capability tiers, and Code adds no cross-provider lane,
+provider family: its exact provider identifier is the family, its rungs fill missing
+tiers like any family's, and Code adds no cross-provider lane,
 quota bucket, priority or special-tier assumption. A nonreasoning inventory
 model is represented by the single `minimal` routing level rather than excluded.
 Launch composition still requires a fresh selected account for every exact
@@ -126,7 +135,14 @@ requests per provider, having probed and spent nothing. A catalog routes only it
 rungs, so the charge probes every eligible model of a family Code requires (OpenAI,
 Anthropic), whose ladder must survive a model that does not answer, and only the
 rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provider);
-such a rung that does not answer leaves that family shorter. Only the returned `confirm`
+such a rung that does not answer leaves that family shorter. A family Code requires is
+laddered on whatever of it answers, short below three rungs, and one none of whose models
+answers is left out as a family with no account is; a selection that needs it is refused
+where it is reviewed. `deriveCatalog` returns the document and every other offered model
+with its reason; the document's compiled catalog names its short families. It refuses only a
+family Code requires whose most capable model regresses on its cheapest
+(`ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
+and nothing reachable at all (`probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
@@ -284,11 +300,13 @@ routing or usage is hidden, **Show routing** and **Show usage** stand in this he
   Confirm charge) and the readout says it finds the models the accounts reach.
 - **Model** is the capability tier (fast, normal, smart, elite), each tier read as the
   model alias its `default` role would lead on in the profile that choosing it forms,
-  with the tier's word under the alias. A tier no model fills reads as its word alone,
-  refused. A curated catalog's own keys (`sol`, `opus`) are its aliases. A derived key
-  (`provider.id`) is named by the last id segment that is not a version or qualifier
-  (`gpt-5.6-sol` is `sol`, `claude-haiku-4-5` is `haiku`); models whose aliases collide
-  keep their full ids, since two models wearing one name would misreport the route.
+  with the tier's word under the alias, so a tier a short family fills reads as the real
+  rung it routes to (smart reading `terra` beside normal's `terra`). A tier no model fills
+  reads as its word alone, refused. A curated catalog's own keys (`sol`, `opus`) are its
+  aliases. A derived key (`provider.id`) is named by the last id segment that is not a
+  version or qualifier (`gpt-5.6-sol` is `sol`, `claude-haiku-4-5` is `haiku`); models
+  whose aliases collide keep their full ids, since two models wearing one name would
+  misreport the route.
 - **Thinking** and **advisor** are levels whose fill grows from the first word; `off`
   is drawn quietly. Advisor adds its real role only when selected.
 - **Fallbacks** is two words, on then off. The chosen one says what it means; the other
@@ -688,15 +706,21 @@ retains restricted tool counts, skill selections or explicit disable-all.
 normal, smart, elite), as a matrix with tiers down and providers across from 760 px of
 sheet width and as one ladder under another below it. Each rung is its model's alias in
 the provider's hue with its measured speed as five blocks (under 30 tok/s one, then 45,
-60 and 90; none measured is a hairline track); an empty rung is a dash. The head says
+60 and 90; none measured is a hairline track); an empty rung is a dash, and pointing at
+one the family offers names the rung the model row lands on instead, while one above the
+family's top (an elite it lacks) says only that it has no model, as the model row refuses
+it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
+**· short** beside its name. The head says
 how many models are in use and when they were verified, or that a staged list waits
 beside them, that they are verifying, or that they are unverified or the bundled
 starter, with **import** (`i`) and **export** (`x`) as two quiet words. Beside the list
 is what the step is about: the charge per provider and the models not probed while
 verifying, a staged list's changes (field by field, a model added or dropped, the old
 value struck), or, after a verification in this panel, the models it left out, each
-with its reason in a word; a model in OMP's `spark` quota class reads **retired**, any
-other class of its own **own quota**. Ids, prices, speeds, thinking ranges and reasons
+with its reason in a word: a model the accounts' plan, their settings or this client
+excludes (`client_blocked`) reads **not served**, one no account finds (`not_found`) **not
+reachable**, a model in OMP's `spark` quota class **retired** and any other class of its
+own **own quota**. Ids, prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
 or focused.
 One next action sits where the launch sits and follows the step: **verify models**,

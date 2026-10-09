@@ -57,7 +57,10 @@ export const CatalogDraftSchema = z.strictObject({
   benchmark: BenchmarkInputSchema, exclusions: ExclusionsSchema,
 });
 export type CatalogDraft = z.infer<typeof CatalogDraftSchema>;
-/** A benchmark-verified catalog, and the named reason each other offered model is absent from it. */
+/**
+ * A benchmark-verified catalog, and the named reason each other offered model is absent from it.
+ * A family Code requires that it ladders short is the document's own fact (`CompiledCatalog.short`).
+ */
 export const DerivedCatalogSchema = z.strictObject({ document: CatalogDocumentSchema, exclusions: ExclusionsSchema });
 export type DerivedCatalog = z.infer<typeof DerivedCatalogSchema>;
 
@@ -247,10 +250,11 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
  * `rung(family, tier)`, so a model that is not a rung is never placed, as a lead or a fallback.
  * A family Code requires (`requiredLadder`: OpenAI, Anthropic) is probed whole, because its
  * ladder has to survive a model that does not answer: a blocked newest falls back to its callable
- * predecessor and a blocked rung to the next candidate. Any other family may be shorter or absent,
- * so it is probed only at the rungs its listing ladders as if every model answered, and a rung that
- * does not answer leaves that family shorter. Probing such a family whole made one OpenRouter key
- * put 207 of an aggregator's models in a 232-request charge, for a family that takes four rungs.
+ * predecessor and a blocked rung to the next candidate, so it is short only where nothing that
+ * answers can take the rung. Any other family is probed only at the rungs its listing ladders as
+ * if every model answered, and a rung that does not answer leaves that family shorter. Probing such
+ * a family whole made one OpenRouter key put 207 of an aggregator's models in a 232-request charge,
+ * for a family that takes four rungs.
  *
  * What is left unprobed is said where it has a reason (`superseded`, `regression`); a model that
  * is merely not chosen has none. The narrowing reads only the listing and the budget; the
@@ -304,7 +308,8 @@ function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
       exclusions.push(exclusion(lower, "regression"), exclusion(higher, "regression"));
       continue;
     }
-    if (policy.requiredLadder && rungs.length < 3) throw new ProbeError("insufficient_ladder");
+    // Fewer than three rungs is laddered, a family Code requires included: the accounts may reach
+    // only part of it, and its missing tiers route to its nearest rung (`CompiledCatalog.short`).
     const add = (model: InventoryModel, tier: CatalogModel["tier"], quotaBucket: string | null): void => {
       const fact = facts?.get(probeAddress(model));
       models.push({ key: candidateKey(model), provider: model.provider, id: model.id, api: model.api, tier, quotaBucket,
@@ -314,6 +319,10 @@ function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
     };
     rungs.forEach((model, index) => add(model, (index + 1) as CatalogModel["tier"], policy.meteredProviders.includes(model.provider) ? policy.quotaBucketBase : null));
   }
+  // A family none of whose models answer is left out, as a family with no account is, its models
+  // named among the exclusions, and a selection that needs it is refused where it is reviewed
+  // (routing.ts `selectionFacts`). With no family left, no selection could route at all.
+  if (models.length === 0) throw new ProbeError("insufficient_ladder");
   const document = parse(CatalogDocumentSchema, { schemaVersion: 1, models });
   try { compileCatalog(document); } catch { throw new ProbeError("insufficient_ladder"); }
   return { document, exclusions: exclusions.sort((a, b) => compare(probeAddress(a), probeAddress(b))) };

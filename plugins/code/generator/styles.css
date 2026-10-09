@@ -699,6 +699,8 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-mrow[data-top] > * { padding-top: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-mrow:last-child > * { border-bottom: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-prov { color: var(--h); font-weight: 650; line-height: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A family Code requires with fewer rungs than fast, normal and smart says so beside its name, quieter than the name. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-short { color: var(--tui-dim); font-weight: 400; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-tier { color: var(--tui-dim); line-height: 22px; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-ladders { display: grid; gap: 14px; min-width: 0; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-ladder { min-width: 0; }

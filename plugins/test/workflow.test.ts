@@ -291,9 +291,22 @@ test("a status read that fails while a probe runs cancels the probe, and a cance
   expect(left.evidence.benchmarkJobIds).toEqual(["benchmark-1"]);
 });
 
+test("a family Code requires that the accounts reach only in part is verified short, not refused", async () => {
+  const short = verificationFixture();
+  short.verdicts["claude-sonnet-5"] = "not_found"; short.verdicts["claude-opus-5"] = "client_blocked";
+  const verified = await (await short.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  expect(verified.configuration.active?.document.models.map(model => [model.tier, model.id]))
+    .toEqual([[1, "claude-haiku-5"], [1, "deepseek-flash"], [2, "deepseek-pro"]]);
+  expect(verified.exclusions).toEqual([{ provider: "anthropic", id: "claude-opus-5", reason: "client_blocked" },
+    { provider: "anthropic", id: "claude-sonnet-5", reason: "not_found" }, { provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }]);
+  // Claude's tiers above its one rung route to that rung, so the preview keeps its highest three-tier capability.
+  expect(verified.configuration.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
+});
+
 test("a derivation or selection the verified catalog cannot serve stops before anything is staged", async () => {
+  // Nothing the accounts offer answers, so there is no catalog to stage.
   const blocked = verificationFixture();
-  blocked.verdicts["claude-sonnet-5"] = "not_found"; blocked.verdicts["claude-opus-5"] = "client_blocked";
+  for (const id of ["claude-haiku-5", "claude-sonnet-5", "claude-opus-5", "deepseek-flash", "deepseek-pro"]) blocked.verdicts[id] = "not_found";
   const refused = await stopOf((await blocked.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
   expect([refused.step, refused.reason]).toEqual(["derive", "code_probe_insufficient_ladder"]);
   expect(blocked.calls).not.toContain("atyrode.code.stageCatalog");

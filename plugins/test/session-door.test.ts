@@ -255,8 +255,9 @@ describe("Code profiles a dependent plugin may offer", () => {
   test("a selection its catalog no longer supports is listed without a model rather than as one", async () => {
     const f = fixture();
     const record = await configured(f);
+    // The saved team leads on Claude, and the list in use now holds no Claude model.
     const narrowed = document();
-    narrowed.models = [{ ...narrowed.models[0]!, thinkingLevels: ["minimal"] }];
+    narrowed.models = [{ ...narrowed.models[0]!, provider: "deepseek", api: "openai-completions" }];
     f.store.set(`configuration/${digestOf(workspace)}`, JSON.stringify({ ...record,
       active: { document: narrowed, digest: digestOf(narrowed), provenance: null } }));
     expect((await accepted(f, "listProfiles", {})).profiles).toEqual([
