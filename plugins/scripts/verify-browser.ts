@@ -2639,20 +2639,25 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     assert(again.benchmark.completedAt > verified.benchmark.completedAt);
 
     // GPT is laddered on the one model its plan serves, short rather than refused, and says so beside its name; the models
-    // the plan does not serve are left out as not on plan, and an empty GPT rung names the rung it lands on.
-    assert.deepEqual([again.document.models.filter(model => model.provider === "openai-codex").map(model => [model.tier, model.id]), again.short],
-      [[[1, servedId]], ["openai"]], "One GPT model answers, so the derivation ladders GPT short");
+    // the plan does not serve are left out as not served. An empty rung GPT offers names the rung it lands on; elite, which
+    // GPT does not offer, says only that it has no model, as the model row refuses it.
+    assert.deepEqual([again.document.models.filter(model => model.provider === "openai-codex").map(model => [model.tier, model.id]),
+      compileCatalog(again.document).short], [[[1, servedId]], ["openai"]], "One GPT model answers, so the derivation ladders GPT short");
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${modelsSheet} .${G}models-prov')].map(el => [el.textContent, el.dataset.short !== undefined])`),
       [["GPT · short", true], ["Claude", false]], "GPT's head says it is short, and Claude's, whole, does not");
-    const notOnPlan = await browser.evaluate<{ id: string; why: string; label: string }[]>(`[...document.querySelectorAll('${modelsSheet} [data-side="left out"] li')].map(li => ({
+    const notServed = await browser.evaluate<{ id: string; why: string; label: string }[]>(`[...document.querySelectorAll('${modelsSheet} [data-side="left out"] li')].map(li => ({
       id: li.querySelector('.${G}models-xid').textContent, why: li.querySelector('.${G}models-why').textContent, label: li.querySelector('.${G}models-xid').getAttribute('aria-label') }))
-      .filter(entry => entry.why === 'not on plan')`);
-    assert.deepEqual(notOnPlan, [...unserved].sort().map(id => ({ id: `openai-codex/${id}`, why: "not on plan",
-      label: `openai-codex/${id}: Your accounts' plan or settings do not serve it` })), "Every Codex model the plan does not serve is left out as not on plan");
+      .filter(entry => entry.why === 'not served')`);
+    assert.deepEqual(notServed, [...unserved].sort().map(id => ({ id: `openai-codex/${id}`, why: "not served",
+      label: `openai-codex/${id}: Not served to your accounts: their plan, their settings or this client excludes it` })),
+      "Every Codex model the plan does not serve is left out as not served");
     const lands = await browser.evaluate<string>(`${element(`${modelsSheet} [data-cell="openai:1"] .${G}models-alias`)}.textContent`);
     await pointOf(browser, element(`${modelsSheet} [data-cell="openai:3"]`));
-    await until(browser, "an empty rung of the short family names the rung it lands on",
+    await until(browser, "an empty rung the short family offers names the rung it lands on",
       `${sheetSays(modelsSheet)} === ${JSON.stringify(`smart GPT · No smart GPT model in the list · the model row lands on ${lands}`)}`);
+    await pointOf(browser, element(`${modelsSheet} [data-cell="openai:4"]`));
+    await until(browser, "elite, which the short family does not offer, lands nowhere",
+      `${sheetSays(modelsSheet)} === 'elite GPT · No elite GPT model in the list'`);
     await pointAway(browser);
     await sheetGeometry(browser, modelsSheet, "Models short list");
 

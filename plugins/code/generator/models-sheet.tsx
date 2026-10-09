@@ -328,8 +328,9 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       const [family, tierText] = rest as [string, string];
       const tier = Number(tierText), row = at(family, tier), tierWord = TIERS[tier - 1]!;
       if (!row) {
+        // Only a tier the family offers lands somewhere: above its top the model row refuses the tier, as this says.
         let lands: string | null = null;
-        try { lands = compiled ? compiled.model(compiled.rung(family, tier)).key : null; } catch { lands = null; }
+        try { lands = compiled && tier <= compiled.top(family) ? compiled.model(compiled.rung(family, tier)).key : null; } catch { lands = null; }
         const alias = lands ? shown.find(candidate => candidate.key === lands)?.alias ?? null : null;
         return { value: `${tierWord} ${familyWord(family)}`, text: `No ${tierWord} ${familyWord(family)} model in the list${alias ? ` · the model row lands on ${alias}` : ""}`, warn: true };
       }

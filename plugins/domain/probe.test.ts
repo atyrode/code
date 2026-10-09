@@ -232,9 +232,9 @@ describe("pure typed scaffolding", () => {
       ["anthropic", 1], ["anthropic", 2], ["anthropic", 3],
     ]);
     // Two rows of a family Code requires are a short ladder: laddered, said short, never refused.
-    const short = derived({ ...inv, models: inv.models.slice(1) });
-    expect([tiers(short.document, "anthropic"), short.short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
-    expect(derived(inv).short).toEqual([]);
+    const short = derived({ ...inv, models: inv.models.slice(1) }).document;
+    expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
+    expect(compileCatalog(derived(inv).document).short).toEqual([]);
   });
   test("a shorter valid ladder beats extra rungs that lose context or thinking", () => {
     const inv = fullInventory(), model = inv.models.find(value => value.provider === "openai-codex")!;
@@ -586,7 +586,8 @@ describe("a family Code requires that the accounts reach only in part", () => {
       [[1, "claude-haiku-5-5"], [2, "claude-sonnet-5-5"], [3, "claude-opus-5-5"], [4, "claude-fable-5-1"]],
       [[1, "deepseek-flash"], [2, "deepseek-v4-pro"]],
     ]);
-    expect(derived.short).toEqual(["openai"]);
+    const catalog = compileCatalog(derived.document);
+    expect(catalog.short).toEqual(["openai"]);
     // What is left out, each with its reason: the plan's unserved GPT models among them.
     expect(derived.exclusions.map(exclusion => [exclusion.id, exclusion.reason])).toEqual([
       ["claude-fable-5", "superseded"], ["claude-haiku-4-5", "superseded"], ["claude-mythos-5", "not_found"], ["claude-mythos-5-1", "not_found"],
@@ -598,7 +599,7 @@ describe("a family Code requires that the accounts reach only in part", () => {
       ["gpt-6.1-sol", "client_blocked"],
     ]);
 
-    const catalog = compileCatalog(derived.document), team = defaultSelection(catalog);
+    const team = defaultSelection(catalog);
     const review = (changes: Partial<Selection>) => reviewCatalog(catalog, { ...team, ...changes }, 200);
     const lead = (value: Review, role: string) => catalog.model(value.routes.find(route => route.role === role)!.lead.key).id;
     const gpt: Selection["lane"] = { kind: "provider", family: "openai", blend: "only" };
@@ -611,6 +612,9 @@ describe("a family Code requires that the accounts reach only in part", () => {
       .toEqual(["gpt-5.6-terra", ["gpt-6-luna"]]);
     expect(compileOmpOverlay(catalog, smart.selection, smart.routes).modelRoles?.default).toBe("openai-codex/gpt-5.6-terra:medium");
     expect(() => review({ lane: gpt, capability: 4 })).toThrow("code_invalid_selection");
+    // A filled lead crosses at its own tier: GPT-led smart leads on terra, a normal rung, so its crossing is Claude's normal.
+    expect(review({ lane: { kind: "provider", family: "openai", blend: "led" }, capability: 3 }).routes.find(route => route.role === "default")!.fallback
+      .map(choice => catalog.model(choice.key).id)).toEqual(["gpt-6-luna", "claude-sonnet-5-5", "claude-haiku-5-5"]);
     // Claude keeps its four tiers, and Mixed crosses to them where its deliberative roles reach past GPT's top.
     expect(([1, 2, 3, 4] as const).map(capability => lead(review({ lane: { kind: "provider", family: "anthropic", blend: "only" }, capability }), "default")))
       .toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"]);
@@ -627,7 +631,7 @@ describe("a family Code requires that the accounts reach only in part", () => {
     const gptIds = operatorRows.filter(([provider, , , , , , , verdict]) => provider === "openai-codex" && verdict !== null).map(([, id]) => id);
     const { inventory, benchmark } = operatorReceipts(Object.fromEntries(gptIds.map(id => [id, "client_blocked"])));
     const derived = catalogFromObservations(inventory, benchmark), catalog = compileCatalog(derived.document);
-    expect([catalog.families, derived.short]).toEqual([["anthropic", "deepseek"], []]);
+    expect([catalog.families, catalog.short]).toEqual([["anthropic", "deepseek"], []]);
     expect(derived.exclusions.filter(exclusion => exclusion.provider === "openai-codex"))
       .toEqual(gptIds.toSorted().map(id => ({ provider: "openai-codex", id, reason: "client_blocked" })));
     // A selection that needs GPT is refused where it is reviewed; the preview a verification carries moves to a lane this catalog hosts.
@@ -668,6 +672,14 @@ describe("passive starter metadata", () => {
         tokensPerSecond: null, timeToFirstTokenMs: null });
     }
     expect(catalogFromMetadata({ ...snapshot, models: [...snapshot.models].reverse() }, "any")).toEqual(document);
+  });
+
+  test("a starter whose bundled list holds one GPT model ladders GPT short rather than leaving no starter", () => {
+    const snapshot = metadata();
+    snapshot.models = snapshot.models.filter(model => model.provider !== "openai-codex" || model.id === "gpt-mini-6");
+    const compiled = compileCatalog(catalogFromMetadata(snapshot, "any")), selection = defaultSelection(compiled);
+    expect([compiled.short, [1, 2, 3].map(tier => compiled.model(compiled.rung("openai", tier)).id)]).toEqual([["openai"], ["gpt-mini-6", "gpt-mini-6", "gpt-mini-6"]]);
+    expect(compiled.model(reviewCatalog(compiled, selection, 1000).routes.find(route => route.role === "default")!.lead.key).id).toBe("gpt-mini-6");
   });
 
   test("a model in a quota class of its own (Spark's, or one not known yet) never enters, however cheap", () => {

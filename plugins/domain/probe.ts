@@ -3,7 +3,7 @@ import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, I
   PROBE_MODEL_LIMIT, ProbeIdentitySchema, ProbeError, ThinkingLevelSchema, epochMilliseconds, identifier, parseBenchmarkInput, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type ProbeIdentity, type ProbeRefusal } from "@atyrode/manifold-omp";
 import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel } from "./contracts.ts";
-import { compileCatalog, validTierPair, type CompiledCatalog } from "./catalog.ts";
+import { compileCatalog, validTierPair } from "./catalog.ts";
 import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
 type InventoryModel = z.infer<typeof InventoryModelSchema>;
@@ -58,12 +58,10 @@ export const CatalogDraftSchema = z.strictObject({
 });
 export type CatalogDraft = z.infer<typeof CatalogDraftSchema>;
 /**
- * A benchmark-verified catalog, the named reason each other offered model is absent from it, and
- * the families Code requires that it ladders short (`CompiledCatalog.short`): fewer rungs than
- * the three tiers, each missing tier routed to the family's nearest real rung.
+ * A benchmark-verified catalog, and the named reason each other offered model is absent from it.
+ * A family Code requires that it ladders short is the document's own fact (`CompiledCatalog.short`).
  */
-export const DerivedCatalogSchema = z.strictObject({ document: CatalogDocumentSchema, exclusions: ExclusionsSchema,
-  short: z.array(identifier).max(PROBE_MODEL_LIMIT) });
+export const DerivedCatalogSchema = z.strictObject({ document: CatalogDocumentSchema, exclusions: ExclusionsSchema });
 export type DerivedCatalog = z.infer<typeof DerivedCatalogSchema>;
 
 function parse<T>(schema: z.ZodType<T>, value: unknown, code: ProbeRefusal = "invalid_observation"): T {
@@ -326,9 +324,8 @@ function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
   // (routing.ts `selectionFacts`). With no family left, no selection could route at all.
   if (models.length === 0) throw new ProbeError("insufficient_ladder");
   const document = parse(CatalogDocumentSchema, { schemaVersion: 1, models });
-  let compiled: CompiledCatalog;
-  try { compiled = compileCatalog(document); } catch { throw new ProbeError("insufficient_ladder"); }
-  return { document, exclusions: exclusions.sort((a, b) => compare(probeAddress(a), probeAddress(b))), short: [...compiled.short] };
+  try { compileCatalog(document); } catch { throw new ProbeError("insufficient_ladder"); }
+  return { document, exclusions: exclusions.sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
 /** Passive metadata is policy input, never inventory, reachability or measured performance.
  * Check the whole submitted identity set before narrowing it; silently choosing between

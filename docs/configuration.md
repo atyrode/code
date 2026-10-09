@@ -69,9 +69,12 @@ which is read as off. Code never recovers these semantics from terminal output.
 
 A family's declared rungs fill its missing tiers 1–3, each gap from the nearest declared
 rung (the lower on a tie), so a filled tier routes to a real model of that family; tier 4
-is never filled. A family Code requires (OpenAI, Anthropic) fills the same way: one that
-lacks a rung of its own at tier 1, 2 or 3 is **short**, and the compiled catalog names it
-(`short`) rather than refusing it.
+is never filled. A lead on a filled tier is that rung's model and routes as it: its
+fallbacks step down from the rung's own tier and cross to another family at that tier,
+not the one chosen (GPT smart on `terra`, a normal rung, crosses to Claude's normal). A
+family Code requires (OpenAI, Anthropic) fills the same way: one that lacks a rung of its
+own at tier 1, 2 or 3 is **short**, and the compiled catalog names it (`short`) rather
+than refusing it.
 
 Known providers may add named families, quota metadata, priority
 or off-peak behavior. A provider without such a policy is still a complete
@@ -135,8 +138,8 @@ rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provid
 such a rung that does not answer leaves that family shorter. A family Code requires is
 laddered on whatever of it answers, short below three rungs, and one none of whose models
 answers is left out as a family with no account is; a selection that needs it is refused
-where it is reviewed. `deriveCatalog` returns the document, every other offered model with
-its reason, and `short`, the families Code requires laddered short. It refuses only a
+where it is reviewed. `deriveCatalog` returns the document and every other offered model
+with its reason; the document's compiled catalog names its short families. It refuses only a
 family Code requires whose most capable model regresses on its cheapest
 (`ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
 and nothing reachable at all (`probe_insufficient_ladder`). Only the returned `confirm`
@@ -704,16 +707,18 @@ normal, smart, elite), as a matrix with tiers down and providers across from 760
 sheet width and as one ladder under another below it. Each rung is its model's alias in
 the provider's hue with its measured speed as five blocks (under 30 tok/s one, then 45,
 60 and 90; none measured is a hairline track); an empty rung is a dash, and pointing at
-it names the rung the model row lands on instead. A family Code requires that lacks a rung
-of its own at fast, normal or smart reads **· short** beside its name. The head says
+one the family offers names the rung the model row lands on instead, while one above the
+family's top (an elite it lacks) says only that it has no model, as the model row refuses
+it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
+**· short** beside its name. The head says
 how many models are in use and when they were verified, or that a staged list waits
 beside them, that they are verifying, or that they are unverified or the bundled
 starter, with **import** (`i`) and **export** (`x`) as two quiet words. Beside the list
 is what the step is about: the charge per provider and the models not probed while
 verifying, a staged list's changes (field by field, a model added or dropped, the old
 value struck), or, after a verification in this panel, the models it left out, each
-with its reason in a word: a model the accounts' plan or settings do not serve
-(`client_blocked`) reads **not on plan**, one no account finds (`not_found`) **not
+with its reason in a word: a model the accounts' plan, their settings or this client
+excludes (`client_blocked`) reads **not served**, one no account finds (`not_found`) **not
 reachable**, a model in OMP's `spark` quota class **retired** and any other class of its
 own **own quota**. Ids, prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
