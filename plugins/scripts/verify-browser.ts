@@ -1267,6 +1267,10 @@ async function sheetStill(browser: BrowserInstance, what: string): Promise<void>
  * Leaves the profile as it found it.
  */
 async function acceptanceScenario(browser: BrowserInstance, label: string, recent: Selection, draftKey: string): Promise<void> {
+  // The main view rests once its destination is judged. Until every online machine has said whether OMP answers there, the
+  // launch names no machine, and the judgement then changes the word with nothing pressed (machine-web.ts `useCodeTarget`):
+  // landing while the machine list was open below, it read as Mod+↵ in the list changing the machine.
+  await until(browser, "the launch names the machine the panel judged", `${machinePicker}?.textContent === ${JSON.stringify(machineName)}`);
   const before = await readProfile(browser, draftKey);
   const thinking = await browser.evaluate<string>(chosenKey("thinking")), advisor = await browser.evaluate<string>(chosenKey("advisor"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
@@ -1460,6 +1464,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "← lowers the thinking one available step", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-2))}`);
   assert.equal(await browser.evaluate(`document.activeElement === ${word("thinking", available.at(-2)!)} && [...${row("thinking")}.querySelectorAll('[tabindex="0"]')].length === 1`), true,
     "Focus follows the value: the row's one Tab stop is the word it holds");
+  // The row's pointer fades in over 140ms each time focus enters the row (styles.css `.dial-ptr`), and focusRow brought focus
+  // in only a few keys ago: read before the fade ends, it is still part-way. The indicator is judged once the fade has ended.
+  await until(browser, "the row's pointer has finished fading in", `${row("thinking")}.querySelector('.${G}dial-ptr').getAnimations().every(animation => animation.playState !== 'running')`);
   assert.equal(await browser.evaluate(`document.activeElement.matches(':focus-visible') &&
     getComputedStyle(${row("thinking")}.querySelector('.${G}dial-ptr')).opacity === '1'`), true, "Keyboard edits keep a visible focus indicator, the row's pointer");
   // A keyboard commit names its value in the readout, where a pointer reads a word before choosing it (once the last
@@ -3199,6 +3206,8 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
   } finally {
     offReads();
     await fixture.stop();
+    // Reduced motion was this scenario's own; the scenarios after it prove the panel under default motion.
+    await browser.send("Emulation.setEmulatedMedia", { features: [] });
   }
   assert.deepEqual(await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 }), deployments,
     "Destination selection, planYolo and shared profile edits never grant or revoke native approval");
