@@ -379,14 +379,15 @@ export type CodeRun = {
 export type CodeRuns = { readonly observedAt: number; readonly canSponsor: boolean; readonly runs: readonly CodeRun[] };
 
 /**
- * The Runs worth listing: every open one, every expired one whose terminal still runs (detached: its
- * TUI outlived its lease), then the newest few that ended in the last day, never a Run cancelled
- * before it launched. Open ones first, each group newest first.
+ * The Runs worth listing: every open one, every settled one whose own TUI still runs (`running`;
+ * detached: its lease ran out, or it was revoked or cancelled, while its TUI goes on), then the newest
+ * few that ended in the last day, never a Run cancelled before it launched. Open and detached ones
+ * first, each group newest first.
  */
 export function listedRuns<T extends { readonly run: { readonly state: AgentRunV2["state"]; readonly createdAt: number; readonly session: unknown } }>(
   runs: readonly T[], running: (entry: T) => boolean, now: number): T[] {
   const newest = (left: T, right: T) => right.run.createdAt - left.run.createdAt;
-  const open = runs.filter(entry => OPEN_RUN_STATES[entry.run.state] === true || (entry.run.state === "expired" && running(entry)));
+  const open = runs.filter(entry => OPEN_RUN_STATES[entry.run.state] === true || running(entry));
   const ended = runs.filter(entry => !open.includes(entry) && entry.run.createdAt > now - ENDED_RUNS_MS &&
     !(entry.run.state === "cancelled" && entry.run.session === null)).sort(newest).slice(0, ENDED_RUNS);
   return [...open.sort(newest), ...ended];
@@ -890,14 +891,18 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       const entries = lists.flatMap((list, index) => list.runs.map(run => ({ run, leaseMs: agents[index]!.grant.maxRunLifetimeMs,
         terminal: run.session === null || !(OPEN_RUN_STATES[run.state] === true || run.state === "expired") ? null : runningSessionTerminals(run.session, inventory)
           .find(terminal => terminal.createdAt >= run.createdAt && terminal.createdAt < run.expiresAt) ?? null })));
-      const shown = listedRuns(entries, entry => entry.terminal !== null, observedAt);
-      const inspections = await Promise.all(shown.map(entry => access("inspectRunV2", { runId: entry.run.id, limit: 1 }, InspectRunV2ResultSchema)
+      // A Run whose session still runs a terminal may be detached, its TUI going on after it settled: each is inspected whatever its
+      // age, and listed with the open ones once its own TUI is known. One whose terminal is a Run-less resume, or whose inspection
+      // is unread, stands with the ended ones, where only the newest of the last day stay.
+      const read = listedRuns(entries, entry => entry.run.session !== null && runningSessionTerminals(entry.run.session, inventory).length > 0, observedAt);
+      const inspections = await Promise.all(read.map(entry => access("inspectRunV2", { runId: entry.run.id, limit: 1 }, InspectRunV2ResultSchema)
         .then(inspected, () => null)));
-      return { observedAt, canSponsor: listed.canRegister, runs: shown.map((entry, index) => {
+      const runs = read.map((entry, index) => {
         const inspection = inspections[index] ?? null, session = entry.run.session;
         const own = entry.terminal ?? (session && inspection ? runningSessionTerminals(session, inventory).find(terminal => inspection.terminalIds.includes(terminal.id)) ?? null : null);
         return { ...entry, terminal: own, inspection };
-      }) };
+      });
+      return { observedAt, canSponsor: listed.canRegister, runs: listedRuns(runs, entry => entry.terminal !== null, observedAt) };
     },
     /** Turns a running TUI Run's main-agent dials (`atyrode.omp.controlRun`): the session's dials after the change, or its refusal thrown. */
     controlRun: (runId: string, change: Omit<OmpInput<"controlRun">, "runId">): Promise<RunDials> => omp("controlRun", { runId, ...change }),

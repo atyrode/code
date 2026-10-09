@@ -7,7 +7,7 @@ import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/ro
 import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
 import { answerDial, NO_DIALS, pressDial, refuseDial, settleDial } from "../code/generator/run-dials.ts";
-import { leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
+import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
 const target = { containerId: "workspace", machineId: "destination" };
 const containerUri = formatManifoldUri({ kind: "container", containerId: target.containerId });
@@ -49,6 +49,25 @@ function launchedOf(runtime: Record<string, unknown> = {}) {
   return { runtime: { machineId: target.machineId, pluginId: "atyrode.omp", operationId: "atyrode.omp.harness", installationRevision: "native",
     artifactSha256: "c".repeat(64), input: { sessionId, tui: true }, resourceBindingDigest: "d".repeat(64), launchBinding: "binding-1", session, ...runtime },
     destination: { machineId: target.machineId }, session, reviewDigest: "f".repeat(64) };
+}
+const session = (id: string) => ({ harness: "atyrode.omp", sessionId: id, machineId: target.machineId });
+/** A Run as `listRunsV2` lists it: open, created an hour before `now` and expiring an hour after, unless `overrides` say otherwise. */
+function listedRun(id: string, now: number, overrides: Record<string, unknown>) {
+  return { id, principalId: "agent-principal", agentId: "agent-1", session: null, activity: "idle", name: "Code", state: "pending_policy", purpose: "Code",
+    createdAt: now - HOUR, expiresAt: now + HOUR, parentRunId: null, actionCount: 0, refusalCount: 0, scope, ...overrides };
+}
+type ListedRun = { readonly id: string; readonly principalId: string; readonly agentId: string; readonly session: unknown; readonly activity: string;
+  readonly name: string; readonly state: string; readonly purpose: string; readonly createdAt: number; readonly expiresAt: number };
+/** `inspectRunV2`'s answer for a listed Run: settled at `finishedAt` (null while open), naming the running terminals it opened. */
+function inspectionOf(run: ListedRun, finishedAt: number | null, terminalIds: readonly string[]) {
+  return { availability: "available", observedAt: run.createdAt, run: { id: run.id, principalId: run.principalId, agentId: run.agentId, session: run.session,
+    activity: run.activity, name: run.name, state: run.state, rootRunId: run.id, parentRunId: null, sponsorPrincipalId: "writer", authorizationPath: "principal",
+    purpose: run.purpose, target: containerUri, reach: "subtree", caps: ["containers:read"], createdAt: run.createdAt, expiresAt: run.expiresAt, renewals: 2,
+    depth: 0, maxDepth: 0, maxDescendants: 0, policyRevision: "e".repeat(64), acknowledgedPolicyRevision: null, policyAcknowledgedAt: null,
+    cleanup: { ownerPrincipalId: "writer", revokedCredentials: 1, revokedGrants: 0, finishedAt, status: finishedAt === null ? "pending" : "finished" }, scope },
+    lineage: [], lineageComplete: true, credentials: [], connections: [], traces: [], nextBeforeTraceId: null, requestedTrace: "not_requested",
+    history: "retained_only", jobs: [], nativeTruncated: false, terminals: terminalIds.map(terminalId => ({ terminalId, machineId: target.machineId,
+      containerId: target.containerId, createdAt: run.createdAt, state: "running", exitCode: null, traceId: null, retention: "retained" })) };
 }
 
 /**
@@ -186,20 +205,17 @@ describe("the agent door sequence", () => {
   test("the runs read lists open, detached and recently ended Runs of this workspace's Code Agents only", async () => {
     const f = agentFixture();
     const base = await codeAgentName(target.containerId), now = Date.now();
-    const session = (id: string) => ({ harness: "atyrode.omp", sessionId: id, machineId: target.machineId });
-    const entry = (id: string, overrides: Record<string, unknown>) => ({ id, principalId: "agent-principal", agentId: "agent-1", session: null, activity: "idle",
-      name: "Code", state: "pending_policy", purpose: "Code", createdAt: now - HOUR, expiresAt: now + HOUR, parentRunId: null, actionCount: 0, refusalCount: 0, scope, ...overrides });
     const detachedSession = "8ab82ad4-8c9e-4166-8130-472c7cae1559";
     f.answers["core.access.listAgentsV2"] = () => ({ agents: [agentOf(base), agentOf("Code someone-else", { agentId: "agent-2" })], truncated: false, canRegister: true });
     f.answers["core.access.listRunsV2"] = input => {
       expect(input).toEqual({ agentId: "agent-1" });
       return { observedAt: now, truncated: false, runs: [
-        entry("live", { session: session(sessionId), createdAt: now - 10 * 60_000 }),
-        entry("detached", { session: session(detachedSession), state: "expired", createdAt: now - 20 * HOUR }),
-        entry("expired-gone", { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR, expiresAt: now - 2 * HOUR }),
-        entry("never-launched", { state: "cancelled", createdAt: now - 2 * HOUR }),
-        entry("old", { session: session(sessionId), state: "completed", createdAt: now - 30 * HOUR }),
-        ...[1, 2, 3].map(index => entry(`ended-${index}`, { session: session(sessionId), state: "completed", createdAt: now - index * HOUR - 1 })),
+        listedRun("live", now, { session: session(sessionId), createdAt: now - 10 * 60_000 }),
+        listedRun("detached", now, { session: session(detachedSession), state: "expired", createdAt: now - 20 * HOUR }),
+        listedRun("expired-gone", now, { session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559"), state: "expired", createdAt: now - 3 * HOUR, expiresAt: now - 2 * HOUR }),
+        listedRun("never-launched", now, { state: "cancelled", createdAt: now - 2 * HOUR }),
+        listedRun("old", now, { session: session(sessionId), state: "completed", createdAt: now - 30 * HOUR }),
+        ...[1, 2, 3].map(index => listedRun(`ended-${index}`, now, { session: session(sessionId), state: "completed", createdAt: now - index * HOUR - 1 })),
       ] };
     };
     const running: TerminalSummary = { id: "tui", machineId: target.machineId, name: "OMP", createdAt: now - 20 * HOUR, status: "running", exitCode: null,
@@ -217,6 +233,38 @@ describe("the agent door sequence", () => {
     expect(read.runs.find(run => run.run.id === "expired-gone")!.terminal).toBeNull();
     expect(read.runs.find(run => run.run.id === "ended-1")!.terminal).toBeNull();
     expect(read.runs.every(run => run.inspection === null)).toBe(true);
+  });
+
+  test("a revoked Run whose inspection names its running TUI is detached and listed with the open Runs, whatever its age", async () => {
+    const f = agentFixture();
+    const base = await codeAgentName(target.containerId), now = Date.now();
+    const revokedSession = "8ab82ad4-8c9e-4166-8130-472c7cae1559", resumedSession = "9ab82ad4-8c9e-4166-8130-472c7cae1559";
+    const runs = [
+      listedRun("live", now, { session: session(sessionId), createdAt: now - 10 * 60_000 }),
+      // Revoked in Agents more than a day ago while its TUI ran on: only its inspection says that terminal is its own.
+      listedRun("revoked", now, { session: session(revokedSession), state: "revoked", createdAt: now - 30 * HOUR }),
+      // Completed, then resumed without a Run: its inspection names no running terminal, so it stays an ended Run.
+      listedRun("completed-resumed", now, { session: session(resumedSession), state: "completed", createdAt: now - 2 * HOUR }),
+      listedRun("ended", now, { session: session("aab82ad4-8c9e-4166-8130-472c7cae1559"), state: "completed", createdAt: now - HOUR }),
+    ];
+    f.answers["core.access.listAgentsV2"] = () => ({ agents: [agentOf(base)], truncated: false, canRegister: true });
+    f.answers["core.access.listRunsV2"] = () => ({ observedAt: now, truncated: false, runs });
+    const terminal = (id: string, of: string, createdAt: number): TerminalSummary => ({ id, machineId: target.machineId, name: "OMP", createdAt, status: "running",
+      exitCode: null, homeId: target.containerId, unplaced: false, session: session(of) });
+    f.answers["core.terminals.listAll"] = () => ({ terminals: [terminal("tui-revoked", revokedSession, now - 29 * HOUR), terminal("resumed", resumedSession, now - 10 * 60_000),
+      terminal("tui-live", sessionId, now - 9 * 60_000)] });
+    const finishedAt = now - 20 * 60_000;
+    f.answers["core.access.inspectRunV2"] = input => {
+      const run = runs.find(candidate => candidate.id === input.runId)!;
+      return inspectionOf(run, run.state === "revoked" ? finishedAt : null, run.id === "revoked" ? ["tui-revoked"] : run.id === "live" ? ["tui-live"] : []);
+    };
+    const read = await f.workflow.readRuns(target.containerId);
+    expect(read.runs.map(entry => entry.run.id)).toEqual(["live", "revoked", "ended", "completed-resumed"]);
+    const revoked = read.runs.find(entry => entry.run.id === "revoked")!;
+    expect([revoked.terminal?.id, runPhase(revoked), detachedAt(revoked)]).toEqual(["tui-revoked", "detached", finishedAt]);
+    const resumed = read.runs.find(entry => entry.run.id === "completed-resumed")!;
+    expect([resumed.terminal, runPhase(resumed)]).toEqual([null, "completed"]);
+    expect(f.calls.filter(call => call.door === "core.access.inspectRunV2").map(call => call.input.runId).sort()).toEqual(["completed-resumed", "ended", "live", "revoked"]);
   });
 });
 

@@ -593,8 +593,9 @@ allows open only.
 
 **Runs.** An agent launch's Run heads its machine's group, one line per Run: an
 activity mark and word (`working`, `blocked`, `done`, `idle`; `starting` before the
-harness's first report; `detached` once its lease ran out while its terminal still
-runs; `completed`, `failed`, `cancelled`, `expired` or `revoked` once settled), its
+harness's first report; `detached` once it settled, by expiry, revocation or
+cancellation, while its own terminal still runs, listed with the open Runs;
+`completed`, `failed`, `cancelled`, `expired` or `revoked` once settled), its
 title from the machine's saved read (else "new session"), its folder, its live
 `model:thinking` in the provider's hue and one verb. **open** goes to its terminal;
 **cancel** finishes a Run whose terminal never opened (it never stops a running TUI);
@@ -826,9 +827,11 @@ Manifold action transport as the web. It composes `createCodeClient` with
   same press, once the Run is cancelled, launches the reviewed session while its review
   still stands. `readRuns(containerId)` lists the visible Code Agents named for the
   workspace, their Runs, each listed Run's inspection (renewals, settlement, exit code)
-  and the terminal inventory; a Run's TUI is a running terminal of its session opened
-  while the Run stood, so a later Run-less resume of that session is an ordinary running
-  row. `controlRun(runId, { model?, thinking? })` is OMP's door.
+  and the terminal inventory. An open or expired Run's TUI is a running terminal of its
+  session opened while the Run stood, so a later Run-less resume of that session is an
+  ordinary running row; a Run settled otherwise keeps a future expiry, so its TUI is only
+  a terminal its inspection names. Every Run whose session still runs a terminal is
+  inspected, whatever its age. `controlRun(runId, { model?, thinking? })` is OMP's door.
   A Run whose lease ends, after a missed renewal or the 24th, settles `expired`, but
   its terminal job runs under the opener's credential and goes on, so Code shows it
   as detached while that terminal runs; Run input, and therefore its dials, then
