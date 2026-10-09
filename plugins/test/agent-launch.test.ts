@@ -6,7 +6,7 @@ import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
-import { answerDial, NO_DIALS, pressDial, refuseDial, settleDial } from "../code/generator/run-dials.ts";
+import { answerDial, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readKeptAnswers, refuseDial, settleDial } from "../code/generator/run-dials.ts";
 import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
 const target = { containerId: "workspace", machineId: "destination" };
@@ -168,6 +168,11 @@ describe("the agent door sequence", () => {
       await expect(g.workflow.launchAgent(g.review)).rejects.toThrow();
       expect(g.doors().at(-1)).toBe("core.access.finishAgentRunV2");
     }
+    // A TUI that would write a session other than the one the Run is bound to is cancelled too.
+    const other = agentFixture();
+    other.answers["core.access.launchRun"] = () => launchedOf({ input: { sessionId: "8ab82ad4-8c9e-4166-8130-472c7cae1559", tui: true } });
+    await expect(other.workflow.launchAgent(other.review)).rejects.toThrow("code_run_changed");
+    expect(other.doors().at(-1)).toBe("core.access.finishAgentRunV2");
     // A cancellation that fails is named beside what stopped the launch.
     const h = agentFixture();
     h.answers["core.access.launchRun"] = () => h.deny("core.access.launchRun", "run_launch_owner_unavailable");
@@ -319,6 +324,26 @@ describe("a Run's dials", () => {
     expect(forbidden.forbidden).toBe(true);
     expect(pressDial(forbidden, { field: "thinking", value: "high" }, launched, none).send).toBe(false);
     expect(refuseDial(pending, change, "omp_session_unavailable", "").outcome).toEqual({ kind: "gone" });
+  });
+
+  test("the answers kept per workspace come back after a reload, newest last and at most 32; malformed or refused storage keeps none and throws nothing", () => {
+    const stored = new Map<string, string>();
+    const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), changed: Dials = { model: "anthropic/claude-opus-5", thinking: "high" };
+    for (let index = 0; index < 34; index++) keepAnswer(storage, key, `run-${index}`, launched);
+    // Kept again, a Run's answer is its newest, never a second entry.
+    keepAnswer(storage, key, "run-2", changed);
+    const kept = readKeptAnswers(storage, key);
+    expect([kept.size, [...kept.keys()][0], [...kept.keys()].at(-1), kept.get("run-2")]).toEqual([32, "run-3", "run-2", changed]);
+    expect(readKeptAnswers(storage, keptAnswersKey("writer", "another-workspace")).size).toBe(0);
+    for (const text of ["{", JSON.stringify([["run-1", { model: 1, thinking: null }]])]) {
+      stored.set(key, text);
+      expect(readKeptAnswers(storage, key).size).toBe(0);
+    }
+    const refusing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
+    expect(readKeptAnswers(refusing, key).size).toBe(0);
+    expect(() => keepAnswer(refusing, key, "run-1", launched)).not.toThrow();
+    expect(readKeptAnswers(null, key).size).toBe(0);
   });
 });
 

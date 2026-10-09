@@ -4586,7 +4586,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     // Runs this machine cannot start, shaped on the real ones: open, at 24 of 24, renewal due, detached, starting and ended.
     const now = Date.now(), MINUTE = 60_000, HOUR = 60 * MINUTE;
     const launched = runDials(realRuns.runs[0]!.model);
-    assert(launched.model === reference(0) || published.some((_, index) => launched.model === reference(index)), "The Run records the launch's model");
+    const lead = reviewCatalog(compiled, saved.selection!, Date.now()).routes.find(route => route.role === "default")!.lead;
+    assert.deepEqual(launched, { model: `anthropic/${compiled.model(lead.key).id}`, thinking: lead.thinking }, "The Run records the launch's main-agent model and thinking");
     type ListedRun = ListRunsV2Result["runs"][number];
     type Shape = { id: string; state: ListedRun["state"]; activity: ListedRun["activity"]; age: number; left: number; renewals: number; ended: number | null; tui: boolean; title: string; cwd: string };
     const shapes: Shape[] = [
