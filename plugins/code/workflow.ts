@@ -1,11 +1,15 @@
-import { createOmpClient, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID,
-  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID,
-  type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type OmpSessionRef, type OmpAction, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
+import { createOmpClient, OmpHarnessProfileSchema, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID,
+  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema,
+  type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type OmpHarnessProfile, type OmpSessionRef, type OmpAction, type RunDials, type ThinkingSelector,
+  type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
-  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type PublicJob, type TerminalSummary, canonicalJobJson } from "@manifold/protocol";
+  JobDeploymentReadArgsSchema, JobDeploymentRequestSchema, JobDeploymentReviewSchema, JobDeploymentSchema, ServiceReadArgsSchema, PublicJobSchema, ListJobRunsResultSchema, MachinesResponseSchema, TerminalsResponseSchema, type PublicJob, type TerminalSummary, canonicalJobJson,
+  AGENT_RUN_MAX_LIFETIME_MS, AGENT_RUN_MAX_RENEWALS, CreateRunV2ResultSchema, FinishAgentRunV2ResultSchema, InspectRunV2ResultSchema, LaunchRunResultSchema, ListAgentsV2ResultSchema,
+  ListRunsV2ResultSchema, RegisterAgentV2ResultSchema, UpdateAgentV2ResultSchema, formatManifoldUri,
+  type AgentRunV2, type AgentV2, type AuthorityScope, type InspectRunV2Result, type LaunchRunResult, type ListRunsV2Result, type RunModel } from "@manifold/protocol";
 import { z } from "zod";
 import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Configuration, type Target, type VerificationProvenance } from "./contract.ts";
-import { observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
+import { HARNESS_OPERATION_ID, observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
@@ -46,6 +50,40 @@ const messages: Readonly<Record<string, string>> = {
   omp_session_binding_changed: "That saved session moved or changed. Read the machine again.",
   omp_resume_plan_unsupported: "Resuming with the current profile cannot approve plans automatically.",
   omp_operation_unavailable: "OMP is not installed on that machine.",
+  omp_tui_plan_unsupported: "OMP's terminal UI under an agent cannot approve plans automatically.",
+  omp_harness_runtime_unsupported: "OMP's agent harness on that machine predates live dials. Review sessions in Setup again.",
+  omp_run_control_forbidden: "Only the run's launcher or its agent's sponsor turns its dials.",
+  omp_model_unavailable: "The session does not serve that model.",
+  omp_run_control_unsupported: "That run has no live dials.",
+  omp_run_control_unconfirmed: "The session did not answer within 20 seconds; the change may still apply.",
+  code_agent_disabled: "Code's agent for this workspace is disabled in Agents. Enable it there to launch with live dials.",
+  code_agent_retired: "Code's agents for this workspace are retired in Agents.",
+  code_agent_options_unsupported: "Session options and automatic plans run without an agent, so this launch cannot be an agent run.",
+  code_run_changed: "Manifold launched a different run than Code asked for. Nothing was opened.",
+};
+/**
+ * Manifold's own refusals of the Agent doors (`core.access`), which carry no `code_`/`omp_` prefix,
+ * in a person's words. They are matched whole, so a message Manifold words differently is said as it
+ * is rather than mistaken for one of these.
+ */
+const agentRefusals: Readonly<Record<string, string>> = {
+  agent_registration_requires_human: "Only a person can sponsor Code's agent.",
+  sponsor_authority_unavailable: "Your access does not cover sponsoring an agent in this workspace.",
+  agent_sponsor_confined: "Your access does not cover sponsoring an agent in this workspace.",
+  agent_unavailable: "Code's agent or its run is not yours to use.",
+  agent_disabled: "Code's agent for this workspace is disabled in Agents.",
+  agent_retired: "Code's agent for this workspace is retired in Agents.",
+  grant_expired: "Code's agent grant has expired. Launch again to renew it.",
+  scope_exceeds_grant: "The run asks for more than Code's agent may hold.",
+  lifetime_exceeds_grant: "The run asks for more than Code's agent may hold.",
+  agent_run_unavailable: "That run has ended or its lease has run out.",
+  run_launch_protocol_unsupported: "That machine cannot launch an agent run: its native job owner is missing or predates agent runs.",
+  run_launch_owner_unavailable: "That machine's native job owner is not ready to launch an agent run.",
+  run_launch_binding_required: "The run's launch expired before its terminal opened.",
+  "run launch binding expired or revoked": "The run's launch expired before its terminal opened.",
+  "run launch credential unavailable": "The run's launch expired before its terminal opened.",
+  "run launch already in progress": "That run is already launching.",
+  "harness launch target changed": "The run was created for another machine or workspace.",
 };
 /** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
 const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;
@@ -58,11 +96,13 @@ export function refusalToken(message: string): string | null {
 
 /**
  * A workflow failure in a person's words. A refused door's message loses the door name it was
- * reported under, and its refusal token becomes words: the known ones from `messages`, any other as
- * who refused, so no raw token reaches a person. A detail written for a person after the token stays.
+ * reported under, and its refusal token becomes words: the known ones from `messages` and Manifold's
+ * Agent refusals, any other as who refused, so no raw token reaches a person. A detail written for a
+ * person after the token stays.
  */
 export function failureWords(message: string): string {
   const denial = DOOR_DENIAL.exec(message)?.[1] ?? message;
+  if (Object.hasOwn(agentRefusals, denial)) return agentRefusals[denial]!;
   const refusal = REFUSAL_TOKEN.exec(denial);
   if (!refusal) return denial;
   const [, token, detail] = refusal;
@@ -197,7 +237,7 @@ export type SessionReview = {
   native: OmpResult<"reviewSession">;
 };
 export type ResumeSessionOptions = Pick<OmpInput<"resumeSession">, "skills" | "automation"> & { profile?: { target: Target; expectedRevision: number } };
-export function runningSessionTerminals(ref: OmpSessionRef, terminals: readonly TerminalSummary[]): TerminalSummary[] {
+export function runningSessionTerminals(ref: Pick<OmpSessionRef, "machineId" | "sessionId"> & { readonly harness: string }, terminals: readonly TerminalSummary[]): TerminalSummary[] {
   return terminals.filter(terminal => terminal.status === "running" && terminal.machineId === ref.machineId &&
     terminal.session?.harness === ref.harness && terminal.session.machineId === ref.machineId && terminal.session.sessionId === ref.sessionId);
 }
@@ -210,6 +250,137 @@ export type RuntimeConfigurationReview =
 const serviceObservation = z.object({ machineId: ServiceReadArgsSchema.shape.machineId, connected: z.boolean(),
   services: z.array(z.object({ serviceId: ServiceReadArgsSchema.shape.serviceId, revision: ServiceReadArgsSchema.shape.revision,
     operations: z.array(z.object({ operationId: ServiceReadArgsSchema.shape.operationId, ready: z.boolean(), invocable: z.boolean() })) })) });
+
+// ---------------------------------------------------------------- the agent a launch runs as
+/*
+ * A launch runs as an Agent Run when it can: Code registers one Agent per sponsor and workspace
+ * profile with OMP's harness (`tui: true`), updates it when the profile changes, creates a Run for
+ * the destination and has `core.access.launchRun` prepare OMP's terminal UI under it. The Run's
+ * own credential, renewal and activity stay with OMP's harness and Manifold; Code holds nothing but
+ * the sponsor's session and reads the Run back for display. The one-time runner credential a first
+ * registration returns is never kept: a browser launch never needs it.
+ */
+
+/** A Code Run's lease: Manifold's longest. OMP's TUI harness renews it at half of it, for the same length. */
+export const AGENT_LEASE_MS = AGENT_RUN_MAX_LIFETIME_MS;
+/** Manifold's renewals per Run; the 25th is refused. */
+export const AGENT_RENEWALS = AGENT_RUN_MAX_RENEWALS;
+/** How long a Run can stay attributed: its first lease, then each renewal at half a lease moves its expiry half a lease on. */
+export const AGENT_RUN_WINDOW_MS = AGENT_LEASE_MS + AGENT_RENEWALS * (AGENT_LEASE_MS / 2);
+/** A grant outlasts the whole window of a Run created now by one more lease, so a launch never meets a grant about to end. */
+const AGENT_GRANT_MS = AGENT_RUN_WINDOW_MS + AGENT_LEASE_MS;
+/** A retired Agent never runs again, so its name passes to the next generation; this many retirements end Code's agent launches here. */
+const AGENT_GENERATIONS = 8;
+/** How long an ended Run stays listed, and how many at most: the recent ones a person may want to resume. */
+const ENDED_RUNS_MS = 86_400_000, ENDED_RUNS = 3;
+/** The states of a Run that has not settled: a TUI Run stays `pending_policy` for life, since its harness never acknowledges. */
+export const OPEN_RUN_STATES: Readonly<Partial<Record<AgentRunV2["state"], true>>> = { pending_policy: true, active: true, policy_stale: true };
+
+/** The name of Code's Agent for a workspace: deterministic, so every launch of the same sponsor finds the same Agent. */
+export async function codeAgentName(containerId: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(containerId));
+  return `Code ${Array.from(new Uint8Array(bytes).slice(0, 8), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+/** Whether `name` is one of the generations of the Agent named `base`. */
+function codeAgentGeneration(name: string, base: string): boolean {
+  return name === base || (name.startsWith(`${base} `) && /^[2-9]$/.test(name.slice(base.length + 1)));
+}
+/** The Run's one scope rectangle: the container it launches into. Manifold hands OMP's hardened harness the V1 projection, which needs one. */
+function agentScope(containerId: string): AuthorityScope {
+  return [{ target: formatManifoldUri({ kind: "container", containerId }), reach: "subtree", caps: ["containers:read"] }];
+}
+function agentGrant(containerId: string, now: number) {
+  return { scope: agentScope(containerId), maxRunLifetimeMs: AGENT_LEASE_MS, delegation: { maxDepth: 0, maxDescendants: 0 }, expiresAt: now + AGENT_GRANT_MS };
+}
+/** OMP's TUI harness profile of a composition: the durable dials alone, never a prompt, skills or automation. */
+export function agentProfile(composition: Pick<ActionResult<"composeSession">, "accountPool" | "overlay" | "planYolo">): OmpHarnessProfile {
+  if (composition.planYolo) throw new WorkflowError("omp_tui_plan_unsupported");
+  return OmpHarnessProfileSchema.parse({ accountPool: composition.accountPool, overlay: composition.overlay, planYolo: false, tui: true });
+}
+
+/** The main agent's dials as `controlRun` answers them: a `provider/id` and a thinking selector, either unknown. */
+export type Dials = { readonly model: string | null; readonly thinking: ThinkingSelector | null };
+/**
+ * The launch's main-agent selector, recorded on the Run as OMP spells it (`provider` and `id:thinking`):
+ * `Run.model` is written once at creation, and only its sponsor's browser hears what `controlRun`
+ * changes afterwards, so the launch value is what every other reader is left with.
+ */
+export function runModel(composition: Pick<ActionResult<"composeSession">, "overlay">): RunModel {
+  const reference = composition.overlay.modelRoles?.default;
+  const slash = reference?.indexOf("/") ?? -1;
+  if (!reference || slash < 1) throw new WorkflowError("code_composition_changed");
+  return { provider: reference.slice(0, slash), model: reference.slice(slash + 1) };
+}
+/** A Run's recorded model as dials: the `provider/id`, and the thinking a trailing `:selector` names. */
+export function runDials(model: RunModel | undefined): Dials {
+  if (!model) return { model: null, thinking: null };
+  const reference = `${model.provider}/${model.model}`, colon = reference.lastIndexOf(":");
+  const thinking = colon > 0 ? ThinkingSelectorSchema.safeParse(reference.slice(colon + 1)) : null;
+  return thinking?.success ? { model: reference.slice(0, colon), thinking: thinking.data } : { model: reference, thinking: null };
+}
+
+/** Why a reviewed launch cannot be an Agent Run, or null when it can. */
+export type AgentLaunchBlocker = "plans" | "options" | "harness" | "sponsor" | "agents";
+/**
+ * Whether an Agent Run can carry this launch. OMP's TUI harness refuses automatic plans
+ * (`omp_tui_plan_unsupported`); `core.access.launchRun` hands the harness only its destination,
+ * so optional skills and restricted automation cannot reach it; the destination must have OMP's
+ * harness operation ready; and the caller must be able to sponsor an Agent (`canRegister`, null
+ * while the Agents are unread). Any of them leaves the launch to OMP's ordinary reviewed terminal,
+ * without a Run or live dials.
+ */
+export function agentLaunchBlocker(review: SessionReview, harnessReady: boolean, canSponsor: boolean | null): AgentLaunchBlocker | null {
+  if (review.composition.planYolo) return "plans";
+  if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted") return "options";
+  if (!harnessReady) return "harness";
+  if (canSponsor === null) return "agents";
+  return canSponsor ? null : "sponsor";
+}
+/**
+ * Whether a launch failed because this caller cannot sponsor Code's Agent here. Manifold refuses
+ * that at registration or at Run creation, before any Run exists, so the reviewed session remains
+ * the honest way to launch; `canRegister` alone cannot tell, since it holds for delegation anywhere.
+ */
+export function sponsorRefused(error: unknown): boolean {
+  if (!(error instanceof WorkflowError)) return false;
+  const denial = DOOR_DENIAL.exec(error.message);
+  return denial !== null && /^core\.access\.(?:registerAgentV2|updateAgentV2|createRunV2):/.test(error.message) &&
+    ["agent_registration_requires_human", "sponsor_authority_unavailable", "agent_sponsor_confined"].includes(denial[1]!);
+}
+
+/** A launched Run's terminal, for the caller to open with `host.authoring.createTerminal` within the minute Manifold binds it for. */
+export type AgentLaunch = { readonly run: AgentRunV2; readonly launched: LaunchRunResult };
+/** One of a workspace's Code Runs as the Sessions view reads it. */
+export type CodeRun = {
+  readonly run: ListRunsV2Result["runs"][number];
+  /** Its Agent's lease, which its harness renews at half for the same length. */
+  readonly leaseMs: number;
+  /** What its inspection adds: renewals so far, when it settled, and the exit code its terminal or job reported; null when unread. */
+  readonly inspection: { readonly renewals: number; readonly finishedAt: number | null; readonly exitCode: number | null } | null;
+  /** The running terminal that carries its session; null when none does (not started, ended, or the inventory is unread). */
+  readonly terminal: TerminalSummary | null;
+};
+/** The workspace's Code Runs at one observation, and whether the caller can sponsor a new one. */
+export type CodeRuns = { readonly observedAt: number; readonly canSponsor: boolean; readonly runs: readonly CodeRun[] };
+
+/**
+ * The Runs worth listing: every open one, every expired one whose terminal still runs (detached: its
+ * TUI outlived its lease), then the newest few that ended in the last day, never a Run cancelled
+ * before it launched. Open ones first, each group newest first.
+ */
+export function listedRuns<T extends { readonly run: { readonly state: AgentRunV2["state"]; readonly createdAt: number; readonly session: unknown } }>(
+  runs: readonly T[], running: (entry: T) => boolean, now: number): T[] {
+  const newest = (left: T, right: T) => right.run.createdAt - left.run.createdAt;
+  const open = runs.filter(entry => OPEN_RUN_STATES[entry.run.state] === true || (entry.run.state === "expired" && running(entry)));
+  const ended = runs.filter(entry => !open.includes(entry) && entry.run.createdAt > now - ENDED_RUNS_MS &&
+    !(entry.run.state === "cancelled" && entry.run.session === null)).sort(newest).slice(0, ENDED_RUNS);
+  return [...open.sort(newest), ...ended];
+}
+function inspected(inspection: InspectRunV2Result): NonNullable<CodeRun["inspection"]> {
+  const terminal = [...inspection.terminals].sort((left, right) => right.createdAt - left.createdAt)[0];
+  const job = inspection.jobs.find(entry => entry.operationId === HARNESS_OPERATION_ID && entry.exitCode !== null);
+  return { renewals: inspection.run.renewals, finishedAt: inspection.run.cleanup.finishedAt, exitCode: terminal?.exitCode ?? job?.exitCode ?? null };
+}
 
 /** One Code action through the ordinary caller transport: its result, or its refusal thrown in a person's words. */
 export type CodeCall = <K extends CodeAction>(name: K, input: ActionInput<K>) => Promise<ActionResult<K>>;
@@ -444,6 +615,56 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     await availableMachine(session.machineId);
     return runningSessionTerminals(session, TerminalsResponseSchema.parse(await dispatch("core.terminals.listAll", {})).terminals);
   }
+  /**
+   * A reviewed session's composition read again at the moment of an effect: the same Code digest
+   * and the same OMP defaults revision, or the review no longer describes what would run.
+   */
+  async function reviewedComposition(review: SessionReview) {
+    if (review.native.agentTools !== undefined || review.native.operationId !== LAUNCH_OPERATION_ID) throw new WorkflowError("omp_review_changed");
+    const [composition, defaults] = await Promise.all([
+      composeSession(review.destination, review.composition.revision, review.composition.prompt), omp("readDefaults", {}),
+    ]);
+    if (composition.compositionDigest !== review.composition.compositionDigest || defaults.revision !== review.native.defaultsRevision)
+      throw new WorkflowError("code_composition_changed");
+    return { composition, defaults };
+  }
+  /** One `core.access` door, its result parsed by Manifold's own schema; a refusal is thrown as the dispatch reports it. */
+  async function access<T>(action: string, input: unknown, result: z.ZodType<T>): Promise<T> {
+    return result.parse(await dispatch(`core.access.${action}`, input));
+  }
+  /**
+   * Code's Agent for this sponsor and workspace, with this composition as its profile: registered
+   * when absent, its profile and grant updated when they no longer match. Registration is
+   * idempotent per sponsor and name, so a repeat finds the same Agent unchanged; a retired one
+   * passes its name to the next generation, and a disabled one is the operator's to enable.
+   */
+  async function ensureAgent(target: Target, composition: ActionResult<"composeSession">): Promise<AgentV2> {
+    const base = await codeAgentName(target.containerId);
+    const context = { profile: agentProfile(composition) };
+    for (let generation = 1; generation <= AGENT_GENERATIONS; generation++) {
+      const now = Date.now(), grant = agentGrant(target.containerId, now);
+      const registered = await access("registerAgentV2", {
+        name: generation === 1 ? base : `${base} ${generation}`, harness: OMP_PLUGIN_ID, grant, context,
+        purpose: `Code's workspace profile for container ${target.containerId}, launched as OMP's terminal UI with live dials.`,
+      }, RegisterAgentV2ResultSchema);
+      const agent = registered.agent;
+      if (agent.state === "retired") continue;
+      if (agent.state === "disabled") throw new WorkflowError("code_agent_disabled");
+      if (agent.harness !== OMP_PLUGIN_ID) throw new WorkflowError("code_run_changed");
+      if (registered.created) return agent;
+      const profileChanged = canonicalJobJson(agent.context) !== canonicalJobJson(context);
+      // An edited grant goes back to Code's, and one too short for a full Run window is renewed.
+      const grantChanged = canonicalJobJson({ ...agent.grant, expiresAt: 0 }) !== canonicalJobJson({ ...grant, expiresAt: 0 }) ||
+        agent.grant.expiresAt < now + AGENT_RUN_WINDOW_MS;
+      if (!profileChanged && !grantChanged) return agent;
+      return (await access("updateAgentV2", { agentId: agent.agentId, ...(profileChanged ? { context } : {}), ...(grantChanged ? { grant } : {}) },
+        UpdateAgentV2ResultSchema)).agent;
+    }
+    throw new WorkflowError("code_agent_retired");
+  }
+  async function cancelRun(runId: string) {
+    return (await access("finishAgentRunV2", { runId, outcome: "cancelled" }, FinishAgentRunV2ResultSchema)).run;
+  }
   return {
     code, omp, native,
     readStarterCatalog, verifyModels, observeVerification,
@@ -585,12 +806,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       return { destination: { ...target }, composition, native };
     },
     async prepareSession(review: SessionReview): Promise<OmpResult<"prepareSession">> {
-      if (review.native.agentTools !== undefined || review.native.operationId !== LAUNCH_OPERATION_ID) throw new WorkflowError("omp_review_changed");
-      const [composition, defaults] = await Promise.all([
-        composeSession(review.destination, review.composition.revision, review.composition.prompt), omp("readDefaults", {}),
-      ]);
-      if (composition.compositionDigest !== review.composition.compositionDigest || defaults.revision !== review.native.defaultsRevision)
-        throw new WorkflowError("code_composition_changed");
+      const { composition, defaults } = await reviewedComposition(review);
       const prepared = await omp("prepareSession", { ...sessionInput(review.destination, composition, defaults.revision, reviewedSessionOptions(review.native)), reviewDigest: review.native.reviewDigest });
       const runtime = prepared.runtime;
       if (prepared.destination.containerId !== review.destination.containerId || prepared.destination.machineId !== review.destination.machineId || prepared.reviewDigest !== review.native.reviewDigest ||
@@ -604,6 +820,63 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
         throw new WorkflowError("omp_review_changed");
       return prepared;
     },
+    /**
+     * LAUNCH AS AN AGENT RUN, the reviewed session's twin: read the composition again (same digest,
+     * same OMP defaults), make Code's Agent carry it as its profile, create a Run for the destination
+     * with its one scope rectangle and the launch's model, and have Manifold launch it through OMP's
+     * TUI harness. What returns is the Run and the terminal runtime Manifold bound to this caller for
+     * one minute, which the caller opens. A refusal or a mismatch once the Run exists cancels the Run
+     * before it is thrown, so no unlaunched Run is left behind, and a cancellation that fails is named.
+     */
+    async launchAgent(review: SessionReview, isCurrent: () => boolean = () => true): Promise<AgentLaunch> {
+      if (review.native.skills.mode !== "preserve" || review.native.automation.mode === "restricted") throw new WorkflowError("code_agent_options_unsupported");
+      const { composition } = await reviewedComposition(review);
+      const agent = await ensureAgent(review.destination, composition);
+      const target = { machineId: review.destination.machineId, containerId: review.destination.containerId };
+      if (!isCurrent()) throw new WorkflowError("code_destination_changed");
+      const { run } = await access("createRunV2", { agentId: agent.agentId, target, reach: "subtree", lifetimeMs: agent.grant.maxRunLifetimeMs,
+        scope: agentScope(target.containerId), model: runModel(composition) }, CreateRunV2ResultSchema);
+      try {
+        const launched = await access("launchRun", { runId: run.id, target }, LaunchRunResultSchema);
+        const { runtime, session } = launched;
+        if (launched.destination.machineId !== target.machineId || runtime.machineId !== target.machineId || runtime.pluginId !== OMP_PLUGIN_ID ||
+          runtime.operationId !== HARNESS_OPERATION_ID || runtime.input.tui !== true || session.harness !== OMP_PLUGIN_ID || session.machineId !== target.machineId ||
+          runtime.session?.harness !== session.harness || runtime.session.machineId !== session.machineId || runtime.session.sessionId !== session.sessionId)
+          throw new WorkflowError("code_run_changed");
+        if (!isCurrent()) throw new WorkflowError("code_destination_changed");
+        return { run, launched };
+      } catch (error) {
+        try { await cancelRun(run.id); }
+        catch (cancelError) {
+          const words = (reason: unknown) => reason instanceof WorkflowError ? failureWords(reason.message) : "The Code action could not be completed.";
+          throw new WorkflowError(`${words(error)} The run it created could not be cancelled (${words(cancelError)}); it ends with its lease.`);
+        }
+        throw error;
+      }
+    },
+    /** Cancels a Run that never opened its terminal (`finishAgentRunV2`, outcome `cancelled`). A Run's TUI that already runs is not stopped by it. */
+    cancelRun,
+    /**
+     * The workspace's Code Runs for the Sessions view: the caller's Code Agents for this workspace
+     * (every generation), their Runs as Manifold lists them, the inspection of each listed Run for its
+     * renewals and settlement, and the terminal inventory for the TUIs still running. It reads only;
+     * Manifold's own visibility decides what appears. An inspection that fails leaves its Run unread.
+     */
+    async readRuns(containerId: string): Promise<CodeRuns> {
+      const [base, listed, inventory] = await Promise.all([codeAgentName(containerId), access("listAgentsV2", {}, ListAgentsV2ResultSchema),
+        dispatch("core.terminals.listAll", {}).then(value => TerminalsResponseSchema.parse(value).terminals)]);
+      const agents = listed.agents.filter(agent => agent.harness === OMP_PLUGIN_ID && codeAgentGeneration(agent.name, base));
+      const lists = await Promise.all(agents.map(agent => access("listRunsV2", { agentId: agent.agentId }, ListRunsV2ResultSchema)));
+      const observedAt = lists.reduce((latest, list) => Math.max(latest, list.observedAt), 0) || Date.now();
+      const entries = lists.flatMap((list, index) => list.runs.map(run => ({ run, leaseMs: agents[index]!.grant.maxRunLifetimeMs,
+        terminal: run.session === null ? null : runningSessionTerminals(run.session, inventory)[0] ?? null })));
+      const shown = listedRuns(entries, entry => entry.terminal !== null, observedAt);
+      const inspections = await Promise.all(shown.map(entry => access("inspectRunV2", { runId: entry.run.id, limit: 1 }, InspectRunV2ResultSchema)
+        .then(inspected, () => null)));
+      return { observedAt, canSponsor: listed.canRegister, runs: shown.map((entry, index) => ({ ...entry, inspection: inspections[index] ?? null })) };
+    },
+    /** Turns a running TUI Run's main-agent dials (`atyrode.omp.controlRun`): the session's dials after the change, or its refusal thrown. */
+    controlRun: (runId: string, change: Omit<OmpInput<"controlRun">, "runId">): Promise<RunDials> => omp("controlRun", { runId, ...change }),
     async prepareSignIn(containerId: string, expectedBrokerRevision: string) {
       const current = await omp("readAccountSetup", {});
       if (!current.canSignIn || current.callerRefusal || current.revision !== expectedBrokerRevision) throw new WorkflowError(current.callerRefusal ?? "omp_review_changed");
