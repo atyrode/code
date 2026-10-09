@@ -1464,6 +1464,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "← lowers the thinking one available step", `${chosenKey("thinking")} === ${JSON.stringify(available.at(-2))}`);
   assert.equal(await browser.evaluate(`document.activeElement === ${word("thinking", available.at(-2)!)} && [...${row("thinking")}.querySelectorAll('[tabindex="0"]')].length === 1`), true,
     "Focus follows the value: the row's one Tab stop is the word it holds");
+  // The row's pointer fades in over 140ms each time focus enters the row (styles.css `.dial-ptr`), and focusRow brought focus
+  // in only a few keys ago: read before the fade ends, it is still part-way. The indicator is judged once the fade has ended.
+  await until(browser, "the row's pointer has finished fading in", `${row("thinking")}.querySelector('.${G}dial-ptr').getAnimations().every(animation => animation.playState !== 'running')`);
   assert.equal(await browser.evaluate(`document.activeElement.matches(':focus-visible') &&
     getComputedStyle(${row("thinking")}.querySelector('.${G}dial-ptr')).opacity === '1'`), true, "Keyboard edits keep a visible focus indicator, the row's pointer");
   // A keyboard commit names its value in the readout, where a pointer reads a word before choosing it (once the last
