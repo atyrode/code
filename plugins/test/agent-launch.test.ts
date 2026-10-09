@@ -206,13 +206,16 @@ describe("the agent door sequence", () => {
       homeId: target.containerId, unplaced: false, session: session(detachedSession) };
     // The expired Run's session was resumed without a Run after it ended: that terminal is not the Run's TUI, so the Run is not detached.
     const resumed: TerminalSummary = { ...running, id: "resumed", createdAt: now - 10 * 60_000, session: session("9ab82ad4-8c9e-4166-8130-472c7cae1559") };
-    f.answers["core.terminals.listAll"] = () => ({ terminals: [running, resumed] });
+    // A completed Run keeps its future expiresAt; a resume of its session before then is still not its TUI.
+    const resumedCompleted: TerminalSummary = { ...running, id: "resumed-completed", createdAt: now - 5 * 60_000, session: session(sessionId) };
+    f.answers["core.terminals.listAll"] = () => ({ terminals: [running, resumed, resumedCompleted] });
     f.answers["core.access.inspectRunV2"] = input => f.deny("core.access.inspectRunV2", `inspection of ${String(input.runId)} unavailable`);
     const read = await f.workflow.readRuns(target.containerId);
     expect(read.canSponsor).toBe(true);
     expect(read.runs.map(run => run.run.id)).toEqual(["live", "detached", "ended-1", "ended-2", "expired-gone"]);
     expect(read.runs.find(run => run.run.id === "detached")!.terminal?.id).toBe("tui");
     expect(read.runs.find(run => run.run.id === "expired-gone")!.terminal).toBeNull();
+    expect(read.runs.find(run => run.run.id === "ended-1")!.terminal).toBeNull();
     expect(read.runs.every(run => run.inspection === null)).toBe(true);
   });
 });
@@ -277,7 +280,16 @@ describe("a Run's lease and words", () => {
   const entry = (run: Partial<CodeRun["run"]>, renewals: number | null, terminal: TerminalSummary | null = null): CodeRun => ({
     run: { id: "run", principalId: "p", agentId: "a", session: { harness: "atyrode.omp", sessionId, machineId: "m" }, activity: "working", name: "Code",
       state: "pending_policy", purpose: "Code", createdAt: now - HOUR, expiresAt: now + 40 * 60_000, parentRunId: null, actionCount: 0, refusalCount: 0, scope: [], ...run },
-    leaseMs: HOUR, terminal, inspection: renewals === null ? null : { renewals, finishedAt: now - 3 * 60_000, exitCode: 1 } });
+    leaseMs: HOUR, terminal, inspection: renewals === null ? null : { renewals, finishedAt: now - 3 * 60_000, exitCode: 1, terminalIds: ["tui"] } });
+  test("a settled Run whose own TUI still runs is detached since it settled; one cancelled before any terminal offers no resume", () => {
+    const tui: TerminalSummary = { id: "tui", machineId: "m", name: "OMP", createdAt: 1, status: "running", exitCode: null, homeId: "w", unplaced: false };
+    const revoked = entry({ state: "revoked", expiresAt: now + HOUR }, 3, tui);
+    expect(runPhase(revoked)).toBe("detached");
+    expect(leaseWords(revoked, now, vocab).text).toBe(`detached since ${vocab.time(now - 3 * 60_000)}`);
+    const cancelled = { ...entry({ state: "cancelled" }, 0), inspection: { renewals: 0, finishedAt: now, exitCode: null, terminalIds: [] } };
+    expect(runVerb(cancelled)).toBeNull();
+    expect(runVerb(entry({ state: "cancelled" }, 0))).toBe("resume");
+  });
   test("the next renewal is due half a lease before expiry, and each renewal left moves the end half a lease on", () => {
     const lease = leaseOf(entry({}, 2));
     expect(lease.next).toBe(now + 10 * 60_000);

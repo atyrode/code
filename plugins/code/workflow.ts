@@ -370,9 +370,9 @@ export type CodeRun = {
   readonly run: ListRunsV2Result["runs"][number];
   /** Its Agent's lease, which its harness renews at half for the same length. */
   readonly leaseMs: number;
-  /** What its inspection adds: renewals so far, when it settled, and the exit code its terminal or job reported; null when unread. */
-  readonly inspection: { readonly renewals: number; readonly finishedAt: number | null; readonly exitCode: number | null } | null;
-  /** The running terminal that carries its session; null when none does (not started, ended, or the inventory is unread). */
+  /** What its inspection adds: renewals so far, when it settled, the exit code its terminal or job reported, and the terminals it opened; null when unread. */
+  readonly inspection: { readonly renewals: number; readonly finishedAt: number | null; readonly exitCode: number | null; readonly terminalIds: readonly string[] } | null;
+  /** Its own TUI while that still runs; null when none does (not started, exited, or the inventory is unread). */
   readonly terminal: TerminalSummary | null;
 };
 /** The workspace's Code Runs at one observation, and whether the caller can sponsor a new one. */
@@ -394,7 +394,8 @@ export function listedRuns<T extends { readonly run: { readonly state: AgentRunV
 function inspected(inspection: InspectRunV2Result): NonNullable<CodeRun["inspection"]> {
   const terminal = [...inspection.terminals].sort((left, right) => right.createdAt - left.createdAt)[0];
   const job = inspection.jobs.find(entry => entry.operationId === HARNESS_OPERATION_ID && entry.exitCode !== null);
-  return { renewals: inspection.run.renewals, finishedAt: inspection.run.cleanup.finishedAt, exitCode: terminal?.exitCode ?? job?.exitCode ?? null };
+  return { renewals: inspection.run.renewals, finishedAt: inspection.run.cleanup.finishedAt, exitCode: terminal?.exitCode ?? job?.exitCode ?? null,
+    terminalIds: inspection.terminals.map(entry => entry.terminalId) };
 }
 
 /** One Code action through the ordinary caller transport: its result, or its refusal thrown in a person's words. */
@@ -884,14 +885,19 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       const agents = listed.agents.filter(agent => agent.harness === OMP_PLUGIN_ID && codeAgentGeneration(agent.name, base));
       const lists = await Promise.all(agents.map(agent => access("listRunsV2", { agentId: agent.agentId }, ListRunsV2ResultSchema)));
       const observedAt = lists.reduce((latest, list) => Math.max(latest, list.observedAt), 0) || Date.now();
-      // A Run's TUI is a terminal of its session opened while the Run stood: a later one on the same session is a Run-less resume.
+      // An open or expired Run's TUI is a terminal of its session opened while the Run stood: expiry ends that window, so a later
+      // Run-less resume is never it. A Run settled otherwise keeps a future expiresAt, so its TUI is only one its inspection names.
       const entries = lists.flatMap((list, index) => list.runs.map(run => ({ run, leaseMs: agents[index]!.grant.maxRunLifetimeMs,
-        terminal: run.session === null ? null : runningSessionTerminals(run.session, inventory)
+        terminal: run.session === null || !(OPEN_RUN_STATES[run.state] === true || run.state === "expired") ? null : runningSessionTerminals(run.session, inventory)
           .find(terminal => terminal.createdAt >= run.createdAt && terminal.createdAt < run.expiresAt) ?? null })));
       const shown = listedRuns(entries, entry => entry.terminal !== null, observedAt);
       const inspections = await Promise.all(shown.map(entry => access("inspectRunV2", { runId: entry.run.id, limit: 1 }, InspectRunV2ResultSchema)
         .then(inspected, () => null)));
-      return { observedAt, canSponsor: listed.canRegister, runs: shown.map((entry, index) => ({ ...entry, inspection: inspections[index] ?? null })) };
+      return { observedAt, canSponsor: listed.canRegister, runs: shown.map((entry, index) => {
+        const inspection = inspections[index] ?? null, session = entry.run.session;
+        const own = entry.terminal ?? (session && inspection ? runningSessionTerminals(session, inventory).find(terminal => inspection.terminalIds.includes(terminal.id)) ?? null : null);
+        return { ...entry, terminal: own, inspection };
+      }) };
     },
     /** Turns a running TUI Run's main-agent dials (`atyrode.omp.controlRun`): the session's dials after the change, or its refusal thrown. */
     controlRun: (runId: string, change: Omit<OmpInput<"controlRun">, "runId">): Promise<RunDials> => omp("controlRun", { runId, ...change }),

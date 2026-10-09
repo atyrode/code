@@ -13,16 +13,20 @@ import { shownDials, type DialOutcome, type RunDialState } from "./run-dials.ts"
 /**
  * What a Run is now. `starting`: not settled and nothing reported yet (a TUI Run stays
  * `pending_policy` for life, so only its first report says it started). `live`: reporting. `detached`:
- * its lease ran out while its TUI goes on, unattributed. The rest are settled, `expired` being a lease
- * that ran out with its terminal gone too.
+ * settled (its lease ran out, or it was revoked or cancelled) while its own TUI goes on, unattributed.
+ * The rest are settled with their TUI gone, `expired` being a lease that ran out.
  */
 export type RunPhase = "starting" | "live" | "detached" | "completed" | "failed" | "cancelled" | "expired" | "revoked";
 export function runPhase(entry: Pick<CodeRun, "run" | "terminal">): RunPhase {
   const { state, activity } = entry.run;
   if (OPEN_RUN_STATES[state] === true) return activity === "unknown" ? "starting" : "live";
-  if (state === "expired") return entry.terminal ? "detached" : "expired";
-  if (state === "completed" || state === "cancelled" || state === "revoked") return state;
+  if (entry.terminal) return "detached";
+  if (state === "expired" || state === "completed" || state === "cancelled" || state === "revoked") return state;
   return "failed";
+}
+/** When a detached Run stopped being attributed: its expiry, or when a revocation or cancellation settled it. */
+export function detachedAt(entry: Pick<CodeRun, "run" | "inspection">): number {
+  return entry.run.state === "expired" ? entry.run.expiresAt : entry.inspection?.finishedAt ?? entry.run.expiresAt;
 }
 /** Whether its dials, lease and said line show: an open Run's, a detached one's included. */
 export function runOpen(phase: RunPhase): boolean {
@@ -44,7 +48,7 @@ export function activitySaid(word: ActivityWord, renewals: number | null): strin
     case "done": return "turn ended; waiting for you";
     case "starting": return "policy pending; no report yet";
     case "live": return "running";
-    case "detached": return renewals !== null && renewals >= AGENT_RENEWALS ? "renewals ran out; the TUI goes on" : "a renewal was missed; the TUI goes on";
+    case "detached": return renewals !== null && renewals >= AGENT_RENEWALS ? "renewals ran out; the TUI goes on" : "the run ended; the TUI goes on";
     case "completed": return "the TUI exited; session saved";
     case "failed": return "the TUI exited with an error";
     case "cancelled": return "cancelled from Code or Agents";
@@ -52,12 +56,12 @@ export function activitySaid(word: ActivityWord, renewals: number | null): strin
     case "revoked": return "revoked in Agents";
   }
 }
-/** The Run's one verb: open its terminal, cancel one that never opened, or resume a settled one's saved session. */
-export function runVerb(entry: Pick<CodeRun, "run" | "terminal">): "open" | "cancel" | "resume" | null {
+/** The Run's one verb: open its terminal, cancel one that never opened, or resume a settled one's saved session (none for a Run cancelled before any terminal opened). */
+export function runVerb(entry: Pick<CodeRun, "run" | "terminal" | "inspection">): "open" | "cancel" | "resume" | null {
   const phase = runPhase(entry);
   if (phase === "starting") return entry.terminal ? "open" : "cancel";
   if (phase === "live" || phase === "detached") return "open";
-  return entry.run.session ? "resume" : null;
+  return entry.run.session && !(phase === "cancelled" && entry.inspection?.terminalIds.length === 0) ? "resume" : null;
 }
 
 // ---------------------------------------------------------------- the lease
@@ -94,7 +98,7 @@ export function leaseWords(entry: CodeRun, now: number, vocab: RunVocabulary): {
   const phase = runPhase(entry), lease = leaseOf(entry), finished = entry.inspection?.finishedAt ?? null;
   switch (phase) {
     case "starting": return { text: "", tone: null };
-    case "detached": return { text: `detached since ${vocab.time(lease.expiresAt)}`, tone: "off" };
+    case "detached": return { text: `detached since ${vocab.time(detachedAt(entry))}`, tone: "off" };
     case "failed": {
       const exit = entry.inspection?.exitCode;
       return { text: [finished === null ? null : vocab.time(finished), exit === null || exit === undefined ? null : `exit ${exit}`].filter(Boolean).join(" · "), tone: null };
@@ -154,7 +158,7 @@ export function dialsLock(entry: CodeRun, state: RunDialState, vocab: RunVocabul
   const phase = runPhase(entry);
   if (state.forbidden) return said("dials", "its launcher's or sponsor's alone", { warn: true });
   if (phase === "starting") return said("dials", "once the session starts");
-  if (phase === "detached") return said("dials", `off since ${vocab.time(entry.run.expiresAt)} · the TUI goes on`);
+  if (phase === "detached") return said("dials", `off since ${vocab.time(detachedAt(entry))} · the TUI goes on`);
   if (phase !== "live") return said("dials", "the run is over");
   return null;
 }
@@ -228,7 +232,7 @@ export function runSaid(entry: CodeRun, state: RunDialState, pointed: RunPointed
 /** The lease said in full while it is pointed: the renewal due and when, or why there is none. */
 export function leaseSaid(entry: CodeRun, now: number, vocab: RunVocabulary): RunSaid {
   const lease = leaseOf(entry), phase = runPhase(entry);
-  if (phase === "detached") return said("detached", `since ${vocab.time(lease.expiresAt)} · the TUI goes on`);
+  if (phase === "detached") return said("detached", `since ${vocab.time(detachedAt(entry))} · the TUI goes on`);
   if (phase === "starting") return said("lease", "from its first report");
   if (lease.renewals === null) return said("lease", `expires ${vocab.time(lease.expiresAt)} · renewals unread`);
   if (lease.next === null) return said("no renewals left", `detached after ${vocab.time(lease.expiresAt)}`, { warn: true });
