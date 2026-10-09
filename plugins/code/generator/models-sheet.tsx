@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type Ref } from "react";
 import type { HostServices } from "@manifold/plugin";
 import type { MachineSummary } from "@manifold/protocol";
 import { prefersReducedMotion } from "@manifold/ui";
@@ -13,7 +13,7 @@ import { WorkflowError, type CodeCall } from "../workflow.ts";
 import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
-import { contextWords, exclusionWords, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
+import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
   type ListChange, type ModelRow, type SavePress } from "./sheets-model.ts";
 import { sameTeam } from "./statement-model.ts";
 import { CHECKING_HOLD_MS } from "./verification.ts";
@@ -111,11 +111,14 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       : kind === "discard" ? "discarding drops that list" : "an import replaces that list";
     return `Your unsaved edit is on ${madeOn}, and ${effect}. ${savable ? "Save keeps the edit on the list in use; discard edit drops it." : "Discard edit drops the edit."}`;
   };
-  // A save pressed here is said here, its own failure only (sheets-model.ts `saveFailure`).
+  // A save pressed here is said here, its own failure only (sheets-model.ts `saveFailure`). The press goes along with each
+  // draft the workbench makes of that edit and ends with it (`followPress`); a visited sheet stays mounted, so it sees them all.
   const [savePress, setSavePress] = useState<SavePress | null>(null);
-  const failedSave = saveFailure(savePress, model.localDraft, model.message);
+  const localDraft = model.localDraft;
+  useLayoutEffect(() => { setSavePress(previous => followPress(previous, localDraft)); }, [localDraft]);
+  const failedSave = saveFailure(savePress, localDraft, model.message);
   const editFixes: readonly GoFix[] = [
-    ...savable ? [{ label: "save", run: () => { setSavePress({ draft: model.localDraft, before: model.message }); void model.actions.save(); } }] : [],
+    ...savable && localDraft ? [{ label: "save", run: () => { setSavePress({ draft: localDraft, before: model.message }); void model.actions.save(); } }] : [],
     { label: "discard edit", run: () => model.actions.discardChanges() }];
   /**
    * Runs one press's writes against the workspace this sheet was opened on, from the revision it was read at; anything that

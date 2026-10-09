@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CatalogDocument } from "../domain/contracts.ts";
-import { exclusionWords, listChanges, modelRows, modelsPhase, nextSetupRow, saveFailure, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
-import { followRecord } from "../code/generator/launch-step.ts";
+import { exclusionWords, followPress, listChanges, modelRows, modelsPhase, nextSetupRow, saveFailure, setupRows, speedLevel, type SetupFacts } from "../code/generator/sheets-model.ts";
+import { followCatalogWrite, followRecord } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 
 const document: CatalogDocument = { schemaVersion: 1, models: ([1, 2, 3] as const).map(tier => ({
@@ -61,6 +61,8 @@ describe("the Models sheet", () => {
   // A recalled team that could not be formed left a failed message, and the edit stayed.
   const recall = { text: "That profile cannot be formed from the current models; nothing changed.", failed: true };
   const stale = { text: "The workspace profile changed. Read it again before saving your edit.", failed: true };
+  // A plain resume, which an unsaved edit allows, failed and left the edit as it was.
+  const resume = { text: "Nothing was opened: the canvas refused the terminal.", failed: true };
 
   test("the held action says only its own save's failure: never a message that stood before it, nor one left once the edit changed", () => {
     expect(saveFailure(null, edit, recall)).toBeNull();
@@ -69,20 +71,45 @@ describe("the Models sheet", () => {
     expect(saveFailure(press, edit, null)).toBeNull();
     expect(saveFailure(press, edit, recall)).toBeNull();
     expect(saveFailure(press, edit, stale)).toBe(stale.text);
-    // Once the edit changes, or is discarded, its earlier save's failure is no longer said.
-    expect(saveFailure(press, { ...edit, selection: { ...selection, advisor: "off" } }, stale)).toBeNull();
-    expect(saveFailure(press, null, stale)).toBeNull();
+    // Once the edit changes, or is discarded, the press ends with it.
+    const changed = { ...edit, selection: { ...selection, advisor: "off" } } as const;
+    expect(followPress(press, changed)).toBeNull();
+    expect(saveFailure(press, changed, stale)).toBeNull();
+    expect(followPress(press, null)).toBeNull();
   });
 
-  test("a save refused as stale is still said once the same team is followed to a new revision", () => {
+  test("a save refused as stale is still said once the same edit is followed to a new revision", () => {
     // Another tab changed the account choices (revision 8) while the save of revision 7 was in flight. The read that
     // brings revision 8 moves the edit's base forward (launch-step.ts `followRecord`): a new draft holding the same team.
     const followed = followRecord(edit, { revision: 8, initialized: true, catalogDigest: edit.catalogDigest, draftDigest: edit.draftDigest,
       selection: edit.baseSelection, metadataKey: null });
     expect(followed).not.toBe(edit);
     expect(followed.revision).toBe(8);
-    // The save's refusal arrives after that read, and the held action says it.
-    expect(saveFailure({ draft: edit, before: null }, followed, stale)).toBe(stale.text);
+    // The press goes with it, and the save's refusal, arriving after that read, is said.
+    const carried = followPress({ draft: edit, before: null }, followed);
+    expect(carried).toEqual({ draft: followed, before: null });
+    expect(saveFailure(carried, followed, stale)).toBe(stale.text);
+    // A list then staged beside the one in use (launch-step.ts `followCatalogWrite`) moves the same edit on again.
+    const restaged = followCatalogWrite(followed, 8, { revision: 9, initialized: true, catalogDigest: edit.catalogDigest, draftDigest: "e".repeat(64),
+      selection: edit.baseSelection, metadataKey: null })!;
+    expect(restaged).not.toBe(followed);
+    expect(saveFailure(followPress(carried, restaged), restaged, stale)).toBe(stale.text);
+  });
+
+  test("an edit discarded, or changed away and back, then made again of the same team starts without a press: a later failure is not the save's", () => {
+    const press = { draft: edit, before: null };
+    // Discarded, then the same team chosen again: a new draft with the same fields.
+    const remade: ProfileDraft = { ...edit, selection: { ...edit.selection } };
+    const afterDiscard = followPress(followPress(press, null), remade);
+    expect(afterDiscard).toBeNull();
+    expect(saveFailure(afterDiscard, remade, resume)).toBeNull();
+    // Changed to another team and back.
+    const away: ProfileDraft = { ...edit, selection: { ...selection, advisor: "off" } };
+    const afterBack = followPress(followPress(press, away), remade);
+    expect(afterBack).toBeNull();
+    expect(saveFailure(afterBack, remade, resume)).toBeNull();
+    // Fields alone cannot tell a remade edit from a followed one, which is why the press follows every draft in turn.
+    expect(followPress(press, remade)).not.toBeNull();
   });
 });
 

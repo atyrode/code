@@ -126,16 +126,24 @@ export function modelsPhase(facts: {
 
 /**
  * A save pressed beside Models' held action: the edit it saved and the workbench message standing
- * when it was pressed. Only that save's own failure is said there, for as long as the same team from
- * the same list is on show. A read that only moves the edit's base to a newer revision (launch-step.ts
- * `followRecord`) leaves it that edit, so a save refused as stale is still said. A message that already
- * stood, such as a recalled team that could not be formed, is not its answer, and neither is one left
- * once the edit has changed or been discarded.
+ * when it was pressed. Only that save's own failure is said there, while that edit is on show
+ * (`followPress` carries the press along with it). A message that already stood, such as a recalled
+ * team that could not be formed, is not its answer.
  */
-export type SavePress = { readonly draft: ProfileDraft | null; readonly before: WorkbenchMessage | null };
+export type SavePress = { readonly draft: ProfileDraft; readonly before: WorkbenchMessage | null };
+/**
+ * The press as the edit it saved moves on. A read or a Models write that only moves the edit's base
+ * to a newer revision (launch-step.ts `followRecord`, `followCatalogWrite`) makes a new draft with the
+ * same source and team, and the press goes with it, so a save refused as stale is still said. A
+ * discard (no draft) or any other team ends the press, so an edit made again later, even of the same
+ * team, starts without one. Applied to every draft in turn, never to a draft seen after a gap.
+ */
+export function followPress(press: SavePress | null, draft: ProfileDraft | null): SavePress | null {
+  if (press === null || press.draft === draft) return press;
+  return draft !== null && draft.source === press.draft.source && sameTeam(draft.selection, press.draft.selection) ? { ...press, draft } : null;
+}
 export function saveFailure(press: SavePress | null, draft: ProfileDraft | null, message: WorkbenchMessage | null): string | null {
-  if (!press?.draft || !draft || press.draft.source !== draft.source || !sameTeam(press.draft.selection, draft.selection)) return null;
-  return message !== press.before && message?.failed ? message.text : null;
+  return press !== null && press.draft === draft && message !== press.before && message?.failed ? message.text : null;
 }
 
 // ---------------------------------------------------------------- Setup: what the machine needs
