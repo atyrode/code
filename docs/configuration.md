@@ -141,8 +141,8 @@ answers is left out as a family with no account is; a selection that needs it is
 where it is reviewed. `deriveCatalog` returns the document and every other offered model
 with its reason; the document's compiled catalog names its short families. It refuses only a
 family Code requires whose most capable model regresses on its cheapest
-(`ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
-and nothing reachable at all (`probe_insufficient_ladder`). Only the returned `confirm`
+(`code_ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
+and nothing laddered at all (`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
