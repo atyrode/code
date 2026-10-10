@@ -421,6 +421,8 @@ describe("a Run's dials", () => {
     expect(back.priors).toEqual([opus.model!]);
     expect(readDials(back, opus)).toBe(back);
     expect(readDials(back, sonnet).priors).toEqual([]);
+    // A read in hand already naming haiku, a model the bridge never held, shows haiku's report landed: nothing is left to bridge.
+    expect(answerDial(pressDial(first, toHaiku, first.reply!, none).state, toHaiku, { model: haiku.model, thinking: "high" }, first.reply!, haiku.model).priors).toEqual([]);
     // The bridge keeps its first model, which every read names while the session serves unconfirmed models, and the latest.
     const models = Array.from({ length: 10 }, (_, index) => `openrouter/vendor/model-${index}`);
     const swept = models.reduce((state, value) => {

@@ -103,16 +103,19 @@ const PRIORS = 8;
 /**
  * The session's answer to the change in flight, landing while the read in hand names `read` as the
  * Run's model. The reads still to come may name that model, unless it is already the answer's. While
- * an earlier answer still bridges, though, the read in hand predates that answer's report, so they
- * may name any model of its bridge or that answer's own model instead (`priors`), even when the read
- * in hand names the model this answer returns to. A thinking level the session applied other than the
- * one asked for, or that a model change moved, is clamped: the model's own levels decided it.
+ * an earlier answer still bridges, though, the read in hand may predate that answer's report, so they
+ * may name any model of its bridge or that answer's own model instead (`priors`). That holds even when
+ * the read in hand names the model this answer returns to, a model of that bridge; only one naming a
+ * model the bridge never held shows this answer's report already landed. A thinking level the
+ * session applied other than the one asked for, or that a model change moved, is clamped: the
+ * model's own levels decided it.
  */
 export function answerDial(state: RunDialState, change: DialChange, dials: Dials, before: Dials, read: string | null): RunDialState {
   const asked = change.field === "thinking" ? change.value : before.thinking;
   const clamped = dials.thinking !== null && dials.thinking !== asked ? dials.thinking : null;
+  const reported = read !== null && read === dials.model && !state.priors.includes(read);
   // An answer's model is never in its own bridge, so the bridge it extends holds no model twice.
-  const bridged = state.reply !== null && state.priors.length > 0 ? [...state.priors, state.reply.model] : read === dials.model ? [] : [read];
+  const bridged = reported ? [] : state.reply !== null && state.priors.length > 0 ? [...state.priors, state.reply.model] : [read];
   const priors = bridged.filter((model): model is string => model !== null && model !== dials.model);
   return { ...state, reply: dials, priors: priors.length > PRIORS ? [priors[0]!, ...priors.slice(1 - PRIORS)] : priors, pending: null, unconfirmed: null,
     outcome: { kind: "confirmed", change, clamped } };
