@@ -31,9 +31,9 @@ export type RunDialState = {
   /** The session's dials as this browser last heard them from `controlRun`; null before any answer, or once a read contradicted it. */
   readonly reply: Dials | null;
   /**
-   * The models a read may still name before it shows the kept answer's, oldest first: the Run's model in the read in hand
-   * when the answer landed, or, while an earlier answer still bridged, that answer's bridge and its own model, whose report
-   * may land first. Empty once a read names the answer's model.
+   * The models a read may still name before it shows the kept answer's, oldest first, are the Run's model in the read in
+   * hand when the answer landed or, while an earlier answer still bridged, that answer's bridge and its own model, whose
+   * report may land first. A read naming the answer's model empties them.
    */
   readonly priors: readonly string[];
   /** The change sent and not yet answered. */
@@ -96,22 +96,24 @@ export function pressDial(state: RunDialState, change: DialChange, shown: Dials,
 }
 
 /**
- * As many models as an answer's bridge holds: its first, which every read names while the session
+ * A bridge holds at most this many models: its first, which every read names while the session
  * serves models its harness never confirms (OpenRouter's), and the latest.
  */
 const PRIORS = 8;
 /**
  * The session's answer to the change in flight, landing while the read in hand names `read` as the
- * Run's model. A read naming that model may still come, or, while an earlier answer still bridges,
- * one naming a model of that bridge or that answer's own (`priors`); none may once the read in hand
- * names the answer's model. A thinking level the session applied other than the one asked for, or
- * that a model change moved, is clamped: the model's own levels decided it.
+ * Run's model. The reads still to come may name that model, unless it is already the answer's. While
+ * an earlier answer still bridges, though, the read in hand predates that answer's report, so they
+ * may name any model of its bridge or that answer's own model instead (`priors`), even when the read
+ * in hand names the model this answer returns to. A thinking level the session applied other than the
+ * one asked for, or that a model change moved, is clamped: the model's own levels decided it.
  */
 export function answerDial(state: RunDialState, change: DialChange, dials: Dials, before: Dials, read: string | null): RunDialState {
   const asked = change.field === "thinking" ? change.value : before.thinking;
   const clamped = dials.thinking !== null && dials.thinking !== asked ? dials.thinking : null;
-  const bridged = state.reply !== null && state.priors.length > 0 ? [...state.priors, state.reply.model] : [read];
-  const priors = read === dials.model ? [] : [...new Set(bridged)].filter((model): model is string => model !== null && model !== dials.model);
+  // An answer's model is never in its own bridge, so the bridge it extends holds no model twice.
+  const bridged = state.reply !== null && state.priors.length > 0 ? [...state.priors, state.reply.model] : read === dials.model ? [] : [read];
+  const priors = bridged.filter((model): model is string => model !== null && model !== dials.model);
   return { ...state, reply: dials, priors: priors.length > PRIORS ? [priors[0]!, ...priors.slice(1 - PRIORS)] : priors, pending: null, unconfirmed: null,
     outcome: { kind: "confirmed", change, clamped } };
 }
@@ -142,7 +144,7 @@ const KEPT_ANSWERS = 32;
 const KeptAnswersSchema = z.array(z.tuple([z.string().min(1).max(128), z.strictObject({ model: z.string().max(240).nullable(),
   thinking: ThinkingSelectorSchema.nullable(), priors: z.array(z.string().min(1).max(240)).max(PRIORS).optional() })])).max(KEPT_ANSWERS);
 export type AnswerStorage = Pick<Storage, "getItem" | "setItem">;
-/** A Run's answer as this browser keeps it: the session's dials, and its bridge while it has one (`RunDialState`). */
+/** This browser keeps a Run's answer as the session's dials and, while it has one, its bridge (`RunDialState`). */
 export type KeptAnswer = { readonly reply: Dials; readonly priors: readonly string[] };
 
 export function keptAnswersKey(principalId: string, containerId: string): string {
@@ -180,4 +182,15 @@ export function judgeKept(storage: AnswerStorage | null, key: string, runId: str
   if (reply !== answer.reply || priors !== answer.priors)
     writeKept(storage, key, [...kept].flatMap(([id, entry]) => id !== runId ? [[id, entry] as const] : reply ? [[id, { reply, priors }] as const] : []));
   return live.model !== null && reply?.model === live.model ? reply : null;
+}
+/**
+ * A read judges a Run's dials on this page and its kept answer alike. When it leaves the page without
+ * an answer, the page shows the one kept for the model the read names, which another tab may have
+ * kept since.
+ */
+export function judgeRead(storage: AnswerStorage | null, key: string, runId: string, state: RunDialState, live: Dials): RunDialState {
+  const next = readDials(state, live);
+  if (next === state) return state;
+  const kept = judgeKept(storage, key, runId, live);
+  return next.reply === null && kept ? { ...next, reply: kept } : next;
 }

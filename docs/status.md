@@ -95,7 +95,7 @@ files, service state, credentials or backups.
   serves once the Run's harness confirms it
   ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)). The last `controlRun`
   answer this browser received is the one word on its thinking and bridges a dial until a
-  read shows its model, so a read served before the session's report never drops it. A
+  read shows its model, so a read served before the session's report does not drop it. A
   Run this browser has not turned reads its level as `?` from its TUI's first report, and
   a level changed in the TUI alone is not seen.
   A Run is attributed for at most about 13 leases. After that, or after a missed

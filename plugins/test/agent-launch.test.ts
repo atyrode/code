@@ -6,7 +6,7 @@ import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
 import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runDials, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
-import { answerDial, judgeKept, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
+import { answerDial, judgeKept, judgeRead, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
   type AnswerStorage } from "../code/generator/run-dials.ts";
 import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
@@ -345,7 +345,7 @@ describe("a Run's dials", () => {
     expect([kept.size, [...kept.keys()][0], [...kept.keys()].at(-1), kept.get("run-2")]).toEqual([32, "run-3", "run-2", changed]);
     expect(readKeptAnswers(storage, keptAnswersKey("writer", "another-workspace")).size).toBe(0);
     // An answer kept before answers bridged reads as one that no longer does, and one that no longer does is kept the same way,
-    // so a page of either age reads the other's.
+    // so a v0.21.0 page still reads every answer without a bridge.
     stored.set(key, JSON.stringify([["run-1", launched]]));
     expect(readKeptAnswers(storage, key).get("run-1")).toEqual({ reply: launched, priors: [] });
     keepAnswer(storage, key, "run-2", { reply: launched, priors: [] });
@@ -414,6 +414,13 @@ describe("a Run's dials", () => {
     expect([opusRead.reply, opusRead.priors]).toEqual([second.reply, [opus.model!]]);
     expect(readDials(opusRead, sonnet).reply).toBeNull();
     expect(readDials(opusRead, haiku).priors).toEqual([]);
+    // Turned back to sonnet before any read showed opus, the read in hand still names sonnet, yet reads naming opus may still
+    // come, served before sonnet's second report: opus is the bridge, and a read of sonnet ends it.
+    const toSonnet = { field: "model" as const, value: sonnet.model! };
+    const back = answerDial(pressDial(first, toSonnet, first.reply!, none).state, toSonnet, { model: sonnet.model, thinking: "high" }, first.reply!, sonnet.model);
+    expect(back.priors).toEqual([opus.model!]);
+    expect(readDials(back, opus)).toBe(back);
+    expect(readDials(back, sonnet).priors).toEqual([]);
     // The bridge keeps its first model, which every read names while the session serves unconfirmed models, and the latest.
     const models = Array.from({ length: 10 }, (_, index) => `openrouter/vendor/model-${index}`);
     const swept = models.reduce((state, value) => {
@@ -441,6 +448,23 @@ describe("a Run's dials", () => {
     expect(readDials(unconfirmed, opus)).toEqual({ ...unconfirmed, unconfirmed: null });
     const unread = refuseDial({ ...NO_DIALS, pending: level }, level, "omp_run_control_unconfirmed", "");
     expect(readDials(unread, opus)).toBe(unread);
+  });
+
+  test("a read that drops this page's answer shows the one another tab kept for the model it names; with none, the thinking is unknown", () => {
+    const stored = new Map<string, string>();
+    const storage: AnswerStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), toOpus = { field: "model" as const, value: opus.model! };
+    const page = readDials(answerDial(pressDial(NO_DIALS, toOpus, launched, none).state, toOpus, { model: opus.model, thinking: "high" }, launched, sonnet.model), opus);
+    // Another tab turned run-1 to haiku at max and kept that answer over this page's before this page read the switch.
+    keepAnswer(storage, key, "run-1", { reply: page.reply!, priors: [] });
+    keepAnswer(storage, key, "run-1", { reply: { model: haiku.model, thinking: "max" }, priors: [] });
+    keepAnswer(storage, key, "run-2", { reply: page.reply!, priors: [] });
+    const adopted = judgeRead(storage, key, "run-1", page, haiku);
+    expect([adopted.reply, adopted.outcome, shownDials(adopted, haiku)]).toEqual([{ model: haiku.model, thinking: "max" }, null, { model: haiku.model, thinking: "max" }]);
+    expect(judgeRead(storage, key, "run-1", adopted, haiku)).toBe(adopted);
+    // run-2's only kept answer is this page's: it is dropped here and from storage, and the thinking reads unknown.
+    const alone = judgeRead(storage, key, "run-2", page, haiku);
+    expect([alone.reply, shownDials(alone, haiku), readKeptAnswers(storage, key).has("run-2")]).toEqual([null, haiku, false]);
   });
 
   test("a read judges the kept answers as it judges the page's, so a reload or another tab agrees; a store that refuses writes throws nothing", () => {
