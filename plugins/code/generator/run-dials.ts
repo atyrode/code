@@ -7,11 +7,12 @@ import type { Dials } from "../workflow.ts";
  * A running Run's two live dials, model and thinking, as this browser has turned them. Each press is
  * one `controlRun`, which answers with the session's dials, refuses, or is not answered within its
  * 20 s. The model shown is the Run's live `Run.model`, which OMP's harness moves with its session
- * whatever turned it, a dial, the operator in the TUI or another tab (atyrode/manifold#1078). The
- * answer this browser kept bridges a confirmed dial until the next read; after it, the answer stays
- * only while it names the model the Run reports, as the one word on its thinking, since `Run.model`
- * carries none once the harness reports. One change is in flight per Run at a time; a press while one
- * waits is queued, the latest replacing any earlier one, and sent once the answer lands.
+ * whatever turned it, a dial, the operator in the TUI or another tab (atyrode/manifold#1078), as
+ * `provider` and `id` alone. The answer this browser kept is the one word on the thinking. It bridges
+ * a confirmed dial until a read names its model, since a read served before the session reports the
+ * change can land after its answer, and so can the report of an earlier answer (`readDials`). One
+ * change is in flight per Run at a time; a press while one waits is queued, the latest replacing any
+ * earlier one, and sent once the answer lands.
  */
 
 export type DialField = "model" | "thinking";
@@ -27,8 +28,14 @@ export type DialOutcome =
   | { readonly kind: "unsupported" }
   | { readonly kind: "failed"; readonly words: string };
 export type RunDialState = {
-  /** The session's dials as this browser last heard them from `controlRun`; null before any answer. */
+  /** The session's dials as this browser last heard them from `controlRun`; null before any answer, or once a read contradicted it. */
   readonly reply: Dials | null;
+  /**
+   * The models a read may still name before it shows the kept answer's, oldest first: the Run's model in the read in hand
+   * when the answer landed, or, while an earlier answer still bridged, that answer's bridge and its own model, whose report
+   * may land first. Empty once a read names the answer's model.
+   */
+  readonly priors: readonly string[];
   /** The change sent and not yet answered. */
   readonly pending: DialChange | null;
   /** The latest change pressed while another waited, sent once that one is answered. */
@@ -41,7 +48,7 @@ export type RunDialState = {
   /** The door refuses this caller's dials outright (`omp_run_control_forbidden`), so every press is refused here. */
   readonly forbidden: boolean;
 };
-export const NO_DIALS: RunDialState = { reply: null, pending: null, queued: null, unconfirmed: null, unserved: [], outcome: null, forbidden: false };
+export const NO_DIALS: RunDialState = { reply: null, priors: [], pending: null, queued: null, unconfirmed: null, unserved: [], outcome: null, forbidden: false };
 
 /** The dials a Run shows: the answer this browser kept, else the Run's live model, whose thinking only the launch's record names. */
 export function shownDials(state: RunDialState, live: Dials): Dials {
@@ -49,14 +56,24 @@ export function shownDials(state: RunDialState, live: Dials): Dials {
 }
 
 /**
- * A read of the Run judges the answer kept before it, and the live `Run.model` wins: an answer for
- * another model is stale (the TUI, another tab or a later change moved the session), so it is
- * dropped with the confirmation it said. One for the model the Run reports stays. A Run that
- * reports no model contradicts nothing.
+ * A read of the Run judges what this browser heard before it, and the live `Run.model` wins. A read
+ * naming the model of a change left unanswered shows that it applied. One naming the kept answer's
+ * model ends its bridge. One naming a model of its bridge (`priors`) may have been served before the
+ * session reported the change, so it contradicts nothing, and the models before that one are past.
+ * Neither does one naming the model of the change in flight, whose report can land before its
+ * answer. Any other model was switched elsewhere (the TUI, another tab): the answer is stale and
+ * dropped with the confirmation it said. A Run that reports no model contradicts nothing.
  */
 export function readDials(state: RunDialState, live: Dials): RunDialState {
-  if (state.reply === null || live.model === null || state.reply.model === live.model) return state;
-  return { ...state, reply: null, outcome: state.outcome?.kind === "confirmed" ? null : state.outcome };
+  const model = live.model;
+  if (model === null) return state;
+  const read = state.unconfirmed?.field === "model" && state.unconfirmed.value === model ? { ...state, unconfirmed: null } : state;
+  if (read.reply === null) return read;
+  if (read.reply.model === model) return read.priors.length === 0 ? read : { ...read, priors: [] };
+  const at = read.priors.indexOf(model);
+  if (at >= 0) return at === 0 ? read : { ...read, priors: read.priors.slice(at) };
+  if (read.pending?.field === "model" && read.pending.value === model) return read;
+  return { ...read, reply: null, priors: [], outcome: read.outcome?.kind === "confirmed" ? null : read.outcome };
 }
 
 /**
@@ -79,13 +96,24 @@ export function pressDial(state: RunDialState, change: DialChange, shown: Dials,
 }
 
 /**
- * The session's answer to the change in flight. A thinking level the session applied other than the
- * one asked for, or that a model change moved, is clamped: the model's own levels decided it.
+ * As many models as an answer's bridge holds: its first, which every read names while the session
+ * serves models its harness never confirms (OpenRouter's), and the latest.
  */
-export function answerDial(state: RunDialState, change: DialChange, dials: Dials, before: Dials): RunDialState {
+const PRIORS = 8;
+/**
+ * The session's answer to the change in flight, landing while the read in hand names `read` as the
+ * Run's model. A read naming that model may still come, or, while an earlier answer still bridges,
+ * one naming a model of that bridge or that answer's own (`priors`); none may once the read in hand
+ * names the answer's model. A thinking level the session applied other than the one asked for, or
+ * that a model change moved, is clamped: the model's own levels decided it.
+ */
+export function answerDial(state: RunDialState, change: DialChange, dials: Dials, before: Dials, read: string | null): RunDialState {
   const asked = change.field === "thinking" ? change.value : before.thinking;
   const clamped = dials.thinking !== null && dials.thinking !== asked ? dials.thinking : null;
-  return { ...state, reply: dials, pending: null, unconfirmed: null, outcome: { kind: "confirmed", change, clamped } };
+  const bridged = state.reply !== null && state.priors.length > 0 ? [...state.priors, state.reply.model] : [read];
+  const priors = read === dials.model ? [] : [...new Set(bridged)].filter((model): model is string => model !== null && model !== dials.model);
+  return { ...state, reply: dials, priors: priors.length > PRIORS ? [priors[0]!, ...priors.slice(1 - PRIORS)] : priors, pending: null, unconfirmed: null,
+    outcome: { kind: "confirmed", change, clamped } };
 }
 
 /** The door's refusal of the change in flight, by its token. A refusal that ends the dials drops the queued change too. */
@@ -111,31 +139,45 @@ export function settleDial(state: RunDialState): RunDialState {
 
 /** As many Runs' answers as a browser keeps: more than run at once. */
 const KEPT_ANSWERS = 32;
-const KeptAnswersSchema = z.array(z.tuple([z.string().min(1).max(128),
-  z.strictObject({ model: z.string().max(240).nullable(), thinking: ThinkingSelectorSchema.nullable() })])).max(KEPT_ANSWERS);
+const KeptAnswersSchema = z.array(z.tuple([z.string().min(1).max(128), z.strictObject({ model: z.string().max(240).nullable(),
+  thinking: ThinkingSelectorSchema.nullable(), priors: z.array(z.string().min(1).max(240)).max(PRIORS).optional() })])).max(KEPT_ANSWERS);
 export type AnswerStorage = Pick<Storage, "getItem" | "setItem">;
+/** A Run's answer as this browser keeps it: the session's dials, and its bridge while it has one (`RunDialState`). */
+export type KeptAnswer = { readonly reply: Dials; readonly priors: readonly string[] };
 
 export function keptAnswersKey(principalId: string, containerId: string): string {
   return `${CODE_PLUGIN_ID}.run-dials:${JSON.stringify([principalId, containerId])}`;
 }
 /** The answers kept for a workspace, newest last; unreadable or malformed storage reads as none. */
-export function readKeptAnswers(storage: AnswerStorage | null, key: string): ReadonlyMap<string, Dials> {
+export function readKeptAnswers(storage: AnswerStorage | null, key: string): ReadonlyMap<string, KeptAnswer> {
   let text: string | null = null;
   try { text = storage?.getItem(key) ?? null; } catch { return new Map(); }
   if (!text) return new Map();
   try {
     const parsed = KeptAnswersSchema.safeParse(JSON.parse(text));
-    return parsed.success ? new Map(parsed.data) : new Map();
+    return parsed.success ? new Map<string, KeptAnswer>(parsed.data.map(([runId, { priors, ...reply }]) => [runId, { reply, priors: priors ?? [] }])) : new Map();
   } catch { return new Map(); }
 }
-/** Keep a Run's latest answer, dropping the oldest beyond the limit; a refused write keeps this page's answers only. */
-export function keepAnswer(storage: AnswerStorage | null, key: string, runId: string, dials: Dials): void {
-  const kept = [...readKeptAnswers(storage, key)].filter(([id]) => id !== runId);
-  try { storage?.setItem(key, JSON.stringify([...kept, [runId, dials]].slice(-KEPT_ANSWERS))); } catch { /* A full or refused store keeps this page's answers only. */ }
+/** An answer without a bridge is kept as its dials alone, as answers were before they bridged. */
+function writeKept(storage: AnswerStorage | null, key: string, answers: readonly (readonly [string, KeptAnswer])[]): void {
+  try { storage?.setItem(key, JSON.stringify(answers.slice(-KEPT_ANSWERS).map(([runId, { reply, priors }]) => [runId, priors.length ? { ...reply, priors } : reply]))); }
+  catch { /* A full or refused store keeps this page's answers only. */ }
 }
-/** Forget a Run's kept answer a read contradicted, unless another tab has since kept one for `live`, the model the Run reports. */
-export function forgetAnswer(storage: AnswerStorage | null, key: string, runId: string, live: string): void {
-  const kept = readKeptAnswers(storage, key);
-  if (!kept.has(runId) || kept.get(runId)!.model === live) return;
-  try { storage?.setItem(key, JSON.stringify([...kept].filter(([id]) => id !== runId))); } catch { /* A refused store forgets on this page only. */ }
+/** Keep a Run's latest answer, dropping the oldest beyond the limit; a refused write keeps this page's answers only. */
+export function keepAnswer(storage: AnswerStorage | null, key: string, runId: string, answer: KeptAnswer): void {
+  writeKept(storage, key, [...[...readKeptAnswers(storage, key)].filter(([id]) => id !== runId), [runId, answer]]);
+}
+/**
+ * A read judges a Run's kept answer as it judges the page's (`readDials`), so a reload or another tab
+ * agrees: a contradicted answer is forgotten, and one whose model the read names no longer bridges.
+ * Returns the kept answer for the model the Run reports, which another tab may have kept after this
+ * page's own was contradicted; null when none is.
+ */
+export function judgeKept(storage: AnswerStorage | null, key: string, runId: string, live: Dials): Dials | null {
+  const kept = readKeptAnswers(storage, key), answer = kept.get(runId);
+  if (!answer) return null;
+  const { reply, priors } = readDials({ ...NO_DIALS, ...answer }, live);
+  if (reply !== answer.reply || priors !== answer.priors)
+    writeKept(storage, key, [...kept].flatMap(([id, entry]) => id !== runId ? [[id, entry] as const] : reply ? [[id, { reply, priors }] as const] : []));
+  return live.model !== null && reply?.model === live.model ? reply : null;
 }

@@ -6,7 +6,7 @@ import { codeOperationFailure, codeWorkflow } from "../machine-web.ts";
 import { hhmm, hueOf } from "../ui.tsx";
 import { AGENT_RENEWALS, refusalToken, runDials, WorkflowError, type CodeRun } from "../workflow.ts";
 import { Glyph, GLYPHS } from "./dial-row.tsx";
-import { answerDial, forgetAnswer, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
+import { answerDial, judgeKept, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
   type AnswerStorage, type DialChange, type DialField, type RunDialState } from "./run-dials.ts";
 import { activityWord, leaseOf, leaseWords, modelLevels, modelName, modelWords, runOpen, runPhase, runSaid, runVerb, THINKING_LEVELS,
   type DialWord, type RunPointed } from "./runs-model.ts";
@@ -39,7 +39,7 @@ export type RunDialsHandle = {
 export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDialsHandle {
   const key = keptAnswersKey(host.principal.id, host.containerId!);
   const [states, setStates] = useState<ReadonlyMap<string, RunDialState>>(() =>
-    new Map([...readKeptAnswers(browserStorage(), key)].map(([runId, dials]) => [runId, { ...NO_DIALS, reply: dials }])));
+    new Map([...readKeptAnswers(browserStorage(), key)].map(([runId, answer]) => [runId, { ...NO_DIALS, ...answer }])));
   const latest = useRef(states);
   const read = useRef(runs);
   read.current = runs;
@@ -54,8 +54,9 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     latest.current = new Map(latest.current).set(runId, next);
     if (mounted.current) setStates(latest.current);
   }
-  // Each new read judges the answers kept before it (`readDials`): one for another model than the Run reports is dropped, here
-  // and from storage. A remount or a failed read keeps the read in hand, which may predate an answer whose report is on its way.
+  // Each new read judges what this browser heard before it (`readDials`), before it paints, and the answers kept in storage alike
+  // (`judgeKept`). A page whose own answer was dropped shows the one another tab kept for the live model. A remount, or a failed
+  // read that keeps the read in hand, judges nothing until the next read.
   const judged = useRef(runs);
   useLayoutEffect(() => {
     if (judged.current === runs) return;
@@ -63,8 +64,8 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     for (const entry of runs) {
       const runId = entry.run.id, live = runDials(entry.run.model), state = stateOf(runId), next = readDials(state, live);
       if (next === state) continue;
-      forgetAnswer(browserStorage(), key, runId, live.model!);
-      write(runId, next);
+      const kept = judgeKept(browserStorage(), key, runId, live);
+      write(runId, next.reply === null && kept ? { ...next, reply: kept } : next);
     }
   }, [runs]);
   async function press(entry: CodeRun, change: DialChange, levelsOf: (model: string | null) => readonly string[] | null): Promise<void> {
@@ -77,8 +78,12 @@ export function useRunDials(host: HostServices, runs: readonly CodeRun[]): RunDi
     if (!send) return;
     try {
       const dials = await codeWorkflow(host).controlRun(runId, change.field === "model" ? { model: change.value } : { thinking: change.value as ThinkingSelector });
-      keepAnswer(browserStorage(), key, runId, dials);
-      write(runId, answerDial(stateOf(runId), change, dials, before));
+      // The read in hand may have been served before the session reported this change, and so may the next: a read still naming
+      // the model this one names does not contradict the answer (`answerDial`).
+      const inHand = runDials(read.current.find(candidate => candidate.run.id === runId)?.run.model).model;
+      const answered = answerDial(stateOf(runId), change, dials, before, inHand);
+      keepAnswer(browserStorage(), key, runId, { reply: dials, priors: answered.priors });
+      write(runId, answered);
       window.clearTimeout(timers.current.get(runId));
       timers.current.set(runId, window.setTimeout(() => write(runId, settleDial(stateOf(runId))), SAID_MS));
     } catch (reason) {

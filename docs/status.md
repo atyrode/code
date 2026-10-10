@@ -80,21 +80,24 @@ files, service state, credentials or backups.
   machine's launches are the reviewed session with "no live dials: <machine> cannot
   launch agent runs". Sessions' Runs (activity, the lease to 24 of 24
   and detached, the dials' pending, queued, confirmed, clamped, not served, unanswered and
-  forbidden states, locked dials that send nothing, a queued change included, a model
-  switched in the TUI and a stale kept answer dropped) are rendered from fixtures shaped
-  on that real Agent and Run, with a synthetic `controlRun` whose model switches the
-  fixture reports as OMP's harness would. No launched Run, renewal, activity or model
-  report or `controlRun` answer has been exercised through Code or on any preview; those
-  are proven end to end only by OMP's own native harness gate. The launch line after a launch
+  forbidden states, locked dials that send nothing, a queued change included, the
+  thinking unknown once a TUI reports, a read served before a model report landing after
+  its answer, a model switched in the TUI and a stale kept answer dropped) are rendered
+  from fixtures shaped on that real Agent and Run. Each Run whose TUI opened carries the
+  `provider` and `id` alone that OMP's harness reports once its TUI is up, and a synthetic
+  `controlRun` reports its model switches to the fixture. No launched Run, renewal,
+  activity or model report or `controlRun` answer has been exercised through Code or on
+  any preview; those are proven end to end only by OMP's own native harness gate. The
+  launch line after a launch
   ("Launched on … · dials", or "· no live dials: …" with **Enable in Setup**) needs an
   opened terminal, which the disposable server cannot open, so only unit tests cover
   it. A Run's model is its live `Run.model`, which follows the model its TUI session
   serves once the Run's harness confirms it
   ([manifold#1078](https://github.com/atyrode/manifold/pull/1078)). The last `controlRun`
-  answer this browser received bridges a dial until the next read and then stays only
-  for the model the Run reports, as the one word on its thinking. `Run.model` carries no
-  thinking once the harness reports, so a browser without that answer reads the level as
-  `?`, and a level changed in the TUI alone is not seen.
+  answer this browser received is the one word on its thinking and bridges a dial until a
+  read shows its model, so a read served before the session's report never drops it. A
+  Run this browser has not turned reads its level as `?` from its TUI's first report, and
+  a level changed in the TUI alone is not seen.
   A Run is attributed for at most about 13 leases. After that, or after a missed
   renewal, its TUI goes on detached and unattributed, with no dials.
 - The main view's presentation has these bounds. Cost is a relative list-price index,

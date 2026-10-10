@@ -4497,13 +4497,14 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
  * Agent and creates a Run at the real server, whose `launchRun` this machine refuses for want of a native job owner; Code
  * cancels the Run and the launch says why. With OMP's harness not ready the same press is the reviewed session, and the
  * pointed launch says it has no live dials and why. In Sessions, synthetic Runs say their activity, their lease up to 24
- * of 24 and detached; a synthetic `controlRun` takes their dials through pending, confirmed, clamped, not served,
- * unanswered and sent again, and refused, and a model it switches to becomes the Run's live `Run.model`, as OMP's harness
- * reports it. A model switched in the TUI shows once read, dropping the answer kept for the earlier one, and after a
- * reload the first read drops a kept answer the live model contradicts. ←→ settle before sending, ↵ and Space send at
- * once, ↑↓ cross dials; a pointed word, lease or activity says itself and moves nothing; reduced motion stills every
- * mark; nothing overflows from 170 to 1440px. No terminal opens and no provider is asked; a live Run, its renewals and
- * its TUI remain unexercised here.
+ * of 24 and detached. Each Run whose TUI opened carries the model OMP's harness reports once it is up, so it reads with its
+ * thinking unknown. A synthetic `controlRun` takes their dials through pending, confirmed, clamped, not served, unanswered
+ * and sent again, and refused, and a model it switches to becomes the Run's `Run.model`, as the harness reports it. A read
+ * served before that report and landing after the answer keeps the answer; a model switched in the TUI shows in the read
+ * that carries it, dropping the answer kept for the earlier one; after a reload the first read judges the kept answers.
+ * ←→ settle before sending, ↵ and Space send at once, ↑↓ cross dials; a pointed word, lease or activity says itself and
+ * moves nothing; reduced motion stills every mark; nothing overflows from 170 to 1440px. No terminal opens and no provider
+ * is asked; a live Run, its renewals and its TUI remain unexercised here.
  */
 async function agentLaunchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Agent launch", "canvas");
@@ -4558,11 +4559,21 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   let runs: { list: () => ListRunsV2Result; inspect: (runId: string) => InspectRunV2Result | null; terminals: TerminalSummary[]; report: (runId: string, reference: string) => void } | null = null;
   const controls: Record<string, unknown>[] = [];
   const heldControl = holdable();
+  // A Run list held once asked: it answers as the Runs stood then, after whatever lands meanwhile.
+  const heldList = holdable();
+  let holdNextList = false;
   let control: (input: Record<string, unknown>) => Outcome | Promise<Outcome> = () => refused("synthetic_control_unset");
   const sessions: { id: string; title: string; cwd: string; updatedAt: number }[] = [];
   const fixture = await intercept(browser, server, async (name, input) => {
     if (runs) switch (name) {
-      case "core.access.listRunsV2": return { ok: true, result: runs.list() };
+      case "core.access.listRunsV2": {
+        const result = runs.list();
+        if (holdNextList) {
+          holdNextList = false;
+          await heldList.wait();
+        }
+        return { ok: true, result };
+      }
       case "core.access.inspectRunV2": {
         const inspection = runs.inspect(input.runId as string);
         return inspection ? { ok: true, result: inspection } : refused("agent_run_unavailable");
@@ -4671,9 +4682,10 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     const lead = reviewCatalog(compiled, saved.selection!, Date.now()).routes.find(route => route.role === "default")!.lead;
     assert.deepEqual(launched, { model: `anthropic/${compiled.model(lead.key).id}`, thinking: lead.thinking }, "The Run records the launch's main-agent model and thinking");
     type ListedRun = ListRunsV2Result["runs"][number];
-    // `model`: the one its harness last reported, as `provider` and `id`; unset, the Run keeps the launch's record.
+    // `model`: the `provider/id` its harness last reported. OMP's TUI harness reports its session's model as soon as the TUI is up,
+    // so a Run that opened one reads the launch's model without its thinking; only the starting Run keeps the launch's `id:thinking`.
     type Shape = { id: string; state: ListedRun["state"]; activity: ListedRun["activity"]; age: number; left: number; renewals: number; ended: number | null; tui: boolean; title: string; cwd: string;
-      model?: ListedRun["model"] };
+      model?: string };
     const shapes: Shape[] = [
       { id: "run-working", state: "pending_policy", activity: "working", age: 10 * MINUTE, left: 40 * MINUTE, renewals: 1, ended: null, tui: true, title: "Trace the CAS conflict", cwd: "/home/alex/code-statement/code" },
       { id: "run-blocked", state: "pending_policy", activity: "blocked", age: 4 * HOUR, left: 25 * MINUTE, renewals: 7, ended: null, tui: true, title: "Measure the seat grid", cwd: "/home/alex/manifold" },
@@ -4683,8 +4695,11 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       { id: "run-ended", state: "completed", activity: "done", age: 3 * HOUR, left: -HOUR, renewals: 4, ended: now - 62 * MINUTE, tui: false, title: "Make the settings easier to understand", cwd: "/workspace/example" },
     ];
     const sessionOf = (index: number) => ({ harness: "atyrode.omp", machineId: target.machineId, sessionId: `9cb82ad4-8c9e-4166-8130-47200000000${index}` });
-    const fields = (shape: Shape, index: number) => ({ id: shape.id, state: shape.state, activity: shape.activity,
-      session: shape.id === "run-starting" ? null : sessionOf(index), createdAt: now - shape.age, expiresAt: now + shape.left, ...shape.model && { model: shape.model } });
+    const fields = (shape: Shape, index: number) => {
+      const reported = shape.id === "run-starting" ? null : shape.model ?? launched.model!, slash = reported?.indexOf("/") ?? -1;
+      return { id: shape.id, state: shape.state, activity: shape.activity, session: shape.id === "run-starting" ? null : sessionOf(index),
+        createdAt: now - shape.age, expiresAt: now + shape.left, ...reported && { model: { provider: reported.slice(0, slash), model: reported.slice(slash + 1) } } };
+    };
     sessions.push(...shapes.flatMap((shape, index) => shape.title ? [{ id: sessionOf(index).sessionId, title: shape.title, cwd: shape.cwd, updatedAt: now - shape.age }] : []));
     runs = {
       list: () => ({ ...realRuns, observedAt: Date.now(), runs: shapes.map((shape, index): ListedRun => ({ ...realRuns.runs[0]!, ...fields(shape, index) })) }),
@@ -4697,8 +4712,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       terminals: shapes.flatMap((shape, index) => shape.tui ? [{ id: `tui-${shape.id}`, machineId: target.machineId, name: "OMP", createdAt: now - shape.age,
         status: "running" as const, exitCode: null, homeId: target.containerId, unplaced: false, session: sessionOf(index), cwd: shape.cwd }] : []),
       report: (runId, reference) => {
-        const index = shapes.findIndex(shape => shape.id === runId), slash = reference.indexOf("/");
-        shapes[index] = { ...shapes[index]!, model: { provider: reference.slice(0, slash), model: reference.slice(slash + 1) } };
+        const index = shapes.findIndex(shape => shape.id === runId);
+        shapes[index] = { ...shapes[index]!, model: reference };
       },
     };
     const runRow = (id: string) => `${generator} [data-run-id="${id}"]`;
@@ -4728,6 +4743,14 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id]')].map(el => [el.dataset.runId, el.querySelector('[data-verb]')?.dataset.verb ?? null, !!el.querySelector('[data-run-dial]')])`), [
       ["run-starting", "cancel", true], ["run-working", "open", true], ["run-blocked", "open", true], ["run-full", "open", true], ["run-detached", "open", true], ["run-ended", "resume", false]],
     "One verb each: cancel before a terminal, open while its TUI runs, resume once settled; dials while open, detached included");
+    // Seconds after its TUI opens, a Run this browser has not turned reads the launch's model with its thinking unknown and no level
+    // checked: `Run.model` carries none. The starting Run, whose TUI has not reported, still reads the launch's record.
+    const launchedIndex = published.findIndex((_, index) => reference(index) === launched.model);
+    assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [data-run-id]')].map(el => [el.dataset.runId, el.querySelector('.${G}run-tok').textContent,
+      el.querySelector('[data-run-dial][data-row="thinking"] [aria-checked="true"]')?.dataset.value ?? null])`),
+    [["run-starting", `${alias(launchedIndex)}:${launched.thinking}`, launched.thinking],
+      ...["run-working", "run-blocked", "run-full", "run-detached", "run-ended"].map(id => [id, `${alias(launchedIndex)}:?`, null])],
+    "A Run its TUI reported reads the launch's model with its thinking unknown; the starting one reads the launch's record");
     const tab = element(`${generator} [data-view-tab="sessions"]`);
     assert.deepEqual(await browser.evaluate(`(() => {
       const tab = ${tab}, mark = tab?.querySelector('.${G}tab-mark'), text = document.createRange();
@@ -4760,17 +4783,18 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await Bun.sleep(700);
     assert.equal(controls.length, beforeLocked, "A starting or detached Run's dials send nothing");
 
-    // The dials: pending until the session answers, then confirmed; a clamped level; a model not served, struck from then on.
-    const thinkingShown = launched.thinking ?? "medium";
-    const other = ["low", "medium", "high"].find(level => level !== thinkingShown)!;
+    // The dials: pending until the session answers, then confirmed; a clamped level; a model not served, struck from then on. The
+    // session runs the launch's thinking, which no read shows, so the line says it is unknown meanwhile.
+    const launchedThinking = launched.thinking ?? "medium";
+    const other = ["low", "medium", "high"].find(level => level !== launchedThinking)!;
     control = async input => {
       await heldControl.wait();
-      return { ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking ?? thinkingShown } };
+      return { ok: true, result: { model: input.model ?? launched.model, thinking: input.thinking ?? launchedThinking } };
     };
     await click(browser, dialWord("run-working", "thinking", other));
     await waitFor(() => heldControl.held, timeout, 50);
     await until(browser, "the asked-for word waits with its hollow dot, and the said line says what stays meanwhile",
-      `${dialWord("run-working", "thinking", other)}.dataset.pending !== undefined && ${said("run-working")} === ${JSON.stringify(`${other} · sent · ${thinkingShown} until it answers`)}`);
+      `${dialWord("run-working", "thinking", other)}.dataset.pending !== undefined && ${said("run-working")} === ${JSON.stringify(`${other} · sent · unknown until it answers`)}`);
     assert.deepEqual(controls.at(-1), { runId: "run-working", thinking: other }, "One press sends one change to the Run");
     // Under reduced motion nothing breathes, not even a change in flight.
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
@@ -4890,19 +4914,57 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await key(browser, "ArrowUp", 38);
     await until(browser, "↑ comes back", `!!document.activeElement?.closest('${runRow("run-working")} [data-run-dial][data-row="thinking"]')`);
 
-    // Switched in the TUI itself: OMP's harness reports the session's new model and the next read shows it. The answer this
-    // browser kept names the earlier model, so it is stale: dropped, here and from storage, and the thinking reads unknown.
+    // A read served before the session reports a change can land after its answer. Still naming the model the Run reported before
+    // the press, it contradicts nothing: the answer keeps its model and thinking, storage keeps it with that model as its bridge,
+    // and its confirmation stays its whole moment. The held read carries the Run idle, so its landing shows.
     const keptKey = keptAnswersKey(sponsor.principal.id, workspace.id);
-    const keptRuns = `JSON.parse(localStorage.getItem(${JSON.stringify(keptKey)}) ?? '[]').map(([id]) => id)`;
-    assert((await browser.evaluate<string[]>(keptRuns)).includes("run-working"), "The working Run's confirmed answer is kept");
+    const kept = `JSON.parse(localStorage.getItem(${JSON.stringify(keptKey)}) ?? '[]')`;
+    const keptRuns = `${kept}.map(([id]) => id)`;
+    const working = shapes.findIndex(shape => shape.id === "run-working");
+    control = input => ({ ok: true, result: { model: input.model ?? reference(unanswered), thinking: input.thinking ?? "low" } });
+    shapes[working] = { ...shapes[working]!, activity: "idle" };
+    holdNextList = true;
+    await key(browser, "r", 82);
+    await waitFor(() => heldList.held, timeout, 50);
+    const confirmation = `${alias(launchedIndex)} · running now`;
+    await browser.evaluate(`(() => {
+      const line = ${element(`${runRow("run-working")} .${G}run-said`)}, seen = globalThis.__codeSaid = [];
+      globalThis.__codeSaidSeer = new MutationObserver(() => seen.push([performance.now(), line.textContent]));
+      globalThis.__codeSaidSeer.observe(line, { subtree: true, childList: true, characterData: true });
+    })()`);
+    await click(browser, dialWord("run-working", "model", launched.model!));
+    await pointAway(browser);
+    await until(browser, "the dial's answer lands while a read served before the report is held", `${said("run-working")} === ${JSON.stringify(confirmation)}`);
+    heldList.release();
+    await until(browser, "the held read lands", `${element(`${runRow("run-working")} .${G}run-act`)}.textContent === 'idle'`);
+    assert.deepEqual(await browser.evaluate(`[${element(`${runRow("run-working")} .${G}run-tok`)}.textContent, ${kept}.find(([id]) => id === 'run-working')?.[1]]`),
+      [`${alias(launchedIndex)}:low`, { model: launched.model, thinking: "low", priors: [reference(unanswered)] }],
+      "A read served before the session's report keeps the answer's model and thinking, and storage keeps the answer with its bridge");
+    // Measured from when it showed, so a slow read cannot pass for a cut: the confirmation gives way on its own time alone.
+    await until(browser, "the confirmation gives way", `${said("run-working")} !== ${JSON.stringify(confirmation)}`);
+    const seen = await browser.evaluate<[number, string][]>("(globalThis.__codeSaidSeer.disconnect(), globalThis.__codeSaid)");
+    const shown = seen.findIndex(([, text]) => text === confirmation), gone = seen.findIndex(([, text], index) => index > shown && text !== confirmation);
+    assert(shown >= 0 && gone > shown && seen[gone]![0] - seen[shown]![0] >= 2_400, `The held read leaves the confirmation its whole moment (${JSON.stringify(seen)})`);
+
+    // Switched in the TUI itself: the harness reports the session's new model with its activity, and the read that carries them
+    // shows both before it paints. The answer this browser kept names the earlier model, so it is stale: dropped, here and from
+    // storage, and the thinking reads unknown.
     const switched = published.findIndex((_, index) => index !== unserved && index !== unanswered && reference(index) !== launched.model);
     assert(switched >= 0, "A fourth model is left to switch to in the TUI");
-    runs.report("run-working", reference(switched));
+    shapes[working] = { ...shapes[working]!, model: reference(switched), activity: "working" };
+    await browser.evaluate(`(() => {
+      const row = ${element(runRow("run-working"))}, seen = globalThis.__codeSeen = [];
+      globalThis.__codeSeer = new MutationObserver(() => seen.push([row.querySelector('.${G}run-act').textContent, row.querySelector('.${G}run-tok').textContent]));
+      globalThis.__codeSeer.observe(row, { subtree: true, childList: true, characterData: true, attributes: true });
+    })()`);
     await key(browser, "r", 82);
     await until(browser, "a model switched in the TUI shows once read, its thinking unknown",
       `${dialWord("run-working", "model", reference(switched))}.getAttribute('aria-checked') === 'true' &&
       !${element(`${runRow("run-working")} [data-run-dial][data-row="thinking"] [aria-checked="true"]`)} &&
       ${element(`${runRow("run-working")} .${G}run-tok`)}.textContent === ${JSON.stringify(`${alias(switched)}:?`)}`);
+    assert.deepEqual(await browser.evaluate(`(globalThis.__codeSeer.disconnect(),
+      globalThis.__codeSeen.filter(([act, token]) => act === 'working' && token !== ${JSON.stringify(`${alias(switched)}:?`)}))`), [],
+    "The read that shows the switch never shows the stale answer beside it");
     assert.equal((await browser.evaluate<string[]>(keptRuns)).includes("run-working"), false, "The answer kept for the earlier model is dropped from storage");
 
     // Refused outright: the dials of a Run this caller may not turn rest, and say whose they are.
@@ -4966,22 +5028,27 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
       await browser.send("Emulation.setEmulatedMedia", { features: [] });
       await browser.send("Emulation.clearDeviceMetricsOverride", {});
     }
-    // A reload brings back the answers this browser kept, and the first read judges them against each Run's live model:
-    // run-blocked's names a model it does not report, so it is stale and dropped from storage too, and the Run shows the
-    // launch's record; run-full's names the model it reports and keeps its thinking.
+    // A reload brings back the answers this browser kept, and the first read judges them as it judges the page's. run-blocked's
+    // names a model it does not report: stale, dropped from storage too, and the Run reads its reported model with its thinking
+    // unknown. run-full's names the model it reports and keeps its thinking. run-working's landed just before the reload, while the
+    // read in hand still named `switched`: that first read, still naming it, may predate the session's report, so it stays.
     await browser.evaluate(`localStorage.setItem(${JSON.stringify(keptKey)}, ${JSON.stringify(JSON.stringify([
-      ["run-blocked", { model: reference(switched), thinking: "max" }], ["run-full", { model: launched.model, thinking: other }]]))})`);
+      ["run-blocked", { model: reference(switched), thinking: "max" }], ["run-full", { model: launched.model, thinking: other }],
+      ["run-working", { model: launched.model, thinking: "low", priors: [reference(switched)] }]]))})`);
     await openGenerator(browser, server, workspace.id);
     await chooseMachine(browser, target.machineId, machineName);
     await showView(browser, "sessions");
-    await until(browser, "after a reload the first read drops a kept answer the live model contradicts and keeps one it agrees with",
+    await until(browser, "after a reload the first read judges each kept answer",
       `${dialWord("run-blocked", "model", launched.model!)}?.getAttribute('aria-checked') === 'true' &&
-      ${element(`${runRow("run-blocked")} .${G}tok-thinking`)}?.textContent === ${JSON.stringify(`:${launched.thinking ?? "?"}`)} &&
-      ${dialWord("run-full", "thinking", other)}?.getAttribute('aria-checked') === 'true'`);
-    assert.deepEqual(await browser.evaluate(keptRuns), ["run-full"], "The stale kept answer is dropped from storage and the agreeing one stays");
+      ${element(`${runRow("run-blocked")} .${G}tok-thinking`)}?.textContent === ':?' &&
+      ${dialWord("run-full", "thinking", other)}?.getAttribute('aria-checked') === 'true' &&
+      ${dialWord("run-working", "model", launched.model!)}?.getAttribute('aria-checked') === 'true' &&
+      ${dialWord("run-working", "thinking", "low")}?.getAttribute('aria-checked') === 'true'`);
+    assert.deepEqual(await browser.evaluate(keptRuns), ["run-full", "run-working"], "The stale kept answer is dropped from storage, the agreeing and the bridging ones stay");
     fixture.check();
   } finally {
     heldControl.release();
+    heldList.release();
     actions.stop();
     await fixture.stop();
     await browser.evaluate(identity(writer));
