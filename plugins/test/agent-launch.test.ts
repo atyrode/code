@@ -4,9 +4,10 @@ import { formatManifoldUri, type TerminalSummary } from "@manifold/protocol";
 import type { ActionResult } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
-import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runsRefused, sponsorRefused, WorkflowError,
+import { agentLaunchBlocker, AGENT_RUN_WINDOW_MS, codeAgentName, createCodeWorkflowClient, failureWords, runDials, runsRefused, sponsorRefused, WorkflowError,
   type CodeRun, type Dials, type SessionReview } from "../code/workflow.ts";
-import { answerDial, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readKeptAnswers, refuseDial, settleDial } from "../code/generator/run-dials.ts";
+import { answerDial, judgeKept, judgeRead, keepAnswer, keptAnswersKey, NO_DIALS, pressDial, readDials, readKeptAnswers, refuseDial, settleDial, shownDials,
+  type AnswerStorage } from "../code/generator/run-dials.ts";
 import { detachedAt, leaseOf, leaseWords, runPhase, runSaid, runVerb, span, tabMark } from "../code/generator/runs-model.ts";
 
 const target = { containerId: "workspace", machineId: "destination" };
@@ -292,19 +293,20 @@ describe("a Run's dials", () => {
     expect(latest.state.queued).toEqual({ field: "thinking", value: "low" });
     expect(pressDial(latest.state, sent.state.pending!, launched, none).state.queued).toBeNull();
     // An answer keeps the queued change for the hook to send; a refusal that ends the dials drops it.
-    expect(answerDial(latest.state, sent.state.pending!, { model: "anthropic/claude-opus-5", thinking: "medium" }, launched).queued).toEqual({ field: "thinking", value: "low" });
+    expect(answerDial(latest.state, sent.state.pending!, { model: "anthropic/claude-opus-5", thinking: "medium" }, launched, launched.model).queued)
+      .toEqual({ field: "thinking", value: "low" });
     expect(refuseDial(latest.state, sent.state.pending!, "omp_run_control_forbidden", "").queued).toBeNull();
   });
 
   test("an answer confirms the session's dials, and a thinking level the model moved is said as clamped", () => {
     const change = { field: "model" as const, value: "anthropic/claude-haiku-5" };
     const pending = pressDial(NO_DIALS, change, launched, none).state;
-    const confirmed = answerDial(pending, change, { model: change.value, thinking: "medium" }, launched);
+    const confirmed = answerDial(pending, change, { model: change.value, thinking: "medium" }, launched, launched.model);
     expect(confirmed.reply).toEqual({ model: change.value, thinking: "medium" });
     expect(confirmed.outcome).toEqual({ kind: "confirmed", change, clamped: null });
-    expect(answerDial(pending, change, { model: change.value, thinking: "low" }, launched).outcome).toEqual({ kind: "confirmed", change, clamped: "low" });
+    expect(answerDial(pending, change, { model: change.value, thinking: "low" }, launched, launched.model).outcome).toEqual({ kind: "confirmed", change, clamped: "low" });
     const thinking = { field: "thinking" as const, value: "max" };
-    expect(answerDial(pressDial(NO_DIALS, thinking, launched, none).state, thinking, { model: launched.model, thinking: "xhigh" }, launched).outcome)
+    expect(answerDial(pressDial(NO_DIALS, thinking, launched, none).state, thinking, { model: launched.model, thinking: "xhigh" }, launched, launched.model).outcome)
       .toEqual({ kind: "confirmed", change: thinking, clamped: "xhigh" });
     expect(settleDial(confirmed).outcome).toBeNull();
   });
@@ -334,21 +336,163 @@ describe("a Run's dials", () => {
   test("the answers kept per workspace come back after a reload, newest last and at most 32; malformed or refused storage keeps none and throws nothing", () => {
     const stored = new Map<string, string>();
     const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
-    const key = keptAnswersKey("writer", target.containerId), changed: Dials = { model: "anthropic/claude-opus-5", thinking: "high" };
-    for (let index = 0; index < 34; index++) keepAnswer(storage, key, `run-${index}`, launched);
+    const key = keptAnswersKey("writer", target.containerId);
+    const changed = { reply: { model: "anthropic/claude-opus-5", thinking: "high" as const }, priors: [launched.model!] };
+    for (let index = 0; index < 34; index++) keepAnswer(storage, key, `run-${index}`, { reply: launched, priors: [] });
     // Kept again, a Run's answer is its newest, never a second entry.
     keepAnswer(storage, key, "run-2", changed);
     const kept = readKeptAnswers(storage, key);
     expect([kept.size, [...kept.keys()][0], [...kept.keys()].at(-1), kept.get("run-2")]).toEqual([32, "run-3", "run-2", changed]);
     expect(readKeptAnswers(storage, keptAnswersKey("writer", "another-workspace")).size).toBe(0);
+    // An answer kept before answers bridged reads as one that no longer does, and one that no longer does is kept the same way,
+    // so a v0.21.0 page still reads every answer without a bridge.
+    stored.set(key, JSON.stringify([["run-1", launched]]));
+    expect(readKeptAnswers(storage, key).get("run-1")).toEqual({ reply: launched, priors: [] });
+    keepAnswer(storage, key, "run-2", { reply: launched, priors: [] });
+    expect(JSON.parse(stored.get(key)!)).toEqual([["run-1", launched], ["run-2", launched]]);
     for (const text of ["{", JSON.stringify([["run-1", { model: 1, thinking: null }]])]) {
       stored.set(key, text);
       expect(readKeptAnswers(storage, key).size).toBe(0);
     }
     const refusing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
     expect(readKeptAnswers(refusing, key).size).toBe(0);
-    expect(() => keepAnswer(refusing, key, "run-1", launched)).not.toThrow();
+    expect(() => keepAnswer(refusing, key, "run-1", { reply: launched, priors: [] })).not.toThrow();
     expect(readKeptAnswers(null, key).size).toBe(0);
+  });
+
+  // OMP's harness reports the model its session serves as `provider` and `id` alone; Code records the launch as `id:thinking`.
+  const sonnet = runDials({ provider: "anthropic", model: "claude-sonnet-5" }), opus = runDials({ provider: "anthropic", model: "claude-opus-5" });
+  const haiku = runDials({ provider: "anthropic", model: "claude-haiku-5" });
+
+  test("a model switched in the TUI shows once read: the live Run.model wins over the answer kept for another model, and one for the reported model keeps its thinking", () => {
+    expect(runDials({ provider: "anthropic", model: "claude-sonnet-5:medium" })).toEqual(launched);
+    expect(opus).toEqual({ model: "anthropic/claude-opus-5", thinking: null });
+    const thinking = { field: "thinking" as const, value: "high" };
+    const confirmed = answerDial(pressDial(NO_DIALS, thinking, launched, none).state, thinking, { model: launched.model, thinking: "high" }, launched, sonnet.model);
+    // The answer is the one word on the thinking: a read of its own model keeps it.
+    expect(readDials(confirmed, sonnet)).toEqual({ ...confirmed, priors: [] });
+    expect(shownDials(confirmed, sonnet)).toEqual({ model: launched.model, thinking: "high" });
+    // Read after the operator switched in the TUI: the answer and its confirmation go, the reported model shows and its thinking is unknown.
+    const read = readDials(confirmed, opus);
+    expect([read.reply, read.priors, read.outcome, shownDials(read, opus)]).toEqual([null, [], null, opus]);
+    // A refusal still said stays, and a Run that reports no model contradicts nothing.
+    const unserved = refuseDial(confirmed, { field: "model", value: "anthropic/claude-fable-5" }, "omp_model_unavailable", "");
+    expect(readDials(unserved, opus).outcome).toEqual(unserved.outcome);
+    expect(readDials(confirmed, runDials(undefined))).toBe(confirmed);
+  });
+
+  test("a read served before the session reported a change does not contradict its answer; one naming the answer's model ends the bridge", () => {
+    const change = { field: "model" as const, value: opus.model! };
+    // The answer lands while the read in hand names sonnet, the model the Run reported before the press.
+    const answered = answerDial(pressDial(NO_DIALS, change, launched, none).state, change, { model: opus.model, thinking: "high" }, launched, sonnet.model);
+    // A read served before the report and landing after the answer still names sonnet: model, thinking and confirmation stay.
+    expect(readDials(answered, sonnet)).toBe(answered);
+    expect([shownDials(answered, sonnet), answered.outcome?.kind]).toEqual([{ model: opus.model, thinking: "high" }, "confirmed"]);
+    // Any other model is a switch made elsewhere, bridge or not.
+    expect(readDials(answered, haiku).reply).toBeNull();
+    // A read naming opus ends the bridge, and from then on sonnet is a switch back in the TUI.
+    const reported = readDials(answered, opus);
+    expect([reported.reply, reported.priors, reported.outcome]).toEqual([answered.reply, [], answered.outcome]);
+    expect(readDials(reported, sonnet).reply).toBeNull();
+    // An answer landing once the read in hand already names its model has no bridge.
+    expect(answerDial(pressDial(NO_DIALS, change, launched, none).state, change, { model: opus.model, thinking: "high" }, launched, opus.model).priors).toEqual([]);
+    // A model the Run's harness never confirms (OpenRouter's) leaves every read naming sonnet, and the answer stays.
+    const live = { field: "model" as const, value: "openrouter/qwen/qwen3-coder" };
+    const unconfirmable = answerDial(pressDial(NO_DIALS, live, launched, none).state, live, { model: live.value, thinking: null }, launched, sonnet.model);
+    expect(readDials(readDials(unconfirmable, sonnet), sonnet)).toBe(unconfirmable);
+  });
+
+  test("a change queued behind an answer still bridging keeps both models in its bridge, in the order the session reports them", () => {
+    const toOpus = { field: "model" as const, value: opus.model! }, toHaiku = { field: "model" as const, value: haiku.model! };
+    const first = answerDial(pressDial(NO_DIALS, toOpus, launched, none).state, toOpus, { model: opus.model, thinking: "high" }, launched, sonnet.model);
+    // The queued change goes the moment opus answers, and its own answer lands before any read shows opus.
+    const second = answerDial(pressDial(first, toHaiku, first.reply!, none).state, toHaiku, { model: haiku.model, thinking: "high" }, first.reply!, sonnet.model);
+    expect(second.priors).toEqual([sonnet.model!, opus.model!]);
+    // Reads served before haiku's report name sonnet, then opus: each keeps haiku, and once opus is read, sonnet is past.
+    expect(readDials(second, sonnet)).toBe(second);
+    const opusRead = readDials(second, opus);
+    expect([opusRead.reply, opusRead.priors]).toEqual([second.reply, [opus.model!]]);
+    expect(readDials(opusRead, sonnet).reply).toBeNull();
+    expect(readDials(opusRead, haiku).priors).toEqual([]);
+    // Turned back to sonnet before any read showed opus, the read in hand still names sonnet, yet reads naming opus may still
+    // come, served before sonnet's second report: opus is the bridge, and a read of sonnet ends it.
+    const toSonnet = { field: "model" as const, value: sonnet.model! };
+    const back = answerDial(pressDial(first, toSonnet, first.reply!, none).state, toSonnet, { model: sonnet.model, thinking: "high" }, first.reply!, sonnet.model);
+    expect(back.priors).toEqual([opus.model!]);
+    expect(readDials(back, opus)).toBe(back);
+    expect(readDials(back, sonnet).priors).toEqual([]);
+    // A read in hand already naming haiku, a model the bridge never held, shows haiku's report landed: nothing is left to bridge.
+    expect(answerDial(pressDial(first, toHaiku, first.reply!, none).state, toHaiku, { model: haiku.model, thinking: "high" }, first.reply!, haiku.model).priors).toEqual([]);
+    // The bridge keeps its first model, which every read names while the session serves unconfirmed models, and the latest.
+    const models = Array.from({ length: 10 }, (_, index) => `openrouter/vendor/model-${index}`);
+    const swept = models.reduce((state, value) => {
+      const sweep = { field: "model" as const, value };
+      return answerDial(pressDial(state, sweep, shownDials(state, sonnet), none).state, sweep, { model: value, thinking: null }, shownDials(state, sonnet), sonnet.model);
+    }, NO_DIALS);
+    expect(swept.priors).toEqual([sonnet.model!, ...models.slice(2, 9)]);
+    expect(readDials(swept, sonnet)).toBe(swept);
+  });
+
+  test("a read naming the model of the change in flight leaves the answer kept before it; a read of another model drops it", () => {
+    const toOpus = { field: "model" as const, value: opus.model! }, toHaiku = { field: "model" as const, value: haiku.model! };
+    const kept = readDials(answerDial(pressDial(NO_DIALS, toOpus, launched, none).state, toOpus, { model: opus.model, thinking: "high" }, launched, sonnet.model), opus);
+    const inFlight = pressDial(kept, toHaiku, kept.reply!, none).state;
+    // Haiku's report can land before its answer: the dials still show opus until haiku answers.
+    expect(readDials(inFlight, haiku)).toBe(inFlight);
+    expect(shownDials(inFlight, haiku)).toEqual(kept.reply!);
+    expect(readDials(inFlight, sonnet).reply).toBeNull();
+  });
+
+  test("a read naming the model of a change left unanswered shows that it applied; a thinking level cannot be read", () => {
+    const change = { field: "model" as const, value: opus.model! }, level = { field: "thinking" as const, value: "high" };
+    const unconfirmed = refuseDial({ ...NO_DIALS, pending: change }, change, "omp_run_control_unconfirmed", "");
+    expect(readDials(unconfirmed, sonnet)).toBe(unconfirmed);
+    expect(readDials(unconfirmed, opus)).toEqual({ ...unconfirmed, unconfirmed: null });
+    const unread = refuseDial({ ...NO_DIALS, pending: level }, level, "omp_run_control_unconfirmed", "");
+    expect(readDials(unread, opus)).toBe(unread);
+  });
+
+  test("a read that drops this page's answer shows the one another tab kept for the model it names; with none, the thinking is unknown", () => {
+    const stored = new Map<string, string>();
+    const storage: AnswerStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), toOpus = { field: "model" as const, value: opus.model! };
+    const page = readDials(answerDial(pressDial(NO_DIALS, toOpus, launched, none).state, toOpus, { model: opus.model, thinking: "high" }, launched, sonnet.model), opus);
+    // Another tab turned run-1 to haiku at max and kept that answer over this page's before this page read the switch.
+    keepAnswer(storage, key, "run-1", { reply: page.reply!, priors: [] });
+    keepAnswer(storage, key, "run-1", { reply: { model: haiku.model, thinking: "max" }, priors: [] });
+    keepAnswer(storage, key, "run-2", { reply: page.reply!, priors: [] });
+    const adopted = judgeRead(storage, key, "run-1", page, haiku);
+    expect([adopted.reply, adopted.outcome, shownDials(adopted, haiku)]).toEqual([{ model: haiku.model, thinking: "max" }, null, { model: haiku.model, thinking: "max" }]);
+    expect(judgeRead(storage, key, "run-1", adopted, haiku)).toBe(adopted);
+    // run-2's only kept answer is this page's: it is dropped here and from storage, and the thinking reads unknown.
+    const alone = judgeRead(storage, key, "run-2", page, haiku);
+    expect([alone.reply, shownDials(alone, haiku), readKeptAnswers(storage, key).has("run-2")]).toEqual([null, haiku, false]);
+  });
+
+  test("a read judges the kept answers as it judges the page's, so a reload or another tab agrees; a store that refuses writes throws nothing", () => {
+    const stored = new Map<string, string>();
+    const storage: AnswerStorage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => { stored.set(key, value); } };
+    const key = keptAnswersKey("writer", target.containerId), opusHigh = { model: opus.model, thinking: "high" as const };
+    keepAnswer(storage, key, "stale", { reply: opusHigh, priors: [] });
+    keepAnswer(storage, key, "bridging", { reply: opusHigh, priors: [sonnet.model!] });
+    keepAnswer(storage, key, "agrees", { reply: launched, priors: [] });
+    // A reload restores each answer with its bridge. The first read names sonnet for each: the stale answer is forgotten, the
+    // bridging one stays, since that read may predate the report of its change.
+    expect(readKeptAnswers(storage, key).get("bridging")).toEqual({ reply: opusHigh, priors: [sonnet.model!] });
+    expect([judgeKept(storage, key, "stale", sonnet), judgeKept(storage, key, "bridging", sonnet)]).toEqual([null, null]);
+    expect([...readKeptAnswers(storage, key).keys()]).toEqual(["bridging", "agrees"]);
+    // A read naming the bridging answer's model ends its bridge in storage too.
+    expect(judgeKept(storage, key, "bridging", opus)).toEqual(opusHigh);
+    expect(readKeptAnswers(storage, key).get("bridging")).toEqual({ reply: opusHigh, priors: [] });
+    // The answer kept for the model a read names is returned, for a page whose own answer that read dropped to show.
+    expect(judgeKept(storage, key, "agrees", sonnet)).toEqual(launched);
+    // A store that reads but refuses writes forgets nothing and throws nothing; one that refuses reads holds nothing to judge.
+    const before = stored.get(key);
+    const full: AnswerStorage = { getItem: name => stored.get(name) ?? null, setItem: () => { throw new Error("full"); } };
+    expect(judgeKept(full, key, "agrees", haiku)).toBeNull();
+    expect(stored.get(key)).toBe(before);
+    const refusing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("full"); } };
+    expect(judgeKept(refusing, key, "agrees", haiku)).toBeNull();
   });
 });
 
@@ -414,7 +558,8 @@ describe("a Run's lease and words", () => {
     expect(runSaid(entry({ state: "expired" }, 24, null), NO_DIALS, null, now, context)).toBeNull();
     // A click leaves the pointer on the word it sent: what the press came to is said, not the word's own readout.
     const pointed = { kind: "word" as const, field: "model" as const, value: "anthropic/claude-opus-5" };
-    const confirmed = answerDial(pending, pending.pending, { model: "anthropic/claude-opus-5", thinking: "medium" }, { model: "anthropic/claude-terra-5", thinking: "medium" });
+    const confirmed = answerDial(pending, pending.pending, { model: "anthropic/claude-opus-5", thinking: "medium" }, { model: "anthropic/claude-terra-5", thinking: "medium" },
+      "anthropic/claude-terra-5");
     expect(runSaid(run, confirmed, pointed, now, context)).toMatchObject({ value: "opus", text: "running now" });
     expect(runSaid(run, unserved, pointed, now, context)).toMatchObject({ text: "not served here · terra stays" });
   });

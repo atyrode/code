@@ -608,7 +608,8 @@ the saved rows do, without a new Run or dials. An open Run also shows its **mode
 or "detached since 12:50", and one said line of fixed height. A dial press is one
 `atyrode.omp.controlRun` on the main agent: the word asked for waits paler with a
 hollow dot ("sent · terra until it answers"), then the session's answer shows ("running
-now", or "running now · thinking xhigh" when the model clamped it). A model the session
+now", or "running now · thinking xhigh" when the model clamped it or the level before was
+unknown). A model the session
 does not serve is struck ("not served here · terra stays"); no answer within 20 s says
 so and offers **send again**; a caller the door refuses reads "its launcher's or
 sponsor's alone". A press while a change waits is said as next ("high · next · once terra
@@ -619,10 +620,24 @@ half a second before sending it, and any press in that half second sends only it
 `Space` send at once, `↑` `↓` go to the next dial of any Run. Pointed, a dial word says
 what choosing it sends, the lease its next renewal and the activity what it means, all on
 the said line, so nothing moves; the word just pressed keeps saying what its press came
-to. The dials shown are the
-last answer this browser received, kept per workspace in local storage, else the
-launch's, because `Run.model` is written once. The Sessions tab carries one square
-for the open Runs, never a count: blocked, then working, then starting, else quiet.
+to. The model shown is the Run's own `Run.model` as `listRunsV2` reads it. OMP's harness
+reports the model its session serves as soon as its TUI is up and again whatever switched
+it (a dial, the operator in the TUI, another tab), and Manifold records it once the Run's
+harness confirms its launch serves it. `Run.model` carries no thinking once the harness
+reports, so a Run this browser has not turned reads `?` from its TUI's first report, seconds
+after it opens, and the launch's level only before; a level changed in the TUI alone is not
+seen. The last answer this browser received, kept per workspace in local storage, is the
+one word on the thinking. It bridges a confirmed dial until a read shows its model, since
+a read served before the session reported the change can land after the answer: a read
+still naming the model the Run had when the answer landed, or one an earlier answer was
+still bridging, contradicts nothing, and neither does one naming the model of a change in
+flight. A read naming any other model was switched elsewhere: it drops the answer, here
+and from storage, and shows the answer another tab kept for that model, if any. A read
+naming the model of a change left unanswered settles it. A model the Run's harness cannot
+confirm, such as an OpenRouter one, leaves `Run.model` on its last confirmed value, so its
+dial's answer stays bridged; the one switch this misses is one in the TUI back to that
+value before any read shows another. The Sessions tab carries one square for the open
+Runs, never a count: blocked, then working, then starting, else quiet.
 
 **Recent profiles.** Each successful launch records its team in this browser's local
 storage per principal and workspace (newest first, one entry per team, nine at most).
