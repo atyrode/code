@@ -2,7 +2,8 @@ import { z } from "zod";
 import { BenchmarkInputSchema, BenchmarkReceiptSchema, InventoryReceiptSchema, InventoryModelSchema, ModelCatalogSnapshotSchema,
   PROBE_MODEL_LIMIT, ProbeIdentitySchema, ProbeError, ThinkingLevelSchema, epochMilliseconds, identifier, parseBenchmarkInput, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type ProbeIdentity, type ProbeRefusal } from "@atyrode/manifold-omp";
-import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel } from "./contracts.ts";
+import { CatalogDocumentSchema, SelectionSchema, DomainError, admittedBy, type Selection, type CatalogDocument, type CatalogModel,
+  type ProviderPolicy } from "./contracts.ts";
 import { compileCatalog, validTierPair } from "./catalog.ts";
 import { orderedFamilies, familyPolicy, providerPolicy } from "./providers.ts";
 
@@ -32,11 +33,11 @@ export type ScaffoldOptions = z.infer<typeof ScaffoldOptionsSchema>;
  * `superseded`: a newer version of its family is used instead. `unstable_id`: a rolling alias,
  * preview or experiment, never probed or laddered. `not_found` and `client_blocked`: the
  * benchmark's own verdicts; a blocked model is the operator's to fix, so it is named, as the old
- * scaffold's warnings named it. `regression`: as a rung it would lose context or thinking against
- * a cheaper rung. `separate_quota`: it draws a quota of its own, which Code does not spend, named
+ * scaffold's warnings named it. `regression`: as a rung it would think less than a cheaper rung
+ * below it. `separate_quota`: it draws a quota of its own, which Code does not spend, named
  * by OMP's class for it (`quotaTier`), so a reader can tell Spark's retired class from another.
- * A model that is merely not chosen (a third middle, a model priced above the top) has no such
- * reason and is not listed.
+ * A model that is merely not chosen (a third middle, a model priced above the top, a model whose
+ * id names none of its provider's tier names) has no such reason and is not listed.
  */
 const excludedIdentity = { provider: ProbeIdentitySchema.shape.provider, id: ProbeIdentitySchema.shape.id };
 export const ExclusionSchema = z.discriminatedUnion("reason", [
@@ -154,6 +155,19 @@ function modelFamily(id: string): { name: string; version: number[] } {
   }
   return { name: name.join("-"), version };
 }
+/** Which of two models of one family `supersede` keeps: the newer version, then the provider its
+ * family lists first, then the lower id, so the choice never depends on the listing's order. */
+function preferred(model: InventoryModel, old: InventoryModel): boolean {
+  const version = modelFamily(model.id).version, previous = modelFamily(old.id).version;
+  let order = 0;
+  for (let i = 0; i < Math.max(previous.length, version.length); i++) {
+    order = (version[i] ?? -1) - (previous[i] ?? -1);
+    if (order !== 0) break;
+  }
+  const providers = providerPolicy(model.provider).providers;
+  return order > 0 || (order === 0 && (providers.indexOf(model.provider) < providers.indexOf(old.provider) ||
+    (model.provider === old.provider && compare(model.id, old.id) < 0)));
+}
 /**
  * NEWEST VERSION PER FAMILY, WHATEVER ITS PRICE OR PROFILE. Providers keep listing what they
  * replaced, often repriced: `claude-opus-4-6` still lists at $5 beside `claude-opus-5`. Collapsing
@@ -165,46 +179,76 @@ function modelFamily(id: string): { name: string; version: number[] } {
 function supersede(models: readonly InventoryModel[]): { kept: InventoryModel[]; superseded: InventoryModel[] } {
   const latest = new Map<string, InventoryModel>();
   for (const model of models) {
-    const family = modelFamily(model.id);
-    const key = JSON.stringify([providerPolicy(model.provider).family, family.name]);
+    const key = JSON.stringify([providerPolicy(model.provider).family, modelFamily(model.id).name]);
     const old = latest.get(key);
-    if (!old) { latest.set(key, model); continue; }
-    const previous = modelFamily(old.id).version;
-    let order = 0;
-    for (let i = 0; i < Math.max(previous.length, family.version.length); i++) {
-      order = (family.version[i] ?? -1) - (previous[i] ?? -1);
-      if (order !== 0) break;
-    }
-    const providers = providerPolicy(model.provider).providers;
-    if (order > 0 || (order === 0 && (providers.indexOf(model.provider) < providers.indexOf(old.provider) ||
-      (model.provider === old.provider && compare(model.id, old.id) < 0)))) latest.set(key, model);
+    if (!old || preferred(model, old)) latest.set(key, model);
   }
   const kept = new Set(latest.values());
   return { kept: [...kept], superseded: models.filter(model => !kept.has(model)) };
 }
-type Ranked = { readonly model: InventoryModel; readonly price: number; readonly ceiling: number; readonly context: number; readonly address: string };
+type Ranked = { readonly model: InventoryModel; readonly price: number; readonly ceiling: number; readonly address: string };
 function ranked(model: InventoryModel): Ranked {
   let ceiling = -1;
   for (const level of model.thinkingLevels) ceiling = Math.max(ceiling, ThinkingLevelSchema.options.indexOf(level));
-  return { model, price: model.inputCostPerMillion, ceiling, context: model.contextWindow ?? 0, address: probeAddress(model) };
+  return { model, price: model.inputCostPerMillion, ceiling, address: probeAddress(model) };
 }
 /** Tier order. At one price the weaker model comes first: the only order in which two
  * equal-price rungs can pass `validTierPair`, and the order a free ladder climbs in. */
 function tierOrder(a: Ranked, b: Ranked): number {
-  return a.price - b.price || a.ceiling - b.ceiling || a.context - b.context || compare(a.address, b.address);
+  return a.price - b.price || a.ceiling - b.ceiling || compare(a.address, b.address);
 }
-/** Capability: thinking ceiling, then context, then price. Price comes last because across
- * generations it lies; among otherwise identical specs it is the only remaining signal of size. */
+/** Capability: the thinking ceiling, then the price, the provider's own statement of size where
+ * the thinking is alike. A context window is not a capability: providers give newer, stronger
+ * models smaller windows than older ones, as OpenAI's sol and astra have beside terra. */
 function moreCapable(a: Ranked, b: Ranked): number {
-  return b.ceiling - a.ceiling || b.context - a.context || b.price - a.price || compare(a.address, b.address);
+  return b.ceiling - a.ceiling || b.price - a.price || compare(a.address, b.address);
+}
+type Rung = { readonly model: InventoryModel; readonly tier: CatalogModel["tier"] };
+/** A family's rungs, lowest tier first, the candidates a middle passed over, and a pair that regresses. */
+type FamilyLadder = { rungs: Rung[]; rejected: InventoryModel[]; regression?: readonly [InventoryModel, InventoryModel] };
+/**
+ * THE PROVIDER'S OWN TIER NAMES WHERE IT HAS THEM (`ProviderPolicy.tierNames`), OLD CODE'S RULE
+ * OTHERWISE. A listing none of whose models carries one of the names, an older one or a renamed
+ * line, is laddered by the rule rather than left with no ladder at all.
+ */
+function ladder(models: readonly InventoryModel[], policy: ProviderPolicy): FamilyLadder {
+  const names = policy.tierNames ?? [];
+  return models.some(model => names.includes(tierWord(model.id))) ? namedLadder(models, names) : metadataLadder(models);
+}
+/** The word a provider's tier names are matched against: the id's last name token (`gpt-6.1-sol` is `sol`). */
+function tierWord(id: string): string {
+  return modelFamily(id).name.split("-").at(-1)!;
 }
 /**
- * OLD CODE'S `pickLadder` (`0035b4f:generate_init.go:187-278`), NOT THE LONGEST VALID CHAIN.
+ * LADDERED BY THE PROVIDER'S NAMES. A model whose id ends in one of them takes that name's tier
+ * (OpenAI's luna 1, terra 2, sol 3, astra 4), and a model whose id names none of them is not
+ * chosen. Price and context decide nothing here: OpenAI prices its newer sol alike with the older
+ * terra and gives it a smaller window, and old Code's rule, reading the window as capability, put
+ * terra above sol and left astra out. A tier the accounts do not reach stays empty and routes to
+ * its nearest rung (`CompiledCatalog`). The rungs still pass `validTierPair`; a pair that does
+ * not is returned for the caller to refuse or drop, as a regressing top is.
+ */
+function namedLadder(models: readonly InventoryModel[], names: readonly string[]): FamilyLadder {
+  const byTier = new Map<number, InventoryModel>();
+  for (const model of models) {
+    const tier = names.indexOf(tierWord(model.id)) + 1;
+    const held = byTier.get(tier);
+    if (tier > 0 && (!held || preferred(model, held))) byTier.set(tier, model);
+  }
+  const rungs = [...byTier].sort(([a], [b]) => a - b).map(([tier, model]) => ({ model, tier: tier as CatalogModel["tier"] }));
+  for (const [index, lower] of rungs.entries()) {
+    const higher = rungs.slice(index + 1).find(rung => !validTierPair(lower.model, rung.model));
+    if (higher) return { rungs: [], rejected: [], regression: [lower.model, higher.model] };
+  }
+  return { rungs, rejected: [] };
+}
+/**
+ * OLD CODE'S `pickLadder` (`0035b4f:generate_init.go:187-278`), NOT THE LONGEST VALID CHAIN, for a
+ * family whose provider does not name its tiers.
  *
- * The bottom is the cheapest model and the top the most capable of the rest; up to two middles
- * are the most capable models priced strictly between them. Maximising the rung count instead let
- * four 272k-context OpenAI rows outvote the 1M-context GPT-5.6 family, because the context rule
- * cut every chain through the newer family to three rungs.
+ * The bottom is the cheapest model and the top the most capable of the rest (`moreCapable`); up
+ * to two middles are the most capable models priced strictly between them. Old Code also read the
+ * context window as capability, which no longer ranks or refuses anything.
  *
  * One deliberate deviation: old Code took the middles by capability and then refused the file
  * when one regressed. Here a middle is taken only if every pair still passes `validTierPair`, and
@@ -214,15 +258,15 @@ function moreCapable(a: Ranked, b: Ranked): number {
  * At one price the weaker model is the cheaper rung (`tierOrder`), and the middles the price gap
  * cannot supply come from candidates sharing an end's price, as old Code's median fallback did.
  * That is what lets a free ladder, every rung $0 (#201), progress at all. A twin of an end (same
- * price, ceiling and context) is never a middle.
+ * price and thinking ceiling) is never a middle.
  */
-function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; rejected: InventoryModel[]; regression?: readonly [InventoryModel, InventoryModel] } {
+function metadataLadder(models: readonly InventoryModel[]): FamilyLadder {
   if (models.length === 0) return { rungs: [], rejected: [] };
   const ordered = models.map(ranked).sort(tierOrder);
   const bottom = ordered[0]!;
   let found: Ranked | undefined;
   for (const candidate of ordered.slice(1)) if (!found || moreCapable(candidate, found) < 0) found = candidate;
-  if (!found) return { rungs: [bottom.model], rejected: [] };
+  if (!found) return { rungs: [{ model: bottom.model, tier: 1 }], rejected: [] };
   const top = found;
   if (!validTierPair(bottom.model, top.model)) return { rungs: [], rejected: [], regression: [bottom.model, top.model] };
   // Priced strictly inside the gap first; candidates sharing an end's price only fill what is left.
@@ -230,8 +274,7 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
   for (const candidate of ordered.slice(1)) {
     if (candidate === top || tierOrder(candidate, top) >= 0) continue;
     if (candidate.price > bottom.price && candidate.price < top.price) gap.push(candidate);
-    else if (![bottom, top].some(end => end.price === candidate.price && end.ceiling === candidate.ceiling &&
-      end.context === candidate.context)) shared.push(candidate);
+    else if (![bottom, top].some(end => end.price === candidate.price && end.ceiling === candidate.ceiling)) shared.push(candidate);
   }
   const middles: Ranked[] = [], rejected: InventoryModel[] = [];
   for (const candidate of [...gap.sort(moreCapable), ...shared.sort(moreCapable)]) {
@@ -240,7 +283,7 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
     if (rungs.every((lower, index) => rungs.slice(index + 1).every(higher => validTierPair(lower.model, higher.model)))) middles.push(candidate);
     else rejected.push(candidate.model);
   }
-  return { rungs: [bottom, ...middles, top].sort(tierOrder).map(value => value.model), rejected };
+  return { rungs: [bottom, ...middles, top].sort(tierOrder).map((value, index) => ({ model: value.model, tier: (index + 1) as CatalogModel["tier"] })), rejected };
 }
 /**
  * WHAT A BENCHMARK PROBES: EVERY ELIGIBLE MODEL OF A FAMILY CODE REQUIRES, ONLY THE RUNGS OF ANY
@@ -251,7 +294,9 @@ function ladder(models: readonly InventoryModel[]): { rungs: InventoryModel[]; r
  * A family Code requires (`requiredLadder`: OpenAI, Anthropic) is probed whole, because its
  * ladder has to survive a model that does not answer: a blocked newest falls back to its callable
  * predecessor and a blocked rung to the next candidate, so it is short only where nothing that
- * answers can take the rung. Any other family is probed only at the rungs its listing ladders as
+ * answers can take the rung. That holds for one laddered by its provider's names as well: its ids
+ * that name none of them can be chosen only when no named model answers, and only the probe says
+ * whether one does. Any other family is probed only at the rungs its listing ladders as
  * if every model answered, and a rung that does not answer leaves that family shorter. Probing such
  * a family whole made one OpenRouter key put 207 of an aggregator's models in a 232-request charge,
  * for a family that takes four rungs.
@@ -268,8 +313,8 @@ function probeSet(inventory: InventoryReceipt, budget: Selection["budget"]): { m
     const members = offered.filter(model => familyOf(model) === family);
     if (familyPolicy(family).requiredLadder) { models.push(...members); continue; }
     const ordinary = supersede(members);
-    const { rungs, rejected, regression } = ladder(ordinary.kept);
-    models.push(...rungs);
+    const { rungs, rejected, regression } = ladder(ordinary.kept, familyPolicy(family));
+    models.push(...rungs.map(rung => rung.model));
     for (const model of ordinary.superseded) unprobed.push(exclusion(model, "superseded"));
     for (const model of [...rejected, ...regression ?? []]) unprobed.push(exclusion(model, "regression"));
   }
@@ -297,7 +342,7 @@ function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
     const members = laddered.filter(model => providerPolicy(model.provider).family === family);
     const ordinary = supersede(members);
     for (const model of ordinary.superseded) exclusions.push(exclusion(model, "superseded"));
-    const { rungs, rejected, regression } = ladder(ordinary.kept);
+    const { rungs, rejected, regression } = ladder(ordinary.kept, policy);
     for (const model of rejected) exclusions.push(exclusion(model, "regression"));
     if (regression) {
       const [lower, higher] = regression;
@@ -317,7 +362,7 @@ function scaffold(allowed: InventoryModel[], excluded: readonly Exclusion[],
         contextWindow: model.contextWindow, thinkingLevels: model.reasoning ? model.thinkingLevels : ["minimal"], images: model.images,
         tokensPerSecond: fact?.tokensPerSecond ?? null, timeToFirstTokenMs: fact?.timeToFirstTokenMs ?? null });
     };
-    rungs.forEach((model, index) => add(model, (index + 1) as CatalogModel["tier"], policy.meteredProviders.includes(model.provider) ? policy.quotaBucketBase : null));
+    for (const { model, tier } of rungs) add(model, tier, policy.meteredProviders.includes(model.provider) ? policy.quotaBucketBase : null);
   }
   // A family none of whose models answer is left out, as a family with no account is, its models
   // named among the exclusions, and a selection that needs it is refused where it is reviewed
