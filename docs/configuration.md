@@ -424,7 +424,8 @@ agents here, agents unread). While the launch is pointed after its review, the r
 says the same ("live dials in Sessions" or the reason). Setup's sessions row, and the
 "Open coding sessions" review, enable OMP's launch and harness operations together.
 
-**The launch line** sits beside the launch and keeps to facts and one-press fixes, each
+**The launch line** sits beside the launch, or under it where there is no room beside
+it, and keeps to facts and one-press fixes, each
 a button; its asides ("changes stay a local preview", "nothing is spent until you
 confirm", and, while a staged model list waits beside the active one, "a staged model
 list waits in Models") are said in the readout while the launch is pointed or pressed. It is written in this
@@ -695,10 +696,11 @@ reason a pressed refused control gave.
 The layout answers the panel's own measured width, never the window's, since Code
 shares the window with its canvas. From 760 px the generator and routing stand side by
 side with usage under both. The generator is as wide as its rows need, never under 42%
-of the panel, and routing takes the rest, never under 36%, so a fallback chain stays on
-one line wherever the panel has room for it. What the readout and the launch line say
-never moves that divide. Each pane is as tall as its content and usage follows them, so
-the room a tall panel has left over lies below everything rather than inside the generator.
+of the panel, and routing takes what that leaves, never under 36%, so the room the rows
+do not need goes to routing's fallback chains. What the readout and the launch line say
+never moves that divide. The generator and routing are as tall as the taller of them, and
+usage follows them, so the room a tall panel has left lies below everything rather than
+inside the generator.
 Below 760 px the generator stands alone with the grouped team under its rows, and routing
 and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lead's words drop under its label so the
 leads and the only box keep one line, and below 380 px usage windows use thinner blocks and drop
