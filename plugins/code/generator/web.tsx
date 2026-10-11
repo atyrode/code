@@ -35,7 +35,7 @@ const PANEL_ROOT = ".plugin-atyrode_code_generator";
 /** The session options sheet's title; Models and Setup draw their own heads (models-sheet.tsx, setup-sheet.tsx). */
 const OPTIONS_TITLE = "Session options";
 const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: "", extras: "", machine: "" };
-/** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wide proportions. */
+/** Below this panel width the generator stands alone, routing and usage a key away; from the second, the wider spacing. */
 const NARROW_BELOW_PX = 760, WIDE_FROM_PX = 1180;
 type Mode = "narrow" | "medium" | "wide";
 

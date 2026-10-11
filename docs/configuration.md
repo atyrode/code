@@ -367,9 +367,9 @@ showing the index's middle level.
 ### The launch
 
 The launch row reads `↵ <step> on <machine ▾>`: the **launch** button, the machine
-dropdown, and the **launch line** (below) beside them. The launch row is anchored to
-the bottom of the generator and the launch line grows upward, or sits above the launch
-when it has no room beside it, so the launch never moves under the pointer while its
+dropdown, and the **launch line** (below) beside them. The launch row follows the
+generator's rows, and the launch line sits beside the launch, or under it when it has no
+room beside it, and grows downward, so the launch never moves under the pointer while its
 line changes. The step is the label of the next step in lower case: **verify models**,
 **review**, **save**, **save & review**, **save & launch**, **launch**, **launch
 anyway** or **review in Models**, and **checking…**, **verifying…**, **saving…**,
@@ -693,8 +693,12 @@ which has no keys, the key line is hidden, and every button, tab and radio is at
 reason a pressed refused control gave.
 
 The layout answers the panel's own measured width, never the window's, since Code
-shares the window with its canvas. From 1180 px the generator and routing stand side by
-side with usage under both; from 760 px the same in slightly different proportions.
+shares the window with its canvas. From 760 px the generator and routing stand side by
+side with usage under both. The generator is as wide as its rows need, never under 42%
+of the panel, and routing takes the rest, never under 36%, so a fallback chain stays on
+one line wherever the panel has room for it. What the readout and the launch line say
+never moves that divide. Each pane is as tall as its content and usage follows them, so
+the room a tall panel has left over lies below everything rather than inside the generator.
 Below 760 px the generator stands alone with the grouped team under its rows, and routing
 and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lead's words drop under its label so the
 leads and the only box keep one line, and below 380 px usage windows use thinner blocks and drop
