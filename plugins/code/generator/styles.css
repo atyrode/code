@@ -5,8 +5,9 @@
  * then the sheets over it. Flat and typographic: selection is weight, colour and position; feedback
  * is colour, motion and simple block bars; no capsules, no grounds behind words, no glows. Widths
  * answer the panel's own (`data-mode`, set from its measured width, and container queries on the
- * `code` container), never the viewport, and every track is `minmax(0, …)` so nothing scrolls
- * sideways. The prototype's quieter greys are raised to 4.5:1 on the panel ground.
+ * `code` container), never the viewport, and every track's minimum fits inside the panel
+ * (`minmax(0, …)`, or a share of the stage) so nothing scrolls sideways. The prototype's quieter
+ * greys are raised to 4.5:1 on the panel ground.
  * Sections: panel · palette · stage · generator rows · readout, profile, meters and launch ·
  * routing · key line · widths · motion · session options · sheets · sessions.
  */
@@ -66,11 +67,19 @@
   font: 14px/20px var(--code-sans);
   font-variant-numeric: tabular-nums;
 }
+/*
+ * The generator is as wide as its head, rows and meters need, never under 42% of the stage, and routing
+ * takes what that leaves, never under 36%: the room the rows do not need goes to routing's chains
+ * rather than to empty space beside the rows. The readout and the launch row take the width they are
+ * given (`contain: inline-size`), so nothing they say moves the divide. The first row is as tall as
+ * its taller pane and usage follows it, so the room a tall panel has left lies below everything and
+ * the generator never opens a gap between its rows and its launch.
+ */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__stage {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
-  grid-template-rows: 1fr auto;
+  grid-template-columns: minmax(42%, max-content) minmax(36%, 1fr);
+  grid-template-rows: auto 1fr;
   min-height: 0;
   overflow-x: clip;
 }
@@ -273,10 +282,12 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__only:focus-visible .plugin-atyrode_code_generator__only-text { outline: 1px solid var(--tui-acc); outline-offset: 3px; }
 
 /* ---------------------------------------------------------------- readout, profile, meters and launch */
-/* The readout: the one place exact values and reasons appear, only while something is pointed, dragged, pressed or focused. */
+/* The readout: the one place exact values and reasons appear, only while something is pointed, dragged, pressed or focused.
+   It takes the generator's width rather than setting it, so what it says never moves the divide beside it. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout {
   display: -webkit-box;
   min-height: 40px;
+  contain: inline-size;
   margin: 8px 0 0 calc(16px + 24px + var(--labw));
   overflow: hidden;
   color: var(--tui-dim);
@@ -298,8 +309,8 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-mark { margin-right: 4px; color: var(--tui-mid); font-size: 7px; vertical-align: 2px; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-alias { font-weight: 560; }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tok-value, .plugin-atyrode_code_generator__profile-lead) .plugin-atyrode_code_generator__tok-thinking { opacity: .8; }
-/* Cost, speed and the launch, pinned at the generator's foot, level with the routing pane's own foot. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__genfoot { display: grid; row-gap: 2px; margin-top: auto; padding-top: 18px; }
+/* Cost, speed and the launch follow the readout, so the launch's place depends only on the rows above it. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__genfoot { display: grid; row-gap: 2px; padding-top: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter { display: grid; grid-template-columns: 16px calc(24px + var(--labw)) auto; justify-content: start; align-items: center; line-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter-label { grid-column: 2; color: var(--tui-dim); }
 /* Five glyphs a little closer than a letter's width, bold like the terminal's: lit in the accent, unlit as the meter's dark track. */
@@ -307,11 +318,11 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg { display: block; width: 16px; height: 16px; margin: 0 -3px; color: #363c47; stroke-width: 2; transition: color 200ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__glyphs > svg[data-lit] { color: var(--tui-acc); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__meter[data-unmeasured] .plugin-atyrode_code_generator__glyphs > svg { color: #30353f; }
-/* The launch, the machine it runs on, then the line beside them. The foot sits on the pane's floor, and the launch on the foot's:
-   the line beside it grows upward, and where there is no room beside the launch it goes above it, so the launch never moves
-   while its line changes and a double press lands on it twice. */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: end; min-height: 32px; margin-top: 12px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap-reverse; grid-column: 2; align-items: flex-start; gap: 2px 16px; min-width: 0; }
+/* The launch, the machine it runs on, then the line beside them, or under them where there is no room beside: the line only
+   grows downward, so the launch never moves while its line changes and a double press lands on it twice. The row takes the
+   width the generator's rows give it, so a long line wraps rather than widening the generator. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launchrow { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; min-height: 32px; margin-top: 12px; contain: inline-size; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-run { position: relative; display: flex; flex-wrap: wrap; grid-column: 2; align-items: flex-start; gap: 2px 16px; min-width: 0; }
 /* The machine goes under the launch where both do not fit, never squeezed out of sight. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; max-width: 100%; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-mark { display: grid; flex: none; }
@@ -339,7 +350,7 @@
 /* The line beside the launch: its facts and fixes wrap beside the launch rather than clip, since a refusal's words are its reason. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line { display: flex; flex: 1 1 12rem; flex-wrap: wrap; align-items: baseline; gap: 0 14px; min-width: 0; color: var(--tui-warn-text); font-size: 13px; line-height: 20px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-line:empty { display: none; }
-/* The machine: `on` and its name, a word that opens the roster above the launch line; each machine with its neutral online dot. */
+/* The machine: `on` and its name, a word that opens the roster above the launch row; each machine with its neutral online dot. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine { display: inline-flex; align-items: center; gap: 0 7px; min-width: 0; max-width: 100%; font-size: 14px; line-height: 22px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-on { flex: none; color: var(--tui-dim); }
 /* The name ends in an ellipsis where the line is short, its title whole; it never narrows past a few letters. */
@@ -426,7 +437,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-step { display: inline-flex; gap: 7px; white-space: nowrap; animation: plugin-atyrode_code_generator__chain-in 260ms var(--tui-ease) var(--step-delay, 0ms) backwards; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__chain-arrow { color: var(--tui-quiet); }
 @keyframes plugin-atyrode_code_generator__chain-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routefoot { display: grid; row-gap: 6px; margin-top: auto; padding-top: 18px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__routefoot { display: grid; row-gap: 6px; padding-top: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout { min-height: 20px; overflow: hidden; color: var(--tui-dim); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout b { color: var(--rc, var(--tui-fg)); font-weight: 600; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__route-readout[data-tone="warn"] { color: var(--tui-warn-text); }
@@ -439,9 +450,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys-word { color: var(--tui-dim); white-space: nowrap; }
 
 /* ---------------------------------------------------------------- widths: the panel's own (`data-mode`), the label column measured from the labels */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="wide"] .plugin-atyrode_code_generator__stage { grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="medium"] { --gap: 14px; --pad: 24px; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="medium"] .plugin-atyrode_code_generator__stage { grid-template-columns: minmax(0, 1.72fr) minmax(0, 1fr); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] { --gap: 12px; --pad: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__pane { padding-top: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__dial { grid-template-columns: 12px 22px var(--labw) minmax(0, 1fr); }

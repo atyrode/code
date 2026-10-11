@@ -24,7 +24,7 @@ export type MachinePickerProps = {
 
 /**
  * Where the launch runs: `on studio` after the launch's label, the machine's name a dropdown (its
- * name and a chevron) that opens a short list of the roster above the launch line, each machine
+ * name and a chevron) that opens a short list of the roster above the launch row, each machine
  * with its neutral online dot. Click,
  * or ↑↓ and ↵, chooses; Esc, Tab or a press outside closes, and focus returns to the word. While the
  * list is open it owns its keys (`data-popover`), so the panel's keys leave them alone. A machine

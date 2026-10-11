@@ -434,7 +434,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   useLayoutEffect(() => { controls.current = latest; });
 
   // A launch-line control that leaves once pressed (a retry that clears its failure, a rescue taken) takes focus with
-  // it to the page, where the panel's keys no longer reach; focus then goes to the launch, the pane's fixed point.
+  // it to the page, where the panel's keys no longer reach; focus then goes to the launch, which no line change moves.
   const lineFocus = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const control = lineFocus.current;
