@@ -116,6 +116,17 @@ context, image support and thinking levels; any quota class other than chat (Spa
 for one) is excluded, since Code spends no quota of its own. Unmeasured performance stays null. Derivation admits at
 most 256 budget-eligible candidates before constructing ladders; it never truncates.
 
+Each family is laddered fast, normal, smart, elite (tiers 1–4) after keeping only the
+newest version of each model name. OpenAI names its tiers, so its ladder is those names:
+luna, terra, sol and astra, each at its own tier whatever its price or context window, and
+a model whose id names none of them is not chosen; a listing with none of the names is
+laddered as any other family is. Any other family's cheapest model is its first rung and
+its most capable its top (the highest thinking ceiling, then the higher price), with up to
+two of the most capable models priced between them as its middles. A rung must reach every
+thinking level of a cheaper rung below it. A context window is not a capability: it never
+ranks a model or refuses a rung, since OpenAI's newer sol and astra carry smaller windows
+than the older terra beneath them.
+
 Only a successful canonical configuration read establishes an absent revision 0
 or an initialized-empty positive revision. Loading and failure are not absence.
 The local starter freezes the full metadata snapshot, catalog, selection, base
@@ -140,7 +151,7 @@ laddered on whatever of it answers, short below three rungs, and one none of who
 answers is left out as a family with no account is; a selection that needs it is refused
 where it is reviewed. `deriveCatalog` returns the document and every other offered model
 with its reason; the document's compiled catalog names its short families. It refuses only a
-family Code requires whose most capable model regresses on its cheapest
+family Code requires whose ladder would put a model above a cheaper one that thinks deeper
 (`code_ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
 and nothing laddered at all (`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save

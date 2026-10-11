@@ -87,12 +87,14 @@ describe("catalog capabilities and identity", () => {
     expect(catalog.short).toEqual([]);
   });
 
-  test("context and thinking regressions include tier four but never use price as capability rank", () => {
-    for (const changes of [{ contextWindow: 100_000 }, { thinkingLevels: ["high"] as CatalogModel["thinkingLevels"] }]) {
-      const input = document();
-      input.models = input.models.map(value => value.key === "a4" ? { ...value, ...changes } : value);
-      expect(() => compileCatalog(input)).toThrow("code_invalid_catalog");
-    }
+  test("a thinking regression refuses the catalog at any tier, a smaller context window never does, and price never ranks capability", () => {
+    const thinner = document();
+    thinner.models = thinner.models.map(value => value.key === "a4" ? { ...value, thinkingLevels: ["high"] as CatalogModel["thinkingLevels"] } : value);
+    expect(() => compileCatalog(thinner)).toThrow("code_invalid_catalog");
+    // OpenAI's sol and astra sit above terra with smaller windows, as its own tier names place them.
+    const narrower = document();
+    narrower.models = narrower.models.map(value => value.key === "o3" ? { ...value, contextWindow: 50_000 } : value);
+    expect(compileCatalog(narrower).model("o3").contextWindow).toBe(50_000);
     const repriced = document();
     repriced.models = repriced.models.map(value => value.key === "a4" ? { ...value, inputCostPerMillion: 1 } : value);
     expect(route(reviewCatalog(compileCatalog(repriced), selection({ capability: 3 }), daytime).routes, "plan").lead.key).toBe("a4");

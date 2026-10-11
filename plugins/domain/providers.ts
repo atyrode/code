@@ -3,6 +3,7 @@ import type { ProviderPolicy } from "./contracts.ts";
 function policy(value: ProviderPolicy): ProviderPolicy {
   Object.freeze(value.providers);
   Object.freeze(value.meteredProviders);
+  if (value.tierNames) Object.freeze(value.tierNames);
   if (value.priority) Object.freeze(value.priority);
   if (value.offPeak) Object.freeze(value.offPeak);
   return Object.freeze(value);
@@ -18,6 +19,10 @@ export const providerPolicies: readonly ProviderPolicy[] = Object.freeze([
     family: "openai", providers: ["openai-codex", "openai"], label: "OpenAI", accountLabel: "OpenAI",
     requiredLadder: true, meteredProviders: ["openai-codex"], quotaBucketBase: "codex",
     crossTo: "anthropic",
+    // OpenAI names its tiers luna, terra, sol and astra, fast to elite. Its newer models carry
+    // smaller context windows than the older terra and are priced alike, so neither price nor
+    // context recovers that order; the names are the provider's own statement of it.
+    tierNames: ["luna", "terra", "sol", "astra"],
     priority: { key: "openai", value: "priority", costMultiplier: 1.9, speedMultiplier: 1.3 },
   }),
   policy({

@@ -441,13 +441,13 @@ describe("pure client-supplied policy composition", () => {
     expect(await configuration(f)).toBeNull();
     // A refusal that names its subject keeps the name across the door.
     const regressing: InventoryReceipt = { ...inventory, models: [
-      { ...inventory.models[0]!, id: "wide-entry", contextWindow: 1_000_000, thinkingLevels: ["low"] },
-      { ...inventory.models[2]!, id: "narrow-top", contextWindow: 100_000, thinkingLevels: ["high"] },
+      { ...inventory.models[0]!, id: "deep-entry", thinkingLevels: ["high"] },
+      { ...inventory.models[2]!, id: "shallow-top", thinkingLevels: ["low"] },
     ] };
     const probed = (await accepted(f, "draftInventory", { inventory: regressing, budget: "any" })).benchmark.candidates;
     expect(await invoke(f, "deriveCatalog", { inventory: regressing, budget: "any", benchmark: { ...benchmark,
       results: probed.map(candidate => ({ ...candidate, status: "reachable", tokensPerSecond: 42, timeToFirstTokenMs: 80 })) } }))
-      .toEqual({ refused: "code_ladder_regression: anthropic: anthropic/narrow-top regresses on anthropic/wide-entry" });
+      .toEqual({ refused: "code_ladder_regression: anthropic: anthropic/shallow-top regresses on anthropic/deep-entry" });
   });
 
   test("ordinary Code client rejects invalid requests and results while returning typed refusals", async () => {

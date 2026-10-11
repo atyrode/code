@@ -111,6 +111,12 @@ export interface ProviderPolicy {
   readonly crossTo: string | null;
   readonly priority?: { readonly key: string; readonly value: string; readonly costMultiplier: number; readonly speedMultiplier: number };
   readonly offPeak?: { readonly startMinutesUtc: number; readonly endMinutesUtc: number; readonly multiplier: number };
+  /**
+   * The provider's own names for its tiers, fast to elite, where it ranks its models by name. A
+   * family that declares them is laddered by them (probe.ts `namedLadder`): a model whose id ends
+   * in one of these words takes that word's tier, whatever its price or context window says.
+   */
+  readonly tierNames?: readonly string[];
 }
 
 export const AccountPresetSchema = z.strictObject({

@@ -4,11 +4,16 @@ import { familyPolicy, orderedFamilies, providerPolicy } from "./providers.ts";
 
 type Model = Readonly<Omit<CatalogModel, "thinkingLevels">> & { readonly thinkingLevels: readonly ThinkingLevel[] };
 type Ladder = readonly (string | undefined)[];
-type TierCandidate = Pick<Model, "inputCostPerMillion" | "contextWindow" | "thinkingLevels">;
+type TierCandidate = Pick<Model, "inputCostPerMillion" | "thinkingLevels">;
 
+/**
+ * Whether `higher` may sit on a higher tier than `lower`: unless it is the cheaper of the two, it
+ * must reach every thinking level `lower` does, so a role a higher tier takes over never has to
+ * think less. A context window is not a capability and never refuses a tier: OpenAI's sol and
+ * astra carry smaller windows than the older terra beneath them.
+ */
 export function validTierPair(lower: TierCandidate, higher: TierCandidate): boolean {
   if (higher.inputCostPerMillion < lower.inputCostPerMillion) return true;
-  if (lower.contextWindow !== null && higher.contextWindow !== null && higher.contextWindow < lower.contextWindow) return false;
   let ceiling = -1;
   for (const level of higher.thinkingLevels) ceiling = Math.max(ceiling, ThinkingLevelSchema.options.indexOf(level));
   for (const level of lower.thinkingLevels) if (ThinkingLevelSchema.options.indexOf(level) > ceiling) return false;

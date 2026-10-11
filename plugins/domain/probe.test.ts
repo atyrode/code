@@ -103,10 +103,10 @@ describe("pure typed scaffolding", () => {
     const inv = fullInventory(), draft = inventoryDraft(inv, "any");
     expect(draft).toEqual({ schemaVersion: 1, kind: "draft", inventoryObservedAt: 100, benchmark: benchmarkCandidates(inv), exclusions: [] });
     expect(inventoryDraft({ ...inv, models: [...inv.models].reverse() }, "any")).toEqual(draft);
-    // Two Anthropic rows whose dearer one loses context on the cheaper form no ladder, not even a
+    // Two Anthropic rows whose dearer one thinks less than the cheaper form no ladder, not even a
     // short one, yet what probing them costs is still stated.
     const narrow = { ...inv, models: inv.models.filter(model => model.id === "claude-haiku-5" || model.id === "claude-sonnet-5")
-      .map(model => model.id === "claude-sonnet-5" ? { ...model, contextWindow: 100_000 } : model) };
+      .map(model => model.id === "claude-sonnet-5" ? { ...model, thinkingLevels: ["minimal" as const] } : model) };
     expect(inventoryDraft(narrow, "any").benchmark.candidates.map(candidate => candidate.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
     expect(() => derived(narrow)).toThrow("code_ladder_regression: anthropic: anthropic/claude-sonnet-5 regresses on anthropic/claude-haiku-5");
     const receipt = parseBenchmarkObservation(report(draft.benchmark), draft.benchmark, 101, 200);
@@ -172,31 +172,27 @@ describe("pure typed scaffolding", () => {
     const review = reviewCatalog(catalog, { ...defaultSelection(catalog), capability: 4 }, 200);
     expect(compileOmpOverlay(catalog, review.selection, review.routes).modelRoles?.default).toBe("anthropic/series4:max");
   });
-  test("a rung of unknown context is admitted, while a known context regression is rejected by name", () => {
+  test("a smaller or unknown context window costs no rung, while a rung that would think less than a cheaper one is rejected by name", () => {
     const inv = fourLevelInventory(), base = inv.models[0]!;
     inv.models = [
-      { ...base, id: "entry", inputCostPerMillion: 1, contextWindow: 100000, thinkingLevels: ["low"] },
-      { ...base, id: "bridge", inputCostPerMillion: 2, contextWindow: null, thinkingLevels: ["medium"] },
-      { ...base, id: "narrow", inputCostPerMillion: 3, contextWindow: 50000, thinkingLevels: ["high"] },
-      { ...base, id: "top", inputCostPerMillion: 4, contextWindow: 500000, thinkingLevels: ["max"] },
+      { ...base, id: "entry", inputCostPerMillion: 1, contextWindow: 100000, thinkingLevels: ["low", "max"] },
+      { ...base, id: "shallow", inputCostPerMillion: 2, contextWindow: 500000, thinkingLevels: ["xhigh"] },
+      { ...base, id: "narrow", inputCostPerMillion: 3, contextWindow: 50000, thinkingLevels: ["max"] },
+      { ...base, id: "top", inputCostPerMillion: 4, contextWindow: null, thinkingLevels: ["max"] },
     ];
     const result = derived(inv);
-    expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "entry"], [2, "bridge"], [3, "top"]]);
-    expect(result.exclusions).toEqual([{ provider: "openai-codex", id: "narrow", reason: "regression" }]);
+    expect(result.document.models.map(model => [model.tier, model.id])).toEqual([[1, "entry"], [2, "narrow"], [3, "top"]]);
+    expect(result.exclusions).toEqual([{ provider: "openai-codex", id: "shallow", reason: "regression" }]);
   });
-  test("the maximum inventory of three antichains retains the preferred real fallback independent of order", () => {
+  test("the maximum inventory is probed whole and ladders the same whatever its order", () => {
     const inv = fourLevelInventory(), base = inv.models[0]!;
     const levels = ["low", "high", "max"] as const;
-    // Across groups every edge is valid; within each group context decreases
-    // as price rises. There are many middle pairs but no four-rung ladder.
-    inv.models = Array.from({ length: PROBE_MODEL_LIMIT }, (_, index) => {
-      const group = index < 85 ? 0 : index < 171 ? 1 : 2;
-      return { ...base, id: `adversary${index + 1}`, inputCostPerMillion: index + 1,
-        contextWindow: (group + 1) * 100000 - index, thinkingLevels: [levels[group]!] };
-    });
+    inv.models = Array.from({ length: PROBE_MODEL_LIMIT }, (_, index) => ({ ...base, id: `adversary${index + 1}`,
+      inputCostPerMillion: index + 1, thinkingLevels: [levels[index < 85 ? 0 : index < 171 ? 1 : 2]!] }));
     const result = derived(inv);
+    // The cheapest, then the dearest of the deepest thinkers: capability is the thinking ceiling, then price.
     expect(result.document.models.map(model => [model.tier, model.id]))
-      .toEqual([[1, "adversary1"], [2, "adversary86"], [3, "adversary172"]]);
+      .toEqual([[1, "adversary1"], [2, "adversary254"], [3, "adversary255"], [4, "adversary256"]]);
     expect(inventoryDraft(inv, "any").benchmark.candidates.map(model => model.id)).toEqual(inv.models.map(model => model.id).sort());
     expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
@@ -235,20 +231,6 @@ describe("pure typed scaffolding", () => {
     const short = derived({ ...inv, models: inv.models.slice(1) }).document;
     expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
     expect(compileCatalog(derived(inv).document).short).toEqual([]);
-  });
-  test("a shorter valid ladder beats extra rungs that lose context or thinking", () => {
-    const inv = fullInventory(), model = inv.models.find(value => value.provider === "openai-codex")!;
-    inv.models = [
-      { ...model, id: "gpt-efficient", inputCostPerMillion: 0.2, contextWindow: 1000000, thinkingLevels: ["max"] },
-      { ...model, id: "gpt-compact", inputCostPerMillion: 0.75, contextWindow: 272000, thinkingLevels: ["max"] },
-      { ...model, id: "gpt-shallow", inputCostPerMillion: 1, contextWindow: 1000000, thinkingLevels: ["xhigh"] },
-      { ...model, id: "gpt-standard", inputCostPerMillion: 2, contextWindow: 1000000, thinkingLevels: ["max"] },
-      { ...model, id: "gpt-powerful", inputCostPerMillion: 4, contextWindow: 1000000, thinkingLevels: ["max"] },
-      { ...model, id: "gpt-pricey", inputCostPerMillion: 10, contextWindow: 922000, thinkingLevels: ["max"] },
-    ];
-    expect(derived(inv).document.models.map(value => [value.tier, value.id])).toEqual([
-      [1, "gpt-efficient"], [2, "gpt-standard"], [3, "gpt-powerful"],
-    ]);
   });
   test("missing, stale, wrong API and inconclusive probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
@@ -423,8 +405,9 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     ]);
   });
   test("version tokens decide the newest GPT, including a major version spelled before the name", () => {
-    const gpt = derived(receiptOf(openai1814().filter(model => ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-6-astra"].includes(model.id))));
-    expect(tiers(gpt.document, "openai-codex")).toEqual([[1, "gpt-5.4-mini"], [2, "gpt-5.5"], [3, "gpt-6-astra"]]);
+    // None of these older rows carries one of OpenAI's tier names, so old Code's rule ladders them.
+    const gpt = derived(receiptOf(openai1814().filter(model => ["gpt-5.4", "gpt-5.4-mini", "gpt-5.5"].includes(model.id))));
+    expect(tiers(gpt.document, "openai-codex")).toEqual([[1, "gpt-5.4-mini"], [2, "gpt-5.5"]]);
     expect(gpt.exclusions).toEqual([{ provider: "openai-codex", id: "gpt-5.4", reason: "superseded" }]);
     const luna = derived(receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 1_000_000, "low", "max"),
       ...openai1814().filter(model => ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"].includes(model.id))]));
@@ -436,7 +419,7 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       ({ ...listed("deepseek", id, id.endsWith("-pro") ? 0.435 : 0.14, context, "low", "max", images), thinkingLevels: ["low", "high", "max"] });
     const inv = receiptOf([
       ...openai1814().filter(model => ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"].includes(model.id)),
-      // Given the widest context of their families, either would be the top if it were a candidate.
+      // Each names whatever its source pins next, so neither is a candidate, however it would rank.
       listed("openai-codex", "gpt-daybreak-blue-latest", 5, 2_000_000, "low", "max"),
       deepseek("deepseek-v4-flash", 1_000_000, false), deepseek("deepseek-v4-pro", 1_000_000, false),
       deepseek("deepseek-v4-flash-vision-exp", 2_000_000, true),
@@ -458,18 +441,21 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     const review = reviewCatalog(catalog, { ...defaultSelection(catalog), lane: { kind: "provider", family: "deepseek", blend: "only" } }, 200);
     expect(catalog.family(review.routes.find(route => route.role === "vision")!.lead.key)).toBe("openai");
   });
-  test("OpenAI's 18.1.14 rows ladder the GPT-5.6 family rather than the longest 272k-context chain", () => {
+  test("OpenAI's 18.1.14 rows ladder by OpenAI's names, astra at elite above the 1M-context terra and sol", () => {
+    // Old Code's rule read the context window as capability: terra and sol's 1M put astra's 272k
+    // below them, and astra was left out of the ladder it tops.
     const result = derived(receiptOf(openai1814()));
-    expect(tiers(result.document, "openai-codex")).toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
+    expect(tiers(result.document, "openai-codex"))
+      .toEqual([[1, "gpt-5.6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"], [4, "gpt-6-astra"]]);
+    // The rows that name no tier are not chosen, so only what has a reason is said.
     expect(result.exclusions).toEqual([
       { provider: "openai-codex", id: "gpt-5.4", reason: "superseded" },
-      { provider: "openai-codex", id: "gpt-5.4-mini", reason: "regression" },
       { provider: "openai-codex", id: "gpt-daybreak-blue-latest", reason: "unstable_id" },
     ]);
   });
-  test("an 18.4.x-like listing ladders luna, terra, sol and astra, ordering equal-price middles by address", () => {
+  test("an 18.4.x-like listing ladders luna, terra, sol and astra by name, whatever their prices", () => {
     // The operator's curated facts for the models it routes, beside the older rows OMP still lists.
-    // `gpt-5.6-terra` and `gpt-6.1-sol` share an input price, so only their addresses order them.
+    // `gpt-5.6-terra` and `gpt-6.1-sol` share an input price; their names order them.
     const current = [
       listed("openai-codex", "gpt-6-luna", 0.1, 1_000_000, "low", "max"), listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "max"),
       listed("openai-codex", "gpt-6.1-sol", 2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6-astra", 10, 1_000_000, "low", "max"),
@@ -480,14 +466,11 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
     expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
-  test("a required family whose most capable model regresses on its cheapest refuses, naming both", () => {
-    // Only luna and the 272k-context rows answer. Their most capable, gpt-5.5, would sit a smaller
-    // context above luna, and quietly choosing another top would hide that from the operator.
-    const inv = receiptOf(openai1814());
-    const callable = ["gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.5", "gpt-5.4"];
-    const verdicts = Object.fromEntries(inv.models.filter(model => !callable.includes(model.id)).map(model => [model.id, "not_found" as const]));
-    expect(() => catalogFromObservations(inv, observed(inv, verdicts)))
-      .toThrow("code_ladder_regression: openai: openai-codex/gpt-5.5 regresses on openai-codex/gpt-5.6-luna");
+  test("a required family whose named rung would think less than a cheaper one refuses, naming both", () => {
+    // The names set the order and are never quietly repaired: terra stops at high while luna below it reaches max.
+    const inv = receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "max"),
+      listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "high"), listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max")]);
+    expect(() => derived(inv)).toThrow("code_ladder_regression: openai: openai-codex/gpt-5.6-terra regresses on openai-codex/gpt-6-luna");
   });
   test("OMP's Spark quota class on an inventory row keeps Spark off the ladder and out of every route", () => {
     const rows = [...openai1814(), listed("openai-codex", "gpt-5.3-codex-spark", 1.75, 128_000, "low", "xhigh", false), ...anthropic1814()];
@@ -644,11 +627,22 @@ describe("a family Code requires that the accounts reach only in part", () => {
     expect(() => catalogFromObservations(nothing.inventory, nothing.benchmark)).toThrow("probe_insufficient_ladder");
   });
 
-  test("a short family still refuses a regression, naming both models", () => {
-    // A plan serving terra and astra alone: astra, the dearer, has less context than terra.
+  test("a plan serving every GPT model ladders luna, terra, sol and astra, OpenAI's own order", () => {
+    // The receipts list terra at 1M beside sol's and astra's 922k: ranked by window, terra topped the
+    // family, sol sat under it and astra was left out.
+    const reachable = Object.fromEntries(operatorRows.flatMap(([provider, id, , , , , , verdict]) =>
+      provider === "openai-codex" && verdict !== null ? [[id, "reachable" as const]] : []));
+    const { inventory, benchmark } = operatorReceipts(reachable);
+    expect(tiers(catalogFromObservations(inventory, benchmark).document, "openai-codex"))
+      .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
+  });
+
+  test("a plan serving terra and astra alone ladders each at its own tier, the tiers between routing to terra", () => {
     const { inventory, benchmark } = operatorReceipts({ "gpt-6-luna": "client_blocked", "gpt-5.6-luna": "client_blocked", "gpt-6-astra": "reachable" });
-    expect(() => catalogFromObservations(inventory, benchmark))
-      .toThrow("code_ladder_regression: openai: openai-codex/gpt-6-astra regresses on openai-codex/gpt-5.6-terra");
+    const derived = catalogFromObservations(inventory, benchmark), catalog = compileCatalog(derived.document);
+    expect(tiers(derived.document, "openai-codex")).toEqual([[2, "gpt-5.6-terra"], [4, "gpt-6-astra"]]);
+    expect([1, 2, 3, 4].map(tier => catalog.model(catalog.rung("openai", tier)).id))
+      .toEqual(["gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-6-astra"]);
   });
 });
 
@@ -672,6 +666,20 @@ describe("passive starter metadata", () => {
         tokensPerSecond: null, timeToFirstTokenMs: null });
     }
     expect(catalogFromMetadata({ ...snapshot, models: [...snapshot.models].reverse() }, "any")).toEqual(document);
+  });
+
+  test("OMP 18.8.6's bundled GPT rows start the ladder at luna, terra, sol and astra", () => {
+    // Its newer luna, sol and astra list 272k windows beside the older terra's 1M, and sol is priced
+    // as terra is: ranked by window, the starter read luna, sol, terra and struck elite.
+    const snapshot = metadata();
+    snapshot.models = [...snapshot.models.filter(model => model.provider !== "openai-codex"), ...[
+      listed("openai-codex", "gpt-5.6-luna", 0.2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-5.6-sol", 4, 1_000_000, "low", "max"),
+      listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6-astra", 10, 272_000, "low", "max"),
+      listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "max"), listed("openai-codex", "gpt-6-sol", 2, 272_000, "low", "max"),
+      listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max"),
+    ].map(model => ({ ...model, quotaTier: "chat" }))];
+    expect(tiers(catalogFromMetadata(snapshot, "any"), "openai-codex"))
+      .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
   });
 
   test("a starter whose bundled list holds one GPT model ladders GPT short rather than leaving no starter", () => {
