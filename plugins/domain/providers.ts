@@ -1,6 +1,9 @@
 import type { ProviderPolicy } from "./contracts.ts";
 
 function policy(value: ProviderPolicy): ProviderPolicy {
+  // A tier name is a tier, 1 to 4: a fifth name or a repeated one would place a model nowhere real.
+  if (value.tierNames && (value.tierNames.length > 4 || new Set(value.tierNames).size !== value.tierNames.length))
+    throw new Error(`${value.family}: tier names are at most four distinct words`);
   Object.freeze(value.providers);
   Object.freeze(value.meteredProviders);
   if (value.tierNames) Object.freeze(value.tierNames);

@@ -294,7 +294,9 @@ function metadataLadder(models: readonly InventoryModel[]): FamilyLadder {
  * A family Code requires (`requiredLadder`: OpenAI, Anthropic) is probed whole, because its
  * ladder has to survive a model that does not answer: a blocked newest falls back to its callable
  * predecessor and a blocked rung to the next candidate, so it is short only where nothing that
- * answers can take the rung. Any other family is probed only at the rungs its listing ladders as
+ * answers can take the rung. That holds for one laddered by its provider's names as well: its ids
+ * that name none of them can be chosen only when no named model answers, and only the probe says
+ * whether one does. Any other family is probed only at the rungs its listing ladders as
  * if every model answered, and a rung that does not answer leaves that family shorter. Probing such
  * a family whole made one OpenRouter key put 207 of an aggregator's models in a 232-request charge,
  * for a family that takes four rungs.

@@ -1479,7 +1479,12 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await choose(browser, "thinking", thinking);
   assert.deepEqual(await readProfile(browser, draftKey), before, "Keyboard round trips return the exact profile");
 
-  // A step only a refused word could take does nothing and says why, in the readout and aloud.
+  // A step only a refused word could take does nothing and says why, in the readout and aloud. GPT and Claude ladder all four
+  // tiers in the bundled starter, so the step is taken under DeepSeek only, whose two rungs leave elite with no model.
+  const laneBefore = keptEdit(before).selection.lane;
+  await choose(browser, "lane", "deepseek");
+  if (await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-checked')`) !== "true") await click(browser, onlyBox);
+  await until(browser, "the lead is DeepSeek only", `${chosenKey("lane")} === "deepseek" && ${onlyBox}.getAttribute('aria-checked') === 'true'`);
   await focusRow(browser, "tier");
   const tier = await browser.evaluate<string>(chosenKey("tier"));
   const refusedTier = await browser.evaluate<string | null>(`(() => {
@@ -1487,7 +1492,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     const last = words.findLastIndex(el => el.dataset.off === undefined);
     return last >= 0 && last < words.length - 1 ? words[last + 1].dataset.key : null;
   })()`);
-  assert(refusedTier, "The bundled starter refuses the tier above its most capable available one");
+  assert(refusedTier, "Under DeepSeek only the model row refuses the tier above its most capable available one");
   const refusedText = await browser.evaluate<string>(`${word("tier", refusedTier)}.querySelector('.${G}word-text').textContent`);
   await key(browser, "End", 35);
   await key(browser, "ArrowRight", 39);
@@ -1497,6 +1502,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     `${liveRegion}.textContent.startsWith(${row("tier")}.querySelector('.${G}dial-label').textContent + ' ' + ${JSON.stringify(refusedText)} + ': ') && ${liveRegion}.textContent.length > ${refusedText.length + 10}`);
   assert.notEqual(await browser.evaluate(chosenKey("tier")), refusedTier, "A refused step leaves the row where it was");
   await choose(browser, "tier", tier);
+  await choose(browser, "lane", laneBefore.kind === "mixed" ? "mixed" : laneBefore.family);
+  if (laneBefore.kind === "provider" && await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-checked')`) !== String(laneBefore.blend === "only"))
+    await click(browser, onlyBox);
   assert.deepEqual(await readProfile(browser, draftKey), before, "A refused step and End return the exact profile");
 
   // The lead row (#252): mixed, then GPT, Claude and DeepSeek, then an `only` box, a Tab stop of its own, checked while

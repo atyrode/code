@@ -414,15 +414,16 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     expect(tiers(luna.document, "openai-codex")).toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-5.6-sol"]]);
     expect(luna.exclusions).toEqual([{ provider: "openai-codex", id: "gpt-5.6-luna", reason: "superseded" }]);
   });
-  test("rolling aliases and experiments are never probed or laddered, even as their family's most capable rows", () => {
-    const deepseek = (id: string, context: number, images: boolean): Row =>
-      ({ ...listed("deepseek", id, id.endsWith("-pro") ? 0.435 : 0.14, context, "low", "max", images), thinkingLevels: ["low", "high", "max"] });
+  test("rolling aliases, previews and experiments are never probed or laddered, even where they would take a rung", () => {
+    const deepseek = (id: string, price: number, images: boolean): Row =>
+      ({ ...listed("deepseek", id, price, 1_000_000, "low", "max", images), thinkingLevels: ["low", "high", "max"] });
     const inv = receiptOf([
       ...openai1814().filter(model => ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"].includes(model.id)),
-      // Each names whatever its source pins next, so neither is a candidate, however it would rank.
-      listed("openai-codex", "gpt-daybreak-blue-latest", 5, 2_000_000, "low", "max"),
-      deepseek("deepseek-v4-flash", 1_000_000, false), deepseek("deepseek-v4-pro", 1_000_000, false),
-      deepseek("deepseek-v4-flash-vision-exp", 2_000_000, true),
+      // Each names whatever its source pins next, and would otherwise take a rung: the preview is
+      // the newest sol, and the experiment DeepSeek's dearest model and the only one seeing images.
+      listed("openai-codex", "gpt-6.2-preview-sol", 5, 272_000, "low", "max"),
+      deepseek("deepseek-v4-flash", 0.14, false), deepseek("deepseek-v4-pro", 0.435, false),
+      deepseek("deepseek-v4-pro-vision-exp", 0.6, true),
     ]);
     const draft = inventoryDraft(inv, "any"), result = derived(inv);
     expect(draft.benchmark.candidates.map(model => model.id))
@@ -432,8 +433,8 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
     // The draft already names them, so the charge an operator confirms never includes them.
     for (const exclusions of [draft.exclusions, result.exclusions]) {
       expect(exclusions).toEqual([
-        { provider: "deepseek", id: "deepseek-v4-flash-vision-exp", reason: "unstable_id" },
-        { provider: "openai-codex", id: "gpt-daybreak-blue-latest", reason: "unstable_id" },
+        { provider: "deepseek", id: "deepseek-v4-pro-vision-exp", reason: "unstable_id" },
+        { provider: "openai-codex", id: "gpt-6.2-preview-sol", reason: "unstable_id" },
       ]);
     }
     // DeepSeek is then text-only, so its vision role crosses to an image-capable family as intended.
@@ -455,10 +456,10 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
   });
   test("an 18.4.x-like listing ladders luna, terra, sol and astra by name, whatever their prices", () => {
     // The operator's curated facts for the models it routes, beside the older rows OMP still lists.
-    // `gpt-5.6-terra` and `gpt-6.1-sol` share an input price; their names order them.
+    // Here sol is listed cheaper than terra: by price alone it would sit beneath terra.
     const current = [
       listed("openai-codex", "gpt-6-luna", 0.1, 1_000_000, "low", "max"), listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "max"),
-      listed("openai-codex", "gpt-6.1-sol", 2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6-astra", 10, 1_000_000, "low", "max"),
+      listed("openai-codex", "gpt-6.1-sol", 1.75, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6-astra", 10, 1_000_000, "low", "max"),
     ];
     const inv = receiptOf([...current, ...openai1814().filter(model => !current.some(value => value.id === model.id))]);
     const result = derived(inv);
@@ -466,11 +467,22 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       .toEqual([[1, "gpt-6-luna"], [2, "gpt-5.6-terra"], [3, "gpt-6.1-sol"], [4, "gpt-6-astra"]]);
     expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
-  test("a required family whose named rung would think less than a cheaper one refuses, naming both", () => {
+  test("a required family whose named rung would think less than one below it refuses, naming both", () => {
     // The names set the order and are never quietly repaired: terra stops at high while luna below it reaches max.
     const inv = receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "max"),
       listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "high"), listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max")]);
     expect(() => derived(inv)).toThrow("code_ladder_regression: openai: openai-codex/gpt-5.6-terra regresses on openai-codex/gpt-6-luna");
+    // Above the first rung too: sol, priced as terra is, stops at xhigh under terra's max.
+    const higher = receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "high"),
+      listed("openai-codex", "gpt-5.6-terra", 2, 1_000_000, "low", "max"), listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "xhigh")]);
+    expect(() => derived(higher)).toThrow("code_ladder_regression: openai: openai-codex/gpt-6.1-sol regresses on openai-codex/gpt-5.6-terra");
+  });
+  test("ids naming one tier under different names give it their newest, whatever the listing's order", () => {
+    const inv = receiptOf([listed("openai-codex", "gpt-6-luna", 0.1, 272_000, "low", "max"),
+      listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max"), listed("openai-codex", "gpt-6-codex-sol", 3, 272_000, "low", "max")]);
+    const result = derived(inv);
+    expect(tiers(result.document, "openai-codex")).toEqual([[1, "gpt-6-luna"], [3, "gpt-6.1-sol"]]);
+    expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
   test("OMP's Spark quota class on an inventory row keeps Spark off the ladder and out of every route", () => {
     const rows = [...openai1814(), listed("openai-codex", "gpt-5.3-codex-spark", 1.75, 128_000, "low", "xhigh", false), ...anthropic1814()];
