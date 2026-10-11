@@ -47,7 +47,9 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   stays focusable and the launch line names what failed (the accounts, the workspace
   profile, OMP missing from the machine) with a fix. **Routing** beside it lists every
   role's `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
-  each can be hidden. Below 760 px routing and usage are tabs of their own. The
+  each can be hidden. Below 760 px routing and usage stand under the generator when the
+  panel is tall enough for the generator and the whole routing at once, and are tabs of
+  their own otherwise, the profile then grouped under the rows by provider and level. The
   **sessions** list running and explicitly read saved sessions and this device's
   recent profiles. Priority, prewalk and auto plans are profile switches in Options.
   Every action is a visible control; keys are accelerators, listed under

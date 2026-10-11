@@ -864,7 +864,7 @@ async function panelWidth(browser: BrowserInstance, width: number, height = 900)
   throw new ProofFailure(`The generator panel could not be sized to ${width}px`);
 }
 
-/** The views a key opens from the generator, and back with Esc. Routing and usage are views of their own only when narrow. */
+/** The views a key opens from the generator, and back with Esc. Routing and usage are views of their own only where they are tabs. */
 type View = "main" | "accounts" | "sessions" | "routing" | "usage";
 const VIEW_KEYS: Readonly<Record<Exclude<View, "main">, { key: string; code: number }>> = {
   accounts: { key: "a", code: 65 }, sessions: { key: "e", code: 69 }, routing: { key: "p", code: 80 }, usage: { key: "s", code: 83 },
@@ -1044,10 +1044,11 @@ const MENU_OUTSIDE = `(() => {
 })()`;
 /**
  * From 170 to 1440px of panel width, in every view the width offers (routing and usage are views of
- * their own when narrow): text paints, and there is no horizontal overflow, no cut text, no text
- * outside the panel, no text box intersecting another, no text past the routing pane and no control
- * too narrow to press, in each of the panel's three layouts; in the medium layout with the routing's
- * fallback chains shown too. More's menu opens inside the panel at every width. Every width and view
+ * their own where they are tabs): text paints, and there is no horizontal overflow, no cut text, no
+ * text outside the panel, no text box intersecting another, no text past the routing pane and no
+ * control too narrow to press, in each of the panel's three layouts; in the medium layout with the
+ * routing's fallback chains shown too, and narrow but tall, with routing and usage under the
+ * generator instead of tabs. More's menu opens inside the panel at every width. Every width and view
  * is measured before the verdict, so one run names every place that fails.
  */
 async function geometryAcrossWidths(browser: BrowserInstance, label: string): Promise<void> {
@@ -1067,7 +1068,8 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
       await panelWidth(browser, width);
       const mode = await browser.evaluate<string>(`${element(stage)}.dataset.mode`);
       modes.add(mode);
-      for (const view of ["main", "accounts", "sessions", ...(mode === "narrow" ? ["routing", "usage"] as const : [])] as const) {
+      const tabbed = await browser.evaluate<boolean>(`document.querySelector('${generator} [data-view-tab="routing"]') !== null`);
+      for (const view of ["main", "accounts", "sessions", ...(tabbed ? ["routing", "usage"] as const : [])] as const) {
         await showView(browser, view);
         await still(browser);
         const where = `${view} at ${width}px`;
@@ -1088,6 +1090,16 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
         await until(browser, "Esc closes More's menu", `${menu} === null`);
       }
       await showView(browser, "main");
+    }
+    // Narrow but tall enough for the generator and the whole routing, routing and usage stand under the generator and have no tabs.
+    for (const width of [620, 320, 170]) {
+      await panelWidth(browser, width, 2400);
+      await still(browser);
+      const where = `main at ${width}px and 2400px tall`;
+      if (!await browser.evaluate<boolean>(`${element(stage)}.dataset.stacked === 'true' && document.querySelector('${generator} [data-view-tab="routing"]') === null`)) {
+        problems.push(`${where}: routing and usage are not under the generator`);
+      }
+      await measure(where, "main");
     }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
@@ -2822,7 +2834,7 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
     await showView(browser, "main");
     await assertRoutes(browser, true);
-    // Wide, the routing's leads; narrow, the profile's leads beside the generator.
+    // Wide, the routing's leads; narrow and too short for routing under the generator, the grouped profile's leads.
     try {
       for (const [width, leads] of [[1280, `[data-pane="routing"] .${G}tok-value`], [390, `.${G}profile-lead`]] as const) {
         await panelWidth(browser, width);

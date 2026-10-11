@@ -244,8 +244,9 @@ Models names `m` only in the generator, where `m` opens Models rather than Manag
 ### The top bar
 
 The tabs are a tab list: `←` `→` move among them and `↵` or `Space` opens one. Below
-760 px of panel width **Routing** and **Usage** join them, since those panes are views
-of their own there. **More** keeps to the bar's end and is a standard menu button: a
+760 px of panel width, when the panel is too short for routing under the generator,
+**Routing** and **Usage** join them as views of their own (see the layout below).
+**More** keeps to the bar's end and is a standard menu button: a
 press, `↓`, `↵` or `Space` opens its menu on the first item and `↑` on the last; `↑` `↓`,
 `Home` and `End` move, `↵` or `Space` chooses, and an item's own key (`m`, `u`, `o`, `?`)
 chooses it too. `Esc` closes the menu and returns focus to More; `Tab`, a press outside
@@ -365,10 +366,12 @@ fallbacks row and says there are no chains to show. Its state is local to the op
 panel. **Hide** in routing's head (`p`) removes the pane; **Show routing** in the
 generator's head brings it back.
 
-Whenever routing is not beside the rows (a narrow panel, or hidden) the team shows
-under the rows grouped by what it runs: each group's `model:thinking`, then its roles
-with `●` on agent-backed ones. A change that moves a role between groups glides it
-there.
+Whenever routing is not shown with the generator (hidden, or a tab of its own in a short
+narrow panel) the profile shows under the rows grouped by what it runs: each group's
+`model:thinking`, then its roles in routing order with `●` on agent-backed ones. Groups
+read by provider, the default role's first and then GPT, Claude, DeepSeek and the rest,
+and within a provider by level: the higher tier first (elite, smart, normal, fast), then
+the higher thinking. A change that moves a role between groups glides it there.
 
 The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
 lit to the level in the lane's accent, and the level's word while pointed. Cost is a
@@ -507,7 +510,8 @@ never a refusal.
 ### Usage
 
 The **usage** pane stands under routing, or alone as the **Usage** tab in a narrow
-panel. It lists providers in the panel's family order (GPT, Claude, DeepSeek, then the
+panel too short for routing under the generator. It lists providers in the panel's
+family order (GPT, Claude, DeepSeek, then the
 rest) and, under each, its accounts by email (else API key or identity). Each reported
 window of an account is one line: its label (`5h`, `7d`), a twelve-block bar filled to
 the share used, the percentage, `↻` and the time to its reset, and Code's word for it:
@@ -690,9 +694,9 @@ generator's rows. Each of these has a control; none is the only way to anything.
 - **Accounts.** `↑` `↓`, `Home`, `End`, `Space`, `↵`, `m` and `a` as above.
 - **Manage.** Esc returns to the accounts, `a` to the generator.
 - **Sessions.** `↑` `↓` move, `1`–`9` recall a recent profile, `e` or Esc go back.
-- **Narrow routing and usage views.** Esc goes back and `a` opens the accounts; `p` and
-  `s` open routing and usage, and return to the main view from their own; `f` shows the
-  chains in routing.
+- **Routing and usage tabs.** Where they are tabs of their own, `p` and `s` open routing
+  and usage rather than hide them, and return to the main view from their own; there Esc
+  goes back, `a` opens the accounts and `f` shows the chains in routing.
 - **Anywhere in the panel.** `r` is Refresh now: everything read again at once. `?`
   opens Shortcuts.
 
@@ -707,7 +711,7 @@ which has no keys, the key line is hidden, and every button, tab and radio is at
 44 px. One polite live region announces outcomes, failures, the charge, recalls and the
 reason a pressed refused control gave.
 
-The layout answers the panel's own measured width, never the window's, since Code
+The layout answers the panel's own measured size, never the window's, since Code
 shares the window with its canvas. From 760 px the generator and routing stand side by
 side with usage under both. The generator is as wide as its rows need, never under 42%
 of the panel, and routing takes what that leaves, never under 36%, so the room the rows
@@ -715,13 +719,19 @@ do not need goes to routing's fallback chains. What the readout and the launch l
 never moves that divide. The generator and routing are as tall as the taller of them, and
 usage follows them, so the room a tall panel has left lies below everything rather than
 inside the generator.
-Below 760 px the generator stands alone with the grouped team under its rows, and routing
-and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lead's words drop under its label so the
+Below 760 px routing stands under the generator and usage under routing when the panel is
+tall enough for the generator, without its grouped profile, and the whole routing at once;
+otherwise the generator stands alone with the grouped profile under its rows, and routing
+and usage are tabs of their own. The fit is judged from what is rendered, when the panel is
+resized and when the stage's structure changes (the routes, the fallback chains, routing
+hidden or shown, a return to the generator), never when the readout or the launch line
+changes: a later overflow scrolls, and the launch never moves under the pointer. Widening
+the panel closes a routing or usage view. Below 430 px the lead's words drop under its label so the
 leads and the only box keep one line, and below 380 px usage windows use thinner blocks and drop
 the word "used". Nothing scrolls sideways at any width. Hiding routing or usage is
-local to the open panel and not kept. The first layout and every resize place things
-without motion; a pane that comes into view slides in, and under reduced motion nothing
-moves.
+local to the open panel and not kept. The first layout, every resize and every change
+between the two narrow arrangements place things without motion; a pane that comes into
+view slides in, and under reduced motion nothing moves.
 
 ### Drafts and what persists
 

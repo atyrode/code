@@ -6,8 +6,9 @@
  * is colour, motion and simple block bars; no capsules, no grounds behind words, no glows. Widths
  * answer the panel's own (`data-mode`, set from its measured width, and container queries on the
  * `code` container), never the viewport, and every track's minimum fits inside the panel
- * (`minmax(0, …)`, or a share of the stage) so nothing scrolls sideways. The prototype's quieter
- * greys are raised to 4.5:1 on the panel ground.
+ * (`minmax(0, …)`, or a share of the stage) so nothing scrolls sideways; below 760px the panel's
+ * height decides whether routing and usage stand under the generator (`data-stacked`) or are tabs.
+ * The prototype's quieter greys are raised to 4.5:1 on the panel ground.
  * Sections: panel · palette · stage · generator rows · readout, profile, meters and launch ·
  * routing · key line · widths · motion · session options · sheets · sessions.
  */
@@ -299,7 +300,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout b { color: var(--rc, var(--tui-acc)); font-weight: 650; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] { color: var(--tui-warn-text); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__readout[data-tone="warn"] b { color: var(--tui-warn); }
-/* The narrow profile: the team grouped by what it runs, whenever routing is not beside the generator. */
+/* The grouped profile: the roles grouped by what they run, whenever routing is not shown with the generator. */
 /* Either column gives way before anything is cut: a lead or a role too long for its room ends in an ellipsis, its title whole. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: 2px 18px; margin: 14px 0 0 calc(16px + 24px); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__profile-lead { min-width: 0; overflow: hidden; color: var(--h); line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
@@ -458,6 +459,14 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__meter { grid-template-columns: 12px calc(22px + var(--labw)) auto; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__launchrow { grid-template-columns: 12px minmax(0, 1fr); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] .plugin-atyrode_code_generator__profile { margin-left: calc(12px + 22px); }
+/*
+ * Narrow and tall enough (`data-stacked`, web.tsx `useStacked`): one column, routing under the generator
+ * and usage under routing, each the panel's width, a rule above each as usage has at every width.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-stacked] .plugin-atyrode_code_generator__stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 1fr; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-stacked] .plugin-atyrode_code_generator__pane[data-pane="routing"] { grid-column: 1; grid-row: 2; border-top: 1px solid var(--tui-rule); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-stacked] .plugin-atyrode_code_generator__pane[data-pane="routing"]::before { display: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-stacked] .plugin-atyrode_code_generator__pane[data-pane="usage"] { grid-row: 3; }
 /* Under 430px the lead's words drop under its label, so the leads and the `only` box keep one line. */
 @container code (width < 430px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui[data-mode="narrow"] { --gap: 8px; --pad: 14px; font-size: 13px; }

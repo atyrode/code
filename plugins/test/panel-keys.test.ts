@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { acceleratorFor, panelKey, type PanelAction, type PanelKey, type PanelView } from "../code/generator/panel-keys.ts";
 
-/** A key pressed on a generator row in the shown main view at full width, with three recent profiles; each test changes only what it is about. */
+/** A key pressed on a generator row in the shown main view with routing and usage shown with it, with three recent profiles; each test changes only what it is about. */
 function press(key: string, changes: Partial<PanelKey> = {}): PanelKey {
   return {
     key, mod: false, alt: false, repeat: false, defaultPrevented: false, inView: true, inField: false, inDialog: false, onControl: false, onRoot: false,
-    view: "main", narrow: false, recents: 3, ...changes,
+    view: "main", tabbed: false, recents: 3, ...changes,
   };
 }
 
@@ -40,11 +40,11 @@ describe("views one key away", () => {
     expect(panelKey(press("e", { view: "sessions" }))).toEqual({ kind: "view", view: "main" });
   });
 
-  test("p and s hide routing and usage beside the generator, and open them as views of their own when narrow", () => {
+  test("p and s hide or show routing and usage with the generator, and open their tabs when they have them", () => {
     expect(panelKey(press("p"))).toEqual({ kind: "toggle", pane: "routing" });
     expect(panelKey(press("s"))).toEqual({ kind: "toggle", pane: "usage" });
-    expect(panelKey(press("p", { narrow: true }))).toEqual({ kind: "view", view: "routing" });
-    expect(panelKey(press("p", { narrow: true, view: "routing" }))).toEqual({ kind: "view", view: "main" });
+    expect(panelKey(press("p", { tabbed: true }))).toEqual({ kind: "view", view: "routing" });
+    expect(panelKey(press("p", { tabbed: true, view: "routing" }))).toEqual({ kind: "view", view: "main" });
     // Beside the accounts there is nothing to hide.
     expect(panelKey(press("s", { view: "accounts" }))).toBeNull();
   });

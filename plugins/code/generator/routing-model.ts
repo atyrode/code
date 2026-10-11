@@ -1,14 +1,16 @@
+import { ThinkingLevelSchema } from "@atyrode/manifold-omp";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
-import type { ModelChoice } from "../../domain/contracts.ts";
+import type { CatalogModel, ModelChoice } from "../../domain/contracts.ts";
+import { orderedFamilies } from "../../domain/providers.ts";
 import { roleOutcomes, type QuotaPool } from "../../domain/quota.ts";
 import type { Review } from "../../domain/routing.ts";
 import { outWord, poolOf, thinkingWord, type Vocabulary } from "./statement-model.ts";
 
 /*
  * The routing as data: every role on one line with its lead as `alias:thinking` in its provider's
- * hue, the fallback chain behind it, and whether quota leaves the lead out; and the same team
- * grouped by what it runs, for the narrow profile. Routes come only from the review and quota only
- * from `quotaPools`/`roleOutcomes`; nothing here judges either.
+ * hue, the fallback chain behind it, and whether quota leaves the lead out; and the same profile
+ * grouped by what it runs, wherever routing is not shown with the generator. Routes come only from
+ * the review and quota only from `quotaPools`/`roleOutcomes`; nothing here judges either.
  */
 
 /** One model choice as the routing writes it. `signature` changes exactly when the token reads or colours differently. */
@@ -21,6 +23,8 @@ export type RouteToken = {
   readonly id: string;
   /** The thinking level as the readout writes it (`x-high`). */
   readonly effort: string;
+  /** The model's catalog tier (4 elite down to 1 fast; 0 a special tier), which orders the grouped profile. */
+  readonly tier: CatalogModel["tier"];
 };
 export type LedgerRow = {
   readonly role: string;
@@ -37,7 +41,7 @@ function token(catalog: CompiledCatalog, aliases: ReadonlyMap<string, string>, c
   const model = catalog.model(choice.key);
   return {
     key: choice.key, alias: aliases.get(choice.key) ?? choice.key, thinking: choice.thinking, family: catalog.family(choice.key),
-    id: `${model.provider}/${model.id}`, effort: thinkingWord(choice.thinking),
+    id: `${model.provider}/${model.id}`, effort: thinkingWord(choice.thinking), tier: model.tier,
   };
 }
 
@@ -66,10 +70,15 @@ export function routeLedger(catalog: CompiledCatalog, review: Review, aliases: R
   return rows;
 }
 
-/** One group of the narrow profile: a lead and thinking, and the roles that run it in routing order. */
+/** One group of the grouped profile: a lead and thinking, and the roles that run it in routing order. */
 export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; readonly down: boolean; readonly roles: readonly { readonly role: string; readonly agentBacked: boolean }[] };
 
-/** The team grouped by what it runs (`model:thinking`), groups in the order their first role appears; an off advisor runs nothing. */
+/**
+ * The profile grouped by what it runs (`model:thinking`), read by provider and then by level: the
+ * default role's provider first and the others in the panel's provider order, then within a provider
+ * the stronger tier first, then the higher thinking, then the alias, so equal groups always stand in
+ * one order. Roles keep their routing order inside a group; an off advisor runs nothing.
+ */
 export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
   const groups = new Map<string, { key: string; lead: RouteToken; down: boolean; roles: { role: string; agentBacked: boolean }[] }>();
   for (const row of ledger) {
@@ -78,5 +87,10 @@ export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
     const group = groups.get(key) ?? groups.set(key, { key, lead: row.lead, down: row.down !== null, roles: [] }).get(key)!;
     group.roles.push({ role: row.role, agentBacked: row.agentBacked });
   }
-  return [...groups.values()];
+  const first = ledger.find(row => row.role === "default")?.lead?.family;
+  const families = orderedFamilies([...groups.values()].map(group => group.lead.family));
+  const rank = first === undefined ? families : [first, ...families.filter(family => family !== first)];
+  const scale: readonly string[] = ThinkingLevelSchema.options;
+  return [...groups.values()].sort((a, b) => rank.indexOf(a.lead.family) - rank.indexOf(b.lead.family) || b.lead.tier - a.lead.tier
+    || scale.indexOf(b.lead.thinking) - scale.indexOf(a.lead.thinking) || a.lead.alias.localeCompare(b.lead.alias));
 }

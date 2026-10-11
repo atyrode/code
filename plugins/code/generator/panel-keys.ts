@@ -7,7 +7,7 @@
  * the last word. A generator row's own keys (←→, ↑↓, Home, End, Space) are the row's (dial-row.tsx).
  */
 
-/** What the stage shows: the generator with routing and usage, a pane alone (narrow), the accounts, their management (`manage`, under the accounts) or the sessions. */
+/** What the stage shows: the generator with routing and usage, a pane alone (its tab), the accounts, their management (`manage`, under the accounts) or the sessions. */
 export type PanelView = "main" | "routing" | "usage" | "accounts" | "manage" | "sessions";
 /** The sheets that open over the stage. */
 export type PanelSheet = "models" | "setup" | "options";
@@ -31,8 +31,8 @@ export type PanelKey = {
   /** Nothing in the stage has focus: the panel root, which has focus when the panel opens. */
   readonly onRoot: boolean;
   readonly view: PanelView;
-  /** The panel is too narrow for routing and usage beside the generator; they open as views of their own. */
-  readonly narrow: boolean;
+  /** Routing and usage are tabs of their own, as when the panel has room for them neither beside nor under the generator. */
+  readonly tabbed: boolean;
   /** How many recent profiles the digits can recall, in the sessions view. */
   readonly recents: number;
 };
@@ -42,7 +42,7 @@ export type PanelAction =
   | { readonly kind: "defaults" }
   | { readonly kind: "saved" }
   | { readonly kind: "chains" }
-  /** Hide or show a pane beside the generator. */
+  /** Hide or show a pane shown with the generator. */
   | { readonly kind: "toggle"; readonly pane: "routing" | "usage" }
   /** Show a view; `main` goes back. */
   | { readonly kind: "view"; readonly view: PanelView }
@@ -63,11 +63,11 @@ const SHEET_KEYS: Readonly<Record<string, PanelSheet>> = { u: "setup", o: "optio
  * What a key press means, or null when the panel leaves it alone. Mod+↵ takes the launch's step in
  * the main view; a plain ↵ does too unless a control has focus, which answers it itself. Neither
  * acts on key repeat, so holding them cannot take one step after another. Letters act outside text:
- * `a` and `e` open the accounts and the sessions or come back; `p` and `s` hide routing and usage
- * beside the generator, or open them as views when narrow; `d`, `z`, `f` and `w` (the machine) act
- * in the main view; `m`, `u` and `o` open Models, Setup and the session options from the main view,
- * and `m` the accounts' management from the accounts; `r` reads again and `?` shows every key.
- * Digits recall a recent profile where the sessions view lists them. Esc goes back: from the
+ * `a` and `e` open the accounts and the sessions or come back; `p` and `s` hide or show routing and
+ * usage with the generator, or open their tabs when they have them; `d`, `z`, `f` and `w` (the
+ * machine) act in the main view; `m`, `u` and `o` open Models, Setup and the session options from the
+ * main view, and `m` the accounts' management from the accounts; `r` reads again and `?` shows every
+ * key. Digits recall a recent profile where the sessions view lists them. Esc goes back: from the
  * accounts' management to the accounts, from anything else to the main view; at rest in the main
  * view it is left alone. Every one of these is also a control on the panel; keys only speed them up.
  */
@@ -85,8 +85,8 @@ export function panelKey(press: PanelKey): PanelAction | null {
   switch (press.key) {
     case "a": return { kind: "view", view: press.view === "accounts" || press.view === "manage" ? "main" : "accounts" };
     case "e": return { kind: "view", view: press.view === "sessions" ? "main" : "sessions" };
-    case "p": return press.narrow ? { kind: "view", view: press.view === "routing" ? "main" : "routing" } : main ? { kind: "toggle", pane: "routing" } : null;
-    case "s": return press.narrow ? { kind: "view", view: press.view === "usage" ? "main" : "usage" } : main ? { kind: "toggle", pane: "usage" } : null;
+    case "p": return press.tabbed ? { kind: "view", view: press.view === "routing" ? "main" : "routing" } : main ? { kind: "toggle", pane: "routing" } : null;
+    case "s": return press.tabbed ? { kind: "view", view: press.view === "usage" ? "main" : "usage" } : main ? { kind: "toggle", pane: "usage" } : null;
     case "d": return main ? { kind: "defaults" } : null;
     case "z": return main ? { kind: "saved" } : null;
     case "f": return main || press.view === "routing" ? { kind: "chains" } : null;
@@ -109,10 +109,10 @@ export function panelKey(press: PanelKey): PanelAction | null {
  * null where none does. A control names it as its accelerator, so it never claims a key that does
  * something else in that view, or nothing.
  */
-export function acceleratorFor(view: PanelView, narrow: boolean, keys: readonly string[], does: (action: PanelAction) => boolean): string | null {
+export function acceleratorFor(view: PanelView, tabbed: boolean, keys: readonly string[], does: (action: PanelAction) => boolean): string | null {
   return keys.find(key => {
     const action = panelKey({ key, mod: false, alt: false, repeat: false, defaultPrevented: false, inView: true, inField: false,
-      inDialog: false, onControl: false, onRoot: false, view, narrow, recents: 0 });
+      inDialog: false, onControl: false, onRoot: false, view, tabbed, recents: 0 });
     return action !== null && does(action);
   }) ?? null;
 }

@@ -101,7 +101,7 @@ export type RoutingPaneProps = {
   /** The profile's fallbacks are on, so there are chains to show. */
   readonly fallbacks: boolean;
   readonly onChains: () => void;
-  /** The head's Hide control beside the generator; none when routing is a view of its own. */
+  /** The head's Hide control while routing shows with the generator; none when it is a tab of its own. */
   readonly hide: ReactNode;
   readonly hidden: boolean;
 };
@@ -137,10 +137,11 @@ export function RoutingPane({ ledger, chains, fallbacks, onChains, hide, hidden 
 }
 
 /**
- * The narrow profile, under the generator's rows whenever routing is not beside them: the team
- * grouped by what it runs, each group's `model:thinking` then its roles, ● for the agent-backed. When
- * a change moves a role between groups it glides from where it was to where it lands. A name too long
- * for its room ends in an ellipsis and says itself whole in its title.
+ * The grouped profile, under the generator's rows whenever routing is not shown with them: the roles
+ * grouped by what they run (`profileGroups`: by provider, then by level), each group's
+ * `model:thinking` then its roles, ● for the agent-backed. When a change moves a role between groups
+ * it glides from where it was to where it lands. A name too long for its room ends in an ellipsis and
+ * says itself whole in its title.
  */
 export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
   const box = useRef<HTMLDivElement>(null);
@@ -171,7 +172,7 @@ export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
     known.current = new Set(leads.map(lead => lead.dataset.group!));
     places.current = after;
   }, [key]);
-  return <div ref={box} className={`${G}profile`} aria-label="team">
+  return <div ref={box} className={`${G}profile`} aria-label="roles by model">
     {groups.map(group => <Fragment key={group.key}>
       <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}
         title={`${group.lead.alias}:${group.lead.thinking}`}>
