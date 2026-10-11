@@ -482,6 +482,8 @@ describe("old Code derivation rules over OMP's bundled rows", () => {
       listed("openai-codex", "gpt-6.1-sol", 2, 272_000, "low", "max"), listed("openai-codex", "gpt-6-codex-sol", 3, 272_000, "low", "max")]);
     const result = derived(inv);
     expect(tiers(result.document, "openai-codex")).toEqual([[1, "gpt-6-luna"], [3, "gpt-6.1-sol"]]);
+    // The other sol is merely not chosen, so it carries no reason.
+    expect(result.exclusions).toEqual([]);
     expect(derived({ ...inv, models: [...inv.models].reverse() })).toEqual(result);
   });
   test("OMP's Spark quota class on an inventory row keeps Spark off the ladder and out of every route", () => {

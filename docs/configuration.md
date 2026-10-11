@@ -118,16 +118,17 @@ most 256 budget-eligible candidates before constructing ladders; it never trunca
 
 Each family is laddered fast, normal, smart, elite (tiers 1–4) after keeping only the
 newest version of each model name. OpenAI names its tiers, so its ladder is those names:
-luna, terra, sol and astra, each at its own tier whatever its price or context window, and
-a model whose id names none of them is not chosen; a listing with none of the names is
-laddered as any other family is. Any other family's cheapest model is its first rung and
-its most capable its top (the highest thinking ceiling, then the higher price), with up to
-two of the most capable models priced between them, or priced as an end when none lies
-between, as its middles. A rung that is not cheaper than a rung below it must reach every
-thinking level of that rung. A context window is not a capability: it never ranks a model
-or refuses a rung, since OpenAI's newer sol and astra carry smaller windows than the older
-terra beneath them. A catalog verified under the earlier context rule keeps its ladder,
-as stored active policy does, until it is verified again.
+luna, terra, sol and astra, each at its own tier whatever its price or context window (of
+ids sharing a name, the newest takes it), and a model whose id names none of them is not
+chosen; a listing with none of the names is laddered as any other family is. Any other
+family's cheapest model is its first rung and its most capable its top (the highest thinking
+ceiling, then the higher price), with up to two of the most capable models priced between
+them, or, where fewer than two lie between, priced as an end, as its middles. A rung that is
+not cheaper than a rung below it must reach every thinking level of that rung. A context
+window is not a capability: it never ranks a model or refuses a rung, since OpenAI's newer
+sol and astra carry smaller windows than the older terra beneath them. A catalog verified
+under the earlier context rule keeps its ladder, as stored active policy does, until it is
+verified again.
 
 Only a successful canonical configuration read establishes an absent revision 0
 or an initialized-empty positive revision. Loading and failure are not absence.
