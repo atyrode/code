@@ -63,30 +63,34 @@ when none is staged; the active list, the saved team and the account choices sta
 they are.
 
 A person's model checks and their standing approval are the caller's own, keyed by
-their principal and kept for humans only; nobody reads or writes another person's, and
-an agent, a service or a token confined to one container keeps none. `stageCatalog` with
-a `verification` also keeps the staged list as the checking person's check of its exact
-account pool and the budget it was derived under (`verification.budget`, `any` when
-absent), at `checks/<person>/<budget>/<poolIdentityDigest>`, unless they already keep one
-whose benchmark completed no earlier; it stays kept whatever then happens to the stage or
-its promotion, since it is still a true measurement, and the 16 most recently kept are
-kept. Every stored check and approval names its principal, and a read of one naming
-anyone else, or filed under another key, refuses `code_invalid_configuration`.
+their principal and kept only for a person whose sign-in reaches the workspace root
+(Code asks `containers:read` there); nobody reads or writes another person's, and an
+agent, a service, or a token confined to one container or by an authority ceiling keeps
+none. `stageCatalog` with a `verification` also keeps the staged list as the checking
+person's check of its exact account pool and the budget it was derived under
+(`verification.budget`, required), at `checks/<person>/<budget>/<poolIdentityDigest>`,
+unless they already keep one whose benchmark completed no earlier, or another of their
+checks of it is kept first; it stays kept whatever then happens to the stage or its
+promotion, since it is still a true measurement, and the 16 most recently kept are kept.
+Every stored check and approval names its principal, and a read of one naming anyone
+else, or filed under another key, refuses `code_invalid_configuration`.
 `readChecks({})` answers `{ revision, approvedRequests, approvedAt, checks }`: each
 check's pool, budget, list digest, verification provenance, when it was kept, and every
-model it ladders as `provider/id`. `approveChecks({ expectedRevision, requests })`
-records, at the approval's exact revision, the largest charge in benchmark requests the
-person approved checks to spend without asking; `requests: 0` withdraws it, a moved
-revision refuses `code_stale_preferences` and a caller that keeps none
-`code_person_required`. Both ask no container capability and are container-graded, so a
-token confined to one container reaches them and reads that it keeps none.
-`adoptCheck({ containerId, expectedRevision, accounts, poolIdentityDigest, budget,
-selection })` puts the caller's check of the workspace's present pool and that budget in
-use: Code recomputes the pool from the observation and the saved choices and refuses
-`code_accounts_changed` unless it is the one named, refuses `code_check_missing` when the
-caller keeps no such check, and `code_check_current` when the workspace already holds a
-list of that pool whose benchmark completed no earlier. It saves `selection` (else the
-saved one) narrowed to the check's list, and leaves a staged list as it is.
+model it ladders as `provider/id`; a caller that keeps none reads none.
+`approveChecks({ expectedRevision, requests })` records, at the approval's exact
+revision, the largest charge in benchmark requests the person approved checks to spend
+without asking; `requests: 0` withdraws it, a moved revision refuses
+`code_stale_preferences`, a caller that is not a person `code_person_required` and a
+confined sign-in `code_checks_confined`. Both ask no container capability and are
+container-graded, so a token confined to one container reaches them and is answered as
+keeping none. `adoptCheck({ containerId, expectedRevision, accounts, poolIdentityDigest,
+budget, selection })` puts the caller's check of the workspace's present pool and that
+budget in use: Code recomputes the pool from the observation and the saved choices and
+refuses `code_accounts_changed` unless it is the one named, refuses `code_check_missing`
+when the caller keeps no such check, `code_invalid_provenance` when the kept list names a
+provider the pool does not include, and `code_check_current` when the workspace already
+holds a list of that pool whose benchmark completed no earlier. It saves `selection`
+(else the saved one) narrowed to the check's list, and leaves a staged list as it is.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
@@ -185,8 +189,9 @@ benchmark requests per provider, and the caller's standing approval as read whil
 preparing, having probed and spent nothing. An `adoptOnly` run instead ends with
 `{ kind: "none" }`, having started and written nothing, and never initializes an absent
 workspace. A `beforeWrite` option is awaited before the run first adopts or stages, so a
-caller can hold those writes. A
-catalog routes only its
+caller can hold those writes, and a confirmation passed `unasked: true` (nobody pressed
+for it) reads the standing approval again before its first benchmark request and stops
+with `code_approval_withdrawn` unless it still covers the charge. A catalog routes only its
 rungs, so the charge probes every eligible model of a family Code requires (OpenAI,
 Anthropic), whose ladder must survive a model that does not answer, and only the
 rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provider);
@@ -590,8 +595,10 @@ the line beside a launch the list in use can serve, and a stop is said in Models
 After any check stops, is cancelled or ends unspent, nothing starts on its own again
 while the panel stays open until a check the person starts completes. An edit of the
 rows cancels one that has not started writing; while it writes the model list the gate
-holds edits as a step in progress. **ask first** in Setup withdraws the approval and stops
-a check already spending under it that the person did not approve with a press.
+holds edits as a step in progress. **ask first** in Setup withdraws the approval: a check
+the person did not approve with a press then spends nothing more, asking instead (or, in
+the background, ending unspent) if it is still listing models, and stopping if it is
+measuring them; one already past measuring keeps what it paid for.
 
 Once the saved team on a list that serves a launch meets every launch precondition and
 its review inputs (options, accounts, revisions, destination) have held still briefly,

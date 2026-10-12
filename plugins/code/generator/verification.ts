@@ -124,6 +124,14 @@ export type VerificationMode = "launch" | "manual" | "background";
 export function spendsWithoutAsking(mode: VerificationMode, renews: boolean, approvedRequests: number, requests: number): boolean {
   return approvalCovers(approvedRequests, requests) && (mode !== "background" || renews);
 }
+/**
+ * Whether a check may only adopt the person's kept check, starting no inventory: a background run
+ * that may not spend, because the list never passed a check or nothing is approved, would list
+ * models for a charge it can never spend.
+ */
+export function adoptsOnly(mode: VerificationMode, renews: boolean, approvedRequests: number): boolean {
+  return mode === "background" && !(renews && approvedRequests > 0);
+}
 /** What decides whether the panel starts a check on its own (`backgroundCheckDue`). */
 export type BackgroundFacts = {
   /** The list in use's standing, set aside any check in flight. */

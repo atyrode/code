@@ -7,8 +7,8 @@ import { editedDraft } from "../code/generator/draft-store.ts";
 import { autoReviewDue, draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
   type CatalogWrite, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
-import { backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState, type BackgroundFacts,
-  type VerificationStatus } from "../code/generator/verification.ts";
+import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState,
+  type BackgroundFacts, type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
 const provenance: VerificationProvenance = { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: catalog,
@@ -314,6 +314,13 @@ describe("checks the panel runs or spends on its own", () => {
     expect(spendsWithoutAsking("background", true, 19, 19)).toBe(true);
     // A first check that spends is always the person's own press, however much they approved.
     expect(spendsWithoutAsking("background", false, 19, 1)).toBe(false);
+  });
+
+  test("a background check that may not spend starts no inventory: it only adopts", () => {
+    expect(adoptsOnly("background", true, 19)).toBe(false);
+    expect([adoptsOnly("background", false, 19), adoptsOnly("background", true, 0)]).toEqual([true, true]);
+    // The person's own press always lists models, to show them the charge.
+    expect([adoptsOnly("launch", false, 0), adoptsOnly("manual", false, 0)]).toEqual([false, false]);
   });
 
   test("a background check starts only to renew a list that no longer holds, and only when it can adopt or may spend", () => {

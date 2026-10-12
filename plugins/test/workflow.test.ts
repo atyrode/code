@@ -56,15 +56,17 @@ function verificationFixture() {
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
   const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
-  // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them.
+  // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them. `ceiling` is a
+  // credential confined by an authority ceiling: still unscoped, but refused at the workspace root.
   const caller = { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" } as CodeContext["auth"]["principal"],
-    containerScope: null as string | null };
+    containerScope: null as string | null, ceiling: false };
   const ctx: CodeContext = {
     now: () => 10_000, emit() {}, outsideScope: async () => null,
     auth: { get principal() { return caller.principal; },
       caps: ["containers:read", "containers:write"], get containerScope() { return caller.containerScope; }, isRoot: false,
-      allows: async (cap, node) => node?.kind === "container" && (node.containerId === target.containerId || node.containerId === second.containerId) &&
-        (cap === "containers:read" || cap === "containers:write") },
+      allows: async (cap, node) => (cap === "containers:read" || cap === "containers:write") && (node === undefined
+        ? caller.containerScope === null && !caller.ceiling
+        : node.kind === "container" && (node.containerId === target.containerId || node.containerId === second.containerId)) },
     storage: { pluginId: "atyrode.code", get: async key => store.get(key) ?? null,
       set: unavailable, delete: async key => { store.delete(key); }, keys: async prefix => [...store.keys()].filter(key => key.startsWith(prefix ?? "")).sort(),
       compareAndSet: async (key, expected, value) => {
@@ -545,10 +547,44 @@ test("stored checks and approvals are bound to their principal: a record naming 
     await expect(f.workflow.readChecks()).rejects.toThrow("code_invalid_configuration");
     f.store.set(key, original);
   }
-  // A token confined to one container reads none of them and approves nothing.
+  // A check filed under another pool's key is not that pool's check: read or adopted, it is refused as corruption.
+  const key = [...f.store.keys()].find(entry => entry.startsWith("checks/"))!, original = f.store.get(key)!;
+  const moved = key.replace(/[0-9a-f]{64}$/, "b".repeat(64));
+  f.store.delete(key); f.store.set(moved, original);
+  await expect(f.workflow.readChecks()).rejects.toThrow("code_invalid_configuration");
+  f.store.delete(moved); f.store.set(key, original);
+  // A token confined to one container, or by an authority ceiling, reads none of them and approves nothing.
   f.caller.containerScope = target.containerId;
   expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
-  await expect(f.workflow.approveChecks(0, 5)).rejects.toThrow("code_person_required");
+  await expect(f.workflow.approveChecks(0, 5)).rejects.toThrow("code_checks_confined");
+  f.caller.containerScope = null; f.caller.ceiling = true;
+  expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  await expect(f.workflow.approveChecks(1, 5)).rejects.toThrow("code_checks_confined");
+});
+
+test("a check derived under another budget is never adopted: the workspace checks for itself", async () => {
+  const f = verificationFixture();
+  await (await prepared(f, 0)).confirm(preview);
+  const from = f.calls.length;
+  // The fixture's models are all paid, so the free inventory's own draft refuses; what matters is that it ran instead of adopting.
+  await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "free", selection: null }).catch(() => null);
+  expect(f.calls.slice(from)).toContain(actionDoor("startInventory"));
+  expect(f.calls.slice(from)).not.toContain("atyrode.code.adoptCheck");
+});
+
+test("a charge spent without asking is spent only while the approval, read again, still covers it", async () => {
+  const f = verificationFixture();
+  await f.workflow.approveChecks(0, 5);
+  const pending = await prepared(f, 0);
+  // Withdrawn after the charge was answered: nothing is benchmarked.
+  await f.workflow.approveChecks(1, 0);
+  const stopped = await stopOf(pending.confirm(preview, { unasked: true }));
+  expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_approval_withdrawn"]);
+  expect(f.benchmarked).toEqual([]);
+  // Still covered, it spends.
+  await f.workflow.approveChecks(2, 5);
+  const again = await prepared(f, (await f.configuration()).revision);
+  expect((await again.confirm(preview, { unasked: true })).configuration.active?.provenance).not.toBeNull();
 });
 
 function sessionFixture() {

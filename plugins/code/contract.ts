@@ -82,7 +82,7 @@ export const CatalogVerificationSchema = z.strictObject({
   accounts: AccountsObservationSchema,
   poolIdentityDigest: digest,
   // The budget the list was derived under, which the person's kept check of the pool is filed by.
-  budget: SelectionSchema.shape.budget.default("any"),
+  budget: SelectionSchema.shape.budget,
 });
 /** How many pools a person's checks are kept for: the most recently recorded ones. A pool not kept is checked again when next used. */
 export const MAX_CHECKS = 16;

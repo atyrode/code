@@ -9,7 +9,7 @@ import { VerificationError, WorkflowError, inventoryArtifact, type ChargeReview,
   type VerificationProgress, type VerificationStep, type VerifiedModels } from "../workflow.ts";
 import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow, useOmpQuery, useWorkflowQuery } from "../machine-web.ts";
 import { operationReady } from "../permission-plan.ts";
-import { backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState, type ConfirmActivation,
+import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState, type ConfirmActivation,
   type VerificationMode, type VerificationState, type VerificationStatus } from "./verification.ts";
 
 export type ModelVerificationInput = {
@@ -100,12 +100,12 @@ type Run = { phase: VerificationPhase; progress: VerificationProgress | null; ch
 /**
  * The run in flight: who started it, how to stop it, whether it still holds, when its press started
  * it, its charge while unapproved, the revision it started from, whether the workspace had no choices
- * then, the revision its answered charge was made at, and whether the person approved its charge
- * with their own press.
+ * then, the revision its answered charge was made at, whether the person approved its charge with
+ * their own press, and whether they withdrew the standing approval while it ran.
  */
 type Session = {
   mode: VerificationMode; controller: AbortController; isCurrent: () => boolean; preparedAt: number; pending: ChargedVerification | null;
-  from: number; absent: boolean; charged: number | null; approvedByPress: boolean;
+  from: number; absent: boolean; charged: number | null; approvedByPress: boolean; withdrawn: boolean;
   /** The list in use passed a check when the run started: only such a list may a background run spend to renew. */
   renews: boolean;
 };
@@ -217,12 +217,13 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   const progressTo = (session: Session) => (progress: VerificationProgress) => {
     if (owns(session)) setRun(previous => previous && { ...previous, progress });
   };
-  async function spend(session: Session, pending: ChargedVerification) {
+  /** Spends the charge: approved by the person's press, or unasked, which the workflow spends only within the approval as read again. */
+  async function spend(session: Session, pending: ChargedVerification, unasked: boolean) {
     session.pending = null;
     setRun(previous => previous && { ...previous, phase: "benchmark", charge: pending.charge });
     try {
-      finished(session, await pending.confirm(selectionFor(session.mode),
-        { signal: session.controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session), beforeWrite: holdFor(session) }), false);
+      finished(session, await pending.confirm(selectionFor(session.mode), { signal: session.controller.signal, isCurrent: session.isCurrent,
+        onProgress: progressTo(session), beforeWrite: holdFor(session), unasked }), false);
     } catch (reason) { stopped(session, reason); }
   }
   /**
@@ -242,7 +243,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     if (!canPrepare || !target) return;
     const started = { host, target }, controller = new AbortController();
     const session: Session = { mode, controller, pending: null, preparedAt: Date.now(), from: revision, absent: record === null, charged: null,
-      approvedByPress: false, renews: provenance !== null, isCurrent: () => {
+      approvedByPress: false, withdrawn: false, renews: provenance !== null, isCurrent: () => {
         const now = latest.current;
         return mounted.current && !controller.signal.aborted && now.host.client === started.host.client &&
           now.host.principal.id === started.host.principal.id && now.host.containerId === started.host.containerId &&
@@ -254,25 +255,20 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     if (mode !== "background") setExclusions(null);
     setRun({ phase: "inventory", progress: null, charge: null, mode });
     try {
-      // The client is ungated: a stop must still reach the native job owner to cancel the job. A background run for a list
-      // that never passed a check only adopts: it starts no inventory, and writes nothing, unless the person keeps a check.
+      // The client is ungated: a stop must still reach the native job owner to cancel the job. A background run that may not
+      // spend only adopts: it starts no inventory, and writes nothing, unless the person keeps a check.
       const selection = selectionFor(mode);
       const pending = await codeWorkflow(host).verifyModels(target, { expectedRevision: revision, budget: selection?.budget ?? "any", selection,
-        adoptOnly: mode === "background" && !session.renews },
+        adoptOnly: adoptsOnly(mode, session.renews, approvedRequests ?? 0) },
         { signal: controller.signal, isCurrent: session.isCurrent, onProgress: progressTo(session), beforeWrite: holdFor(session) });
       if (!owns(session)) return;
       if (pending.kind === "none") { unspent(session); return; }
       if (pending.kind === "adopted") { finished(session, pending.verified, true); return; }
       session.charged = pending.charge.revision;
-      if (spendsWithoutAsking(mode, session.renews, pending.approvedRequests, pending.charge.requests)) {
-        // The approval is read again just before spending, so one withdrawn while the inventory ran is honoured.
-        const fresh = await codeWorkflow(host).readChecks().catch(() => null);
-        if (!owns(session)) return;
-        if (controller.signal.aborted) {
-          stopped(session, new VerificationError("draft", "code_verification_cancelled", { inventoryJobId: pending.charge.inventoryJobId, benchmarkJobIds: [], revision: null }));
-          return;
-        }
-        if (fresh !== null && spendsWithoutAsking(mode, session.renews, fresh.approvedRequests, pending.charge.requests)) { await spend(session, pending); return; }
+      // An approval withdrawn while the inventory ran is honoured here, and one withdrawn after by the workflow's own read.
+      if (!session.withdrawn && spendsWithoutAsking(mode, session.renews, pending.approvedRequests, pending.charge.requests)) {
+        await spend(session, pending, true);
+        return;
       }
       // A background run never asks: any charge it may not spend ends it here, with nothing spent.
       if (mode === "background") { unspent(session); return; }
@@ -296,14 +292,14 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
       !confirmsCharge(activation, shown, { charge: pending.charge, preparedAt: session.preparedAt }, Date.now())) return;
     session.pending = null; session.approvedByPress = true;
     setRun(previous => previous && { ...previous, phase: "benchmark" });
-    // The press approves this charge whatever happens to the standing approval: one that cannot be recorded (a caller
-    // confined to one container keeps none) only means the next check asks again.
+    // The press approves this charge whatever happens to the standing approval: one that cannot be recorded (a sign-in that
+    // keeps no checks) only means the next check asks again.
     try {
       const workflow = codeWorkflow(host), now = await workflow.readChecks();
       await workflow.approveChecks(now.revision, Math.max(now.approvedRequests, pending.charge.requests));
       kept.refresh();
     } catch { /* The next check asks again; this one was approved by the press. */ }
-    await spend(session, pending);
+    await spend(session, pending, false);
   }
   function cancel() {
     const session = active.current;
@@ -320,12 +316,16 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     }
   }
   /**
-   * Withdraws the standing approval, and stops a check already spending under it that the person did
-   * not approve with a press; one still listing models reads the approval again before it spends.
+   * Withdraws the standing approval. A check the person did not approve with a press then spends
+   * nothing more: one still listing models asks instead (or, in the background, ends unspent), and
+   * one measuring under the approval is stopped. A check already past measuring keeps what it paid for.
    */
   async function withdraw() {
     const session = active.current;
-    if (session && !session.approvedByPress && session.charged !== null && session.pending === null) cancel();
+    if (session && !session.approvedByPress) {
+      session.withdrawn = true;
+      if (session.charged !== null && session.pending === null && run?.phase === "benchmark" && run.progress?.step === "benchmark") cancel();
+    }
     const workflow = codeWorkflow(host), now = await workflow.readChecks();
     await workflow.approveChecks(now.revision, 0);
     kept.refresh();

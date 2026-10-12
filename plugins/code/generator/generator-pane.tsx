@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSP
 import type { MachineSummary } from "@manifold/protocol";
 import type { OmpPresence } from "../machine-web.ts";
 import { prefersReducedMotion } from "@manifold/ui";
+import type { CompiledCatalog } from "../../domain/catalog.ts";
 import type { Selection } from "../../domain/contracts.ts";
 import type { QuotaPool } from "../../domain/quota.ts";
 import { defaultSelection, type Review } from "../../domain/routing.ts";
@@ -121,7 +122,9 @@ type Said = {
 };
 type Hovered = { readonly kind: "word"; readonly row: RowId; readonly key: string } | { readonly kind: "launch" } | { readonly kind: "meter"; readonly name: "cost" | "speed" }
   | { readonly kind: "machine"; readonly value: string };
-type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly refused: RowWord | null };
+// A scrub's origin is a review of the catalog in use when the scrub started (`catalog`): a change sentence compares it only with
+// a review of that same catalog, since another list (a model check put one in use meanwhile) need not hold the origin's models.
+type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly catalog: CompiledCatalog | null; readonly refused: RowWord | null };
 
 /**
  * GENERATOR: one row of plain option words per dial and extra, a readout line that says
@@ -256,7 +259,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (!row) return null;
     if (scrub.refused) return wordSaid(row, scrub.refused);
     const now = chosenSaid(row);
-    if (!now || !catalog || !controlsReview || !scrub.origin || sameTeam(scrub.origin.selection, controlsReview.selection)) return now;
+    if (!now || !catalog || !controlsReview || !scrub.origin || scrub.catalog !== catalog || sameTeam(scrub.origin.selection, controlsReview.selection)) return now;
     const lead = row.words.find(word => word.selected)?.sub;
     return { ...now, text: [lead, changeSentence(catalog, scrub.origin, controlsReview, familyWord)].filter(Boolean).join(" · "), warn: false };
   }
@@ -529,7 +532,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
         onFocusChange={on => { setFocused(current => on ? row.id : current === row.id ? null : current); if (on) setCursor(row.id); }}
         onScrub={phase => {
           window.clearTimeout(scrubTimer.current);
-          if (phase === "start") setScrub({ row: row.id, origin: controlsReview, refused: null });
+          if (phase === "start") setScrub({ row: row.id, origin: controlsReview, catalog, refused: null });
           else scrubTimer.current = window.setTimeout(() => setScrub(null), SCRUB_SAID_MS);
         }}
         onMove={delta => { const next = rows[index + delta]; if (next) focusRow(next.id); }} />)

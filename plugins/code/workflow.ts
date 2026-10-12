@@ -48,6 +48,8 @@ const messages: Readonly<Record<string, string>> = {
   code_check_missing: "No model check of these accounts is kept yet.",
   code_check_current: "This workspace's model list is already as recent as your check.",
   code_person_required: "Only a person can approve what model checks spend.",
+  code_checks_confined: "This sign-in reaches only part of Manifold, so it keeps no model checks and approves none.",
+  code_approval_withdrawn: "Model checks now ask before spending, so this one spent nothing. Launch again to approve it.",
   code_operation_unavailable: "The Code action could not be completed.",
   code_scope_refused: "Your current authority does not cover this container.",
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
@@ -161,9 +163,10 @@ export class VerificationError extends WorkflowError {
 /** `signal` cancels, `isCurrent` revokes; either stops the run before its next effect and
  * cancels the probe job it is waiting on. `onProgress` hears every step and per-provider count.
  * `beforeWrite` is awaited before the run first writes the model list (adopting or staging), so a
- * caller can hold those writes while something else of its own is in flight. */
+ * caller can hold those writes while something else of its own is in flight. `unasked` marks a
+ * confirmation nobody pressed for: it spends only within the standing approval as read again. */
 export type VerificationOptions = { isCurrent?: () => boolean; signal?: AbortSignal; onProgress?: (progress: VerificationProgress) => void;
-  beforeWrite?: () => Promise<void> };
+  beforeWrite?: () => Promise<void>; unasked?: boolean };
 /**
  * What confirming a verification will spend, shown before anything is: one tiny benchmark
  * request per candidate, per provider, through the exact pool and OMP defaults the inventory
@@ -624,14 +627,21 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       confirm: (selection, confirmOptions = options) => {
         if (confirmed) return Promise.reject(new WorkflowError("code_verification_confirmed"));
         confirmed = true;
-        return confirmVerification(charge, inUse, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }));
+        return confirmVerification(charge, inUse, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }), confirmOptions.unasked === true);
       },
     };
   }
-  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, wanted: Selection | null, run: VerificationRun): Promise<VerifiedModels> {
+  /**
+   * A charge spent without asking (`unasked`) is spent only while the caller's standing approval,
+   * read again now, still covers it: an approval withdrawn since the charge was answered stops the
+   * run before its first benchmark request.
+   */
+  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, wanted: Selection | null, run: VerificationRun,
+    unasked: boolean): Promise<VerifiedModels> {
     const { target } = charge;
     run.enter("benchmark");
     await unchangedCharge(charge, run);
+    if (unasked && !approvalCovers((await run.call(() => code("readChecks", {}))).approvedRequests, charge.requests)) throw run.fail("code_approval_withdrawn");
     const progress: ProviderProgress[] = charge.providers.map(({ provider, requests }) => ({ provider, done: 0, total: requests }));
     run.progress(progress);
     const receipts: BenchmarkReceipt[] = [];
