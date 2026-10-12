@@ -218,9 +218,9 @@ files, service state, credentials or backups.
   reads as unverified and asks to be verified again, and a current one can be renewed on
   purpose. Unit tests prove the rule against a synthetic destination and catalog, and the
   disposable browser against the real bundled catalog: it moves a verified list's runtime
-  artifact, then republishes the catalog without the list's default lead. Applied to the
-  preview workspace's live reads (destination pins, catalog revision and account pool), the
-  rule gives current: only the runtime artifact moved. This source repin is not a release, preview
+  artifact, then serves a synthetic republish of that catalog without the list's default lead.
+  Applied to the preview workspace's live reads (destination pins, catalog revision and account
+  pool), the rule gives current: only the runtime artifact moved. This source repin is not a release, preview
   installation, native deployment review or provider observation.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.

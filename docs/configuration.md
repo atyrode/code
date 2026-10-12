@@ -172,7 +172,7 @@ inventory runs stops the verification before its charge is answered. A catalog s
 being verified when the saved choices select another pool, or when OMP's bundled catalog
 has moved to another revision that no longer publishes a model the profile routes to,
 leads and fallbacks; the launch line then says OMP no longer lists a model this profile
-uses, and Models names it. An OMP update alone leaves the verification current: the
+uses, and Models names it, or counts several. An OMP update alone leaves the verification current: the
 selected destination's inventory operation installed from another artifact
 (`describeDestination`'s pins), or another catalog revision that still publishes every
 routed model. What OMP publishes is read only once its catalog has moved, since the
