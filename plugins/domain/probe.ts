@@ -33,15 +33,17 @@ export type ScaffoldOptions = z.infer<typeof ScaffoldOptionsSchema>;
  * `superseded`: a newer version of its family is used instead. `unstable_id`: a rolling alias,
  * preview or experiment, never probed or laddered. `not_found` and `client_blocked`: the
  * benchmark's own verdicts; a blocked model is the operator's to fix, so it is named, as the old
- * scaffold's warnings named it. `regression`: as a rung it would think less than a cheaper rung
- * below it. `separate_quota`: it draws a quota of its own, which Code does not spend, named
- * by OMP's class for it (`quotaTier`), so a reader can tell Spark's retired class from another.
+ * scaffold's warnings named it. `inconclusive`: its probe got no answer the benchmark could read
+ * (OMP's `unresolved` or `unmatched`), so it is left out until a later verification settles it.
+ * `regression`: as a rung it would think less than a cheaper rung below it. `separate_quota`: it
+ * draws a quota of its own, which Code does not spend, named by OMP's class for it (`quotaTier`),
+ * so a reader can tell Spark's retired class from another.
  * A model that is merely not chosen (a third middle, a model priced above the top, a model whose
  * id names none of its provider's tier names) has no such reason and is not listed.
  */
 const excludedIdentity = { provider: ProbeIdentitySchema.shape.provider, id: ProbeIdentitySchema.shape.id };
 export const ExclusionSchema = z.discriminatedUnion("reason", [
-  z.strictObject({ ...excludedIdentity, reason: z.enum(["superseded", "unstable_id", "not_found", "client_blocked", "regression"]) }),
+  z.strictObject({ ...excludedIdentity, reason: z.enum(["superseded", "unstable_id", "not_found", "client_blocked", "inconclusive", "regression"]) }),
   z.strictObject({ ...excludedIdentity, reason: z.literal("separate_quota"), quotaTier: QuotaTierSchema }),
 ]);
 export type Exclusion = z.infer<typeof ExclusionSchema>;
@@ -411,7 +413,13 @@ export function inventoryDraft(inventoryValue: unknown, budget: Selection["budge
   return { schemaVersion: 1, kind: "draft", inventoryObservedAt: inventory.observedAt, benchmark: benchmarkInput(inventory, models),
     exclusions: [...unstableExclusions(inventory, options.budget), ...unprobed].sort((a, b) => compare(probeAddress(a), probeAddress(b))) };
 }
-/** Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions. */
+/**
+ * Every probed candidate (`probeSet`) must have an exact probe, before superseding older versions.
+ * Only a reachable model enters the catalog. One whose probe was inconclusive is left out and named,
+ * like a refused one, rather than refusing the whole catalog: a provider that could not be checked
+ * (a key without credit, a timeout, a wording OMP does not classify) must not discard every model
+ * measured beside it.
+ */
 export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { budget: "any" }): DerivedCatalog {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
   const options = parse(ScaffoldOptionsSchema, optionsValue, "invalid_input");
@@ -424,12 +432,12 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
   for (const candidate of candidates) {
     const fact = facts.get(probeAddress(candidate));
     if (!fact || fact.api !== candidate.api || fact.key !== candidate.key) throw new ProbeError("missing_probe");
-    if (fact.status === "unmatched" || fact.status === "unresolved") throw new ProbeError("inconclusive_probe");
   }
   const refused: Exclusion[] = [];
   for (const model of offered) {
     const status = facts.get(probeAddress(model))!.status;
     if (status === "not_found" || status === "client_blocked") refused.push(exclusion(model, status));
+    else if (status === "unresolved" || status === "unmatched") refused.push(exclusion(model, "inconclusive"));
   }
   return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"),
     [...unstableExclusions(inventory, options.budget), ...unprobed, ...refused], facts);

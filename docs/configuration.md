@@ -152,11 +152,14 @@ rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provid
 such a rung that does not answer leaves that family shorter. A family Code requires is
 laddered on whatever of it answers, short below three rungs, and one none of whose models
 answers is left out as a family with no account is; a selection that needs it is refused
-where it is reviewed. `deriveCatalog` returns the document and every other offered model
-with its reason; the document's compiled catalog names its short families. It refuses only a
-family Code requires whose ladder would put a model above one that costs no more and thinks deeper
-(`code_ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
-and nothing laddered at all (`code_probe_insufficient_ladder`). Only the returned `confirm`
+where it is reviewed. A model whose probe got no answer the benchmark could read (OMP's
+`unresolved` or `unmatched`) is left out as `inconclusive`, as one that does not answer is,
+rather than discarding every model measured beside it. `deriveCatalog` returns the document
+and every other offered model with its reason; the document's compiled catalog names its
+short families. It refuses only a family Code requires whose ladder would put a model above
+one that costs no more and thinks deeper (`code_ladder_regression`, naming both), a benchmark
+that does not answer the charge exactly, and nothing laddered at all
+(`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
@@ -780,8 +783,9 @@ verifying, a staged list's changes (field by field, a model added or dropped, th
 value struck), or, after a verification in this panel, the models it left out, each
 with its reason in a word: a model the accounts' plan, their settings or this client
 excludes (`client_blocked`) reads **not served**, one no account finds (`not_found`) **not
-reachable**, a model in OMP's `spark` quota class **retired** and any other class of its
-own **own quota**. Ids, prices, speeds, thinking ranges and reasons
+reachable**, one whose check got no clear answer (`inconclusive`) **no answer**, a model in
+OMP's `spark` quota class **retired** and any other class of its own **own quota**. Ids,
+prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
 or focused.
 One next action sits where the launch sits and follows the step: **verify models**,

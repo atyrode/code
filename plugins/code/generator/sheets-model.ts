@@ -93,6 +93,7 @@ const EXCLUSION_WORDS: Readonly<Record<Exclusion["reason"], readonly [string, st
   unstable_id: ["unstable id", "A rolling alias, preview or experiment, which Code never probes"],
   not_found: ["not reachable", "Not found through your accounts"],
   client_blocked: ["not served", "Not served to your accounts: their plan, their settings or this client excludes it"],
+  inconclusive: ["no answer", "Its check got no clear answer; verifying again checks it again"],
   regression: ["worse than cheaper", "Worse than a cheaper tier"],
   separate_quota: ["own quota", "Draws a quota of its own, which Code does not spend"],
 };

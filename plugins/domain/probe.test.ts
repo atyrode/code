@@ -61,7 +61,7 @@ function receiptOf(models: Row[]): InventoryReceipt {
   return { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 100, models };
 }
 /** A benchmark of every candidate: reachable, except the ids given another verdict. */
-function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {},
+function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {},
   options: ScaffoldOptions = { budget: "any" }) {
   const input = benchmarkCandidates(inv, options), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
   return { ...receipt, results: receipt.results.map(result => verdicts[result.id]
@@ -232,13 +232,22 @@ describe("pure typed scaffolding", () => {
     expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
     expect(compileCatalog(derived(inv).document).short).toEqual([]);
   });
-  test("missing, stale, wrong API and inconclusive probes refuse promotion", () => {
+  test("missing, stale and wrong-API probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
     expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.slice(1) })).toThrow("probe_missing_probe");
     expect(() => catalogFromObservations(inv, { ...receipt, inventoryObservedAt: 99 })).toThrow("probe_missing_probe");
     expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.map((result, i) => i ? result : { ...result, api: "other" }) })).toThrow("probe_missing_probe");
-    for (const status of ["unresolved", "unmatched"]) {
-      expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.map((result, i) => i ? result : { ...result, status, tokensPerSecond: null, timeToFirstTokenMs: null }) })).toThrow("probe_inconclusive_probe");
+  });
+  test("an inconclusive probe leaves only its own model out, named, as a refused one is", () => {
+    const inv = fullInventory();
+    inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
+    const refused = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": "client_blocked", "deepseek-v4": "not_found" }));
+    for (const status of ["unresolved", "unmatched"] as const) {
+      // One model of a provider that answered otherwise, and the whole of a provider that could not be checked at all.
+      const derived = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": status, "deepseek-v4": status }));
+      expect(derived.document).toEqual(refused.document);
+      expect(derived.exclusions).toEqual(refused.exclusions.map(exclusion =>
+        exclusion.id === "gpt-pro-6" || exclusion.id === "deepseek-v4" ? { ...exclusion, reason: "inconclusive" } : exclusion));
     }
   });
   test("every old version is probed before supersession, blocked newest cannot displace callable older", () => {
