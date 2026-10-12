@@ -11,6 +11,8 @@ import { displayAliases } from "./aliases.ts";
 import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
+import { listServes } from "./launch-step.ts";
+import type { VerificationFailure } from "./model-verification.ts";
 import { DialRow, Glyph, toneColor } from "./dial-row.tsx";
 import { MachinePicker, type MachinePickerHandle } from "./machine-picker.tsx";
 import { strandsNote } from "./earlier-model.ts";
@@ -20,7 +22,7 @@ import { Profile, rippleTeam } from "./routing-pane.tsx";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
   changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
-  machineSlot, reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView,
+  machineSlot, reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView, WORD_NAMES,
   type EstimateReadout, type Projection, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
@@ -37,11 +39,11 @@ const ENTER = "M13.25 2.75v5.5a1 1 0 0 1-1 1H3.5M6.75 6 3.5 9.25l3.25 3.25";
 const DOLLAR = "M10.6 4.6c-.55-.85-1.45-1.3-2.6-1.3-1.5 0-2.55.8-2.55 1.95 0 2.85 5.6 1.6 5.6 4.65 0 1.25-1.15 2.1-2.85 2.1-1.2 0-2.2-.5-2.8-1.4M8 1.75v12.5";
 const CHEVRONS = "M5 5.25 7.5 8 5 10.75M8.75 5.25 11.25 8l-2.5 2.75";
 const CHECK = "M3 8.5 6.5 12 13 4.5";
-/** Where a verification stopped, in the panel's words rather than the workflow's step names. */
+/** Where a model check stopped, in the panel's words rather than the workflow's step names. */
 const STEP_WORDS: Readonly<Record<VerificationStep, string>> = {
-  observe: "reading the accounts", initialize: "setting up the workspace", inventory: "checking models", draft: "preparing the charge",
-  benchmark: "measuring models", derive: "building the model list", stage: "saving the model list", review: "reviewing the model list",
-  promote: "putting the model list in use", select: "saving the profile",
+  observe: "reading the accounts", initialize: "setting up the workspace", adopt: "using your earlier check", inventory: "listing models",
+  draft: "preparing the charge", benchmark: "measuring models", derive: "building the model list", stage: "saving the model list",
+  review: "reviewing the model list", promote: "putting the model list in use", select: "saving the profile",
 };
 /** What the cost meter is, said in the readout while it is pointed. */
 const COST_NOTE = "a relative list-price index; subscriptions spend quota windows, which usage shows";
@@ -139,9 +141,13 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const [keySaid, setKeySaid] = useState<Said | null>(null);
   const [scrub, setScrub] = useState<Scrub | null>(null);
   const [launching, setLaunching] = useState(false);
-  // A Save & launch press that stopped at its review: the review, and what it shows unlike the projection.
-  const [stopped, setStopped] = useState<{ readonly review: object; readonly differs: readonly string[] } | null>(null);
-  const chain = useRef<{ readonly projection: Projection; readonly review: Review } | null>(null);
+  // A Save & launch press that stopped at its review: the review, and what it shows unlike the projection. A Launch press
+  // whose check narrowed the profile stops the same way, naming the settings the check moved.
+  const [stopped, setStopped] = useState<{ readonly review: object; readonly differs: readonly string[]; readonly by: "review" | "check" } | null>(null);
+  // The press in progress: a Save & launch on its projection, or a Launch that checks the models first, on the profile it was
+  // pressed on and the last check failure before the press.
+  const chain = useRef<{ readonly kind: "save"; readonly projection: Projection; readonly review: Review }
+    | { readonly kind: "check"; readonly wanted: Selection | null; readonly failure: VerificationFailure | null } | null>(null);
   const keyTimer = useRef(0), scrubTimer = useRef(0);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
@@ -176,7 +182,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
 
   const verb = verbView({
     step: model.step, verdict: model.verb, busy: model.busy, inFlight: model.inFlight, chaining: model.chaining, unsaved: model.unsaved,
-    draft: model.localDraft !== null, phase: verification.phase, verification: verification.status,
+    draft: model.localDraft !== null, edited: model.edited, phase: verification.phase, mode: verification.mode,
+    serves: listServes({ verification, unservedLead: model.unservedLead }),
     // Launch anyway is for roles whose pools are out; a lead no account serves is the door's refusal, never "anyway".
     stranded: quota?.stop?.waits.some(pool => pool.verdict.kind === "blocked" || pool.verdict.kind === "maxed") ?? false,
     grounded: quota?.grounded ?? false, placeable: model.placeable, launching,
@@ -192,17 +199,19 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const other = others.find(entry => presence?.get(entry.id) === "ok") ?? (presence ? null : others[0] ?? null);
   const charge = verification.phase === "charge" ? verification.charge : null;
   const progress = verification.progress?.providers.reduce((sum, entry) => ({ done: sum.done + entry.done, total: sum.total + entry.total }), { done: 0, total: 0 }) ?? null;
-  // A verification that stopped says so until the next one starts; the verb, Verify models again, is its retry.
-  const stoppedVerifying = verification.failure && verification.phase === null ? {
-    text: verification.failure.cancelled ? "Verification cancelled" : `Verification stopped while ${STEP_WORDS[verification.failure.step]}: ${verification.failure.reason}`,
+  // A check that stopped says so until the next one starts; the verb, Launch again, is its retry. One the panel ran on its own
+  // stopped beside a launch it never held up, so it is said in Models only.
+  const stoppedVerifying = verification.failure && verification.failure.mode !== "background" && verification.phase === null ? {
+    text: verification.failure.cancelled ? "Model check cancelled" : `Model check stopped while ${STEP_WORDS[verification.failure.step]}: ${verification.failure.reason}`,
     failed: !verification.failure.cancelled,
   } : null;
+  const shownStop = stopped !== null && stopped.review === model.launchReview ? stopped : null;
   const line = launchLine({
-    verb, phase: verification.phase, progress, charge, inFlight: model.inFlight, busy: model.busy, chaining: model.chaining, launching,
+    verb, phase: verification.phase, mode: verification.mode, progress, charge, inFlight: model.inFlight, busy: model.busy, chaining: model.chaining, launching,
     machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, machineChosen: model.machineId !== "",
     rosterUnread: rosterError, otherMachine: other && { id: other.id, name: other.name },
     message: model.message ?? stoppedVerifying, outcome: model.outcome, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
-    differs: stopped !== null && stopped.review === model.launchReview ? stopped.differs : null,
+    differs: shownStop?.by === "review" ? shownStop.differs : null, narrowed: shownStop?.by === "check" ? shownStop.differs : null,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, listFailure,
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
@@ -228,7 +237,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   function wordSaid(row: GeneratorRow, word: RowWord): Said {
     const value = row.kind === "switch" ? `${row.label} ${word.text}` : word.text;
     const lead = word.sub !== null ? [word.sub] : [];
-    if (!word.available) return { value, text: [...lead, word.reason ?? "", word.verifies ? "a press verifies models, which finds them" : ""].filter(Boolean).join(" · "), warn: true, color: null };
+    if (!word.available) return { value, text: [...lead, word.reason ?? "", word.verifies ? "a press checks the models, which finds them" : ""].filter(Boolean).join(" · "), warn: true, color: null };
     const strain = quotaParts(word.quota, vocab);
     return {
       value, text: [...lead, word.says, ...strain.map(entry => entry.text)].filter(Boolean).join(" · "),
@@ -261,7 +270,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       const readout = estimates?.[hovered.name];
       if (!readout) return null;
       return { value: hovered.name, text: hovered.name === "cost" ? `${readout.word} · ${COST_NOTE}`
-        : readout.level === null ? "unmeasured · verifying models measures it" : `${readout.word} · from measured throughput and first-token time`, warn: false, color: null };
+        : readout.level === null ? "unmeasured · a model check measures it" : `${readout.word} · from measured throughput and first-token time`, warn: false, color: null };
     }
     const row = rowOf(hovered.row), word = row?.words.find(entry => entry.key === hovered.key) ?? (row?.only?.word.key === hovered.key ? row.only.word : undefined);
     return row && word ? wordSaid(row, word) : null;
@@ -298,12 +307,13 @@ export function GeneratorPane(props: GeneratorPaneProps) {
       return;
     }
     if (via === "scrub") { setScrub(current => current && { ...current, refused: word }); return; }
-    // A lane whose family the model list lacks is one verification away: a press starts it, through its own gate (it spends nothing before Confirm charge).
+    // A lane whose family the model list lacks is one check away: a press starts it, through its own gate (it spends nothing
+    // before Approve, unless the person approved checks).
     const verify = model.gate("verify");
     if (word.verifies && verify.open) {
       model.actions.verify();
-      say({ value: "verify models", text: `finds the models your accounts reach · ${word.reason ?? ""}`, warn: false, color: null });
-      announce(`Verifying models: ${word.reason ?? ""}`);
+      say({ value: "check models", text: `finds the models your accounts reach · ${word.reason ?? ""}`, warn: false, color: null });
+      announce(`Checking models: ${word.reason ?? ""}`);
       return;
     }
     // A press holds the scrub's readout while the pointer is down and a moment after: it says why, as a scrub onto the word does.
@@ -367,10 +377,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     }
   }
 
-  // ------------------------------------------------------------ the launch: Save & launch as one gesture
+  // ------------------------------------------------------------ the launch: Save & launch, and a Launch that checks first, as one gesture
   function act() {
     setStopped(null);
-    if (verb.launches && shown) { chain.current = { projection: projectionOf(shown, served), review: shown }; setLaunching(true); }
+    if (verb.checks) { chain.current = { kind: "check", wanted: selection, failure: verification.failure }; setLaunching(true); }
+    else if (verb.launches && shown) { chain.current = { kind: "save", projection: projectionOf(shown, served), review: shown }; setLaunching(true); }
     model.actions.next();
   }
   /** The press: a refused one shakes and says why; one that runs plays its charge and check, and the team lights up. */
@@ -400,19 +411,37 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     button.dataset.pressing = "";
     window.setTimeout(() => { delete button.dataset.pressing; fire(); }, 160);
   }
-  // A Save & launch press goes on from its review to the launch only when the review shows what was
-  // projected; `next` asks the gate again before launching. A chain that ends anywhere else stops,
-  // and a review that differs is said as what differs, for the person to choose.
+  // A Launch that checks first goes on once its check is done: it reviews the saved team, then launches it, unless the check
+  // narrowed the profile to what answered, which is said for the person to choose. A check that stopped ends the press.
+  // A Save & launch press goes on from its review to the launch only when the review shows what was projected. `next` asks
+  // the gate again before each step. A chain that ends anywhere else stops, and a review that differs is said as what
+  // differs, for the person to choose.
   useLayoutEffect(() => {
-    const projected = chain.current;
-    if (!projected || model.busy || model.chaining) return;
-    chain.current = null;
-    setLaunching(false);
+    const pressed = chain.current;
+    if (!pressed) return;
+    const end = () => { chain.current = null; setLaunching(false); };
+    if (pressed.kind === "check") {
+      if (verification.phase !== null) return;
+      if (verification.failure !== null && verification.failure !== pressed.failure) { end(); return; }
+      if (model.busy || model.chaining || !model.configurationCurrent) return;
+      if (model.step.step === "review") { if (model.verb.open) model.actions.next(); else end(); return; }
+      end();
+      const review = model.launchReview;
+      if (model.step.step !== "launch" || !review) return;
+      const moved = pressed.wanted && model.record?.selection ? teamEdits(pressed.wanted, model.record.selection, familyWord) : [];
+      if (moved.length === 0) { model.actions.next(); return; }
+      const differs = moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`);
+      setStopped({ review, differs, by: "check" });
+      announce(`The model check changed the profile: ${differs.join(", ")}. Launch to go on with it, or change a setting first.`);
+      return;
+    }
+    if (model.busy || model.chaining) return;
+    end();
     const review = model.launchReview;
     if (model.step.step !== "launch" || !review || !catalog) return;
-    if (reviewMatches(projected.projection, review.composition)) { model.actions.next(); return; }
-    const differs = reviewDifferences(catalog, projected.review, projected.projection.providers, review.composition, vocab);
-    setStopped({ review, differs });
+    if (reviewMatches(pressed.projection, review.composition)) { model.actions.next(); return; }
+    const differs = reviewDifferences(catalog, pressed.review, pressed.projection.providers, review.composition, vocab);
+    setStopped({ review, differs, by: "review" });
     announce(`The review differs: ${differs.join("; ")}. Launch to use the reviewed pool, or change a setting first.`);
   });
 
@@ -469,7 +498,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     else if (model.message?.failed && model.message !== last.message) announce(model.message.text);
     else if (stoppedVerifying && verification.failure !== last.failure) announce(stoppedVerifying.text);
     if (charge && charge !== last.charge) {
-      announce(charge.requests > 0 ? `Verifying spends ${charge.requests} tiny requests. Confirm charge is the next control.` : "Nothing to verify through these accounts.");
+      announce(charge.requests > 0 ? `Checking models spends ${charge.requests} tiny requests. Approve is the next control.` : "Nothing to check through these accounts.");
     }
     seen.current = { outcome: model.outcome, message: model.message, charge, failure: verification.failure };
   }, [model.outcome, model.message, charge, verification.failure]);
@@ -561,9 +590,9 @@ function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string;
 }
 
 /**
- * The line beside the launch and its machine: Confirm charge first when it carries it, then its
- * facts, then its fixes and cancel as cues; a fix that opens a place answers to that place's key too.
- * Its asides are the readout's, said while the launch is pointed. Confirm charge is the next Tab stop
+ * The line beside the launch and its machine: Approve first when it carries a check's charge, then
+ * its facts, then its fixes and cancel as cues; a fix that opens a place answers to that place's key
+ * too. Its asides are the readout's, said while the launch is pointed. Approve is the next Tab stop
  * after the launch: while a charge waits the machine cannot change, and its word leaves the Tab order.
  */
 function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
@@ -572,9 +601,9 @@ function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
   const parts = line.parts.filter(entry => entry.tone !== "meta");
   const confirm = line.actions.find(action => action.kind === "confirm");
   return <>
-    {confirm && <button type="button" className={`${G}confirm`} aria-label={`Confirm charge: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}`}
+    {confirm && <button type="button" className={`${G}confirm`} aria-label={`Approve: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}, and later checks within it`}
       aria-disabled={!canConfirm || undefined} onClick={event => onConfirm(event.detail)}
-      onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>confirm charge</button>}
+      onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>approve</button>}
     {parts.length > 0 && <span className={`${G}launch-facts`}>
       {parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
     </span>}

@@ -83,8 +83,10 @@ function fixture(isRoot = false): Fixture {
         await hook?.();
         return value;
       },
-      set: unavailable, delete: unavailable, keys: unavailable,
+      set: unavailable, delete: async key => { store.delete(key); }, keys: async prefix => [...store.keys()].filter(key => key.startsWith(prefix ?? "")).sort(),
       compareAndSet: async (key, expected, value) => {
+        // Plugin storage refuses a key outside this shape (plugin-kit `STORAGE_KEY_PATTERN`), so a write here does too.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(key)) throw new Error(`invalid storage key: ${key}`);
         if ((store.get(key) ?? null) !== expected) return false;
         store.set(key, value);
         return true;

@@ -36,11 +36,11 @@ describe("whether a recorded verification still holds", () => {
     expect(republished).toMatchObject({ status: "current", changes: { runtimeChanged: false, catalogChanged: true } });
   });
 
-  test("a moved catalog that dropped a routed model asks to verify again, and the recorded one never reads as dropping any", () => {
+  test("a moved catalog that dropped a routed model asks for a check before the launch, and the recorded one never reads as dropping any", () => {
     const dropped = verificationState(provenance, { ...present, catalogRevision: moved, unpublished: ["openai-codex/terra"], pool: same }, false);
     expect(dropped).toMatchObject({ status: "unpublished", changes: { catalogChanged: true, unpublished: ["openai-codex/terra"] } });
     expect(nextLaunchStep(facts({}, dropped.status)).step).toBe("verify");
-    expect(launchStatusText(facts({}, dropped.status))).toBe("OMP no longer lists a model this profile uses. Verify again.");
+    expect(launchStatusText(facts({}, dropped.status))).toBe("OMP no longer lists a model this profile uses; Launch checks the models again first.");
     // The revision the verification recorded publishes every model it laddered, so a list read against it claims nothing.
     expect(verificationState(provenance, { ...present, unpublished: ["openai-codex/terra"], pool: same }, false).status).toBe("current");
   });
@@ -70,29 +70,48 @@ describe("whether a recorded verification still holds", () => {
   });
 });
 
-/** A verified, saved, launchable workbench; each test changes only what it is about. */
+/**
+ * A verified, saved, launchable workbench; each test changes only what it is about. `status` is the list's standing: one that
+ * passed a check unless it was never checked; `verifying` is a check of a list that cannot serve, still running.
+ */
 function facts(changes: Partial<LaunchFacts> = {}, status: VerificationStatus = "current", ready = true): LaunchFacts {
+  const held = status === "verifying" ? "unverified" : status;
   return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
-    queries: { setup: { error: null } }, verification: { status, ready }, ...changes };
+    queries: { setup: { error: null } }, verification: { status, held, passed: held !== "unverified", mode: null, ready }, unservedLead: null, ...changes };
 }
+const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer"] };
 
-describe("the next launch step with verification", () => {
-  test("verify precedes save and review whenever the verification is not current", () => {
-    for (const status of ["unverified", "accounts-changed", "unpublished"] as const) {
+describe("the next launch step with the model check", () => {
+  test("a check precedes save and review whenever the list in use cannot serve a launch, and the Launch press runs it", () => {
+    for (const status of ["unverified", "unpublished"] as const) {
       expect(nextLaunchStep(facts({}, status)).step).toBe("verify");
-      // The bundled preview and an unsaved edit both verify before anything saves.
+      // The bundled preview and an unsaved edit both check before anything saves.
       expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }, status)).step).toBe("verify");
       expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } }, status)).step).toBe("verify");
     }
+    expect(launchStatusText(facts({}, "unverified"))).toBe("Launch first checks which models your accounts can use.");
     expect(nextLaunchStep(facts()).step).toBe("review");
     expect(nextLaunchStep(facts({ previewCurrent: true })).step).toBe("launch");
     expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } })).step).toBe("save");
-    // A bundled preview is never saved directly, even when a verification is somehow current.
+    // A bundled preview is never saved directly, even when a check is somehow current.
     expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" } }))).toMatchObject({ step: "blocked", reason: { code: "unsaved" } });
   });
 
-  test("configuration and a staged catalog still come first, and verification has its own preconditions in order", () => {
+  test("a list that passed a check keeps serving while only the accounts changed, unless the door would refuse a lead", () => {
+    expect(nextLaunchStep(facts({}, "accounts-changed")).step).toBe("review");
+    expect(nextLaunchStep(facts({ previewCurrent: true }, "accounts-changed")).step).toBe("launch");
+    expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } }, "accounts-changed")).step).toBe("save");
+    // A lead the changed accounts no longer serve is refused by the session door, so the press checks first.
+    expect(nextLaunchStep(facts({ unservedLead: claude }, "accounts-changed")).step).toBe("verify");
+    expect(launchStatusText(facts({ unservedLead: claude }, "accounts-changed"))).toBe("Accounts changed since the models were checked; Launch checks them again first.");
+    // A list that never passed one (imported) has nothing to keep serving with.
+    expect(nextLaunchStep(facts({ verification: { status: "accounts-changed", held: "accounts-changed", passed: false, mode: null, ready: true } })).step).toBe("verify");
+    // A check running beside it, the panel's own, holds nothing up.
+    expect(nextLaunchStep(facts({ previewCurrent: true, verification: { status: "verifying", held: "accounts-changed", passed: true, mode: "background", ready: true } })).step).toBe("launch");
+  });
+
+  test("configuration and a staged catalog still come first, and the check has its own preconditions in order", () => {
     expect(nextLaunchStep(facts({ configurationCurrent: false }, "unverified")).reason?.code).toBe("configuration");
     expect(nextLaunchStep(facts({ profile: { source: "draft" }, record: { draft: {} } }, "unverified")).reason?.code).toBe("staged");
     expect(nextLaunchStep(facts({}, "verifying")).reason?.code).toBe("verifying");
@@ -101,7 +120,7 @@ describe("the next launch step with verification", () => {
     expect(nextLaunchStep(facts({ available: false }, "unverified")).reason?.code).toBe("unavailable");
     expect(nextLaunchStep(facts({ queries: { setup: { error: "unreadable" } } }, "unverified"))).toMatchObject({ reason: { code: "verify-status", action: "refresh" } });
     expect(nextLaunchStep(facts({}, "unverified", false))).toMatchObject({ reason: { code: "verify-permissions", action: "permissions" } });
-    // Launch-only preconditions never block a verification: it needs no launch permission, skills or local review.
+    // Launch-only preconditions never block a check: it needs no launch permission, skills or local review.
     expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "unpublished")).step).toBe("verify");
     // Once current, the launch order is unchanged.
     expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
@@ -125,7 +144,7 @@ describe("a first verification that stops before it saves", () => {
   const step = (draft: DraftBase | null, shared: SharedBase) => nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" },
     localDraft: { source: "starter" }, record: null, stale: draft !== null && draftStale(draft, shared) }, "unverified"));
 
-  test("its own initialization offers Verify models again, whether it stopped before the charge or after", () => {
+  test("its own initialization offers the check again, whether it stopped before the charge or after", () => {
     // Stopped at the inventory: the stop's evidence names the initialization.
     expect(step(followInitialization(starter, 0, ownInitialization(true, null, 1)!), initialized).step).toBe("verify");
     // Cancelled at the charge: the charge was made at the initialized revision.
@@ -256,17 +275,17 @@ describe("this panel's own writes of the model list in Models", () => {
   });
 });
 
-describe("confirming the verification charge", () => {
+describe("approving a check's charge", () => {
   const charge = { requests: 19 };
   const prepared = { charge, preparedAt: 10_000 };
   const at = (ms: number) => prepared.preparedAt + ms;
-  test("the second click of a double-click on Verify never spends, however long the inventory took", () => {
+  test("the second click of a double-click on Launch never spends, however long the inventory took", () => {
     expect(confirmsCharge({ detail: 2, repeat: false }, charge, prepared, at(250))).toBe(false);
     expect(confirmsCharge({ detail: 2, repeat: false }, charge, prepared, at(10 * CHECKING_HOLD_MS))).toBe(false);
     expect(confirmsCharge({ detail: 3, repeat: false }, charge, prepared, at(10 * CHECKING_HOLD_MS))).toBe(false);
   });
 
-  test("a single press confirms only once the checking hold has passed, and a held key never does", () => {
+  test("a single press approves only once the checking hold has passed, and a held key never does", () => {
     expect(confirmsCharge({ detail: 1, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS - 1))).toBe(false);
     expect(confirmsCharge({ detail: 1, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS))).toBe(true);
     expect(confirmsCharge({ detail: 0, repeat: false }, charge, prepared, at(CHECKING_HOLD_MS))).toBe(true);
@@ -292,12 +311,13 @@ function gateFacts(changes: Partial<GateFacts> = {}, status: VerificationStatus 
 }
 
 describe("reviewing the saved team when its inputs settle", () => {
-  test("only the saved, verified team with every launch precondition reviews by itself", () => {
+  test("only the saved team on a list that serves a launch, with every launch precondition, reviews by itself", () => {
     expect(autoReviewDue(gateFacts(), 4, null)).toBe(true);
     expect(autoReviewDue(gateFacts({ unsaved: true, localDraft: { source: "active" } }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ profile: { source: "draft" }, record: { draft: {} } }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({}, "accounts-changed"), 4, null)).toBe(false);
+    expect(autoReviewDue(gateFacts({}, "accounts-changed"), 4, null)).toBe(true);
+    expect(autoReviewDue(gateFacts({}, "unpublished"), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ writable: false }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ launchReady: false }), 4, null)).toBe(false);
     expect(autoReviewDue(gateFacts({ previewCurrent: true }), 4, null)).toBe(false);

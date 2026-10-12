@@ -366,13 +366,15 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     : accountsFailed ? { kind: "failed", text: accounts.error! } : judgedAccounts !== null && judgedAccounts.status !== "fresh" ? { kind: "stale" } : { kind: "choices" };
   const launchReady = operationReady(setup.data, LAUNCH_OPERATION_ID);
   const harnessReady = operationReady(setup.data, HARNESS_OPERATION_ID);
-  // A confirmed verification is itself the save of the shown selection: the bundled preview's
-  // dials, or the active profile's, narrowed to what the verified catalog hosts.
+  // A check the person starts is itself the save of the shown selection: the bundled preview's dials, or the active
+  // profile's, narrowed to what the verified catalog hosts. A background check saves the saved selection, and only
+  // starts while the rows hold no edit and nothing else is in flight.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
     configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
-    onVerified: saved => {
+    edited, idle: !busy && !chaining && !writingCatalog,
+    onVerified: (saved, mode) => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      setMessage({ text: "Models verified with your accounts, and the profile saved for the workspace.", failed: false });
+      if (mode === "manual") setMessage({ text: "Models checked with your accounts, and the profile saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
     onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });
@@ -389,7 +391,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const reviewKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
     machineId, available, rosterError !== null, configurationCurrent, record?.revision, record?.active?.digest, record?.draft?.digest,
     record?.selection, defaults.data?.revision, defaults.error !== null, skillCatalog.data?.revision, skillCatalog.error !== null,
-    setup.error !== null, setup.data === null, accountObservation, skillChoice, automation, savedSessionId, verification.status]);
+    setup.error !== null, setup.data === null, accountObservation, skillChoice, automation, savedSessionId, verification.held]);
   const reviewScope = useRef({ key: reviewKey, epoch: 0 });
   if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
   // Exact CAS arbitrates shared revision changes. Observing this save's own
@@ -415,7 +417,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const shownReview = previewCurrent ? preview.composition.review : localReview;
   // The session door's rule on the team the verb acts on: a lead nobody serves refuses, fallbacks are pruned.
   const unservedLead = served && compiled && shownReview ? routeService(compiled, shownReview.routes, provider => served.has(provider)).lead : null;
-  const verifyRunning = verification.phase === "inventory" || verification.phase === "benchmark";
+  // A check the person started holds every other step; a background one only while it writes the model list, so it never
+  // holds up a launch the list in use can serve.
+  const verifyRunning = (verification.phase === "inventory" || verification.phase === "benchmark") &&
+    (verification.mode !== "background" || verification.writing);
   const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, placeable, available, accounts: accountState,
     launchReady, previewCurrent, localReview, skillProblems, queries: { setup }, verification,
     running: busy || chaining || verifyRunning || writingCatalog, charge: verification.phase === "charge" ? verification.charge : null,
@@ -586,13 +591,13 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     launched(reviewed, machine.name, blocker, "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.");
   }
   function verify() {
-    if (allowed("verify")) void verification.prepare();
+    if (allowed("verify")) void verification.prepare("manual");
   }
-  /** The verb: whatever the next step is, if the gate lets it start. */
+  /** The verb: whatever the next step is, if the gate lets it start. A check it starts is the Launch press's own, which goes on to the launch. */
   function next() {
     if (pending.current || step.step === "blocked" || !verb.open) return;
     switch (step.step) {
-      case "verify": verify(); return;
+      case "verify": void verification.prepare("launch"); return;
       case "save": setChaining(true); void save(); return;
       case "review": void review(); return;
       case "launch": void launch(); return;
@@ -682,7 +687,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }, [premise]);
   const profileState: ProfileState = stale ? "conflict" : unsaved ? "local" : "saved";
   const stateLabel = !configurationCurrent ? "Shared choices unavailable" : stale ? "Shared profile changed" :
-    profile?.source === "starter" ? "Bundled preview · verify to save" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
+    profile?.source === "starter" ? "Bundled preview · checked on the first launch" : profile?.source === "draft" ? "Staged catalog preview" : dials ? "Local changes" : "Saved profile";
   const usage: BoardUsage = {
     view: reading.value, current: !(reading.cached || historicalChoices || configuration.error !== null || accounts.error !== null), nowMs,
     accounts: choices && {

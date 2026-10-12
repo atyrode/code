@@ -15,7 +15,7 @@ function cx(...classes: (string | false | null | undefined)[]): string {
 
 // ---------------------------------------------------------------- vocabulary
 
-/** A control's tooltip naming its key as this keyboard labels it: `Defaults (D)`, `Verify models (Ctrl ↵)`. */
+/** A control's tooltip naming its key as this keyboard labels it: `Defaults (D)`, `Launch (Ctrl ↵)`. */
 export function withKey(label: string, stroke: string): string {
   return `${label} (${keyCapLabel(stroke)})`;
 }

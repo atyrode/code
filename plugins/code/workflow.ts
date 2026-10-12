@@ -28,21 +28,25 @@ const messages: Readonly<Record<string, string>> = {
   code_catalog_missing: "No model list is in use yet. Review one in Models.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
-  code_omp_changed: "OMP or its model list changed on the machine since the inventory. Verify again.",
-  code_model_unpublished: "OMP no longer lists a model this profile uses. Verify models again.",
+  code_omp_changed: "OMP or its model list changed on the machine since the inventory. Check again.",
+  code_model_unpublished: "OMP no longer lists a model this profile uses. Check the models again.",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
   code_invalid_selection: "This profile cannot be formed from the current models.",
   code_budget_unsatisfiable: "No free route serves this profile.",
   code_invalid_catalog: "The model list could not be used.",
   code_preview_changed: "The reviewed model list changed. Review it again.",
-  code_starter_candidate_limit: "The bundled model list is too large to verify at once.",
-  code_probe_missing_probe: "OMP's results do not match the models it was asked to check. Verify again.",
+  code_invalid_provenance: "The checked list names a provider these accounts do not include. Check again.",
+  code_starter_candidate_limit: "The bundled model list is too large to check at once.",
+  code_probe_missing_probe: "OMP's results do not match the models it was asked to check. Check again.",
   code_probe_insufficient_ladder: "No model answered its check, so there is no list to build.",
   code_ladder_regression: "Among the models that answered, a higher tier thinks less than a lower one that costs no more.",
-  code_models_unanswered: "Models the list in use or this profile needs gave no clear answer, so the list and profile stayed as they were. Verify again later, or choose a profile or accounts without them.",
-  code_verification_cancelled: "Verification cancelled.",
-  code_verification_changed: "The machine, workspace or edit access changed, so the verification stopped.",
+  code_models_unanswered: "Models the list in use or this profile needs gave no clear answer, so the list and profile stayed as they were. Check again later, or choose a profile or accounts without them.",
+  code_verification_cancelled: "Model check cancelled.",
+  code_verification_changed: "The machine, workspace or edit access changed, so the model check stopped.",
   code_verification_confirmed: "That charge was already confirmed.",
+  code_check_missing: "No model check of these accounts is kept yet.",
+  code_check_current: "This workspace's model list is already as recent as your check.",
+  code_person_required: "Only a person can approve what model checks spend.",
   code_operation_unavailable: "The Code action could not be completed.",
   code_scope_refused: "Your current authority does not cover this container.",
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
@@ -139,8 +143,9 @@ function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<st
     (inUse.has(probeAddress(exclusion)) || lost.includes(providerPolicy(exclusion.provider).family))).map(probeAddress);
 }
 
-/** The steps of a model verification, in the order they run; a failure names the one it stopped at. */
-export type VerificationStep = "observe" | "initialize" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote" | "select";
+/** The steps of a model verification, in the order they run; a failure names the one it stopped at. `adopt` replaces
+ * every step from `inventory` on when the caller keeps a newer check of the workspace's pool. */
+export type VerificationStep = "observe" | "initialize" | "adopt" | "inventory" | "draft" | "benchmark" | "derive" | "stage" | "review" | "promote" | "select";
 /** Requests a provider's benchmark has answered out of those it was charged. */
 export type ProviderProgress = { provider: string; done: number; total: number };
 export type VerificationProgress = { step: VerificationStep; providers: ProviderProgress[] };
@@ -182,11 +187,24 @@ export type ChargeReview = {
   replacesDraft: boolean;
 };
 export type VerifiedModels = { configuration: Configuration; exclusions: Exclusion[]; provenance: VerificationProvenance };
-/** A prepared verification: its charge, and the one explicit confirmation that spends it. */
-export type PendingVerification = {
-  charge: ChargeReview;
-  confirm: (selection: Selection | null, options?: VerificationOptions) => Promise<VerifiedModels>;
-};
+/**
+ * A prepared verification: its charge, the caller's standing approval as read while preparing it
+ * (`approvedRequests`, workflow.ts `approvalCovers`), and the one confirmation that spends it; or
+ * the caller's own newer check of the workspace's pool, already put in use without spending
+ * anything (`exclusions` are then unknown and empty).
+ */
+export type PendingVerification =
+  | { kind: "charge"; charge: ChargeReview; approvedRequests: number;
+    confirm: (selection: Selection | null, options?: VerificationOptions) => Promise<VerifiedModels> }
+  | { kind: "adopted"; verified: VerifiedModels };
+/**
+ * Whether a person's standing approval lets a check spend `requests` without asking: up to twice
+ * the largest charge they approved, so OMP listing a few more models than last time asks nothing
+ * again, while a charge out of proportion to what they agreed to does.
+ */
+export function approvalCovers(approvedRequests: number, requests: number): boolean {
+  return approvedRequests > 0 && requests > 0 && requests <= approvedRequests * 2;
+}
 /**
  * The artifact a destination's OMP inventory operation is installed from, as `describeDestination`
  * pins it: the identity of the OMP runtime an inventory there runs, whatever version it reports.
@@ -514,17 +532,20 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   /**
    * VERIFY MODELS WITH THE OPERATOR'S ACCOUNTS, through OMP's own inventory and benchmark: the one
    * way a Code catalog comes to name models, because only a probe shows which this operator can
-   * call. Preparing reads the workspace at `expectedRevision` (initializing an absent one), runs
-   * OMP's inventory with the pool Code composes, and answers the charge — nothing has been probed
-   * or paid for yet. Only `confirm` spends: one benchmark job per provider, then derive, stage,
-   * review, promote, and save the caller's selection narrowed to what the verified catalog hosts.
+   * call. Preparing reads the workspace at `expectedRevision` (initializing an absent one). When
+   * the caller keeps a check of the workspace's present pool newer than the list in use, preparing
+   * puts it in use with `selection` narrowed to it and ends there, spending nothing. Otherwise it
+   * runs OMP's inventory with the pool Code composes and answers the charge — nothing has been
+   * probed or paid for yet. Only `confirm` spends: one benchmark job per provider, then derive,
+   * stage, review, promote, and save the caller's selection narrowed to what the verified catalog
+   * hosts. A promotion also keeps the list as the caller's check of that pool.
    *
    * Every step re-observes before it acts and stops, naming itself, on a moved revision, pool,
    * OMP defaults or OMP, a refusal, a cancelled `signal` or a revoked `isCurrent`. A stop never undoes:
    * probe jobs stay in OMP's history and a staged catalog stays staged, both named in the error's
    * evidence. A failed or uncertain confirmation is never replayed; observe the workspace first.
    */
-  async function verifyModels(target: Target, input: { expectedRevision: number; budget: Selection["budget"] },
+  async function verifyModels(target: Target, input: { expectedRevision: number; budget: Selection["budget"]; selection: Selection | null },
     options: VerificationOptions = {}): Promise<PendingVerification> {
     const evidence: VerificationEvidence = { inventoryJobId: null, benchmarkJobIds: [], revision: null };
     const run = verificationRun(options, evidence);
@@ -541,13 +562,25 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     run.enter("inventory");
     // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
     // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
-    const [defaults, pool, catalogRevision] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
-      readCatalogRevision()]));
-    // The models of the list in use, when it was verified with this exact pool: what a model that merely gives no clear
-    // answer may not remove. Spark's retired rung (tier 0) is never routed, so nothing needs it.
+    const [defaults, pool, catalogRevision, checks] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
+      readCatalogRevision(), code("readChecks", {})]));
+    // What a model that merely gives no clear answer may not remove: the models of the list in use when it was verified with
+    // this exact pool, and those of the caller's own check of it, which their other workspaces adopt. Spark's retired rung
+    // (tier 0) is never routed, so nothing needs it.
     const active = record.active;
-    const inUse = new Set(active && active.provenance?.poolIdentityDigest === pool.poolIdentityDigest
-      ? active.document.models.filter(model => model.tier !== 0).map(probeAddress) : []);
+    const kept = checks.checks.find(check => check.poolIdentityDigest === pool.poolIdentityDigest);
+    const held = active?.provenance ?? null;
+    // The caller's own check of this pool, newer than what the workspace holds for it: put in use as it is, spending nothing.
+    if (kept && (held === null || held.poolIdentityDigest !== kept.poolIdentityDigest || held.benchmarkCompletedAt < kept.provenance.benchmarkCompletedAt)) {
+      run.enter("adopt");
+      const configuration = await run.call(() => code("adoptCheck", { containerId: target.containerId, expectedRevision: revision,
+        accounts: pool.accounts, poolIdentityDigest: pool.poolIdentityDigest, selection: input.selection }));
+      evidence.revision = configuration.revision;
+      if (!configuration.active?.provenance) throw run.fail("code_preview_changed");
+      return { kind: "adopted", verified: { configuration, exclusions: [], provenance: configuration.active.provenance } };
+    }
+    const inUse = new Set([...held?.poolIdentityDigest === pool.poolIdentityDigest
+      ? active!.document.models.filter(model => model.tier !== 0).map(probeAddress) : [], ...kept?.models ?? []]);
     // The start is checked by the job's own wait, so a stop that lands now cancels the job rather than abandoning it.
     const job = await run.call(() => omp("startInventory", { ...target, expectedDefaultsRevision: defaults.revision, accountPool: pool.accountPool }), false);
     evidence.inventoryJobId = job.jobId;
@@ -569,7 +602,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     run.progress(charge.providers.map(({ provider, requests: total }) => ({ provider, done: 0, total })));
     let confirmed = false;
     return {
-      charge,
+      kind: "charge", charge, approvedRequests: checks.approvedRequests,
       confirm: (selection, confirmOptions = options) => {
         if (confirmed) return Promise.reject(new WorkflowError("code_verification_confirmed"));
         confirmed = true;
@@ -726,6 +759,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   return {
     code, omp, native,
     readStarterCatalog, verifyModels, observeVerification,
+    readChecks: () => code("readChecks", {}),
+    approveChecks: (expectedRevision: number, requests: number) => code("approveChecks", { expectedRevision, requests }),
     readSkillCatalog: (target: Target) => omp("readSkillCatalog", target),
     listSessions, runningSession,
     async resumeSession(ref: OmpSessionRef, options: ResumeSessionOptions = {}, isCurrent: () => boolean = () => true): Promise<ResumeSessionResult> {
