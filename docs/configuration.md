@@ -169,16 +169,23 @@ catalog when the inventory started (`catalogRevision`), the list the inventory p
 models from — the inventory's OMP version, inventory and benchmark times, the account
 providers and a digest of the exact account pool. A catalog republished while the
 inventory runs stops the verification before its charge is answered. A catalog stops
-being verified when the selected destination's inventory operation is installed from
-another artifact (`describeDestination`'s pins), OMP bundles a catalog with another
-revision, or the saved choices select another pool. Because the identities are content
-digests, an OMP upgrade, its SDK's or its model list's, is seen whatever version it
-reports and without a new Code build; no version string is compared. A catalog recorded
-before verification carried these identities reads as unverified. An identity not yet
-observed, or whose read failed, claims no change: the destination's failure keeps the
-launch refused, a failed model list read is named in the launch line with Retry and
-Models, and the session door re-checks that every routed model is still published. A
-current verification can still be renewed: Verify needs only its own preconditions
+being verified when the saved choices select another pool, or when OMP's bundled catalog
+has moved to another revision that no longer publishes a model the profile routes to,
+leads and fallbacks; the launch line then says OMP no longer lists a model this profile
+uses, and Models names it, or counts several. An OMP update alone leaves the verification current: the
+selected destination's inventory operation installed from another artifact
+(`describeDestination`'s pins), or another catalog revision that still publishes every
+routed model. What OMP publishes is read only once its catalog has moved, since the
+revision a verification recorded publishes every model it laddered. Because the identities
+are content digests, an update is seen whatever version OMP reports and without a new
+Code build, and Models says it beside the verification's date; no version string is
+compared. A catalog recorded before verification carried these identities reads as
+unverified. An identity not yet observed, or whose read failed, claims no change: the
+destination's failure keeps the launch refused, a failed model list read is named in the
+launch line with Retry and Models, and a failed read of what a moved catalog publishes names
+nothing and leaves a dropped model to the session door, which re-checks that every routed
+model is still published (`code_model_unpublished`). A current verification can still be
+renewed: Verify needs only its own preconditions
 (write access, the machine, readable accounts that include one, discovery and benchmark
 readiness), and its charge still waits on Confirm. A model that draws a
 quota of its own (any OMP class but chat, Spark's for one, as each inventory row states) is
@@ -763,9 +770,11 @@ one the family offers names the rung the model row lands on instead, while one a
 family's top (an elite it lacks) says only that it has no model, as the model row refuses
 it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
 **· short** beside its name. The head says
-how many models are in use and when they were verified, or that a staged list waits
-beside them, that they are verifying, or that they are unverified or the bundled
-starter, with **import** (`i`) and **export** (`x`) as two quiet words. Beside the list
+how many models are in use and when they were verified, with **OMP updated since** when
+OMP's runtime or catalog moved after that, or that accounts changed or OMP dropped a routed
+model since they were verified, that a staged list waits beside them, that they are
+verifying, or that they are unverified or the bundled starter, with **import**
+(`i`) and **export** (`x`) as two quiet words. Beside the list
 is what the step is about: the charge per provider and the models not probed while
 verifying, a staged list's changes (field by field, a model added or dropped, the old
 value struck), or, after a verification in this panel, the models it left out, each

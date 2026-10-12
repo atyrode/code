@@ -5,57 +5,65 @@ import type { VerificationProvenance } from "../contract.ts";
  *
  * `unverified`: no verification is recorded — no active catalog, or one authored, imported or
  * kept from before verification recorded the OMP it ran against. `verifying`: a verification is
- * in flight, including while its charge awaits confirmation. `omp-changed`: the destination's OMP
- * now runs from another artifact than the one the catalog's inventory ran from, or OMP bundles
- * another model catalog than it did then — an upgrade of the runtime, its SDK or its model list,
- * whatever version it reports. `accounts-changed`: the saved choices now select another pool — a
+ * in flight, including while its charge awaits confirmation. `unpublished`: OMP's model catalog
+ * moved and no longer publishes a model the profile routes to, which the session door refuses
+ * (`code_model_unpublished`). `accounts-changed`: the saved choices now select another pool — a
  * provider added or removed, or the same providers through different accounts. `current`: none
  * of those.
+ *
+ * An OMP update alone leaves a verification current, noted in `changes`: the destination's
+ * inventory installed from another artifact, or another catalog revision that still publishes
+ * every routed model. Neither shows that the models these accounts reached have moved, and an
+ * update would otherwise ask every workspace to spend a verification before its next launch. The
+ * session door still re-checks every routed model at launch, and Verify renews a current
+ * verification on purpose.
  */
-export type VerificationStatus = "unverified" | "verifying" | "current" | "accounts-changed" | "omp-changed";
+export type VerificationStatus = "unverified" | "verifying" | "current" | "accounts-changed" | "unpublished";
 /** The present a recorded verification is compared with. A null field has not been observed. */
 export type VerificationObservation = {
   /** The artifact the destination's OMP inventory operation is installed from (workflow.ts `inventoryArtifact`). */
   inventoryArtifactSha256: string | null;
   /** The revision of the model catalog OMP bundles (`readModelCatalog`). */
   catalogRevision: string | null;
+  /**
+   * The routed models OMP's catalog no longer publishes (domain/routing.ts `unpublishedModels`),
+   * read only once the catalog has moved: the revision the verification recorded publishes every
+   * model it laddered.
+   */
+  unpublished: readonly string[] | null;
   /** The pool the saved choices select now, or `"none"` when they select no account at all. */
   pool: { providers: readonly string[]; poolIdentityDigest: string } | "none" | null;
 };
-/** What differs from the recorded verification, for saying why it no longer holds. */
+/** What differs from the recorded verification: why it no longer holds, or the OMP update it outlived. */
 export type VerificationChanges = {
   /** The destination's OMP runs from another artifact than the inventory did. */
   runtimeChanged: boolean;
   /** OMP bundles another model catalog than it did when the inventory ran. */
   catalogChanged: boolean;
+  /** The routed models, as `provider/id`, that the moved catalog no longer publishes. */
+  unpublished: string[];
   providersAdded: string[];
   providersRemoved: string[];
   /** The same providers are covered, by a different exact set of accounts. */
   identitiesChanged: boolean;
 };
-export type VerificationState = {
-  status: VerificationStatus;
-  changes: VerificationChanges;
-  /**
-   * Every fact the comparison needs has been observed. While one is missing — not yet answered,
-   * or failed — `current` rests on the record alone: an observation that is slow or failing is
-   * not evidence that anything changed, its failure is named where that read's failures are, and
-   * the launch itself re-checks accounts and published models at its owner.
-   */
-  observed: boolean;
-};
+export type VerificationState = { status: VerificationStatus; changes: VerificationChanges };
 
 /**
- * Compares a recorded verification with the present. An OMP change outranks an account change,
- * because a different model list invalidates every provider's answers, not only one pool's.
+ * Compares a recorded verification with the present. A routed model OMP dropped outranks an account
+ * change, because the launch fails on it whichever accounts serve it. A fact not yet observed, or
+ * whose read failed, claims no change, since a slow or failing read is not evidence that anything
+ * moved. The destination's and the bundled list's failures are named where those reads' failures
+ * are; the read of what a moved catalog publishes names none and fails open to the session door,
+ * which re-checks accounts and every routed model at launch.
  */
 export function verificationState(provenance: VerificationProvenance | null, observation: VerificationObservation, verifying: boolean): VerificationState {
-  const changes: VerificationChanges = { runtimeChanged: false, catalogChanged: false, providersAdded: [], providersRemoved: [], identitiesChanged: false };
-  const observed = observation.inventoryArtifactSha256 !== null && observation.catalogRevision !== null && observation.pool !== null;
-  if (verifying) return { status: "verifying", changes, observed };
-  if (provenance === null) return { status: "unverified", changes, observed };
+  const changes: VerificationChanges = { runtimeChanged: false, catalogChanged: false, unpublished: [], providersAdded: [], providersRemoved: [], identitiesChanged: false };
+  if (verifying) return { status: "verifying", changes };
+  if (provenance === null) return { status: "unverified", changes };
   changes.runtimeChanged = observation.inventoryArtifactSha256 !== null && observation.inventoryArtifactSha256 !== provenance.inventoryArtifactSha256;
   changes.catalogChanged = observation.catalogRevision !== null && observation.catalogRevision !== provenance.catalogRevision;
+  if (changes.catalogChanged) changes.unpublished = [...(observation.unpublished ?? [])];
   if (observation.pool !== null) {
     const providers = observation.pool === "none" ? [] : observation.pool.providers;
     changes.providersAdded = providers.filter(provider => !provenance.providers.includes(provider));
@@ -64,7 +72,7 @@ export function verificationState(provenance: VerificationProvenance | null, obs
       observation.pool.poolIdentityDigest !== provenance.poolIdentityDigest;
   }
   const accountsChanged = changes.providersAdded.length > 0 || changes.providersRemoved.length > 0 || changes.identitiesChanged;
-  return { status: changes.runtimeChanged || changes.catalogChanged ? "omp-changed" : accountsChanged ? "accounts-changed" : "current", changes, observed };
+  return { status: changes.unpublished.length > 0 ? "unpublished" : accountsChanged ? "accounts-changed" : "current", changes };
 }
 
 /**

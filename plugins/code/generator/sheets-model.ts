@@ -109,8 +109,8 @@ export function exclusionWords(exclusion: Exclusion): readonly [string, string] 
 /**
  * The step the Models sheet is at, which decides its one next action. A run in flight comes first
  * (`finishing` once its measurements are in), then a staged list waiting beside the one in use, a
- * list verified with the present accounts and OMP, and otherwise a list to verify: `refused` when
- * verifying needs discovery the machine has not enabled.
+ * list whose verification holds (verification.ts `current`), and otherwise a list to verify:
+ * `refused` when verifying needs discovery the machine has not enabled.
  */
 export type ModelsPhase = "inventory" | "charge" | "benchmark" | "finishing" | "staged" | "verified" | "refused" | "unverified";
 export function modelsPhase(facts: {

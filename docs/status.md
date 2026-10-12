@@ -211,12 +211,16 @@ files, service state, credentials or backups.
   `quotaTier`, which the derivation reads directly. OMP's bundled catalog is stamped
   with its separately pinned SDK's version, now also 18.8.6. No version string decides
   whether a verification holds: it records the artifact its inventory ran from and the bundled
-  catalog's revision, and goes stale when the destination pins another artifact or OMP
-  bundles another revision, with no Code rebuild. A verification recorded before this
-  change, without those identities, reads as unverified and asks to be verified again,
-  and a current one can be renewed on purpose. Unit tests and the disposable browser
-  prove this against a synthetic destination and the real bundled catalog; no
-  installed OMP upgrade has been observed. This source repin is not a release, preview
+  catalog's revision. An OMP update alone, another artifact or another catalog revision that
+  still publishes every routed model, leaves it current and is noted in Models; it goes stale
+  when a moved catalog no longer publishes a routed model, or the saved choices select another
+  pool, with no Code rebuild. A verification recorded before these identities, without them,
+  reads as unverified and asks to be verified again, and a current one can be renewed on
+  purpose. Unit tests prove the rule against a synthetic destination and catalog, and the
+  disposable browser against the real bundled catalog: it moves a verified list's runtime
+  artifact, then serves a synthetic republish of that catalog without the list's default lead.
+  Applied to the preview workspace's live reads (destination pins, catalog revision and account
+  pool), the rule gives current: only the runtime artifact moved. This source repin is not a release, preview
   installation, native deployment review or provider observation.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.

@@ -54,7 +54,7 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
     // The bundled preview is saved only by the verification that replaces it, and nothing saves unverified.
     expect(code(actionGate(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" } }), "save"))).toBe("unsaved");
-    expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }, "omp-changed"), "save"))).toBe("not-next");
+    expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }, "unpublished"), "save"))).toBe("not-next");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" }, writable: false }), "save"))).toBe("read-only");
   });
 

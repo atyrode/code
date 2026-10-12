@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
 import { servedProviders } from "../../domain/accounts.ts";
-import { defaultSelection, routeService, type Review, type ServiceGap } from "../../domain/routing.ts";
+import { defaultSelection, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
@@ -331,6 +331,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);
   }, [compiled, selection]);
+  // The models the shown team's routes name, which the session door requires OMP to still publish. The door first prunes
+  // fallbacks no included account serves; these are not pruned, because a provider of a verified list that no account
+  // serves now has changed the pool, which asks to verify again whatever OMP publishes.
+  const routed = useMemo(() => compiled && localReview ? routedModels(compiled, localReview.routes) : null, [compiled, localReview]);
   const controlsReview = useMemo(() => {
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });
@@ -365,7 +369,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
-    configurationCurrent, selection, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
+    configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts, and the profile saved for the workspace.", failed: false });

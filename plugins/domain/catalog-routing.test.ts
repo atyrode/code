@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compileCatalog } from "./catalog.ts";
 import { type CatalogDocument, type CatalogModel, type Route, type Selection } from "./contracts.ts";
 import { familyPolicy, providerPolicy } from "./providers.ts";
-import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routeService, servedRoutes } from "./routing.ts";
+import { clampSelection, compileOmpOverlay, defaultSelection, reviewCatalog, ReviewSchema, routedModels, routeService, servedRoutes, unpublishedModels } from "./routing.ts";
 
 function model(key: string, provider: string, tier: CatalogModel["tier"], changes: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -445,5 +445,18 @@ describe("a verified catalog and the accounts a launch meets", () => {
     expect(withoutCodex.lead).toEqual({ provider: "openai-codex", family: "openai",
       roles: review.routes.filter(entry => catalog.model(entry.lead.key).provider === "openai-codex").map(entry => entry.role) });
     expect(() => servedRoutes(catalog, review.routes, provider => provider !== "openai-codex")).toThrow("code_account_unavailable");
+  });
+
+  test("a published list that lacks a routed model, lead or fallback, names it once, by provider and id together", () => {
+    const catalog = compileCatalog(document());
+    const review = reviewCatalog(catalog, selection({ capability: 1, advisor: "audit" }), daytime);
+    const routed = routedModels(catalog, review.routes);
+    expect(unpublishedModels(routed, document().models)).toEqual([]);
+    // The audit advisor falls back to a2 and then a1; a2 dropped from what OMP publishes is named once.
+    expect(route(review.routes, "advisor").fallback.map(choice => choice.key)).toEqual(["a2", "a1"]);
+    expect(unpublishedModels(routed, document().models.filter(entry => entry.key !== "a2"))).toEqual(["anthropic/native-a2"]);
+    // The same id under another provider is another model, and several are named in order.
+    const opus = { provider: "anthropic", id: "claude-opus" }, terra = { provider: "openai-codex", id: "gpt-terra" };
+    expect(unpublishedModels([terra, opus, terra], [{ provider: "openrouter", id: "claude-opus" }])).toEqual(["anthropic/claude-opus", "openai-codex/gpt-terra"]);
   });
 });

@@ -15,7 +15,7 @@ import { z } from "zod";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { DomainError, type AccountChoices, type CatalogDocument, type Selection } from "../domain/contracts.ts";
-import { compileOmpOverlay, reviewCatalog, servedRoutes } from "../domain/routing.ts";
+import { compileOmpOverlay, reviewCatalog, routedModels, servedRoutes, unpublishedModels } from "../domain/routing.ts";
 import { digest, id, revision, reviewedSessionOptions, sessionInput, type ActionInput, type ActionResult,
   type Profile, type SessionComposition } from "./contract.ts";
 import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
@@ -65,11 +65,9 @@ export async function composeSession(ctx: CodeContext, args: ActionInput<"compos
   const catalog = compileCatalog(record.active.document);
   const reviewed = reviewCatalog(catalog, record.selection, receivedAt);
   const review = { ...reviewed, routes: servedRoutes(catalog, reviewed.routes, serves) };
-  const routed = [...new Set(review.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => choice.key))]
-    .map(key => catalog.model(key));
+  const routed = routedModels(catalog, review.routes);
   const published = await ompCall(ctx, "readModelCatalog", { providers: [...new Set(routed.map(model => model.provider))].sort() });
-  const listed = new Set(published.models.map(model => `${model.provider}/${model.id}`));
-  const missing = routed.map(model => `${model.provider}/${model.id}`).filter(address => !listed.has(address)).sort();
+  const missing = unpublishedModels(routed, published.models);
   if (missing.length > 0)
     throw new CodeRefusal("model_unpublished", missing.slice(0, 8).join(", ") + (missing.length > 8 ? ` and ${missing.length - 8} more` : ""));
   const overlay = compileOmpOverlay(catalog, review.selection, review.routes, serves);

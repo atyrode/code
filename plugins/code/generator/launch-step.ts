@@ -152,7 +152,7 @@ const blockerAction: Readonly<Partial<Record<LaunchBlockerCode, LaunchBlockerAct
 const verifyText: Readonly<Record<Exclude<VerificationStatus, "current" | "verifying">, string>> = {
   unverified: "Verify models with your accounts before saving or launching.",
   "accounts-changed": "Accounts changed since models were verified. Verify again.",
-  "omp-changed": "OMP changed since models were verified. Verify again.",
+  unpublished: "OMP no longer lists a model this profile uses. Verify again.",
 };
 function blockerReason(code: LaunchBlockerCode): LaunchBlocker {
   const action = blockerAction[code];
@@ -215,11 +215,11 @@ export function saveGate(facts: LaunchFacts): LaunchBlockerCode | null {
  * review → skill problems → `launch` when the review is current, else `review`.
  *
  * Verification precedes saving and reviewing: whatever team is shown, its first save and every
- * launch need a catalog verified against the present accounts and OMP. While it is not current
- * the step is `verify`, or the first failing verification precondition in its order (verifying →
- * read-only → conflict → runtime unavailable → accounts unreadable or none included →
- * destination status unavailable → discovery/benchmark permission). Below that the precedence is
- * unchanged.
+ * launch need a catalog verified with the present accounts, whose routed models OMP still
+ * publishes. While it is not current the step is `verify`, or the first failing verification
+ * precondition in its order (verifying → read-only → conflict → runtime unavailable → accounts
+ * unreadable or none included → destination status unavailable → discovery/benchmark
+ * permission). Below that the precedence is unchanged.
  *
  * The unsaved branch folds in the Save control: `save` when a save of the local edit may proceed
  * (`saveGate`), otherwise the first failing Save precondition (read-only → conflict → models),

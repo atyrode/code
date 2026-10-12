@@ -13,28 +13,36 @@ const runtime = "c".repeat(64), catalog = "e".repeat(64);
 const provenance: VerificationProvenance = { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: catalog,
   inventoryObservedAt: 1, benchmarkCompletedAt: 2, providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
 const same = { providers: ["anthropic", "openai-codex"], poolIdentityDigest: "a".repeat(64) };
-const present = { inventoryArtifactSha256: runtime, catalogRevision: catalog };
+const present = { inventoryArtifactSha256: runtime, catalogRevision: catalog, unpublished: [] };
+const moved = "f".repeat(64);
 
 describe("whether a recorded verification still holds", () => {
-  test("the present OMP runtime, model catalog and pool decide, and an OMP change outranks an account change", () => {
-    expect(verificationState(provenance, { ...present, pool: same }, false)).toMatchObject({ status: "current", observed: true });
+  test("the present pool and the routed models OMP publishes decide, and a dropped model outranks an account change", () => {
+    expect(verificationState(provenance, { ...present, pool: same }, false).status).toBe("current");
     expect(verificationState(null, { ...present, pool: same }, false).status).toBe("unverified");
     expect(verificationState(provenance, { ...present, pool: same }, true).status).toBe("verifying");
-    const upgraded = verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: { ...same, poolIdentityDigest: "b".repeat(64) } }, false);
-    expect([upgraded.status, upgraded.changes.runtimeChanged, upgraded.changes.identitiesChanged]).toEqual(["omp-changed", true, true]);
+    const both = verificationState(provenance, { ...present, catalogRevision: moved, unpublished: ["openai-codex/terra"], pool: { ...same, poolIdentityDigest: "b".repeat(64) } }, false);
+    expect([both.status, both.changes.unpublished, both.changes.identitiesChanged]).toEqual(["unpublished", ["openai-codex/terra"], true]);
   });
 
-  test("an OMP-only upgrade with the same accounts makes the verification stale, and Verify is the next step", () => {
-    // The runtime is upgraded on the destination; Code is the same build, so its compiled OMP version has not moved.
+  test("an OMP update the routed models survive keeps the verification current, so the launch goes on without verifying", () => {
+    // The runtime is upgraded on the destination with the same model catalog and the same accounts.
     const upgraded = verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: same }, false);
-    expect(upgraded).toMatchObject({ status: "omp-changed", observed: true, changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
-    expect(nextLaunchStep(facts({}, upgraded.status)).step).toBe("verify");
-    expect(launchStatusText(facts({}, upgraded.status))).toBe("OMP changed since models were verified. Verify again.");
+    expect(upgraded).toMatchObject({ status: "current", changes: { runtimeChanged: true, catalogChanged: false, unpublished: [] } });
+    expect(nextLaunchStep(facts({}, upgraded.status)).step).toBe("review");
+    expect(nextLaunchStep(facts({ previewCurrent: true }, upgraded.status)).step).toBe("launch");
+    // A model catalog republished under another revision that still lists every routed model.
+    const republished = verificationState(provenance, { ...present, catalogRevision: moved, pool: same }, false);
+    expect(republished).toMatchObject({ status: "current", changes: { runtimeChanged: false, catalogChanged: true } });
   });
 
-  test("a new model catalog revision makes the verification stale, whatever version OMP reports", () => {
-    const republished = verificationState(provenance, { ...present, catalogRevision: "f".repeat(64), pool: same }, false);
-    expect(republished).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: false, catalogChanged: true } });
+  test("a moved catalog that dropped a routed model asks to verify again, and the recorded one never reads as dropping any", () => {
+    const dropped = verificationState(provenance, { ...present, catalogRevision: moved, unpublished: ["openai-codex/terra"], pool: same }, false);
+    expect(dropped).toMatchObject({ status: "unpublished", changes: { catalogChanged: true, unpublished: ["openai-codex/terra"] } });
+    expect(nextLaunchStep(facts({}, dropped.status)).step).toBe("verify");
+    expect(launchStatusText(facts({}, dropped.status))).toBe("OMP no longer lists a model this profile uses. Verify again.");
+    // The revision the verification recorded publishes every model it laddered, so a list read against it claims nothing.
+    expect(verificationState(provenance, { ...present, unpublished: ["openai-codex/terra"], pool: same }, false).status).toBe("current");
   });
 
   test("a provider added or removed, the same providers through other accounts, or no account at all is an account change", () => {
@@ -47,10 +55,12 @@ describe("whether a recorded verification still holds", () => {
     expect(verificationState(provenance, { ...present, pool: "none" }, false).changes.providersRemoved).toEqual(["anthropic", "openai-codex"]);
   });
 
-  test("an observation not yet answered or failed never claims a change, and says the comparison is incomplete", () => {
-    expect(verificationState(provenance, { inventoryArtifactSha256: null, catalogRevision: null, pool: null }, false)).toMatchObject({ status: "current", observed: false });
-    expect(verificationState(provenance, { ...present, catalogRevision: null, pool: same }, false)).toMatchObject({ status: "current", observed: false });
-    expect(verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: null }, false)).toMatchObject({ status: "omp-changed", observed: false });
+  test("an observation not yet answered or failed never claims a change", () => {
+    expect(verificationState(provenance, { inventoryArtifactSha256: null, catalogRevision: null, unpublished: null, pool: null }, false).status).toBe("current");
+    // A moved catalog whose published list is still being read claims no dropped model.
+    expect(verificationState(provenance, { ...present, catalogRevision: moved, unpublished: null, pool: same }, false))
+      .toMatchObject({ status: "current", changes: { catalogChanged: true, unpublished: [] } });
+    expect(verificationState(provenance, { ...present, pool: null }, false).changes).toMatchObject({ providersAdded: [], providersRemoved: [], identitiesChanged: false });
   });
 
   test("while the destination has not answered, the launch is not ready, so a gap in the observation never opens one", () => {
@@ -69,7 +79,7 @@ function facts(changes: Partial<LaunchFacts> = {}, status: VerificationStatus = 
 
 describe("the next launch step with verification", () => {
   test("verify precedes save and review whenever the verification is not current", () => {
-    for (const status of ["unverified", "accounts-changed", "omp-changed"] as const) {
+    for (const status of ["unverified", "accounts-changed", "unpublished"] as const) {
       expect(nextLaunchStep(facts({}, status)).step).toBe("verify");
       // The bundled preview and an unsaved edit both verify before anything saves.
       expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }, status)).step).toBe("verify");
@@ -92,7 +102,7 @@ describe("the next launch step with verification", () => {
     expect(nextLaunchStep(facts({ queries: { setup: { error: "unreadable" } } }, "unverified"))).toMatchObject({ reason: { code: "verify-status", action: "refresh" } });
     expect(nextLaunchStep(facts({}, "unverified", false))).toMatchObject({ reason: { code: "verify-permissions", action: "permissions" } });
     // Launch-only preconditions never block a verification: it needs no launch permission, skills or local review.
-    expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "omp-changed")).step).toBe("verify");
+    expect(nextLaunchStep(facts({ launchReady: false, skillProblems: ["x"], localReview: null }, "unpublished")).step).toBe("verify");
     // Once current, the launch order is unchanged.
     expect(nextLaunchStep(facts({ launchReady: false })).reason?.code).toBe("permissions");
   });

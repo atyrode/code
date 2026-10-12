@@ -325,6 +325,23 @@ export function routeService(catalog: CompiledCatalog, routes: readonly Route[],
   return { lead: first ? gap(...first) : null, pruned: [...pruned].map(([provider, roles]) => gap(provider, roles)) };
 }
 
+/** A model as OMP's catalog and a compiled catalog both name it. */
+export type ModelAddress = { readonly provider: string; readonly id: string };
+
+/** The models routes name, leads and fallbacks, each once, in route order. */
+export function routedModels(catalog: CompiledCatalog, routes: readonly Route[]): ModelAddress[] {
+  return [...new Set(routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => choice.key))].map(key => catalog.model(key));
+}
+
+/**
+ * The routed models a published catalog lacks, each once as `provider/id` and sorted. The session
+ * door refuses a composition that names any (`model_unpublished`), so a client says it beforehand.
+ */
+export function unpublishedModels(routed: readonly ModelAddress[], published: readonly ModelAddress[]): string[] {
+  const listed = new Set(published.map(model => `${model.provider}/${model.id}`));
+  return [...new Set(routed.map(model => `${model.provider}/${model.id}`))].filter(address => !listed.has(address)).sort();
+}
+
 /**
  * Encode only a complete, exact selection; arbitrary or stale route lists are not overlays. The
  * routes must be exactly the selection's, less precisely the fallbacks `serves` rules out.

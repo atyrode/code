@@ -28,6 +28,7 @@ const messages: Readonly<Record<string, string>> = {
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
   code_omp_changed: "OMP or its model list changed on the machine since the inventory. Verify again.",
+  code_model_unpublished: "OMP no longer lists a model this profile uses. Verify models again.",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
   code_invalid_selection: "This profile cannot be formed from the current models.",
   code_budget_unsatisfiable: "No free route serves this profile.",
@@ -85,6 +86,10 @@ const agentRefusals: Readonly<Record<string, string>> = {
   "run launch already in progress": "That run is already launching.",
   "harness launch target changed": "The run was created for another machine or workspace.",
 };
+/** Refusals whose detail is a list of identifiers, with the label that introduces it; the list stays exactly as written. */
+const listedDetails: Readonly<Record<string, string>> = {
+  code_model_unpublished: "Not listed:",
+};
 /** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
 const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;
 /** A refusal token (`code_account_unavailable`), and the detail for a person that may follow it. */
@@ -98,7 +103,8 @@ export function refusalToken(message: string): string | null {
  * A workflow failure in a person's words. A refused door's message loses the door name it was
  * reported under, and its refusal token becomes words: the known ones from `messages` and Manifold's
  * Agent refusals, any other as who refused, so no raw token reaches a person. A detail written for a
- * person after the token stays.
+ * person after the token stays, as a sentence; a list of identifiers (`listedDetails`) stays exactly
+ * as written after its label.
  */
 export function failureWords(message: string): string {
   const denial = DOOR_DENIAL.exec(message)?.[1] ?? message;
@@ -107,7 +113,8 @@ export function failureWords(message: string): string {
   if (!refusal) return denial;
   const [, token, detail] = refusal;
   const words = messages[token!] ?? (token!.startsWith("omp_") ? "OMP refused the step." : "Code refused the step.");
-  return detail ? `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}` : words;
+  if (!detail) return words;
+  return Object.hasOwn(listedDetails, token!) ? `${words} ${listedDetails[token!]} ${detail}` : `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}`;
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. */
