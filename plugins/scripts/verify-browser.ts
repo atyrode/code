@@ -2990,6 +2990,9 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
  *   press, which goes on to the launch, and, once set up, on its own as it opens.
  * - Once the accounts change under a list that passed a check, its lead still served, Launch stays ready and launches
  *   while the check that renews the list runs on its own, within the approval.
+ * - When they change again and OMP refuses the renewal's benchmark, the stop is said in Models only, Launch stays ready,
+ *   and nothing checks again on its own. Opened again, a renewal spending under the approval is cancelled at its owner by
+ *   Setup's ask first, and writes nothing.
  *
  * A workspace never set up is never checked on its own, whatever the person keeps or approved (model-verification.ts):
  * only its first press initializes it.
@@ -3008,14 +3011,21 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
   const defaultsRevision = (defaults.result as OmpResult<"readDefaults">).revision;
   // The synthetic installation the probe jobs (`probeJob`) and the launch run from.
   const pins = { installationRevision: "synthetic-ui-only", artifactSha256: "c".repeat(64), resourceBindingDigest: "c".repeat(64) };
-  /** The accounts the panel observes: one fictional Claude account, or two once they change. */
+  /** The accounts the panel observes: one fictional Claude account, or more once they change. */
   let observed = fixtureAccounts([1]);
   const inventories = new Map<string, InventoryReceipt>();
   const benchmarks = new Map<string, { request: OmpInput<"startBenchmark">; startedAt: number; receipt: BenchmarkReceipt | null }>();
-  const prepared: string[] = [], cancels: unknown[] = [];
+  /** Benchmarks the destination refused at their start, so they spent nothing and left no job. */
+  const refusedBenchmarks: OmpInput<"startBenchmark">[] = [];
+  const prepared: string[] = [];
+  /** The probe jobs a check asked their owner to cancel, by job. */
+  const cancels: string[] = [];
   // A check held at its inventory, to observe the launch while it runs.
   const heldInventory = holdable();
   let holdNextInventory = false;
+  /** The next benchmark is refused at its start; or it starts and keeps running (`held`) until it is cancelled. */
+  let nextBenchmark: "answered" | "refused" | "held" = "answered";
+  let heldBenchmark: string | null = null;
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const terminals = await ownerAction(server, "core.terminals.listAll", {});
   await arrangeWorkbench(server, person);
@@ -3050,14 +3060,16 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
         const inventory = inventories.get(request.inventoryJobId);
         assert(inventory, "A benchmark follows an inventory this fixture answered");
         assert.deepEqual(request.candidates, inventoryDraft(inventory, "any").benchmark, "A check spends exactly the charge of its inventory");
+        if (nextBenchmark === "refused") { nextBenchmark = "answered"; refusedBenchmarks.push(request); return refused("synthetic_benchmark_refused"); }
         const jobId = `kept-benchmark-${benchmarks.size + 1}`;
         benchmarks.set(jobId, { request, startedAt: Date.now(), receipt: null });
+        if (nextBenchmark === "held") { nextBenchmark = "answered"; heldBenchmark = jobId; }
         return { ok: true, result: probeJob(destination, jobId, BENCHMARK_OPERATION_ID, person.principal.id, "started") };
       }
       case "engine.jobs.status": {
         const { node } = input as { node: { jobId: string; operationId: string } };
         assert(inventories.has(node.jobId) || benchmarks.has(node.jobId), "Only this fixture's probe jobs are followed");
-        return { ok: true, result: probeJob(destination, node.jobId, node.operationId, person.principal.id) };
+        return { ok: true, result: probeJob(destination, node.jobId, node.operationId, person.principal.id, node.jobId === heldBenchmark ? "started" : "exited") };
       }
       case "atyrode.omp.readBenchmark": {
         const run = benchmarks.get(String(input.jobId));
@@ -3069,7 +3081,14 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
           }) };
         return { ok: true, result: { job: probeJob(destination, String(input.jobId), BENCHMARK_OPERATION_ID, person.principal.id), benchmark: run.receipt } };
       }
-      case "engine.jobs.cancel": cancels.push(input); return refused("synthetic_cancel_unexpected");
+      // Only the held benchmark is running, so only it can be cancelled; its owner accepts, and the job ends.
+      case "engine.jobs.cancel": {
+        const { node } = input as { node: { jobId: string } };
+        cancels.push(node.jobId);
+        if (node.jobId !== heldBenchmark) return refused("synthetic_cancel_unexpected");
+        heldBenchmark = null;
+        return { ok: true, result: { accepted: true } };
+      }
       case "atyrode.omp.readSkillCatalog": return { ok: true, result: { revision: 0, skills: [], sets: [], updatedAt: null, updatedBy: null } };
       case "atyrode.omp.reviewSession":
         return { ok: true, result: { destination: { containerId: input.containerId, machineId: destination.machineId }, operationId: LAUNCH_OPERATION_ID, pins,
@@ -3235,10 +3254,59 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     assert.deepEqual([own?.digest, own?.provenance], [checked.digest, checked.provenance], "The kept list is in use as it was checked");
     await headSaysChecked(checked.document, "Models says the list adopted on its own is checked, as of the check it adopted");
 
+    // The accounts change again under the list renewed in the workspace adopted on a press: a third Claude account joins.
+    // That list passed a check and the approval covers the charge, so a renewal starts on its own, and OMP refuses its
+    // benchmark. A renewal that stopped is said in Models only, beside a launch the list in use still serves, and nothing
+    // checks again on its own, which would spend again each time.
+    observed = fixtureAccounts([1, 4, 5]);
+    nextBenchmark = "refused";
+    probes = [inventories.size, benchmarks.size];
+    from = trace.requests.length;
+    await openGenerator(browser, server, pressed.id);
+    await waitFor(() => refusedBenchmarks.length === 1, timeout, 50);
+    await until(browser, "beside the stopped renewal the launch stays a launch, reviewed and ready, and says nothing of the stop",
+      `${launchIs("launch", "ready")} && !${failureLine} && !${lineText}.includes('Model check')`);
+    await Bun.sleep(2_000);
+    assert.deepEqual([inventories.size, benchmarks.size, refusedBenchmarks.length], [probes[0]! + 1, probes[1]!, 1],
+      "The stopped renewal ran one inventory and one refused benchmark, and nothing checks again on its own");
+    assert.equal(await browser.evaluate(`${launchIs("launch", "ready")} && !${failureLine}`), true, "The launch still says nothing of the stop");
+    await openSheet(browser, "models");
+    await until(browser, "Models says the renewal stopped, beside the accounts changed since the check",
+      `${goParts(modelsSheet)}.some(([text, tone]) => text === 'check stopped' && tone === 'attention') && ${sheetState(modelsSheet)}.endsWith(' · accounts changed since checked')`);
+    await closeSheet(browser);
+    assert.deepEqual([inventories.size, refusedBenchmarks.length], [probes[0]! + 1, 1], "Opening and closing Models starts no check");
+    assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(approveChecks|stageCatalog|promoteCatalog|adoptCheck|select)$/.test(request.name)), [],
+      "The stopped renewal asks, stages, promotes, adopts and saves nothing");
+    assert.deepEqual((await readConfiguration(server, person, { containerId: pressed.id })).configuration?.active, renewed, "The stopped renewal leaves the list in use as it was");
+
+    // Ask first while a renewal spends under the approval: opened again, the workspace renews the list on its own, and its
+    // benchmark keeps running until Setup's ask first withdraws the approval, which cancels it at its owner. Nothing is
+    // staged, promoted or adopted, and nothing checks again on its own.
+    nextBenchmark = "held";
+    probes = [inventories.size, benchmarks.size];
+    from = trace.requests.length;
+    await openGenerator(browser, server, pressed.id);
+    await waitFor(() => heldBenchmark !== null, timeout, 50);
+    const spending = heldBenchmark;
+    await until(browser, "while the renewal spends, the launch stays a launch, reviewed and ready", launchIs("launch", "ready"));
+    await askFirst(browser, charge);
+    await waitFor(() => heldBenchmark === null, timeout, 50);
+    assert.deepEqual(cancels, [spending], "Ask first cancels the benchmark the renewal was spending, at its owner");
+    assert.deepEqual(trace.requests.slice(from).filter(request => request.name === "atyrode.code.approveChecks").map(request => request.input),
+      [{ expectedRevision: 1, requests: 0 }], "Ask first records that every later check asks before it spends");
+    await Bun.sleep(2_000);
+    assert.deepEqual([inventories.size, benchmarks.size], [probes[0]! + 1, probes[1]! + 1],
+      "The cancelled renewal ran one inventory and one benchmark, and nothing checks again on its own");
+    assert.deepEqual(trace.requests.slice(from).filter(request => /^atyrode\.code\.(stageCatalog|promoteCatalog|adoptCheck|select)$/.test(request.name)), [],
+      "The cancelled renewal stages, promotes, adopts and saves nothing");
+    assert.deepEqual((await readConfiguration(server, person, { containerId: pressed.id })).configuration?.active, renewed, "The list in use stays as it was");
+    await until(browser, "after ask first the launch still serves", launchIs("launch", "ready"));
+
     const after = await readChecks(server, person);
-    assert.equal(after.approvedRequests, charge, "Only the first approve press recorded an approval");
-    assert.equal(after.checks.length, 3, "Each account pool checked is kept: the first, the other account's and the changed pool's");
-    assert.deepEqual(cancels, [], "No check was stopped, so no native job was cancelled");
+    assert.deepEqual(trace.requests.filter(request => request.name === "atyrode.code.approveChecks").map(request => request.input),
+      [{ expectedRevision: 0, requests: charge }, { expectedRevision: 1, requests: 0 }], "Only the first approve press recorded an approval, and ask first withdrew it");
+    assert.equal(after.approvedRequests, 0, "Withdrawn, the approval lets no check spend without asking");
+    assert.equal(after.checks.length, 3, "Each pool checked is kept: the first, the other account's and the changed pool's; a stopped or cancelled renewal keeps none");
     fixture.check();
   } finally {
     heldInventory.release();
@@ -5861,7 +5929,7 @@ async function run(): Promise<void> {
     await ompUpgradeScenario(writerBrowser, server, writer, target);
     phase = "Models: check models, the charge's hold and deliberate approve, measuring, left out, staged, imported, discarded, ask first and check again";
     await asNewPerson(writerBrowser, server, writer, "Code models checker", person => modelsSheetScenario(writerBrowser, server, person, target));
-    phase = "a person's checks across workspaces: the approval their first approve press records, a check within it that asks nothing, a kept check adopted on a press and on its own, and Launch kept ready while changed accounts are checked again";
+    phase = "a person's checks across workspaces: the approval their first approve press records, a check within it that asks nothing, a kept check adopted on a press and on its own, Launch kept ready while changed accounts are checked again, a stopped renewal never retried and ask first cancelling a renewal that spends";
     await asNewPerson(writerBrowser, server, writer, "Code check keeper", person => keptChecksScenario(writerBrowser, server, person, target));
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
@@ -5893,7 +5961,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A first Launch checks the models itself: its charge waits on approve, the next Tab stop after the launch, with every row and the machine locked, and a double-click, a second click, key repeat or ↵ at the panel root never approves it; the waiting line paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px targets on a coarse pointer and animates nothing under reduced motion; one approve press records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired), back to code and, after ask first, check again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first approve press records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on what it changed before Launch goes on with it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked; a workspace never set up is never checked on its own; and once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does, its readout saying the machine cannot launch agent runs (or, before it, that the harness is not enabled). Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A first Launch checks the models itself: its charge waits on approve, the next Tab stop after the launch, with every row and the machine locked, and a double-click, a second click, key repeat or ↵ at the panel root never approves it; the waiting line paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px targets on a coarse pointer and animates nothing under reduced motion; one approve press records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired), back to code and, after ask first, check again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first approve press records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on what it changed before Launch goes on with it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does, its readout saying the machine cannot launch agent runs (or, before it, that the harness is not enabled). Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
 }
 
 await run();
