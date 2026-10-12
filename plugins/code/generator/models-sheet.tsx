@@ -284,12 +284,19 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
             : { value: "use staged list", text: draft?.provenance ? "replaces the list in use with this verified one" : "replaces the list in use; it needs verifying after" },
           press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
       }
-      case "verified":
+      case "verified": {
         // The head already says when the list was verified; beside the action, only its alternative: verifying again, through
-        // the same gate as a first verification, whose charge still waits on its own confirmation.
-        return { label: "back to code", parts: refused, fixes: verifyGate.open ? [{ label: "verify again", run: () => model.actions.verify() }] : [],
-          said: failure ? { value: "back to code", text: failure, warn: true } : { value: "back to code", text: "the generator routes on this list" },
+        // the same gate as a first verification, whose charge still waits on its own confirmation. A verification again that
+        // stopped says so, as a first one does: what it would have changed (the list, or for a stop while saving the profile,
+        // the team) stays as it was, which the head alone cannot show.
+        const stopped = verification.failure;
+        const note: readonly Part[] = stopped ? [[stopped.cancelled ? "verification cancelled" : "verification stopped", stopped.cancelled ? null : "attention"]] : [];
+        return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "verify again", run: () => model.actions.verify() }] : [],
+          said: failure ? { value: "back to code", text: failure, warn: true }
+            : stopped && !stopped.cancelled ? { value: "back to code", text: stopped.reason, warn: true }
+            : { value: "back to code", text: "the generator routes on this list" },
           press: () => { leave(onBack); return null; } };
+      }
       case "refused": return { label: "enable in setup", parts: [["Discovery is not enabled", "attention"], ["verifying needs it", null]], fixes: [],
         said: { value: "enable in setup", text: `Setup turns on model discovery for ${where}` }, press: () => { leave(() => onPlace("setup")); return null; } };
       case "unverified": {

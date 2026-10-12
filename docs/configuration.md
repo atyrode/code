@@ -152,13 +152,24 @@ rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provid
 such a rung that does not answer leaves that family shorter. A family Code requires is
 laddered on whatever of it answers, short below three rungs, and one none of whose models
 answers is left out as a family with no account is; a selection that needs it is refused
-where it is reviewed. `deriveCatalog` returns the document and every other offered model
-with its reason; the document's compiled catalog names its short families. It refuses only a
-family Code requires whose ladder would put a model above one that costs no more and thinks deeper
-(`code_ladder_regression`, naming both), a benchmark that does not answer the charge exactly,
-and nothing laddered at all (`code_probe_insufficient_ladder`). Only the returned `confirm`
+where it is reviewed. A model whose probe got no answer the benchmark could read (OMP's
+`unresolved` or `unmatched`) is left out rather than discarding every model measured beside
+it: as `inconclusive`, or as it would be had it answered where its answer could not change
+the list (`superseded` by a newer version that answered, `separate_quota`). `deriveCatalog` returns the document
+and every other offered model with its reason; the document's compiled catalog names its
+short families. It refuses only a family Code requires whose ladder would put a model above
+one that costs no more and thinks deeper (`code_ladder_regression`, naming both), a benchmark
+that does not answer the charge exactly, and nothing laddered at all
+(`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
-the selection narrowed to what the verified catalog hosts. Every step re-observes the
+the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
+left out only where nothing already chosen needs it. When it is in the list in use as a
+verification with this exact account pool made it, or belongs to a family the wanted lane
+names (one provider, or OpenAI and Anthropic for the mixed lane) that the new list would not
+have at all, the run stops at derive (`code_models_unanswered`, naming the models) before the
+selection is narrowed, with the list and the saved selection unchanged, since an outage or a
+rate limit reads the same as a model the account cannot use. A list verified with other
+accounts, or never verified, holds no such claim. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
 when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
 OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed
@@ -780,15 +791,19 @@ verifying, a staged list's changes (field by field, a model added or dropped, th
 value struck), or, after a verification in this panel, the models it left out, each
 with its reason in a word: a model the accounts' plan, their settings or this client
 excludes (`client_blocked`) reads **not served**, one no account finds (`not_found`) **not
-reachable**, a model in OMP's `spark` quota class **retired** and any other class of its
-own **own quota**. Ids, prices, speeds, thinking ranges and reasons
+reachable**, one whose check got no clear answer (`inconclusive`) **no answer**, a model in
+OMP's `spark` quota class **retired** and any other class of its own **own quota**. Ids,
+prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
 or focused.
 One next action sits where the launch sits and follows the step: **verify models**,
 **checking models…** (drawn with the checking hold the charge keeps), **confirm charge**
 (a single deliberate press of the exact charge shown, as in the launch line), **verifying…**
 with the requests measured, then **back to code** with **verify again** beside it, the
-same Verify a current verification can always renew, its charge confirmed the same way.
+same Verify a current verification can always renew, its charge confirmed the same way;
+a verification again that stopped reads **verification stopped** beside it, with its
+reason in the readout, since what it would have changed (the list, or for a stop while
+saving the profile, the team) stays as it was.
 A staged list offers **use staged list**, which reviews the staged list at its revision
 and promotes exactly that review with the list's own default team, and **discard**. An
 unsaved edit made on the list a write would replace holds it, saying what the write does

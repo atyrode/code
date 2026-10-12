@@ -61,7 +61,7 @@ function receiptOf(models: Row[]): InventoryReceipt {
   return { schemaVersion: 1, kind: "inventory", ompVersion: OMP_VERSION, observedAt: 100, models };
 }
 /** A benchmark of every candidate: reachable, except the ids given another verdict. */
-function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked"> = {},
+function observed(inv: InventoryReceipt, verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {},
   options: ScaffoldOptions = { budget: "any" }) {
   const input = benchmarkCandidates(inv, options), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
   return { ...receipt, results: receipt.results.map(result => verdicts[result.id]
@@ -232,14 +232,36 @@ describe("pure typed scaffolding", () => {
     expect([tiers(short, "anthropic"), compileCatalog(short).short]).toEqual([[[1, "claude-sonnet-5"], [2, "claude-opus-5"]], ["anthropic"]]);
     expect(compileCatalog(derived(inv).document).short).toEqual([]);
   });
-  test("missing, stale, wrong API and inconclusive probes refuse promotion", () => {
+  test("missing, stale and wrong-API probes refuse promotion", () => {
     const inv = fullInventory(), input = benchmarkCandidates(inv), receipt = parseBenchmarkObservation(report(input), input, 101, 200);
     expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.slice(1) })).toThrow("probe_missing_probe");
     expect(() => catalogFromObservations(inv, { ...receipt, inventoryObservedAt: 99 })).toThrow("probe_missing_probe");
     expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.map((result, i) => i ? result : { ...result, api: "other" }) })).toThrow("probe_missing_probe");
-    for (const status of ["unresolved", "unmatched"]) {
-      expect(() => catalogFromObservations(inv, { ...receipt, results: receipt.results.map((result, i) => i ? result : { ...result, status, tokensPerSecond: null, timeToFirstTokenMs: null }) })).toThrow("probe_inconclusive_probe");
+  });
+  test("an inconclusive probe leaves only its own model out, named, as a refused one is", () => {
+    const inv = fullInventory();
+    inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
+    const refused = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": "client_blocked", "deepseek-v4": "not_found" }));
+    for (const status of ["unresolved", "unmatched"] as const) {
+      // The run leaves one model of a provider that otherwise answered without an answer, and the whole of a provider that could not be checked at all.
+      const derived = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": status, "deepseek-v4": status }));
+      expect(derived.document).toEqual(refused.document);
+      expect(derived.exclusions).toEqual(refused.exclusions.map(exclusion =>
+        exclusion.id === "gpt-pro-6" || exclusion.id === "deepseek-v4" ? { ...exclusion, reason: "inconclusive" } : exclusion));
     }
+  });
+  test("a model with no clear answer is named as it would be had it answered wherever its answer could not change the list", () => {
+    const inv = fullInventory();
+    inv.models.push({ ...inv.models.find(model => model.id === "claude-opus-5")!, id: "claude-opus-6" });
+    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01, quotaTier: "future-resource" });
+    // A newer version that answered replaces it whatever it answers, and a quota Code does not spend never takes a rung.
+    const replaced = catalogFromObservations(inv, observed(inv, { "claude-opus-5": "unresolved", "gpt-spark-6": "unmatched" }));
+    expect(replaced.exclusions).toContainEqual({ provider: "anthropic", id: "claude-opus-5", reason: "superseded" });
+    expect(replaced.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota", quotaTier: "future-resource" });
+    // The newest version is the one whose answer decides the rung, so it is left out as inconclusive and its predecessor takes the rung.
+    const newest = catalogFromObservations(inv, observed(inv, { "claude-opus-6": "unresolved" }));
+    expect(newest.exclusions).toContainEqual({ provider: "anthropic", id: "claude-opus-6", reason: "inconclusive" });
+    expect(tiers(newest.document, "anthropic")).toEqual([[1, "claude-haiku-5"], [2, "claude-sonnet-5"], [3, "claude-opus-5"]]);
   });
   test("every old version is probed before supersession, blocked newest cannot displace callable older", () => {
     const inv = fullInventory();
