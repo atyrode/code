@@ -15,12 +15,17 @@ import { catalogReview, commitConfiguration, configurationMigration, expectRevis
   readConfiguration, requireConfiguration, verificationProvenance } from "./state.ts";
 import { cancelSession, composeSession, followSession, listProfiles, readSession, runSession } from "./session.ts";
 import { configureServices, currentSuggestionService, readServiceConfiguration, reviewServices } from "./service-setup.ts";
+import { adoptCheck, approveChecks, readChecks, recordCheck } from "./checks.ts";
 
 const mutating: Partial<Record<RootAction, true>> = {
-  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, discardCatalog: true, select: true, changeAccounts: true,
+  initializeConfiguration: true, stageCatalog: true, promoteCatalog: true, discardCatalog: true, select: true, adoptCheck: true, changeAccounts: true,
   configureServices: true, runSession: true, cancelSession: true,
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
+// A person's own checks and approval: no container is involved, so no container capability is
+// asked. They are container-graded so that a token confined to one container reaches them and is
+// answered as keeping none, rather than refused in a way a caller could not tell from a failure.
+const personal: Partial<Record<RootAction, true>> = { readChecks: true, approveChecks: true };
 // Only Code's external suggestion policy needs native authority. Policy
 // composition never delegates OMP execution, jobs, accounts or terminals.
 const actionDelegates: Partial<Record<RootAction, readonly Cap[]>> = {
@@ -54,7 +59,11 @@ const productHandlers: ProductHandlers = {
     const record = requireConfiguration(previous);
     compileCatalog(args.document);
     const provenance = args.verification === undefined ? null : verificationProvenance(ctx, record, args.document, args.verification);
-    return commitConfiguration(ctx, previous, { ...record, draft: { document: args.document, digest: digestOf(args.document), provenance } });
+    const draft = { document: args.document, digest: digestOf(args.document), provenance };
+    // A verified list is also kept as the checking person's check of its pool and budget, which their other
+    // workspaces with that pool adopt instead of checking again; it stays a true measurement whatever this stage's fate.
+    if (draft.provenance !== null) await recordCheck(ctx, { ...draft, provenance: draft.provenance }, args.verification!.budget);
+    return commitConfiguration(ctx, previous, { ...record, draft });
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
@@ -81,6 +90,9 @@ const productHandlers: ProductHandlers = {
     reviewCatalog(compileCatalog(record.active.document), args.selection, ctx.now());
     return commitConfiguration(ctx, previous, { ...record, selection: args.selection });
   },
+  readChecks,
+  approveChecks,
+  adoptCheck,
   async changeAccounts(ctx, args) {
     const previous = await readConfiguration(ctx, args, true); expectRevision(previous, args.expectedRevision);
     const record = requireConfiguration(previous);
@@ -133,7 +145,7 @@ const plugin = {
   manifest: PluginManifestSchema.parse(manifestJson),
   actions: (Object.keys(rootActionSchemas) as RootAction[]).map(name => defineServerAction({
     name, title: name.replace(/([A-Z])/g, " $1"),
-    caps: pure[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
+    caps: pure[name] || personal[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
     ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
     scope: pure[name] ? "workspace" : "container", trace: "opaque",
     input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,

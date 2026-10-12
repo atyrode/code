@@ -11,7 +11,7 @@ import { optionConsequence, routeChanges, type DialMove, type OptionContext, typ
 import { chooseOption, laneWord, SPECS, type DialId, type MoreDial, type OptionRefusal } from "./dial-space.ts";
 import type { GateRefusal, GateVerdict, LaunchStep, ProfileSource } from "./launch-step.ts";
 import type { VerificationPhase } from "./model-verification.ts";
-import type { VerificationStatus } from "./verification.ts";
+import type { VerificationMode } from "./verification.ts";
 import type { AgentLaunchBlocker } from "../workflow.ts";
 
 /*
@@ -486,8 +486,13 @@ export type VerbFacts = {
   readonly chaining: boolean;
   readonly unsaved: boolean;
   readonly draft: boolean;
+  /** The rows hold an edit not yet saved (draft-store.ts `editedDraft`), which the press saves. */
+  readonly edited: boolean;
   readonly phase: VerificationPhase | null;
-  readonly verification: VerificationStatus;
+  /** Who started the check in flight; null when none runs. A background check never takes the verb. */
+  readonly mode: VerificationMode | null;
+  /** The list in use serves a launch as it is (launch-step.ts `listServes`). */
+  readonly serves: boolean;
   /** Some role of the team has no route now because its pools are out (`standstill`), which a launch may go ahead with. */
   readonly stranded: boolean;
   /** The panel's projection rests on present readings (`grounded`). */
@@ -499,13 +504,15 @@ export type VerbFacts = {
 };
 export type VerbView = {
   readonly label: string;
-  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a charge waits on its own Confirm. `refused`: the gate says no. */
+  /** `ready`: a press runs it. `busy`: a step runs. `waiting`: a check's charge waits on its own Approve. `refused`: the gate says no. */
   readonly state: "ready" | "busy" | "waiting" | "refused";
   readonly refusal: GateRefusal | null;
   /** A press saves the workspace team first. */
   readonly saves: boolean;
   /** A press goes on from the review to the launch when the review shows what the panel projected. */
   readonly launches: boolean;
+  /** A press checks the models first, then goes on to the launch. */
+  readonly checks: boolean;
   /** A press opens this place instead of taking a step: a staged model list is reviewed in Models. */
   readonly opens: "models" | null;
 };
@@ -516,37 +523,43 @@ const RUNNING_LABELS: Readonly<Record<"save" | "review" | "launch" | "resume", s
 
 /**
  * The verb for the workbench's step. The step and the gate are the model's (`nextLaunchStep`,
- * `actionGate`); this only names them. An edited team saves first: `Save & launch` when the
- * projection rests on present readings, so the press continues through the review to the launch,
- * else `Save & review`, which stops at the review to show the pool, and only `Save` where no canvas
- * can place the terminal. A team with a role that pools leave without a route launches `anyway`,
- * never one whose lead the session door refuses. A staged model list is the one place the verb
- * sends the person: `Review in Models` opens it. A refused step keeps the label of what it would
- * do, with the reason.
+ * `actionGate`); this only names them. Launch is the verb whatever the model list needs: when the
+ * list in use cannot serve a launch, the press checks the models first and goes on to the launch,
+ * and saves an edit on the way (`Save & launch`). An edited team saves first otherwise: `Save &
+ * launch` when the projection rests on present readings, so the press continues through the review
+ * to the launch, else `Save & review`, which stops at the review to show the pool, and only `Save`
+ * where no canvas can place the terminal. A team with a role that pools leave without a route
+ * launches `anyway`, never one whose lead the session door refuses. A staged model list is the one
+ * place the verb sends the person: `Review in Models` opens it. A refused step keeps the label of
+ * what it would do, with the reason. A check the panel runs on its own never takes the verb.
  */
 export function verbView(facts: VerbFacts): VerbView {
-  const view = (label: string, state: VerbView["state"], extra: Partial<Pick<VerbView, "saves" | "launches" | "opens">> = {}): VerbView =>
-    ({ label, state, refusal: null, saves: false, launches: false, opens: null, ...extra });
-  if (facts.phase === "inventory") return view("Checking…", "busy");
-  if (facts.phase === "benchmark") return view("Verifying…", "busy");
-  if (facts.phase === "charge") return view("Verify models", "waiting");
+  const view = (label: string, state: VerbView["state"], extra: Partial<Pick<VerbView, "saves" | "launches" | "checks" | "opens">> = {}): VerbView =>
+    ({ label, state, refusal: null, saves: false, launches: false, checks: false, opens: null, ...extra });
+  const launch = facts.edited ? "Save & launch" : "Launch";
+  if (facts.mode !== null && facts.mode !== "background") {
+    if (facts.phase === "inventory" || facts.phase === "benchmark") return view("Checking models…", "busy");
+    if (facts.phase === "charge") return view(facts.mode === "launch" ? launch : "Check models", "waiting");
+  }
   if (facts.busy) return view(facts.inFlight ? RUNNING_LABELS[facts.inFlight] : "Working…", "busy");
   if (facts.chaining) return view("Reviewing…", "busy");
   if (facts.launching) return view("Launching…", "busy");
   if (facts.step.step === "blocked" && facts.step.reason.code === "staged") return view("Review in Models", "ready", { opens: "models" });
   const step = facts.step.step;
-  const saves = step === "save" || (step === "blocked" && facts.draft && facts.unsaved && facts.verification === "current");
+  const checks = step === "verify";
+  const saves = step === "save" || (step === "blocked" && facts.draft && facts.unsaved && facts.serves);
   const launches = saves && facts.grounded && facts.placeable;
   const anyway = facts.stranded && (facts.verdict.open || facts.verdict.refusal.code !== "no-account");
-  const label = step === "verify" ? "Verify models"
+  const label = checks ? launch
     : step === "review" ? "Review"
     : step === "save" ? (!facts.placeable ? "Save" : facts.grounded ? (anyway ? "Launch anyway" : "Save & launch") : "Save & review")
     : step === "launch" ? (anyway ? "Launch anyway" : "Launch")
-    : facts.verification === "verifying" ? "Verifying…"
-    : facts.verification !== "current" ? "Verify models"
+    : facts.step.step === "blocked" && facts.step.reason.code === "verifying" ? "Checking models…"
+    : !facts.serves ? launch
     : saves ? (facts.placeable ? "Save & launch" : "Save") : "Launch";
-  if (facts.verdict.open) return view(label, "ready", { saves, launches });
-  return { ...view(label, facts.verdict.refusal.code === "running" ? "busy" : "refused", { saves, launches }), refusal: facts.verdict.refusal };
+  if (facts.verdict.open) return view(label, "ready", { saves, launches, checks });
+  const waits = facts.verdict.refusal.code === "running" || facts.verdict.refusal.code === "verifying";
+  return { ...view(label, waits ? "busy" : "refused", { saves, launches, checks }), refusal: facts.verdict.refusal };
 }
 
 /** What the panel projected for a launch: each role's served lead, and the providers its account pool serves (null: unknown). */
@@ -667,7 +680,8 @@ export type StatusFix =
   | { readonly kind: "refresh" }
   | { readonly kind: "discard" };
 export type StatusAction =
-  | { readonly kind: "confirm"; readonly requests: number }
+  // `standing`: approving also lets later checks within it run without asking, which only a person who keeps checks gets.
+  | { readonly kind: "confirm"; readonly requests: number; readonly standing: boolean }
   | { readonly kind: "cancel" }
   | { readonly kind: "fix"; readonly key: string; readonly label: string; readonly fix: StatusFix };
 export type StatusLine = { readonly parts: readonly StatusPart[]; readonly actions: readonly StatusAction[] };
@@ -683,9 +697,13 @@ export function teamEdits(saved: Selection, selection: Selection, familyWord: (f
 export type StatusFacts = {
   readonly verb: VerbView;
   readonly phase: VerificationPhase | null;
+  /** Who started the check in flight; null when none runs. */
+  readonly mode: VerificationMode | null;
   /** Benchmark requests done and in all, while verifying. */
   readonly progress: { readonly done: number; readonly total: number } | null;
   readonly charge: { readonly requests: number; readonly providers: readonly { readonly provider: string; readonly requests: number }[] } | null;
+  /** The person keeps checks and their approval (`readChecks().keeps`): only then does approving once spare later checks the asking. */
+  readonly keepsChecks: boolean;
   readonly inFlight: VerbFacts["inFlight"];
   readonly busy: boolean;
   readonly chaining: boolean;
@@ -711,6 +729,8 @@ export type StatusFacts = {
   readonly fix: FixView | null;
   /** A Save & launch press stopped at a review that differs from the projection: what differs, in the statement's words. */
   readonly differs: readonly string[] | null;
+  /** A Launch press whose check narrowed the profile to what answered stopped before launching: the settings it moved. */
+  readonly narrowed: readonly string[] | null;
   /** For an unserved lead: the nearest lane the accounts serve. */
   readonly laneFix: SlotOption | null;
   /** No included account serves anything (the pool is known and empty). */
@@ -790,8 +810,8 @@ function refusalLines(refusal: GateRefusal, facts: StatusFacts, vocab: Vocabular
     case "unsaved": return attention("No model list in use", [fix("Open Models", { kind: "open", place: "models" }, "unsaved")]);
     case "conflict": return attention("The workspace profile changed elsewhere", [fix("Use theirs", { kind: "discard" }, "conflict")]);
     case "models": return attention("These choices need a model review", [fix("Open Models", { kind: "open", place: "models" }, "models")]);
-    case "verify-status": return attention(`Verification readiness unknown on ${where}`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
-    case "verify-permissions": return attention("Discovery is not enabled", [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], "verifying needs it");
+    case "verify-status": return attention(`Model checks unknown on ${where}`, [fix("Retry", { kind: "refresh" }, "verify-status")]);
+    case "verify-permissions": return attention("Discovery is not enabled", [fix("Enable in Setup", { kind: "open", place: "setup" }, "verify-permissions")], "checking models needs it");
     case "sessions": return attention(`Sessions unavailable on ${where}`, [fix("Open Setup", { kind: "open", place: "setup" }, "sessions")]);
     case "permissions": return attention(`Sessions not enabled on ${where}`, [fix("Enable in Setup", { kind: "open", place: "setup" }, "permissions")]);
     case "skills": return attention("Skill choices need attention", [fix("Open options", { kind: "open", place: "options" }, "skills")]);
@@ -831,18 +851,22 @@ export function launchLine(facts: StatusFacts, vocab: Vocabulary): StatusLine | 
 
 function pressLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLine] | null {
   const cancel: StatusAction = { kind: "cancel" };
-  if (facts.phase === "inventory") return [line([part("Checking which models your accounts can reach", "busy")]), line([], [cancel])];
-  if (facts.phase === "charge" && facts.charge) {
+  // A check the person started, or one the panel started that the launch waits on, is said with its progress. One running
+  // beside a launch the list in use can serve stays out of the way, said only while the launch is pointed.
+  const shown = facts.mode !== null && (facts.mode !== "background" || facts.verb.refusal?.code === "verifying");
+  if (shown && facts.phase === "inventory") return [line([part("Checking which models your accounts can use", "busy")]), line([], [cancel])];
+  if (shown && facts.phase === "charge" && facts.charge) {
     const { requests, providers } = facts.charge;
-    if (requests === 0) return [line([part("Nothing to verify through these accounts")]), line([], [cancel])];
+    if (requests === 0) return [line([part("Nothing to check through these accounts")]), line([], [cancel])];
     const spend = providers.filter(entry => entry.requests > 0)
       .map(entry => `${vocab.family(providerPolicy(entry.provider).family)} ${entry.requests}`).join(" · ");
-    return [line([part(`Verifying spends ${requests} tiny ${requests === 1 ? "request" : "requests"}`), part(spend)]),
-      line([part("nothing is spent until you confirm", "meta")], [{ kind: "confirm", requests }, cancel])];
+    return [line([part(`Checking models spends ${requests} tiny ${requests === 1 ? "request" : "requests"}`), part(spend)]),
+      line(facts.keepsChecks ? [part("asked once: later checks run on their own", "meta")] : [],
+        [{ kind: "confirm", requests, standing: facts.keepsChecks }, cancel])];
   }
-  if (facts.phase === "benchmark") {
+  if (shown && facts.phase === "benchmark") {
     const progress = facts.progress ? [part(`${facts.progress.done} of ${facts.progress.total} requests`, "meta")] : [];
-    return [line([part("Verifying models with your accounts", "busy"), ...progress]), line([], [cancel])];
+    return [line([part("Checking models with your accounts", "busy"), ...progress]), line([], [cancel])];
   }
   if (facts.busy || facts.chaining || facts.launching) {
     const where = facts.machine?.name ?? "the machine";
@@ -860,9 +884,11 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   const { verb } = facts;
   if (verb.state === "refused" && verb.refusal) return refusalLines(verb.refusal, facts, vocab);
   if (verb.opens === "models") return [line([part("A staged model list waits in Models")]), line([part(`${verb.label.toLowerCase()} opens it; the profile stays as it is`, "meta")])];
-  // A stop is a choice, not a failure: what the review shows instead, and both ways on.
+  // A stop is a choice, not a failure: what the review shows instead, or what the check moved, and both ways on.
   if (facts.differs) return [line([part("The review differs", "warn"), ...facts.differs.map(text => part(text))]),
     line([part("launch to use the reviewed pool, or change a setting first", "meta")])];
+  if (facts.narrowed) return [line([part("The model check changed the profile", "warn"), ...facts.narrowed.map(text => part(text))]),
+    line([part("launch to go on with it, or change a setting first", "meta")])];
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
   if (facts.outcome?.kind === "resumed") return [line([part(`Resumed on ${facts.outcome.machine}`, "done")]), EMPTY];
   if (facts.outcome) {
@@ -872,8 +898,9 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
       dials === "harness" ? [{ kind: "fix", key: "dials-setup", label: "Enable in Setup", fix: { kind: "open", place: "setup" } }] : []), EMPTY];
   }
   if (facts.message) return [line([part(facts.message.text, "done")]), EMPTY];
-  // Verifying comes first: the verb's own label says so, and a stop judged on unverified models would be premature.
-  if (verb.label === "Verify models" || !facts.stop) return null;
+  // A press that checks first says so with its own label, and a stop judged on models not checked yet would be premature.
+  if (verb.checks) return null;
+  if (!facts.stop) return facts.mode === "background" && facts.phase !== null ? [line([part("checking models in the background", "meta")]), EMPTY] : null;
   const head = [part(stopHead(facts.stop, vocab), "attention"), part(`${roleList(facts.stop.roles)} ${facts.stop.roles.length === 1 ? "has" : "have"} no route`)];
   return facts.fix
     ? [line(head), line([], [{ kind: "fix", key: "rescue", label: `${facts.fix.label} ${facts.fix.result}`, fix: { kind: "team", selection: facts.fix.selection, review: facts.fix.review } }])]

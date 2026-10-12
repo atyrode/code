@@ -6,7 +6,8 @@ resources, jobs, locations and terminals. The independent `atyrode.omp` plugin
 owns account and usage observations, broker/sign-in custody, gateway policy,
 workspace operations, inventory, benchmark, defaults and reviewed sessions.
 Code owns catalogs, selections, account-pool choices, suggestions and their
-container-scoped compare-and-set. The
+container-scoped compare-and-set, and each person's own model checks and the standing
+approval of what checks spend. The
 [architecture ledger](manifold-transition.md#6-transition-steps) records
 acceptance; the [plugin guide](../plugins/README.md) covers development.
 
@@ -36,7 +37,9 @@ Container read/write authority is checked at every action. Native
 `ctx.storage.compareAndSet` commits the exact previous bytes, so concurrent
 edits refuse with `code_stale_preferences`. `preferences_changed` invalidates
 observations. A local React draft stays visible after a remote edit but is not
-an authoritative store.
+an authoritative store. A person's checks and approval are not shared configuration:
+they are the caller's own (see the doors below), and a workspace holds a copy of a
+check only once it adopts it.
 
 ## Code policy doors
 
@@ -46,17 +49,50 @@ All Code actions are `atyrode.code.<name>`:
 | --------------------- | ---------------------------------------------------------------------------- |
 | Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
 | Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`, `discardCatalog`           |
+| A person's checks     | `readChecks`, `approveChecks`, `adoptCheck`                                   |
 | Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`           |
 | External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
-`initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `discardCatalog`, `select`
-and `changeAccounts` take `expectedRevision`. A catalog review takes
+`initializeConfiguration`, `stageCatalog`, `promoteCatalog`, `discardCatalog`, `select`,
+`adoptCheck` and `changeAccounts` take `expectedRevision`. A catalog review takes
 `{ containerId, expectedRevision, source: "active" | "draft" }` and returns the
 exact catalog digest, compiled route/estimate review and `reviewDigest`.
 Promotion supplies that digest against the same source and revision. Discarding clears
 the staged list at the revision it was seen in and refuses `code_catalog_missing`
 when none is staged; the active list, the saved team and the account choices stay as
 they are.
+
+A person's model checks and their standing approval are the caller's own, keyed by
+their principal and kept only for a person whose sign-in reaches the workspace root
+(Code asks `containers:read` there); nobody reads or writes another person's, and an
+agent, a service, or a token confined to one container or by an authority ceiling keeps
+none. `stageCatalog` with a `verification` also keeps the staged list as the checking
+person's check of its exact account pool and the budget it was derived under
+(`verification.budget`, required), at `checks/<person>/<budget>/<poolIdentityDigest>`,
+unless they already keep one whose benchmark completed no earlier, or another of their
+checks of it is kept first; it stays kept whatever then happens to the stage or its
+promotion, since it is still a true measurement, and the 16 most recently kept are kept.
+Every stored check and approval names its principal, and a read of one naming anyone
+else, or filed under another key, refuses `code_invalid_configuration`.
+`readChecks({})` answers `{ keeps, revision, approvedRequests, approvedAt, checks }`:
+whether the caller keeps checks at all, and each check's pool, budget, list digest,
+verification provenance, when it was kept, and every model it ladders as `provider/id`; a
+caller that keeps none reads `keeps: false` and none, and the panel then promises no
+later check anything when it asks for a charge.
+`approveChecks({ expectedRevision, requests })` records, at the approval's exact
+revision, the largest charge in benchmark requests the person approved checks to spend
+without asking; `requests: 0` withdraws it, a moved revision refuses
+`code_stale_preferences`, a caller that is not a person `code_person_required` and a
+confined sign-in `code_checks_confined`. Both ask no container capability and are
+container-graded, so a token confined to one container reaches them and is answered as
+keeping none. `adoptCheck({ containerId, expectedRevision, accounts, poolIdentityDigest,
+budget, selection })` puts the caller's check of the workspace's present pool and that
+budget in use: Code recomputes the pool from the observation and the saved choices and
+refuses `code_accounts_changed` unless it is the one named, refuses `code_check_missing`
+when the caller keeps no such check, `code_invalid_provenance` when the kept list names a
+provider the pool does not include, and `code_check_current` when the workspace already
+holds a list of that pool whose benchmark completed no earlier. It saves `selection`
+(else the saved one) narrowed to the check's list, and leaves a staged list as it is.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
@@ -140,12 +176,24 @@ An unresolved catalog keeps Models repair reachable; the main view then says the
 model list is unavailable, with Retry and Models, whatever else the launch line says.
 
 The starter is render-only. Nothing writes it as the workspace's catalog except a
-model verification, `workflow.verifyModels(target, { expectedRevision, budget })`:
-the one way a Code catalog comes to name models, because only a probe shows which
-this operator can call. Preparing reads the workspace at `expectedRevision`
-(initializing an absent one), runs OMP's inventory with the pool Code composes from
-the saved account choices, and returns the charge, the number of tiny benchmark
-requests per provider, having probed and spent nothing. A catalog routes only its
+model verification (the panel's **model check**),
+`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`: the
+one way a Code catalog comes to name models, because only a probe shows which this
+operator can call. Preparing reads the workspace at `expectedRevision` (initializing an
+absent one). When the caller keeps a check of the workspace's present pool, derived under
+`budget`, whose benchmark completed later than that of the list the workspace holds for
+that pool, or the workspace holds none for it, preparing puts that check in use
+(`adoptCheck`, with `selection` narrowed to it) and ends there, spending nothing:
+`{ kind: "adopted", verified }`, whose excluded models are unknown. Otherwise it runs
+OMP's inventory with the pool Code composes from the saved account choices and returns
+`{ kind: "charge", charge, approvedRequests, confirm }`: the charge, the number of tiny
+benchmark requests per provider, and the caller's standing approval as read while
+preparing, having probed and spent nothing. An `adoptOnly` run instead ends with
+`{ kind: "none" }`, having started and written nothing, and never initializes an absent
+workspace. A `beforeWrite` option is awaited before the run first adopts or stages, so a
+caller can hold those writes, and a confirmation passed `unasked: true` (nobody pressed
+for it) reads the standing approval again before its first benchmark request and stops
+with `code_approval_withdrawn` unless it still covers the charge. A catalog routes only its
 rungs, so the charge probes every eligible model of a family Code requires (OpenAI,
 Anthropic), whose ladder must survive a model that does not answer, and only the
 rungs any other family's listing ladders (DeepSeek, OpenRouter, any other provider);
@@ -164,16 +212,18 @@ that does not answer the charge exactly, and nothing laddered at all
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
 left out only where nothing already chosen needs it. When it is in the list in use as a
-verification with this exact account pool made it, or belongs to a family the wanted lane
-names (one provider, or OpenAI and Anthropic for the mixed lane) that the new list would not
-have at all, the run stops at derive (`code_models_unanswered`, naming the models) before the
-selection is narrowed, with the list and the saved selection unchanged, since an outage or a
-rate limit reads the same as a model the account cannot use. A list verified with other
-accounts, or never verified, holds no such claim. Every step re-observes the
+verification with this exact account pool made it, or in the caller's own check of that
+pool, or belongs to a family the wanted lane names (one provider, or OpenAI and Anthropic
+for the mixed lane) that the new list would not have at all, the run stops at derive
+(`code_models_unanswered`, naming the models) before the selection is narrowed, with the
+list and the saved selection unchanged, since an outage or a rate limit reads the same as
+a model the account cannot use. A list verified with other accounts, or never verified,
+holds no such claim. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
 when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
 OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed
-or uncertain one is never replayed. The promoted catalog records its verification
+or uncertain one is never replayed. Staging keeps the list as the checking person's
+check of its pool and budget (see the doors above), and the promoted catalog records its verification
 provenance: the OMP its inventory ran under, as content identities — the artifact the
 inventory job ran from (`inventoryArtifactSha256`) and the revision of OMP's bundled model
 catalog when the inventory started (`catalogRevision`), the list the inventory picks its
@@ -195,10 +245,10 @@ unverified. An identity not yet observed, or whose read failed, claims no change
 destination's failure keeps the launch refused, a failed model list read is named in the
 launch line with Retry and Models, and a failed read of what a moved catalog publishes names
 nothing and leaves a dropped model to the session door, which re-checks that every routed
-model is still published (`code_model_unpublished`). A current verification can still be
-renewed: Verify needs only its own preconditions
+model is still published (`code_model_unpublished`). A list in use that holds can still be
+checked again: a check needs only its own preconditions
 (write access, the machine, readable accounts that include one, discovery and benchmark
-readiness), and its charge still waits on Confirm. A model that draws a
+readiness), and its charge asks unless the person's standing approval covers it. A model that draws a
 quota of its own (any OMP class but chat, Spark's for one, as each inventory row states) is
 left off the derived ladder and listed among the last verification's excluded models as
 `separate_quota` with OMP's class for it (`quotaTier`), since Code spends no such quota.
@@ -328,8 +378,9 @@ routing or usage is hidden, **Show routing** and **Show usage** stand in this he
   whose lanes the included accounts can run stays, struck, with the domain's reason. A
   family someone has signed in for but the model list has no model of keeps its lead,
   struck, with "No <family> models in your model list";
-  pressing it starts **Verify models** (through its own gate, spending nothing before
-  Confirm charge) and the readout says it finds the models the accounts reach.
+  pressing it checks the models (through the check's own gate, spending nothing before
+  Approve unless the person approved checks) and the readout says it finds the models the
+  accounts reach.
 - **Model** is the capability tier (fast, normal, smart, elite), each tier read as the
   model alias its `default` role would lead on in the profile that choosing it forms,
   with the tier's word under the alias, so a tier a short family fills reads as the real
@@ -396,7 +447,7 @@ lit to the level in the lane's accent, and the level's word while pointed. Cost 
 role-weighted relative list-price index, lowest to highest, not billing; subscriptions
 spend quota windows, which usage shows. Speed comes from measured throughput and
 first-token time, and only when every lead model has them: otherwise its glyphs stay
-unlit and the readout says "unmeasured · verifying models measures it", rather than
+unlit and the readout says "unmeasured · a model check measures it", rather than
 showing the index's middle level.
 
 ### The launch
@@ -405,10 +456,11 @@ The launch row reads `↵ <step> on <machine ▾>`: the **launch** button, the m
 dropdown, and the **launch line** (below) beside them. The launch row follows the
 generator's rows, and the launch line sits beside the launch, or under it when it has no
 room beside it, and grows downward, so the launch never moves under the pointer while its
-line changes. The step is the label of the next step in lower case: **verify models**,
-**review**, **save**, **save & review**, **save & launch**, **launch**, **launch
-anyway** or **review in Models**, and **checking…**, **verifying…**, **saving…**,
-**reviewing…**, **launching…**, **resuming…** or **working…** while one runs.
+line changes. The step is the label of the next step in lower case: **launch**,
+**save & launch**, **review**, **save**, **save & review**, **launch anyway** or
+**review in Models**, and **checking models…**, **saving…**, **reviewing…**,
+**launching…**, **resuming…** or **working…** while one runs. There is no separate verify
+step: when the list in use cannot serve a launch, the launch checks the models first.
 
 **The machine.** The dropdown shows the machine's name, a neutral dot that shows
 whether it is online and a chevron. It opens a list of the machine roster above the
@@ -416,7 +468,7 @@ launch row; click, or `w`, opens it with focus in the list. `↑` `↓`, `Home`,
 `↵` or `Space` choose; `Esc`, `Tab` or a press outside closes it and returns focus to
 the dropdown. While open the list owns its keys, so the panel's keys do nothing.
 Choosing goes through the edit-machine gate: while a step runs or a charge waits the
-dropdown refuses with the gate's reason and leaves the Tab order, so Confirm charge is
+dropdown refuses with the gate's reason and leaves the Tab order, so Approve is
 the next Tab stop after the launch. An offline or access-revoked machine is struck and
 refuses with its reason, and so is a machine OMP is not installed on ("no OMP here"),
 which can run nothing. Code checks every online machine for OMP, and a browser starts
@@ -428,18 +480,19 @@ every online machine has answered. The readout says what the pointed machine is
 the team, and is not recorded in recent profiles.
 
 **The verb.** The launch is one control whose `data-state` is `ready`, `busy`,
-`waiting` (a charge waits on its own Confirm) or `refused`. It is `aria-disabled`
+`waiting` (a check's charge waits on its own Approve) or `refused`. It is `aria-disabled`
 rather than disabled and stays focusable, so a step changing its state never drops
 focus, and a launch-line control that leaves once pressed hands focus to the launch;
 pressing a refused one shakes it, says the reason in the readout and announces it. A
 read-only workspace (no `containers:write`) is stated in neutral grey, "Read-only
 workspace" (its readout adds "changes stay a local preview"). Write access is the caps
-alone: without a canvas beside the panel, verifying, saving and account edits still
+alone: without a canvas beside the panel, checking models, saving and account edits still
 work, and only launch and resume refuse, in neutral grey, "Open Code beside the
 workspace canvas to launch". **Launch anyway** is offered when a role's pools are out,
 never for a lead no included account serves, which save, review and launch all refuse.
-**Review in Models** opens Models for a staged-only workspace. Verify is refused up
-front when the account observation cannot be read or includes no account. An edited
+**Review in Models** opens Models for a staged-only workspace. A launch that must check
+first is refused up front when the account observation cannot be read or includes no
+account. An edited
 team saves first; while the launch is pointed or pressed the readout says what the save
 changes ("2 changes to the profile: thinking high → max, advisor glance → off"), and
 **Revert** discards the edit. **Save & launch** is offered when the projection rests
@@ -461,13 +514,15 @@ says the same ("live dials in Sessions" or the reason). Setup's sessions row, an
 
 **The launch line** sits beside the launch, or under it where there is no room beside
 it, and keeps to facts and one-press fixes, each
-a button; its asides ("changes stay a local preview", "nothing is spent until you
-confirm", and, while a staged model list waits beside the active one, "a staged model
-list waits in Models") are said in the readout while the launch is pointed or pressed. It is written in this
-precedence: a verification running or its charge, a step in flight, the verb's refusal
-with its fix, a staged model list the verb opens, a review that differs from what was
-projected, a failure, the last outcome, and roles with no route with the one change
-that routes them (said once verifying is no longer the next step). A model list that
+a button; its asides ("changes stay a local preview", "asked once: later checks run on
+their own", "checking models in the background", and, while a staged model list waits
+beside the active one, "a staged model list waits in Models") are said in the readout
+while the launch is pointed or pressed. It is written in this
+precedence: a check the person started (or one the launch waits on) running or its
+charge, a step in flight, the verb's refusal with its fix, a staged model list the verb
+opens, a review that differs from what was projected or a check that changed the
+profile, a failure, the last outcome, and roles with no route with the one change that
+routes them (said once no check precedes the launch). A model list that
 cannot be read joins the line from the verb's refusal on, with its Retry and Models.
 The line names what failed rather than a general refusal:
 
@@ -484,8 +539,8 @@ The line names what failed rather than a general refusal:
   with **Retry**; "The workspace profile changed elsewhere" with **Use theirs**.
 - **OMP.** "OMP isn't on <machine>" when the destination refuses OMP's actions
   outright, in place of the readiness and permission refusals it would otherwise cause,
-  with **Use <machine>** for another online machine where OMP answers. "Verification
-  readiness unknown on <machine>" is kept for a read that really failed.
+  with **Use <machine>** for another online machine where OMP answers. "Model checks
+  unknown on <machine>" is kept for a read that really failed.
 - **Machine.** "<machine> is offline", "access revoked", "is unavailable", "The chosen
   machine is not in your machine list" or "Machine list unreadable", each with **Use
   <machine>** or **Retry** where one applies.
@@ -497,27 +552,66 @@ The line names what failed rather than a general refusal:
 
 A fix that opens a place answers to that place's key too.
 
-**Verification and its charge.** **Verify models** runs OMP's inventory ("Checking
-which models your accounts can reach"), then states the charge: "Verifying spends N tiny
-requests", per provider, with **Confirm charge** and cancel. A charge of nothing says
-"Nothing to verify through these accounts" and cannot be confirmed. Confirm is a Tab
+**Model checks and their charge.** A launch needs a model list checked against the
+account pool (see the starter and verification above). The list in use serves a launch
+when its check holds, or when it passed one and only the accounts changed since without
+leaving a lead no included account serves; a background check then renews it while
+the launch stays ready (below). Otherwise (no list yet, an imported list, a routed model
+OMP no longer lists, or a lead the changed accounts no longer serve) the step is a check
+the launch runs first, under the **launch** (or **save & launch** when the rows hold an
+edit) label, and the status sentence says why: "Launch first checks which models your
+accounts can use.", "Accounts changed since the models were checked; Launch checks them
+again first." or "OMP no longer lists a model this profile uses; Launch checks the models
+again first." The press reads **checking models…**: it puts the person's own newer
+check of the pool in use when they keep one, spending nothing, or runs OMP's inventory
+("Checking which models your accounts can use") and states the charge: "Checking models
+spends N tiny requests", per provider. A charge the person's standing approval covers
+(up to twice the largest charge they approved) is spent at once; any other waits with
+**approve** and cancel, the aside saying it is asked once. A charge of nothing says
+"Nothing to check through these accounts" and cannot be approved. Approve is a Tab
 stop after the launch, is never focused for the person, and spends only the very charge
-it showed: never one of zero requests, never before the Verify press has stayed in its
+it showed: never one of zero requests, never before the press has stayed in its
 checking state for 700 ms, and only on a deliberate single press, never the second
-click of a double-click or a held key. Progress reads "N of M requests". A verification
-that stopped or was cancelled says so until the next one starts; Verify models again is
-its retry.
+click of a double-click or a held key. It records the standing approval (the larger of
+the one held and this charge) before spending; one that cannot be recorded still spends
+this charge, and the next check asks again. Progress reads "Checking models with your
+accounts · N of M requests". When the check is done the press goes on: it reviews the
+saved team and launches it, unless the check narrowed a setting of the profile it was
+pressed on, which stops the press with "The model check changed the profile" and the
+settings it moved, as a choice. A check that stopped or was cancelled says so ("Model
+check stopped while <step>: <reason>", "Model check cancelled") until the next one
+starts; the launch is its retry.
 
-Once the saved, verified team meets every launch precondition and its review inputs
-(options, accounts, revisions, destination) have held still briefly, the workbench
-requests the launch review itself, so Launch is one press. It never does so for an
-unsaved edit, a starter or a staged catalog, and at most once per review scope: a
-refused review or launch waits for an explicit Review or a changed input.
+**Background checks.** The panel starts a check on its own when the workspace has been
+set up, the list in use no longer holds, no staged list waits, the list in use is not an
+imported one, the rows hold no edit, nothing else is in flight and a check could run
+here, and either the person keeps a newer check of the pool and budget to adopt, or the
+list passed a check and the person approved checks. A workspace never set up is left to
+its first Launch press, which adopts a kept check of its pool without asking or
+spending. A background check never asks, and spends only to renew a list that passed a
+check, within the approval as read again just before spending: any other charge ends it
+with nothing spent, and for a list that never passed a check it only adopts, starting no
+inventory, so a first check that spends is always the person's own press. It holds its
+first write until nothing the person started is in flight. It never takes the verb or
+the line beside a launch the list in use can serve, and a stop is said in Models only.
+After any check stops, is cancelled or ends unspent, nothing starts on its own again
+while the panel stays open until a check the person starts completes. An edit of the
+rows cancels one that has not started writing; while it writes the model list the gate
+holds edits as a step in progress. **ask first** in Setup withdraws the approval: a check
+the person did not approve with a press then spends nothing more, asking instead (or, in
+the background, ending unspent) if it is still listing models, and stopping if it is
+measuring them; one already past measuring keeps what it paid for.
 
-One gate decides every action: the launch, saving, verifying, confirming the charge,
+Once the saved team on a list that serves a launch meets every launch precondition and
+its review inputs (options, accounts, revisions, destination) have held still briefly,
+the workbench requests the launch review itself, so Launch is one press. It never does
+so for an unsaved edit, a starter or a staged catalog, and at most once per review
+scope: a refused review or launch waits for an explicit Review or a changed input.
+
+One gate decides every action: the launch, saving, checking models, approving a charge,
 resuming with or without the profile, opening a running session, and every edit of the
 team (including a recalled profile and a profile switch), the machine or the account
-pool. Nothing starts while a step runs, and only Confirm while a charge waits; edits
+pool. Nothing starts while a step runs, and only Approve while a charge waits; edits
 wait too, and a row still answers but refuses each choice with the gate's reason. A
 chain asks the gate again before each later step (save, then review once the save is
 observed; prepare, then open the terminal), so a team, machine, pool or authority
@@ -781,14 +875,14 @@ one the family offers names the rung the model row lands on instead, while one a
 family's top (an elite it lacks) says only that it has no model, as the model row refuses
 it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
 **· short** beside its name. The head says
-how many models are in use and when they were verified, with **OMP updated since** when
+how many models are in use and when they were checked, with **OMP updated since** when
 OMP's runtime or catalog moved after that, or that accounts changed or OMP dropped a routed
-model since they were verified, that a staged list waits beside them, that they are
-verifying, or that they are unverified or the bundled starter, with **import**
+model since they were checked, that a staged list waits beside them, that they are being
+checked, or that they are not checked or the bundled starter, with **import**
 (`i`) and **export** (`x`) as two quiet words. Beside the list
 is what the step is about: the charge per provider and the models not probed while
-verifying, a staged list's changes (field by field, a model added or dropped, the old
-value struck), or, after a verification in this panel, the models it left out, each
+checking, a staged list's changes (field by field, a model added or dropped, the old
+value struck), or, after a check measured in this panel, the models it left out, each
 with its reason in a word: a model the accounts' plan, their settings or this client
 excludes (`client_blocked`) reads **not served**, one no account finds (`not_found`) **not
 reachable**, one whose check got no clear answer (`inconclusive`) **no answer**, a model in
@@ -796,29 +890,31 @@ OMP's `spark` quota class **retired** and any other class of its own **own quota
 prices, speeds, thinking ranges and reasons
 appear only in the readout line while a cell, a provider or a left-out model is pointed
 or focused.
-One next action sits where the launch sits and follows the step: **verify models**,
-**checking models…** (drawn with the checking hold the charge keeps), **confirm charge**
-(a single deliberate press of the exact charge shown, as in the launch line), **verifying…**
-with the requests measured, then **back to code** with **verify again** beside it, the
-same Verify a current verification can always renew, its charge confirmed the same way;
-a verification again that stopped reads **verification stopped** beside it, with its
+One next action sits where the launch sits and follows the step: **check models**,
+**checking models…** (drawn with the checking hold the charge keeps), **approve**
+(a single deliberate press of the exact charge shown, as in the launch line, recording
+the standing approval), **checking…** with the requests measured, then **back to code**
+with **check again** beside it, the same check a list that holds can always renew, which
+spends without asking within the standing approval; a check again that stopped, one the
+panel ran on its own included, reads **check stopped** beside it, with its
 reason in the readout, since what it would have changed (the list, or for a stop while
-saving the profile, the team) stays as it was.
+saving the profile, the team) stays as it was. An adopted check measured nothing here,
+so nothing reads as left out after it.
 A staged list offers **use staged list**, which reviews the staged list at its revision
 and promotes exactly that review with the list's own default team, and **discard**. An
 unsaved edit made on the list a write would replace holds it, saying what the write does
 to that list (putting a staged list in use resets the profile to the staged list's default), with **save**
 (an edit of the team in use, kept on the list in use) and **discard edit** beside it.
-Verifying refused for want of
+Checking refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
 accounts, retry, open Setup, use theirs). Esc cancels a run that can still be stopped,
 and otherwise returns to Code. Import takes a pasted or dropped Code model list, checks
 that it compiles, and stages it beside the list in use, initializing an absent workspace
-first; nothing is verified or put in use until **use staged list**, and a list put in
-use that way is unverified. An import over a staged list replaces it, a verified one
+first; nothing is checked or put in use until **use staged list**, and a list put in
+use that way is not checked. An import over a staged list replaces it, a checked one
 included, and says so in its dialog and in the readout once staged. Export copies the
 list in use. The per-field editor, the
-separate discovery and benchmark controls and job recovery are gone: verification runs
+separate discovery and benchmark controls and job recovery are gone: a check runs
 discovery and benchmark as one step, and OMP's own history keeps every job.
 
 **Setup** (`u`) is one checklist for the chosen machine: machine, OMP, connection,
@@ -831,8 +927,9 @@ folders row's **existing** and **new** route), each review opening the native pe
 review of what it allows; once every row is ready, **back to code**. Folders count as
 prepared only by an OMP job matching the machine's current operation, installation,
 artifact and bindings. Beside the checklist are the profile's facts (revision, the
-models in use and when verified, what the last verification left out, the source and
-the workspace) and the optional classifier: **suggestions** off or ollama, with an
+models in use and when checked, what the last check left out, the source, the standing
+approval of checks with **ask first** to withdraw it, and the workspace) and the optional
+classifier: **suggestions** off or ollama, with an
 origin and a model, reviewed then applied through `reviewServices` and
 `configureServices` as the next action; only the instance owner configures it.
 Destination changes still invalidate native reviews and clear destination-specific
@@ -858,9 +955,10 @@ Manifold action transport as the web. It composes `createCodeClient` with
   exact pins, then prepares the reviewed job. It never falls back from failed
   validation to creation.
 - **Inventory and benchmark:** read OMP defaults and accounts, compose the Code
-  pool, start OMP's job, then read OMP's typed retained receipt. Benchmark binds
-  the inventory job; derived catalog data is staged only through a later
-  explicit Code CAS.
+  pool and read the caller's own checks; a newer kept check of that pool and budget is
+  adopted instead, with no job. Otherwise start OMP's job, then read OMP's typed
+  retained receipt. Benchmark binds the inventory job; derived catalog data is staged
+  only through a later explicit Code CAS, which keeps it as the caller's check.
 - **Session:** compose Code policy and read OMP defaults, request OMP's native
   review, then re-compose/re-read before prepare. Changed Code digest or defaults
   revision refuses. Only OMP's returned destination, review digest and

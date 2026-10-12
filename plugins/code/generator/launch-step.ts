@@ -1,7 +1,7 @@
 import type { Selection } from "../../domain/contracts.ts";
 import type { ServiceGap } from "../../domain/routing.ts";
 import type { Configuration, Target } from "../contract.ts";
-import type { VerificationStatus } from "./verification.ts";
+import type { VerificationMode, VerificationStatus } from "./verification.ts";
 
 /** Where the profile the controls show comes from: the bundled render-only preview, the shared
  * active catalog, or the shared staged one. */
@@ -112,8 +112,14 @@ export type LaunchFacts = {
   localReview: object | null;
   skillProblems: readonly string[];
   queries: { setup: { error: string | null } };
-  /** `ready`: discovery and benchmark are ready on the destination. */
-  verification: { status: VerificationStatus; ready: boolean };
+  /**
+   * The model check. `status`: the list in use's standing, `verifying` while a check runs; `held`:
+   * that standing set aside the check in flight; `passed`: the list in use records a verification;
+   * `mode`: who started the check in flight; `ready`: discovery and benchmark are ready on the destination.
+   */
+  verification: { status: VerificationStatus; held: VerificationStatus; passed: boolean; mode: VerificationMode | null; ready: boolean };
+  /** A lead no included account serves, when the pool is known (routing.ts `routeService`): the session door refuses it. */
+  unservedLead: ServiceGap | null;
 };
 export type LaunchBlockerCode =
   | "configuration" | "staged" | "verifying" | "verify-status" | "verify-permissions" | "unsaved" | "read-only" | "placement" | "conflict"
@@ -129,8 +135,8 @@ export type LaunchStep =
 const blockerText: Readonly<Record<LaunchBlockerCode, string>> = {
   configuration: "The workspace profile needs a fresh read.",
   staged: "A staged model list waits in Models.",
-  verifying: "Verifying models with your accounts…",
-  "verify-status": "Verification readiness is unknown on this machine.",
+  verifying: "Checking models with your accounts…",
+  "verify-status": "Whether models can be checked on this machine is unknown.",
   "verify-permissions": "Discovery is not enabled on this machine.",
   unsaved: "Save the profile first.",
   "read-only": "Edit access needed.",
@@ -148,11 +154,11 @@ const blockerAction: Readonly<Partial<Record<LaunchBlockerCode, LaunchBlockerAct
   configuration: "refresh", staged: "models", "verify-status": "refresh", "verify-permissions": "permissions", conflict: "discard",
   accounts: "refresh", models: "models", sessions: "permissions", permissions: "permissions", skills: "options",
 };
-/** Why the `verify` step is next, as the status sentence says it. */
+/** Why the press checks the models before it launches, as the status sentence says it. */
 const verifyText: Readonly<Record<Exclude<VerificationStatus, "current" | "verifying">, string>> = {
-  unverified: "Verify models with your accounts before saving or launching.",
-  "accounts-changed": "Accounts changed since models were verified. Verify again.",
-  unpublished: "OMP no longer lists a model this profile uses. Verify again.",
+  unverified: "Launch first checks which models your accounts can use.",
+  "accounts-changed": "Accounts changed since the models were checked; Launch checks them again first.",
+  unpublished: "OMP no longer lists a model this profile uses; Launch checks the models again first.",
 };
 function blockerReason(code: LaunchBlockerCode): LaunchBlocker {
   const action = blockerAction[code];
@@ -176,9 +182,19 @@ function verifyPreconditions(facts: LaunchFacts): LaunchBlockerCode | null {
   if (!facts.verification.ready) return "verify-permissions";
   return null;
 }
-/** Verification as the next step: null once it is current, else `verify` when it may run or what blocks it. */
+/**
+ * Whether the list in use serves a launch as it is: its check holds, or it passed one and only the
+ * accounts changed since, without leaving a lead that no included account serves. Such a list keeps
+ * serving launches while a check renews it on its own; a routed model OMP no longer lists, or an
+ * unserved lead, is refused by the session door, so those are checked again first.
+ */
+export function listServes(facts: Pick<LaunchFacts, "verification" | "unservedLead">): boolean {
+  const { held, passed } = facts.verification;
+  return held === "current" || (passed && held === "accounts-changed" && facts.unservedLead === null);
+}
+/** A check as the next step: null while the list in use serves a launch, else `verify` when one may run or what blocks it. */
 function verifyGate(facts: LaunchFacts): LaunchBlockerCode | "verify" | null {
-  if (facts.verification.status === "current") return null;
+  if (listServes(facts)) return null;
   if (facts.verification.status === "verifying") return "verifying";
   return verifyPreconditions(facts) ?? "verify";
 }
@@ -209,17 +225,19 @@ export function saveGate(facts: LaunchFacts): LaunchBlockerCode | null {
 /**
  * The next step the primary launch control should take, and why it cannot when blocked.
  *
- * Precedence: configuration not current → staged catalog previewed → verification not current
- * → unsaved team (or no saved active catalog) → read-only → no canvas to place a terminal →
+ * Precedence: configuration not current → staged catalog previewed → list in use cannot serve a
+ * launch → unsaved team (or no saved active catalog) → read-only → no canvas to place a terminal →
  * runtime unavailable → sessions unavailable → launch permission not ready → no local model
  * review → skill problems → `launch` when the review is current, else `review`.
  *
- * Verification precedes saving and reviewing: whatever team is shown, its first save and every
- * launch need a catalog verified with the present accounts, whose routed models OMP still
- * publishes. While it is not current the step is `verify`, or the first failing verification
- * precondition in its order (verifying → read-only → conflict → runtime unavailable → accounts
- * unreadable or none included → destination status unavailable → discovery/benchmark
- * permission). Below that the precedence is unchanged.
+ * A check precedes saving and reviewing when the list in use cannot serve a launch
+ * (`listServes`): a first launch, an imported list, a routed model OMP no longer lists, or a lead
+ * the changed accounts no longer serve. The step is then `verify`, which the Launch press runs
+ * before going on to the launch, or the first failing check precondition in its order (checking →
+ * read-only → conflict → runtime unavailable → accounts unreadable or none included → destination
+ * status unavailable → discovery/benchmark permission). A list that passed a check keeps serving
+ * while only the accounts changed, and a check renewing it runs on its own. Below that the
+ * precedence is unchanged.
  *
  * The unsaved branch folds in the Save control: `save` when a save of the local edit may proceed
  * (`saveGate`), otherwise the first failing Save precondition (read-only → conflict → models),
@@ -247,8 +265,8 @@ export function nextLaunchStep(facts: LaunchFacts): LaunchStep {
 export function launchStatusText(facts: LaunchFacts): string {
   if (!facts.configurationCurrent) return blockerText.configuration;
   if (facts.record?.draft && !facts.record.active) return blockerText.staged;
-  const verify = verifyGate(facts), status = facts.verification.status;
-  if (verify === "verify" && status !== "current" && status !== "verifying") return verifyText[status];
+  const verify = verifyGate(facts), held = facts.verification.held;
+  if (verify === "verify" && held !== "current" && held !== "verifying") return verifyText[held];
   if (verify !== null && verify !== "verify") return blockerText[verify];
   const gate = launchGate(facts);
   return gate ? blockerText[gate] : facts.previewCurrent ? "Ready to open a terminal." : "Review before opening a terminal.";
@@ -256,12 +274,11 @@ export function launchStatusText(facts: LaunchFacts): string {
 
 /** What the gate reads beyond the launch facts. */
 export type GateFacts = LaunchFacts & {
-  /** A step is in flight: a save, review, launch or resume, a chain between its steps, a verification checking or spending, or Models writing the model list. */
+  /** A step is in flight: a save, review, launch or resume, a chain between its steps, a check the person started, a background
+   * check writing the model list, or Models writing it. */
   running: boolean;
-  /** The charge a prepared verification shows and waits on, until it is confirmed or cancelled. */
+  /** The charge a prepared check shows and waits on, until it is approved or cancelled. */
   charge: { readonly requests: number } | null;
-  /** A lead no included account serves, when the pool is known (routing.ts `routeService`): the session door refuses it. */
-  unservedLead: ServiceGap | null;
   /** The saved session chosen to resume; empty when none is. */
   savedSessionId: string;
   /** The saved team approves plans automatically, which resuming with the team refuses (`omp_resume_plan_unsupported`). */
@@ -282,8 +299,8 @@ export type GateVerdict = { open: true } | { open: false; refusal: GateRefusal }
 const OPEN: GateVerdict = { open: true };
 const refusalText: Readonly<Record<Exclude<GateRefusalCode, LaunchBlockerCode | "not-next">, string>> = {
   running: "Wait for the step in progress.",
-  charge: "Confirm or cancel the verification charge first.",
-  "no-charge": "Nothing to verify through these accounts.",
+  charge: "Approve or cancel the model check first.",
+  "no-charge": "Nothing to check through these accounts.",
   "no-account": "No included account serves a provider this profile leads on.",
   "no-session": "Choose a saved session to resume.",
   plans: "Resuming with the current profile cannot approve plans automatically.",
@@ -304,14 +321,15 @@ function stopped(code: LaunchBlockerCode): GateVerdict {
  * depends on asks it, and a chain asks again before each of its steps with its own step set aside
  * (`running: false`), so a premise that changed mid-flight stops the chain with the refusal.
  *
- * Nothing starts while a step runs, and nothing but its Confirm while a verification charge waits;
+ * Nothing starts while a step runs, and nothing but its Approve while a check's charge waits;
  * edits of the team, session options, machine or accounts wait too, so a step never completes on a
- * premise changed under it. Confirm needs a charge of at least one request. The verb's steps follow
- * `nextLaunchStep`, except that a verification is judged by its own preconditions and a save by
- * `saveGate`. A verification that is current may still be renewed on purpose — what OMP or the
- * accounts can reach changes in ways no observation proves — and its charge still waits on its own
- * Confirm. Save, review and launch also refuse a lead no included account serves, as the session
- * door does, so a team the door refuses is never saved on the way to a launch it cannot reach.
+ * premise changed under it. Approve needs a charge of at least one request. The verb's steps follow
+ * `nextLaunchStep`, except that a check is judged by its own preconditions and a save by
+ * `saveGate`. A list in use that holds may still be checked again on purpose — what OMP or the
+ * accounts can reach changes in ways no observation proves. Save and resuming with the team stand
+ * on a list in use that serves a launch (`listServes`). Save, review and launch also refuse a lead
+ * no included account serves, as the session door does, so a team the door refuses is never saved
+ * on the way to a launch it cannot reach.
  * Resuming needs write access, a canvas to place the terminal, the machine and a chosen session;
  * with the team, the team must be what a launch would compose. Opening a running terminal and
  * editing the team, options or machine need nothing more; editing accounts needs write access.
@@ -319,7 +337,7 @@ function stopped(code: LaunchBlockerCode): GateVerdict {
 export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdict {
   if (facts.running) return refuse("running");
   if (intent === "confirm") {
-    if (!facts.charge) return { open: false, refusal: { code: "not-next", text: "No verification charge is waiting." } };
+    if (!facts.charge) return { open: false, refusal: { code: "not-next", text: "No model check is waiting for approval." } };
     return facts.charge.requests > 0 ? OPEN : refuse("no-charge");
   }
   if (facts.charge) return refuse("charge");
@@ -334,7 +352,7 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
     }
     case "save": {
       if (!facts.configurationCurrent) return stopped("configuration");
-      if (facts.verification.status !== "current") return closed(nextLaunchStep(facts), facts);
+      if (!listServes(facts)) return closed(nextLaunchStep(facts), facts);
       const save = saveGate(facts);
       if (save !== null) return stopped(save);
       return facts.unservedLead ? refuse("no-account", facts.unservedLead) : OPEN;
@@ -352,7 +370,7 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
       if (facts.skillProblems.length) return stopped("skills");
       if (intent === "resume") return OPEN;
       if (!facts.configurationCurrent) return stopped("configuration");
-      if (facts.verification.status !== "current") return closed(nextLaunchStep(facts), facts);
+      if (!listServes(facts)) return closed(nextLaunchStep(facts), facts);
       if (facts.unsaved || !facts.record?.active) return stopped("unsaved");
       if (!facts.localReview) return stopped("models");
       if (facts.unservedLead) return refuse("no-account", facts.unservedLead);

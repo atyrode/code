@@ -81,7 +81,39 @@ export const CatalogVerificationSchema = z.strictObject({
   benchmarkCompletedAt: epochMilliseconds,
   accounts: AccountsObservationSchema,
   poolIdentityDigest: digest,
+  // The budget the list was derived under, which the person's kept check of the pool is filed by.
+  budget: SelectionSchema.shape.budget,
 });
+/** How many pools a person's checks are kept for: the most recently recorded ones. A pool not kept is checked again when next used. */
+export const MAX_CHECKS = 16;
+/** The largest charge, in benchmark requests, a person can approve checks to run without asking for. */
+export const MAX_APPROVED_REQUESTS = 10_000;
+/**
+ * ONE OF A PERSON'S MODEL CHECKS, as its summary: a verified list a verification staged, kept for
+ * the person who checked it under the exact account pool it was verified with
+ * (`poolIdentityDigest`) and the budget it was derived under, so that any workspace whose saved
+ * choices select that pool, at that budget, adopts it instead of spending another check. `digest`
+ * is the list's, `recordedAt` when it was kept, and `models` every model it ladders, as
+ * `provider/id`: what a later check of the same pool may not drop merely because the model gave no
+ * clear answer.
+ */
+export const ModelCheckSchema = z.strictObject({
+  poolIdentityDigest: digest, budget: SelectionSchema.shape.budget, digest, provenance: VerificationProvenanceSchema, recordedAt: epochMilliseconds,
+  models: z.array(z.string().min(3).max(512)).max(512),
+});
+export type ModelCheck = z.infer<typeof ModelCheckSchema>;
+/**
+ * A PERSON'S CHECKS AND THEIR STANDING APPROVAL. `keeps` says whether the caller keeps any at all:
+ * false for an agent, a service or a confined sign-in, whose every check asks. `approvedRequests`
+ * is the largest charge they approved for checks that then run without asking (0: every check
+ * asks), `revision` the approval's own compare-and-set revision (0 before they ever answered), and
+ * `checks` the kept checks, newest first.
+ */
+export const ChecksSchema = z.strictObject({
+  keeps: z.boolean(), revision, approvedRequests: z.number().int().nonnegative().max(MAX_APPROVED_REQUESTS), approvedAt: epochMilliseconds.nullable(),
+  checks: z.array(ModelCheckSchema).max(MAX_CHECKS),
+});
+export type Checks = z.infer<typeof ChecksSchema>;
 /** The prompt bound is OMP's, in bytes, because the prompt reaches the machine as one entry
  * of the job input map the hub bounds (`PROMPT_MAX_BYTES`, 44 KiB). Code takes the schema
  * itself rather than the number, so the two can never disagree. */
@@ -218,6 +250,14 @@ export const rootActionSchemas = {
   // Clears the staged list, at the revision it was seen in; the list in use and the saved team stay as they are.
   discardCatalog: { input: RevisionWorkspaceSchema, result: ConfigurationSchema },
   select: { input: RevisionWorkspaceSchema.extend({ selection: SelectionSchema }), result: ConfigurationSchema },
+  // The caller's own checks and approval; nobody reads or writes another person's.
+  readChecks: { input: z.strictObject({}), result: ChecksSchema },
+  // `requests: 0` withdraws the approval, so every later check asks again.
+  approveChecks: { input: z.strictObject({ expectedRevision: revision, requests: ChecksSchema.shape.approvedRequests }), result: ChecksSchema },
+  // Puts the caller's check of the workspace's present pool, derived under `budget`, in use, with `selection` (else the saved
+  // one) narrowed to it. `poolIdentityDigest` is the pool the caller found a check for; Code recomputes the pool and refuses any other.
+  adoptCheck: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, poolIdentityDigest: digest,
+    budget: SelectionSchema.shape.budget, selection: SelectionSchema.nullable() }), result: ConfigurationSchema },
   changeAccounts: { input: RevisionWorkspaceSchema.extend({ change: AccountChoiceChangeSchema }), result: ConfigurationSchema },
   // `poolIdentityDigest` names this exact pool, independent of the order OMP lists accounts in:
   // it is what a verified catalog records and what `stageCatalog` checks a verification against.

@@ -30,7 +30,7 @@ const FOLDER_ROUTES: Readonly<Record<FolderMode, string>> = { existing: VALIDATE
 /** What each row means, as the readout says it while the row is pointed or focused. */
 const ABOUT: Readonly<Record<Exclude<SetupRowId, "machine" | "omp" | "folders">, string>> = {
   connection: "the model gateway connects OMP to your account broker; it moves no credentials and starts no request",
-  discovery: "lets Code read the models your accounts reach and measure them; verifying models needs it",
+  discovery: "lets Code read the models your accounts reach and measure them; checking models needs it",
   sessions: "lets Code open OMP sessions here",
 };
 const FOLDERS: Readonly<Record<FolderMode, string>> = {
@@ -231,7 +231,7 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
           press: () => { refresh(); return null; } };
       }
       case "connection": return reviewing("gateway", "review connection", `on ${where}`);
-      case "discovery": return reviewing("benchmark", "enable discovery", "verifying needs it");
+      case "discovery": return reviewing("benchmark", "enable discovery", "checking models needs it");
       case "sessions": return reviewing("session", "enable sessions", "launching needs it");
       case "folders": {
         // A route its permission does not allow yet is reviewed first; an allowed one runs as a native job.
@@ -253,7 +253,7 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
         said: { value: "apply classifier", text: change === "off" ? "Code stops sending task descriptions" : `Code sends task descriptions to ${classifier.origin.trim()}` },
         press: () => { applyClassifier(); return null; } };
     }
-    return { label: "back to code", parts: [[`ready on ${where}`, "done"]], fixes: [], said: { value: "back to code", text: `verify and launch on ${where}` },
+    return { label: "back to code", parts: [[`ready on ${where}`, "done"]], fixes: [], said: { value: "back to code", text: `launch on ${where}` },
       press: () => { onBack(); return null; } };
   }
   const next = primary();
@@ -306,8 +306,15 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
   // ------------------------------------------------------------ the profile's facts
   const record = model.record, active = record?.active ?? null;
   const inUse = useMemo(() => active ? modelRows(active.document).length : 0, [active]);
-  const verifiedAt = model.verification.status === "current" ? model.verification.provenance?.benchmarkCompletedAt ?? null : null;
+  const verifiedAt = model.verification.held === "current" ? model.verification.provenance?.benchmarkCompletedAt ?? null : null;
   const leftOut = model.verification.exclusions;
+  // What checks may spend on their own (model-verification.ts `approvedRequests`): up to twice the largest approved charge;
+  // null until the approval has been read, when nothing is said rather than a guess.
+  const approved = model.verification.approvedRequests;
+  async function askFirst() {
+    try { await model.verification.withdraw(); readout.say({ value: "checks", text: "every later check asks before it spends" }); }
+    catch (reason) { readout.say({ value: "checks", text: `${codeOperationFailure(reason)} Checks still run on their own.`, warn: true }); }
+  }
   const ompVersion = model.queries.metadata.data?.ompVersion ?? null;
 
   return <section ref={root} className={`${G}sheet`} data-sheet="setup" data-mode={mode} aria-label="Setup" onKeyDown={keys}>
@@ -353,10 +360,14 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
           <dd>{record?.revision ?? model.observed?.revision ?? "not read"}{!model.configurationCurrent && <span className={`${G}setup-q`}> · last known</span>}</dd>
           <dt>models</dt>
           <dd><button type="button" className={`${G}setup-link`} data-place="models" onClick={() => onPlace("models")}>{active ? `${inUse} in use` : "none in use"}</button>
-            {active && <span className={`${G}setup-q`}> · {verifiedAt !== null ? `verified ${since(Date.now() - verifiedAt)}` : "unverified"}</span>}</dd>
+            {active && <span className={`${G}setup-q`}> · {verifiedAt !== null ? `checked ${since(Date.now() - verifiedAt)}` : "not checked"}</span>}</dd>
           {leftOut && <><dt>left out</dt><dd><button type="button" className={`${G}setup-link`} data-place="models" onClick={() => onPlace("models")}>{leftOut.length}</button></dd></>}
           <dt>source</dt>
           <dd>{active ? "stored list" : record?.draft ? "staged list" : "bundled starter"}{ompVersion && <span className={`${G}setup-q`}> · OMP {ompVersion} bundled list</span>}</dd>
+          {approved !== null && <><dt>checks</dt>
+            <dd>{approved > 0
+              ? <>on their own up to {approved * 2} requests <span className={`${G}setup-q`}>·</span> <button type="button" className={`${G}setup-link`} data-checks="ask" onClick={() => void askFirst()}>ask first</button></>
+              : "ask before spending"}</dd></>}
           <dt>workspace</dt>
           <dd>{host.containerId}</dd>
         </dl>

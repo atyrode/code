@@ -101,7 +101,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const edits = model.gate("edit-team");
   const writeRefusal = !model.writable ? "Edit access needed." : !model.configurationCurrent ? "The workspace profile needs a fresh read."
-    : running ? "A verification is running." : working ? "Wait for the change in progress." : !edits.open ? edits.refusal.text : null;
+    : running ? "A model check is running." : working ? "Wait for the change in progress." : !edits.open ? edits.refusal.text : null;
   // An unsaved edit made on the list a write would replace holds that write until it is saved or discarded (launch-step.ts
   // `editHoldsCatalogWrite`), saying what the write does to that list and what each fix does with the edit. A list put in
   // use starts from its own default team (state.ts `catalogReview`), so a saved edit stays with the list in use. Only an
@@ -157,7 +157,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       wrote(revision, promoted);
       // The staged list goes in use with its own default team; a saved team it does not repeat is said to be gone.
       const reset = saved !== null && promoted.selection !== null && !sameTeam(promoted.selection, saved);
-      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is the new list's default now"] : [], ...verified ? [] : ["verify it next"]].join("; ") };
+      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is the new list's default now"] : [], ...verified ? [] : ["check it next"]].join("; ") };
     }, setFailure);
   }
   function discard() {
@@ -178,10 +178,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const importRefusal = writeRefusal;
   // Import opens over an edit it would replace; the dialog says so and offers to discard the edit.
   const stageHold = writeRefusal ? null : editHold("stage");
-  // An import over a staged list replaces it, a verified one with its verification.
+  // An import over a staged list replaces it, a checked one with its check.
   const importEffect = !draft ? "It is staged beside the list in use; nothing changes until you use it."
-    : `It replaces the ${draft.provenance ? "verified " : ""}staged list; ${active ? "the list in use changes only when you use it." : "nothing is in use until you use it."}`;
-  const exportRefusal = running ? "A verification is running." : !(active?.document ?? inUseDocument) ? "There is no list to export." : null;
+    : `It replaces the ${draft.provenance ? "checked " : ""}staged list; ${active ? "the list in use changes only when you use it." : "nothing is in use until you use it."}`;
+  const exportRefusal = running ? "A model check is running." : !(active?.document ?? inUseDocument) ? "There is no list to export." : null;
   function openImport() {
     setPaste(""); setImportError(null);
     dialog.current?.showModal();
@@ -203,7 +203,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       wrote(initialized.revision, staged);
       dialog.current?.close();
       const beside = `${count(added, "change")} beside the list in use`;
-      return { value: "staged", text: replacing ? `${beside}; it replaced the ${replacing.provenance ? "verified " : ""}list staged before` : beside };
+      return { value: "staged", text: replacing ? `${beside}; it replaced the ${replacing.provenance ? "checked " : ""}list staged before` : beside };
     }, setImportError);
   }
   async function exportList() {
@@ -234,7 +234,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const refused: readonly Part[] = failure ? [["not changed", "attention"]] : [];
   const charged = verification.charge?.requests ?? 0;
   const measured = progress.reduce((sum, entry) => sum + entry.done, 0), measuring = progress.reduce((sum, entry) => sum + entry.total, 0) || charged;
-  const busy = (): string => "A verification is running; cancel stops it.";
+  const busy = (): string => "A model check is running; cancel stops it.";
   function verifyRefused(refusal: GateRefusal): Primary {
     const setup: GoFix = { label: "open setup", run: () => onPlace("setup") };
     const accounts: GoFix = { label: "show accounts", run: () => onPlace("accounts") };
@@ -245,34 +245,35 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       : code === "unavailable" ? [!machine ? "No machine chosen" : machine.online ? `${machine.name} is unavailable` : `${machine.name} is offline`, [setup]]
       : code === "accounts" ? ["Accounts unreadable", [accounts]]
       : code === "no-accounts" ? ["No account is included", [accounts]]
-      : code === "verify-status" ? [`Verification readiness unknown on ${where}`, [retry]]
+      : code === "verify-status" ? [`Model checks unknown on ${where}`, [retry]]
       : code === "configuration" ? ["The workspace profile needs a fresh read", [retry]]
       : code === "conflict" ? ["The workspace profile changed elsewhere", [{ label: "use theirs", run: () => model.actions.discardChanges() }]]
       : [refusal.text.replace(/\.$/, ""), []];
-    return { label: "verify models", disabled: true, parts: [[text, "attention"]], fixes,
-      said: { value: "verify models", text: refusal.text, warn: true }, press: () => refusal.text };
+    return { label: "check models", disabled: true, parts: [[text, "attention"]], fixes,
+      said: { value: "check models", text: refusal.text, warn: true }, press: () => refusal.text };
   }
   function primary(): Primary {
     switch (phase) {
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
         said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
       case "charge": {
-        const charge = verification.charge;
-        return { label: "confirm charge", disabled: !verification.canConfirm, parts: [[count(charged, "tiny request"), "strong"], ["nothing spent yet", null]], fixes: [cancel],
-          said: { value: "confirm charge", text: `${count(charged, "request")}, one per model your accounts offer; measures speed, then puts the list in use` },
+        const charge = verification.charge, standing = verification.keepsChecks !== false;
+        return { label: "approve", disabled: !verification.canConfirm, parts: [[count(charged, "tiny request"), "strong"], ...standing ? [["asked once", null] as const] : []],
+          fixes: [cancel],
+          said: { value: "approve", text: `${count(charged, "request")}, one per model your accounts offer${standing ? "; later checks within it run on their own" : ""}` },
           press: detail => {
             const gate = model.gate("confirm");
-            if (!charge || !gate.open) return gate.open ? "Nothing to confirm yet." : gate.refusal.text;
+            if (!charge || !gate.open) return gate.open ? "Nothing to approve yet." : gate.refusal.text;
             // Only a deliberate single press spends (verification.ts `confirmsCharge`): never the second click of a double click.
-            if (detail > 1) return "A double press confirms nothing; press once.";
+            if (detail > 1) return "A double press approves nothing; press once.";
             model.actions.confirmCharge({ detail, repeat: false }, charge);
             return null;
           } };
       }
-      case "benchmark": return { label: "verifying…", busy: true, parts: [["measuring models", null], [`${measured} of ${measuring}`, "strong"]], fixes: [cancel],
-        said: { value: "verifying", text: "cancel stops the probe; what it measured so far stays in OMP's history" }, press: busy };
-      case "finishing": return { label: "verifying…", busy: true, parts: [["putting the model list in use", null]], fixes: [],
-        said: { value: "verifying", text: "saving the verified list and the profile" }, press: () => "The verified list is being saved." };
+      case "benchmark": return { label: "checking…", busy: true, parts: [["measuring models", null], [`${measured} of ${measuring}`, "strong"]], fixes: [cancel],
+        said: { value: "checking", text: "cancel stops the probe; what it measured so far stays in OMP's history" }, press: busy };
+      case "finishing": return { label: "checking…", busy: true, parts: [["putting the model list in use", null]], fixes: [],
+        said: { value: "checking", text: "saving the checked list and the profile" }, press: () => "The checked list is being saved." };
       case "staged": {
         // An unsaved edit made on the list this replaces holds it, with what lifts the hold beside it.
         const held = writeRefusal ? null : editHold("use");
@@ -281,35 +282,36 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
         return { label: "use staged list", busy: working !== null, disabled: writeRefusal !== null,
           parts: [...refused, [count(changes.length, "change"), "strong"], ["staged", null]], fixes: writeRefusal ? [] : [{ label: "discard", run: discard }],
           said: failure ? { value: "use staged list", text: failure, warn: true } : writeRefusal ? { value: "use staged list", text: writeRefusal, warn: true }
-            : { value: "use staged list", text: draft?.provenance ? "replaces the list in use with this verified one" : "replaces the list in use; it needs verifying after" },
+            : { value: "use staged list", text: draft?.provenance ? "replaces the list in use with this checked one" : "replaces the list in use; it needs checking after" },
           press: () => { if (writeRefusal) return writeRefusal; useStaged(); return null; } };
       }
       case "verified": {
-        // The head already says when the list was verified; beside the action, only its alternative: verifying again, through
-        // the same gate as a first verification, whose charge still waits on its own confirmation. A verification again that
-        // stopped says so, as a first one does: what it would have changed (the list, or for a stop while saving the profile,
+        // The head already says when the list was checked; beside the action, only its alternative: checking again, through
+        // the same gate as a first check, whose charge asks unless the person approved checks. A check again that stopped,
+        // the panel's own included, says so: what it would have changed (the list, or for a stop while saving the profile,
         // the team) stays as it was, which the head alone cannot show.
         const stopped = verification.failure;
-        const note: readonly Part[] = stopped ? [[stopped.cancelled ? "verification cancelled" : "verification stopped", stopped.cancelled ? null : "attention"]] : [];
-        return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "verify again", run: () => model.actions.verify() }] : [],
+        const note: readonly Part[] = stopped ? [[stopped.cancelled ? "check cancelled" : "check stopped", stopped.cancelled ? null : "attention"]] : [];
+        return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "check again", run: () => model.actions.verify() }] : [],
           said: failure ? { value: "back to code", text: failure, warn: true }
             : stopped && !stopped.cancelled ? { value: "back to code", text: stopped.reason, warn: true }
             : { value: "back to code", text: "the generator routes on this list" },
           press: () => { leave(onBack); return null; } };
       }
-      case "refused": return { label: "enable in setup", parts: [["Discovery is not enabled", "attention"], ["verifying needs it", null]], fixes: [],
+      case "refused": return { label: "enable in setup", parts: [["Discovery is not enabled", "attention"], ["checking models needs it", null]], fixes: [],
         said: { value: "enable in setup", text: `Setup turns on model discovery for ${where}` }, press: () => { leave(() => onPlace("setup")); return null; } };
       case "unverified": {
         if (!verifyGate.open) return verifyRefused(verifyGate.refusal);
         const stopped = verification.failure;
-        const note: readonly Part[] = stopped ? [[stopped.cancelled ? "verification cancelled" : "verification stopped", stopped.cancelled ? null : "attention"]] : [];
+        const note: readonly Part[] = stopped ? [[stopped.cancelled ? "check cancelled" : "check stopped", stopped.cancelled ? null : "attention"]] : [];
         // A model OMP dropped is named as the list shows it; several are counted.
         const dropped = verification.changes.unpublished, named = inUse.find(row => `${row.provider}/${row.id}` === dropped[0])?.alias ?? dropped[0];
         const tail: Part = verification.status === "accounts-changed" ? ["accounts changed", "warn"]
-          : verification.status === "unpublished" ? [`OMP dropped ${dropped.length === 1 ? named : count(dropped.length, "model")}`, "warn"] : ["unverified", "warn"];
-        return { label: "verify models", parts: [...note, ...refused, tail], fixes: [],
-          said: stopped && !stopped.cancelled ? { value: "verify models", text: stopped.reason, warn: true }
-            : { value: "verify models", text: "finds the models your accounts reach and measures them; nothing is spent before you confirm" },
+          : verification.status === "unpublished" ? [`OMP dropped ${dropped.length === 1 ? named : count(dropped.length, "model")}`, "warn"] : ["not checked", "warn"];
+        return { label: "check models", parts: [...note, ...refused, tail], fixes: [],
+          said: stopped && !stopped.cancelled ? { value: "check models", text: stopped.reason, warn: true }
+            : { value: "check models", text: (verification.approvedRequests ?? 0) > 0 ? "finds and measures the models your accounts reach, within what you approved"
+              : "finds and measures the models your accounts reach; nothing is spent before you approve" },
           press: () => { model.actions.verify(); return null; } };
       }
     }
@@ -347,7 +349,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       const rowChanges = changed(row);
       if (rowChanges.length) return { value: row.alias, color: "var(--tui-acc)",
         text: `${rowChanges.map(change => `${change.field} ${change.from ?? "—"} → ${change.to ?? "—"}`).join(" · ")} · staged` };
-      const speed = row.tps === null ? owed.has(row.provider) ? "measuring…" : "unmeasured · verifying measures it"
+      const speed = row.tps === null ? owed.has(row.provider) ? "measuring…" : "unmeasured · a check measures it"
         : `${Math.round(row.tps)} tok/s${row.ttft === null ? "" : ` · first token ${(row.ttft / 1000).toFixed(1)} s`}`;
       return { value: row.alias, color: hue(row.family),
         text: `${row.provider}/${row.id} · ${speed} · ${money(row.pin)} in, ${money(row.pout)} out per M · ${contextWords(row.ctx)} · ${thinkingRange(row.levels)}` };
@@ -419,13 +421,13 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
 
   // ------------------------------------------------------------ the sheet
   const verifiedAt = verification.provenance?.benchmarkCompletedAt ?? null;
-  // An OMP update the routes survived leaves the list verified; it is said beside the date, since verifying again is the way to measure under it.
+  // An OMP update the routes survived leaves the list checked; it is said beside the date, since checking again is the way to measure under it.
   const ompUpdated = verification.changes.runtimeChanged || verification.changes.catalogChanged;
-  const [tail, tone]: Part = running ? ["verifying", null] : phase === "staged" ? [active ? "staged list beside it" : "staged, none in use", "warn"]
-    : verification.status === "current" && verifiedAt !== null ? [`verified ${since(Date.now() - verifiedAt)}${ompUpdated ? " · OMP updated since" : ""}`, null]
-    : verification.status === "accounts-changed" ? ["accounts changed since verified", "warn"]
-    : verification.status === "unpublished" ? [`OMP dropped ${count(verification.changes.unpublished.length, "model")} since verified`, "warn"]
-    : !active ? ["starter · unverified", "warn"] : ["unverified", "warn"];
+  const [tail, tone]: Part = running ? ["checking", null] : phase === "staged" ? [active ? "staged list beside it" : "staged, none in use", "warn"]
+    : verification.status === "current" && verifiedAt !== null ? [`checked ${since(Date.now() - verifiedAt)}${ompUpdated ? " · OMP updated since" : ""}`, null]
+    : verification.status === "accounts-changed" ? ["accounts changed since checked", "warn"]
+    : verification.status === "unpublished" ? [`OMP dropped ${count(verification.changes.unpublished.length, "model")} since checked`, "warn"]
+    : !active ? ["starter · not checked", "warn"] : ["not checked", "warn"];
   function cell(family: string, tier: number) {
     const row = at(family, tier), id = `${family}:${tier}`, tierWord = TIERS[tier - 1]!;
     const bound = readout.bind(`cell:${id}`);

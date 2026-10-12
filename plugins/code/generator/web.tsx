@@ -222,7 +222,7 @@ const TAB_KEYS = ["Escape", "a", "e", "p", "s"] as const;
 /** Every key the panel answers, grouped by the view it acts in (panel-keys.ts); the key line names only the most used. */
 const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (readonly [key: string, does: string])[] }[] = [
   { title: "Generator", keys: [["↑ ↓", "Move between the rows"], ["← →", "Change the row's value"], ["Home End", "The row's first or last value"],
-    ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: verify, save, review or launch"], ["Mod ⏎", "The launch, from anywhere in the view"],
+    ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: save, review or launch, checking the models first when needed"], ["Mod ⏎", "The launch, from anywhere in the view"],
     ["d", "Defaults"], ["z", "Back to the saved profile"], ["f", "Show or hide the fallback chains, here or in Routing"], ["w", "Choose the machine"],
     ["m", "Models"], ["u", "Setup"], ["o", "Session options"]] },
   { title: "Views", keys: [["a", "Accounts, or back to the generator"], ["e", "Sessions, or back to the generator"],

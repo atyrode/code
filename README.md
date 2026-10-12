@@ -40,9 +40,9 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   or wheel, each model shown by its short alias per tier, with **Defaults** and
   **Revert** in its head and a readout line that says what a pointed word does,
   including to quota where it strands a role or leads on a strained pool. A lane for
-  a signed-in family the model list lacks is struck, and pressing it starts **Verify
-  models**. Cost and speed meters sit above a launch row that names the next step
-  (Verify models, Save & launch, Launch) beside a dropdown of the machines it can run
+  a signed-in family the model list lacks is struck, and pressing it checks the models,
+  which finds them. Cost and speed meters sit above a launch row that names the next step
+  (Launch, Save & launch, Review) beside a dropdown of the machines it can run
   on; a machine without OMP is refused like an offline one. When the step is refused it
   stays focusable and the launch line names what failed (the accounts, the workspace
   profile, OMP missing from the machine) with a fix. **Routing** beside it lists every
@@ -56,12 +56,22 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   **Shortcuts**, with a short key line that a touch screen does not show. Launch is
   task-less: the task is typed in the session. Empty workspaces derive a render-only
   starter from OMP's passive bundled model metadata, so exploring needs no models,
-  credentials or runtime setup; saving starts with **Verify models**. Stored active
-  policy always wins. Models (the list as one ladder per provider, its verification
-  and charge, a staged list, import and export), Setup (one checklist of what the
-  machine needs, with the profile's facts and the classifier) and Options (profile
+  credentials or runtime setup. Stored active policy always wins. Models (the list as
+  one ladder per provider, its check and charge, a staged list, import and export),
+  Setup (one checklist of what the machine needs, with the profile's facts, the
+  standing approval of model checks and the classifier) and Options (profile
   switches, skills and automation for one launch) open as sheets. An unsaved profile
   survives a reload in the tab.
+- **Model checks:** a launch needs a model list checked against the account pool,
+  and Launch runs that check itself when the list in use cannot serve it (a first
+  launch, a model OMP no longer lists, or a lead the accounts no longer serve), then
+  goes on to the review and the launch. The first check asks the person to approve its
+  cost, once: later checks within twice that charge run without asking, and Setup can
+  withdraw the approval. A finished check is kept as that person's check of the exact
+  account pool, so another workspace whose choices select the same pool adopts it on its
+  first launch, without spending. When accounts change, a check renews a list that passed one on its
+  own while the panel is open, within the approval, and Launch keeps working with the last
+  list that passed meanwhile.
 - **Agent launch:** the launch is still one press. Where an Agent Run can carry it,
   Code registers one Manifold Agent per sponsor and workspace profile with OMP's TUI
   harness, updates it when the profile changes, and launches a Run whose terminal is

@@ -83,8 +83,10 @@ function fixture(isRoot = false): Fixture {
         await hook?.();
         return value;
       },
-      set: unavailable, delete: unavailable, keys: unavailable,
+      set: unavailable, delete: async key => { store.delete(key); }, keys: async prefix => [...store.keys()].filter(key => key.startsWith(prefix ?? "")).sort(),
       compareAndSet: async (key, expected, value) => {
+        // Plugin storage refuses a key outside this shape (plugin-kit `STORAGE_KEY_PATTERN`), so a write here does too.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(key)) throw new Error(`invalid storage key: ${key}`);
         if ((store.get(key) ?? null) !== expected) return false;
         store.set(key, value);
         return true;
@@ -468,7 +470,7 @@ describe("verified catalogs and launch-time honesty", () => {
   async function verification(f: Fixture, revision: number, observation = accounts()) {
     const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: revision, accounts: observation });
     return { ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64), inventoryObservedAt: now - 2000,
-      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest };
+      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest, budget: "any" as const };
   }
 
   test("a verification records the pool Code reads itself, and review and promotion carry exactly that provenance", async () => {

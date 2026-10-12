@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID, OMP_VERSION,
   type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
-import { createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationProgress } from "../code/workflow.ts";
+import { approvalCovers, createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationOptions, type VerificationProgress } from "../code/workflow.ts";
 import { verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
@@ -13,6 +13,8 @@ import type { CodeContext } from "../code/context.ts";
 import { z } from "zod";
 
 const target = { containerId: "workspace", machineId: "destination" };
+/** Another workspace on the same destination, for checks kept across workspaces. */
+const second = { containerId: "workspace-2", machineId: "destination" };
 const unavailable = async (): Promise<never> => { throw new Error("Unexpected native operation"); };
 const JobNodeInput = z.strictObject({ node: z.strictObject({ kind: z.literal("job"), machineId: z.string(), operationId: z.string(), jobId: z.string() }) });
 /** The verification error a run stopped with; any other outcome fails the test. */
@@ -20,6 +22,12 @@ async function stopOf(run: Promise<unknown>): Promise<VerificationError> {
   const outcome = await run.then(() => null, (error: unknown) => error);
   if (!(outcome instanceof VerificationError)) throw new Error(`expected a verification stop, got ${String(outcome)}`);
   return outcome;
+}
+/** A prepared verification's charge, from the workspace's present revision; one that adopted a kept check instead fails the test. */
+async function prepared(f: ReturnType<typeof verificationFixture>, expectedRevision: number, options: VerificationOptions = {}, at: typeof target = target) {
+  const pending = await f.workflow.verifyModels(at, { expectedRevision, budget: "any", selection: null }, options);
+  if (pending.kind !== "charge") throw new Error("expected a charge, not an adopted check");
+  return pending;
 }
 
 function probeJob(jobId: string, operationId: string, state: PublicJob["state"]): PublicJob {
@@ -48,15 +56,22 @@ function verificationFixture() {
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
   const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
+  // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them. `ceiling` is a
+  // credential confined by an authority ceiling: still unscoped, but refused at the workspace root.
+  const caller = { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" } as CodeContext["auth"]["principal"],
+    containerScope: null as string | null, ceiling: false };
   const ctx: CodeContext = {
     now: () => 10_000, emit() {}, outsideScope: async () => null,
-    auth: { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" },
-      caps: ["containers:read", "containers:write"], containerScope: null, isRoot: false,
-      allows: async (cap, node) => node?.kind === "container" && node.containerId === target.containerId &&
-        (cap === "containers:read" || cap === "containers:write") },
+    auth: { get principal() { return caller.principal; },
+      caps: ["containers:read", "containers:write"], get containerScope() { return caller.containerScope; }, isRoot: false,
+      allows: async (cap, node) => (cap === "containers:read" || cap === "containers:write") && (node === undefined
+        ? caller.containerScope === null && !caller.ceiling
+        : node.kind === "container" && (node.containerId === target.containerId || node.containerId === second.containerId)) },
     storage: { pluginId: "atyrode.code", get: async key => store.get(key) ?? null,
-      set: unavailable, delete: unavailable, keys: unavailable,
+      set: unavailable, delete: async key => { store.delete(key); }, keys: async prefix => [...store.keys()].filter(key => key.startsWith(prefix ?? "")).sort(),
       compareAndSet: async (key, expected, value) => {
+        // Plugin storage refuses a key outside this shape (plugin-kit `STORAGE_KEY_PATTERN`), so a write here does too.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/.test(key)) throw new Error(`invalid storage key: ${key}`);
         if ((store.get(key) ?? null) !== expected) return false;
         store.set(key, value); return true;
       } },
@@ -128,8 +143,8 @@ function verificationFixture() {
     await hooks[door]?.();
     return result;
   });
-  const configuration = async () => actionSchemas.readConfiguration.result.parse(await handlers.readConfiguration!(ctx, { containerId: target.containerId }));
-  return { workflow, store, calls, cancelled, benchmarked, hooks, states, exitCodes, verdicts, omp, ctx, configuration, slot };
+  const configuration = async (at: typeof target = target) => actionSchemas.readConfiguration.result.parse(await handlers.readConfiguration!(ctx, { containerId: at.containerId }));
+  return { workflow, store, calls, cancelled, benchmarked, hooks, states, exitCodes, verdicts, omp, ctx, caller, configuration, slot };
 }
 /** The operator's preview, made against a catalog with OpenAI and a fourth rung. */
 const preview: Selection = { lane: { kind: "mixed" }, capability: 4, thinking: "high", advisor: "review", spark: true,
@@ -139,7 +154,7 @@ const effects = ["atyrode.code.initializeConfiguration", actionDoor("startInvent
 
 test("verification prepares a charge without spending, and one confirmation saves a verified catalog and the narrowed preview", async () => {
   const f = verificationFixture(), progress: VerificationProgress[] = [];
-  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { onProgress: value => progress.push(value) });
+  const pending = await prepared(f, 0, { onProgress: value => progress.push(value) });
   expect(pending.charge).toMatchObject({ target, revision: 1, budget: "any", inventoryJobId: "inventory-1", requests: 5, replacesDraft: false,
     defaultsRevision: 3, providers: [{ provider: "anthropic", requests: 3 }, { provider: "deepseek", requests: 2 }],
     exclusions: [{ provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }],
@@ -172,7 +187,7 @@ test("verification prepares a charge without spending, and one confirmation save
 test("a confirmation refuses to spend against a revision, pool, OMP defaults or OMP that moved since the charge", async () => {
   for (const move of ["revision", "pool", "defaults", "runtime", "catalog"] as const) {
     const f = verificationFixture();
-    const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+    const pending = await prepared(f, 0);
     if (move === "revision") await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: 1,
       change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
     if (move === "pool") f.omp.accounts.accounts = [f.slot("anthropic", 1)];
@@ -189,13 +204,13 @@ test("a confirmation refuses to spend against a revision, pool, OMP defaults or 
   }
   // Preparing from a revision the workspace has left spends nothing at all.
   const f = verificationFixture();
-  await expect(f.workflow.verifyModels(target, { expectedRevision: 3, budget: "any" })).rejects.toThrow("observe: code_stale_preferences");
+  await expect(prepared(f, 3)).rejects.toThrow("observe: code_stale_preferences");
   expect(f.calls.filter(door => effects.includes(door))).toEqual([]);
 });
 
 test("a pool that moves while the benchmark runs is never recorded as the verified one", async () => {
   const f = verificationFixture();
-  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const pending = await prepared(f, 0);
   f.hooks[actionDoor("readBenchmark")] = () => { f.omp.accounts.accounts = [f.slot("anthropic", 1), f.slot("deepseek", 2), f.slot("deepseek", 3)]; };
   const stopped = await stopOf(pending.confirm(preview));
   expect([stopped.step, stopped.reason]).toEqual(["stage", "code_accounts_changed"]);
@@ -206,7 +221,7 @@ test("a pool that moves while the benchmark runs is never recorded as the verifi
 
 test("an OMP upgraded while the benchmark runs is never recorded as the one verified", async () => {
   const f = verificationFixture();
-  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const pending = await prepared(f, 0);
   f.hooks[actionDoor("readBenchmark")] = () => { f.omp.artifact = "9".repeat(64); };
   const stopped = await stopOf(pending.confirm(preview));
   expect([stopped.step, stopped.reason]).toEqual(["stage", "code_omp_changed"]);
@@ -217,7 +232,7 @@ test("a model list republished while the inventory runs stops the verification b
   const f = verificationFixture();
   // OMP picked the inventory's models from the list it bundled when the inventory started; another list is published after.
   f.hooks[actionDoor("startInventory")] = () => { f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) }; };
-  const stopped = await stopOf(f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }));
+  const stopped = await stopOf(prepared(f, 0));
   expect([stopped.step, stopped.reason]).toEqual(["draft", "code_omp_changed"]);
   expect(stopped.evidence).toEqual({ inventoryJobId: "inventory-1", benchmarkJobIds: [], revision: 1 });
   expect(f.calls).not.toContain(actionDoor("startBenchmark"));
@@ -228,7 +243,7 @@ test("a verification outlives an OMP update its routed models survive, and a mod
   const f = verificationFixture();
   // OMP publishes the models its inventory listed, as its bundled catalog does.
   f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
-  const { configuration } = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  const { configuration } = await (await prepared(f, 0)).confirm(preview);
   const catalog = compileCatalog(configuration.active!.document);
   const routed = routedModels(catalog, reviewCatalog(catalog, configuration.selection!, 0).routes);
   // What the workbench compares the saved verification with: the destination's pins, the bundled list's revision, what that
@@ -257,14 +272,14 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
   const cancelling = verificationFixture(), controller = new AbortController();
   cancelling.states.set("inventory-1", ["started", "started"]);
   cancelling.hooks[actionDoor("startInventory")] = () => { controller.abort(); };
-  await expect(cancelling.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { signal: controller.signal }))
+  await expect(prepared(cancelling, 0, { signal: controller.signal }))
     .rejects.toThrow("inventory: code_verification_cancelled");
   expect(cancelling.cancelled).toEqual(["inventory-1"]);
   expect(cancelling.calls).not.toContain(actionDoor("readInventory"));
   // Revocation is a stop like cancellation: the running benchmark is cancelled, not abandoned.
   const revoked = verificationFixture();
   let current = true;
-  const pending = await revoked.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" }, { isCurrent: () => current });
+  const pending = await prepared(revoked, 0, { isCurrent: () => current });
   revoked.states.set("benchmark-1", ["started"]);
   revoked.hooks[actionDoor("startBenchmark")] = () => { current = false; };
   await expect(pending.confirm(preview)).rejects.toThrow("benchmark: code_verification_changed");
@@ -273,7 +288,7 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
   // A probe job that fails stops the run at its step, with the job named.
   const failing = verificationFixture();
   failing.exitCodes.set("benchmark-2", 1);
-  const failed = await stopOf((await failing.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  const failed = await stopOf((await prepared(failing, 0)).confirm(preview));
   expect([failed.step, failed.reason]).toEqual(["benchmark", "job benchmark-2 exited with exit code 1"]);
   expect(failed.evidence.benchmarkJobIds).toEqual(["benchmark-1", "benchmark-2"]);
   expect((await failing.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
@@ -281,7 +296,7 @@ test("a stop cancels the probe job in flight, and a failed one names its step an
 
 test("a status read that fails while a probe runs cancels the probe, and a cancellation that fails is named", async () => {
   const unread = verificationFixture();
-  const pending = await unread.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const pending = await prepared(unread, 0);
   unread.states.set("benchmark-1", ["started"]);
   unread.hooks["engine.jobs.status"] = () => { throw new Error("engine_job_status_unavailable"); };
   const stopped = await stopOf(pending.confirm(preview));
@@ -289,7 +304,7 @@ test("a status read that fails while a probe runs cancels the probe, and a cance
   expect(unread.cancelled).toEqual(["benchmark-1"]);
   // The cancellation is attempted even when it then fails, and the error keeps both what stopped the wait and that the job runs on.
   const stuck = verificationFixture();
-  const again = await stuck.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const again = await prepared(stuck, 0);
   stuck.states.set("benchmark-1", ["started"]);
   stuck.hooks["engine.jobs.status"] = () => { throw new Error("engine_job_status_unavailable"); };
   stuck.hooks["engine.jobs.cancel"] = () => { throw new Error("timeout"); };
@@ -302,7 +317,7 @@ test("a status read that fails while a probe runs cancels the probe, and a cance
 test("a family Code requires that the accounts reach only in part is verified short, not refused", async () => {
   const short = verificationFixture();
   short.verdicts["claude-sonnet-5"] = "not_found"; short.verdicts["claude-opus-5"] = "client_blocked";
-  const verified = await (await short.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  const verified = await (await prepared(short, 0)).confirm(preview);
   expect(verified.configuration.active?.document.models.map(model => [model.tier, model.id]))
     .toEqual([[1, "claude-haiku-5"], [1, "deepseek-flash"], [2, "deepseek-pro"]]);
   expect(verified.exclusions).toEqual([{ provider: "anthropic", id: "claude-opus-5", reason: "client_blocked" },
@@ -315,41 +330,49 @@ test("a model with no clear answer is left out of a first list, but never shorte
   // A first list: a provider that could not be checked at all is left out and named, and what answered is saved.
   const f = verificationFixture();
   f.verdicts["deepseek-flash"] = "unresolved"; f.verdicts["deepseek-pro"] = "unmatched";
-  const first = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  const first = await (await prepared(f, 0)).confirm(preview);
   expect(first.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"]);
   expect(first.exclusions.filter(exclusion => exclusion.reason === "inconclusive").map(exclusion => exclusion.id)).toEqual(["deepseek-flash", "deepseek-pro"]);
   // Verifying again while a model of the list in use gives no clear answer stops before anything is staged; the list and team stay.
   f.verdicts["claude-opus-5"] = "unresolved";
   const before = await f.configuration();
-  const again = await stopOf((await f.workflow.verifyModels(target, { expectedRevision: before.revision, budget: "any" })).confirm(first.configuration.selection));
+  const again = await stopOf((await prepared(f, before.revision)).confirm(first.configuration.selection));
   expect([again.step, again.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-opus-5"]);
   expect(await f.configuration()).toEqual(before);
   // Another pool's verification vouches for nothing these accounts could keep, so the same non-answer only leaves the model out.
   f.omp.accounts.accounts.push(f.slot("anthropic", 3));
-  const otherPool = await (await f.workflow.verifyModels(target, { expectedRevision: before.revision, budget: "any" })).confirm(first.configuration.selection);
+  const otherPool = await (await prepared(f, before.revision)).confirm(first.configuration.selection);
   expect(otherPool.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
-  // So does a list in use that no verification made, such as an imported one.
-  const imported = await f.workflow.code("stageCatalog", { containerId: target.containerId, expectedRevision: otherPool.configuration.revision,
-    document: first.configuration.active!.document });
-  const review = await f.workflow.code("reviewCatalog", { containerId: target.containerId, expectedRevision: imported.revision, source: "draft" });
-  const unverified = await f.workflow.code("promoteCatalog", { containerId: target.containerId, expectedRevision: imported.revision, source: "draft", reviewDigest: review.reviewDigest });
-  expect(unverified.active?.provenance).toBeNull();
-  const replaced = await (await f.workflow.verifyModels(target, { expectedRevision: unverified.revision, budget: "any" })).confirm(unverified.selection);
-  expect(replaced.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
+});
+
+test("a list in use that no verification made vouches for nothing either", async () => {
+  // An imported list, put in use before any check of these accounts was kept.
+  const f = verificationFixture();
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: target.containerId, expectedRevision: 0 });
+  const document = { schemaVersion: 1 as const, models: (["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"] as const).map((id, index) => ({
+    key: id, provider: "anthropic", id, api: "anthropic-messages", tier: (index + 1) as 1 | 2 | 3, quotaBucket: null, inputCostPerMillion: index + 1,
+    outputCostPerMillion: (index + 1) * 5, tokensPerSecond: null, timeToFirstTokenMs: null, contextWindow: 200_000, thinkingLevels: ["low" as const, "high" as const], images: true })) };
+  const staged = await f.workflow.code("stageCatalog", { containerId: target.containerId, expectedRevision: initialized.revision, document });
+  const review = await f.workflow.code("reviewCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft" });
+  const imported = await f.workflow.code("promoteCatalog", { containerId: target.containerId, expectedRevision: staged.revision, source: "draft", reviewDigest: review.reviewDigest });
+  expect(imported.active?.provenance).toBeNull();
+  f.verdicts["claude-opus-5"] = "unresolved";
+  const replaced = await (await prepared(f, imported.revision)).confirm(imported.selection);
+  expect(replaced.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5", "deepseek-flash", "deepseek-pro"]);
 });
 
 test("a first list stops rather than move the team off a family it chose that gave no clear answer at all", async () => {
   // The mixed lane names Claude: with no Claude model answering, saving would leave the team on another family.
   const mixed = verificationFixture();
   for (const id of ["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"]) mixed.verdicts[id] = "unresolved";
-  const blended = await stopOf((await mixed.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  const blended = await stopOf((await prepared(mixed, 0)).confirm(preview));
   expect([blended.step, blended.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-haiku-5, anthropic/claude-opus-5, anthropic/claude-sonnet-5"]);
   expect(mixed.calls).not.toContain("atyrode.code.stageCatalog");
   // A team that chose DeepSeek alone stops the same way when DeepSeek does not answer.
   const chosen = verificationFixture();
   chosen.verdicts["deepseek-flash"] = "unresolved"; chosen.verdicts["deepseek-pro"] = "unresolved";
   const deepseekOnly: Selection = { ...preview, lane: { kind: "provider", family: "deepseek", blend: "only" } };
-  const refused = await stopOf((await chosen.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(deepseekOnly));
+  const refused = await stopOf((await prepared(chosen, 0)).confirm(deepseekOnly));
   expect([refused.step, refused.reason]).toEqual(["derive", "code_models_unanswered: deepseek/deepseek-flash, deepseek/deepseek-pro"]);
   expect(chosen.calls).not.toContain("atyrode.code.stageCatalog");
 });
@@ -358,19 +381,19 @@ test("a derivation or selection the verified catalog cannot serve stops before a
   // Nothing the accounts offer answers, so there is no catalog to stage.
   const blocked = verificationFixture();
   for (const id of ["claude-haiku-5", "claude-sonnet-5", "claude-opus-5", "deepseek-flash", "deepseek-pro"]) blocked.verdicts[id] = "not_found";
-  const refused = await stopOf((await blocked.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  const refused = await stopOf((await prepared(blocked, 0)).confirm(preview));
   expect([refused.step, refused.reason]).toEqual(["derive", "code_probe_insufficient_ladder"]);
   expect(blocked.calls).not.toContain("atyrode.code.stageCatalog");
   // A free preview against a catalog derived under `any` with nothing free: the budget is never widened.
   const paid = verificationFixture();
-  const unsatisfiable = await stopOf((await paid.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm({ ...preview, budget: "free" }));
+  const unsatisfiable = await stopOf((await prepared(paid, 0)).confirm({ ...preview, budget: "free" }));
   expect([unsatisfiable.step, unsatisfiable.reason]).toEqual(["derive", "code_budget_unsatisfiable"]);
   expect(paid.calls).not.toContain("atyrode.code.stageCatalog");
 });
 
 test("a write that loses its race after staging stops at its step and keeps the verified draft for review", async () => {
   const f = verificationFixture();
-  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const pending = await prepared(f, 0);
   f.hooks["atyrode.code.reviewCatalog"] = async () => {
     const current = (await f.configuration()).revision;
     await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: current,
@@ -386,12 +409,188 @@ test("a write that loses its race after staging stops at its step and keeps the 
 
 test("the verification observation names the pool a verification would record, and an empty one as none", async () => {
   const f = verificationFixture();
-  const pending = await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" });
+  const pending = await prepared(f, 0);
   const record: Configuration = (await f.configuration()).configuration!;
   expect(await f.workflow.observeVerification(target.containerId, record.revision, record.accounts))
     .toEqual({ providers: ["anthropic", "deepseek"], poolIdentityDigest: pending.charge.pool.poolIdentityDigest });
   f.omp.accounts.accounts = [];
   expect(await f.workflow.observeVerification(target.containerId, record.revision, record.accounts)).toBeNull();
+});
+
+test("a staged verification is kept as the person's own check of its pool and budget, which nobody else reads", async () => {
+  const f = verificationFixture();
+  expect(await f.workflow.readChecks()).toEqual({ keeps: true, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  const verified = await (await prepared(f, 0)).confirm(preview);
+  expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: verified.provenance.poolIdentityDigest, budget: "any",
+    digest: verified.configuration.active!.digest, provenance: verified.provenance, recordedAt: 10_000,
+    models: ["anthropic/claude-haiku-5", "anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "deepseek/deepseek-flash", "deepseek/deepseek-pro"] }]);
+  // Another person, an agent or a service sees none of it.
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  expect((await f.workflow.readChecks()).checks).toEqual([]);
+  f.caller.principal = { id: "agent-1", kind: "agent", name: "Agent", color: "#654321" };
+  expect((await f.workflow.readChecks()).checks).toEqual([]);
+});
+
+test("a workspace whose saved choices select a kept pool adopts the person's check without spending, narrowed to its profile", async () => {
+  const f = verificationFixture();
+  const first = await (await prepared(f, 0)).confirm(preview);
+  const from = f.calls.length;
+  const deepseekOnly: Selection = { ...preview, lane: { kind: "provider", family: "deepseek", blend: "only" } };
+  const adopted = await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "any", selection: deepseekOnly });
+  expect(adopted.kind).toBe("adopted");
+  // Initialized and adopted: no inventory, no benchmark, nothing staged.
+  expect(f.calls.slice(from).filter(door => effects.includes(door) || door === "atyrode.code.adoptCheck"))
+    .toEqual(["atyrode.code.initializeConfiguration", "atyrode.code.adoptCheck"]);
+  const saved = (await f.configuration(second)).configuration!;
+  expect(saved.active).toEqual(first.configuration.active);
+  expect(saved.selection?.lane).toEqual(deepseekOnly.lane);
+  // Holding the check now, that workspace checks for real when asked again.
+  expect((await prepared(f, saved.revision, {}, second)).charge.requests).toBe(5);
+});
+
+test("adopting refuses another pool, a pool with no kept check, and a workspace already holding one no older", async () => {
+  const f = verificationFixture();
+  const first = await (await prepared(f, 0)).confirm(preview);
+  const accounts = await f.workflow.omp("accounts", {});
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
+  const adopt = (containerId: string, expectedRevision: number, poolIdentityDigest = first.provenance.poolIdentityDigest, budget: Selection["budget"] = "any") =>
+    handlers.adoptCheck!(f.ctx, { containerId, expectedRevision, accounts, poolIdentityDigest, budget, selection: null });
+  // The pool the caller found a check for must be the one the saved choices select now.
+  expect(await adopt(second.containerId, initialized.revision, "b".repeat(64))).toEqual({ refused: "code_accounts_changed" });
+  // The workspace the check came from already holds it.
+  expect(await adopt(target.containerId, first.configuration.revision)).toEqual({ refused: "code_check_current" });
+  // A list derived under another budget is not the check of this one: a free list never replaces a paid one, or the reverse.
+  expect(await adopt(second.containerId, initialized.revision, first.provenance.poolIdentityDigest, "free")).toEqual({ refused: "code_check_missing" });
+  // A token confined to one container keeps no checks, so it adopts none either.
+  f.caller.containerScope = second.containerId;
+  expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
+  f.caller.containerScope = null;
+  // A kept list naming a provider these accounts do not include is never put in use, whatever key it is filed under.
+  const key = [...f.store.keys()].find(entry => entry.startsWith("checks/"))!, original = f.store.get(key)!, stored = JSON.parse(original);
+  f.store.set(key, JSON.stringify({ ...stored, document: { ...stored.document, models: [...stored.document.models,
+    { ...stored.document.models[0], key: "elsewhere", provider: "openrouter", id: "elsewhere" }] } }));
+  expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_invalid_provenance" });
+  f.store.set(key, original);
+  // Another person keeps no check of this pool.
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
+  expect((await f.configuration(second)).configuration).toEqual(initialized);
+});
+
+test("the standing approval is the caller's own, written at its exact revision, and bounds what checks spend without asking", async () => {
+  const f = verificationFixture();
+  expect(await f.workflow.approveChecks(0, 19)).toMatchObject({ revision: 1, approvedRequests: 19, approvedAt: 10_000 });
+  await expect(f.workflow.approveChecks(0, 40)).rejects.toThrow("code_stale_preferences");
+  expect((await f.workflow.approveChecks(1, 0)).approvedRequests).toBe(0);
+  // Checks run without asking up to twice the approved charge, never with none approved, and never for nothing.
+  expect([approvalCovers(19, 38), approvalCovers(19, 39), approvalCovers(0, 1), approvalCovers(19, 0)]).toEqual([true, false, false, false]);
+  // A prepared charge carries the approval as read while preparing it.
+  await f.workflow.approveChecks(2, 5);
+  expect((await prepared(f, 0)).approvedRequests).toBe(5);
+  // Another person's approval is theirs; an agent approves nothing.
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  expect((await f.workflow.readChecks()).approvedRequests).toBe(0);
+  f.caller.principal = { id: "agent-1", kind: "agent", name: "Agent", color: "#654321" };
+  await expect(f.workflow.approveChecks(0, 19)).rejects.toThrow("code_person_required");
+});
+
+test("a check never drops a model the person's own check of the pool listed when it merely gave no clear answer", async () => {
+  const f = verificationFixture();
+  // The person's check of this pool lists Claude Opus.
+  await (await prepared(f, 0)).confirm(preview);
+  // In another workspace, someone else put a newer list of the same pool in use without Opus: theirs, not this person's check.
+  f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
+  f.verdicts["claude-opus-5"] = "not_found";
+  const theirs = await (await prepared(f, 0, {}, second)).confirm(preview);
+  expect(theirs.configuration.active?.document.models.map(model => model.id)).not.toContain("claude-opus-5");
+  // Checking that workspace again, Opus gives no clear answer: the person's own check keeps it from being dropped.
+  f.caller.principal = { id: "writer", kind: "human", name: "Writer", color: "#123456" };
+  f.verdicts["claude-opus-5"] = "unresolved";
+  const before = await f.configuration(second);
+  const stopped = await stopOf((await prepared(f, before.revision, {}, second)).confirm(theirs.configuration.selection));
+  expect([stopped.step, stopped.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-opus-5"]);
+  expect(await f.configuration(second)).toEqual(before);
+});
+
+test("a check survives its own run losing a race after it was staged, and the next run adopts it instead of spending", async () => {
+  const f = verificationFixture();
+  const pending = await prepared(f, 0);
+  f.hooks["atyrode.code.reviewCatalog"] = async () => {
+    const current = (await f.configuration()).revision;
+    await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: current,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+  };
+  expect((await stopOf(pending.confirm(preview))).step).toBe("promote");
+  delete f.hooks["atyrode.code.reviewCatalog"];
+  const benchmarks = f.benchmarked.length, now = await f.configuration();
+  const again = await f.workflow.verifyModels(target, { expectedRevision: now.revision, budget: "any", selection: preview });
+  expect(again.kind).toBe("adopted");
+  expect(f.benchmarked).toHaveLength(benchmarks);
+});
+
+test("an adopt-only run writes and starts nothing unless the person keeps a check of the pool", async () => {
+  const f = verificationFixture();
+  // A workspace never set up is left alone: not even initialized.
+  expect(await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any", selection: null, adoptOnly: true })).toEqual({ kind: "none" });
+  expect(f.calls.filter(door => effects.includes(door))).toEqual([]);
+  // A set-up workspace with no kept check of its pool starts no inventory.
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: target.containerId, expectedRevision: 0 });
+  expect(await f.workflow.verifyModels(target, { expectedRevision: initialized.revision, budget: "any", selection: null, adoptOnly: true })).toEqual({ kind: "none" });
+  expect(f.calls).not.toContain(actionDoor("startInventory"));
+  // With a check of the pool kept from another workspace, it adopts it.
+  await (await prepared(f, 0, {}, second)).confirm(preview);
+  expect((await f.workflow.verifyModels(target, { expectedRevision: initialized.revision, budget: "any", selection: null, adoptOnly: true })).kind).toBe("adopted");
+});
+
+test("stored checks and approvals are bound to their principal: a record naming anyone else is refused as corruption", async () => {
+  const f = verificationFixture();
+  await (await prepared(f, 0)).confirm(preview);
+  await f.workflow.approveChecks(0, 19);
+  for (const prefix of ["checks/", "approvals/"]) {
+    const key = [...f.store.keys()].find(entry => entry.startsWith(prefix))!;
+    const original = f.store.get(key)!;
+    f.store.set(key, JSON.stringify({ ...JSON.parse(original), principalId: "reader" }));
+    await expect(f.workflow.readChecks()).rejects.toThrow("code_invalid_configuration");
+    f.store.set(key, original);
+  }
+  // A check filed under another pool's key is not that pool's check: read or adopted, it is refused as corruption.
+  const key = [...f.store.keys()].find(entry => entry.startsWith("checks/"))!, original = f.store.get(key)!;
+  const moved = key.replace(/[0-9a-f]{64}$/, "b".repeat(64));
+  f.store.delete(key); f.store.set(moved, original);
+  await expect(f.workflow.readChecks()).rejects.toThrow("code_invalid_configuration");
+  f.store.delete(moved); f.store.set(key, original);
+  // A token confined to one container, or by an authority ceiling, reads none of them and approves nothing.
+  f.caller.containerScope = target.containerId;
+  expect(await f.workflow.readChecks()).toEqual({ keeps: false, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  await expect(f.workflow.approveChecks(0, 5)).rejects.toThrow("code_checks_confined");
+  f.caller.containerScope = null; f.caller.ceiling = true;
+  expect(await f.workflow.readChecks()).toEqual({ keeps: false, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  await expect(f.workflow.approveChecks(1, 5)).rejects.toThrow("code_checks_confined");
+});
+
+test("a check derived under another budget is never adopted: the workspace checks for itself", async () => {
+  const f = verificationFixture();
+  await (await prepared(f, 0)).confirm(preview);
+  const from = f.calls.length;
+  // The fixture's models are all paid, so the free inventory's own draft refuses; what matters is that it ran instead of adopting.
+  await f.workflow.verifyModels(second, { expectedRevision: 0, budget: "free", selection: null }).catch(() => null);
+  expect(f.calls.slice(from)).toContain(actionDoor("startInventory"));
+  expect(f.calls.slice(from)).not.toContain("atyrode.code.adoptCheck");
+});
+
+test("a charge spent without asking is spent only while the approval, read again, still covers it", async () => {
+  const f = verificationFixture();
+  await f.workflow.approveChecks(0, 5);
+  const pending = await prepared(f, 0);
+  // Withdrawn after the charge was answered: nothing is benchmarked.
+  await f.workflow.approveChecks(1, 0);
+  const stopped = await stopOf(pending.confirm(preview, { unasked: true }));
+  expect([stopped.step, stopped.reason]).toEqual(["benchmark", "code_approval_withdrawn"]);
+  expect(f.benchmarked).toEqual([]);
+  // Still covered, it spends.
+  await f.workflow.approveChecks(2, 5);
+  const again = await prepared(f, (await f.configuration()).revision);
+  expect((await again.confirm(preview, { unasked: true })).configuration.active?.provenance).not.toBeNull();
 });
 
 function sessionFixture() {

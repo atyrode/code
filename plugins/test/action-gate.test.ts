@@ -3,11 +3,15 @@ import { actionGate, resumeTeam, type GateFacts, type GateVerdict, type Workbenc
 import type { Configuration } from "../code/contract.ts";
 import type { VerificationStatus } from "../code/generator/verification.ts";
 
+/** A check's facts for a list whose standing is `status`: one that passed a check once unless it was never checked, with nothing in flight. */
+function checked(status: VerificationStatus, ready = true): GateFacts["verification"] {
+  return { status, held: status === "verifying" ? "current" : status, passed: status !== "unverified", mode: null, ready };
+}
 /** A verified, saved, launchable workbench with a saved session chosen and nothing in flight; each test changes only what it is about. */
 function facts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "current"): GateFacts {
   return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
-    queries: { setup: { error: null } }, verification: { status, ready: true },
+    queries: { setup: { error: null } }, verification: checked(status),
     running: false, charge: null, unservedLead: null, savedSessionId: "session-1", planYolo: false, ...changes };
 }
 const every: readonly WorkbenchIntent[] = ["verify", "confirm", "save", "review", "launch", "resume", "resume-with-team", "open",
@@ -20,7 +24,7 @@ describe("one gate for every action", () => {
     for (const intent of every) expect(code(actionGate(facts({ running: true, previewCurrent: true }), intent))).toBe("running");
   });
 
-  test("while a charge waits only its Confirm proceeds; edits of the team, session options, machine and accounts wait with it", () => {
+  test("while a check's charge waits only its Approve proceeds; edits of the team, session options, machine and accounts wait with it", () => {
     const waiting = facts({ charge: { requests: 19 } }, "unverified");
     for (const intent of every) expect(code(actionGate(waiting, intent))).toBe(intent === "confirm" ? "open" : "charge");
     expect(code(actionGate(facts({ charge: { requests: 0 } }, "unverified"), "confirm"))).toBe("no-charge");
@@ -52,14 +56,16 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({ writable: false }, "unverified"), "verify"))).toBe("read-only");
     expect(code(actionGate(facts({ configurationCurrent: false }, "unverified"), "verify"))).toBe("configuration");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
-    // The bundled preview is saved only by the verification that replaces it, and nothing saves unverified.
+    // The bundled preview is saved only by the check that replaces it, and nothing saves on a list the door would refuse.
     expect(code(actionGate(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" } }), "save"))).toBe("unsaved");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }, "unpublished"), "save"))).toBe("not-next");
+    // A list that passed a check still serves while only the accounts changed, so an edit of its team saves.
+    expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }, "accounts-changed"), "save"))).toBe("open");
     expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" }, writable: false }), "save"))).toBe("read-only");
   });
 
-  test("a current verification can still be renewed on purpose, through the same account, destination, readiness and authority checks", () => {
-    // What OMP or the accounts reach can change in ways no observation proves, so Verify stays reachable; its charge still waits on Confirm.
+  test("a list in use that holds can still be checked again on purpose, through the same account, destination, readiness and authority checks", () => {
+    // What OMP or the accounts reach can change in ways no observation proves, so a check stays reachable; its charge asks unless approved.
     expect(code(actionGate(facts(), "verify"))).toBe("open");
     expect(code(actionGate(facts({ writable: false }), "verify"))).toBe("read-only");
     expect(code(actionGate(facts({ stale: true }), "verify"))).toBe("conflict");
@@ -67,7 +73,7 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({ accounts: "unreadable" }), "verify"))).toBe("accounts");
     expect(code(actionGate(facts({ accounts: "none" }), "verify"))).toBe("no-accounts");
     expect(code(actionGate(facts({ queries: { setup: { error: "unreadable" } } }), "verify"))).toBe("verify-status");
-    expect(code(actionGate(facts({ verification: { status: "current", ready: false } }), "verify"))).toBe("verify-permissions");
+    expect(code(actionGate(facts({ verification: checked("current", false) }), "verify"))).toBe("verify-permissions");
     expect(code(actionGate(facts({ charge: { requests: 3 } }), "verify"))).toBe("charge");
     expect(code(actionGate(facts({ charge: { requests: 3 } }), "confirm"))).toBe("open");
   });
