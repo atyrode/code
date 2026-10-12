@@ -419,7 +419,7 @@ test("the verification observation names the pool a verification would record, a
 
 test("a staged verification is kept as the person's own check of its pool and budget, which nobody else reads", async () => {
   const f = verificationFixture();
-  expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  expect(await f.workflow.readChecks()).toEqual({ keeps: true, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
   const verified = await (await prepared(f, 0)).confirm(preview);
   expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: verified.provenance.poolIdentityDigest, budget: "any",
     digest: verified.configuration.active!.digest, provenance: verified.provenance, recordedAt: 10_000,
@@ -465,6 +465,12 @@ test("adopting refuses another pool, a pool with no kept check, and a workspace 
   f.caller.containerScope = second.containerId;
   expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
   f.caller.containerScope = null;
+  // A kept list naming a provider these accounts do not include is never put in use, whatever key it is filed under.
+  const key = [...f.store.keys()].find(entry => entry.startsWith("checks/"))!, original = f.store.get(key)!, stored = JSON.parse(original);
+  f.store.set(key, JSON.stringify({ ...stored, document: { ...stored.document, models: [...stored.document.models,
+    { ...stored.document.models[0], key: "elsewhere", provider: "openrouter", id: "elsewhere" }] } }));
+  expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_invalid_provenance" });
+  f.store.set(key, original);
   // Another person keeps no check of this pool.
   f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
   expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
@@ -555,10 +561,10 @@ test("stored checks and approvals are bound to their principal: a record naming 
   f.store.delete(moved); f.store.set(key, original);
   // A token confined to one container, or by an authority ceiling, reads none of them and approves nothing.
   f.caller.containerScope = target.containerId;
-  expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  expect(await f.workflow.readChecks()).toEqual({ keeps: false, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
   await expect(f.workflow.approveChecks(0, 5)).rejects.toThrow("code_checks_confined");
   f.caller.containerScope = null; f.caller.ceiling = true;
-  expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  expect(await f.workflow.readChecks()).toEqual({ keeps: false, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
   await expect(f.workflow.approveChecks(1, 5)).rejects.toThrow("code_checks_confined");
 });
 

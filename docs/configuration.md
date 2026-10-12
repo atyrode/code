@@ -74,9 +74,11 @@ checks of it is kept first; it stays kept whatever then happens to the stage or 
 promotion, since it is still a true measurement, and the 16 most recently kept are kept.
 Every stored check and approval names its principal, and a read of one naming anyone
 else, or filed under another key, refuses `code_invalid_configuration`.
-`readChecks({})` answers `{ revision, approvedRequests, approvedAt, checks }`: each
-check's pool, budget, list digest, verification provenance, when it was kept, and every
-model it ladders as `provider/id`; a caller that keeps none reads none.
+`readChecks({})` answers `{ keeps, revision, approvedRequests, approvedAt, checks }`:
+whether the caller keeps checks at all, and each check's pool, budget, list digest,
+verification provenance, when it was kept, and every model it ladders as `provider/id`; a
+caller that keeps none reads `keeps: false` and none, and the panel then promises no
+later check anything when it asks for a charge.
 `approveChecks({ expectedRevision, requests })` records, at the approval's exact
 revision, the largest charge in benchmark requests the person approved checks to spend
 without asking; `requests: 0` withdraws it, a moved revision refuses

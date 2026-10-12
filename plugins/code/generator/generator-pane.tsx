@@ -211,7 +211,8 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   } : null;
   const shownStop = stopped !== null && stopped.review === model.launchReview ? stopped : null;
   const line = launchLine({
-    verb, phase: verification.phase, mode: verification.mode, progress, charge, inFlight: model.inFlight, busy: model.busy, chaining: model.chaining, launching,
+    verb, phase: verification.phase, mode: verification.mode, progress, charge, keepsChecks: verification.keepsChecks !== false, inFlight: model.inFlight,
+    busy: model.busy, chaining: model.chaining, launching,
     machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, machineChosen: model.machineId !== "",
     rosterUnread: rosterError, otherMachine: other && { id: other.id, name: other.name },
     message: model.message ?? stoppedVerifying, outcome: model.outcome, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
@@ -612,7 +613,8 @@ function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
   const parts = line.parts.filter(entry => entry.tone !== "meta");
   const confirm = line.actions.find(action => action.kind === "confirm");
   return <>
-    {confirm && <button type="button" className={`${G}confirm`} aria-label={`Approve: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}, and later checks within it`}
+    {confirm && <button type="button" className={`${G}confirm`}
+      aria-label={`Approve: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}${confirm.standing ? ", and later checks within it" : ""}`}
       aria-disabled={!canConfirm || undefined} onClick={event => onConfirm(event.detail)}
       onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>approve</button>}
     {parts.length > 0 && <span className={`${G}launch-facts`}>

@@ -75,6 +75,8 @@ export type ModelVerification = VerificationState & {
   canConfirm: boolean;
   /** The largest charge, in requests, the person approved checks to spend without asking: 0 when every check asks, null until read. */
   approvedRequests: number | null;
+  /** The person keeps checks and their approval at all (`readChecks().keeps`); null until read. */
+  keepsChecks: boolean | null;
   /**
    * Initialize if needed, then put the person's own newer check of this pool in use, or run OMP's
    * inventory and answer the charge. A charge the standing approval covers is spent at once; any
@@ -106,6 +108,8 @@ type Run = { phase: VerificationPhase; progress: VerificationProgress | null; ch
 type Session = {
   mode: VerificationMode; controller: AbortController; isCurrent: () => boolean; preparedAt: number; pending: ChargedVerification | null;
   from: number; absent: boolean; charged: number | null; approvedByPress: boolean; withdrawn: boolean;
+  /** The step the run last reported, as it happens rather than as last rendered. */
+  step: VerificationStep | null;
   /** The list in use passed a check when the run started: only such a list may a background run spend to renew. */
   renews: boolean;
 };
@@ -215,15 +219,19 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     if (made !== null) latest.current.onInitialized(session.from, made);
   }
   const progressTo = (session: Session) => (progress: VerificationProgress) => {
+    session.step = progress.step;
     if (owns(session)) setRun(previous => previous && { ...previous, progress });
   };
-  /** Spends the charge: approved by the person's press, or unasked, which the workflow spends only within the approval as read again. */
-  async function spend(session: Session, pending: ChargedVerification, unasked: boolean) {
+  /**
+   * Spends the charge. One the person did not approve with their press is spent unasked, which the
+   * workflow spends only within the standing approval as it reads it again.
+   */
+  async function spend(session: Session, pending: ChargedVerification) {
     session.pending = null;
     setRun(previous => previous && { ...previous, phase: "benchmark", charge: pending.charge });
     try {
       finished(session, await pending.confirm(selectionFor(session.mode), { signal: session.controller.signal, isCurrent: session.isCurrent,
-        onProgress: progressTo(session), beforeWrite: holdFor(session), unasked }), false);
+        onProgress: progressTo(session), beforeWrite: holdFor(session), unasked: !session.approvedByPress }), false);
     } catch (reason) { stopped(session, reason); }
   }
   /**
@@ -243,7 +251,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     if (!canPrepare || !target) return;
     const started = { host, target }, controller = new AbortController();
     const session: Session = { mode, controller, pending: null, preparedAt: Date.now(), from: revision, absent: record === null, charged: null,
-      approvedByPress: false, withdrawn: false, renews: provenance !== null, isCurrent: () => {
+      approvedByPress: false, withdrawn: false, step: null, renews: provenance !== null, isCurrent: () => {
         const now = latest.current;
         return mounted.current && !controller.signal.aborted && now.host.client === started.host.client &&
           now.host.principal.id === started.host.principal.id && now.host.containerId === started.host.containerId &&
@@ -267,7 +275,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
       session.charged = pending.charge.revision;
       // An approval withdrawn while the inventory ran is honoured here, and one withdrawn after by the workflow's own read.
       if (!session.withdrawn && spendsWithoutAsking(mode, session.renews, pending.approvedRequests, pending.charge.requests)) {
-        await spend(session, pending, true);
+        await spend(session, pending);
         return;
       }
       // A background run never asks: any charge it may not spend ends it here, with nothing spent.
@@ -299,7 +307,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
       await workflow.approveChecks(now.revision, Math.max(now.approvedRequests, pending.charge.requests));
       kept.refresh();
     } catch { /* The next check asks again; this one was approved by the press. */ }
-    await spend(session, pending, false);
+    await spend(session, pending);
   }
   function cancel() {
     const session = active.current;
@@ -324,7 +332,7 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
     const session = active.current;
     if (session && !session.approvedByPress) {
       session.withdrawn = true;
-      if (session.charged !== null && session.pending === null && run?.phase === "benchmark" && run.progress?.step === "benchmark") cancel();
+      if (session.charged !== null && session.pending === null && session.step === "benchmark") cancel();
     }
     const workflow = codeWorkflow(host), now = await workflow.readChecks();
     await workflow.approveChecks(now.revision, 0);
@@ -333,6 +341,6 @@ export function useModelVerification(input: ModelVerificationInput): ModelVerifi
   return {
     ...state, held: held.status, passed: provenance !== null, phase: run?.phase ?? null, progress: run?.progress ?? null, charge: run?.charge ?? null,
     mode: run?.mode ?? null, writing, exclusions, provenance, failure, ready, canPrepare, canConfirm: run?.phase === "charge" && (run.charge?.requests ?? 0) > 0,
-    approvedRequests, prepare, confirm, cancel, withdraw,
+    approvedRequests, keepsChecks: kept.data?.keeps ?? null, prepare, confirm, cancel, withdraw,
   };
 }

@@ -92,9 +92,9 @@ function summary(check: StoredCheck): ModelCheck {
 
 export async function readChecks(ctx: CodeContext): Promise<Checks> {
   const person = await personOf(ctx);
-  if (person === null) return { revision: 0, approvedRequests: 0, approvedAt: null, checks: [] };
+  if (person === null) return { keeps: false, revision: 0, approvedRequests: 0, approvedAt: null, checks: [] };
   const [held, checks] = await Promise.all([readApproval(ctx, person), storedChecks(ctx, person)]);
-  return { revision: held?.approval.revision ?? 0, approvedRequests: held?.approval.requests ?? 0, approvedAt: held?.approval.approvedAt ?? null,
+  return { keeps: true, revision: held?.approval.revision ?? 0, approvedRequests: held?.approval.requests ?? 0, approvedAt: held?.approval.approvedAt ?? null,
     checks: checks.slice(0, MAX_CHECKS).map(summary) };
 }
 

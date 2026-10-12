@@ -49,7 +49,7 @@ const messages: Readonly<Record<string, string>> = {
   code_check_current: "This workspace's model list is already as recent as your check.",
   code_person_required: "Only a person can approve what model checks spend.",
   code_checks_confined: "This sign-in reaches only part of Manifold, so it keeps no model checks and approves none.",
-  code_approval_withdrawn: "Model checks now ask before spending, so this one spent nothing. Launch again to approve it.",
+  code_approval_withdrawn: "Model checks now ask before spending, so this one spent nothing.",
   code_operation_unavailable: "The Code action could not be completed.",
   code_scope_refused: "Your current authority does not cover this container.",
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",

@@ -242,7 +242,7 @@ describe("the launch line, in precedence", () => {
   const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
     draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, grounded: true, placeable: true, launching: false });
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
-    verb: ready, phase: null, mode: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
+    verb: ready, phase: null, mode: null, progress: null, charge: null, keepsChecks: true, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
     stop: null, fix: null, differs: null, narrowed: null, laneFix: null, nobodyServes: false, listFailure: "none", ompMissing: false, accountsProblem: null,
     configurationFailed: false, ...changes,
@@ -264,7 +264,7 @@ describe("the launch line, in precedence", () => {
   test("a waiting charge outranks the last outcome, and offers Approve only for a charge of at least one request", () => {
     const line = said({ phase: "charge", mode: "launch", charge, outcome: { kind: "launched", machine: "Studio", dials: "run" } });
     expect(line.parts.map(part => part.text).join(" ")).toContain("19");
-    expect(line.actions).toContainEqual({ kind: "confirm", requests: 19 });
+    expect(line.actions).toContainEqual({ kind: "confirm", requests: 19, standing: true });
     expect(fixes(said({ phase: "charge", mode: "launch", charge: { requests: 0, providers: [] } }))).toEqual(["cancel"]);
   });
 

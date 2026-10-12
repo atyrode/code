@@ -257,9 +257,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       case "inventory": return { label: "checking models…", busy: true, parts: [[`on ${where}`, null]], fixes: [cancel],
         said: { value: "checking models", text: "OMP reads the models your accounts reach; nothing is spent" }, press: busy };
       case "charge": {
-        const charge = verification.charge;
-        return { label: "approve", disabled: !verification.canConfirm, parts: [[count(charged, "tiny request"), "strong"], ["asked once", null]], fixes: [cancel],
-          said: { value: "approve", text: `${count(charged, "request")}, one per model your accounts offer; later checks within it run on their own` },
+        const charge = verification.charge, standing = verification.keepsChecks !== false;
+        return { label: "approve", disabled: !verification.canConfirm, parts: [[count(charged, "tiny request"), "strong"], ...standing ? [["asked once", null] as const] : []],
+          fixes: [cancel],
+          said: { value: "approve", text: `${count(charged, "request")}, one per model your accounts offer${standing ? "; later checks within it run on their own" : ""}` },
           press: detail => {
             const gate = model.gate("confirm");
             if (!charge || !gate.open) return gate.open ? "Nothing to approve yet." : gate.refusal.text;

@@ -103,13 +103,14 @@ export const ModelCheckSchema = z.strictObject({
 });
 export type ModelCheck = z.infer<typeof ModelCheckSchema>;
 /**
- * A PERSON'S CHECKS AND THEIR STANDING APPROVAL. `approvedRequests` is the largest charge they
- * approved for checks that then run without asking (0: every check asks), `revision` the
- * approval's own compare-and-set revision (0 before they ever answered), and `checks` the kept
- * checks, newest first. An agent, a service or a token confined to one container keeps none.
+ * A PERSON'S CHECKS AND THEIR STANDING APPROVAL. `keeps` says whether the caller keeps any at all:
+ * false for an agent, a service or a confined sign-in, whose every check asks. `approvedRequests`
+ * is the largest charge they approved for checks that then run without asking (0: every check
+ * asks), `revision` the approval's own compare-and-set revision (0 before they ever answered), and
+ * `checks` the kept checks, newest first.
  */
 export const ChecksSchema = z.strictObject({
-  revision, approvedRequests: z.number().int().nonnegative().max(MAX_APPROVED_REQUESTS), approvedAt: epochMilliseconds.nullable(),
+  keeps: z.boolean(), revision, approvedRequests: z.number().int().nonnegative().max(MAX_APPROVED_REQUESTS), approvedAt: epochMilliseconds.nullable(),
   checks: z.array(ModelCheckSchema).max(MAX_CHECKS),
 });
 export type Checks = z.infer<typeof ChecksSchema>;

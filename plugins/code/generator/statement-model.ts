@@ -680,7 +680,8 @@ export type StatusFix =
   | { readonly kind: "refresh" }
   | { readonly kind: "discard" };
 export type StatusAction =
-  | { readonly kind: "confirm"; readonly requests: number }
+  // `standing`: approving also lets later checks within it run without asking, which only a person who keeps checks gets.
+  | { readonly kind: "confirm"; readonly requests: number; readonly standing: boolean }
   | { readonly kind: "cancel" }
   | { readonly kind: "fix"; readonly key: string; readonly label: string; readonly fix: StatusFix };
 export type StatusLine = { readonly parts: readonly StatusPart[]; readonly actions: readonly StatusAction[] };
@@ -701,6 +702,8 @@ export type StatusFacts = {
   /** Benchmark requests done and in all, while verifying. */
   readonly progress: { readonly done: number; readonly total: number } | null;
   readonly charge: { readonly requests: number; readonly providers: readonly { readonly provider: string; readonly requests: number }[] } | null;
+  /** The person keeps checks and their approval (`readChecks().keeps`): only then does approving once spare later checks the asking. */
+  readonly keepsChecks: boolean;
   readonly inFlight: VerbFacts["inFlight"];
   readonly busy: boolean;
   readonly chaining: boolean;
@@ -858,7 +861,8 @@ function pressLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusL
     const spend = providers.filter(entry => entry.requests > 0)
       .map(entry => `${vocab.family(providerPolicy(entry.provider).family)} ${entry.requests}`).join(" · ");
     return [line([part(`Checking models spends ${requests} tiny ${requests === 1 ? "request" : "requests"}`), part(spend)]),
-      line([part("asked once: later checks run on their own", "meta")], [{ kind: "confirm", requests }, cancel])];
+      line(facts.keepsChecks ? [part("asked once: later checks run on their own", "meta")] : [],
+        [{ kind: "confirm", requests, standing: facts.keepsChecks }, cancel])];
   }
   if (shown && facts.phase === "benchmark") {
     const progress = facts.progress ? [part(`${facts.progress.done} of ${facts.progress.total} requests`, "meta")] : [];
