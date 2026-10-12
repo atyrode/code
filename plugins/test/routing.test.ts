@@ -9,7 +9,7 @@ import { projectUsage } from "../domain/usage.ts";
 import { displayAliases } from "../code/generator/aliases.ts";
 import { modelListFailure } from "../code/generator/board-model.ts";
 import { strandsNote } from "../code/generator/earlier-model.ts";
-import { profileGroups, routeLedger } from "../code/generator/routing-model.ts";
+import { profileGroups, routeLedger, type LedgerRow, type RouteToken } from "../code/generator/routing-model.ts";
 
 const scope = "machine/broker-scope";
 const now = Date.UTC(2026, 9, 3, 12);
@@ -121,13 +121,29 @@ describe("the routing", () => {
     expect(ledger(review({ lane: claudeOnly }), { excluded: ["carol"] }).find(row => row.role === "default")?.down).toBe("No Claude account included");
   });
 
-  test("the narrow profile groups the team by what it runs, in the order each group first appears, and leaves an off advisor out", () => {
+  test("the grouped profile groups the roles by what they run and leaves an off advisor out", () => {
     const rows = ledger(review());
     const groups = profileGroups(rows);
     expect(groups.flatMap(group => group.roles.map(role => role.role)).sort()).toEqual(rows.filter(row => !row.off).map(row => row.role).sort());
-    expect(groups[0]?.roles[0]?.role).toBe(rows[0]?.role);
     expect(new Set(groups.map(group => group.key)).size).toBe(groups.length);
     expect(groups.every(group => group.roles.every(role => rows.find(row => row.role === role.role)?.lead?.key === group.lead.key))).toBe(true);
+  });
+
+  test("the grouped profile reads by provider, the default's first, then by tier and thinking, strongest first; roles keep routing order", () => {
+    const row = (role: string, family: string, alias: string, tier: RouteToken["tier"], thinking: string): LedgerRow => ({
+      role, agentBacked: false, off: false, down: null, fallback: [],
+      lead: { key: `${family}.${alias}`, alias, thinking, family, id: `${family}/${alias}`, effort: thinking, tier },
+    });
+    const groups = profileGroups([
+      row("plan", "openai", "o3", 3, "medium"), row("scout", "deepseek", "d1", 1, "max"), row("default", "anthropic", "a2", 2, "high"),
+      row("smol", "openai", "o1", 1, "low"), row("commit", "openai", "nano", 1, "minimal"), row("reviewer", "anthropic", "a3", 3, "medium"),
+      row("sonic", "openai", "o3", 3, "xhigh"), row("vision", "anthropic", "a2", 2, "low"), row("tiny", "openai", "mini", 1, "low"),
+      row("task", "anthropic", "a2", 2, "high"), { role: "advisor", agentBacked: false, off: true, lead: null, down: null, fallback: [] },
+    ]);
+    expect(groups.map(group => `${group.lead.alias}:${group.lead.thinking}`)).toEqual([
+      "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o3:medium", "mini:low", "o1:low", "nano:minimal", "d1:max",
+    ]);
+    expect(groups[1]?.roles.map(role => role.role)).toEqual(["default", "task"]);
   });
 });
 

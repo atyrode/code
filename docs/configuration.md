@@ -244,21 +244,21 @@ Models names `m` only in the generator, where `m` opens Models rather than Manag
 ### The top bar
 
 The tabs are a tab list: `←` `→` move among them and `↵` or `Space` opens one. Below
-760 px of panel width **Routing** and **Usage** join them, since those panes are views
-of their own there. **More** keeps to the bar's end and is a standard menu button: a
-press, `↓`, `↵` or `Space` opens its menu on the first item and `↑` on the last; `↑` `↓`,
-`Home` and `End` move, `↵` or `Space` chooses, and an item's own key (`m`, `u`, `o`, `?`)
-chooses it too. `Esc` closes the menu and returns focus to More; `Tab`, a press outside
-or focus leaving closes it. Choosing returns focus to More, where a sheet or dialog
-gives it back. **Models**, **Setup** and **Options** open their sheets (`m`, `u`, `o`
-from the main view, where the menu shows each key beside its item). While a staged model
-list waits beside the active one, More reads **More · staged** and its item **Models ·
-staged**, since nothing changes until it is reviewed there. When session options are
-set, More and its **Options** item carry their summary ("· restricted", "· skills off",
-"· 2 skills"). **Shortcuts** opens a native modal dialog that lists every key under the
-view it acts in (Generator, Views, Accounts, Sessions, Anywhere), with `m`, `u` and `o`
-under Generator, where they act; `Esc` or its Close button closes it and it owns its
-keys while open.
+760 px of panel width, when the panel is too short for routing under the generator,
+**Routing** and **Usage** join them as views of their own (see the layout below). **More**
+keeps to the bar's end and is a standard menu button: a press, `↓`, `↵` or `Space` opens
+its menu on the first item and `↑` on the last; `↑` `↓`, `Home` and `End` move, `↵` or
+`Space` chooses, and an item's own key (`m`, `u`, `o`, `?`) chooses it too. `Esc` closes
+the menu and returns focus to More; `Tab`, a press outside or focus leaving closes it.
+Choosing returns focus to More, where a sheet or dialog gives it back. **Models**,
+**Setup** and **Options** open their sheets (`m`, `u`, `o` from the main view, where the
+menu shows each key beside its item). While a staged model list waits beside the active
+one, More reads **More · staged** and its item **Models · staged**, since nothing changes
+until it is reviewed there. When session options are set, More and its **Options** item
+carry their summary ("· restricted", "· skills off", "· 2 skills"). **Shortcuts** opens a
+native modal dialog that lists every key under the view it acts in (Generator, Views,
+Accounts, Sessions, Anywhere), with `m`, `u` and `o` under Generator, where they act;
+`Esc` or its Close button closes it and it owns its keys while open.
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -365,10 +365,13 @@ fallbacks row and says there are no chains to show. Its state is local to the op
 panel. **Hide** in routing's head (`p`) removes the pane; **Show routing** in the
 generator's head brings it back.
 
-Whenever routing is not beside the rows (a narrow panel, or hidden) the team shows
-under the rows grouped by what it runs: each group's `model:thinking`, then its roles
-with `●` on agent-backed ones. A change that moves a role between groups glides it
-there.
+Whenever routing is not shown with the generator (hidden, or a tab of its own in a short
+narrow panel) the profile shows under the rows grouped by what it runs: each group's
+`model:thinking`, then its roles in routing order with `●` on agent-backed ones. Groups
+read by provider, the default role's first and then GPT, Claude, DeepSeek and the rest.
+Within a provider they read by level: the higher tier first (elite, smart, normal, fast),
+then the higher thinking, and last by alias, so equal levels always stand in one order. A
+change that moves a role between groups glides it there.
 
 The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
 lit to the level in the lane's accent, and the level's word while pointed. Cost is a
@@ -507,27 +510,28 @@ never a refusal.
 ### Usage
 
 The **usage** pane stands under routing, or alone as the **Usage** tab in a narrow
-panel. It lists providers in the panel's family order (GPT, Claude, DeepSeek, then the
-rest) and, under each, its accounts by email (else API key or identity). Each reported
-window of an account is one line: its label (`5h`, `7d`), a twelve-block bar filled to
-the share used, the percentage, `↻` and the time to its reset, and Code's word for it:
-`tight` from 80% used (or when the provider warns), `maxed` when exhausted, `blocked`
-for a provider block, whose `↻` is the time it lifts. Windows are never averaged across
-accounts or providers. Every reported window is a row. A window with a tier meters a
-limit of its own beside the account's shared windows, such as Anthropic's weekly limit
-for one model kind or a Codex named limit, and its label names the tier (`7d fable`,
-`7d base-model-inference`) so it is told apart from the shared `7d`. Only the shared
-windows judge the provider's pool: OMP does not yet say whether a tiered limit stops
-every route of the account or only one model's, so a used-up `fable` window makes
-Claude neither tight nor maxed. A prepaid balance is shown in its own currency; an account
-with no windows says "no windows reported"; a block on a scope no shown window meters
-is its own line ("<scope> requests blocked ↻ Sat 16:55"). An account excluded from the
-pool, or whose credential is disabled, is drawn in quieter colours. An account read
-from a stale source or longer ago than the five-minute freshness window says its age
-("12m old") and is never drawn as current; a provider whose accounts are all history
-says it once. Where nothing can be drawn the pane says "no account choices yet", "not
-read yet", "accounts unavailable" or "no accounts". **Hide** in the head (`s`) removes
-the pane; **Show usage** in the generator's head brings it back.
+panel too short for routing under the generator. It lists providers in the panel's
+family order (GPT, Claude, DeepSeek, then the rest) and, under each, its accounts by
+email (else API key or identity). Each reported window of an account is one line: its
+label (`5h`, `7d`), a twelve-block bar filled to the share used, the percentage, `↻` and
+the time to its reset, and Code's word for it: `tight` from 80% used (or when the
+provider warns), `maxed` when exhausted, `blocked` for a provider block, whose `↻` is the
+time it lifts. Windows are never averaged across accounts or providers. Every reported
+window is a row. A window with a tier meters a limit of its own beside the account's
+shared windows, such as Anthropic's weekly limit for one model kind or a Codex named
+limit, and its label names the tier (`7d fable`, `7d base-model-inference`) so it is
+told apart from the shared `7d`. Only the shared windows judge the provider's pool: OMP
+does not yet say whether a tiered limit stops every route of the account or only one
+model's, so a used-up `fable` window makes Claude neither tight nor maxed. A prepaid
+balance is shown in its own currency; an account with no windows says "no windows
+reported"; a block on a scope no shown window meters is its own line ("<scope> requests
+blocked ↻ Sat 16:55"). An account excluded from the pool, or whose credential is
+disabled, is drawn in quieter colours. An account read from a stale source or longer ago
+than the five-minute freshness window says its age ("12m old") and is never drawn as
+current; a provider whose accounts are all history says it once. Where nothing can be
+drawn the pane says "no account choices yet", "not read yet", "accounts unavailable" or
+"no accounts". **Hide** in the head (`s`) removes the pane; **Show usage** in the
+generator's head brings it back.
 
 Its last line reads `next refresh 4:54` with a **Refresh now** button (`r`). Code reads
 the usage again every five minutes, its freshness window: the host's feeds read again
@@ -690,9 +694,9 @@ generator's rows. Each of these has a control; none is the only way to anything.
 - **Accounts.** `↑` `↓`, `Home`, `End`, `Space`, `↵`, `m` and `a` as above.
 - **Manage.** Esc returns to the accounts, `a` to the generator.
 - **Sessions.** `↑` `↓` move, `1`–`9` recall a recent profile, `e` or Esc go back.
-- **Narrow routing and usage views.** Esc goes back and `a` opens the accounts; `p` and
-  `s` open routing and usage, and return to the main view from their own; `f` shows the
-  chains in routing.
+- **Routing and usage tabs.** Where they are tabs of their own, `p` and `s` open routing
+  and usage rather than hide them, and return to the main view from their own; there Esc
+  goes back, `a` opens the accounts and `f` shows the chains in routing.
 - **Anywhere in the panel.** `r` is Refresh now: everything read again at once. `?`
   opens Shortcuts.
 
@@ -707,7 +711,7 @@ which has no keys, the key line is hidden, and every button, tab and radio is at
 44 px. One polite live region announces outcomes, failures, the charge, recalls and the
 reason a pressed refused control gave.
 
-The layout answers the panel's own measured width, never the window's, since Code
+The layout answers the panel's own measured size, never the window's, since Code
 shares the window with its canvas. From 760 px the generator and routing stand side by
 side with usage under both. The generator is as wide as its rows need, never under 42%
 of the panel, and routing takes what that leaves, never under 36%, so the room the rows
@@ -715,13 +719,20 @@ do not need goes to routing's fallback chains. What the readout and the launch l
 never moves that divide. The generator and routing are as tall as the taller of them, and
 usage follows them, so the room a tall panel has left lies below everything rather than
 inside the generator.
-Below 760 px the generator stands alone with the grouped team under its rows, and routing
-and usage are tabs of their own; widening the panel closes such a view. Below 430 px the lead's words drop under its label so the
-leads and the only box keep one line, and below 380 px usage windows use thinner blocks and drop
-the word "used". Nothing scrolls sideways at any width. Hiding routing or usage is
-local to the open panel and not kept. The first layout and every resize place things
-without motion; a pane that comes into view slides in, and under reduced motion nothing
-moves.
+Below 760 px routing stands under the generator and usage under routing when the panel is
+tall enough for the generator, without its grouped profile, and the whole routing, without
+its fallback chains, at once; otherwise the generator stands alone with the grouped profile
+under its rows, and routing and usage are tabs of their own. The fit is judged from what is
+rendered, once a resize has settled and when the stage's structure changes (the routes or
+the generator's rows, routing hidden or shown, a return to the generator), never when the
+readout, the launch line or the fallback chains change: what then runs past the panel
+scrolls, so the launch never moves under the pointer and the chains never send routing
+back to a tab. Widening the panel closes a routing or usage view. Below 430 px the lead's
+words drop under its label so the leads and the only box keep one line, and below 380 px
+usage windows use thinner blocks and drop the word "used". Nothing scrolls sideways at any
+width. Hiding routing or usage is local to the open panel and not kept. The first layout,
+every resize and every change between the two narrow arrangements place things without
+motion; a pane that comes into view slides in, and under reduced motion nothing moves.
 
 ### Drafts and what persists
 

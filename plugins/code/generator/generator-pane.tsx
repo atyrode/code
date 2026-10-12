@@ -89,11 +89,11 @@ export type GeneratorPaneProps = {
   readonly recents: readonly RecentTeam[];
   /** Families with a signed-in account, included or not; null when the reading cannot say. */
   readonly connected: ReadonlySet<string> | null;
-  /** The routing's rows, which the narrow profile groups. */
+  /** The routing's rows, which the grouped profile groups. */
   readonly ledger: readonly LedgerRow[] | null;
   /** The review the routing shows: the reviewed composition while current, else the local review. */
   readonly shown: Review | null;
-  /** Routing is not beside the generator, so the team shows grouped under its rows. */
+  /** Routing is not shown with the generator, so the profile shows grouped under its rows. */
   readonly profile: boolean;
   /** Another view has the stage; the pane keeps its state behind it. */
   readonly hidden: boolean;
@@ -123,10 +123,10 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly ref
 
 /**
  * GENERATOR: one row of plain option words per dial and extra, a readout line that says
- * what is pointed, the narrow profile when routing is not beside, the cost and speed meters and the
- * launch line. Every action goes through the workbench model's gate; the pane only names the step,
- * shows what each word would do and quota's verdict on it, and says the consequence of whatever is
- * pointed, pressed or scrubbed in the readout.
+ * what is pointed, the grouped profile when routing is not shown with it, the cost and speed meters
+ * and the launch line. Every action goes through the workbench model's gate; the pane only names the
+ * step, shows what each word would do and quota's verdict on it, and says the consequence of whatever
+ * is pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
   const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;

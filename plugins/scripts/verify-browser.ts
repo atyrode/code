@@ -864,7 +864,7 @@ async function panelWidth(browser: BrowserInstance, width: number, height = 900)
   throw new ProofFailure(`The generator panel could not be sized to ${width}px`);
 }
 
-/** The views a key opens from the generator, and back with Esc. Routing and usage are views of their own only when narrow. */
+/** The views a key opens from the generator, and back with Esc. Routing and usage are views of their own only where they are tabs. */
 type View = "main" | "accounts" | "sessions" | "routing" | "usage";
 const VIEW_KEYS: Readonly<Record<Exclude<View, "main">, { key: string; code: number }>> = {
   accounts: { key: "a", code: 65 }, sessions: { key: "e", code: 69 }, routing: { key: "p", code: 80 }, usage: { key: "s", code: 83 },
@@ -1044,10 +1044,11 @@ const MENU_OUTSIDE = `(() => {
 })()`;
 /**
  * From 170 to 1440px of panel width, in every view the width offers (routing and usage are views of
- * their own when narrow): text paints, and there is no horizontal overflow, no cut text, no text
- * outside the panel, no text box intersecting another, no text past the routing pane and no control
- * too narrow to press, in each of the panel's three layouts; in the medium layout with the routing's
- * fallback chains shown too. More's menu opens inside the panel at every width. Every width and view
+ * their own where they are tabs): text paints, and there is no horizontal overflow, no cut text, no
+ * text outside the panel, no text box intersecting another, no text past the routing pane and no
+ * control too narrow to press, in each of the panel's three layouts; in the medium layout with the
+ * routing's fallback chains shown too, and narrow but tall, with routing and usage under the
+ * generator instead of tabs. More's menu opens inside the panel at every width. Every width and view
  * is measured before the verdict, so one run names every place that fails.
  */
 async function geometryAcrossWidths(browser: BrowserInstance, label: string): Promise<void> {
@@ -1067,7 +1068,8 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
       await panelWidth(browser, width);
       const mode = await browser.evaluate<string>(`${element(stage)}.dataset.mode`);
       modes.add(mode);
-      for (const view of ["main", "accounts", "sessions", ...(mode === "narrow" ? ["routing", "usage"] as const : [])] as const) {
+      const tabbed = await browser.evaluate<boolean>(`document.querySelector('${generator} [data-view-tab="routing"]') !== null`);
+      for (const view of ["main", "accounts", "sessions", ...(tabbed ? ["routing", "usage"] as const : [])] as const) {
         await showView(browser, view);
         await still(browser);
         const where = `${view} at ${width}px`;
@@ -1089,11 +1091,74 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
       }
       await showView(browser, "main");
     }
+    // Narrow but tall enough for the generator and the whole routing, routing and usage stand under the generator and have no tabs.
+    for (const width of [620, 320, 170]) {
+      await panelWidth(browser, width, 2400);
+      await still(browser);
+      const where = `main at ${width}px and 2400px tall`;
+      if (!await browser.evaluate<boolean>(`${element(stage)}.dataset.stacked === 'true' && document.querySelector('${generator} [data-view-tab="routing"]') === null`)) {
+        problems.push(`${where}: routing and usage are not under the generator`);
+      }
+      await measure(where, "main");
+    }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
   assert.deepEqual(problems, [], `No ${label} view overflows, cuts, collides, runs past the routing pane or squeezes a control from 170 to 1440px, and More's menu stays inside the panel`);
   assert.deepEqual([...modes].sort(), ["medium", "narrow", "wide"], `The ${label} widths exercise the panel's three layouts`);
+}
+
+/**
+ * Below 760px routing and usage stand under the generator when the panel is tall enough for both, and are tabs of their own
+ * otherwise. Short, the Routing and Usage tabs show and the profile is grouped under the generator's rows. Tall, routing stands
+ * under the generator and usage under routing, with no tabs for them and no grouped profile; `p` hides routing, bringing the
+ * grouped profile back while the stage stays stacked, and shows it again; `f` shows the fallback chains without changing the
+ * arrangement or letting anything scroll sideways.
+ */
+async function narrowArrangements(browser: BrowserInstance, label: string): Promise<void> {
+  const chains = element(`${generator} [data-chains]`);
+  const arrangement = `(() => {
+    const viewport = document.querySelector('${generator} .scroll-region__viewport');
+    return JSON.stringify({ stacked: ${element(stage)}.dataset.stacked === 'true', tabs: [...document.querySelectorAll('${generator} [data-view-tab]')].map(tab => tab.dataset.viewTab).join(' '),
+      routing: ${element(`${generator} [data-pane="routing"]`)}.checkVisibility(), profile: !!document.querySelector('${generator} .${G}profile'),
+      overflow: viewport.scrollWidth - viewport.clientWidth });
+  })()`;
+  type Arrangement = { stacked: boolean; tabs: string; routing: boolean; profile: boolean; overflow: number };
+  const is = (expected: Arrangement) => `${arrangement} === ${JSON.stringify(JSON.stringify(expected))}`;
+  const tabbed: Arrangement = { stacked: false, tabs: "main routing usage accounts sessions", routing: false, profile: true, overflow: 0 };
+  const stacked: Arrangement = { stacked: true, tabs: "main accounts sessions", routing: true, profile: false, overflow: 0 };
+  const inStage = `!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`;
+  try {
+    await showView(browser, "main");
+    await panelWidth(browser, 390, 600);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), tabbed,
+      `The ${label} panel 390px wide and 600px tall keeps routing and usage as tabs, the profile grouped under the rows`);
+    await panelWidth(browser, 390, 2400);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), stacked,
+      `The ${label} panel 390px wide and 2400px tall stands routing and usage under the generator, with no tabs for them`);
+    assert.deepEqual(await browser.evaluate(`(() => {
+      const box = pane => document.querySelector('${generator} [data-pane="' + pane + '"]').getBoundingClientRect();
+      return { routing: box('routing').top >= box('generator').bottom - 1, usage: box('usage').top >= box('routing').bottom - 1 };
+    })()`), { routing: true, usage: true }, "Stacked, routing stands under the generator and usage under routing");
+    if (!await browser.evaluate<boolean>(inStage)) await click(browser, generatorTitle);
+    await key(browser, "p", 80);
+    await until(browser, "p hides routing under the generator, the grouped profile comes back and the stage stays stacked",
+      is({ ...stacked, routing: false, profile: true }));
+    await key(browser, "p", 80);
+    await until(browser, "p shows routing under the generator again", is(stacked));
+    if (!await browser.evaluate<boolean>(inStage)) await click(browser, generatorTitle);
+    await key(browser, "f", 70);
+    await until(browser, "f shows the routing's fallback chains", `${chains}.getAttribute('aria-checked') === 'true'`);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), stacked,
+      "Stacked, showing the fallback chains changes neither the arrangement nor the panel's width");
+    await key(browser, "f", 70);
+    await until(browser, "f hides the fallback chains", `${chains}.getAttribute('aria-checked') !== 'true'`);
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
 }
 
 /** Pointing at or focusing any control of the generator, routing, usage or key line moves no layout box (the readouts' words aside). */
@@ -1687,6 +1752,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
 
   await zeroShift(browser, label);
   await geometryAcrossWidths(browser, label);
+  await narrowArrangements(browser, label);
   await browser.send("Emulation.setEmulatedMedia", { features: [] });
   assert.deepEqual(await readProfile(browser, draftKey), before, "Hover, focus, views and resizing are presentation only");
 }
@@ -2822,7 +2888,7 @@ async function tieredUsageScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual(await browser.evaluate(windowRows(accountsPane)), rows, "Every reported window is its own row in the accounts, a tiered one labelled with its tier");
     await showView(browser, "main");
     await assertRoutes(browser, true);
-    // Wide, the routing's leads; narrow, the profile's leads beside the generator.
+    // Wide, the routing's leads; narrow and too short for routing under the generator, the grouped profile's leads.
     try {
       for (const [width, leads] of [[1280, `[data-pane="routing"] .${G}tok-value`], [390, `.${G}profile-lead`]] as const) {
         await panelWidth(browser, width);
