@@ -3,7 +3,7 @@ import type { HostServices } from "@manifold/plugin";
 import { formatManifoldUri, type MachineSummary } from "@manifold/protocol";
 import { compileCatalog, type CompiledCatalog } from "../../domain/catalog.ts";
 import { servedProviders } from "../../domain/accounts.ts";
-import { defaultSelection, routeService, type Review, type ServiceGap } from "../../domain/routing.ts";
+import { defaultSelection, routeService, routedModels, type Review, type ServiceGap } from "../../domain/routing.ts";
 import { catalogFromMetadata } from "../../domain/probe.ts";
 import type { AccountChoiceChange, CatalogDocument, Selection } from "../../domain/contracts.ts";
 import type { ActionResult, Configuration, Target } from "../contract.ts";
@@ -331,9 +331,10 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);
   }, [compiled, selection]);
-  // The models the shown team's routes name, leads and fallbacks: the session door refuses any OMP no longer publishes.
-  const routed = useMemo(() => compiled && localReview
-    ? localReview.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => compiled.model(choice.key)) : null, [compiled, localReview]);
+  // The models the shown team's routes name, which the session door requires OMP to still publish. The door first prunes
+  // fallbacks no included account serves; these are not pruned, because a provider of a verified list that no account
+  // serves now has changed the pool, which asks to verify again whatever OMP publishes.
+  const routed = useMemo(() => compiled && localReview ? routedModels(compiled, localReview.routes) : null, [compiled, localReview]);
   const controlsReview = useMemo(() => {
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });

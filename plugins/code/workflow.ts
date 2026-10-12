@@ -28,7 +28,7 @@ const messages: Readonly<Record<string, string>> = {
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
   code_omp_changed: "OMP or its model list changed on the machine since the inventory. Verify again.",
-  code_model_unpublished: "OMP no longer lists a model this profile uses. Verify models again.",
+  code_model_unpublished: "OMP no longer lists a model this profile uses. Verify models again. Not listed:",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
   code_invalid_selection: "This profile cannot be formed from the current models.",
   code_budget_unsatisfiable: "No free route serves this profile.",
@@ -99,7 +99,8 @@ export function refusalToken(message: string): string | null {
  * A workflow failure in a person's words. A refused door's message loses the door name it was
  * reported under, and its refusal token becomes words: the known ones from `messages` and Manifold's
  * Agent refusals, any other as who refused, so no raw token reaches a person. A detail written for a
- * person after the token stays.
+ * person after the token stays, as a sentence; words that end in a colon introduce a list of
+ * identifiers, which stay exactly as written.
  */
 export function failureWords(message: string): string {
   const denial = DOOR_DENIAL.exec(message)?.[1] ?? message;
@@ -108,7 +109,8 @@ export function failureWords(message: string): string {
   if (!refusal) return denial;
   const [, token, detail] = refusal;
   const words = messages[token!] ?? (token!.startsWith("omp_") ? "OMP refused the step." : "Code refused the step.");
-  return detail ? `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}` : words;
+  if (!detail) return words;
+  return words.endsWith(":") ? `${words} ${detail}` : `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}`;
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. */

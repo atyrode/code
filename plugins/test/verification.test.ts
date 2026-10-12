@@ -7,7 +7,7 @@ import { editedDraft } from "../code/generator/draft-store.ts";
 import { autoReviewDue, draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
   type CatalogWrite, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
-import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, unpublishedModels, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
+import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
 const provenance: VerificationProvenance = { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: catalog,
@@ -43,14 +43,6 @@ describe("whether a recorded verification still holds", () => {
     expect(launchStatusText(facts({}, dropped.status))).toBe("OMP no longer lists a model this profile uses. Verify again.");
     // The revision the verification recorded publishes every model it laddered, so a list read against it claims nothing.
     expect(verificationState(provenance, { ...present, unpublished: ["openai-codex/terra"], pool: same }, false).status).toBe("current");
-  });
-
-  test("the routed models a published list lacks are named once each, in order, by provider and id together", () => {
-    const terra = { provider: "openai-codex", id: "gpt-terra" }, opus = { provider: "anthropic", id: "claude-opus" };
-    const routed = [terra, { provider: "openrouter", id: "anthropic/claude-opus" }, opus, terra];
-    expect(unpublishedModels(routed, [opus])).toEqual(["openai-codex/gpt-terra", "openrouter/anthropic/claude-opus"]);
-    expect(unpublishedModels([opus], [{ provider: "openrouter", id: "claude-opus" }])).toEqual(["anthropic/claude-opus"]);
-    expect(unpublishedModels(routed, routed)).toEqual([]);
   });
 
   test("a provider added or removed, the same providers through other accounts, or no account at all is an account change", () => {

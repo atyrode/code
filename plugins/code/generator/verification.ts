@@ -19,8 +19,6 @@ import type { VerificationProvenance } from "../contract.ts";
  * verification on purpose.
  */
 export type VerificationStatus = "unverified" | "verifying" | "current" | "accounts-changed" | "unpublished";
-/** A model as OMP's catalog and a compiled catalog both name it. */
-export type ModelAddress = { readonly provider: string; readonly id: string };
 /** The present a recorded verification is compared with. A null field has not been observed. */
 export type VerificationObservation = {
   /** The artifact the destination's OMP inventory operation is installed from (workflow.ts `inventoryArtifact`). */
@@ -28,8 +26,9 @@ export type VerificationObservation = {
   /** The revision of the model catalog OMP bundles (`readModelCatalog`). */
   catalogRevision: string | null;
   /**
-   * The routed models OMP's catalog no longer publishes (`unpublishedModels`), read only once the
-   * catalog has moved: the revision the verification recorded publishes every model it laddered.
+   * The routed models OMP's catalog no longer publishes (domain/routing.ts `unpublishedModels`),
+   * read only once the catalog has moved: the revision the verification recorded publishes every
+   * model it laddered.
    */
   unpublished: readonly string[] | null;
   /** The pool the saved choices select now, or `"none"` when they select no account at all. */
@@ -51,20 +50,12 @@ export type VerificationChanges = {
 export type VerificationState = { status: VerificationStatus; changes: VerificationChanges };
 
 /**
- * The routed models a published catalog lacks, each once as `provider/id` and sorted: what the
- * session door refuses as `code_model_unpublished`.
- */
-export function unpublishedModels(routed: readonly ModelAddress[], published: readonly ModelAddress[]): string[] {
-  const listed = new Set(published.map(model => `${model.provider}/${model.id}`));
-  return [...new Set(routed.map(model => `${model.provider}/${model.id}`))].filter(address => !listed.has(address)).sort();
-}
-
-/**
  * Compares a recorded verification with the present. A routed model OMP dropped outranks an account
  * change, because the launch fails on it whichever accounts serve it. A fact not yet observed, or
- * whose read failed, claims no change: a slow or failing read is not evidence that anything moved,
- * its failure is named where that read's failures are, and the launch re-checks accounts and
- * published models at its owner.
+ * whose read failed, claims no change, since a slow or failing read is not evidence that anything
+ * moved. The destination's and the bundled list's failures are named where those reads' failures
+ * are; the read of what a moved catalog publishes names none and fails open to the session door,
+ * which re-checks accounts and every routed model at launch.
  */
 export function verificationState(provenance: VerificationProvenance | null, observation: VerificationObservation, verifying: boolean): VerificationState {
   const changes: VerificationChanges = { runtimeChanged: false, catalogChanged: false, unpublished: [], providersAdded: [], providersRemoved: [], identitiesChanged: false };

@@ -216,11 +216,11 @@ files, service state, credentials or backups.
   when a moved catalog no longer publishes a routed model, or the saved choices select another
   pool, with no Code rebuild. A verification recorded before these identities, without them,
   reads as unverified and asks to be verified again, and a current one can be renewed on
-  purpose. Unit tests prove the rule against a synthetic destination and catalog; the
-  disposable browser verifies against the real bundled catalog but moves no OMP under a
-  verified list. Judged by this rule against the preview's live reads, the workspace there
-  verified under OMP 18.8.6 reads current: its runtime artifact moved, its catalog revision,
-  routed models and accounts did not. This source repin is not a release, preview
+  purpose. Unit tests prove the rule against a synthetic destination and catalog, and the
+  disposable browser against the real bundled catalog: it moves a verified list's runtime
+  artifact, then republishes the catalog without the list's default lead. Applied to the
+  preview workspace's live reads (destination pins, catalog revision and account pool), the
+  rule gives current: only the runtime artifact moved. This source repin is not a release, preview
   installation, native deployment review or provider observation.
   The one-shot-only `agentTools: { runId }` selector carries existing native
   authority; it does not grant, infer or acknowledge it. Omission stays unbound.

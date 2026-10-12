@@ -182,8 +182,9 @@ Code build, and Models says it beside the verification's date; no version string
 compared. A catalog recorded before verification carried these identities reads as
 unverified. An identity not yet observed, or whose read failed, claims no change: the
 destination's failure keeps the launch refused, a failed model list read is named in the
-launch line with Retry and Models, and the session door re-checks that every routed model
-is still published (`code_model_unpublished`). A current verification can still be
+launch line with Retry and Models, and a failed read of what a moved catalog publishes names
+nothing and leaves a dropped model to the session door, which re-checks that every routed
+model is still published (`code_model_unpublished`). A current verification can still be
 renewed: Verify needs only its own preconditions
 (write access, the machine, readable accounts that include one, discovery and benchmark
 readiness), and its charge still waits on Confirm. A model that draws a
@@ -770,8 +771,9 @@ family's top (an elite it lacks) says only that it has no model, as the model ro
 it. A family Code requires that lacks a rung of its own at fast, normal or smart reads
 **· short** beside its name. The head says
 how many models are in use and when they were verified, with **OMP updated since** when
-OMP's runtime or catalog moved after that, or that a staged list waits beside them, that
-they are verifying, or that they are unverified or the bundled starter, with **import**
+OMP's runtime or catalog moved after that, or that accounts changed or OMP dropped a routed
+model since they were verified, that a staged list waits beside them, that they are
+verifying, or that they are unverified or the bundled starter, with **import**
 (`i`) and **export** (`x`) as two quiet words. Beside the list
 is what the step is about: the charge per provider and the models not probed while
 verifying, a staged list's changes (field by field, a model added or dropped, the old

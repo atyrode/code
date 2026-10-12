@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID, OMP_VERSION,
   type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationProgress } from "../code/workflow.ts";
-import { unpublishedModels, verificationState } from "../code/generator/verification.ts";
+import { verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import type { Selection } from "../domain/contracts.ts";
-import { compileOmpOverlay, defaultSelection, reviewCatalog } from "../domain/routing.ts";
+import { compileOmpOverlay, defaultSelection, reviewCatalog, routedModels, unpublishedModels } from "../domain/routing.ts";
 import { handlers } from "../code/server.ts";
 import type { CodeContext } from "../code/context.ts";
 import { z } from "zod";
@@ -224,11 +224,13 @@ test("a model list republished while the inventory runs stops the verification b
   expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
 });
 
-test("a verification outlives an OMP update its routed models survive, and a model list that dropped them asks for another", async () => {
+test("a verification outlives an OMP update its routed models survive, and a model list that dropped one asks for another", async () => {
   const f = verificationFixture();
+  // OMP publishes the models its inventory listed, as its bundled catalog does.
+  f.omp.catalog = { ...f.omp.catalog, models: f.omp.inventory.models };
   const { configuration } = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
   const catalog = compileCatalog(configuration.active!.document);
-  const routed = reviewCatalog(catalog, configuration.selection!, 0).routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => catalog.model(choice.key));
+  const routed = routedModels(catalog, reviewCatalog(catalog, configuration.selection!, 0).routes);
   // What the workbench compares the saved verification with: the destination's pins, the bundled list's revision, what that
   // list publishes for the routed providers, and the pool.
   const present = async () => verificationState(configuration.active!.provenance, {
@@ -243,9 +245,12 @@ test("a verification outlives an OMP update its routed models survive, and a mod
   // OMP upgraded on the machine, with the same accounts, model list and Code build: only the runtime artifact moved.
   f.omp.artifact = "9".repeat(64);
   expect(await present()).toMatchObject({ status: "current", changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
-  // The model list republished under another revision that no longer lists the routed models.
+  // The model list republished under another revision that still lists every routed model.
   f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) };
-  expect(await present()).toMatchObject({ status: "unpublished", changes: { catalogChanged: true, unpublished: unpublishedModels(routed, []) } });
+  expect(await present()).toMatchObject({ status: "current", changes: { catalogChanged: true, unpublished: [] } });
+  // Republished again without Claude Opus, which the saved team routes.
+  f.omp.catalog = { ...f.omp.catalog, revision: "d".repeat(64), models: f.omp.catalog.models.filter(model => model.id !== "claude-opus-5") };
+  expect(await present()).toMatchObject({ status: "unpublished", changes: { catalogChanged: true, unpublished: ["anthropic/claude-opus-5"] } });
 });
 
 test("a stop cancels the probe job in flight, and a failed one names its step and leaves its work inspectable", async () => {

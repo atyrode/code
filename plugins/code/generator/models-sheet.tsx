@@ -417,7 +417,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const [tail, tone]: Part = running ? ["verifying", null] : phase === "staged" ? [active ? "staged list beside it" : "staged, none in use", "warn"]
     : verification.status === "current" && verifiedAt !== null ? [`verified ${since(Date.now() - verifiedAt)}${ompUpdated ? " · OMP updated since" : ""}`, null]
     : verification.status === "accounts-changed" ? ["accounts changed since verified", "warn"]
-    : verification.status === "unpublished" ? ["OMP changed since verified", "warn"]
+    : verification.status === "unpublished" ? [`OMP dropped ${count(verification.changes.unpublished.length, "model")} since verified`, "warn"]
     : !active ? ["starter · unverified", "warn"] : ["unverified", "warn"];
   function cell(family: string, tier: number) {
     const row = at(family, tier), id = `${family}:${tier}`, tierWord = TIERS[tier - 1]!;

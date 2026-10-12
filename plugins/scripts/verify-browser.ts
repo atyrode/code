@@ -64,8 +64,9 @@ focus kept on it, kept across a lead change and disabled under Mixed, with struc
 that say why, and Models' pasted imports, discards and the exact review a staged list is used by,
 through the real Code server.
 Separate synthetic RPC responses exercise the verification charge and its refused spend; a verified
-catalog made stale by an OMP upgrade alone; a Models verification run end to end on fictional probe
-jobs that reach no provider, whose derivation, staging and promotion are the real server's; Setup's
+catalog that outlives an OMP upgrade alone and goes stale once a republished list drops a routed
+model; a Models verification run end to end on fictional probe jobs that reach no provider, whose
+derivation, staging and promotion are the real server's; Setup's
 readiness rows, folder jobs and the owner's classifier (an owner-class identity minted for it alone);
 and launch/resume review invalidation and refusal. The preparation, configuration and execution they
 lead to are refused, never native execution or consent success.
@@ -2304,10 +2305,12 @@ async function verificationChargeScenario(browser: BrowserInstance, server: Test
 }
 
 /**
- * A verified catalog holds for the OMP it ran under. Recorded as the workflow records it — the pinned OMP's artifact and
- * the real bundled catalog's revision — on a destination whose synthetic readiness pins that artifact, the verification is
- * current and the launch is the step. The same destination upgraded alone, with the same accounts and the same Code
- * bundles, makes Verify the step again, ready to run. Nothing is probed, spent, saved or installed.
+ * A verified catalog outlives an OMP update its routed models survive. Recorded as the workflow records it — the pinned
+ * OMP's artifact and the real bundled catalog's revision — on a destination whose synthetic readiness pins that artifact,
+ * the verification is current and the launch is the step. The same destination upgraded alone, with the same accounts,
+ * catalog and Code bundles, keeps the launch the step, and Models says OMP was updated since. A model list then
+ * republished under another revision without the default lead makes Verify the step, ready to run, and Models names the
+ * model OMP dropped. Nothing is probed, spent, saved or installed.
  */
 async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "OMP upgrade", "canvas");
@@ -2321,8 +2324,9 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
   const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { containerId: workspace.id, expectedRevision: revision, accounts: observation });
   assert(probe.ok);
   let runtime = pinnedOmpArtifact();
+  const document = catalogFromMetadata(metadata, "any");
   const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { containerId: workspace.id, expectedRevision: revision,
-    document: catalogFromMetadata(metadata, "any"), verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: metadata.revision,
+    document, verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: metadata.revision,
       inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observation,
       poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest } });
   assert(staged.ok, "A verification records the pinned OMP's artifact and the real catalog revision");
@@ -2332,10 +2336,17 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
   const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
   assert(promoted.ok);
   const saved = await readConfiguration(server, writer, target);
+  assert(saved.configuration?.selection, "Promotion puts the list in use with its default team");
+  // The default lead as the saved team routes it, and the alias the list shows it by.
+  const catalog = compileCatalog(document);
+  const leadKey = reviewCatalog(catalog, saved.configuration.selection, Date.now()).routes.find(route => route.role === "default")!.lead.key;
+  const lead = catalog.model(leadKey), alias = displayAliases(catalog).get(leadKey) ?? leadKey;
   await arrangeWorkbench(server, writer);
   let described = 0;
+  let republished: OmpResult<"readModelCatalog"> | null = null;
   const fixture = await intercept(browser, server, (name, input) => {
     if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: fixtureAccounts([1]) };
+    if (name === "atyrode.omp.readModelCatalog" && republished) return { ok: true, result: republished };
     if (name !== "atyrode.omp.describeDestination" || input.containerId !== target.containerId || input.machineId !== target.machineId) return undefined;
     described++;
     const pins = { installationRevision: "synthetic-ui-only", artifactSha256: runtime, resourceBindingDigest: "c".repeat(64) };
@@ -2349,11 +2360,24 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
     await Bun.sleep(500);
     // Discovery is ready, so a stale verification would make Verify the step; the launch this machine has no permission for is.
     await until(browser, "on the OMP it ran under, the verification is current and the next step is the launch", launchIs("launch", "refused"));
-    // OMP upgraded on the machine, and nothing else: its runtime is another artifact, whatever version it reports.
+    // OMP upgraded on the machine, and nothing else: its runtime is another artifact, whatever version it reports. Models
+    // says so once the panel has read it, and the launch stays the step.
     runtime = "9".repeat(64);
     await openGenerator(browser, server, workspace.id);
-    await until(browser, "an OMP upgrade alone makes Verify the step again, ready to run", launchIs("verify models", "ready"));
-    assert.deepEqual(await readConfiguration(server, writer, target), saved, "Observing an upgraded OMP saves nothing");
+    await openFromMore(browser, "models");
+    await until(browser, "Models keeps the verification and says OMP was updated since",
+      `${sheetState(modelsSheet)}.endsWith(' · OMP updated since') && ${goIs(modelsSheet, "back to code")}`);
+    await closeSheet(browser);
+    await until(browser, "an OMP upgrade alone keeps the launch the next step", launchIs("launch", "refused"));
+    // The model list republished under another revision without the default lead: the launch would be refused for it.
+    republished = { ...metadata, revision: "f".repeat(64), models: metadata.models.filter(model => model.provider !== lead.provider || model.id !== lead.id) };
+    await openGenerator(browser, server, workspace.id);
+    await until(browser, "a model list that dropped a routed model makes Verify the step again, ready to run", launchIs("verify models", "ready"));
+    await openFromMore(browser, "models");
+    await until(browser, "Models names the model OMP dropped beside verify models",
+      `${goIs(modelsSheet, "verify models")} && JSON.stringify(${goParts(modelsSheet)}) === ${JSON.stringify(JSON.stringify([[`OMP dropped ${alias}`, "warn"]]))}`);
+    await closeSheet(browser);
+    assert.deepEqual(await readConfiguration(server, writer, target), saved, "Observing an updated OMP saves nothing");
     fixture.check();
   } finally {
     await fixture.stop();
@@ -5426,7 +5450,7 @@ async function run(): Promise<void> {
     await starterObservationScenario(writerBrowser, server, writer);
     phase = "verification charge gate";
     await verificationChargeScenario(writerBrowser, server, writer, target);
-    phase = "an OMP upgrade alone makes a verified catalog stale";
+    phase = "a verified catalog outlives an OMP upgrade alone and asks for another once a routed model is dropped";
     await ompUpgradeScenario(writerBrowser, server, writer, target);
     phase = "Models: verify, the charge's hold and deliberate confirm, measuring, left out, staged, imported, discarded and verified again";
     await modelsSheetScenario(writerBrowser, server, writer, target);
