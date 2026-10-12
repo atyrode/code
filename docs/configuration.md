@@ -369,10 +369,9 @@ Whenever routing is not shown with the generator (hidden, or a tab of its own in
 narrow panel) the profile shows under the rows grouped by what it runs: each group's
 `model:thinking`, then its roles in routing order with `●` on agent-backed ones. Groups
 read by provider, the default role's first and then GPT, Claude, DeepSeek and the rest.
-Within a provider they read by level: the higher tier first (elite, smart, normal, fast,
-then a special tier such as Spark's after fast), then the higher thinking, and last by
-alias, so equal levels always stand in one order. A change that moves a role between
-groups glides it there.
+Within a provider they read by level: the higher tier first (elite, smart, normal, fast),
+then the higher thinking, and last by alias, so equal levels always stand in one order. A
+change that moves a role between groups glides it there.
 
 The **cost** and **speed** meters sit above the launch: five glyphs each (`$` and `»`),
 lit to the level in the lane's accent, and the level's word while pointed. Cost is a

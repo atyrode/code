@@ -176,6 +176,8 @@ type StageFacts = {
 function useStacked(app: RefObject<HTMLDivElement | null>, panel: Panel, still: () => void, facts: StageFacts, keep: () => void): { stacked: boolean; probing: boolean } {
   const [state, setState] = useState({ stacked: false, probing: false });
   // The bar's and routing's height as the stacked arrangement laid them out, by width and routes, and whether the fonts were ready.
+  // The bar can gain a line later (More's aside wrapping at a narrow width) without a new key; that only scrolls, as any later
+  // overflow does, until the next resize or structural change judges again.
   const laid = useRef({ fonts: false, heights: new Map<string, number>() });
   const judged = useRef<string | null>(null);
   useLayoutEffect(() => {

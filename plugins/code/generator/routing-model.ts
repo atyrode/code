@@ -23,7 +23,7 @@ export type RouteToken = {
   readonly id: string;
   /** The thinking level as the readout writes it (`x-high`). */
   readonly effort: string;
-  /** The model's catalog tier (4 elite down to 1 fast; 0 a special tier), which orders the grouped profile. */
+  /** The model's catalog tier, 4 elite down to 1 fast, which orders the grouped profile. */
   readonly tier: CatalogModel["tier"];
 };
 export type LedgerRow = {
@@ -76,9 +76,9 @@ export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; re
 /**
  * The profile grouped by what it runs (`model:thinking`), read by provider and then by level: the
  * default role's provider first and the others in the panel's provider order, then within a provider
- * the stronger tier first (a special tier, 0, after fast), then the higher thinking, then the alias,
- * so equal groups always stand in one order whatever the locale. Roles keep their routing order
- * inside a group; an off advisor runs nothing.
+ * the stronger tier first, then the higher thinking, then the alias, so equal groups always stand
+ * in one order whatever the locale. Roles keep their routing order inside a group; an off advisor
+ * runs nothing.
  */
 export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
   const groups = new Map<string, { key: string; lead: RouteToken; down: boolean; roles: { role: string; agentBacked: boolean }[] }>();

@@ -136,12 +136,12 @@ describe("the routing", () => {
     });
     const groups = profileGroups([
       row("plan", "openai", "o3", 3, "medium"), row("scout", "deepseek", "d1", 1, "max"), row("default", "anthropic", "a2", 2, "high"),
-      row("smol", "openai", "o1", 1, "low"), row("commit", "openai", "spark", 0, "minimal"), row("reviewer", "anthropic", "a3", 3, "medium"),
+      row("smol", "openai", "o1", 1, "low"), row("commit", "openai", "nano", 1, "minimal"), row("reviewer", "anthropic", "a3", 3, "medium"),
       row("sonic", "openai", "o3", 3, "xhigh"), row("vision", "anthropic", "a2", 2, "low"), row("tiny", "openai", "mini", 1, "low"),
       row("task", "anthropic", "a2", 2, "high"), { role: "advisor", agentBacked: false, off: true, lead: null, down: null, fallback: [] },
     ]);
     expect(groups.map(group => `${group.lead.alias}:${group.lead.thinking}`)).toEqual([
-      "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o3:medium", "mini:low", "o1:low", "spark:minimal", "d1:max",
+      "a3:medium", "a2:high", "a2:low", "o3:xhigh", "o3:medium", "mini:low", "o1:low", "nano:minimal", "d1:max",
     ]);
     expect(groups[1]?.roles.map(role => role.role)).toEqual(["default", "task"]);
   });
