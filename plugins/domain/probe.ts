@@ -419,8 +419,8 @@ export function inventoryDraft(inventoryValue: unknown, budget: Selection["budge
  * like a refused one, rather than refusing the whole catalog: a provider that could not be checked
  * (a key without credit, a timeout, a wording OMP does not classify) must not discard every model
  * measured beside it. Whether leaving it out may replace what is already chosen is the caller's to
- * judge (workflow.ts `unansweredNeeds`), so it is named `inconclusive` only where its answer could
- * have changed the list.
+ * judge (workflow.ts `unansweredNeeds`), so it is named `superseded` or `separate_quota` instead
+ * wherever a newer version that answered, or its own quota class, keeps it out whatever it answers.
  */
 export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { budget: "any" }): DerivedCatalog {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
