@@ -287,7 +287,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       case "verified": {
         // The head already says when the list was verified; beside the action, only its alternative: verifying again, through
         // the same gate as a first verification, whose charge still waits on its own confirmation. A verification again that
-        // stopped says so, as a first one does: the list it would have replaced stays in use, which the head alone cannot show.
+        // stopped says so, as a first one does: what it would have changed (the list, or for a stop while saving the profile,
+        // the team) stays as it was, which the head alone cannot show.
         const stopped = verification.failure;
         const note: readonly Part[] = stopped ? [[stopped.cancelled ? "verification cancelled" : "verification stopped", stopped.cancelled ? null : "attention"]] : [];
         return { label: "back to code", parts: [...note, ...refused], fixes: verifyGate.open ? [{ label: "verify again", run: () => model.actions.verify() }] : [],
