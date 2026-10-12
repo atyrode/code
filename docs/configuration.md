@@ -800,7 +800,9 @@ One next action sits where the launch sits and follows the step: **verify models
 **checking models…** (drawn with the checking hold the charge keeps), **confirm charge**
 (a single deliberate press of the exact charge shown, as in the launch line), **verifying…**
 with the requests measured, then **back to code** with **verify again** beside it, the
-same Verify a current verification can always renew, its charge confirmed the same way.
+same Verify a current verification can always renew, its charge confirmed the same way;
+a verification again that stopped reads **verification stopped** beside it, with its
+reason in the readout, since the list it would have replaced stays in use.
 A staged list offers **use staged list**, which reviews the staged list at its revision
 and promotes exactly that review with the list's own default team, and **discard**. An
 unsaved edit made on the list a write would replace holds it, saying what the write does
