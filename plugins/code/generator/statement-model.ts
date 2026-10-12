@@ -10,7 +10,8 @@ import type { ListFailure } from "./board-model.ts";
 import { optionConsequence, routeChanges, type DialMove, type OptionContext, type Redline, type Rescue } from "./consequences.ts";
 import { chooseOption, laneWord, SPECS, type DialId, type MoreDial, type OptionRefusal } from "./dial-space.ts";
 import type { GateRefusal, GateVerdict, LaunchStep, ProfileSource } from "./launch-step.ts";
-import type { VerificationMode, VerificationPhase } from "./model-verification.ts";
+import type { VerificationPhase } from "./model-verification.ts";
+import type { VerificationMode } from "./verification.ts";
 import type { AgentLaunchBlocker } from "../workflow.ts";
 
 /*

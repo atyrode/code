@@ -56,12 +56,13 @@ function verificationFixture() {
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
   const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
-  // Who calls: a person unless a test says otherwise, as a principal a session would carry.
-  const caller = { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" } as CodeContext["auth"]["principal"] };
+  // Who calls: a person with an unconfined token unless a test says otherwise, as a session would carry them.
+  const caller = { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" } as CodeContext["auth"]["principal"],
+    containerScope: null as string | null };
   const ctx: CodeContext = {
     now: () => 10_000, emit() {}, outsideScope: async () => null,
     auth: { get principal() { return caller.principal; },
-      caps: ["containers:read", "containers:write"], containerScope: null, isRoot: false,
+      caps: ["containers:read", "containers:write"], get containerScope() { return caller.containerScope; }, isRoot: false,
       allows: async (cap, node) => node?.kind === "container" && (node.containerId === target.containerId || node.containerId === second.containerId) &&
         (cap === "containers:read" || cap === "containers:write") },
     storage: { pluginId: "atyrode.code", get: async key => store.get(key) ?? null,
@@ -414,11 +415,11 @@ test("the verification observation names the pool a verification would record, a
   expect(await f.workflow.observeVerification(target.containerId, record.revision, record.accounts)).toBeNull();
 });
 
-test("a promoted verification is kept as the person's own check of its pool, which nobody else reads", async () => {
+test("a staged verification is kept as the person's own check of its pool and budget, which nobody else reads", async () => {
   const f = verificationFixture();
   expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
   const verified = await (await prepared(f, 0)).confirm(preview);
-  expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: verified.provenance.poolIdentityDigest,
+  expect((await f.workflow.readChecks()).checks).toEqual([{ poolIdentityDigest: verified.provenance.poolIdentityDigest, budget: "any",
     digest: verified.configuration.active!.digest, provenance: verified.provenance, recordedAt: 10_000,
     models: ["anthropic/claude-haiku-5", "anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "deepseek/deepseek-flash", "deepseek/deepseek-pro"] }]);
   // Another person, an agent or a service sees none of it.
@@ -450,12 +451,18 @@ test("adopting refuses another pool, a pool with no kept check, and a workspace 
   const first = await (await prepared(f, 0)).confirm(preview);
   const accounts = await f.workflow.omp("accounts", {});
   const initialized = await f.workflow.code("initializeConfiguration", { containerId: second.containerId, expectedRevision: 0 });
-  const adopt = (containerId: string, expectedRevision: number, poolIdentityDigest = first.provenance.poolIdentityDigest) =>
-    handlers.adoptCheck!(f.ctx, { containerId, expectedRevision, accounts, poolIdentityDigest, selection: null });
+  const adopt = (containerId: string, expectedRevision: number, poolIdentityDigest = first.provenance.poolIdentityDigest, budget: Selection["budget"] = "any") =>
+    handlers.adoptCheck!(f.ctx, { containerId, expectedRevision, accounts, poolIdentityDigest, budget, selection: null });
   // The pool the caller found a check for must be the one the saved choices select now.
   expect(await adopt(second.containerId, initialized.revision, "b".repeat(64))).toEqual({ refused: "code_accounts_changed" });
   // The workspace the check came from already holds it.
   expect(await adopt(target.containerId, first.configuration.revision)).toEqual({ refused: "code_check_current" });
+  // A list derived under another budget is not the check of this one: a free list never replaces a paid one, or the reverse.
+  expect(await adopt(second.containerId, initialized.revision, first.provenance.poolIdentityDigest, "free")).toEqual({ refused: "code_check_missing" });
+  // A token confined to one container keeps no checks, so it adopts none either.
+  f.caller.containerScope = second.containerId;
+  expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
+  f.caller.containerScope = null;
   // Another person keeps no check of this pool.
   f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
   expect(await adopt(second.containerId, initialized.revision)).toEqual({ refused: "code_check_missing" });
@@ -495,6 +502,53 @@ test("a check never drops a model the person's own check of the pool listed when
   const stopped = await stopOf((await prepared(f, before.revision, {}, second)).confirm(theirs.configuration.selection));
   expect([stopped.step, stopped.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-opus-5"]);
   expect(await f.configuration(second)).toEqual(before);
+});
+
+test("a check survives its own run losing a race after it was staged, and the next run adopts it instead of spending", async () => {
+  const f = verificationFixture();
+  const pending = await prepared(f, 0);
+  f.hooks["atyrode.code.reviewCatalog"] = async () => {
+    const current = (await f.configuration()).revision;
+    await f.workflow.code("changeAccounts", { containerId: target.containerId, expectedRevision: current,
+      change: { kind: "create-preset", preset: { id: "other", name: "Other", disabled: [] } } });
+  };
+  expect((await stopOf(pending.confirm(preview))).step).toBe("promote");
+  delete f.hooks["atyrode.code.reviewCatalog"];
+  const benchmarks = f.benchmarked.length, now = await f.configuration();
+  const again = await f.workflow.verifyModels(target, { expectedRevision: now.revision, budget: "any", selection: preview });
+  expect(again.kind).toBe("adopted");
+  expect(f.benchmarked).toHaveLength(benchmarks);
+});
+
+test("an adopt-only run writes and starts nothing unless the person keeps a check of the pool", async () => {
+  const f = verificationFixture();
+  // A workspace never set up is left alone: not even initialized.
+  expect(await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any", selection: null, adoptOnly: true })).toEqual({ kind: "none" });
+  expect(f.calls.filter(door => effects.includes(door))).toEqual([]);
+  // A set-up workspace with no kept check of its pool starts no inventory.
+  const initialized = await f.workflow.code("initializeConfiguration", { containerId: target.containerId, expectedRevision: 0 });
+  expect(await f.workflow.verifyModels(target, { expectedRevision: initialized.revision, budget: "any", selection: null, adoptOnly: true })).toEqual({ kind: "none" });
+  expect(f.calls).not.toContain(actionDoor("startInventory"));
+  // With a check of the pool kept from another workspace, it adopts it.
+  await (await prepared(f, 0, {}, second)).confirm(preview);
+  expect((await f.workflow.verifyModels(target, { expectedRevision: initialized.revision, budget: "any", selection: null, adoptOnly: true })).kind).toBe("adopted");
+});
+
+test("stored checks and approvals are bound to their principal: a record naming anyone else is refused as corruption", async () => {
+  const f = verificationFixture();
+  await (await prepared(f, 0)).confirm(preview);
+  await f.workflow.approveChecks(0, 19);
+  for (const prefix of ["checks/", "approvals/"]) {
+    const key = [...f.store.keys()].find(entry => entry.startsWith(prefix))!;
+    const original = f.store.get(key)!;
+    f.store.set(key, JSON.stringify({ ...JSON.parse(original), principalId: "reader" }));
+    await expect(f.workflow.readChecks()).rejects.toThrow("code_invalid_configuration");
+    f.store.set(key, original);
+  }
+  // A token confined to one container reads none of them and approves nothing.
+  f.caller.containerScope = target.containerId;
+  expect(await f.workflow.readChecks()).toEqual({ revision: 0, approvedRequests: 0, approvedAt: null, checks: [] });
+  await expect(f.workflow.approveChecks(0, 5)).rejects.toThrow("code_person_required");
 });
 
 function sessionFixture() {

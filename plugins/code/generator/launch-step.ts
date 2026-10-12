@@ -1,8 +1,7 @@
 import type { Selection } from "../../domain/contracts.ts";
 import type { ServiceGap } from "../../domain/routing.ts";
 import type { Configuration, Target } from "../contract.ts";
-import type { VerificationStatus } from "./verification.ts";
-import type { VerificationMode } from "./model-verification.ts";
+import type { VerificationMode, VerificationStatus } from "./verification.ts";
 
 /** Where the profile the controls show comes from: the bundled render-only preview, the shared
  * active catalog, or the shared staged one. */

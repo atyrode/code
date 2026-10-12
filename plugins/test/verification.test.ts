@@ -7,7 +7,8 @@ import { editedDraft } from "../code/generator/draft-store.ts";
 import { autoReviewDue, draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
   type CatalogWrite, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
-import { CHECKING_HOLD_MS, confirmsCharge, ownInitialization, verificationState, type VerificationStatus } from "../code/generator/verification.ts";
+import { backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState, type BackgroundFacts,
+  type VerificationStatus } from "../code/generator/verification.ts";
 
 const runtime = "c".repeat(64), catalog = "e".repeat(64);
 const provenance: VerificationProvenance = { ompVersion: OMP_VERSION, inventoryArtifactSha256: runtime, catalogRevision: catalog,
@@ -302,6 +303,32 @@ describe("approving a check's charge", () => {
     expect(confirmsCharge(press, charge, null, later)).toBe(false);
     const nothing = { requests: 0 };
     expect(confirmsCharge(press, nothing, { charge: nothing, preparedAt: prepared.preparedAt }, later)).toBe(false);
+  });
+});
+
+describe("checks the panel runs or spends on its own", () => {
+  test("a charge is spent without asking only within the approval, and in the background only to renew a list that passed a check", () => {
+    expect(spendsWithoutAsking("launch", false, 19, 38)).toBe(true);
+    expect(spendsWithoutAsking("launch", false, 19, 39)).toBe(false);
+    expect(spendsWithoutAsking("manual", false, 0, 1)).toBe(false);
+    expect(spendsWithoutAsking("background", true, 19, 19)).toBe(true);
+    // A first check that spends is always the person's own press, however much they approved.
+    expect(spendsWithoutAsking("background", false, 19, 1)).toBe(false);
+  });
+
+  test("a background check starts only to renew a list that no longer holds, and only when it can adopt or may spend", () => {
+    const due = (changes: Partial<BackgroundFacts> = {}) => backgroundCheckDue({ held: "accounts-changed", initialized: true, staged: false,
+      imported: false, passed: true, adoptable: false, approvedRequests: 19, ready: true, quiet: false, ...changes });
+    expect(due()).toBe(true);
+    expect(due({ held: "current" })).toBe(false);
+    // Never in a workspace never set up, over a staged or imported list, while not ready or after a stop.
+    for (const changes of [{ initialized: false, adoptable: true }, { staged: true }, { imported: true, passed: false, adoptable: true },
+      { ready: false }, { quiet: true }, { approvedRequests: null }] as const) expect(due(changes)).toBe(false);
+    // A list that never passed a check is only adopted; with no approval, only a kept check makes it due.
+    expect(due({ passed: false })).toBe(false);
+    expect(due({ passed: false, held: "unverified", adoptable: true })).toBe(true);
+    expect(due({ approvedRequests: 0 })).toBe(false);
+    expect(due({ approvedRequests: 0, adoptable: true })).toBe(true);
   });
 });
 

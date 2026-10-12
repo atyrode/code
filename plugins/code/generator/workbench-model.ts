@@ -372,9 +372,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
     configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     edited, idle: !busy && !chaining && !writingCatalog,
-    onVerified: (saved, mode) => {
+    onVerified: (saved, mode, adopted) => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
-      if (mode === "manual") setMessage({ text: "Models checked with your accounts, and the profile saved for the workspace.", failed: false });
+      if (mode === "manual") setMessage({ text: adopted ? "Your earlier model check is in use here." : "Models checked with your accounts, and the profile saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
     onInitialized: (from, to) => setDials(previous => followInitialization(previous, from, to)) });

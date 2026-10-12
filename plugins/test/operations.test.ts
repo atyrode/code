@@ -470,7 +470,7 @@ describe("verified catalogs and launch-time honesty", () => {
   async function verification(f: Fixture, revision: number, observation = accounts()) {
     const probe = await accepted(f, "composeProbe", { ...workspace, expectedRevision: revision, accounts: observation });
     return { ompVersion: "18.4.12", inventoryArtifactSha256: "c".repeat(64), catalogRevision: "a".repeat(64), inventoryObservedAt: now - 2000,
-      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest };
+      benchmarkCompletedAt: now - 1000, accounts: observation, poolIdentityDigest: probe.poolIdentityDigest, budget: "any" as const };
   }
 
   test("a verification records the pool Code reads itself, and review and promotion carry exactly that provenance", async () => {

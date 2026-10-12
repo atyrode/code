@@ -145,9 +145,10 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // whose check narrowed the profile stops the same way, naming the settings the check moved.
   const [stopped, setStopped] = useState<{ readonly review: object; readonly differs: readonly string[]; readonly by: "review" | "check" } | null>(null);
   // The press in progress: a Save & launch on its projection, or a Launch that checks the models first, on the profile it was
-  // pressed on and the last check failure before the press.
+  // pressed on, the last check failure and message before the press, and whether it has asked for its review yet.
   const chain = useRef<{ readonly kind: "save"; readonly projection: Projection; readonly review: Review }
-    | { readonly kind: "check"; readonly wanted: Selection | null; readonly failure: VerificationFailure | null } | null>(null);
+    | { readonly kind: "check"; readonly wanted: Selection | null; readonly failure: VerificationFailure | null; readonly message: unknown; readonly reviewed: boolean }
+    | null>(null);
   const keyTimer = useRef(0), scrubTimer = useRef(0);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
@@ -380,7 +381,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // ------------------------------------------------------------ the launch: Save & launch, and a Launch that checks first, as one gesture
   function act() {
     setStopped(null);
-    if (verb.checks) { chain.current = { kind: "check", wanted: selection, failure: verification.failure }; setLaunching(true); }
+    if (verb.checks) { chain.current = { kind: "check", wanted: selection, failure: verification.failure, message: model.message, reviewed: false }; setLaunching(true); }
     else if (verb.launches && shown) { chain.current = { kind: "save", projection: projectionOf(shown, served), review: shown }; setLaunching(true); }
     model.actions.next();
   }
@@ -411,8 +412,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     button.dataset.pressing = "";
     window.setTimeout(() => { delete button.dataset.pressing; fire(); }, 160);
   }
-  // A Launch that checks first goes on once its check is done: it reviews the saved team, then launches it, unless the check
-  // narrowed the profile to what answered, which is said for the person to choose. A check that stopped ends the press.
+  // A Launch that checks first goes on once its check is done: it reviews the saved team once, then launches it, unless the
+  // check narrowed the profile to what answered, which is said for the person to choose. A check that stopped, a failed or
+  // unread workspace profile, a failed review or one that left the step at review ends the press, never retries it.
   // A Save & launch press goes on from its review to the launch only when the review shows what was projected. `next` asks
   // the gate again before each step. A chain that ends anywhere else stops, and a review that differs is said as what
   // differs, for the person to choose.
@@ -423,8 +425,14 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (pressed.kind === "check") {
       if (verification.phase !== null) return;
       if (verification.failure !== null && verification.failure !== pressed.failure) { end(); return; }
+      if (model.configurationFailed || (model.message?.failed && model.message !== pressed.message)) { end(); return; }
       if (model.busy || model.chaining || !model.configurationCurrent) return;
-      if (model.step.step === "review") { if (model.verb.open) model.actions.next(); else end(); return; }
+      if (model.step.step === "review") {
+        if (pressed.reviewed || !model.verb.open) { end(); return; }
+        chain.current = { ...pressed, reviewed: true };
+        model.actions.next();
+        return;
+      }
       end();
       const review = model.launchReview;
       if (model.step.step !== "launch" || !review) return;

@@ -67,10 +67,11 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   launch, a model OMP no longer lists, or a lead the accounts no longer serve), then
   goes on to the review and the launch. The first check asks the person to approve its
   cost, once: later checks within twice that charge run without asking, and Setup can
-  withdraw the approval. A check put in use is kept as that person's check of the exact
-  account pool, so another workspace whose choices select the same pool adopts it
-  without spending. When accounts change, a check renews the list on its own while the
-  panel is open, and Launch keeps working with the last list that passed meanwhile.
+  withdraw the approval. A finished check is kept as that person's check of the exact
+  account pool, so another workspace whose choices select the same pool adopts it on its
+  first launch, without spending. When accounts change, a check renews a list that passed one on its
+  own while the panel is open, within the approval, and Launch keeps working with the last
+  list that passed meanwhile.
 - **Agent launch:** the launch is still one press. Where an Agent Run can carry it,
   Code registers one Manifold Agent per sponsor and workspace profile with OMP's TUI
   harness, updates it when the profile changes, and launches a Run whose terminal is

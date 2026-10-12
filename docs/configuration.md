@@ -64,25 +64,29 @@ they are.
 
 A person's model checks and their standing approval are the caller's own, keyed by
 their principal and kept for humans only; nobody reads or writes another person's, and
-an agent or a service keeps none. `promoteCatalog` of a staged list that records a
-verification also keeps it as the promoting person's check of its exact account pool
-(`checks/<person>/<poolIdentityDigest>`), unless they already keep one whose benchmark
-completed no earlier; the 16 most recently kept pools are kept. `readChecks({})` answers
-`{ revision, approvedRequests, approvedAt, checks }`: each check's pool, list digest,
-verification provenance, when it was kept, and every model it ladders as
-`provider/id`. `approveChecks({ expectedRevision, requests })` records, at the
-approval's exact revision, the largest charge in benchmark requests the person approved
-checks to spend without asking; `requests: 0` withdraws it, a moved revision refuses
-`code_stale_preferences` and a caller that is not a person `code_person_required`.
-Both are workspace-graded with no container capability, so a token confined to one
-container is refused them. `adoptCheck({ containerId, expectedRevision, accounts,
-poolIdentityDigest, selection })` puts the caller's check of the workspace's present
-pool in use: Code recomputes the pool from the observation and the saved choices and
-refuses `code_accounts_changed` unless it is the one named, refuses `code_check_missing`
-when the caller keeps no check of it, and `code_check_current` when the workspace
-already holds a list of that pool whose benchmark completed no earlier. It saves
-`selection` (else the saved one) narrowed to the check's list, and leaves a staged list
-as it is.
+an agent, a service or a token confined to one container keeps none. `stageCatalog` with
+a `verification` also keeps the staged list as the checking person's check of its exact
+account pool and the budget it was derived under (`verification.budget`, `any` when
+absent), at `checks/<person>/<budget>/<poolIdentityDigest>`, unless they already keep one
+whose benchmark completed no earlier; it stays kept whatever then happens to the stage or
+its promotion, since it is still a true measurement, and the 16 most recently kept are
+kept. Every stored check and approval names its principal, and a read of one naming
+anyone else, or filed under another key, refuses `code_invalid_configuration`.
+`readChecks({})` answers `{ revision, approvedRequests, approvedAt, checks }`: each
+check's pool, budget, list digest, verification provenance, when it was kept, and every
+model it ladders as `provider/id`. `approveChecks({ expectedRevision, requests })`
+records, at the approval's exact revision, the largest charge in benchmark requests the
+person approved checks to spend without asking; `requests: 0` withdraws it, a moved
+revision refuses `code_stale_preferences` and a caller that keeps none
+`code_person_required`. Both ask no container capability and are container-graded, so a
+token confined to one container reaches them and reads that it keeps none.
+`adoptCheck({ containerId, expectedRevision, accounts, poolIdentityDigest, budget,
+selection })` puts the caller's check of the workspace's present pool and that budget in
+use: Code recomputes the pool from the observation and the saved choices and refuses
+`code_accounts_changed` unless it is the one named, refuses `code_check_missing` when the
+caller keeps no such check, and `code_check_current` when the workspace already holds a
+list of that pool whose benchmark completed no earlier. It saves `selection` (else the
+saved one) narrowed to the check's list, and leaves a staged list as it is.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
@@ -167,17 +171,21 @@ model list is unavailable, with Retry and Models, whatever else the launch line 
 
 The starter is render-only. Nothing writes it as the workspace's catalog except a
 model verification (the panel's **model check**),
-`workflow.verifyModels(target, { expectedRevision, budget, selection })`: the one way a
-Code catalog comes to name models, because only a probe shows which this operator can
-call. Preparing reads the workspace at `expectedRevision` (initializing an absent one).
-When the caller keeps a check of the workspace's present pool whose benchmark completed
-later than that of the list the workspace holds for that pool, or the workspace holds
-none for it, preparing puts that check in use (`adoptCheck`, with `selection` narrowed to
-it) and ends there, spending nothing: `{ kind: "adopted", verified }`, whose excluded
-models are unknown. Otherwise it runs OMP's inventory with the pool Code composes from
-the saved account choices and returns `{ kind: "charge", charge, approvedRequests,
-confirm }`: the charge, the number of tiny benchmark requests per provider, and the
-caller's standing approval as read while preparing, having probed and spent nothing. A
+`workflow.verifyModels(target, { expectedRevision, budget, selection, adoptOnly })`: the
+one way a Code catalog comes to name models, because only a probe shows which this
+operator can call. Preparing reads the workspace at `expectedRevision` (initializing an
+absent one). When the caller keeps a check of the workspace's present pool, derived under
+`budget`, whose benchmark completed later than that of the list the workspace holds for
+that pool, or the workspace holds none for it, preparing puts that check in use
+(`adoptCheck`, with `selection` narrowed to it) and ends there, spending nothing:
+`{ kind: "adopted", verified }`, whose excluded models are unknown. Otherwise it runs
+OMP's inventory with the pool Code composes from the saved account choices and returns
+`{ kind: "charge", charge, approvedRequests, confirm }`: the charge, the number of tiny
+benchmark requests per provider, and the caller's standing approval as read while
+preparing, having probed and spent nothing. An `adoptOnly` run instead ends with
+`{ kind: "none" }`, having started and written nothing, and never initializes an absent
+workspace. A `beforeWrite` option is awaited before the run first adopts or stages, so a
+caller can hold those writes. A
 catalog routes only its
 rungs, so the charge probes every eligible model of a family Code requires (OpenAI,
 Anthropic), whose ladder must survive a model that does not answer, and only the
@@ -207,8 +215,8 @@ holds no such claim. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
 when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
 OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed
-or uncertain one is never replayed. Promotion keeps the list as the promoting person's
-check of its pool (see the doors above), and the promoted catalog records its verification
+or uncertain one is never replayed. Staging keeps the list as the checking person's
+check of its pool and budget (see the doors above), and the promoted catalog records its verification
 provenance: the OMP its inventory ran under, as content identities — the artifact the
 inventory job ran from (`inventoryArtifactSha256`) and the revision of OMP's bundled model
 catalog when the inventory started (`catalogRevision`), the list the inventory picks its
@@ -567,16 +575,23 @@ settings it moved, as a choice. A check that stopped or was cancelled says so ("
 check stopped while <step>: <reason>", "Model check cancelled") until the next one
 starts; the launch is its retry.
 
-**Background checks.** The panel starts a check on its own when the list in use no
-longer holds, no staged list waits, the list in use is not an imported one, the rows hold
-no edit, nothing else is in flight and a check could run here, and the person either
-approved checks or keeps a check of the pool to adopt (for a workspace never set up, any
-kept check). A new workspace whose saved choices select a kept pool so adopts it as soon
-as it opens. A background check never asks: a charge the approval does not cover ends it
-with nothing spent. It never takes the verb or the line beside a launch the list in use
-can serve, and a stop is said in Models only. Each standing is tried once while the
-panel stays open. An edit of the rows cancels one that has not started writing; while
-it writes the model list the gate holds edits as a step in progress.
+**Background checks.** The panel starts a check on its own when the workspace has been
+set up, the list in use no longer holds, no staged list waits, the list in use is not an
+imported one, the rows hold no edit, nothing else is in flight and a check could run
+here, and either the person keeps a newer check of the pool and budget to adopt, or the
+list passed a check and the person approved checks. A workspace never set up is left to
+its first Launch press, which adopts a kept check of its pool without asking or
+spending. A background check never asks, and spends only to renew a list that passed a
+check, within the approval as read again just before spending: any other charge ends it
+with nothing spent, and for a list that never passed a check it only adopts, starting no
+inventory, so a first check that spends is always the person's own press. It holds its
+first write until nothing the person started is in flight. It never takes the verb or
+the line beside a launch the list in use can serve, and a stop is said in Models only.
+After any check stops, is cancelled or ends unspent, nothing starts on its own again
+while the panel stays open until a check the person starts completes. An edit of the
+rows cancels one that has not started writing; while it writes the model list the gate
+holds edits as a step in progress. **ask first** in Setup withdraws the approval and stops
+a check already spending under it that the person did not approve with a press.
 
 Once the saved team on a list that serves a launch meets every launch precondition and
 its review inputs (options, accounts, revisions, destination) have held still briefly,
@@ -931,10 +946,10 @@ Manifold action transport as the web. It composes `createCodeClient` with
   exact pins, then prepares the reviewed job. It never falls back from failed
   validation to creation.
 - **Inventory and benchmark:** read OMP defaults and accounts, compose the Code
-  pool and read the caller's own checks; a newer kept check of that pool is adopted
-  instead, with no job. Otherwise start OMP's job, then read OMP's typed retained
-  receipt. Benchmark binds the inventory job; derived catalog data is staged only
-  through a later explicit Code CAS, and its promotion keeps it as the caller's check.
+  pool and read the caller's own checks; a newer kept check of that pool and budget is
+  adopted instead, with no job. Otherwise start OMP's job, then read OMP's typed
+  retained receipt. Benchmark binds the inventory job; derived catalog data is staged
+  only through a later explicit Code CAS, which keeps it as the caller's check.
 - **Session:** compose Code policy and read OMP defaults, request OMP's native
   review, then re-compose/re-read before prepare. Changed Code digest or defaults
   revision refuses. Only OMP's returned destination, review digest and

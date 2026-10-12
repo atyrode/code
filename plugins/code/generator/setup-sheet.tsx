@@ -308,8 +308,9 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
   const inUse = useMemo(() => active ? modelRows(active.document).length : 0, [active]);
   const verifiedAt = model.verification.held === "current" ? model.verification.provenance?.benchmarkCompletedAt ?? null : null;
   const leftOut = model.verification.exclusions;
-  // What checks may spend on their own (model-verification.ts `approvedRequests`): up to twice the largest approved charge.
-  const approved = model.verification.approvedRequests ?? 0;
+  // What checks may spend on their own (model-verification.ts `approvedRequests`): up to twice the largest approved charge;
+  // null until the approval has been read, when nothing is said rather than a guess.
+  const approved = model.verification.approvedRequests;
   async function askFirst() {
     try { await model.verification.withdraw(); readout.say({ value: "checks", text: "every later check asks before it spends" }); }
     catch (reason) { readout.say({ value: "checks", text: `${codeOperationFailure(reason)} Checks still run on their own.`, warn: true }); }
@@ -363,10 +364,10 @@ export function SetupSheet({ host, model, target, machine, machines, rosterError
           {leftOut && <><dt>left out</dt><dd><button type="button" className={`${G}setup-link`} data-place="models" onClick={() => onPlace("models")}>{leftOut.length}</button></dd></>}
           <dt>source</dt>
           <dd>{active ? "stored list" : record?.draft ? "staged list" : "bundled starter"}{ompVersion && <span className={`${G}setup-q`}> · OMP {ompVersion} bundled list</span>}</dd>
-          <dt>checks</dt>
-          <dd>{approved > 0
-            ? <>on their own up to {approved * 2} requests <span className={`${G}setup-q`}>·</span> <button type="button" className={`${G}setup-link`} data-checks="ask" onClick={() => void askFirst()}>ask first</button></>
-            : "ask before spending"}</dd>
+          {approved !== null && <><dt>checks</dt>
+            <dd>{approved > 0
+              ? <>on their own up to {approved * 2} requests <span className={`${G}setup-q`}>·</span> <button type="button" className={`${G}setup-link`} data-checks="ask" onClick={() => void askFirst()}>ask first</button></>
+              : "ask before spending"}</dd></>}
           <dt>workspace</dt>
           <dd>{host.containerId}</dd>
         </dl>

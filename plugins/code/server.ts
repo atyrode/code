@@ -23,7 +23,8 @@ const mutating: Partial<Record<RootAction, true>> = {
 };
 const pure: Partial<Record<RootAction, true>> = { draftInventory: true, deriveCatalog: true };
 // A person's own checks and approval: no container is involved, so no container capability is
-// asked, and a token confined to one container is refused them like a pure door.
+// asked. They are container-graded so that a token confined to one container reaches them and is
+// answered as keeping none, rather than refused in a way a caller could not tell from a failure.
 const personal: Partial<Record<RootAction, true>> = { readChecks: true, approveChecks: true };
 // Only Code's external suggestion policy needs native authority. Policy
 // composition never delegates OMP execution, jobs, accounts or terminals.
@@ -58,7 +59,11 @@ const productHandlers: ProductHandlers = {
     const record = requireConfiguration(previous);
     compileCatalog(args.document);
     const provenance = args.verification === undefined ? null : verificationProvenance(ctx, record, args.document, args.verification);
-    return commitConfiguration(ctx, previous, { ...record, draft: { document: args.document, digest: digestOf(args.document), provenance } });
+    const draft = { document: args.document, digest: digestOf(args.document), provenance };
+    // A verified list is also kept as the checking person's check of its pool and budget, which their other
+    // workspaces with that pool adopt instead of checking again; it stays a true measurement whatever this stage's fate.
+    if (draft.provenance !== null) await recordCheck(ctx, { ...draft, provenance: draft.provenance }, args.verification!.budget);
+    return commitConfiguration(ctx, previous, { ...record, draft });
   },
   async reviewCatalog(ctx, args) {
     const previous = await readConfiguration(ctx, args); expectRevision(previous, args.expectedRevision);
@@ -69,11 +74,7 @@ const productHandlers: ProductHandlers = {
     const record = requireConfiguration(previous);
     const reviewed = catalogReview(ctx, record, args.source);
     if (reviewed.reviewDigest !== args.reviewDigest) throw new CodeRefusal("preview_changed");
-    // A verified list put in use is also kept as the promoting person's check of its pool, which
-    // their other workspaces with that pool adopt instead of checking again.
-    const promoted = record[args.source]!;
-    if (args.source === "draft" && promoted.provenance !== null) await recordCheck(ctx, { ...promoted, provenance: promoted.provenance });
-    return commitConfiguration(ctx, previous, { ...record, active: promoted,
+    return commitConfiguration(ctx, previous, { ...record, active: record[args.source],
       draft: args.source === "draft" ? null : record.draft, selection: reviewed.review.selection });
   },
   async discardCatalog(ctx, args) {
@@ -146,7 +147,7 @@ const plugin = {
     name, title: name.replace(/([A-Z])/g, " $1"),
     caps: pure[name] || personal[name] ? [] : [mutating[name] ? "containers:write" : "containers:read"],
     ...(actionDelegates[name] ? { delegates: actionDelegates[name]! } : {}),
-    scope: pure[name] || personal[name] ? "workspace" : "container", trace: "opaque",
+    scope: pure[name] ? "workspace" : "container", trace: "opaque",
     input: rootActionSchemas[name].input as z.ZodType<unknown>, result: rootActionSchemas[name].result as z.ZodType<unknown>,
   })),
   handlers,
