@@ -67,9 +67,9 @@ files, service state, credentials or backups.
   read. The generator's rows and routing need no account or runtime setup. The
   starter is render-only: saving it is the model check the first Launch press runs
   (OMP inventory through the saved account pool, a charge the operator approves once
-  per person, per-provider benchmarks, then the derived catalog staged, reviewed,
-  promoted, kept as the person's check of that pool and saved with the selection), or
-  the person's kept check of that pool, adopted without spending. Stored active policy
+  per person, per-provider benchmarks, then the derived catalog staged, which keeps it
+  as the person's check of that pool and budget, reviewed, promoted and saved with the
+  selection), or the person's kept check of that pool, adopted without spending. Stored active policy
   wins and unrecorded historical provenance
   stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
