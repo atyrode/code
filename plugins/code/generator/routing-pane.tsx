@@ -172,7 +172,7 @@ export function Profile({ groups }: { groups: readonly ProfileGroup[] }) {
     known.current = new Set(leads.map(lead => lead.dataset.group!));
     places.current = after;
   }, [key]);
-  return <div ref={box} className={`${G}profile`} aria-label="roles by model">
+  return <div ref={box} className={`${G}profile`} role="group" aria-label="roles by model">
     {groups.map(group => <Fragment key={group.key}>
       <span className={`${G}profile-lead`} data-down={group.down || undefined} data-group={group.key} style={hue(group.lead.family)}
         title={`${group.lead.alias}:${group.lead.thinking}`}>

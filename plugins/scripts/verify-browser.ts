@@ -1108,6 +1108,59 @@ async function geometryAcrossWidths(browser: BrowserInstance, label: string): Pr
   assert.deepEqual([...modes].sort(), ["medium", "narrow", "wide"], `The ${label} widths exercise the panel's three layouts`);
 }
 
+/**
+ * Below 760px routing and usage stand under the generator when the panel is tall enough for both, and are tabs of their own
+ * otherwise. Short, the Routing and Usage tabs show and the profile is grouped under the generator's rows. Tall, routing stands
+ * under the generator and usage under routing, with no tabs for them and no grouped profile; `p` hides routing, bringing the
+ * grouped profile back while the stage stays stacked, and shows it again; `f` shows the fallback chains without changing the
+ * arrangement or letting anything scroll sideways.
+ */
+async function narrowArrangements(browser: BrowserInstance, label: string): Promise<void> {
+  const chains = element(`${generator} [data-chains]`);
+  const arrangement = `(() => {
+    const viewport = document.querySelector('${generator} .scroll-region__viewport');
+    return JSON.stringify({ stacked: ${element(stage)}.dataset.stacked === 'true', tabs: [...document.querySelectorAll('${generator} [data-view-tab]')].map(tab => tab.dataset.viewTab).join(' '),
+      routing: ${element(`${generator} [data-pane="routing"]`)}.checkVisibility(), profile: !!document.querySelector('${generator} .${G}profile'),
+      overflow: viewport.scrollWidth - viewport.clientWidth });
+  })()`;
+  type Arrangement = { stacked: boolean; tabs: string; routing: boolean; profile: boolean; overflow: number };
+  const is = (expected: Arrangement) => `${arrangement} === ${JSON.stringify(JSON.stringify(expected))}`;
+  const tabbed: Arrangement = { stacked: false, tabs: "main routing usage accounts sessions", routing: false, profile: true, overflow: 0 };
+  const stacked: Arrangement = { stacked: true, tabs: "main accounts sessions", routing: true, profile: false, overflow: 0 };
+  const inStage = `!!document.activeElement?.closest('${stage}') || document.activeElement === ${element(generator)}`;
+  try {
+    await showView(browser, "main");
+    await panelWidth(browser, 390, 600);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), tabbed,
+      `The ${label} panel 390px wide and 600px tall keeps routing and usage as tabs, the profile grouped under the rows`);
+    await panelWidth(browser, 390, 2400);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), stacked,
+      `The ${label} panel 390px wide and 2400px tall stands routing and usage under the generator, with no tabs for them`);
+    assert.deepEqual(await browser.evaluate(`(() => {
+      const box = pane => document.querySelector('${generator} [data-pane="' + pane + '"]').getBoundingClientRect();
+      return { routing: box('routing').top >= box('generator').bottom - 1, usage: box('usage').top >= box('routing').bottom - 1 };
+    })()`), { routing: true, usage: true }, "Stacked, routing stands under the generator and usage under routing");
+    if (!await browser.evaluate<boolean>(inStage)) await click(browser, generatorTitle);
+    await key(browser, "p", 80);
+    await until(browser, "p hides routing under the generator, the grouped profile comes back and the stage stays stacked",
+      is({ ...stacked, routing: false, profile: true }));
+    await key(browser, "p", 80);
+    await until(browser, "p shows routing under the generator again", is(stacked));
+    if (!await browser.evaluate<boolean>(inStage)) await click(browser, generatorTitle);
+    await key(browser, "f", 70);
+    await until(browser, "f shows the routing's fallback chains", `${chains}.getAttribute('aria-checked') === 'true'`);
+    await still(browser);
+    assert.deepEqual(JSON.parse(await browser.evaluate<string>(arrangement)), stacked,
+      "Stacked, showing the fallback chains changes neither the arrangement nor the panel's width");
+    await key(browser, "f", 70);
+    await until(browser, "f hides the fallback chains", `${chains}.getAttribute('aria-checked') !== 'true'`);
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+}
+
 /** Pointing at or focusing any control of the generator, routing, usage or key line moves no layout box (the readouts' words aside). */
 async function zeroShift(browser: BrowserInstance, label: string): Promise<void> {
   await showView(browser, "main");
@@ -1699,6 +1752,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
 
   await zeroShift(browser, label);
   await geometryAcrossWidths(browser, label);
+  await narrowArrangements(browser, label);
   await browser.send("Emulation.setEmulatedMedia", { features: [] });
   assert.deepEqual(await readProfile(browser, draftKey), before, "Hover, focus, views and resizing are presentation only");
 }

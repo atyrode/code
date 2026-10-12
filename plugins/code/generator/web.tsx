@@ -38,8 +38,11 @@ const NO_WORDS: StatementWords = { lane: "", tier: "", thinking: "", advisor: ""
 /** Below this panel width routing and usage leave the generator's side, for under it or tabs of their own; from the second, the wider spacing. */
 const NARROW_BELOW_PX = 760, WIDE_FROM_PX = 1180;
 type Mode = "narrow" | "medium" | "wide";
-/** The layout the panel's width allows and, below 760px, the panel's size, which decides where routing and usage stand (`useStacked`). */
-type Panel = { readonly mode: Mode; readonly width: number; readonly height: number };
+/**
+ * The layout the panel's width allows and, below 760px, the panel's size, which decides where routing and usage stand
+ * (`useStacked`); `fonts` turns true once the document's fonts are ready, so what a fallback font laid out is measured again.
+ */
+type Panel = { readonly mode: Mode; readonly width: number; readonly height: number; readonly fonts: boolean };
 /** How far the stacked arrangement may run past the panel's height before it gives way, so rounding never flips it back and forth. */
 const STACKED_GRACE_PX = 4;
 
@@ -62,16 +65,18 @@ function scrollParent(element: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * The layout the panel's own size allows, judged before paint and on every resize: the panel, not
- * the window, since Code shares the window with its canvas. The width chooses the layout; below 760px
- * the width and the scroll region's height are kept too, for `useStacked`, and wider a resize renders
- * nothing new. The region is found by its own class, since its viewport only declares itself
- * scrolling once mounted. The first layout, every resize and every `still` change of arrangement place
- * things without motion (`data-boot`), so nothing glides into its place on arrival.
+ * The layout the panel's own size allows: the panel, not the window, since Code shares the window
+ * with its canvas. The width chooses the layout at once, before paint and on every resize. Below
+ * 760px the width and the scroll region's height are kept too, for `useStacked`, but only once a
+ * resize has settled (two frames without another, as `data-boot` lifts), so a drag decides where
+ * routing stands once rather than at every pixel; wider, a resize renders nothing new. The region is
+ * found by its own class, since its viewport only declares itself scrolling once mounted. The first
+ * layout, every resize and every `still` change of arrangement place things without motion
+ * (`data-boot`), so nothing glides into its place on arrival.
  */
 function usePanel(app: RefObject<HTMLDivElement | null>): { panel: Panel; still: () => void } {
-  const [panel, setPanel] = useState<Panel>({ mode: "wide", width: 0, height: 0 });
-  const motion = useRef({ booted: false, frame: 0 });
+  const [panel, setPanel] = useState<Panel>({ mode: "wide", width: 0, height: 0, fonts: false });
+  const motion = useRef({ booted: false, frame: 0, settled: () => {} });
   const still = useCallback(() => {
     const node = app.current, state = motion.current;
     if (!node) return;
@@ -79,25 +84,35 @@ function usePanel(app: RefObject<HTMLDivElement | null>): { panel: Panel; still:
     // Before the fonts are ready the first layout is still settling, and lifts `data-boot` itself once they are.
     if (!state.booted) return;
     cancelAnimationFrame(state.frame);
-    state.frame = requestAnimationFrame(() => { state.frame = requestAnimationFrame(() => { delete node.dataset.boot; }); });
+    state.frame = requestAnimationFrame(() => { state.frame = requestAnimationFrame(() => { delete node.dataset.boot; state.settled(); }); });
   }, []);
   useLayoutEffect(() => {
     const node = app.current, region = node?.closest<HTMLElement>(`.${G}scroll`);
     if (!node) return;
     node.dataset.boot = "";
-    const judge = () => {
+    // A new layout takes its size at once; within one, a new size waits until the resize has settled.
+    const judge = (settled: boolean) => {
       const width = node.clientWidth;
       if (width === 0) return;
       const mode: Mode = width < NARROW_BELOW_PX ? "narrow" : width < WIDE_FROM_PX ? "medium" : "wide";
-      const next = mode === "narrow" ? { mode, width, height: region?.clientHeight ?? 0 } : { mode, width: 0, height: 0 };
-      setPanel(previous => previous.mode === next.mode && previous.width === next.width && previous.height === next.height ? previous : next);
+      const narrow = mode === "narrow";
+      setPanel(previous => {
+        const next = { mode, width: narrow ? width : 0, height: narrow ? region?.clientHeight ?? 0 : 0, fonts: previous.fonts };
+        return previous.mode === mode && (!settled || previous.width === next.width && previous.height === next.height) ? previous : next;
+      });
     };
-    judge();
-    const observer = new ResizeObserver(() => { still(); judge(); });
+    motion.current.settled = () => judge(true);
+    judge(true);
+    const observer = new ResizeObserver(() => { still(); judge(false); });
     observer.observe(node);
     if (region) observer.observe(region);
     let live = true;
-    void node.ownerDocument.fonts.ready.then(() => { if (!live) return; motion.current.booted = true; still(); });
+    void node.ownerDocument.fonts.ready.then(() => {
+      if (!live) return;
+      motion.current.booted = true;
+      setPanel(previous => ({ ...previous, fonts: true }));
+      still();
+    });
     return () => { live = false; cancelAnimationFrame(motion.current.frame); observer.disconnect(); };
   }, []);
   return { panel, still };
@@ -105,18 +120,29 @@ function usePanel(app: RefObject<HTMLDivElement | null>): { panel: Panel; still:
 
 /**
  * The generator's height as both arrangements weigh it: without the grouped profile, which only the
- * tabbed one shows, and with its head's first line only, since the Show controls that only the
- * stacked one adds may wrap the head.
+ * tabbed one shows, and without the Show controls (`data-reveal`) that only the stacked one adds at
+ * the end of its head, where they may take a line of their own.
  */
 function bareHeight(generator: HTMLElement): number {
   const box = (element: Element) => element.getBoundingClientRect();
   const head = generator.querySelector(`:scope > .${G}head`), profile = generator.querySelector(`.${G}profile`);
   let height = box(generator).height;
-  if (head?.firstElementChild) {
-    const title = box(head.firstElementChild);
-    height -= box(head).bottom - Math.max(...[...head.children].map(box).filter(item => item.top < title.bottom).map(item => item.bottom));
-  }
+  if (head) height -= box(head).bottom - Math.max(...[...head.children].filter(child => !child.matches("[data-reveal]")).map(child => box(child).bottom));
   if (profile) height -= box(profile).height + parseFloat(getComputedStyle(profile).marginTop);
+  return height;
+}
+
+/**
+ * Routing's height without its fallback chains, as laid out now: the chains (`f`) never decide where
+ * routing stands, so the lines each route's chain runs past its lead are left out, whether it runs
+ * beside the role or, under 300px, under it.
+ */
+function bareRoutingHeight(routing: HTMLElement): number {
+  let height = routing.getBoundingClientRect().height;
+  for (const chain of routing.querySelectorAll(`.${G}chain`)) {
+    const lead = chain.firstElementChild;
+    if (lead) height -= chain.getBoundingClientRect().bottom - lead.getBoundingClientRect().bottom;
+  }
   return height;
 }
 
@@ -124,8 +150,6 @@ function bareHeight(generator: HTMLElement): number {
 type StageFacts = {
   /** The main view shows, so the generator can be measured: no other view, no sheet over it. */
   readonly main: boolean;
-  /** The routing's fallback chains show. */
-  readonly chains: boolean;
   /** The routing's rows; none while the profile is read, when there is nothing yet to weigh. */
   readonly routes: number;
   /** Routing is hidden beside or under the generator. */
@@ -134,49 +158,58 @@ type StageFacts = {
 
 /**
  * Below 760px, where routing and usage stand: under the generator when the generator without its
- * grouped profile and the whole routing pane fit the panel's height together (its scroll region's,
- * less the key line), otherwise as tabs of their own, as they also are until there are routes to
- * weigh. It is judged from what is rendered, and only when the panel's size or the stage's structure
- * changes (entering narrow, the routing's rows or the generator's, the fallback chains, routing hidden
- * or shown, a return to the main view), never because the readout or the launch line says something
- * else: a later overflow scrolls, and the launch never moves under the pointer. Both arrangements
- * weigh the same heights: the generator by `bareHeight`, and the bar and routing as the stacked
- * arrangement last laid them out at this width with these chains and routes. Where it has not yet,
- * the stacked arrangement is tried before paint (`probing`, routing shown even if hidden) and settles
- * back if it does not fit. A change of arrangement is `still`, as a resize is, and focus on a routing
- * or usage control that goes is kept in the panel (`keep`).
+ * grouped profile and the whole routing pane without its fallback chains fit the panel's height
+ * together (its scroll region's, less the key line), otherwise as tabs of their own, as they also are
+ * until there are routes to weigh. It is judged from what is rendered, and only when the panel's
+ * settled size or the stage's structure changes (entering narrow, the routing's rows or the
+ * generator's, routing hidden or shown, a return to the main view, the fonts becoming ready), never
+ * because the readout, the launch line or the fallback chains changed: what then runs past the panel
+ * scrolls, so the launch never moves under the pointer and the chains never send routing back to a
+ * tab. Both arrangements weigh the same heights: the generator by `bareHeight`, and the bar and
+ * routing (`bareRoutingHeight`) as the stacked arrangement last laid them out at this width with
+ * these routes. Where it has not yet, the stacked arrangement is tried before paint (`probing`:
+ * routing shown even if hidden, and the Routing and Usage tabs kept for focus but given no room) and
+ * settles back if it does not fit; a flip to stacked is measured again as laid out. A change of
+ * arrangement is `still`, as a resize is, and focus on a routing or usage control it hides or removes
+ * is kept in the panel (`keep`).
  */
 function useStacked(app: RefObject<HTMLDivElement | null>, panel: Panel, still: () => void, facts: StageFacts, keep: () => void): { stacked: boolean; probing: boolean } {
   const [state, setState] = useState({ stacked: false, probing: false });
-  // The bar and routing's height as the stacked arrangement laid them out, by width, chains and routes.
-  const laid = useRef(new Map<string, number>());
+  // The bar's and routing's height as the stacked arrangement laid them out, by width and routes, and whether the fonts were ready.
+  const laid = useRef({ fonts: false, heights: new Map<string, number>() });
   const judged = useRef<string | null>(null);
   useLayoutEffect(() => {
+    if (panel.mode !== "narrow" || !facts.main || facts.routes === 0) { judged.current = null; return; }
     const node = app.current;
     const generator = node?.querySelector<HTMLElement>(`[data-pane="generator"]`), routing = node?.querySelector<HTMLElement>(`[data-pane="routing"]`);
-    if (panel.mode !== "narrow" || !facts.main || facts.routes === 0 || !node || !generator || !routing) { judged.current = null; return; }
-    const at = `${panel.width}:${facts.chains}:${facts.routes}`;
-    const key = `${at}:${panel.height}:${facts.hidden}:${generator.querySelectorAll("[data-row]").length}`;
+    if (!node || !generator || !routing) return;
+    if (laid.current.fonts !== panel.fonts) laid.current = { fonts: panel.fonts, heights: new Map() };
+    const at = `${panel.width}:${facts.routes}`;
+    const key = `${at}:${panel.height}:${facts.hidden}:${generator.querySelectorAll("[data-row]").length}:${panel.fonts}`;
     if (key === judged.current && !state.probing) return;
     judged.current = key;
+    // A probe whose routing did not show cannot be measured; it ends rather than asks again for the same key.
+    if (state.probing && routing.hidden) {
+      setState({ stacked: state.stacked, probing: false });
+      return;
+    }
     const height = (element: Element | null) => element?.getBoundingClientRect().height ?? 0;
-    if ((state.stacked || state.probing) && !routing.hidden) laid.current.set(at, height(node.querySelector(`.${G}bar`)) + height(routing));
-    const frame = laid.current.get(at);
-    // Focus on a routing or usage control would be lost with it: its pane hides when the stage turns to tabs, its tab goes when it stacks or is tried.
-    const leaving = node.ownerDocument.activeElement?.closest(`[data-pane="routing"], [data-pane="usage"], [data-view-tab="routing"], [data-view-tab="usage"]`);
+    if ((state.stacked || state.probing) && !routing.hidden) laid.current.heights.set(at, height(node.querySelector(`.${G}bar`)) + bareRoutingHeight(routing));
+    const frame = laid.current.heights.get(at);
     if (frame === undefined) {
       still();
-      if (leaving && !state.stacked) keep();
       setState({ stacked: state.stacked, probing: true });
       return;
     }
     const stacked = frame + bareHeight(generator) <= panel.height - height(node.querySelector(`.${G}keys`)) + (state.stacked ? STACKED_GRACE_PX : 0);
-    if (stacked === state.stacked && !state.probing) return;
     if (stacked !== state.stacked) {
       still();
-      if (leaving) keep();
+      // Focus on a routing or usage control would go with it: its pane hides when the stage turns to tabs, its tab goes when it stacks.
+      if (node.ownerDocument.activeElement?.closest(`[data-pane="routing"], [data-pane="usage"], [data-view-tab="routing"], [data-view-tab="usage"]`)) keep();
+      // A stacked arrangement taken from what an earlier layout measured is measured once more as it is laid out now.
+      if (stacked) judged.current = null;
     }
-    setState({ stacked, probing: false });
+    if (stacked !== state.stacked || state.probing) setState({ stacked, probing: false });
   });
   return state;
 }
@@ -288,13 +321,16 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const accent = !lane || lane.kind === "mixed" ? "var(--tui-mixed)" : `var(--code-${hueOf(lane.family)})`;
 
   // ------------------------------------------------------------ views and sheets
-  const arrangement = useStacked(app, panel, still, { main: view === "main" && sheet === null, chains: chains && fallbacks, routes: ledger?.length ?? 0,
-    hidden: hidden.routing }, keepFocus);
-  // Narrow, routing and usage stand under the generator (`stacked`) or are tabs of their own (`tabbed`).
-  const stacked = narrow && (arrangement.stacked || arrangement.probing);
-  const tabbed = narrow && !stacked;
-  const showRouting = (view === "main" && !tabbed && (!hidden.routing || arrangement.probing)) || view === "routing";
-  const showUsage = (view === "main" && !tabbed && !hidden.usage) || view === "usage";
+  const arrangement = useStacked(app, panel, still, { main: view === "main" && sheet === null, routes: ledger?.length ?? 0, hidden: hidden.routing }, keepFocus);
+  // Narrow, routing and usage stand under the generator (`stacked`) or are tabs of their own (`tabbed`); a probe lays them out
+  // stacked before paint while the tabs keep their nodes (`probing`), so focus on one stays unless the stage really stacks.
+  const probing = narrow && arrangement.probing;
+  const stacked = narrow && (arrangement.stacked || probing);
+  const tabbed = narrow && !arrangement.stacked;
+  // Routing and usage stand with the generator: beside it, or under it.
+  const withGenerator = !narrow || stacked;
+  const showRouting = (view === "main" && withGenerator && (!hidden.routing || probing)) || view === "routing";
+  const showUsage = (view === "main" && withGenerator && !hidden.usage) || view === "usage";
   function changeView(next: PanelView) {
     if (next !== view) setView(next);
   }
@@ -539,7 +575,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     </div>
     <MoreMenu commands={commands} />
   </nav>;
-  const hideButton = (pane: "routing" | "usage") => !tabbed && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
+  const hideButton = (pane: "routing" | "usage") => withGenerator && <Button aria-keyshortcuts={pane === "routing" ? "p" : "s"} title={`Hide ${pane} (${pane === "routing" ? "p" : "s"})`}
     onClick={() => run({ kind: "toggle", pane })}>Hide</Button>;
   // The short key line: the keys the shown view answers most, every other one under Shortcuts. Hidden for a coarse pointer, which has no keys.
   const viewKeys: readonly (readonly [string, string])[] = view === "main"
@@ -555,7 +591,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     </Fragment>);
 
   // ------------------------------------------------------------ the stage
-  const tui = <div ref={app} className={`${G}tui`} data-tui="" data-mode={mode} data-stacked={stacked || undefined} data-view={view} data-solo-generator={(view === "main" && !showRouting) || undefined}
+  const tui = <div ref={app} className={`${G}tui`} data-tui="" data-mode={mode} data-stacked={stacked || undefined} data-probing={probing || undefined} data-view={view}
+    data-solo-generator={(view === "main" && !showRouting) || undefined}
     data-solo={view === "routing" || view === "usage" || undefined} hidden={sheet !== null} style={{ "--tui-acc": accent } as CSSProperties}>
     <h1 className="plugin-atyrode_code__sr">Code</h1>
     {bar}
@@ -563,9 +600,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} announce={announce} onOpen={open}
         onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator}
-        reveal={!tabbed && (hidden.routing || hidden.usage) ? <>
-          {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
-          {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}
+        reveal={withGenerator && (hidden.routing || hidden.usage) ? <>
+          {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
+          {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}
         </> : null} />
       <RoutingPane ledger={ledger} chains={chains} fallbacks={fallbacks} onChains={() => run({ kind: "chains" })} hide={hideButton("routing")} hidden={!showRouting} />
       <section className={`${G}pane`} data-pane="usage" aria-label="usage" hidden={!showUsage} tabIndex={-1}>

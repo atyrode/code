@@ -31,7 +31,7 @@ export type PanelKey = {
   /** Nothing in the stage has focus: the panel root, which has focus when the panel opens. */
   readonly onRoot: boolean;
   readonly view: PanelView;
-  /** Routing and usage are tabs of their own, as when the panel has room for them neither beside nor under the generator. */
+  /** Routing and usage are tabs of their own, because the panel has room for them neither beside nor under the generator. */
   readonly tabbed: boolean;
   /** How many recent profiles the digits can recall, in the sessions view. */
   readonly recents: number;

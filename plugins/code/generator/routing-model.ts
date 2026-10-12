@@ -76,8 +76,9 @@ export type ProfileGroup = { readonly key: string; readonly lead: RouteToken; re
 /**
  * The profile grouped by what it runs (`model:thinking`), read by provider and then by level: the
  * default role's provider first and the others in the panel's provider order, then within a provider
- * the stronger tier first, then the higher thinking, then the alias, so equal groups always stand in
- * one order. Roles keep their routing order inside a group; an off advisor runs nothing.
+ * the stronger tier first (a special tier, 0, after fast), then the higher thinking, then the alias,
+ * so equal groups always stand in one order whatever the locale. Roles keep their routing order
+ * inside a group; an off advisor runs nothing.
  */
 export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
   const groups = new Map<string, { key: string; lead: RouteToken; down: boolean; roles: { role: string; agentBacked: boolean }[] }>();
@@ -92,5 +93,5 @@ export function profileGroups(ledger: readonly LedgerRow[]): ProfileGroup[] {
   const rank = first === undefined ? families : [first, ...families.filter(family => family !== first)];
   const scale: readonly string[] = ThinkingLevelSchema.options;
   return [...groups.values()].sort((a, b) => rank.indexOf(a.lead.family) - rank.indexOf(b.lead.family) || b.lead.tier - a.lead.tier
-    || scale.indexOf(b.lead.thinking) - scale.indexOf(a.lead.thinking) || a.lead.alias.localeCompare(b.lead.alias));
+    || scale.indexOf(b.lead.thinking) - scale.indexOf(a.lead.thinking) || (a.lead.alias < b.lead.alias ? -1 : a.lead.alias > b.lead.alias ? 1 : 0));
 }
