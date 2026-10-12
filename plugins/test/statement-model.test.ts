@@ -268,6 +268,13 @@ describe("the launch line, in precedence", () => {
     expect(fixes(said({ phase: "charge", mode: "launch", charge: { requests: 0, providers: [] } }))).toEqual(["cancel"]);
   });
 
+  test("approving promises later checks nothing to a sign-in that keeps no checks", () => {
+    const keeps = said({ phase: "charge", mode: "launch", charge }), keepsNone = said({ phase: "charge", mode: "launch", charge, keepsChecks: false });
+    expect(keeps.parts.map(part => part.text)).toContain("asked once: later checks run on their own");
+    expect(keepsNone.parts.map(part => part.text).join(" ")).not.toContain("later checks");
+    expect(keepsNone.actions).toContainEqual({ kind: "confirm", requests: 19, standing: false });
+  });
+
   test("a refusal outranks the outcome of the last step, and read-only is said in neutral grey", () => {
     const refused = { ...ready, state: "refused" as const, refusal: { code: "read-only" as const, text: "Edit access needed." } };
     expect(said({ verb: refused, outcome: { kind: "launched", machine: "Studio", dials: "run" } }).parts[0]).toEqual({ text: "Read-only workspace", tone: "neutral" });
