@@ -110,7 +110,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const madeOn = model.localDraft?.source === "active" ? "the list in use" : model.localDraft?.source === "draft" ? "the staged list" : "the bundled starter";
   const editHold = (kind: CatalogWrite): string | null => {
     if (!editHoldsCatalogWrite(model.localDraft, model.edited, kind)) return null;
-    const effect = kind === "use" ? `using ${model.localDraft?.source === "draft" ? "it" : "the staged list"} starts from its own default team`
+    const effect = kind === "use" ? `using ${model.localDraft?.source === "draft" ? "it" : "the staged list"} resets the profile to the staged list's default`
       : kind === "discard" ? "discarding drops that list" : "an import replaces that list";
     return `Your unsaved edit is on ${madeOn}, and ${effect}. ${savable ? "Save keeps the edit on the list in use; discard edit drops it." : "Discard edit drops the edit."}`;
   };
@@ -157,7 +157,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       wrote(revision, promoted);
       // The staged list goes in use with its own default team; a saved team it does not repeat is said to be gone.
       const reset = saved !== null && promoted.selection !== null && !sameTeam(promoted.selection, saved);
-      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is its default team now"] : [], ...verified ? [] : ["verify it next"]].join("; ") };
+      return { value: "in use", text: ["the staged list replaced the one in use", ...reset ? ["the profile is the new list's default now"] : [], ...verified ? [] : ["verify it next"]].join("; ") };
     }, setFailure);
   }
   function discard() {
