@@ -65,10 +65,12 @@ files, service state, credentials or backups.
 - The first workbench derives a frozen local starter from OMP's passive bundled
   SDK model metadata after a successful absent or initialized-empty configuration
   read. The generator's rows and routing need no account or runtime setup. The
-  starter is render-only: saving it is the model verification (OMP inventory
-  through the saved account pool, a charge the operator confirms, per-provider
-  benchmarks, then the derived catalog staged, reviewed, promoted and saved with
-  the selection). Stored active policy wins and unrecorded historical provenance
+  starter is render-only: saving it is the model check the first Launch press runs
+  (OMP inventory through the saved account pool, a charge the operator approves once
+  per person, per-provider benchmarks, then the derived catalog staged, reviewed,
+  promoted, kept as the person's check of that pool and saved with the selection), or
+  the person's kept check of that pool, adopted without spending. Stored active policy
+  wins and unrecorded historical provenance
   stays unknown. Read-only native panels remain locally explorable, not writable.
   Disposable presentation/CAS proof is not native consent, configured accounts,
   provider execution, a release or authenticated preview acceptance.
@@ -215,8 +217,8 @@ files, service state, credentials or backups.
   still publishes every routed model, leaves it current and is noted in Models; it goes stale
   when a moved catalog no longer publishes a routed model, or the saved choices select another
   pool, with no Code rebuild. A verification recorded before these identities, without them,
-  reads as unverified and asks to be verified again, and a current one can be renewed on
-  purpose. Unit tests prove the rule against a synthetic destination and catalog, and the
+  reads as unverified, so the next launch checks the models first, and a current one can be
+  renewed on purpose. Unit tests prove the rule against a synthetic destination and catalog, and the
   disposable browser against the real bundled catalog: it moves a verified list's runtime
   artifact, then serves a synthetic republish of that catalog without the list's default lead.
   Applied to the preview workspace's live reads (destination pins, catalog revision and account

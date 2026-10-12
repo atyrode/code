@@ -34,7 +34,7 @@ and [status.md](status.md) records caveats. Section 6 is the sole progress ledge
 | Catalogs, ladders, selection, routing, estimates, account-choice and usage projection | Code's typed `plugins/domain/` modules; no recovery from terminal output |
 | Human and headless access | React surfaces and `createCodeWorkflowClient` use the same ordinary Manifold action transport across Code and OMP |
 | Fleet, identity, grants and consent | Manifold's canonical principal/machine/container/resource scopes; no Code inventory, ACL or label-based retargeting |
-| Durable product state and concurrency | Manifold plugin storage/migrations; Code owns one container record committed by native CAS |
+| Durable product state and concurrency | Manifold plugin storage/migrations; Code owns one record per container, plus each person's own model checks and check approval keyed by principal, all committed by native CAS |
 | Broker, gateway, provider observations and credential controls | Independent `atyrode.omp` root/accounts/gateway plugins; Code receives typed permitted results only |
 | Artifacts, bindings and installation | Manifold native resources and exact reviewed revisions; OMP alone declares its runtime artifacts |
 | Jobs, cancellation, retained results and provenance | Manifold's native execution/history, invoked through OMP doors; no Code job database, proxy or second ledger |

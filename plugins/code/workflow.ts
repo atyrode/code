@@ -8,7 +8,8 @@ import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymen
   ListRunsV2ResultSchema, RegisterAgentV2ResultSchema, UpdateAgentV2ResultSchema, formatManifoldUri,
   type AgentRunV2, type AgentV2, type AuthorityScope, type InspectRunV2Result, type LaunchRunResult, type ListRunsV2Result, type RunModel } from "@manifold/protocol";
 import { z } from "zod";
-import { createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Configuration, type Target, type VerificationProvenance } from "./contract.ts";
+import { CODE_PLUGIN_ID, createCodeClient, reviewedSessionOptions, sessionInput, type SessionOptions, type CodeAction, type ActionInput, type ActionResult, type Checks,
+  type Configuration, type Target, type VerificationProvenance } from "./contract.ts";
 import { HARNESS_OPERATION_ID, observePermissionPlan, operationReady, type PermissionPlanInput } from "./permission-plan.ts";
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
@@ -517,6 +518,18 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
   }
   // An empty filter selects no rows; the revision still covers OMP's whole unfiltered model catalog.
   const readCatalogRevision = async () => (await omp("readModelCatalog", { providers: [] })).revision;
+  /**
+   * The caller's own checks and approval. A caller the door refuses, a token confined to one
+   * container, keeps none, so its check adopts nothing and its charge asks, as before checks
+   * were kept; any other failure is a failure to observe, and throws.
+   */
+  async function personalChecks(): Promise<Checks> {
+    try { return await code("readChecks", {}); }
+    catch (error) {
+      if (error instanceof WorkflowError && error.message.startsWith(`${CODE_PLUGIN_ID}.readChecks: `)) return { revision: 0, approvedRequests: 0, approvedAt: null, checks: [] };
+      throw error;
+    }
+  }
   /** The world a charge was reviewed in, still: the same Code revision, the same exact account
    * pool, the same OMP defaults and the same OMP — the destination's inventory operation installed
    * from the artifact the inventory ran from, and the same bundled model catalog. Anything else
@@ -563,7 +576,7 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
     // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
     const [defaults, pool, catalogRevision, checks] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
-      readCatalogRevision(), code("readChecks", {})]));
+      readCatalogRevision(), personalChecks()]));
     // What a model that merely gives no clear answer may not remove: the models of the list in use when it was verified with
     // this exact pool, and those of the caller's own check of it, which their other workspaces adopt. Spark's retired rung
     // (tier 0) is never routed, so nothing needs it.
