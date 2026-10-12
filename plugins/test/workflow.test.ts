@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { actionDoor, actionSchemas as ompActionSchemas, BENCHMARK_OPERATION_ID, INVENTORY_OPERATION_ID, OMP_PLUGIN_ID, OMP_VERSION,
   type AccountsObservation, type BenchmarkInput, type InventoryReceipt, type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { createCodeWorkflowClient, inventoryArtifact, VerificationError, type VerificationProgress } from "../code/workflow.ts";
-import { verificationState } from "../code/generator/verification.ts";
+import { unpublishedModels, verificationState } from "../code/generator/verification.ts";
 import { PublicJobSchema, type PublicJob, type TerminalSummary } from "@manifold/protocol";
 import { actionSchemas, type ActionResult, type Configuration } from "../code/contract.ts";
 import { compileCatalog } from "../domain/catalog.ts";
@@ -224,25 +224,28 @@ test("a model list republished while the inventory runs stops the verification b
   expect((await f.configuration()).configuration).toMatchObject({ revision: 1, active: null, draft: null });
 });
 
-test("a verification holds for the OMP runtime and model list it ran against, and an upgrade of either alone makes it stale", async () => {
+test("a verification outlives an OMP update its routed models survive, and a model list that dropped them asks for another", async () => {
   const f = verificationFixture();
   const { configuration } = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
-  // What the workbench compares the saved verification with: the destination's pins, the bundled list's revision and the pool.
+  const catalog = compileCatalog(configuration.active!.document);
+  const routed = reviewCatalog(catalog, configuration.selection!, 0).routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => catalog.model(choice.key));
+  // What the workbench compares the saved verification with: the destination's pins, the bundled list's revision, what that
+  // list publishes for the routed providers, and the pool.
   const present = async () => verificationState(configuration.active!.provenance, {
     inventoryArtifactSha256: inventoryArtifact(await f.workflow.omp("describeDestination", target)),
     catalogRevision: (await f.workflow.omp("readModelCatalog", { providers: [] })).revision,
+    unpublished: unpublishedModels(routed, (await f.workflow.omp("readModelCatalog", { providers: [...new Set(routed.map(model => model.provider))] })).models),
     pool: await f.workflow.observeVerification(target.containerId, configuration.revision, configuration.accounts) ?? "none" }, false);
   // The command line answered the inventory as `OMP_VERSION` while the bundled list reports another version: one present OMP,
   // so a fresh verification is current.
   expect([configuration.active?.provenance?.ompVersion, f.omp.catalog.ompVersion]).toEqual([OMP_VERSION, "18.7.0"]);
-  expect(await present()).toMatchObject({ status: "current", observed: true });
-  // OMP upgraded on the machine, with the same accounts and the same Code build: only the runtime artifact moved.
+  expect(await present()).toMatchObject({ status: "current" });
+  // OMP upgraded on the machine, with the same accounts, model list and Code build: only the runtime artifact moved.
   f.omp.artifact = "9".repeat(64);
-  expect(await present()).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
-  // The model list published under another revision, on the same runtime.
-  f.omp.artifact = "c".repeat(64);
+  expect(await present()).toMatchObject({ status: "current", changes: { runtimeChanged: true, catalogChanged: false, identitiesChanged: false } });
+  // The model list republished under another revision that no longer lists the routed models.
   f.omp.catalog = { ...f.omp.catalog, revision: "b".repeat(64) };
-  expect(await present()).toMatchObject({ status: "omp-changed", changes: { runtimeChanged: false, catalogChanged: true } });
+  expect(await present()).toMatchObject({ status: "unpublished", changes: { catalogChanged: true, unpublished: unpublishedModels(routed, []) } });
 });
 
 test("a stop cancels the probe job in flight, and a failed one names its step and leaves its work inspectable", async () => {

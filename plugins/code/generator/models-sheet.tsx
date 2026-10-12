@@ -296,7 +296,10 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
         if (!verifyGate.open) return verifyRefused(verifyGate.refusal);
         const stopped = verification.failure;
         const note: readonly Part[] = stopped ? [[stopped.cancelled ? "verification cancelled" : "verification stopped", stopped.cancelled ? null : "attention"]] : [];
-        const tail: Part = verification.status === "accounts-changed" ? ["accounts changed", "warn"] : verification.status === "omp-changed" ? ["OMP changed", "warn"] : ["unverified", "warn"];
+        // A model OMP dropped is named as the list shows it; several are counted.
+        const dropped = verification.changes.unpublished, named = inUse.find(row => `${row.provider}/${row.id}` === dropped[0])?.alias ?? dropped[0];
+        const tail: Part = verification.status === "accounts-changed" ? ["accounts changed", "warn"]
+          : verification.status === "unpublished" ? [`OMP dropped ${dropped.length === 1 ? named : count(dropped.length, "model")}`, "warn"] : ["unverified", "warn"];
         return { label: "verify models", parts: [...note, ...refused, tail], fixes: [],
           said: stopped && !stopped.cancelled ? { value: "verify models", text: stopped.reason, warn: true }
             : { value: "verify models", text: "finds the models your accounts reach and measures them; nothing is spent before you confirm" },
@@ -409,10 +412,12 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
 
   // ------------------------------------------------------------ the sheet
   const verifiedAt = verification.provenance?.benchmarkCompletedAt ?? null;
+  // An OMP update the routes survived leaves the list verified; it is said beside the date, since verifying again is the way to measure under it.
+  const ompUpdated = verification.changes.runtimeChanged || verification.changes.catalogChanged;
   const [tail, tone]: Part = running ? ["verifying", null] : phase === "staged" ? [active ? "staged list beside it" : "staged, none in use", "warn"]
-    : verification.status === "current" && verifiedAt !== null ? [`verified ${since(Date.now() - verifiedAt)}`, null]
+    : verification.status === "current" && verifiedAt !== null ? [`verified ${since(Date.now() - verifiedAt)}${ompUpdated ? " · OMP updated since" : ""}`, null]
     : verification.status === "accounts-changed" ? ["accounts changed since verified", "warn"]
-    : verification.status === "omp-changed" ? ["OMP changed since verified", "warn"]
+    : verification.status === "unpublished" ? ["OMP changed since verified", "warn"]
     : !active ? ["starter · unverified", "warn"] : ["unverified", "warn"];
   function cell(family: string, tier: number) {
     const row = at(family, tier), id = `${family}:${tier}`, tierWord = TIERS[tier - 1]!;

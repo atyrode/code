@@ -331,6 +331,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (!compiled || !selection) return null;
     return previewSelection(compiled, selection);
   }, [compiled, selection]);
+  // The models the shown team's routes name, leads and fallbacks: the session door refuses any OMP no longer publishes.
+  const routed = useMemo(() => compiled && localReview
+    ? localReview.routes.flatMap(route => [route.lead, ...route.fallback]).map(choice => compiled.model(choice.key)) : null, [compiled, localReview]);
   const controlsReview = useMemo(() => {
     if (localReview || !compiled || !selection || !initialSelection) return localReview;
     return previewSelection(compiled, { ...initialSelection, budget: selection.budget });
@@ -365,7 +368,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // A confirmed verification is itself the save of the shown selection: the bundled preview's
   // dials, or the active profile's, narrowed to what the verified catalog hosts.
   const verification = useModelVerification({ host, target, record, revision: profile?.revision ?? observed?.revision ?? 0,
-    configurationCurrent, selection, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
+    configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     onVerified: saved => {
       setSavedPolicy(saved); setDials(null); setPreview(null);
       setMessage({ text: "Models verified with your accounts, and the profile saved for the workspace.", failed: false });

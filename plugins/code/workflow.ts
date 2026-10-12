@@ -28,6 +28,7 @@ const messages: Readonly<Record<string, string>> = {
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
   code_accounts_changed: "The accounts changed. Read them again before continuing.",
   code_omp_changed: "OMP or its model list changed on the machine since the inventory. Verify again.",
+  code_model_unpublished: "OMP no longer lists a model this profile uses. Verify models again.",
   code_invalid_accounts: "The account observation could not be used. Read the accounts again.",
   code_invalid_selection: "This profile cannot be formed from the current models.",
   code_budget_unsatisfiable: "No free route serves this profile.",
