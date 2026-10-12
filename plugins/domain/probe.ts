@@ -418,7 +418,9 @@ export function inventoryDraft(inventoryValue: unknown, budget: Selection["budge
  * Only a reachable model enters the catalog. One whose probe was inconclusive is left out and named,
  * like a refused one, rather than refusing the whole catalog: a provider that could not be checked
  * (a key without credit, a timeout, a wording OMP does not classify) must not discard every model
- * measured beside it.
+ * measured beside it. Whether leaving it out may replace what is already chosen is the caller's to
+ * judge (workflow.ts `unansweredNeeds`), so it is named `inconclusive` only where its answer could
+ * have changed the list.
  */
 export function catalogFromObservations(inventoryValue: unknown, benchmarkValue: unknown, optionsValue: unknown = { budget: "any" }): DerivedCatalog {
   const inventory = parse(InventoryReceiptSchema, inventoryValue), benchmark = parse(BenchmarkReceiptSchema, benchmarkValue);
@@ -433,12 +435,18 @@ export function catalogFromObservations(inventoryValue: unknown, benchmarkValue:
     const fact = facts.get(probeAddress(candidate));
     if (!fact || fact.api !== candidate.api || fact.key !== candidate.key) throw new ProbeError("missing_probe");
   }
+  const reachable = offered.filter(model => facts.get(probeAddress(model))!.status === "reachable");
+  // What replaces a model in the ladder (`scaffold`): a newer version of its family that answered and draws no quota of its own.
+  const laddered = reachable.filter(model => !separateClass(model));
   const refused: Exclusion[] = [];
   for (const model of offered) {
     const status = facts.get(probeAddress(model))!.status;
     if (status === "not_found" || status === "client_blocked") refused.push(exclusion(model, status));
-    else if (status === "unresolved" || status === "unmatched") refused.push(exclusion(model, "inconclusive"));
+    // A model with no clear answer is named as it would be had it answered wherever its answer could not change
+    // the list: one drawing a quota of its own, and one a newer, answering version replaces anyway.
+    else if (status === "unresolved" || status === "unmatched") refused.push(separateClass(model)
+      ? { provider: model.provider, id: model.id, reason: "separate_quota", quotaTier: model.quotaTier }
+      : exclusion(model, supersede([...laddered, model]).superseded.includes(model) ? "superseded" : "inconclusive"));
   }
-  return scaffold(offered.filter(model => facts.get(probeAddress(model))!.status === "reachable"),
-    [...unstableExclusions(inventory, options.budget), ...unprobed, ...refused], facts);
+  return scaffold(reachable, [...unstableExclusions(inventory, options.budget), ...unprobed, ...refused], facts);
 }

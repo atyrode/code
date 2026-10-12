@@ -250,6 +250,19 @@ describe("pure typed scaffolding", () => {
         exclusion.id === "gpt-pro-6" || exclusion.id === "deepseek-v4" ? { ...exclusion, reason: "inconclusive" } : exclusion));
     }
   });
+  test("a model with no clear answer is named as it would be had it answered wherever its answer could not change the list", () => {
+    const inv = fullInventory();
+    inv.models.push({ ...inv.models.find(model => model.id === "claude-opus-5")!, id: "claude-opus-6" });
+    inv.models.push({ ...inv.models[0]!, provider: "openai-codex", api: "openai-codex-responses", id: "gpt-spark-6", inputCostPerMillion: 0.01, quotaTier: "future-resource" });
+    // A newer version that answered replaces it whatever it answers, and a quota Code does not spend never takes a rung.
+    const replaced = catalogFromObservations(inv, observed(inv, { "claude-opus-5": "unresolved", "gpt-spark-6": "unmatched" }));
+    expect(replaced.exclusions).toContainEqual({ provider: "anthropic", id: "claude-opus-5", reason: "superseded" });
+    expect(replaced.exclusions).toContainEqual({ provider: "openai-codex", id: "gpt-spark-6", reason: "separate_quota", quotaTier: "future-resource" });
+    // The newest version is the one whose answer decides the rung, so it is left out as inconclusive and its predecessor takes the rung.
+    const newest = catalogFromObservations(inv, observed(inv, { "claude-opus-6": "unresolved" }));
+    expect(newest.exclusions).toContainEqual({ provider: "anthropic", id: "claude-opus-6", reason: "inconclusive" });
+    expect(tiers(newest.document, "anthropic")).toEqual([[1, "claude-haiku-5"], [2, "claude-sonnet-5"], [3, "claude-opus-5"]]);
+  });
   test("every old version is probed before supersession, blocked newest cannot displace callable older", () => {
     const inv = fullInventory();
     inv.models.push({ ...inv.models.find(model => model.id === "claude-opus-5")!, id: "claude-opus-6" });

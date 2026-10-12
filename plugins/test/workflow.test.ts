@@ -311,7 +311,7 @@ test("a family Code requires that the accounts reach only in part is verified sh
   expect(verified.configuration.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
 });
 
-test("a model with no clear answer is left out of a first list, but never shortens the list in use or moves the team off its family", async () => {
+test("a model with no clear answer is left out of a first list, but never shortens a list these accounts verified", async () => {
   // A first list: a provider that could not be checked at all is left out and named, and what answered is saved.
   const f = verificationFixture();
   f.verdicts["deepseek-flash"] = "unresolved"; f.verdicts["deepseek-pro"] = "unmatched";
@@ -324,7 +324,28 @@ test("a model with no clear answer is left out of a first list, but never shorte
   const again = await stopOf((await f.workflow.verifyModels(target, { expectedRevision: before.revision, budget: "any" })).confirm(first.configuration.selection));
   expect([again.step, again.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-opus-5"]);
   expect(await f.configuration()).toEqual(before);
-  // A first list for a team that chose a family none of whose models answered stops too, rather than saving another family's team.
+  // Another pool's verification vouches for nothing these accounts could keep, so the same non-answer only leaves the model out.
+  f.omp.accounts.accounts.push(f.slot("anthropic", 3));
+  const otherPool = await (await f.workflow.verifyModels(target, { expectedRevision: before.revision, budget: "any" })).confirm(first.configuration.selection);
+  expect(otherPool.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
+  // So does a list in use that no verification made, such as an imported one.
+  const imported = await f.workflow.code("stageCatalog", { containerId: target.containerId, expectedRevision: otherPool.configuration.revision,
+    document: first.configuration.active!.document });
+  const review = await f.workflow.code("reviewCatalog", { containerId: target.containerId, expectedRevision: imported.revision, source: "draft" });
+  const unverified = await f.workflow.code("promoteCatalog", { containerId: target.containerId, expectedRevision: imported.revision, source: "draft", reviewDigest: review.reviewDigest });
+  expect(unverified.active?.provenance).toBeNull();
+  const replaced = await (await f.workflow.verifyModels(target, { expectedRevision: unverified.revision, budget: "any" })).confirm(unverified.selection);
+  expect(replaced.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5"]);
+});
+
+test("a first list stops rather than move the team off a family it chose that gave no clear answer at all", async () => {
+  // The mixed lane names Claude: with no Claude model answering, saving would leave the team on another family.
+  const mixed = verificationFixture();
+  for (const id of ["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"]) mixed.verdicts[id] = "unresolved";
+  const blended = await stopOf((await mixed.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview));
+  expect([blended.step, blended.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-haiku-5, anthropic/claude-opus-5, anthropic/claude-sonnet-5"]);
+  expect(mixed.calls).not.toContain("atyrode.code.stageCatalog");
+  // A team that chose DeepSeek alone stops the same way when DeepSeek does not answer.
   const chosen = verificationFixture();
   chosen.verdicts["deepseek-flash"] = "unresolved"; chosen.verdicts["deepseek-pro"] = "unresolved";
   const deepseekOnly: Selection = { ...preview, lane: { kind: "provider", family: "deepseek", blend: "only" } };

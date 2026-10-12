@@ -15,7 +15,7 @@ import { compileCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
 import { providerPolicy } from "../domain/providers.ts";
 import type { Exclusion } from "../domain/probe.ts";
-import { clampSelection } from "../domain/routing.ts";
+import { clampSelection, laneFamilies } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
 
 export type Dispatch = (door: string, input: unknown) => Promise<unknown>;
@@ -39,7 +39,7 @@ const messages: Readonly<Record<string, string>> = {
   code_probe_missing_probe: "OMP's results do not match the models it was asked to check. Verify again.",
   code_probe_insufficient_ladder: "No model answered its check, so there is no list to build.",
   code_ladder_regression: "Among the models that answered, a higher tier thinks less than a lower one that costs no more.",
-  code_models_unanswered: "Models this profile relies on gave no clear answer, so nothing was changed. Verify again later.",
+  code_models_unanswered: "Models the list in use or this team needs gave no clear answer, so the list and team were left as they were. Verify again later.",
   code_verification_cancelled: "Verification cancelled.",
   code_verification_changed: "The machine, workspace or edit access changed, so the verification stopped.",
   code_verification_confirmed: "That charge was already confirmed.",
@@ -126,16 +126,17 @@ export function failureWords(message: string): string {
 
 /**
  * The left-out models a verification may not lose merely because they gave no clear answer
- * (`inconclusive`): one the list in use has, and every one of the family whose provider lane the
- * wanted selection named when narrowing moved off that family. An outage, a rate limit or a
- * wording OMP cannot read would otherwise shorten the list in use, or move the team off the family
- * it chose, which only a provider's own refusal of a model may do.
+ * (`inconclusive`): one the list in use has, and every one of a family the wanted selection's lane
+ * names that the new list (`families`) would not have at all. An outage, a rate limit or a wording
+ * OMP cannot read would otherwise shorten the list in use, or move the team off a family it chose,
+ * which only a provider's own refusal of a model may do. `inUse` is empty where no verification
+ * with this exact pool vouched for the list in use: evidence from other accounts, or a list never
+ * verified, holds nothing these accounts could keep.
  */
-function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<string>, wanted: Selection | null, narrowed: Selection): string[] {
-  const want = wanted?.lane;
-  const lost = want?.kind === "provider" && (narrowed.lane.kind !== "provider" || narrowed.lane.family !== want.family) ? want.family : null;
+function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<string>, wanted: Selection | null, families: readonly string[]): string[] {
+  const lost = wanted ? laneFamilies(wanted.lane).filter(family => !families.includes(family)) : [];
   return exclusions.filter(exclusion => exclusion.reason === "inconclusive" &&
-    (inUse.has(probeAddress(exclusion)) || providerPolicy(exclusion.provider).family === lost)).map(probeAddress);
+    (inUse.has(probeAddress(exclusion)) || lost.includes(providerPolicy(exclusion.provider).family))).map(probeAddress);
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. */
@@ -537,13 +538,16 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       evidence.revision = record.revision;
     }
     const revision = record.revision, replacesDraft = record.draft !== null;
-    // The models the list in use has, which a model that merely gives no clear answer may not remove.
-    const inUse = new Set(record.active?.document.models.map(probeAddress) ?? []);
     run.enter("inventory");
     // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
     // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
     const [defaults, pool, catalogRevision] = await run.call(() => Promise.all([omp("readDefaults", {}), observePool(target.containerId, revision),
       readCatalogRevision()]));
+    // The models of the list in use, when it was verified with this exact pool: what a model that merely gives no clear
+    // answer may not remove. Spark's retired rung (tier 0) is never routed, so nothing needs it.
+    const active = record.active;
+    const inUse = new Set(active && active.provenance?.poolIdentityDigest === pool.poolIdentityDigest
+      ? active.document.models.filter(model => model.tier !== 0).map(probeAddress) : []);
     // The start is checked by the job's own wait, so a stop that lands now cancels the job rather than abandoning it.
     const job = await run.call(() => omp("startInventory", { ...target, expectedDefaultsRevision: defaults.revision, accountPool: pool.accountPool }), false);
     evidence.inventoryJobId = job.jobId;
@@ -598,16 +602,18 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       inventoryObservedAt: charge.inventory.observedAt, startedAt: Math.min(...receipts.map(receipt => receipt.startedAt)),
       completedAt: Math.max(...receipts.map(receipt => receipt.completedAt)), results: receipts.flatMap(receipt => receipt.results) };
     const derived = await run.call(() => code("deriveCatalog", { inventory: charge.inventory, benchmark, budget: charge.budget }));
+    // A model with no clear answer stays out of the list only where nothing already chosen needs it, so a stop
+    // here keeps the list in use and the saved team exactly as they were. It is judged before the selection is
+    // narrowed, since a team whose family gave no answer could not be formed from this list either.
+    const families = [...new Set(derived.document.models.map(model => providerPolicy(model.provider).family))];
+    const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, families);
+    if (unanswered.length > 0)
+      throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
     // Narrowed before anything is written, so a selection the verified catalog cannot serve stops
     // here with nothing staged, rather than after a promotion saved its default instead.
     let selection: Selection;
     try { selection = clampSelection(compileCatalog(derived.document), wanted); }
     catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
-    // A model with no clear answer stays out of the list only where nothing already chosen needs it, so a stop
-    // here keeps the list in use and the saved team exactly as they were.
-    const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, selection);
-    if (unanswered.length > 0)
-      throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
     run.enter("stage");
     const pool = await unchangedCharge(charge, run);
     const staged = await run.call(() => code("stageCatalog", { containerId: target.containerId, expectedRevision: charge.revision, document: derived.document,

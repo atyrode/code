@@ -46,13 +46,20 @@ const weights: Record<Role, number> = {
 const thinkingCost: Record<ThinkingLevel, number> = { minimal: 0.6, low: 0.8, medium: 1, high: 1.3, xhigh: 1.6, max: 2 };
 const thinkingSpeed: Record<ThinkingLevel, number> = { minimal: 1.4, low: 1.2, medium: 1, high: 0.8, xhigh: 0.65, max: 0.5 };
 
+/** The two families the mixed lane blends; it exists only where a catalog has both. */
+const MIXED_FAMILIES: readonly string[] = Object.freeze(["openai", "anthropic"]);
+/** The families a lane names: its own, or the two the mixed lane blends. */
+export function laneFamilies(lane: Lane): readonly string[] {
+  return lane.kind === "mixed" ? MIXED_FAMILIES : [lane.family];
+}
+
 function lanesFor(catalog: CompiledCatalog): Lane[] {
   const lanes: Lane[] = [];
   for (const family of catalog.families) {
     lanes.push({ kind: "provider", family, blend: "only" });
     if (catalog.families.length > 1 && familyPolicy(family).crossTo !== null) lanes.push({ kind: "provider", family, blend: "led" });
   }
-  if (catalog.families.includes("openai") && catalog.families.includes("anthropic")) lanes.push({ kind: "mixed" });
+  if (MIXED_FAMILIES.every(family => catalog.families.includes(family))) lanes.push({ kind: "mixed" });
   return lanes;
 }
 
@@ -99,7 +106,7 @@ function selectionFacts(catalog: CompiledCatalog, input: Selection): { selection
  * refuses a capability the lead family lacks.
  */
 export function defaultSelection(catalog: CompiledCatalog): Selection {
-  const lane: Lane = catalog.families.includes("openai") && catalog.families.includes("anthropic")
+  const lane: Lane = MIXED_FAMILIES.every(family => catalog.families.includes(family))
     ? { kind: "mixed" } : { kind: "provider", family: catalog.families[0]!, blend: "only" };
   const admitted: Selection = {
     lane, capability: 1, thinking: "medium", advisor: "glance", spark: false, priority: false,

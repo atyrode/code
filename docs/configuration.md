@@ -153,8 +153,9 @@ such a rung that does not answer leaves that family shorter. A family Code requi
 laddered on whatever of it answers, short below three rungs, and one none of whose models
 answers is left out as a family with no account is; a selection that needs it is refused
 where it is reviewed. A model whose probe got no answer the benchmark could read (OMP's
-`unresolved` or `unmatched`) is left out as `inconclusive`, as one that does not answer is,
-rather than discarding every model measured beside it. `deriveCatalog` returns the document
+`unresolved` or `unmatched`) is left out rather than discarding every model measured beside
+it: as `inconclusive`, or as it would be had it answered where its answer could not change
+the list (`superseded` by a newer version that answered, `separate_quota`). `deriveCatalog` returns the document
 and every other offered model with its reason; the document's compiled catalog names its
 short families. It refuses only a family Code requires whose ladder would put a model above
 one that costs no more and thinks deeper (`code_ladder_regression`, naming both), a benchmark
@@ -162,11 +163,13 @@ that does not answer the charge exactly, and nothing laddered at all
 (`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
 the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
-left out only where nothing already chosen needs it: when it is in the list in use, or when
-narrowing would move the selection off the provider lane it names because none of that
-family answered, the run stops at derive (`code_models_unanswered`, naming the models)
-with the list and the saved selection unchanged, since an outage or a rate limit reads the
-same as a model the account cannot use. Every step re-observes the
+left out only where nothing already chosen needs it. When it is in the list in use as a
+verification with this exact account pool made it, or belongs to a family the wanted lane
+names (one provider, or OpenAI and Anthropic for the mixed lane) that the new list would not
+have at all, the run stops at derive (`code_models_unanswered`, naming the models) before the
+selection is narrowed, with the list and the saved selection unchanged, since an outage or a
+rate limit reads the same as a model the account cannot use. A list verified with other
+accounts, or never verified, holds no such claim. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
 when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
 OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed
