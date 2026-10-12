@@ -2793,7 +2793,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     from = trace.requests.length;
     await click(browser, goButton);
     await until(browser, "a held press says what using the staged list and each fix do", `${sheetSays(modelsSheet)} === ${JSON.stringify(
-      "use staged list · Your unsaved edit is on the list in use, and using the staged list starts from its own default team. Save keeps the edit on the list in use; discard edit drops it.")}`);
+      "use staged list · Your unsaved edit is on the list in use, and using the staged list resets the profile to the staged list's default. Save keeps the edit on the list in use; discard edit drops it.")}`);
     assert.deepEqual(writes(from), [], "A held press writes nothing");
     await click(browser, goFix(modelsSheet, "save"));
     await until(browser, "saved, the edit lets the staged list be used", `${goIs(modelsSheet, "use staged list")} && JSON.stringify(${goFixes(modelsSheet)}) === '["discard"]'`);
@@ -2821,7 +2821,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     heldReview.release();
     await until(browser, "use staged list puts it in use with its own default team, unverified, and says so", `${phaseIs("unverified")} && ${goIs(modelsSheet, "verify models")} &&
       ${sheetState(modelsSheet)} === ${JSON.stringify(`${listOf(slower).length} models · unverified`)} &&
-      ${sheetSays(modelsSheet)} === 'in use · the staged list replaced the one in use; the profile is its default team now; verify it next'`);
+      ${sheetSays(modelsSheet)} === ${JSON.stringify("in use · the staged list replaced the one in use; the profile is the new list's default now; verify it next")}`);
     const review = reviews.at(-1);
     assert(review, "The real server reviewed the staged list");
     assert.equal(review.catalogDigest, before.configuration?.draft?.digest, "The review is of exactly the staged list");

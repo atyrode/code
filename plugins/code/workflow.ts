@@ -39,7 +39,7 @@ const messages: Readonly<Record<string, string>> = {
   code_probe_missing_probe: "OMP's results do not match the models it was asked to check. Verify again.",
   code_probe_insufficient_ladder: "No model answered its check, so there is no list to build.",
   code_ladder_regression: "Among the models that answered, a higher tier thinks less than a lower one that costs no more.",
-  code_models_unanswered: "Models the list in use or this team needs gave no clear answer, so the list and team stayed as they were. Verify again later, or choose a team or accounts without them.",
+  code_models_unanswered: "Models the list in use or this profile needs gave no clear answer, so the list and profile stayed as they were. Verify again later, or choose a profile or accounts without them.",
   code_verification_cancelled: "Verification cancelled.",
   code_verification_changed: "The machine, workspace or edit access changed, so the verification stopped.",
   code_verification_confirmed: "That charge was already confirmed.",

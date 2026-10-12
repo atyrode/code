@@ -223,8 +223,8 @@ team, so no team made on the replaced list carries over; instead Models holds th
 write and says which list the edit is on, what the write does to that list and what
 each fix does: **save**, for an edit of the team in use, keeps the edit on the list in
 use, and **discard edit**, which the import dialog offers too, drops it. Once a staged
-list is put in use, the readout says when the saved team gave way to that list's
-default team. While a Models write is in flight the gate counts it as a step in
+list is put in use, the readout says **the profile is the new list's default now** when the
+saved team gave way to it. While a Models write is in flight the gate counts it as a step in
 progress, so no edit lands before its receipt does. Only an untouched draft gives way
 to the record, as the bundled preview does to a list imported into a workspace
 without one. A draft
@@ -807,7 +807,7 @@ saving the profile, the team) stays as it was.
 A staged list offers **use staged list**, which reviews the staged list at its revision
 and promotes exactly that review with the list's own default team, and **discard**. An
 unsaved edit made on the list a write would replace holds it, saying what the write does
-to that list (a staged list put in use starts from its own default team), with **save**
+to that list (putting a staged list in use resets the profile to the staged list's default), with **save**
 (an edit of the team in use, kept on the list in use) and **discard edit** beside it.
 Verifying refused for want of
 discovery offers **enable in setup**; another refusal names itself with its fix (show
