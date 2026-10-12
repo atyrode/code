@@ -243,7 +243,7 @@ describe("pure typed scaffolding", () => {
     inv.models.push({ ...inv.models[0]!, provider: "deepseek", api: "openai-completions", id: "deepseek-v4" });
     const refused = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": "client_blocked", "deepseek-v4": "not_found" }));
     for (const status of ["unresolved", "unmatched"] as const) {
-      // One model of a provider that answered otherwise, and the whole of a provider that could not be checked at all.
+      // The run leaves one model of a provider that otherwise answered without an answer, and the whole of a provider that could not be checked at all.
       const derived = catalogFromObservations(inv, observed(inv, { "gpt-pro-6": status, "deepseek-v4": status }));
       expect(derived.document).toEqual(refused.document);
       expect(derived.exclusions).toEqual(refused.exclusions.map(exclusion =>

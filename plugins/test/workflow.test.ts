@@ -47,7 +47,7 @@ function verificationFixture() {
   const hooks: Partial<Record<string, () => void | Promise<void>>> = {};
   const states = new Map<string, PublicJob["state"][]>();
   const exitCodes = new Map<string, number>();
-  const verdicts: Record<string, "not_found" | "client_blocked"> = {};
+  const verdicts: Record<string, "not_found" | "client_blocked" | "unresolved" | "unmatched"> = {};
   const ctx: CodeContext = {
     now: () => 10_000, emit() {}, outsideScope: async () => null,
     auth: { principal: { id: "writer", kind: "human", name: "Writer", color: "#123456" },
@@ -309,6 +309,28 @@ test("a family Code requires that the accounts reach only in part is verified sh
     { provider: "anthropic", id: "claude-sonnet-5", reason: "not_found" }, { provider: "deepseek", id: "deepseek-vision-exp", reason: "unstable_id" }]);
   // Claude's tiers above its one rung route to that rung, so the preview keeps its highest three-tier capability.
   expect(verified.configuration.selection).toEqual({ ...preview, lane: { kind: "provider", family: "anthropic", blend: "only" }, capability: 3, spark: false });
+});
+
+test("a model with no clear answer is left out of a first list, but never shortens the list in use or moves the team off its family", async () => {
+  // A first list: a provider that could not be checked at all is left out and named, and what answered is saved.
+  const f = verificationFixture();
+  f.verdicts["deepseek-flash"] = "unresolved"; f.verdicts["deepseek-pro"] = "unmatched";
+  const first = await (await f.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(preview);
+  expect(first.configuration.active?.document.models.map(model => model.id)).toEqual(["claude-haiku-5", "claude-sonnet-5", "claude-opus-5"]);
+  expect(first.exclusions.filter(exclusion => exclusion.reason === "inconclusive").map(exclusion => exclusion.id)).toEqual(["deepseek-flash", "deepseek-pro"]);
+  // Verifying again while a model of the list in use gives no clear answer stops before anything is staged; the list and team stay.
+  f.verdicts["claude-opus-5"] = "unresolved";
+  const before = await f.configuration();
+  const again = await stopOf((await f.workflow.verifyModels(target, { expectedRevision: before.revision, budget: "any" })).confirm(first.configuration.selection));
+  expect([again.step, again.reason]).toEqual(["derive", "code_models_unanswered: anthropic/claude-opus-5"]);
+  expect(await f.configuration()).toEqual(before);
+  // A first list for a team that chose a family none of whose models answered stops too, rather than saving another family's team.
+  const chosen = verificationFixture();
+  chosen.verdicts["deepseek-flash"] = "unresolved"; chosen.verdicts["deepseek-pro"] = "unresolved";
+  const deepseekOnly: Selection = { ...preview, lane: { kind: "provider", family: "deepseek", blend: "only" } };
+  const refused = await stopOf((await chosen.workflow.verifyModels(target, { expectedRevision: 0, budget: "any" })).confirm(deepseekOnly));
+  expect([refused.step, refused.reason]).toEqual(["derive", "code_models_unanswered: deepseek/deepseek-flash, deepseek/deepseek-pro"]);
+  expect(chosen.calls).not.toContain("atyrode.code.stageCatalog");
 });
 
 test("a derivation or selection the verified catalog cannot serve stops before anything is staged", async () => {

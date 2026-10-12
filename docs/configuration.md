@@ -161,7 +161,12 @@ one that costs no more and thinks deeper (`code_ladder_regression`, naming both)
 that does not answer the charge exactly, and nothing laddered at all
 (`code_probe_insufficient_ladder`). Only the returned `confirm`
 spends: one benchmark job per provider, then derive, stage, review, promote and save
-the selection narrowed to what the verified catalog hosts. Every step re-observes the
+the selection narrowed to what the verified catalog hosts. An `inconclusive` model may be
+left out only where nothing already chosen needs it: when it is in the list in use, or when
+narrowing would move the selection off the provider lane it names because none of that
+family answered, the run stops at derive (`code_models_unanswered`, naming the models)
+with the list and the saved selection unchanged, since an outage or a rate limit reads the
+same as a model the account cannot use. Every step re-observes the
 revision, the exact account pool, OMP defaults and OMP itself, and stops, naming itself,
 when one moved, on a refusal or on cancellation. A stop never undoes: probe jobs stay in
 OMP's history and a staged catalog stays staged. A confirmation is used once, and a failed

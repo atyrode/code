@@ -1,5 +1,5 @@
 import { createOmpClient, OmpHarnessProfileSchema, OmpSessionRefSchema, OMP_PLUGIN_ID, LAUNCH_OPERATION_ID, MATERIAL_SESSION_OPERATION_ID, RESUME_OPERATION_ID, skillInputBindings, PREPARE_WORKSPACE_OPERATION_ID, VALIDATE_WORKSPACE_OPERATION_ID,
-  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema,
+  INVENTORY_OPERATION_ID, BENCHMARK_OPERATION_ID, ThinkingSelectorSchema, probeAddress,
   type BenchmarkInput, type BenchmarkReceipt, type InventoryReceipt, type OmpHarnessProfile, type OmpSessionRef, type OmpAction, type RunDials, type ThinkingSelector,
   type ActionInput as OmpInput, type ActionResult as OmpResult } from "@atyrode/manifold-omp";
 import { JobDeploymentApplyArgsSchema, JobDeploymentListArgsSchema, JobDeploymentListResultSchema,
@@ -13,6 +13,7 @@ import { HARNESS_OPERATION_ID, observePermissionPlan, operationReady, type Permi
 import { selectedAccountPool } from "../domain/accounts.ts";
 import { compileCatalog } from "../domain/catalog.ts";
 import { projectUsage } from "../domain/usage.ts";
+import { providerPolicy } from "../domain/providers.ts";
 import type { Exclusion } from "../domain/probe.ts";
 import { clampSelection } from "../domain/routing.ts";
 import { DomainError, type AccountChoices, type Selection } from "../domain/contracts.ts";
@@ -35,9 +36,10 @@ const messages: Readonly<Record<string, string>> = {
   code_invalid_catalog: "The model list could not be used.",
   code_preview_changed: "The reviewed model list changed. Review it again.",
   code_starter_candidate_limit: "The bundled model list is too large to verify at once.",
-  code_probe_missing_probe: "OMP's check left a model without an answer. Verify again.",
-  code_probe_insufficient_ladder: "No model answered its check with these accounts.",
-  code_ladder_regression: "Among the models that answered, a dearer one thinks less than a cheaper one.",
+  code_probe_missing_probe: "OMP's results do not match the models it was asked to check. Verify again.",
+  code_probe_insufficient_ladder: "No model answered its check, so there is no list to build.",
+  code_ladder_regression: "Among the models that answered, a higher tier thinks less than a lower one that costs no more.",
+  code_models_unanswered: "Models this profile relies on gave no clear answer, so nothing was changed. Verify again later.",
   code_verification_cancelled: "Verification cancelled.",
   code_verification_changed: "The machine, workspace or edit access changed, so the verification stopped.",
   code_verification_confirmed: "That charge was already confirmed.",
@@ -92,6 +94,8 @@ const agentRefusals: Readonly<Record<string, string>> = {
 /** Refusals whose detail is a list of identifiers, with the label that introduces it; the list stays exactly as written. */
 const listedDetails: Readonly<Record<string, string>> = {
   code_model_unpublished: "Not listed:",
+  code_models_unanswered: "No answer:",
+  code_ladder_regression: "In",
 };
 /** How a browser's dispatch reports a refused door (machine-web.ts `codeWorkflow`): `<plugin>.<action>: <denial>. No approval or readiness is assumed.` */
 const DOOR_DENIAL = /^[a-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+: ([^]*?)(?:\. No approval or readiness is assumed\.)?$/;
@@ -118,6 +122,20 @@ export function failureWords(message: string): string {
   const words = messages[token!] ?? (token!.startsWith("omp_") ? "OMP refused the step." : "Code refused the step.");
   if (!detail) return words;
   return Object.hasOwn(listedDetails, token!) ? `${words} ${listedDetails[token!]} ${detail}` : `${words} ${detail.charAt(0).toUpperCase()}${detail.slice(1)}`;
+}
+
+/**
+ * The left-out models a verification may not lose merely because they gave no clear answer
+ * (`inconclusive`): one the list in use has, and every one of the family whose provider lane the
+ * wanted selection named when narrowing moved off that family. An outage, a rate limit or a
+ * wording OMP cannot read would otherwise shorten the list in use, or move the team off the family
+ * it chose, which only a provider's own refusal of a model may do.
+ */
+function unansweredNeeds(exclusions: readonly Exclusion[], inUse: ReadonlySet<string>, wanted: Selection | null, narrowed: Selection): string[] {
+  const want = wanted?.lane;
+  const lost = want?.kind === "provider" && (narrowed.lane.kind !== "provider" || narrowed.lane.family !== want.family) ? want.family : null;
+  return exclusions.filter(exclusion => exclusion.reason === "inconclusive" &&
+    (inUse.has(probeAddress(exclusion)) || providerPolicy(exclusion.provider).family === lost)).map(probeAddress);
 }
 
 /** The steps of a model verification, in the order they run; a failure names the one it stopped at. */
@@ -519,6 +537,8 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       evidence.revision = record.revision;
     }
     const revision = record.revision, replacesDraft = record.draft !== null;
+    // The models the list in use has, which a model that merely gives no clear answer may not remove.
+    const inUse = new Set(record.active?.document.models.map(probeAddress) ?? []);
     run.enter("inventory");
     // The model list OMP bundles now is the one the inventory picks its models from when it starts, so its revision is read
     // before the start: one republished while the inventory runs is then a moved OMP, refused before the charge is answered.
@@ -549,11 +569,11 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
       confirm: (selection, confirmOptions = options) => {
         if (confirmed) return Promise.reject(new WorkflowError("code_verification_confirmed"));
         confirmed = true;
-        return confirmVerification(charge, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }));
+        return confirmVerification(charge, inUse, selection, verificationRun(confirmOptions, { ...evidence, benchmarkJobIds: [] }));
       },
     };
   }
-  async function confirmVerification(charge: ChargeReview, wanted: Selection | null, run: VerificationRun): Promise<VerifiedModels> {
+  async function confirmVerification(charge: ChargeReview, inUse: ReadonlySet<string>, wanted: Selection | null, run: VerificationRun): Promise<VerifiedModels> {
     const { target } = charge;
     run.enter("benchmark");
     await unchangedCharge(charge, run);
@@ -583,6 +603,11 @@ export function createCodeWorkflowClient(dispatch: Dispatch) {
     let selection: Selection;
     try { selection = clampSelection(compileCatalog(derived.document), wanted); }
     catch (error) { throw run.fail(error instanceof Error ? error.message : "code_invalid_selection"); }
+    // A model with no clear answer stays out of the list only where nothing already chosen needs it, so a stop
+    // here keeps the list in use and the saved team exactly as they were.
+    const unanswered = unansweredNeeds(derived.exclusions, inUse, wanted, selection);
+    if (unanswered.length > 0)
+      throw run.fail(`code_models_unanswered: ${unanswered.slice(0, 8).join(", ")}${unanswered.length > 8 ? ` and ${unanswered.length - 8} more` : ""}`);
     run.enter("stage");
     const pool = await unchangedCharge(charge, run);
     const staged = await run.call(() => code("stageCatalog", { containerId: target.containerId, expectedRevision: charge.revision, document: derived.document,
