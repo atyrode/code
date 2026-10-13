@@ -17,12 +17,13 @@ import { NOT_CURRENT, SAVING } from "./account-switch.ts";
 import type { BoardUsage } from "./board-model.ts";
 import { skillDraft, type SkillChoice } from "./skill-draft.ts";
 import type { AutomationChoice } from "./automation.tsx";
-import { actionGate, autoReviewDue, AUTO_REVIEW_SETTLE_MS, draftStale, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep, resumeTeam,
+import { actionGate, draftStale, followCatalogWrite, followInitialization, followRecord, launchStatusText, listServes, nextLaunchStep, resumeTeam,
   type GateFacts, type GateVerdict, type LaunchStep, type ProfileSource, type SharedBase, type WorkbenchIntent } from "./launch-step.ts";
 import { previewSelection } from "./dial-space.ts";
 import { browserTeamStorage, readRecentTeams, recentTeamsKey, rememberLaunch, type RecentTeam } from "./recent-teams.ts";
 import { browserDraftStorage, editedDraft, readStoredDraft, restoreDraft, storeDraft, storedDraftKey } from "./draft-store.ts";
 import { useModelVerification, type ModelVerification } from "./model-verification.ts";
+import { projectionOf, reviewMatches } from "./statement-model.ts";
 import type { ConfirmActivation } from "./verification.ts";
 
 /** The profile the controls show: the frozen local draft, or one derived from the shared record
@@ -52,13 +53,20 @@ export type WorkbenchQueries = {
 };
 export type WorkbenchMessage = { text: string; failed: boolean };
 /** A step in flight, for the verb to name it. */
-export type WorkbenchStep = "save" | "review" | "launch" | "resume";
+export type WorkbenchStep = "save" | "launch" | "resume";
 /** Whether a launch has live dials: `run` when it runs as an Agent Run, else why it cannot (workflow.ts `agentLaunchBlocker`). */
 export type LaunchDials = "run" | AgentLaunchBlocker;
 /** What the last launch or resume opened, until the team, machine or pool changes; a launch says whether it has live dials. */
 export type WorkbenchOutcome = { kind: "launched"; machine: string; dials: LaunchDials } | { kind: "resumed"; machine: string };
 export type ProfileState = "conflict" | "local" | "saved";
-export type EffectiveSkillMode = SessionReview["native"]["skills"]["mode"] | NonNullable<SkillChoice>["mode"];
+/**
+ * A session review a Launch press stopped on because it shows something other than what the panel
+ * showed (statement-model.ts `reviewMatches`), with what the panel showed: the roles' leads and the
+ * providers its pool served, null when that pool was not known. It stands while the press's own
+ * inputs hold (`pressEpoch`, the press scope it was made in) and with the pins `heldCurrent` names,
+ * and the next press launches it; any change of those drops it, and the press after that reviews again.
+ */
+export type HeldReview = { readonly review: SessionReview; readonly projected: Review; readonly providers: readonly string[] | null; readonly pressEpoch: number };
 export type WorkbenchInput = { host: HostServices; target: Target | null; machine: MachineSummary | null; rosterError: string | null; available: boolean };
 
 /**
@@ -66,17 +74,17 @@ export type WorkbenchInput = { host: HostServices; target: Target | null; machin
  * it starts and, in a chain, again before each later step; a refused one does nothing.
  */
 export type WorkbenchActions = {
-  /** Edit the profile controls. Re-derives a starter document for a new budget; revokes the review. */
+  /** Edit the profile controls. Re-derives a starter document for a new budget; drops a held review. */
   updateSelection: (value: Selection) => void;
   /** Recall a team this browser launched, if the current catalog still forms it exactly; otherwise say so. */
   recallTeam: (team: RecentTeam) => void;
   /** Drop the local draft and any acknowledged CAS receipt; return to the observed shared profile. */
   discardChanges: () => void;
-  /** The verb: prepare a verification, save then review once the save is observed, review, or launch. */
+  /** The verb: prepare a verification, save then launch once the save is observed, or launch, which reviews the session first. */
   next: () => void;
   /** Prepare a verification: inventory, then the charge, which spends nothing until `confirmCharge`. */
   verify: () => void;
-  /** CAS-save a local edit of the active profile, without reviewing it. */
+  /** CAS-save a local edit of the active profile, without launching it. */
   save: () => Promise<void>;
   /** Spend the verification charge the control showed (model-verification.ts `confirm`). */
   confirmCharge: (activation: ConfirmActivation, shown: ChargeReview) => void;
@@ -120,13 +128,15 @@ export type WorkbenchModel = {
   profile: ProfileDraft | null;
   /** The frozen local draft (starter or edit); null while the shown profile is the shared record. */
   localDraft: ProfileDraft | null;
-  /** The review to display: the reviewed launch composition while `previewCurrent`, else `localReview`. */
+  /** The review to display: the held review's composition while it stands (`held`), else `localReview`. */
   review: Review | null;
   localReview: Review | null;
   /** `localReview`, or the default selection at the chosen budget so the controls stay usable when it fails. */
   controlsReview: Review | null;
-  /** The reviewed session; non-null exactly while `previewCurrent`. */
+  /** The reviewed session a press stopped on, while it stands; null otherwise. */
   launchReview: SessionReview | null;
+  /** The review a press stopped on, with what the panel showed, while it stands (`HeldReview`). */
+  held: HeldReview | null;
   configurationCurrent: boolean;
   unsaved: boolean;
   /** The rows hold a real edit not yet saved or discarded (draft-store.ts `editedDraft`); the panel's reads on their own wait for it. */
@@ -146,11 +156,10 @@ export type WorkbenchModel = {
   ompMissing: boolean;
   /** Native session launch permission is ready on the destination. */
   launchReady: boolean;
-  previewCurrent: boolean;
   /** An action is in flight (`perform`); the verb shows `inFlight`. */
   busy: boolean;
   inFlight: WorkbenchStep | null;
-  /** A save waits for its revision to be observed before its review (the verb's "Save & review"). */
+  /** A save waits for its revision to be observed before its launch (the verb's "Save & launch"). */
   chaining: boolean;
   profileState: ProfileState;
   stateLabel: string;
@@ -174,13 +183,11 @@ export type WorkbenchModel = {
   /** The usage reading every pool is judged on, and the saved account choices with their guarded edit. */
   usage: BoardUsage;
   skillChoice: SkillChoice;
-  /** Choices revoke the current review and clear the message. */
+  /** Choices drop a held review and clear the message. */
   setSkillChoice: (value: SkillChoice) => void;
   skillProblems: string[];
-  effectiveSkillMode: EffectiveSkillMode;
-  effectiveSkillCount: number;
   automation: AutomationChoice;
-  /** Choices revoke the current review and clear the message. */
+  /** Choices drop a held review and clear the message. */
   setAutomation: (value: AutomationChoice) => void;
   savedSessionId: string;
   /** Stable identity: consumers use it as an effect dependency. */
@@ -192,7 +199,7 @@ export type WorkbenchModel = {
   recentTeams: readonly RecentTeam[];
   /** Code's Agent Runs in this workspace (machine-web.ts `useCodeAgentRuns`): the last good read, its error, and a read again. */
   agentRuns: { readonly runs: CodeRuns | null; readonly error: string | null; readonly refresh: () => void };
-  /** Whether the reviewed launch would run as an Agent Run (`run`) or why not; null while nothing is reviewed. */
+  /** Whether the held review's launch would run as an Agent Run (`run`) or why not; null while no review is held. */
   launchDials: LaunchDials | null;
 };
 
@@ -248,7 +255,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const [accountsFailure, setAccountsFailure] = useState<string | null>(null);
   const accountsBusy = useRef(false);
   const [dials, setDials] = useState<ProfileDraft | null>(null);
-  const [preview, setPreview] = useState<SessionReview | null>(null);
+  const [held, setHeld] = useState<HeldReview | null>(null);
   const [skillChoice, setSkillChoice] = useState<SkillChoice>(undefined);
   const [automation, setAutomation] = useState<AutomationChoice>(undefined);
   const [savedSessionId, setSavedSessionId] = useState("");
@@ -281,7 +288,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       current.current.target?.machineId === machineId && current.current.available;
   }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useLayoutEffect(() => { setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
+  useLayoutEffect(() => { setHeld(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId(""); }, [machineId]);
   const storedDocument = useMemo(() => record?.active?.document ?? record?.draft?.document ?? null,
     [record?.active?.digest, record?.draft?.digest]);
   const metadataKey = useMemo(() => metadata.data === null ? null : JSON.stringify(metadata.data), [metadata.data]);
@@ -373,7 +380,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     configurationCurrent, selection, routed, setup: setup.data, catalogRevision: metadata.data?.revision ?? null, writable, available,
     edited, idle: !busy && !chaining && !writingCatalog,
     onVerified: (saved, mode, adopted) => {
-      setSavedPolicy(saved); setDials(null); setPreview(null);
+      setSavedPolicy(saved); setDials(null); setHeld(null);
       if (mode === "manual") setMessage({ text: adopted ? "Your earlier model check is in use here." : "Models checked with your accounts, and the profile saved for the workspace.", failed: false });
     },
     // A stopped first verification leaves the choices it created and nothing else (launch-step.ts `followInitialization`).
@@ -386,14 +393,24 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const sourceGeneration = useRef({ key: metadataKey, failed: metadata.error !== null, epoch: 0 });
   if (sourceGeneration.current.key !== metadataKey || sourceGeneration.current.failed !== (metadata.error !== null))
     sourceGeneration.current = { key: metadataKey, failed: metadata.error !== null, epoch: sourceGeneration.current.epoch + 1 };
-  // Loss and identical recovery are distinct generations. Neither can revive an
-  // old confirmation, even when every durable revision stays the same.
-  const reviewKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
+  // What a resume stands on, observations included. Loss and identical recovery are distinct
+  // generations. Neither can revive an old confirmation, even when every durable revision stays the same.
+  const resumeKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, sourceGeneration.current.epoch,
     machineId, available, rosterError !== null, configurationCurrent, record?.revision, record?.active?.digest, record?.draft?.digest,
     record?.selection, defaults.data?.revision, defaults.error !== null, skillCatalog.data?.revision, skillCatalog.error !== null,
     setup.error !== null, setup.data === null, accountObservation, skillChoice, automation, savedSessionId, verification.held]);
-  const reviewScope = useRef({ key: reviewKey, epoch: 0 });
-  if (reviewScope.current.key !== reviewKey) reviewScope.current = { key: reviewKey, epoch: reviewScope.current.epoch + 1 };
+  const resumeScope = useRef({ key: resumeKey, epoch: 0 });
+  if (resumeScope.current.key !== resumeKey) resumeScope.current = { key: resumeKey, epoch: resumeScope.current.epoch + 1 };
+  // What a press stands on: what the person chose and where, the saved profile and the authority it acts with. A launch
+  // reads the accounts and OMP's defaults again itself and refuses when they moved under its review (workflow.ts
+  // `reviewedComposition`), so an observation that moves while it runs never stops it on its own. A held review stands
+  // on the same inputs (`HeldReview.pressEpoch`) and the pins `heldCurrent` names; accounts that moved after it are
+  // refused by that same check when it is launched.
+  const pressKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, machineId,
+    record?.revision, record?.active?.digest, record?.selection, skillChoice, automation]);
+  const pressScope = useRef({ key: pressKey, epoch: 0 });
+  if (pressScope.current.key !== pressKey) pressScope.current = { key: pressKey, epoch: pressScope.current.epoch + 1 };
+  const pressEpoch = pressScope.current.epoch;
   // Exact CAS arbitrates shared revision changes. Observing this save's own
   // successful revision must not revoke its acknowledgement. Lost observations
   // and changed local intent still revoke policy confirmation monotonically.
@@ -402,19 +419,23 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const policyScope = useRef({ key: policyKey, epoch: 0 });
   if (policyScope.current.key !== policyKey) policyScope.current = { key: policyKey, epoch: policyScope.current.epoch + 1 };
   const policyEpoch = policyScope.current.epoch;
-  const reviewedEpoch = useRef(-1);
-  const reviewEpoch = reviewScope.current.epoch;
-  const previewCurrent = preview !== null && reviewedEpoch.current === reviewEpoch && writable && available && configurationCurrent &&
+  const resumeEpoch = resumeScope.current.epoch;
+  // A held review stands only while its launch is still the step: the list in use serves it, its lead included, so a press
+  // never runs a model check under words that say it launches.
+  const heldLead = held && served && compiled ? routeService(compiled, held.review.composition.review.routes, provider => served.has(provider)).lead : null;
+  const heldCurrent = held !== null && held.pressEpoch === pressEpoch && writable && available && configurationCurrent &&
     defaults.error === null && skillCatalog.error === null && setup.error === null && !!record?.active &&
-    preview.destination.machineId === machineId && preview.composition.revision === record?.revision &&
-    preview.native.defaultsRevision === defaults.data?.revision && !unsaved &&
-    skillProblems.length === 0 && (preview.native.skills.mode !== "selected" || preview.native.skills.catalogRevision === skillCatalog.data?.revision);
-  // Whether the reviewed launch can run as an Agent Run, or why not (workflow.ts `agentLaunchBlocker`).
-  const agentBlocker = previewCurrent ? agentLaunchBlocker(preview, harnessReady, refusedMachines.has(preview.destination.machineId),
-    unsponsored ? false : agentRuns.runs?.canSponsor ?? null) : null;
-  const effectiveSkillMode = previewCurrent ? preview.native.skills.mode : skillChoice?.mode ?? (automation ? "disabled" : "preserve");
-  const effectiveSkillCount = previewCurrent ? preview.native.skills.selected.length : draftSkills.selected.length;
-  const shownReview = previewCurrent ? preview.composition.review : localReview;
+    held.review.destination.machineId === machineId && held.review.composition.revision === record?.revision &&
+    held.review.native.defaultsRevision === defaults.data?.revision && !unsaved && skillProblems.length === 0 &&
+    (held.review.native.skills.mode !== "selected" || held.review.native.skills.catalogRevision === skillCatalog.data?.revision) &&
+    listServes({ verification, unservedLead: heldLead });
+  // Whatever stops a held review from standing drops it for good: a read that fails and recovers never brings it back.
+  useEffect(() => { if (held !== null && !heldCurrent) setHeld(null); });
+  const standing = heldCurrent ? held : null;
+  // Whether a reviewed launch can run as an Agent Run, or why not (workflow.ts `agentLaunchBlocker`).
+  const dialsFor = (review: SessionReview) => agentLaunchBlocker(review, harnessReady, refusedMachines.has(review.destination.machineId),
+    unsponsored ? false : agentRuns.runs?.canSponsor ?? null);
+  const shownReview = standing ? standing.review.composition.review : localReview;
   // The session door's rule on the team the verb acts on: a lead nobody serves refuses, fallbacks are pruned.
   const unservedLead = served && compiled && shownReview ? routeService(compiled, shownReview.routes, provider => served.has(provider)).lead : null;
   // A check the person started holds every other step; a background one only while it writes the model list, so it never
@@ -422,7 +443,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const verifyRunning = (verification.phase === "inventory" || verification.phase === "benchmark") &&
     (verification.mode !== "background" || verification.writing);
   const facts: GateFacts = { configurationCurrent, profile, localDraft: dials, record, unsaved, stale, writable, placeable, available, accounts: accountState,
-    launchReady, previewCurrent, localReview, skillProblems, queries: { setup }, verification,
+    launchReady, localReview, skillProblems, queries: { setup }, verification,
     running: busy || chaining || verifyRunning || writingCatalog, charge: verification.phase === "charge" ? verification.charge : null,
     unservedLead, savedSessionId, planYolo: record?.selection?.planYolo ?? false };
   // A chain's later steps ask the gate again on the facts of the latest render, its own step set aside.
@@ -452,7 +473,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   function applySelection(document: CatalogDocument, value: Selection) {
     if (!profile) return;
     setDials({ ...profile, document, selection: value });
-    setPreview(null); setMessage(null);
+    setHeld(null); setMessage(null);
   }
   function updateSelection(value: Selection) {
     if (!profile || !allowed("edit-team")) return;
@@ -471,7 +492,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   }
   function discardChanges() {
     if (!allowed("edit-team")) return;
-    setDials(null); setSavedPolicy(null); setPreview(null); setMessage(null);
+    setDials(null); setSavedPolicy(null); setHeld(null); setMessage(null);
   }
   async function save() {
     // Only a local edit of a verified active profile saves here; the bundled preview has no save.
@@ -481,7 +502,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
         containerId: host.containerId!, expectedRevision: profile.revision, selection: profile.selection,
       });
       if (!policyCurrent()) throw new WorkflowError("The workspace changed while saving. Nothing was retried.");
-      setSavedPolicy(saved); setDials(null); setPreview(null);
+      setSavedPolicy(saved); setDials(null); setHeld(null);
       setMessage({ text: "The profile is saved for the workspace.", failed: false });
     });
   }
@@ -500,34 +521,33 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     catch (reason) { if (mounted.current) setMessage({ text: codeOperationFailure(reason), failed: true }); }
     finally { pending.current = false; if (mounted.current) { setBusy(false); setInFlight(null); refresh(); } }
   }
-  // The scope of the last review attempt, explicit or automatic: a refused one waits for a press or a changed input.
-  const reviewAttempt = useRef<number | null>(null);
-  // The workbench opens interactive sessions: the task is typed in the session itself, so the composition carries no prompt.
-  async function review() {
-    if (!record || !target) return;
-    reviewAttempt.current = reviewEpoch;
-    await perform("review", async () => {
-      const value = await codeWorkflow(host, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host))
-        .reviewSession(target, record.revision, "", { skills: skillChoice, automation });
-      if (destinationCurrent() && reviewScope.current.epoch === reviewEpoch && value.destination.machineId === machineId) { reviewedEpoch.current = reviewEpoch; setPreview(value); }
-    });
-  }
   /**
-   * The launch: an Agent Run when one can carry it (workflow.ts `agentLaunchBlocker`), so the session
-   * has live dials, activity and a lease in Sessions; else the reviewed session as before, the line
-   * saying why it has no dials. Either way one review is one attempt: the next launch reviews again.
+   * THE LAUNCH, one press: review the saved team's session on the destination, then launch it — an Agent Run when one can
+   * carry it (workflow.ts `agentLaunchBlocker`), so the session has live dials, activity and a lease in Sessions; else the
+   * reviewed session, the line saying why it has no dials. The workbench opens interactive sessions: the task is typed in
+   * the session itself, so the composition carries no prompt. The review is the press's own, made immediately before the
+   * launch, and it goes on to the launch only when it shows what the panel showed: the same lead for every role and the
+   * same providers in the pool (`reviewMatches`). One that differs is held and the press stops there, for the person to see
+   * what differs; the next press launches the held review while it stands. Nothing reviews without a press.
    */
   async function launch() {
-    const reviewed = preview, blocker = agentBlocker;
-    if (!target || !record || !reviewed) return;
+    const projected = shownReview, providers = served ? [...served].sort() : null, taken = standing?.review ?? null;
+    if (!target || !record || !projected) return;
     await perform("launch", async () => {
+      const pressCurrent = () => destinationCurrent() && pressScope.current.epoch === pressEpoch && canWriteCodeWorkspace(current.current.host);
+      const reviewed = taken ?? await codeWorkflow(host, pressCurrent).reviewSession(target, record.revision, "", { skills: skillChoice, automation });
+      if (!pressCurrent() || reviewed.destination.machineId !== machineId) throw new WorkflowError("code_destination_changed");
+      if (taken === null && !reviewMatches(projectionOf(projected, served), reviewed.composition)) {
+        setHeld({ review: reviewed, projected, providers, pressEpoch });
+        return;
+      }
       try {
-        let fallback: AgentLaunchBlocker | null = blocker;
-        if (blocker === null) {
-          try { await launchRun(reviewed); return; }
+        let fallback: AgentLaunchBlocker | null = dialsFor(reviewed);
+        if (fallback === null) {
+          try { await launchRun(reviewed, pressCurrent); return; }
           catch (reason) {
             // Manifold refused this caller's sponsorship before any Run existed, or the machine refused the Run, which was
-            // cancelled: the reviewed session is the launch, in this same press while its review still stands, and from here on.
+            // cancelled: the reviewed session is the launch, in this same press while it still stands, and from here on.
             if (sponsorRefused(reason)) {
               if (mounted.current) setUnsponsored(true);
               fallback = "sponsor";
@@ -536,21 +556,21 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
               if (mounted.current) setRefusedMachines(machines => new Set(machines).add(machineId));
               fallback = "machine";
             } else throw reason;
-            if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch) throw reason;
+            if (!pressCurrent()) throw reason;
           }
         }
-        await launchSession(reviewed, fallback ?? "sponsor");
+        await launchSession(reviewed, fallback, pressCurrent);
       } finally {
-        if (mounted.current) setPreview(null);
+        if (mounted.current) setHeld(null);
       }
     });
   }
   /** Asked again on the latest facts before a terminal opens: a team, machine, pool or authority change while preparing stops the launch here. */
-  function placement(machineId: string, containerId: string) {
+  function placement(machineId: string, containerId: string, pressCurrent: () => boolean) {
     const verdict = stillOpen("launch");
     if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
     const latest = current.current;
-    if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || machineId !== latest.target?.machineId || containerId !== latest.host.containerId ||
+    if (!pressCurrent() || machineId !== latest.target?.machineId || containerId !== latest.host.containerId ||
       latest.host.principal.id !== host.principal.id || latest.machine?.id !== machineId || !latest.host.authoring || !canWriteCodeWorkspace(latest.host))
       throw new WorkflowError("Nothing was opened: the destination changed.");
     return { machine: latest.machine, authoring: latest.host.authoring };
@@ -564,13 +584,12 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       setOutcome({ kind: "launched", machine, dials });
     }
   }
-  async function launchRun(reviewed: SessionReview) {
+  async function launchRun(reviewed: SessionReview, pressCurrent: () => boolean) {
     const workflow = codeWorkflow(host);
-    const { run, launched: prepared } = await workflow.launchAgent(reviewed,
-      () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+    const { run, launched: prepared } = await workflow.launchAgent(reviewed, pressCurrent);
     let opened: { machine: string } | null = null;
     try {
-      const { machine, authoring } = placement(prepared.destination.machineId, reviewed.destination.containerId);
+      const { machine, authoring } = placement(prepared.destination.machineId, reviewed.destination.containerId, pressCurrent);
       if (await authoring.createTerminal(machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
       opened = { machine: machine.name };
     } catch (reason) {
@@ -584,9 +603,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     // The TUI is open under its Run: what is remembered of the launch never cancels it.
     launched(reviewed, opened.machine, "run", "OMP's terminal UI opened under an agent run. Its dials, activity and lease are in Sessions.");
   }
-  async function launchSession(reviewed: SessionReview, blocker: AgentLaunchBlocker) {
+  async function launchSession(reviewed: SessionReview, blocker: AgentLaunchBlocker, pressCurrent: () => boolean) {
     const prepared = await codeWorkflow(host).prepareSession(reviewed);
-    const { machine, authoring } = placement(prepared.destination.machineId, prepared.destination.containerId);
+    const { machine, authoring } = placement(prepared.destination.machineId, prepared.destination.containerId, pressCurrent);
     if (await authoring.createTerminal(machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
     launched(reviewed, machine.name, blocker, "Terminal opened. Follow the session in OMP. Optional choices were cleared for the next independent launch.");
   }
@@ -598,27 +617,19 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     if (pending.current || step.step === "blocked" || !verb.open) return;
     switch (step.step) {
       case "verify": void verification.prepare("launch"); return;
-      case "save": setChaining(true); void save(); return;
-      case "review": void review(); return;
+      case "save": setChaining(placeable); void save(); return;
       case "launch": void launch(); return;
     }
   }
-  // `Save & review` is one gesture: the review follows once the saved revision is observed, never before,
+  // `Save & launch` is one gesture: the launch follows once the saved revision is observed, never before,
   // and only if the gate, asked again then, lets it; otherwise the chain stops and the verb says why.
   useEffect(() => {
     if (!chaining || busy) return;
     if (message?.failed) { setChaining(false); return; }
     if (!configurationCurrent) return;
     setChaining(false);
-    if (stillOpen("review").open) void review();
+    if (stillOpen("launch").open) void launch();
   });
-  // The saved team reviews itself once its inputs settle, so Launch is one press; an edit never does (launch-step.ts).
-  const autoReview = autoReviewDue(facts, reviewEpoch, reviewAttempt.current);
-  useEffect(() => {
-    if (!autoReview) return;
-    const timer = window.setTimeout(() => { void review(); }, AUTO_REVIEW_SETTLE_MS);
-    return () => window.clearTimeout(timer);
-  }, [autoReview, reviewEpoch]);
   function confirmCharge(activation: ConfirmActivation, shown: ChargeReview) {
     if (actionGate(facts, "confirm").open) void verification.confirm(activation, shown);
   }
@@ -627,11 +638,11 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
     const team = target ? resumeTeam(withTeam, target, record) : null;
     if (!team || !allowed(intent)) return;
     await perform("resume", async () => {
-      setPreview(null);
+      setHeld(null);
       const result = await codeWorkflow(host).resumeSession({ harness: OMP_PLUGIN_ID, machineId, sessionId: savedSessionId }, {
         ...team,
         ...(skillChoice === undefined ? {} : { skills: skillChoice }), ...(automation === undefined ? {} : { automation }),
-      }, () => destinationCurrent() && reviewScope.current.epoch === reviewEpoch && canWriteCodeWorkspace(current.current.host));
+      }, () => destinationCurrent() && resumeScope.current.epoch === resumeEpoch && canWriteCodeWorkspace(current.current.host));
       if (result.kind === "reopen") {
         if (destinationCurrent()) host.navigate(formatManifoldUri({ kind: "terminal", terminalId: result.terminals[0]!.id }));
         return;
@@ -640,12 +651,12 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (!verdict.open) throw new WorkflowError(`Nothing was opened: ${verdict.refusal.text}`);
       const prepared = result.prepared;
       const latest = current.current;
-      if (!destinationCurrent() || reviewScope.current.epoch !== reviewEpoch || latest.host.principal.id !== host.principal.id ||
+      if (!destinationCurrent() || resumeScope.current.epoch !== resumeEpoch || latest.host.principal.id !== host.principal.id ||
         prepared.machineId !== latest.target?.machineId || prepared.sessionId !== savedSessionId || latest.machine?.id !== prepared.machineId ||
         !latest.host.authoring || !canWriteCodeWorkspace(latest.host)) throw new WorkflowError("Nothing was opened: the destination or session choices changed.");
       if (await latest.host.authoring.createTerminal(latest.machine, prepared.runtime) === null) throw new WorkflowError("Nothing was opened: the canvas refused the terminal.");
       if (destinationCurrent()) {
-        setPreview(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
+        setHeld(null); setSkillChoice(undefined); setAutomation(undefined); setSavedSessionId("");
         setMessage({ text: "Saved session opened in OMP. Per-session choices were cleared.", failed: false });
         setOutcome({ kind: "resumed", machine: latest.machine.name });
       }
@@ -672,9 +683,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
       if (mounted.current) { setAccountsPending(false); configuration.refresh(); accounts.refresh(); reading.refresh(); }
     }
   }
-  // Session options are part of a review's scope: changing them mid-chain would end a Save & launch with no line.
-  function changeSkillChoice(value: SkillChoice) { if (allowed("edit-options")) { setSkillChoice(value); setPreview(null); setMessage(null); } }
-  function changeAutomation(value: AutomationChoice) { if (allowed("edit-options")) { setAutomation(value); setPreview(null); setMessage(null); } }
+  // Session options are part of a press's scope: changing them mid-chain would end a Save & launch with no line.
+  function changeSkillChoice(value: SkillChoice) { if (allowed("edit-options")) { setSkillChoice(value); setHeld(null); setMessage(null); } }
+  function changeAutomation(value: AutomationChoice) { if (allowed("edit-options")) { setAutomation(value); setHeld(null); setMessage(null); } }
   // Outcome and refusal lines describe a premise: the team, the machine and the account pool. Any change to
   // one of them clears them, unless the change came with the line itself (a verification saving its team).
   const premise = JSON.stringify([selection, machineId, record?.accounts ?? null, accountObservation, served ? [...served].sort() : null]);
@@ -699,18 +710,18 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   return {
     queries: { configuration, metadata, setup, defaults, skillCatalog, accounts },
     observed, record, machineId, rosterError, document, starterError: starter.error, compiled, selection,
-    profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: previewCurrent ? preview : null,
+    profile, localDraft: dials, review: shownReview, localReview, controlsReview, launchReview: standing?.review ?? null, held: standing,
     configurationCurrent, unsaved, edited, stale, writable, placeable, available, accounts: accountState, accountsProblem,
-    configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, previewCurrent, busy, inFlight, chaining,
+    configurationFailed: configuration.error !== null, ompMissing: setup.code === "omp_operation_unavailable", launchReady, busy, inFlight, chaining,
     profileState, stateLabel, launchStatus: launchStatusText(facts), message,
     gate: (intent, sessionId) => actionGate(sessionId === undefined ? facts : { ...facts, savedSessionId: sessionId }, intent),
     step, verb, served, unservedLead, outcome, usage,
-    skillChoice, setSkillChoice: changeSkillChoice, skillProblems, effectiveSkillMode, effectiveSkillCount,
+    skillChoice, setSkillChoice: changeSkillChoice, skillProblems,
     automation, setAutomation: changeAutomation,
     savedSessionId, setSavedSessionId,
     actions: { updateSelection, recallTeam, discardChanges, next, verify, save, confirmCharge, resume, changeAccounts: edit => void changeAccounts(edit),
       writingCatalog: setWritingCatalog, catalogWritten, refresh, readUsage: reading.refresh },
     verification, recentTeams, agentRuns,
-    launchDials: previewCurrent ? agentBlocker ?? "run" : null,
+    launchDials: standing ? dialsFor(standing.review) ?? "run" : null,
   };
 }

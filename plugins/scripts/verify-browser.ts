@@ -72,7 +72,8 @@ press records, a check within it that asks nothing, a kept check adopted without
 press and on its own, and a launch that stays ready while a changed account pool is checked again
 in the background; Setup's
 readiness rows, folder jobs and the owner's classifier (an owner-class identity minted for it alone);
-and launch/resume review invalidation and refusal. The preparation, configuration and execution they
+and a launch that reviews its session only when pressed and launches it in the same press, and
+launch/resume refusal. The preparation, configuration and execution they
 lead to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
@@ -737,6 +738,41 @@ function noNativeEffects(requests: BrowserAction[]): void {
     "core.terminals.create"];
   assert.deepEqual(requests.filter(request => effects.includes(request.name)), [],
     "Starter observation, edits and navigation never request classification, discovery, benchmark, consent or native execution");
+}
+
+/**
+ * Records what the launch shows, its label and state (`launch ready`, `launching… busy`), from now until the returned stop:
+ * every render is watched rather than sampled, and each change is kept once.
+ */
+async function watchLaunch(browser: BrowserInstance): Promise<() => Promise<string[]>> {
+  await browser.evaluate(`(() => {
+    const shown = () => ${launchButton}?.querySelector('.${G}launch-label')?.textContent + ' ' + ${launchButton}?.dataset.state;
+    const seen = [shown()], watch = new MutationObserver(() => { if (shown() !== seen.at(-1)) seen.push(shown()); });
+    watch.observe(${element(generator)}, { subtree: true, childList: true, attributes: true, characterData: true });
+    globalThis.__codeLaunchSeen = { seen, watch };
+    return true;
+  })()`);
+  return () => browser.evaluate<string[]>("(globalThis.__codeLaunchSeen.watch.disconnect(), globalThis.__codeLaunchSeen.seen)");
+}
+/**
+ * A saved team whose next step is the launch, left without a press for over six seconds while the panel's observations
+ * refresh: nothing reviews the launch, and the verb stays a ready Launch throughout. With the workspace feed live the
+ * panel reads on events and once a minute, so Refresh now (`r`) has it read every input again, the accounts among them,
+ * three times within the wait.
+ */
+async function launchStaysIdle(browser: BrowserInstance, trace: { requests: BrowserAction[] }, description: string): Promise<void> {
+  await until(browser, `${description}: the launch is ready`, launchIs("launch", "ready"));
+  await click(browser, generatorTitle);
+  const from = trace.requests.length, seen = await watchLaunch(browser);
+  for (let pass = 0; pass < 3; pass++) {
+    await key(browser, "r", 82);
+    await Bun.sleep(2_200);
+  }
+  const shown = await seen();
+  const names = trace.requests.slice(from).map(request => request.name);
+  assert(names.filter(name => name === "atyrode.omp.accounts.accounts").length >= 3, `${description}: the panel's observations refresh while it sits`);
+  assert.deepEqual(names.filter(name => name === "atyrode.omp.reviewSession"), [], `${description}: nothing reviews the launch without a press`);
+  assert.deepEqual(shown, ["launch ready"], `${description}: the launch stays a ready Launch throughout`);
 }
 
 type Outcome = { ok: true; result: unknown } | { ok: false; denial: { rule: string; message: string } };
@@ -2985,9 +3021,11 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
  * - A first Launch press asks before its check spends; the approve press records the person's approval, and the same
  *   press goes on to review the saved profile and launch it.
  * - In a workspace with another Claude account, a first Launch press checks within that approval and spends without
- *   asking. The check narrows the profile to what answered, so the press stops on what changed, and Launch goes on with it.
+ *   asking. The check narrows the profile to what answered, so the press stops on what changed before reviewing
+ *   anything, and Launch reviews and launches it.
  * - A workspace with the first account adopts the kept check without an inventory or a spend: on a first Save & launch
- *   press, which goes on to the launch, and, once set up, on its own as it opens.
+ *   press, which goes on to the launch, and, once set up, on its own as it opens, after which nothing reviews the launch
+ *   until it is pressed.
  * - Once the accounts change under a list that passed a check, its lead still served, Launch stays ready and launches
  *   while the check that renews the list runs on its own, within the approval.
  * - When they change again and OMP refuses the renewal's benchmark, the stop is said in Models only, Launch stays ready,
@@ -3102,15 +3140,8 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
   /** The doors that say what a press or the panel did about the models, and about the launch after. */
   const doors = ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.code.approveChecks", "atyrode.omp.startBenchmark",
     "atyrode.code.adoptCheck", "atyrode.code.promoteCatalog", "atyrode.omp.reviewSession", "atyrode.omp.prepareSession"];
-  /**
-   * Those doors requested since `from`, in order, through the first session preparation: once a launch is refused the panel
-   * may review it again on its own, which is no part of the press.
-   */
-  const requested = (from: number) => {
-    const names = trace.requests.slice(from).map(request => request.name).filter(name => doors.includes(name));
-    const launched = names.indexOf("atyrode.omp.prepareSession");
-    return launched === -1 ? names : names.slice(0, launched + 1);
-  };
+  /** Those doors requested since `from`, in order. Nothing reviews a launch without a press, so none follows a refused one. */
+  const requested = (from: number) => trace.requests.slice(from).map(request => request.name).filter(name => doors.includes(name));
   /** The rows lead Claude only, which a Claude-only list hosts as it is: an edit of the bundled starter, which leads Mixed. */
   const leadClaudeOnly = async () => {
     await choose(browser, "lane", "anthropic");
@@ -3164,7 +3195,7 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
     // In a workspace with another Claude account, a first press checks within the approval and spends without asking. The
     // rows lead GPT, which the starter offers and a Claude-only list cannot host: the check narrows them, so the press stops
-    // on what it changed after the review, and Launch goes on with it.
+    // on what it changed before it reviews anything, and Launch reviews the narrowed profile and launches it.
     observed = fixtureAccounts([2]);
     await openEdited(within.id, () => choose(browser, "lane", "openai"));
     // Whatever happens until the press ends, the approve control never shows and the launch never waits on it.
@@ -3180,8 +3211,8 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
       `The stop names each setting the check moved, the lane among them: ${JSON.stringify(narrowed)}`);
     assert.equal(await browser.evaluate("globalThis.__codeAsked"), false, "Within the approval the check never shows approve and the launch never waits on it");
     assert.deepEqual(requested(from), ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.omp.startBenchmark",
-      "atyrode.code.promoteCatalog", "atyrode.omp.reviewSession"],
-      "The check within the approval spends without asking, and the press reviews the narrowed profile and stops before launching");
+      "atyrode.code.promoteCatalog"],
+      "The check within the approval spends without asking, and the press stops on the narrowed profile before reviewing or launching it");
     await pointOf(browser, launchButton);
     await until(browser, "pointed, the launch says it goes on with the narrowed profile", `${readout}.textContent.includes('launch to go on with it, or change a setting first')`);
     await pointAway(browser);
@@ -3190,7 +3221,8 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     await click(browser, launchButton);
     await waitFor(() => prepared.length === 2, timeout, 50);
     await until(browser, "the launch's refusal is said beside it", failureLine);
-    assert.deepEqual(requested(from), ["atyrode.omp.prepareSession"], "Launch goes on with the profile as the check left it");
+    assert.deepEqual(requested(from), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"],
+      "One Launch press reviews the profile as the check left it and launches it");
 
     // A workspace with the first account adopts the person's kept check of it on a first Save & launch press: no inventory
     // and no charge, the kept list in use with the rows' edit, and the press goes on to the launch.
@@ -3210,15 +3242,15 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
     // The accounts change under the adopted list: a second Claude account joins the first, so the pool is another, and
     // Claude, the lead, is still served. A list that passed a check still serves a launch while the check renewing it runs on
-    // its own within the approval, held here at its inventory: Launch stays a launch, reviewed and ready, says the check runs
-    // in the background when pointed, and launches. Opening the workspace again observes the new pool.
+    // its own within the approval, held here at its inventory: Launch stays a ready launch, says the check runs in the
+    // background when pointed, and launches. Opening the workspace again observes the new pool.
     observed = fixtureAccounts([1, 4]);
     holdNextInventory = true;
     probes = [inventories.size, benchmarks.size];
     from = trace.requests.length;
     await openGenerator(browser, server, pressed.id);
     await waitFor(() => heldInventory.held, timeout, 50);
-    await until(browser, "with only the accounts changed the launch stays a launch, reviewed and ready", launchIs("launch", "ready"));
+    await until(browser, "with only the accounts changed the launch stays a ready launch", launchIs("launch", "ready"));
     await pointOf(browser, launchButton);
     await until(browser, "pointed, the launch says a check runs in the background", `${readout}.textContent.includes('checking models in the background')`);
     await pointAway(browser);
@@ -3238,6 +3270,7 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     // A workspace set up with the first account, its starter list not checked, adopts the person's kept check of it on its
     // own as it opens: adopting asks and spends nothing, no inventory reaches OMP, and Models says the list is checked. The
     // panel lands on the machine where OMP answers by itself, and the adoption holds the machine's choice while it runs.
+    // Left alone after that, the panel reviews nothing: the launch waits for a press.
     observed = fixtureAccounts([1]);
     const setUp = await callAction(server, person.token, "atyrode.code.initializeConfiguration", { containerId: opened.id, expectedRevision: 0 });
     assert(setUp.ok, "The person sets up the workspace's Code choices");
@@ -3245,14 +3278,14 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     from = trace.requests.length;
     await openGenerator(browser, server, opened.id);
     await until(browser, "the launch names the machine the panel judged, where OMP answers", `${machinePicker}?.textContent === ${JSON.stringify(machineName)}`);
-    await waitFor(() => trace.requests.slice(from).some(request => request.name === "atyrode.omp.reviewSession"), timeout, 50);
-    await until(browser, "adopted on its own, the launch is reviewed and ready", launchIs("launch", "ready"));
-    assert.deepEqual([inventories.size, benchmarks.size], probes, "Adopting a kept check on its own reaches no inventory or benchmark");
-    assert.deepEqual(requested(from), ["atyrode.code.adoptCheck", "atyrode.omp.reviewSession"],
-      "Opening the set-up workspace adopts the kept check, asking and spending nothing, and reviews the launch");
+    await waitFor(async () => (await readConfiguration(server, person, { containerId: opened.id })).configuration?.active?.provenance != null, timeout, 100);
     const own = (await readConfiguration(server, person, { containerId: opened.id })).configuration?.active;
     assert.deepEqual([own?.digest, own?.provenance], [checked.digest, checked.provenance], "The kept list is in use as it was checked");
     await headSaysChecked(checked.document, "Models says the list adopted on its own is checked, as of the check it adopted");
+    await launchStaysIdle(browser, trace, "Adopted on its own and left alone");
+    assert.deepEqual([inventories.size, benchmarks.size], probes, "Adopting a kept check on its own reaches no inventory or benchmark");
+    assert.deepEqual(requested(from), ["atyrode.code.adoptCheck"],
+      "Opening the set-up workspace adopts the kept check, asking and spending nothing, and reviews nothing without a press");
 
     // The accounts change again under the list renewed in the workspace adopted on a press: a third Claude account joins.
     // That list passed a check and the approval covers the charge, so a renewal starts on its own, and OMP refuses its
@@ -3264,7 +3297,7 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     from = trace.requests.length;
     await openGenerator(browser, server, pressed.id);
     await waitFor(() => refusedBenchmarks.length === 1, timeout, 50);
-    await until(browser, "beside the stopped renewal the launch stays a launch, reviewed and ready, and says nothing of the stop",
+    await until(browser, "beside the stopped renewal the launch stays a ready launch and says nothing of the stop",
       `${launchIs("launch", "ready")} && !${failureLine} && !${lineText}.includes('Model check')`);
     await Bun.sleep(2_000);
     assert.deepEqual([inventories.size, benchmarks.size, refusedBenchmarks.length], [probes[0]! + 1, probes[1]!, 1],
@@ -3288,7 +3321,7 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     await openGenerator(browser, server, pressed.id);
     await waitFor(() => heldBenchmark !== null, timeout, 50);
     const spending = heldBenchmark;
-    await until(browser, "while the renewal spends, the launch stays a launch, reviewed and ready", launchIs("launch", "ready"));
+    await until(browser, "while the renewal spends, the launch stays a ready launch", launchIs("launch", "ready"));
     await askFirst(browser, charge);
     await waitFor(() => heldBenchmark === null, timeout, 50);
     assert.deepEqual(cancels, [spending], "Ask first cancels the benchmark the renewal was spending, at its owner");
@@ -3624,10 +3657,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await openOptions(browser);
     await turn(browser, autoPlans, true);
     await closeOptions(browser);
-    await until(browser, "an edited checked profile saves before its review, and offers the saved one back", `${launchIs("save & review", "ready")} && !!${revertButton}`);
+    await until(browser, "an edited checked profile saves before its launch, and offers the saved one back", `${launchIs("save & launch", "ready")} && !!${revertButton}`);
     // The launch says what its save changes while it is pointed: exactly the three edited settings.
     await pointOf(browser, launchButton);
-    await until(browser, "the launch's readout counts the edited settings", `/^save & review · 3 changes to the profile: /.test(${readout}.textContent)`);
+    await until(browser, "the launch's readout counts the edited settings", `/^save & launch · 3 changes to the profile: /.test(${readout}.textContent)`);
     assert.deepEqual(await browser.evaluate(`${readout}.textContent.split(': ').slice(1).join(': ').split(', ').map(change => change.split(' ')[0]).sort()`), ["extras", "thinking", "tier"],
       "The save changes exactly the edited settings");
     await pointAway(browser);
@@ -3644,7 +3677,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     }
     await panelReads(browser, revision);
     await until(browser, "own account edits leave the edit ready to save, without a conflict",
-      `${launchIs("save & review", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
+      `${launchIs("save & launch", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
     // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: the save
@@ -3655,7 +3688,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await focusLaunch(browser);
     await key(browser, "r", 82);
     await until(browser, "a lead no account serves refuses the save and names its family, with the way to its accounts",
-      `${launchIs("save & review", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
+      `${launchIs("save & launch", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
     const said = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await key(browser, "Enter", 13);
     await until(browser, "the refused press says why", `${liveRegion}.textContent !== ${JSON.stringify(said)} && ${liveRegion}.textContent.endsWith(${launchButton}.title)`);
@@ -3664,7 +3697,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.equal((await readConfiguration(server, writer, first)).revision, revision, "A save refused for an unserved lead writes nothing");
     observed = fixtureAccounts();
     await key(browser, "r", 82);
-    await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & review", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
+    await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & launch", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
     // Models shows the workspace's checked list rung by rung; the accounts' management keeps an unsaved draft in its view under the accounts.
     await openSheet(browser, "models");
@@ -3711,13 +3744,13 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     assert.equal(await browser.evaluate(chosenKey("tier")), "elite");
     assert.equal(await browser.evaluate(`${autoPlans}?.getAttribute('aria-checked')`), "true", "planYolo remains a profile choice, not a native permission");
 
-    // Save from the second destination: the press saves, and its review stops where this machine has no permission.
-    await until(browser, "the edited profile can be saved from the second destination", launchIs("save & review", "ready"));
+    // Save from the second destination: the press saves, and its launch stops where this machine has no permission.
+    await until(browser, "the edited profile can be saved from the second destination", launchIs("save & launch", "ready"));
     const unsaved = (await readConfiguration(server, viewer, second)).revision;
     await focusLaunch(browser);
     await key(browser, "Enter", 13);
     await waitFor(async () => (await readConfiguration(server, viewer, second)).revision === unsaved + 1, timeout, 50);
-    await until(browser, "the saved profile's review stops at this machine's missing permission", launchIs("launch", "refused"));
+    await until(browser, "the saved profile's launch stops at this machine's missing permission", launchIs("launch", "refused"));
     assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "The launch keeps focus from Save through its refusal");
     const saved = await readConfiguration(server, viewer, second);
     assert.equal(saved.configuration?.selection?.thinking, localThinking, "Second destination saves to the shared profile");
@@ -3757,12 +3790,12 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     // brings it back as a conflict: the edit stays on show, nothing is rebased, and theirs is one press away.
     await focusRow(browser, "thinking");
     await key(browser, "ArrowLeft", 37);
-    await until(browser, "← lowers the saved thinking", `${chosenKey("thinking")} !== ${JSON.stringify(localThinking)} && ${launchIs("save & review", "ready")}`);
+    await until(browser, "← lowers the saved thinking", `${chosenKey("thinking")} !== ${JSON.stringify(localThinking)} && ${launchIs("save & launch", "ready")}`);
     const kept = await browser.evaluate<string>(profileValues);
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, first.machineId, machineName);
     await until(browser, "the edited setting survives a reload, still ready to save",
-      `${profileValues} === ${JSON.stringify(kept)} && ${launchIs("save & review", "ready")} && !!${revertButton}`);
+      `${profileValues} === ${JSON.stringify(kept)} && ${launchIs("save & launch", "ready")} && !!${revertButton}`);
     await browser.goto("about:blank");
     const current = await readConfiguration(server, writer, first);
     const ours = current.configuration!.selection!;
@@ -3837,9 +3870,12 @@ async function canvaslessWriterScenario(browser: BrowserInstance, server: TestSe
     await focusRow(browser, "thinking");
     await key(browser, "ArrowRight", 39);
     await until(browser, "the edit back is another Save", `${launchIs("save", "ready")} && ${chosenKey("thinking")} === ${JSON.stringify(thinking)}`);
+    const saving = await watchLaunch(browser);
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 2, timeout, 50);
     await until(browser, "the profile is saved back", launchIs("launch", "refused"));
+    const shown = await saving();
+    assert(shown.includes("saving… busy") && !shown.includes("launching… busy"), `Without a canvas Save reads saving… and goes on to no launch: ${JSON.stringify(shown)}`);
     assert.deepEqual((await readConfiguration(server, writer, target)).configuration?.selection, before.configuration?.selection, "Saving back restores the exact profile");
     assert.equal(await browser.evaluate(readOnly), false, "Nothing a canvas-less writer did is called read-only");
     assert.deepEqual(trace.requests.filter(request => /^(atyrode\.omp\.(reviewSession|prepareSession|resumeSession)|core\.terminals\.create)$/.test(request.name)), [],
@@ -4200,8 +4236,9 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
     await browser.goto(`${server.httpUrl}/p/${configured.containerId}`);
     const usage = ".plugin-atyrode_code_usage .plugin-atyrode_code__usage";
     const retry = element(`${usage} button[data-action="atyrode.omp.accounts.usage"]`);
+    // Check usage is offered whatever the reads say, so the injected failure is awaited at the fixture, not inferred from it.
+    await waitFor(() => failures > 0, timeout, 50);
     await control(browser, "standalone Usage can retry before any successful configuration", retry, false);
-    assert(failures > 0, "The retry control follows an injected configuration failure");
     assert.equal(await browser.evaluate(`${element(`${usage} [data-account-pool]`)} === null`), true);
     failConfiguration = false;
     await click(browser, retry);
@@ -4593,6 +4630,10 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     sets: [{ id: "pair", title: "Reviewed pair", skillIds: ["alpha", "gamma"] }],
     updatedAt: 1000, updatedBy: "synthetic-owner" };
   let sessionVisible = true, secondReadFails = false, terminalInventoryFailed = false, firstReads = 0;
+  // The accounts OMP reports are the shared scenario's Claude ones, read afresh each time; once below a GPT account joins.
+  const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
+    type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
+  let gptJoins = false;
   const resumedInputs: Record<string, unknown>[] = [];
   const savedSessionId = "7ab82ad4-8c9e-4166-8130-472c7cae1559";
   // The first machine keeps twelve sessions in one folder, the newest of them the one resumed below, and one in another
@@ -4616,7 +4657,10 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     switch (name) {
       case "core.machines.list": return { ok: true, result: { machines: fleetMachines } };
       case "core.terminals.listAll": return terminalInventoryFailed ? refused("synthetic_terminal_inventory_failed") : { ok: true, result: { terminals: fleetTerminals } };
-      case "atyrode.omp.accounts.accounts": return { ok: true, result: fixtureAccounts() };
+      case "atyrode.omp.accounts.accounts": {
+        const claude = fixtureAccounts();
+        return { ok: true, result: gptJoins ? { ...claude, accounts: [...claude.accounts, gpt] } : claude };
+      }
       case "atyrode.omp.describeDestination": {
         assert.equal(input.containerId, first.containerId);
         assert(input.machineId === first.machineId || input.machineId === second.machineId);
@@ -4670,7 +4714,21 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
   const savedRow = (machineId: string) => element(`${generator} [data-kind="saved"][data-session-id="${savedSessionId}"][data-machine-id="${machineId}"]`);
   const rowVerb = (machineId: string, verbName: string) => `${savedRow(machineId)}?.querySelector('[data-verb="${verbName}"]')`;
   const runningRow = (terminalId: string) => element(`${generator} [data-kind="running"][data-terminal-id="${terminalId}"]`);
-  const reviewsFor = (count: number) => async () => reviews.length >= count;
+  const trace = await watchActions(browser, server);
+  /** The launch's own doors requested since `from`, in order: its review, then the session's preparation or an Agent Run's doors. */
+  const launchDoors = (from: number) => trace.requests.slice(from).map(request => request.name).filter(name =>
+    name === "atyrode.omp.reviewSession" || name === "atyrode.omp.prepareSession" || /^core\.access\.(registerAgentV2|updateAgentV2|createRunV2|launchRun)$/.test(name));
+  /**
+   * One Launch press on the saved profile, a click unless `press` says otherwise: it reviews the session, then prepares it
+   * with no second press, and the fixture's refusal is said beside a ready Launch.
+   */
+  const launchOnce = async (description: string, press: () => Promise<void> = () => click(browser, launchButton)) => {
+    const from = trace.requests.length, prepared = prepareRequests;
+    await press();
+    await waitFor(() => prepareRequests === prepared + 1, timeout, 50);
+    await until(browser, `${description}: the refused preparation is said beside a ready Launch`, `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(from), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"], `${description}: one press reviews the session, then launches it`);
+  };
   try {
     await arrangeWorkbench(server, writer);
     // One recent profile, so a digit pressed where the panel's keys must not act would recall it.
@@ -4679,30 +4737,19 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, first.machineId, machineName);
 
-    // The saved profile reviews itself once its inputs settle, so Launch is one press.
-    await until(browser, "the saved profile is reviewed without a press", launchIs("launch", "ready"));
-    assert.equal(reviews.length, 1, "One automatic review of the settled saved profile");
-    assert.equal(reviews[0]!.skills, undefined, "An ordinary launch carries no skill choice");
-    // Pointed, the launch says where the profile was reviewed and the reviewed pool by family.
-    await pointOf(browser, launchButton);
-    // A writer who saved automatic plans launches the reviewed session, so the readout says why it will have no live dials.
-    await until(browser, "the launch's readout says where it was reviewed, its pool by family and why it has no live dials",
-      `${readout}.textContent.includes(${JSON.stringify(machineName)}) && /Claude \\d+/.test(${readout}.textContent) && ${readout}.textContent.includes('no live dials: auto plans are on')`);
-    await pointAway(browser);
+    // The saved profile's next step is the launch, and nothing reviews it before a press.
+    await launchStaysIdle(browser, trace, "The saved profile, left alone");
+    assert.equal(reviews.length, 0, "Nothing reviews the saved profile without a press");
 
-    // Skills: a set and an individual choice review as one effective selection.
+    // Skills: a set and an individual choice are one effective selection, which one press reviews and prepares as such.
     await openOptions(browser);
     await click(browser, optionSwitch("Optional skills", "Reviewed pair"));
     await click(browser, optionSwitch("Optional skills", "Alpha"));
-    await waitFor(reviewsFor(2), timeout, 50);
-    await until(browser, "overlapping skill selection is native-reviewed", `${launchIs("launch", "ready")} && document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li').length > 0`);
+    await until(browser, "the overlapping skill selection is chosen", `${launchIs("launch", "ready")} && document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li').length > 0`);
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li .${G}options-skill-title')].map(el => el.textContent)`),
       ["Alpha", "Gamma"], "A set and individual choice render one effective selection without duplicates");
     await closeOptions(browser);
-    await focusLaunch(browser);
-    await key(browser, "Enter", 13);
-    await until(browser, "the refused preparation is said beside the launch", `${failureLine} && ${launchIs("review", "ready")}`);
-    assert.equal(prepareRequests, 1);
+    await launchOnce("↵ on the launch with skills chosen", async () => { await focusLaunch(browser); await key(browser, "Enter", 13); });
     assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "The launch keeps focus through its press and its refusal");
     await until(browser, "the refusal is announced", `${liveRegion}.textContent !== '' && ${lineText}.includes(${liveRegion}.textContent)`);
     // Outcome and refusal lines clear on any change to the profile.
@@ -4713,7 +4760,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await key(browser, "ArrowRight", 39);
     await until(browser, "the saved profile is back without a draft", `${chosenKey("thinking")} === ${JSON.stringify(savedThinking)} && !${revertButton}`);
 
-    // A declared conflict, a stale catalog and a cleared choice; disable-all reviews as such.
+    // A declared conflict, a stale catalog and a cleared choice; disable-all is reviewed as such by the next press, which,
+    // after a failed launch, reviews again.
     await openOptions(browser);
     await click(browser, optionSwitch("Optional skills", "Beta"));
     await until(browser, "a declared skill conflict refuses the step", `${launchButton}.dataset.state === 'refused' && !!${fix("skills")}`);
@@ -4723,35 +4771,34 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await click(browser, workspaceButton("read skills again"));
     await until(browser, "a stale catalog cannot silently rebase the selection", `${launchButton}.dataset.state === 'refused'`);
     await click(browser, workspaceButton("default skills"));
-    await until(browser, "a cleared choice can be reviewed again", `${launchButton}.dataset.state === 'ready'`);
-    const beforeDisable = reviews.length;
+    await until(browser, "a cleared choice makes the launch ready again", `${launchButton}.dataset.state === 'ready'`);
     await click(browser, workspaceButton("all skills off"));
-    await waitFor(reviewsFor(beforeDisable + 1), timeout, 50);
-    await until(browser, "disable-all is reviewed", launchIs("launch", "ready"));
+    await closeOptions(browser);
+    await launchOnce("Launch with all skills off");
     assert.deepEqual(reviews.at(-1)!.skills, { mode: "disabled" }, "The actual browser sends disable-all through the ordinary workflow");
 
-    // Restricted automation reviews as such and suppresses ambient skills; any tool change needs a new review.
+    // Restricted automation is reviewed as such and suppresses ambient skills; a tool changed after a launch reaches the
+    // next press's review, never a launch of the old one.
     const restricted = optionSwitch("Automation policy", "restricted automation"), readTool = optionSwitch("Automation policy", "read");
+    await openOptions(browser);
     await turn(browser, restricted, true);
     await turn(browser, readTool, true);
-    const beforeRestricted = reviews.length;
     await click(browser, workspaceButton("default skills"));
-    await waitFor(async () => reviews.length > beforeRestricted && JSON.stringify(reviews.at(-1)!.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
-    await until(browser, "native restricted policy is rendered", `${element(`${generator} [data-effective-automation]`)}?.dataset.effectiveAutomation === 'restricted'`);
-    assert.equal(reviews.at(-1)!.skills, undefined, "Restricted review suppresses ambient defaults even without an explicit skill choice");
     await closeOptions(browser);
-    await click(browser, launchButton);
-    await until(browser, "restricted preparation refusal is visible", `${failureLine} && ${launchIs("review", "ready")}`);
+    await launchOnce("Launch under restricted automation");
+    assert.deepEqual(reviews.at(-1)!.automation, { mode: "restricted", toolNames: ["read"], delegation: "disabled" }, "The press reviews the restricted policy as chosen");
+    assert.equal(reviews.at(-1)!.skills, undefined, "Restricted review suppresses ambient defaults even without an explicit skill choice");
     await openOptions(browser);
-    const beforeTool = reviews.length;
     await turn(browser, readTool, false);
-    await waitFor(reviewsFor(beforeTool + 1), timeout, 50);
-    assert.deepEqual((reviews.at(-1)!.automation as { toolNames: string[] }).toolNames, [], "A tool change is reviewed again, never launched on the old review");
+    await closeOptions(browser);
+    await launchOnce("Launch after a tool change");
+    assert.deepEqual(reviews.at(-1)!.automation, { mode: "restricted", toolNames: [], delegation: "disabled" }, "A tool change is reviewed again, never launched on the old review");
+    await openOptions(browser);
     await turn(browser, restricted, false);
     await closeOptions(browser);
-    await until(browser, "the ordinary session is reviewed", launchIs("launch", "ready"));
+    await until(browser, "the ordinary session is ready to launch", launchIs("launch", "ready"));
 
-    // A machine without permission refuses; returning reviews afresh, never resurrecting the old review.
+    // A machine without permission refuses; returning offers the launch again, and nothing reviews it before a press.
     const reviewsBeforeSecond = reviews.length, preparations = prepareRequests;
     await chooseMachine(browser, second.machineId, secondName);
     await until(browser, "the second destination cannot launch", `${launchButton}.dataset.state === 'refused' && !!${fix("permissions")}`);
@@ -4759,16 +4806,19 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(reviews.length, reviewsBeforeSecond, "Choosing an unprepared machine requests no review");
     assert.equal(prepareRequests, preparations, "Destination selection never prepares a launch");
     await chooseMachine(browser, first.machineId, machineName);
-    await waitFor(reviewsFor(reviewsBeforeSecond + 1), timeout, 50);
-    await until(browser, "returning reviews afresh", launchIs("launch", "ready"));
+    await until(browser, "returning offers the launch again", launchIs("launch", "ready"));
+    await Bun.sleep(1_200);
+    assert.equal(reviews.length, reviewsBeforeSecond, "Returning to the machine requests no review before a press");
 
-    // While a review is in flight no profile or machine edit lands, and the focused row keeps focus.
+    // One press held at its review: the launch says it is launching, and where, and no profile or machine edit lands
+    // meanwhile, the focused row keeping focus. Released, the same press goes on from its review to the launch.
     holdNextReview = true;
-    await openOptions(browser);
-    await click(browser, workspaceButton("all skills off"));
-    await closeOptions(browser);
+    const pressedAt = trace.requests.length, seen = await watchLaunch(browser);
+    await focusLaunch(browser);
+    await key(browser, "Enter", 13);
     await waitFor(() => heldReview.held, timeout, 50);
-    await until(browser, "the launch says the review runs", launchIs("reviewing…", "busy"));
+    await until(browser, "while its review runs the launch says it is launching, and on which machine",
+      `${launchIs("launching…", "busy")} && ${lineText}.includes(${JSON.stringify(`Opening a terminal on ${machineName}`)})`);
     await focusRow(browser, "advisor");
     const settings = await browser.evaluate<string>(profileValues);
     const announced = await browser.evaluate<string>(`${liveRegion}.textContent`);
@@ -4778,18 +4828,57 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await key(browser, "w", 87);
     await Bun.sleep(300);
     assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null })`),
-      { settings, machine: machineName, list: false }, "No profile or machine edit lands while a review runs");
+      { settings, machine: machineName, list: false }, "No profile or machine edit lands while a launch runs");
     await focusRow(browser, "advisor");
     heldReview.release();
-    await until(browser, "the held review completes for the unchanged profile", launchIs("launch", "ready"));
+    await waitFor(() => prepareRequests === preparations + 1, timeout, 50);
+    await until(browser, "the same press goes on to the launch, whose refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(pressedAt), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"], "One press reviews the session, then launches it, with no second press");
+    assert.deepEqual(await seen(), ["launch ready", "launching… busy", "launch ready"], "The launch reads launching… from the press until its refusal, then Launch again");
+    assert.deepEqual([reviews.at(-1)!.skills, reviews.at(-1)!.automation], [undefined, undefined], "An ordinary launch carries no skill or automation choice");
     assert.equal(await browser.evaluate(`!!${row("advisor")}.contains(document.activeElement)`), true, "Keyboard focus stays on its row through the gate");
+
+    // A GPT account joins the accounts OMP reports after the panel last read them, so the press's own review shows a pool
+    // other than the one the panel showed: the press stops there and holds that review, saying what differs, and the line
+    // stands while the panel reads its inputs again. Pointed, the launch says where the held review runs and why it has no
+    // live dials. The next press launches the held review without reviewing it again.
+    gptJoins = true;
+    const reviewsBeforeHold = reviews.length, preparedBeforeHold = prepareRequests, heldAt = trace.requests.length;
+    const stops = `${element(`${generator} .${G}launch-part[data-tone="warn"]`)}?.textContent === 'What will run differs'`;
     await click(browser, launchButton);
-    await until(browser, "launch refusal is shown and consumes its review", `${failureLine} && ${launchIs("review", "ready")}`);
-    await openOptions(browser);
-    await click(browser, workspaceButton("default skills"));
-    await closeOptions(browser);
-    // The cleared choice is reviewed on its own, so no review is still due when the steps below are counted.
-    await until(browser, "the cleared choice is reviewed", launchIs("launch", "ready"));
+    await until(browser, "the press stops on a review unlike what the panel showed, and says what differs", `${stops} && ${launchIs("launch", "ready")}`);
+    const differs = await browser.evaluate<[string, string | null][]>(launchParts);
+    assert(differs[0]?.[1] === "warn" && differs.length > 1, `The stop names what differs: ${JSON.stringify(differs)}`);
+    assert.deepEqual(launchDoors(heldAt), ["atyrode.omp.reviewSession"], "The press reviews once and stops before launching");
+    await browser.evaluate(`(() => {
+      const held = { lost: !(${stops}), watch: new MutationObserver(() => { if (!(${stops})) held.lost = true; }) };
+      held.watch.observe(${element(generator)}, { subtree: true, childList: true, attributes: true, characterData: true });
+      globalThis.__codeHeld = held;
+      return true;
+    })()`);
+    const refreshedAt = trace.requests.length;
+    for (let pass = 0; pass < 2; pass++) {
+      await key(browser, "r", 82);
+      await Bun.sleep(1_700);
+    }
+    assert.equal(await browser.evaluate("(globalThis.__codeHeld.watch.disconnect(), globalThis.__codeHeld.lost)"), false,
+      "The held review's line stands while the panel reads its inputs again");
+    assert(trace.requests.slice(refreshedAt).some(request => request.name === "atyrode.omp.accounts.accounts"), "The panel read the accounts again meanwhile");
+    await pointOf(browser, launchButton);
+    await until(browser, "pointed, the launch says where the held review runs and why it has no live dials",
+      `${readout}.textContent.includes(${JSON.stringify(`runs on ${machineName}`)}) && ${readout}.textContent.includes('no live dials: auto plans are on')`);
+    await pointAway(browser);
+    const launchedAt = trace.requests.length;
+    await click(browser, launchButton);
+    await waitFor(() => prepareRequests === preparedBeforeHold + 1, timeout, 50);
+    await until(browser, "the next press launches the held review, whose refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(launchedAt), ["atyrode.omp.prepareSession"], "The next press launches the held review without reviewing it again");
+    assert.equal(reviews.length, reviewsBeforeHold + 1, "The held review was the only review of both presses");
+    // The GPT account leaves again, and the panel reads the accounts before anything below projects a launch on them.
+    gptJoins = false;
+    const leftAt = trace.requests.length;
+    await key(browser, "r", 82);
+    await waitFor(() => trace.requests.slice(leftAt).some(request => request.name === "atyrode.omp.accounts.accounts"), timeout, 50);
 
     // The sessions view: saved sessions are read per machine; only an exact terminal correlation is a running row.
     // A Read button goes as its read starts; focus follows the read to the machine's first row verb, never out of the panel.
@@ -4948,16 +5037,17 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(resumedInputs.length, 1, "Unsupported profile policy must not be silently dropped");
     assert.deepEqual(await readConfiguration(server, writer, first), saved, "Native observations and refusals never change saved choices");
 
-    // Save the profile without automatic plans; the save changes only that choice.
+    // Save the profile without automatic plans: the save changes only that choice, and the same press goes on, once the
+    // saved revision is observed, to review and launch it, the launch reading saving… then launching… until it ends.
     await showView(browser, "main");
     await openOptions(browser);
     await turn(browser, autoPlans, false);
     await closeOptions(browser);
-    await until(browser, "the edit saves before its review", launchIs("save & review", "ready"));
-    const beforeSave = reviews.length;
-    await click(browser, launchButton);
-    await waitFor(async () => (await readConfiguration(server, writer, first)).revision === saved.revision + 1, timeout, 50);
-    await waitFor(reviewsFor(beforeSave + 1), timeout, 50);
+    await until(browser, "the edit saves before its launch", launchIs("save & launch", "ready"));
+    const saving = await watchLaunch(browser);
+    await launchOnce("Save & launch");
+    assert.deepEqual(await saving(), ["save & launch ready", "saving… busy", "launching… busy", "launch ready"],
+      "Save & launch reads saving… while it saves and launching… from then until its launch ends");
     const supported = await readConfiguration(server, writer, first);
     assert(supported.configuration);
     assert.deepEqual(supported, { ...saved, revision: saved.revision + 1, configuration: {
@@ -4966,14 +5056,14 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
       selection: { ...saved.configuration!.selection, planYolo: false },
     } }, "The explicit profile save changes only its chosen policy and revision metadata");
     saved = supported;
-    await until(browser, "Save & review goes on to its review", launchIs("launch", "ready"));
+    assert.equal(reviews.at(-1)!.planYolo, false, "Save & launch reviews the profile it saved, without automatic plans");
     await openOptions(browser);
     await turn(browser, restricted, true);
     await turn(browser, readTool, true);
     await closeOptions(browser);
     await showView(browser, "sessions");
     await until(browser, "resuming with this profile is allowed", `${rowVerb(first.machineId, "resume-with-team")}?.getAttribute('aria-disabled') !== 'true'`);
-    await waitFor(async () => JSON.stringify(reviews.at(-1)?.automation) === JSON.stringify({ mode: "restricted", toolNames: ["read"], delegation: "disabled" }), timeout, 50);
+    // The profile resumed with is the one the last launch reviewed: the same overlay and account pool.
     await click(browser, rowVerb(first.machineId, "resume-with-team"));
     await waitFor(() => resumedInputs.length === 2, timeout, 50);
     await until(browser, "explicit profile resume refusal is said on the sessions view's own line", sessionSays(modelSaid));
@@ -5059,6 +5149,7 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     heldList.release();
     offNavigations();
     await fixture.stop();
+    trace.stop();
   }
   assert.deepEqual(await readConfiguration(server, writer, first), saved, "Synthetic observations never change real saved choices");
 }
@@ -5067,18 +5158,19 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
 
 /**
  * A launch as an Agent Run through Manifold's real doors, then Runs this fixture cannot start, read from fixtures shaped
- * on that real Agent's and Run's own reads. A human sponsor who may delegate presses the launch once: Code registers its
- * Agent and creates a Run at the real server, whose `launchRun` this machine refuses for want of a native job owner; Code
- * cancels the Run and the launch says why. With OMP's harness not ready the same press is the reviewed session, and the
- * pointed launch says it has no live dials and why. In Sessions, synthetic Runs say their activity, their lease up to 24
- * of 24 and detached. Each Run whose TUI opened carries the model OMP's harness reports once it is up, so it reads with its
- * thinking unknown. A synthetic `controlRun` takes their dials through pending, confirmed, clamped, not served, unanswered
- * and sent again, and refused, and a model it switches to becomes the Run's `Run.model`, as the harness reports it. A read
- * served before that report and landing after the answer keeps the answer; a model switched in the TUI shows in the read
- * that carries it, dropping the answer kept for the earlier one; after a reload the first read judges the kept answers.
- * ←→ settle before sending, ↵ and Space send at once, ↑↓ cross dials; a pointed word, lease or activity says itself and
- * moves nothing; reduced motion stills every mark; nothing overflows from 170 to 1440px. No terminal opens and no provider
- * is asked; a live Run, its renewals and its TUI remain unexercised here.
+ * on that real Agent's and Run's own reads. A human sponsor who may delegate presses the launch once: OMP reviews the
+ * session, then Code registers its Agent and creates a Run at the real server, whose `launchRun` this machine refuses for
+ * want of a native job owner; Code cancels the Run and the same press goes on to the reviewed session, as every later
+ * press on that machine does, and as a press does where OMP's harness is not ready. In Sessions, synthetic Runs say their
+ * activity, their lease up to 24 of 24 and detached. Each Run whose TUI opened carries the model OMP's harness reports
+ * once it is up, so it reads with its thinking unknown. A synthetic `controlRun` takes their dials through pending,
+ * confirmed, clamped, not served, unanswered and sent again, and refused, and a model it switches to becomes the Run's
+ * `Run.model`, as the harness reports it. A read served before that report and landing after the answer keeps the
+ * answer; a model switched in the TUI shows in the read that carries it, dropping the answer kept for the earlier one;
+ * after a reload the first read judges the kept answers. ←→ settle before sending, ↵ and Space send at once, ↑↓ cross
+ * dials; a pointed word, lease or activity says itself and moves nothing; reduced motion stills every mark; nothing
+ * overflows from 170 to 1440px. No terminal opens and no provider is asked; a live Run, its renewals and its TUI remain
+ * unexercised here.
  */
 async function agentLaunchScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Agent launch", "canvas");
@@ -5182,27 +5274,27 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   });
   const agentName = await codeAgentName(workspace.id);
   const actions = await watchActions(browser, server);
-  /** The Run doors the browser called since `from`, reads left out. */
-  const runDoors = (from: number) => actions.requests.slice(from).map(request => request.name)
-    .filter(name => name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name));
+  /** The launch's doors the browser called since `from`, in order: the session's review and preparation, and the Agent and Run doors, reads left out. */
+  const launchDoors = (from: number) => actions.requests.slice(from).map(request => request.name).filter(name => name === "atyrode.omp.reviewSession" ||
+    name === "atyrode.omp.prepareSession" || (name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name)));
   try {
     await arrangeWorkbench(server, sponsor);
     await browser.evaluate(identity(sponsor));
     await openGenerator(browser, server, workspace.id);
     await chooseMachine(browser, target.machineId, machineName);
 
-    // One press: the real doors register Code's Agent and create its Run; this machine refuses to launch it, Code cancels it,
-    // and the same press goes on to the reviewed session, which the fixture refuses at its preparation.
-    await until(browser, "the sponsor's saved profile is reviewed without a press", launchIs("launch", "ready"));
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says its dials will be live in Sessions", `${readout}.textContent.includes('live dials in Sessions')`);
-    await pointAway(browser);
-    const beforeLaunch = actions.requests.length;
+    // One press: OMP reviews the session, then the real doors register Code's Agent and create its Run; this machine refuses
+    // to launch it, Code cancels it, and the same press goes on to the reviewed session, which the fixture refuses at its
+    // preparation. The launch reads launching… throughout.
+    await until(browser, "the sponsor's saved profile is ready to launch", launchIs("launch", "ready"));
+    const beforeLaunch = actions.requests.length, launching = await watchLaunch(browser);
     await click(browser, launchButton);
     await waitFor(() => prepares === 1, timeout, 50);
-    await until(browser, "the same press goes on to the reviewed session, whose refusal is said beside the launch", failureLine);
-    assert.deepEqual(runDoors(beforeLaunch), ["core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun", "core.access.finishAgentRunV2"],
-      "One press registers the Agent, creates its Run, asks Manifold to launch it and cancels it once refused");
+    await until(browser, "the same press goes on to the reviewed session, whose refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(beforeLaunch), ["atyrode.omp.reviewSession", "core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun",
+      "core.access.finishAgentRunV2", "atyrode.omp.prepareSession"],
+      "One press reviews the session, registers the Agent, creates its Run, asks Manifold to launch it, cancels it once refused and prepares the reviewed session");
+    assert.deepEqual(await launching(), ["launch ready", "launching… busy", "launch ready"], "The launch reads launching… from the press until its refusal");
     const agentsRead = await callAction(server, sponsor.token, "core.access.listAgentsV2", {});
     assert(agentsRead.ok);
     const agents = ListAgentsV2ResultSchema.parse(agentsRead.result);
@@ -5225,30 +5317,27 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     await Bun.sleep(500);
     assert.equal(await browser.evaluate(`${element(`${generator} [data-run-id]`)} === null`), true, "A Run cancelled before it launched is not listed");
 
-    // From then on this machine's launch is the reviewed session, and the pointed launch says why it has no live dials.
+    // From then on this machine's launch is the reviewed session: the next press reviews and prepares it, and calls no Agent
+    // or Run door.
     await showView(browser, "main");
-    await until(browser, "the launch offers its next review", `${launchIs("review", "ready")} || ${launchIs("launch", "ready")}`);
-    if (await browser.evaluate<boolean>(launchIs("review", "ready"))) await click(browser, launchButton);
-    await until(browser, "the launch is reviewed again", launchIs("launch", "ready"));
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says this machine cannot launch agent runs",
-      `${readout}.textContent.includes(${JSON.stringify(`no live dials: ${machineName} cannot launch agent runs`)})`);
-    await pointAway(browser);
+    await until(browser, "after the refused launch the launch is ready again", launchIs("launch", "ready"));
     const beforeFallback = actions.requests.length;
     await click(browser, launchButton);
     await waitFor(() => prepares === 2, timeout, 50);
-    await until(browser, "the reviewed session's refusal is said beside the launch", failureLine);
-    assert.deepEqual(runDoors(beforeFallback), [], "A machine that refused a Run gets the reviewed session: no Agent or Run door is called");
-    // OMP's harness not ready is said before it.
+    await until(browser, "the reviewed session's refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(beforeFallback), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"],
+      "A machine that refused a Run gets the reviewed session: no Agent or Run door is called");
+    // A panel opened afresh has no refused machine, and OMP's harness not ready there makes its launch the reviewed session too.
     harnessReady = false;
-    await key(browser, "r", 82);
-    await until(browser, "the launch offers its next review", `${launchIs("review", "ready")} || ${launchIs("launch", "ready")}`);
-    if (await browser.evaluate<boolean>(launchIs("review", "ready"))) await click(browser, launchButton);
-    await until(browser, "the launch is reviewed again", launchIs("launch", "ready"));
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says it has no live dials because the harness is not enabled",
-      `${readout}.textContent.includes(${JSON.stringify(`no live dials: not enabled on ${machineName}`)})`);
-    await pointAway(browser);
+    await openGenerator(browser, server, workspace.id);
+    await chooseMachine(browser, target.machineId, machineName);
+    await until(browser, "with the harness not enabled the launch is ready", launchIs("launch", "ready"));
+    const beforeHarness = actions.requests.length;
+    await click(browser, launchButton);
+    await waitFor(() => prepares === 3, timeout, 50);
+    await until(browser, "the reviewed session's refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
+    assert.deepEqual(launchDoors(beforeHarness), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"],
+      "Without OMP's harness the press gets the reviewed session: no Agent or Run door is called");
 
     // Runs this machine cannot start, shaped on the real ones: open, at 24 of 24, renewal due, detached, starting and ended.
     const now = Date.now(), MINUTE = 60_000, HOUR = 60 * MINUTE;
@@ -5961,7 +6050,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A first Launch checks the models itself: its charge waits on approve, the next Tab stop after the launch, with every row and the machine locked, and a double-click, a second click, key repeat or ↵ at the panel root never approves it; the waiting line paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px targets on a coarse pointer and animates nothing under reduced motion; one approve press records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired), back to code and, after ask first, check again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first approve press records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on what it changed before Launch goes on with it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Auto-review, skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does, its readout saying the machine cannot launch agent runs (or, before it, that the harness is not enabled). Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A first Launch checks the models itself: its charge waits on approve, the next Tab stop after the launch, with every row and the machine locked, and a double-click, a second click, key repeat or ↵ at the panel root never approves it; the waiting line paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px targets on a coarse pointer and animates nothing under reduced motion; one approve press records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired), back to code and, after ask first, check again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first approve press records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on what it changed, before any review, until Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal; a press whose own review shows an account pool the panel did not show stops on what will run, which stands while the panel reads again and, pointed, says where it runs, and the next press launches that review without another; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
 }
 
 await run();

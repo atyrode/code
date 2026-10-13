@@ -424,8 +424,8 @@ account) is struck and says why under the pointer ("Claude blocked until 16:55 �
 falls back to sol:high", or "no route"); any pointed value names its exact
 `provider/id` and thinking level. A role name too long for its room ends in an ellipsis
 and says itself whole in its title; under 300 px each chain goes under its role. Routes
-come from the review on display: the reviewed composition while it is current, else
-the local review.
+come from the review on display: a held review's composition while it stands (see the
+launch below), else the local review.
 
 The **fallback chains** checkbox in routing's head (`f`) shows the chains behind each
 lead (`lead → fallback → fallback`) while the profile's fallbacks are on. With fallbacks
@@ -457,10 +457,12 @@ dropdown, and the **launch line** (below) beside them. The launch row follows th
 generator's rows, and the launch line sits beside the launch, or under it when it has no
 room beside it, and grows downward, so the launch never moves under the pointer while its
 line changes. The step is the label of the next step in lower case: **launch**,
-**save & launch**, **review**, **save**, **save & review**, **launch anyway** or
-**review in Models**, and **checking models…**, **saving…**, **reviewing…**,
-**launching…**, **resuming…** or **working…** while one runs. There is no separate verify
-step: when the list in use cannot serve a launch, the launch checks the models first.
+**save & launch**, **save**, **launch anyway** or **review in Models**, and **checking
+models…**, **saving…**, **launching…**, **resuming…** or **working…** while one runs.
+There is no separate verify step: when the list in use cannot serve a launch, the launch
+checks the models first. There is no review step either: a launch reviews its session
+inside the press (below), and nothing reviews without a press, so no review ever changes
+the label.
 
 **The machine.** The dropdown shows the machine's name, a neutral dot that shows
 whether it is online and a chevron. It opens a list of the machine roster above the
@@ -489,26 +491,39 @@ workspace" (its readout adds "changes stay a local preview"). Write access is th
 alone: without a canvas beside the panel, checking models, saving and account edits still
 work, and only launch and resume refuse, in neutral grey, "Open Code beside the
 workspace canvas to launch". **Launch anyway** is offered when a role's pools are out,
-never for a lead no included account serves, which save, review and launch all refuse.
+never for a lead no included account serves, which save and launch both refuse.
 **Review in Models** opens Models for a staged-only workspace. A launch that must check
 first is refused up front when the account observation cannot be read or includes no
 account. An edited
 team saves first; while the launch is pointed or pressed the readout says what the save
 changes ("2 changes to the profile: thinking high → max, advisor glance → off"), and
-**Revert** discards the edit. **Save & launch** is offered when the projection rests
-on present readings (every lead's pool judged fresh and the served providers known),
-and the press then continues from the review to the launch only if the review shows the
-projected leads and the same providers in the account pool; otherwise it stops and says
-what differs (roles' leads, providers that joined or left the pool) as a choice: launch
-with the reviewed pool or change a setting first. **Save & review** stops at the
-review so the pool is seen first. Outcome and refusal lines clear whenever the team,
+**Revert** discards the edit. **Save & launch** saves, then launches once the saved
+revision is observed (only **Save** where no canvas can place a terminal).
+
+**One press.** A launch reviews the saved team's session on the destination immediately
+before it starts it, in the same press (**launching…** throughout), and starts it when
+the review shows what the panel showed: the same lead for every role and the same
+providers in the account pool. A review that differs stops the press and is held: the
+line says "What will run differs" and what differs (roles' leads, providers that joined
+or left the pool, or that the accounts were not known before), with "launch again to run
+it, or change a setting first"; while the launch is pointed the readout says where it
+runs and its pool ("runs on <machine>: GPT 2"). The next press launches the held review
+while the press's own inputs hold (team, options, machine, the saved profile and
+authority), OMP's defaults and skill catalog revisions are those it was made with, the
+reads it rests on succeed and its launch is still the step (the list in use serves it);
+the first of them that fails drops it for good, and the press after that reviews again.
+Accounts that moved after it are refused by the launch's own check (below). A press
+stands on the same inputs: a change of one of them while it runs stops it, while an
+observation that moves meanwhile does not, since the launch reads the accounts and
+OMP's defaults again itself and refuses when they moved under its review. Choosing a
+saved session does not stop a launch. Outcome and refusal lines clear whenever the team,
 machine or account pool changes.
 
 **Live dials.** An agent launch (see the workflow below) ends "Launched on <machine> ·
 **dials**", the fix opening Sessions (`e`); a launch the reviewed session carried ends
 "Launched on <machine> · no live dials: <reason>" (auto plans are on, session options
 are set, not enabled on <machine> with **Enable in Setup**, your access sponsors no
-agents here, agents unread). While the launch is pointed after its review, the readout
+agents here, agents unread). While the launch is pointed with a held review, the readout
 says the same ("live dials in Sessions" or the reason). Setup's sessions row, and the
 "Open coding sessions" review, enable OMP's launch and harness operations together.
 
@@ -520,7 +535,7 @@ beside the active one, "a staged model list waits in Models") are said in the re
 while the launch is pointed or pressed. It is written in this
 precedence: a check the person started (or one the launch waits on) running or its
 charge, a step in flight, the verb's refusal with its fix, a staged model list the verb
-opens, a review that differs from what was projected or a check that changed the
+opens, a held review that differs from what the panel showed or a check that changed the
 profile, a failure, the last outcome, and roles with no route with the one change that
 routes them (said once no check precedes the launch). A model list that
 cannot be read joins the line from the verb's refusal on, with its Retry and Models.
@@ -575,12 +590,12 @@ checking state for 700 ms, and only on a deliberate single press, never the seco
 click of a double-click or a held key. It records the standing approval (the larger of
 the one held and this charge) before spending; one that cannot be recorded still spends
 this charge, and the next check asks again. Progress reads "Checking models with your
-accounts · N of M requests". When the check is done the press goes on: it reviews the
-saved team and launches it, unless the check narrowed a setting of the profile it was
-pressed on, which stops the press with "The model check changed the profile" and the
-settings it moved, as a choice. A check that stopped or was cancelled says so ("Model
-check stopped while <step>: <reason>", "Model check cancelled") until the next one
-starts; the launch is its retry.
+accounts · N of M requests". When the check is done the press goes on to the launch,
+which reviews and starts the saved team as above, unless the check narrowed a setting of
+the profile it was pressed on, which stops the press with "The model check changed the
+profile" and the settings it moved, as a choice. A check that stopped or was cancelled
+says so ("Model check stopped while <step>: <reason>", "Model check cancelled") until
+the next one starts; the launch is its retry.
 
 **Background checks.** The panel starts a check on its own when the workspace has been
 set up, the list in use no longer holds, no staged list waits, the list in use is not an
@@ -602,22 +617,16 @@ the person did not approve with a press then spends nothing more, asking instead
 the background, ending unspent) if it is still listing models, and stopping if it is
 measuring them; one already past measuring keeps what it paid for.
 
-Once the saved team on a list that serves a launch meets every launch precondition and
-its review inputs (options, accounts, revisions, destination) have held still briefly,
-the workbench requests the launch review itself, so Launch is one press. It never does
-so for an unsaved edit, a starter or a staged catalog, and at most once per review
-scope: a refused review or launch waits for an explicit Review or a changed input.
-
 One gate decides every action: the launch, saving, checking models, approving a charge,
 resuming with or without the profile, opening a running session, and every edit of the
 team (including a recalled profile and a profile switch), the machine or the account
 pool. Nothing starts while a step runs, and only Approve while a charge waits; edits
 wait too, and a row still answers but refuses each choice with the gate's reason. A
-chain asks the gate again before each later step (save, then review once the save is
-observed; prepare, then open the terminal), so a team, machine, pool or authority
-change mid-flight stops it with the reason. Review and launch refuse only a lead no
-included account serves, as the session door does; fallbacks it would drop are noted,
-never a refusal.
+chain asks the gate again before each later step (save, then launch once the save is
+observed; review, then prepare, then open the terminal), so a team, machine, pool or
+authority change mid-flight stops it with the reason. Save and launch refuse only a
+lead no included account serves, as the session door does; fallbacks it would drop are
+noted, never a refusal.
 
 ### Usage
 
@@ -939,7 +948,13 @@ session choices.
 
 `createCodeWorkflowClient(dispatch)` is React-free and uses the same ordinary
 Manifold action transport as the web. It composes `createCodeClient` with
-`createOmpClient`; no Code server proxies an OMP action. Important flows are:
+`createOmpClient`; no Code server proxies an OMP action. A door that validates an
+Agent's profile (`core.access.registerAgentV2`, `updateAgentV2` and `launchRun`) and is
+refused with `exclusive request requires a drained guest` or `profile validation requires
+exclusive guest access` is asked again after 150, 300, 600 and 1200 ms, then the refusal
+stands ("OMP was busy for a moment. Try again."): Manifold validates the profile in OMP's
+isolate only while that isolate serves nothing else, and refuses rather than waits,
+before the door does anything. No other door is retried. Important flows are:
 
 - **Permission review:** read OMP root destination readiness, account-owner
   setup/observations and gateway-owner setup independently. Build exact native
@@ -994,7 +1009,7 @@ Manifold action transport as the web. It composes `createCodeClient` with
   panel's life; so does a machine whose `launchRun` refuses agent runs
   (`run_launch_protocol_unsupported`, `omp_harness_runtime_unsupported`), for that
   machine ("no live dials: <machine> cannot launch agent runs"). In either case the
-  same press, once the Run is cancelled, launches the reviewed session while its review
+  same press, once the Run is cancelled, launches the reviewed session while the press
   still stands. `readRuns(containerId)` lists the visible Code Agents named for the
   workspace, their Runs, each listed Run's inspection (renewals, settlement, exit code)
   and the terminal inventory. An open or expired Run's TUI is a running terminal of its

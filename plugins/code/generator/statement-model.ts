@@ -468,21 +468,12 @@ export function fixView(fix: Rescue, catalog: CompiledCatalog, pools: readonly Q
 
 // ---------------------------------------------------------------- the verb
 
-/** Whether a launch's projection rests on present readings: every lead's pool judged fresh, and the served providers known. */
-export function grounded(catalog: CompiledCatalog, routes: readonly Route[], pools: readonly QuotaPool[], served: ReadonlySet<string> | null): boolean {
-  if (served === null) return false;
-  return routes.every(route => {
-    const kind = poolOf(catalog, route.lead, pools)?.verdict.kind;
-    return kind !== undefined && kind !== "stale" && kind !== "unknown";
-  });
-}
-
 export type VerbFacts = {
   readonly step: LaunchStep;
   /** The gate's verdict on the step (`WorkbenchModel.verb`). */
   readonly verdict: GateVerdict;
   readonly busy: boolean;
-  readonly inFlight: "save" | "review" | "launch" | "resume" | null;
+  readonly inFlight: "save" | "launch" | "resume" | null;
   readonly chaining: boolean;
   readonly unsaved: boolean;
   readonly draft: boolean;
@@ -495,11 +486,9 @@ export type VerbFacts = {
   readonly serves: boolean;
   /** Some role of the team has no route now because its pools are out (`standstill`), which a launch may go ahead with. */
   readonly stranded: boolean;
-  /** The panel's projection rests on present readings (`grounded`). */
-  readonly grounded: boolean;
   /** A canvas beside the panel can place a terminal, so a save can go on to a launch here. */
   readonly placeable: boolean;
-  /** A Save & launch press waits for its review before launching. */
+  /** A Launch press that checks the models first is between its steps. */
   readonly launching: boolean;
 };
 export type VerbView = {
@@ -509,57 +498,52 @@ export type VerbView = {
   readonly refusal: GateRefusal | null;
   /** A press saves the workspace team first. */
   readonly saves: boolean;
-  /** A press goes on from the review to the launch when the review shows what the panel projected. */
-  readonly launches: boolean;
   /** A press checks the models first, then goes on to the launch. */
   readonly checks: boolean;
   /** A press opens this place instead of taking a step: a staged model list is reviewed in Models. */
   readonly opens: "models" | null;
 };
 
-const RUNNING_LABELS: Readonly<Record<"save" | "review" | "launch" | "resume", string>> = {
-  save: "Saving…", review: "Reviewing…", launch: "Launching…", resume: "Resuming…",
+const RUNNING_LABELS: Readonly<Record<"save" | "launch" | "resume", string>> = {
+  save: "Saving…", launch: "Launching…", resume: "Resuming…",
 };
 
 /**
  * The verb for the workbench's step. The step and the gate are the model's (`nextLaunchStep`,
  * `actionGate`); this only names them. Launch is the verb whatever the model list needs: when the
  * list in use cannot serve a launch, the press checks the models first and goes on to the launch,
- * and saves an edit on the way (`Save & launch`). An edited team saves first otherwise: `Save &
- * launch` when the projection rests on present readings, so the press continues through the review
- * to the launch, else `Save & review`, which stops at the review to show the pool, and only `Save`
- * where no canvas can place the terminal. A team with a role that pools leave without a route
- * launches `anyway`, never one whose lead the session door refuses. A staged model list is the one
- * place the verb sends the person: `Review in Models` opens it. A refused step keeps the label of
- * what it would do, with the reason. A check the panel runs on its own never takes the verb.
+ * and saves an edit on the way (`Save & launch`). An edited team saves first otherwise, and the
+ * press goes on to the launch (`Save & launch`), only `Save` where no canvas can place the terminal.
+ * A launch reviews its session inside the press, so no label names a review. A team with a role
+ * that pools leave without a route launches `anyway`, never one whose lead the session door
+ * refuses. A staged model list is the one place the verb sends the person: `Review in Models`
+ * opens it. A refused step keeps the label of what it would do, with the reason. A check the
+ * panel runs on its own never takes the verb.
  */
 export function verbView(facts: VerbFacts): VerbView {
-  const view = (label: string, state: VerbView["state"], extra: Partial<Pick<VerbView, "saves" | "launches" | "checks" | "opens">> = {}): VerbView =>
-    ({ label, state, refusal: null, saves: false, launches: false, checks: false, opens: null, ...extra });
+  const view = (label: string, state: VerbView["state"], extra: Partial<Pick<VerbView, "saves" | "checks" | "opens">> = {}): VerbView =>
+    ({ label, state, refusal: null, saves: false, checks: false, opens: null, ...extra });
   const launch = facts.edited ? "Save & launch" : "Launch";
   if (facts.mode !== null && facts.mode !== "background") {
     if (facts.phase === "inventory" || facts.phase === "benchmark") return view("Checking models…", "busy");
     if (facts.phase === "charge") return view(facts.mode === "launch" ? launch : "Check models", "waiting");
   }
   if (facts.busy) return view(facts.inFlight ? RUNNING_LABELS[facts.inFlight] : "Working…", "busy");
-  if (facts.chaining) return view("Reviewing…", "busy");
-  if (facts.launching) return view("Launching…", "busy");
+  if (facts.chaining || facts.launching) return view("Launching…", "busy");
   if (facts.step.step === "blocked" && facts.step.reason.code === "staged") return view("Review in Models", "ready", { opens: "models" });
   const step = facts.step.step;
   const checks = step === "verify";
   const saves = step === "save" || (step === "blocked" && facts.draft && facts.unsaved && facts.serves);
-  const launches = saves && facts.grounded && facts.placeable;
   const anyway = facts.stranded && (facts.verdict.open || facts.verdict.refusal.code !== "no-account");
   const label = checks ? launch
-    : step === "review" ? "Review"
-    : step === "save" ? (!facts.placeable ? "Save" : facts.grounded ? (anyway ? "Launch anyway" : "Save & launch") : "Save & review")
+    : step === "save" ? (!facts.placeable ? "Save" : anyway ? "Launch anyway" : "Save & launch")
     : step === "launch" ? (anyway ? "Launch anyway" : "Launch")
     : facts.step.step === "blocked" && facts.step.reason.code === "verifying" ? "Checking models…"
     : !facts.serves ? launch
     : saves ? (facts.placeable ? "Save & launch" : "Save") : "Launch";
-  if (facts.verdict.open) return view(label, "ready", { saves, launches, checks });
+  if (facts.verdict.open) return view(label, "ready", { saves, checks });
   const waits = facts.verdict.refusal.code === "running" || facts.verdict.refusal.code === "verifying";
-  return { ...view(label, waits ? "busy" : "refused", { saves, launches, checks }), refusal: facts.verdict.refusal };
+  return { ...view(label, waits ? "busy" : "refused", { saves, checks }), refusal: facts.verdict.refusal };
 }
 
 /** What the panel projected for a launch: each role's served lead, and the providers its account pool serves (null: unknown). */
@@ -569,9 +553,9 @@ export function projectionOf(review: Pick<Review, "routes">, served: ReadonlySet
   return { leads: review.routes.map(route => `${route.role}:${route.lead.key}:${route.lead.thinking}`).sort(), providers: served ? [...served].sort() : null };
 }
 /**
- * Whether a session review shows what the panel projected, so `Save & launch` may go on to the
- * launch. A different lead for any role, a different set of providers in the account pool, or a
- * pool the panel did not know stops the press at the review.
+ * Whether a session review shows what the panel showed, so a Launch press may go on from its review
+ * to the launch. A different lead for any role, a different set of providers in the account pool,
+ * or a pool the panel did not know stops the press, holding the review for the person to see.
  */
 export function reviewMatches(projection: Projection, reviewed: { readonly review: Pick<Review, "routes">; readonly accountPool: Readonly<Record<string, readonly unknown[]>> }): boolean {
   if (projection.providers === null) return false;
@@ -606,16 +590,17 @@ export function movesText(catalog: CompiledCatalog, before: Review, after: Revie
   return [...groups.values()].map(group => group.say(group.roles.join(", "))).join(" · ");
 }
 /**
- * What a session review shows unlike the projection a Save & launch was pressed on, in the statement's
- * words: the roles whose lead moved, seat by seat, and the providers whose accounts joined or left
- * the pool; that the pool was not known when there was no projection of it.
+ * What a session review shows unlike what the panel showed when the launch started (after the
+ * save, for a Save & launch), in the statement's words: the roles whose lead moved, seat by seat,
+ * and the providers whose accounts joined or left the pool; that the accounts were not known when
+ * the panel had no reading of them.
  */
 export function reviewDifferences(catalog: CompiledCatalog, projected: Review, providers: readonly string[] | null,
   reviewed: { readonly review: Review; readonly accountPool: Readonly<Record<string, readonly unknown[]>> }, vocab: Vocabulary): string[] {
   const moves = movesText(catalog, projected, reviewed.review);
   const now = Object.keys(reviewed.accountPool).filter(provider => reviewed.accountPool[provider]!.length > 0);
   const families = (list: readonly string[]) => [...new Set(list.map(provider => vocab.family(providerPolicy(provider).family)))];
-  if (providers === null) return [...moves ? [moves] : [], "the pool was not known before the review"];
+  if (providers === null) return [...moves ? [moves] : [], "the accounts were not known before"];
   return [
     ...moves ? [moves] : [],
     ...families(now.filter(provider => !providers.includes(provider))).map(family => `${family} accounts join the pool`),
@@ -727,7 +712,7 @@ export type StatusFacts = {
   readonly outcome: { readonly kind: "launched"; readonly machine: string; readonly dials: "run" | AgentLaunchBlocker } | { readonly kind: "resumed"; readonly machine: string } | null;
   readonly stop: Standstill | null;
   readonly fix: FixView | null;
-  /** A Save & launch press stopped at a review that differs from the projection: what differs, in the statement's words. */
+  /** A Launch press stopped on a review unlike what the panel showed: what differs, in the statement's words. */
   readonly differs: readonly string[] | null;
   /** A Launch press whose check narrowed the profile to what answered stopped before launching: the settings it moved. */
   readonly narrowed: readonly string[] | null;
@@ -837,7 +822,7 @@ function withListFailure([first, second]: [StatusLine, StatusLine], failure: Lis
 /**
  * The line beside the launch, in precedence: a verification running or its charge (never written
  * over), a step in flight, the verb's refusal with its fix, a staged model list the verb opens, a
- * review that differs from the projection, a failure, the outcome of the last step, and roles with
+ * held review unlike what the panel showed, a failure, the outcome of the last step, and roles with
  * no route with the fix that routes them. From the verb's refusal on, a failed model list joins it
  * with its own fixes. Otherwise the line is null: the verb's label, the routing and the usage say
  * the rest, and the readout says the verb's status while the launch is pointed.
@@ -870,10 +855,9 @@ function pressLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusL
   }
   if (facts.busy || facts.chaining || facts.launching) {
     const where = facts.machine?.name ?? "the machine";
-    const text = facts.launching || facts.inFlight === "launch" ? `Opening a terminal on ${where}`
-      : facts.inFlight === "save" ? "Saving the workspace profile"
-      : facts.inFlight === "review" || facts.chaining ? `Reviewing the session on ${where}`
-      : facts.inFlight === "resume" ? `Resuming on ${where}` : "Working";
+    const text = facts.inFlight === "save" ? "Saving the workspace profile"
+      : facts.inFlight === "resume" ? `Resuming on ${where}`
+      : facts.launching || facts.chaining || facts.inFlight === "launch" ? `Opening a terminal on ${where}` : "Working";
     return [line([part(text, "busy")]), EMPTY];
   }
   const base = baseLines(facts, vocab);
@@ -884,9 +868,9 @@ function baseLines(facts: StatusFacts, vocab: Vocabulary): [StatusLine, StatusLi
   const { verb } = facts;
   if (verb.state === "refused" && verb.refusal) return refusalLines(verb.refusal, facts, vocab);
   if (verb.opens === "models") return [line([part("A staged model list waits in Models")]), line([part(`${verb.label.toLowerCase()} opens it; the profile stays as it is`, "meta")])];
-  // A stop is a choice, not a failure: what the review shows instead, or what the check moved, and both ways on.
-  if (facts.differs) return [line([part("The review differs", "warn"), ...facts.differs.map(text => part(text))]),
-    line([part("launch to use the reviewed pool, or change a setting first", "meta")])];
+  // A stop is a choice, not a failure: what would run instead, or what the check moved, and both ways on.
+  if (facts.differs) return [line([part("What will run differs", "warn"), ...facts.differs.map(text => part(text))]),
+    line([part("launch again to run it, or change a setting first", "meta")])];
   if (facts.narrowed) return [line([part("The model check changed the profile", "warn"), ...facts.narrowed.map(text => part(text))]),
     line([part("launch to go on with it, or change a setting first", "meta")])];
   if (facts.message?.failed) return [line([part(facts.message.text, "attention")]), EMPTY];
@@ -912,20 +896,17 @@ export type LaunchReadoutFacts = {
   readonly verb: VerbView;
   /** What the verb's save would change on the saved workspace profile; empty when it saves nothing. */
   readonly edits: readonly TeamEdit[];
-  /** The launch review on display, with its pool, until the team, machine or pool changes. */
+  /** A held review, with its pool, while it stands (workbench-model.ts `HeldReview`). */
   readonly reviewed: { readonly machine: string; readonly pool: readonly { readonly family: string; readonly count: number }[] } | null;
-  /** Whether the reviewed launch runs as an Agent Run (`run`) or why not (workflow.ts `AgentLaunchBlocker`); null with no review on display. */
+  /** Whether the held review runs as an Agent Run (`run`) or why not (workflow.ts `AgentLaunchBlocker`); null with no review held. */
   readonly dials: "run" | AgentLaunchBlocker | null;
-  /** The projection rests on present readings (`grounded`). */
-  readonly grounded: boolean;
   /** The model's status sentence (`launchStatusText`). */
   readonly launchStatus: string;
 };
 
 /**
  * What the readout says while the launch is pointed or pressed: the refusal; else what a save
- * changes on the workspace profile, the reviewed pool (or that the review shows it before anything
- * runs); else the model's status sentence.
+ * changes on the workspace profile and what a held review runs; else the model's status sentence.
  */
 export function launchReadout(facts: LaunchReadoutFacts, vocab: Vocabulary): { readonly text: string; readonly warn: boolean } {
   const { verb, edits, reviewed } = facts;
@@ -937,9 +918,9 @@ export function launchReadout(facts: LaunchReadoutFacts, vocab: Vocabulary): { r
   }
   if (reviewed) {
     const pool = reviewed.pool.map(({ family, count }) => `${vocab.family(family)} ${count}`).join(" · ");
-    parts.push(`reviewed on ${reviewed.machine}${pool ? `: ${pool}` : ""}`);
+    parts.push(`runs on ${reviewed.machine}${pool ? `: ${pool}` : ""}`);
     if (facts.dials) parts.push(facts.dials === "run" ? "live dials in Sessions" : noDials(facts.dials, reviewed.machine));
-  } else if (!facts.grounded && (verb.label === "Review" || verb.label === "Save & review")) parts.push("the review shows the pool before anything runs");
+  }
   return { text: parts.length ? parts.join(" · ") : facts.launchStatus, warn: false };
 }
 
