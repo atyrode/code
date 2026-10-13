@@ -222,7 +222,7 @@ const TAB_KEYS = ["Escape", "a", "e", "p", "s"] as const;
 /** Every key the panel answers, grouped by the view it acts in (panel-keys.ts); the key line names only the most used. */
 const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (readonly [key: string, does: string])[] }[] = [
   { title: "Generator", keys: [["↑ ↓", "Move between the rows"], ["← →", "Change the row's value"], ["Home End", "The row's first or last value"],
-    ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: save, review or launch, checking the models first when needed"], ["Mod ⏎", "The launch, from anywhere in the view"],
+    ["Space", "Turn fallbacks on or off"], ["⏎", "The launch: save and launch, checking the models first when needed"], ["Mod ⏎", "The launch, from anywhere in the view"],
     ["d", "Defaults"], ["z", "Back to the saved profile"], ["f", "Show or hide the fallback chains, here or in Routing"], ["w", "Choose the machine"],
     ["m", "Models"], ["u", "Setup"], ["o", "Session options"]] },
   { title: "Views", keys: [["a", "Accounts, or back to the generator"], ["e", "Sessions, or back to the generator"],
@@ -294,6 +294,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const backButtons = useRef<Partial<Record<PanelSheet, HTMLButtonElement | null>>>({});
   const returnFocus = useRef<HTMLElement | null>(null);
   const stageScroll = useRef(0);
+  // Where the question a press waits on mounts (decision-dialog.tsx): beside the stage and the sheets, so it shows over either.
+  const [decisionHost, setDecisionHost] = useState<HTMLDivElement | null>(null);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
   // The roster is polled; what reads it is recomputed only when it really changes.
@@ -413,16 +415,16 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const inputAt = useRef(0);
   /**
    * Whether the person is in the middle of something a read on its own must not interrupt: a step
-   * that runs or a charge that waits, a sheet, the shortcuts or a popup (the More menu, the machine
-   * list) open, a row being scrubbed, a text field in use, an account change saving, a profile edit or
-   * a saved pool draft left unsaved, or a press a moment ago. Asked when a read comes due, so it reads
-   * the latest render and the DOM.
+   * that runs or a charge that waits, a sheet, the shortcuts, a question a press waits on or a popup
+   * (the More menu, the machine list) open, a row being scrubbed, a text field in use, an account
+   * change saving, a profile edit or a saved pool draft left unsaved, or a press a moment ago. Asked
+   * when a read comes due, so it reads the latest render and the DOM.
    */
   const held = () => {
     const node = app.current, focused = node?.ownerDocument.activeElement ?? null;
     return readHeld({
       step: !teamGate.open,
-      open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null,
+      open: sheet !== null || shortcuts.current?.open === true || node?.querySelector("[data-popover]") != null || decisionHost?.querySelector("dialog[open]") != null,
       editing: node?.querySelector("[data-dragging]") != null || usage.accounts?.pending === true
         || (focused !== null && node?.contains(focused) === true && focused.matches("textarea, input, select, [contenteditable]")),
       unsaved: model.edited || presetDraft.current,
@@ -601,7 +603,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     <main className={`${G}stage`}>
       <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} announce={announce} onOpen={open}
-        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator}
+        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator} decisionHost={decisionHost}
         reveal={withGenerator && (hidden.routing || hidden.usage) ? <>
           {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
           {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}
@@ -649,6 +651,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   return <>
     {region}
     {tui}
+    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties} />
     {sheetHost("models", <ModelsSheet host={host} model={model} machine={machine} onBack={closeSheet} backRef={backRef("models")} onPlace={open} />)}
     {sheetHost("setup", <SetupSheet host={host} model={model} target={target} machine={machine} machines={roster} rosterError={rosterError} presence={presence}
       select={select} refreshMachines={refreshMachines} onBack={closeSheet} backRef={backRef("setup")} onPlace={open} open={sheet === "setup"} />)}

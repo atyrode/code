@@ -1,5 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { MachineSummary } from "@manifold/protocol";
+import { useNotice } from "@manifold/plugin/hooks";
 import type { OmpPresence } from "../machine-web.ts";
 import { prefersReducedMotion } from "@manifold/ui";
 import type { CompiledCatalog } from "../../domain/catalog.ts";
@@ -12,7 +14,9 @@ import { displayAliases } from "./aliases.ts";
 import type { ListFailure } from "./board-model.ts";
 import { rescue } from "./consequences.ts";
 import { previewSelection } from "./dial-space.ts";
-import { listServes } from "./launch-step.ts";
+import { DecisionDialog } from "./decision-dialog.tsx";
+import { chargeDecision, differsDecision, narrowedDecision, refusalDecision, type Decision, type DecisionChoice } from "./decision-model.ts";
+import { listServes, type GateRefusalCode } from "./launch-step.ts";
 import type { VerificationFailure } from "./model-verification.ts";
 import { DialRow, Glyph, toneColor } from "./dial-row.tsx";
 import { MachinePicker, type MachinePickerHandle } from "./machine-picker.tsx";
@@ -24,13 +28,15 @@ import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord 
 import {
   changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, reviewDifferences,
   machineSlot, sameTeam, standstill, statementSlots, teamEdits, verbView, WORD_NAMES,
-  type EstimateReadout, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
+  type EstimateReadout, type SlotOption, type StatementContext, type StatusAction, type StatusFacts, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
 const HOUR = 3_600_000;
+/** The one notice slot a press's outcome takes in Manifold's notice stack: each outcome replaces the last where it stands. */
+const PRESS_NOTICE = "atyrode.code.press";
 /** How long the readout keeps what a key or a press did before it gives way to what is pointed. */
 const KEY_SAID_MS = 2600;
 /** How long the readout keeps a scrub's consequence after the pointer lets go. */
@@ -112,6 +118,8 @@ export type GeneratorPaneProps = {
   /** Hears the profile switches kept outside the rows (the session options sheet draws them) whenever they change. */
   readonly onExtras: (extras: readonly SlotOption[]) => void;
   readonly controls: RefObject<GeneratorControls | null>;
+  /** Where the dialog a press waits on mounts: outside the stage and the sheets, so it shows whichever of them is shown. */
+  readonly decisionHost: HTMLElement | null;
 };
 
 /** What the readout says: a value in bold, then what it means or does, warm when it refuses or strains. */
@@ -134,7 +142,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly cat
  * is pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls, decisionHost } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -147,6 +155,9 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   // A Launch press whose check narrowed the profile to what answered stopped before launching: the saved profile it stopped
   // on (`profileKey`) and the settings the check moved.
   const [narrowed, setNarrowed] = useState<{ readonly on: string; readonly differs: readonly string[] } | null>(null);
+  // A refused Launch press asks its question until it is answered or the refusal changes: the refusal it was pressed on.
+  const [refused, setRefused] = useState<GateRefusalCode | null>(null);
+  const { notify } = useNotice();
   // A Launch press that checks the models first: the profile it was pressed on, and the last check failure and message before it.
   const chain = useRef<{ readonly wanted: Selection | null; readonly failure: VerificationFailure | null; readonly message: unknown } | null>(null);
   const keyTimer = useRef(0), scrubTimer = useRef(0);
@@ -211,20 +222,31 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const profileKey = JSON.stringify([model.record?.revision ?? null, model.record?.selection ?? null, model.localDraft !== null, model.machineId]);
   const shownNarrowed = narrowed !== null && narrowed.on === profileKey ? narrowed.differs : null;
   useEffect(() => { if (narrowed !== null && narrowed.on !== profileKey) setNarrowed(null); });
+  // A refused press's question goes with its refusal: a refusal that lifted or changed is not asked again without a press.
+  const stillRefused = refused !== null && verb.state === "refused" && verb.refusal?.code === refused;
+  useEffect(() => { if (refused !== null && !stillRefused) setRefused(null); });
   // What a held review shows unlike what the panel showed, in the statement's words, while it stands.
   const differs = useMemo(() => model.held && catalog
     ? reviewDifferences(catalog, model.held.projected, model.held.providers, model.held.review.composition, vocab) : null, [model.held, catalog, vocab]);
-  const line = launchLine({
-    verb, phase: verification.phase, mode: verification.mode, progress, charge, keepsChecks: verification.keepsChecks !== false, inFlight: model.inFlight,
+  const status: StatusFacts = {
+    verb, phase: verification.phase, mode: verification.mode, progress, charge, inFlight: model.inFlight,
     busy: model.busy, chaining: model.chaining, launching,
     machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, machineChosen: model.machineId !== "",
     rosterUnread: rosterError, otherMachine: other && { id: other.id, name: other.name },
     message: model.message ?? stoppedVerifying, outcome: model.outcome, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
-    differs, narrowed: shownNarrowed,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, listFailure,
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
-  }, vocab);
+  };
+  const line = launchLine(status, vocab);
+  // The one question a press waits on, in precedence: a check's charge (from the launch or Models), a review that differs, a
+  // check that changed the profile, then a refused press. A check the panel runs on its own never asks.
+  const decision: Decision | null = charge && verification.mode !== null && verification.mode !== "background"
+    ? chargeDecision(charge, verification.mode, verification.keepsChecks !== false, vocab)
+    : differs && verb.state === "ready" ? differsDecision(differs)
+    : shownNarrowed && verb.state === "ready" ? narrowedDecision(shownNarrowed)
+    : stillRefused && verb.refusal ? refusalDecision(verb.refusal, status, vocab)
+    : null;
   const reviewed = model.launchReview && catalog ? {
     machine: machine?.name ?? model.launchReview.destination.machineId,
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
@@ -392,11 +414,15 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (verb.checks) { chain.current = { wanted: selection, failure: verification.failure, message: model.message }; setLaunching(true); }
     model.actions.next();
   }
-  /** The press: a refused one shakes and says why; one that runs plays its charge and check, and the team lights up. */
+  /**
+   * The press: a refused one asks its question (the reason, why, and its fixes); one pressed while a step runs shakes and says
+   * why; one that runs plays its charge and check, and the team lights up.
+   */
   function fire() {
     const button = launchButton.current;
     if (verb.opens) { onOpen(verb.opens); return; }
     const still = prefersReducedMotion();
+    if (verb.state === "refused" && verb.refusal) { setRefused(verb.refusal.code); return; }
     if (verb.state !== "ready") {
       if (!still) button?.animate([{ transform: "none" }, { transform: "translateX(-2px)" }, { transform: "translateX(2px)" }, { transform: "none" }], { duration: 260 });
       say({ value: verb.label.toLowerCase(), text: launchSays.text, warn: true, color: null, staged });
@@ -420,7 +446,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     window.setTimeout(() => { delete button.dataset.pressing; fire(); }, 160);
   }
   // A Launch that checks first goes on to the launch once its check is done, unless the check narrowed the profile to what
-  // answered, which is said for the person to choose. A check that stopped, or a failed or unread workspace profile, ends the
+  // answered, which is asked for the person to choose. A check that stopped, or a failed or unread workspace profile, ends the
   // press and never retries it. `next` asks the gate again, and a launch the gate refuses then is said by the verb.
   useLayoutEffect(() => {
     const pressed = chain.current;
@@ -434,14 +460,24 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (model.step.step !== "launch") return;
     const moved = pressed.wanted && model.record?.selection ? teamEdits(pressed.wanted, model.record.selection, familyWord) : [];
     if (moved.length === 0) { model.actions.next(); return; }
-    const settings = moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`);
-    setNarrowed({ on: profileKey, differs: settings });
-    announce(`The model check changed the profile: ${settings.join(", ")}. Launch to go on with it, or change a setting first.`);
+    setNarrowed({ on: profileKey, differs: moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`) });
   });
-  // A press that stopped on a review unlike what the panel showed says what differs, once.
-  useEffect(() => {
-    if (differs) announce(`What will run differs: ${differs.join("; ")}. Launch again to run it, or change a setting first.`);
-  }, [differs]);
+  /**
+   * An answer to the question a press waits on. Every way out of a check's charge but Approve cancels the check first, so
+   * nothing is spent; Approve spends only the charge the dialog showed (`confirmsCharge`). Not now drops a held review, so
+   * the next press reviews again, and a narrowed stop or a refused press's question simply ends.
+   */
+  function decide(choice: DecisionChoice, detail: number) {
+    const does = choice.does;
+    if (decision?.kind === "charge") {
+      if (does.kind === "approve") { if (charge) model.actions.confirmCharge({ detail, repeat: false }, charge); return; }
+      verification.cancel();
+    } else if (decision?.kind === "differs" && does.kind === "dismiss") model.actions.dropHeld();
+    else if (decision?.kind === "narrowed") setNarrowed(null);
+    else if (decision?.kind === "refused") setRefused(null);
+    if (does.kind === "launch") fire();
+    else if (does.kind === "fix") runFix(does.action);
+  }
 
   // What the panel's keys ask of the pane, current on every render.
   const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall, machines: () => picker.current?.open(),
@@ -488,18 +524,20 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     return () => { live = false; observer.disconnect(); };
   }, [rows !== null]);
 
-  // ------------------------------------------------------------ announcements: the charge, outcomes and failures, once each
-  const seen = useRef({ outcome: model.outcome, message: model.message, charge, failure: verification.failure });
+  // ------------------------------------------------------------ notices: how a press ended, once each
+  // Said in Manifold's one notice stack as well as beside the launch, so it is seen wherever the person is looking; the stack
+  // announces it too. A cancelled check is the person's own doing and a check the panel ran on its own held up nothing, so
+  // neither is said there.
+  const seen = useRef({ outcome: model.outcome, message: model.message, failure: verification.failure });
   useEffect(() => {
     const last = seen.current;
-    if (model.outcome && model.outcome !== last.outcome) announce(`${model.outcome.kind === "launched" ? "Launched" : "Resumed"} on ${model.outcome.machine}`);
-    else if (model.message?.failed && model.message !== last.message) announce(model.message.text);
-    else if (stoppedVerifying && verification.failure !== last.failure) announce(stoppedVerifying.text);
-    if (charge && charge !== last.charge) {
-      announce(charge.requests > 0 ? `Checking models spends ${charge.requests} tiny requests. Approve is the next control.` : "Nothing to check through these accounts.");
-    }
-    seen.current = { outcome: model.outcome, message: model.message, charge, failure: verification.failure };
-  }, [model.outcome, model.message, charge, verification.failure]);
+    seen.current = { outcome: model.outcome, message: model.message, failure: verification.failure };
+    const outcome = model.outcome && model.outcome !== last.outcome ? model.outcome : null;
+    const notice = outcome ? outcome.kind === "launched" ? `Launched on ${outcome.machine}. Type your task in its terminal.` : `Resumed on ${outcome.machine}.`
+      : model.message && model.message !== last.message ? model.message.text
+      : stoppedVerifying?.failed && verification.failure !== last.failure ? stoppedVerifying.text : null;
+    if (notice) notify(notice, { key: PRESS_NOTICE });
+  }, [model.outcome, model.message, verification.failure]);
 
   // ------------------------------------------------------------ render
   const lineId = `${id}-line`;
@@ -553,12 +591,12 @@ export function GeneratorPane(props: GeneratorPaneProps) {
           </span>
           <span id={lineId} className={`${G}launch-line`} onFocus={event => { lineFocus.current = event.target; }}
             onBlur={event => { if (event.relatedTarget) lineFocus.current = null; }}>
-            {line ? <LaunchLine line={line} canConfirm={verification.canConfirm} onConfirm={detail => charge && model.actions.confirmCharge({ detail, repeat: false }, charge)}
-              onCancel={verification.cancel} onFix={runFix} /> : null}
+            {line ? <LaunchLine line={line} onCancel={verification.cancel} onFix={runFix} /> : null}
           </span>
         </span>
       </div>
     </div>
+    {decisionHost && createPortal(<DecisionDialog decision={decision} onChoose={decide} />, decisionHost)}
   </section>;
 }
 
@@ -588,27 +626,20 @@ function Meter({ name, glyph, readout, onPoint }: { name: string; glyph: string;
 }
 
 /**
- * The line beside the launch and its machine: Approve first when it carries a check's charge, then
- * its facts, then its fixes and cancel as cues; a fix that opens a place answers to that place's key
- * too. Its asides are the readout's, said while the launch is pointed. Approve is the next Tab stop
- * after the launch: while a charge waits the machine cannot change, and its word leaves the Tab order.
+ * The line beside the launch and its machine: its facts, then its fixes and a running check's cancel
+ * as cues; a fix that opens a place answers to that place's key too. Its asides are the readout's,
+ * said while the launch is pointed. What a press waits on the person for is asked in its dialog.
  */
-function LaunchLine({ line, canConfirm, onConfirm, onCancel, onFix }: {
-  line: StatusLine; canConfirm: boolean; onConfirm: (detail: number) => void; onCancel: () => void; onFix: (action: Extract<StatusAction, { kind: "fix" }>) => void;
+function LaunchLine({ line, onCancel, onFix }: {
+  line: StatusLine; onCancel: () => void; onFix: (action: Extract<StatusAction, { kind: "fix" }>) => void;
 }) {
   const parts = line.parts.filter(entry => entry.tone !== "meta");
-  const confirm = line.actions.find(action => action.kind === "confirm");
   return <>
-    {confirm && <button type="button" className={`${G}confirm`}
-      aria-label={`Approve: ${confirm.requests} ${confirm.requests === 1 ? "request" : "requests"}${confirm.standing ? ", and later checks within it" : ""}`}
-      aria-disabled={!canConfirm || undefined} onClick={event => onConfirm(event.detail)}
-      onKeyDown={event => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); }}>approve</button>}
     {parts.length > 0 && <span className={`${G}launch-facts`}>
       {parts.map((entry, index) => <span key={index} className={`${G}launch-part`} data-tone={entry.tone}>{entry.text}</span>)}
     </span>}
     {line.actions.map(action => {
       if (action.kind === "cancel") return <Button key="cancel" className={`${G}fix`} onClick={onCancel}>Cancel</Button>;
-      if (action.kind !== "fix") return null;
       const key = action.fix.kind === "open" ? FIX_KEYS[action.fix.place] : action.fix.kind === "refresh" ? FIX_KEYS.refresh : undefined;
       return <Button key={action.key} className={`${G}fix`} data-fix={action.key} aria-keyshortcuts={key} onClick={() => onFix(action)}>{action.label}</Button>;
     })}

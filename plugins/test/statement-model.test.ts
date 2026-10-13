@@ -218,18 +218,6 @@ describe("a Launch press stops on a review unlike what the panel showed", () => 
     expect(reviewDifferences(catalog, shown, ["openai-codex", "anthropic", "deepseek"], reviewed, vocab)).toEqual(["no deepseek account in the pool"]);
     expect(reviewDifferences(catalog, shown, null, reviewed, vocab)).toEqual(["the accounts were not known before"]);
   });
-
-  test("the line says what will run differs and both ways on, never as a failure", () => {
-    const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-      draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false });
-    const line = launchLine({ verb: ready, phase: null, mode: null, progress: null, charge: null, keepsChecks: true, inFlight: null, busy: false, chaining: false,
-      launching: false, machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null,
-      outcome: null, stop: null, fix: null, differs: ["Claude accounts join the pool"], narrowed: null, laneFix: null, nobodyServes: false, listFailure: "none",
-      ompMissing: false, accountsProblem: null, configurationFailed: false }, vocab)!;
-    expect(line.parts).toEqual([{ text: "What will run differs", tone: "warn" }, { text: "Claude accounts join the pool", tone: "plain" },
-      { text: "launch again to run it, or change a setting first", tone: "meta" }]);
-    expect(line.actions).toEqual([]);
-  });
 });
 
 describe("the fix for roles with no route", () => {
@@ -251,13 +239,12 @@ describe("the fix for roles with no route", () => {
 });
 
 describe("the launch line, in precedence", () => {
-  const charge = { requests: 19, providers: [{ provider: "openai-codex", requests: 12 }, { provider: "anthropic", requests: 7 }] };
   const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
     draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false });
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
-    verb: ready, phase: null, mode: null, progress: null, charge: null, keepsChecks: true, inFlight: null, busy: false, chaining: false, launching: false,
+    verb: ready, phase: null, mode: null, progress: null, charge: null, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
-    stop: null, fix: null, differs: null, narrowed: null, laneFix: null, nobodyServes: false, listFailure: "none", ompMissing: false, accountsProblem: null,
+    stop: null, fix: null, laneFix: null, nobodyServes: false, listFailure: "none", ompMissing: false, accountsProblem: null,
     configurationFailed: false, ...changes,
   });
   const said = (changes: Partial<StatusFacts> = {}): StatusLine => launchLine(facts(changes), vocab)!;
@@ -274,18 +261,10 @@ describe("the launch line, in precedence", () => {
     expect(beside?.parts.every(part => part.tone === "meta")).toBe(true);
   });
 
-  test("a waiting charge outranks the last outcome, and offers Approve only for a charge of at least one request", () => {
-    const line = said({ phase: "charge", mode: "launch", charge, outcome: { kind: "launched", machine: "Studio", dials: "run" } });
-    expect(line.parts.map(part => part.text).join(" ")).toContain("19");
-    expect(line.actions).toContainEqual({ kind: "confirm", requests: 19, standing: true });
-    expect(fixes(said({ phase: "charge", mode: "launch", charge: { requests: 0, providers: [] } }))).toEqual(["cancel"]);
-  });
-
-  test("approving promises later checks nothing to a sign-in that keeps no checks", () => {
-    const keeps = said({ phase: "charge", mode: "launch", charge }), keepsNone = said({ phase: "charge", mode: "launch", charge, keepsChecks: false });
-    expect(keeps.parts.map(part => part.text)).toContain("asked once: later checks run on their own");
-    expect(keepsNone.parts.map(part => part.text).join(" ")).not.toContain("later checks");
-    expect(keepsNone.actions).toContainEqual({ kind: "confirm", requests: 19, standing: false });
+  test("a waiting charge outranks the last outcome, and the line only says it waits: its dialog asks for the approval", () => {
+    const line = said({ phase: "charge", mode: "launch", charge: { requests: 19 }, outcome: { kind: "launched", machine: "Studio", dials: "run" } });
+    expect(line.parts.map(part => part.tone)).toEqual(["busy"]);
+    expect(line.actions).toEqual([]);
   });
 
   test("a refusal outranks the outcome of the last step, and read-only is said in neutral grey", () => {

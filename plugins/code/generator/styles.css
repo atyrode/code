@@ -102,7 +102,7 @@
 /* A pane's head: its title in the accent, then its controls. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 24px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__title { margin: 0 6px 0 0; color: var(--tui-acc); font-size: 15px; font-weight: 650; line-height: 22px; letter-spacing: .005em; transition: color 320ms var(--tui-ease); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__confirm) {
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__launch {
   display: inline-flex;
   align-items: baseline;
   min-width: 0;
@@ -118,8 +118,7 @@
   cursor: pointer;
   overflow-wrap: normal;
 }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__confirm):hover { border: 0; background: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__confirm:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__launch:hover { border: 0; background: none; }
 
 /* ---------------------------------------------------------------- the bar: the views as tabs, then More, the one menu of the panel's sheets */
 /*
@@ -409,8 +408,6 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part:is([data-tone="plain"], [data-tone="neutral"], [data-tone="busy"], [data-tone="meta"]) { color: var(--tui-dim); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part[data-tone="strong"] { color: var(--tui-fg); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__launch-part[data-tone="done"] { color: var(--tui-acc); }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm { color: var(--tui-acc); font-size: 14px; font-weight: 650; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__confirm[aria-disabled="true"] { color: var(--tui-quiet); cursor: default; }
 
 /* ---------------------------------------------------------------- routing: role, model:thinking in its provider's hue, the chain behind it */
 /*
@@ -508,7 +505,7 @@
 /* Coarse pointers: every target at least 44px tall, the launch, each row's words and the machine's included; set at rest, so nothing moves on hover or focus. */
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__keys { display: none; }
-  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__confirm, .plugin-atyrode_code_generator__machine-word, .plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__tab) { align-items: center; min-height: 44px; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui :is(.plugin-atyrode_code_generator__machine-word, .plugin-atyrode_code_generator__launch, .plugin-atyrode_code_generator__tab) { align-items: center; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__word { box-sizing: border-box; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code_generator__only { height: auto; min-height: 44px; }
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__machine-option { min-height: 44px; }
@@ -610,7 +607,7 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__sheet[data-mode="narrow"] { --pad: 18px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__sheet[data-mode="tiny"] { --pad: 10px; }
 /* Controls drawn as words: none of the panel's button chrome, and a focus ring in the accent that takes no room. */
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__sheet-back, .plugin-atyrode_code_generator__sheet-cue, .plugin-atyrode_code_generator__go, .plugin-atyrode_code_generator__go-fix, .plugin-atyrode_code_generator__sheet-word, .plugin-atyrode_code_generator__setup-link) {
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__sheet-back, .plugin-atyrode_code_generator__sheet-cue, .plugin-atyrode_code_generator__go, .plugin-atyrode_code_generator__go-fix, .plugin-atyrode_code_generator__sheet-word, .plugin-atyrode_code_generator__setup-link, .plugin-atyrode_code_generator__decision-go) {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
@@ -726,6 +723,37 @@
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__sheet-dialog textarea, .plugin-atyrode_code_generator__sheet-field input):hover { border-color: var(--tui-faint); }
 .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__sheet-dialog textarea, .plugin-atyrode_code_generator__sheet-field input):focus-visible { outline: none; border-color: var(--tui-acc); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__sheet-field { display: grid; gap: 2px; min-width: 0; color: var(--tui-dim); font-size: 13px; }
+/*
+ * The question a press waits on (decision-dialog.tsx), in the sheet dialog's grammar: its title in
+ * the accent, why in grey, what it is about in the foreground, then its choices as words, the next
+ * action first and in the accent. The box draws no padding of its own, so a press inside it is never
+ * taken for one on the backdrop. Its host lays nothing out: the dialog stands in the top layer.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-host { display: contents; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision { width: min(420px, calc(100vw - 24px)); padding: 0; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 18px 20px 16px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision h2 { margin-bottom: 8px; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision h2:focus { outline: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision p { margin: 0 0 8px; color: var(--tui-mid); font-size: 14px; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-items { margin: 4px 0 0; padding: 0; color: var(--tui-fg); list-style: none; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-choices { margin-top: 16px; }
+/* A choice wraps rather than run past the box where the viewport leaves a word no room. */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-choices button { white-space: normal; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-go { color: var(--tui-acc); font-size: 15px; font-weight: 650; line-height: 22px; transition: color 140ms; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-go:hover { color: color-mix(in srgb, var(--tui-acc) 78%, #fff); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-go:focus-visible { outline: 1px solid var(--tui-acc); outline-offset: 2px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision[open] { animation: plugin-atyrode_code_generator__decision-in 140ms var(--tui-ease); }
+@keyframes plugin-atyrode_code_generator__decision-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision[open] { animation: none; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-go { transition: none; }
+}
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-choices button { min-height: 44px; }
+}
+@media (max-width: 300px) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 14px 12px 12px; }
+}
 
 /* Models: the list as the ladders it is, wide as a matrix (tiers down, providers across), else one ladder per provider. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-matrix { display: grid; grid-template-columns: max-content repeat(var(--cols), minmax(0, 1fr)); column-gap: 22px; min-width: 0; }

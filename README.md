@@ -26,8 +26,7 @@ Code owns custom launch and continuation choices; OMP supplies the runtime
 primitives that execute them. Moving the launcher into Manifold does not move
 its product policy into OMP. The retained continuation scope is native fleet
 metadata, exact terminal reopening, native resume and explicit next-resume
-choices. The skill, automation and continuation additions are source-only,
-not included in a published release; see [availability boundaries](docs/status.md#explicit-availability-boundaries).
+choices.
 Portable archives, general live settings-origin inspection, live per-account
 quota preservation and Code-owned upstream fallback repair are not planned.
 
@@ -42,10 +41,13 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   including to quota where it strands a role or leads on a strained pool. A lane for
   a signed-in family the model list lacks is struck, and pressing it checks the models,
   which finds them. Cost and speed meters sit above a launch row that names the next step
-  (Launch, Save & launch, Review) beside a dropdown of the machines it can run
+  (Launch, Save & launch) beside a dropdown of the machines it can run
   on; a machine without OMP is refused like an offline one. When the step is refused it
   stays focusable and the launch line names what failed (the accounts, the workspace
-  profile, OMP missing from the machine) with a fix. **Routing** beside it lists every
+  profile, OMP missing from the machine) with a fix; pressing it anyway opens a dialog
+  with the reason, why it applies and the same fix. Whatever a press waits on the person
+  for (a check's charge, a review that differs) is asked in such a dialog, and how a
+  press ended also reaches Manifold's notice stack. **Routing** beside it lists every
   role's `model:thinking`, with a fallback-chains checkbox, and **usage** under both;
   each can be hidden. Below 760 px routing and usage stand under the generator when the
   panel is tall enough for the generator and the whole routing at once, and are tabs of
@@ -65,7 +67,7 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 - **Model checks:** a launch needs a model list checked against the account pool,
   and Launch runs that check itself when the list in use cannot serve it (a first
   launch, a model OMP no longer lists, or a lead the accounts no longer serve), then
-  goes on to the launch. The first check asks the person to approve its
+  goes on to the launch. The first check asks the person, in a dialog, to approve its
   cost, once: later checks within twice that charge run without asking, and Setup can
   withdraw the approval. A finished check is kept as that person's check of the exact
   account pool, so another workspace whose choices select the same pool adopts it on its
@@ -74,7 +76,7 @@ quota preservation and Code-owned upstream fallback repair are not planned.
   list that passed meanwhile.
 - **Agent launch:** the launch is one press, with no review step: the press reviews the
   session immediately before starting it, and stops only when what would run differs
-  from what the panel showed, saying what differs. Where an Agent Run can carry it,
+  from what the panel showed, asking in a dialog whether to launch it. Where an Agent Run can carry it,
   Code registers one Manifold Agent per sponsor and workspace profile with OMP's TUI
   harness, updates it when the profile changes, and launches a Run whose terminal is
   OMP's own terminal UI. **Sessions** heads each machine's group with these Runs: their
