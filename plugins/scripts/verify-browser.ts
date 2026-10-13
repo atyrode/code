@@ -22,6 +22,8 @@ import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/gener
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { keptAnswersKey } from "../code/generator/run-dials.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
+// Type-only: the dialog renders React, which this process does not load; its settle time is pinned by type below.
+import type * as DecisionDialogModule from "../code/generator/decision-dialog.tsx";
 import {
   BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, OmpHarnessProfileSchema,
   PREPARE_WORKSPACE_OPERATION_ID, ResumeSessionInputSchema, VALIDATE_WORKSPACE_OPERATION_ID, actionSchemas as ompActionSchemas,
@@ -52,7 +54,8 @@ view and the sheets: no horizontal overflow, cut text or colliding text from 170
 view and sheet, zero hover/focus layout shift, panel-local keys that never act from a sheet or an
 open popover, More as a menu button by pointer and keyboard, arrival keys, the wheel only on a focused
 or rested row, 44px targets on a coarse pointer, focus kept through the gate and reduced motion that
-animates nothing.
+animates nothing; and the modal question a press waits on (a refused press, a check's charge, a
+review that differs, a check that changed the profile), answered only by a deliberate press.
 Also: an unsaved edit kept across a reload, own account edits that never conflict with it while a
 foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
 who saves but is told why launching waits, account switches saved through the real changeAccounts
@@ -63,18 +66,18 @@ rows and judge no provider's pool, the lead row's only box, toggled by a press a
 focus kept on it, kept across a lead change and disabled under Mixed, with struck leads and boxes
 that say why, and Models' pasted imports, discards and the exact review a staged list is used by,
 through the real Code server.
-Separate synthetic RPC responses exercise the model check a first Launch runs, its charge and its
-refused spend; a checked list that outlives an OMP upgrade alone and is checked again once a
-republished list drops a routed model; a Models check run end to end on fictional probe jobs that
-reach no provider, whose derivation, staging and promotion are the real server's; a person's checks
-across workspaces (each check scenario signs in as a person of its own): the approval an approve
-press records, a check within it that asks nothing, a kept check adopted without an inventory on a
-press and on its own, and a launch that stays ready while a changed account pool is checked again
-in the background; Setup's
+Separate synthetic RPC responses exercise the model check a first Launch runs, the question its
+charge asks and its refused spend; a checked list that outlives an OMP upgrade alone and is checked
+again once a republished list drops a routed model; a Models check run end to end on fictional probe
+jobs that reach no provider, whose derivation, staging and promotion are the real server's; a
+person's checks across workspaces (each check scenario signs in as a person of its own): the
+approval an Approve records, a check within it that asks nothing, a kept check adopted without an
+inventory on a press and on its own, and a launch that stays ready while a changed account pool is
+checked again in the background; Setup's
 readiness rows, folder jobs and the owner's classifier (an owner-class identity minted for it alone);
 and a launch that reviews its session only when pressed and launches it in the same press, and
-launch/resume refusal. The preparation, configuration and execution they
-lead to are refused, never native execution or consent success.
+launch/resume refusal, each press's outcome posted to Manifold's notice stack. The preparation,
+configuration and execution they lead to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
   console.log(HELP);
@@ -300,17 +303,63 @@ const G = "plugin-atyrode_code_generator__";
 const stage = `${generator} [data-tui]`;
 const generatorTitle = element(`${generator} [data-pane="generator"] .${G}title`);
 const launchButton = element(`${generator} .${G}launch`);
-/** The approve beside the launch while a model check's charge waits on the person (generator-pane.tsx `LaunchLine`). */
-const approveButton = element(`${generator} .${G}confirm`);
+/**
+ * The launch's shake (generator-pane.tsx `fire`), which a press plays while a step runs, unless motion is reduced; a refused
+ * press asks its question instead. Read at once after the press: it lasts a quarter of a second.
+ */
+const shaking = `${launchButton}.getAnimations().some(animation => animation.effect?.getKeyframes().some(frame => String(frame.transform).includes('translateX')))`;
 const readout = element(`${generator} .${G}readout`);
-// The announcer is the panel's polite live region; other status roles (skills, notices) are not it.
+// The announcer is the panel's polite live region; other status roles (skills, notices) are not it. It says how a press
+// ended, as Manifold's notice stack does (`noticeRows`), but never a charge or a refused press: their question says those.
 const liveRegion = element(`${generator} div.plugin-atyrode_code__sr[role="status"][aria-live="polite"]`);
 const lineText = `(${element(`${generator} .${G}launch-line`)}?.textContent ?? '')`;
 /** A failure or refusal said beside the launch, in the attention colour. */
 const failureLine = `!!document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="attention"]`)})`;
 /** The facts beside the launch, part by part, each with its tone; the line's asides are said in the readout instead. */
 const launchParts = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}launch-part`)})].map(el => [el.textContent, el.dataset.tone ?? null])`;
-const cancelCharge = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}fix`)})].find(el => el.textContent.trim() === 'Cancel')`;
+/**
+ * The question a press waits on the person for (decision-dialog.tsx): one native dialog, mounted beside the stage and the
+ * sheets and opened modal over the whole page, whose `data-decision` names what it asks: a check's charge, a review that
+ * differs from what the panel showed, a check that changed the profile, or a refused press.
+ */
+const decision = element(`${generator} dialog.${G}decision`);
+type Question = "charge" | "differs" | "narrowed" | "refused";
+/** The open question asks `kind`, modal over the page. */
+function asks(kind: Question): string {
+  return `(!!${decision}?.open && ${decision}.matches(':modal') && ${decision}.dataset.decision === '${kind}')`;
+}
+/** No question is open. */
+const unasked = `!${decision}?.open`;
+/** A choice of the open question by its `data-choice`: approve, cancel, launch, dismiss, or the key of a fix the launch line offers. */
+function choice(key: string): string {
+  return element(`${generator} dialog.${G}decision[open] button[data-choice="${key}"]`);
+}
+/** What the open question asks, as a person reads it: its title, its sentences, what it is about, and its choices in order, each by its `data-choice` and words. */
+type Asked = { title: string; text: string[]; items: string[]; choices: [string, string][] };
+const asked = `(() => {
+  const dialog = ${decision};
+  return { title: dialog.querySelector('h2')?.textContent ?? '', text: [...dialog.querySelectorAll('p')].map(el => el.textContent),
+    items: [...dialog.querySelectorAll('.${G}decision-items li')].map(el => el.textContent),
+    choices: [...dialog.querySelectorAll('button[data-choice]')].map(el => [el.dataset.choice, el.textContent]) };
+})()`;
+/** The fixes beside the launch, each by its key and words: what a refused press's question offers, before Close. */
+const lineFixes = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line [data-fix]`)})].map(el => [el.dataset.fix, el.textContent.trim()])`;
+/**
+ * How long the question ignores any press but Esc once it opens or its words change (one that lands this soon was aimed at
+ * what stood there before), and how long a choice must have held focus before a key answers with it (Tab then ↵ in one
+ * burst is typing meant for somewhere else). Typed as decision-dialog.tsx's own `DECISION_SETTLE_MS` and
+ * `DECISION_FOCUS_MS`, so this stops compiling if either changes.
+ */
+const DECISION_SETTLE_MS: typeof DecisionDialogModule.DECISION_SETTLE_MS = 400;
+const DECISION_FOCUS_MS: typeof DecisionDialogModule.DECISION_FOCUS_MS = 300;
+/** A wait after which ↵ on the choice just focused is a deliberate press: the question has settled and the choice has held focus. */
+const DELIBERATE_MS = Math.max(DECISION_SETTLE_MS, DECISION_FOCUS_MS);
+/** Manifold's notice stack (notice.tsx): its rows on show, newest first. A press's outcome takes one row, each new one in the last one's place. */
+const noticeRows = `[...document.querySelectorAll('.notice-layer .notice:not(.notice--leaving)')]`;
+/** A row of the notice stack, a status, says `words` (an expression). */
+function noticeSays(words: string): string {
+  return `${noticeRows}.some(row => row.getAttribute('role') === 'status' && row.querySelector('.notice-message')?.textContent === ${words})`;
+}
 const shortcuts = element(`${generator} dialog.${G}shortcuts`);
 const machinePicker = element(`${generator} [data-machine-picker]`);
 const machineList = element(`${generator} [role="listbox"][aria-label="machines"]`);
@@ -455,6 +504,63 @@ async function chooseMachine(browser: BrowserInstance, machineId: string, name: 
   await until(browser, "the machine list opens", `${machineList} !== null`);
   await click(browser, element(`${generator} [data-machine="${machineId}"]`));
   await until(browser, `the launch runs on ${name}`, `${machineList} === null && ${machinePicker}?.textContent === ${JSON.stringify(name)}`);
+}
+/**
+ * The question `kind` opens, modal over the page, with focus on its title, never on a choice: it comes back while the person
+ * may be typing elsewhere, and no key meant for something else may answer it. Returns what it asks.
+ */
+async function questionOpens(browser: BrowserInstance, kind: Question, description: string): Promise<Asked> {
+  await until(browser, description, asks(kind));
+  await until(browser, `the ${kind} question takes focus on its title`, `document.activeElement === ${decision}.querySelector('h2')`);
+  return browser.evaluate<Asked>(asked);
+}
+/**
+ * ↵ on the open question's title answers nothing, and Tab from there reaches its first choice, the next action, drawn as the
+ * one to take where the question offers more than one way on. Leaves keyboard focus on that choice.
+ */
+async function firstChoiceByTab(browser: BrowserInstance, kind: Question): Promise<void> {
+  const question = await browser.evaluate<Asked>(asked);
+  await key(browser, "Enter", 13);
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`[${asks(kind)}, document.activeElement === ${decision}.querySelector('h2'), ${asked}]`), [true, true, question],
+    `↵ on the ${kind} question's title answers nothing`);
+  await key(browser, "Tab", 9);
+  await until(browser, `Tab from the ${kind} question's title reaches its first choice`,
+    `document.activeElement === ${decision}.querySelector('button[data-choice]') && document.activeElement.matches(':focus-visible')`);
+  assert.equal(await browser.evaluate(`document.activeElement.classList.contains('${G}decision-go')`), question.choices.length > 1,
+    `The ${kind} question draws its first choice as the next action exactly when it offers more than one`);
+}
+/** Answers the open question by a pointer press on the choice `which`, once the question has settled (`DECISION_SETTLE_MS`). */
+async function answer(browser: BrowserInstance, which: string): Promise<void> {
+  await Bun.sleep(DECISION_SETTLE_MS);
+  await click(browser, choice(which));
+}
+/** A point on the open question's backdrop, the page's top-left corner: a press there is a press on the dialog itself. */
+const backdrop: Point = { x: 4, y: 4 };
+/**
+ * From now until the page next loads, every row Manifold's notice stack shows (each by its words) and everything the
+ * panel's live region says, each once as it appears. Rows are watched rather than sampled: a notice fades after five
+ * seconds, and a press's next one takes its place. The returned read gives both so far.
+ */
+async function watchSaid(browser: BrowserInstance): Promise<() => Promise<{ notices: string[]; announced: string[] }>> {
+  await browser.evaluate(`(() => {
+    globalThis.__codeSaid?.watch.disconnect();
+    const rows = () => document.querySelectorAll('.notice-layer .notice');
+    const said = { notices: [], announced: [], seen: new WeakSet(rows()), last: ${liveRegion}?.textContent ?? '' };
+    said.watch = new MutationObserver(() => {
+      for (const row of rows()) {
+        if (said.seen.has(row)) continue;
+        said.seen.add(row);
+        said.notices.push(row.querySelector('.notice-message')?.textContent ?? '');
+      }
+      const text = ${liveRegion}?.textContent ?? '';
+      if (text !== said.last) { said.last = text; if (text) said.announced.push(text); }
+    });
+    said.watch.observe(document.body, { subtree: true, childList: true, characterData: true });
+    globalThis.__codeSaid = said;
+    return true;
+  })()`);
+  return () => browser.evaluate("({ notices: globalThis.__codeSaid.notices, announced: globalThis.__codeSaid.announced })");
 }
 
 /** The sheets that open over the stage: the key the main view opens each with, More's item that does, and the sheet's title. */
@@ -1019,24 +1125,27 @@ async function showView(browser: BrowserInstance, view: View): Promise<void> {
 }
 
 /**
- * The shown view's text and controls, as painted: the stage's (`[data-tui]`) or an open sheet's. Glyphs paint inside the
- * middle of a text box: a font's ascent and descent may reach into a neighbouring line without any ink touching, so each
- * box is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips it sideways is
- * cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by a clip is still overflow.
- * Screen-reader text is clipped to a pixel on purpose and is left out. A control (`controls`) narrower than 24px can no
- * longer be read or pressed.
+ * The shown view's text and controls, as painted: the stage's (`[data-tui]`), an open sheet's or the open question's. Glyphs
+ * paint inside the middle of a text box: a font's ascent and descent may reach into a neighbouring line without any ink
+ * touching, so each box is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips
+ * it sideways is cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by a clip is still
+ * overflow. Screen-reader text is clipped to a pixel on purpose and is left out. A control (`controls`) narrower than 24px
+ * can no longer be read or pressed. Text paints inside `bounds`: the panel, or the viewport for the question, which stands
+ * over the whole page in the top layer, where no box around it clips it.
  */
 type Paint = { overflow: number; overlaps: string[]; outside: string[]; cut: string[]; small: string[]; texts: number };
-function paintOf(view: string, controls: string): string {
+function paintOf(view: string, controls: string, bounds = "root.getBoundingClientRect()"): string {
   return `(() => {
   const root = document.querySelector('${generator}');
   const view = root.querySelector('${view}');
   const viewport = root.querySelector('.scroll-region__viewport');
-  const bounds = root.getBoundingClientRect();
+  const bounds = ${bounds};
+  // A modal view stands in the top layer: only it and what it holds clip its text.
+  const top = view.matches(':modal') ? view : root;
   const clips = new Map();
   const clipOf = element => {
     if (clips.has(element)) return clips.get(element);
-    const parent = element.parentElement && element !== root ? clipOf(element.parentElement) : { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+    const parent = element.parentElement && element !== top ? clipOf(element.parentElement) : { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
     const style = getComputedStyle(element);
     let clip = parent;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {
@@ -1058,7 +1167,7 @@ function paintOf(view: string, controls: string): string {
     range.selectNodeContents(node);
     for (const rect of range.getClientRects()) {
       if (rect.width < 1) continue;
-      for (let box = parent; box && box !== root.parentElement; box = box.parentElement) {
+      for (let box = parent; box && box !== top.parentElement; box = box.parentElement) {
         const style = getComputedStyle(box);
         if (style.overflowX === 'visible') continue;
         const edge = box.getBoundingClientRect();
@@ -1119,7 +1228,14 @@ function boxesOf(view: string, skip: string): string {
   return boxes.size;
 })()`;
 }
-const BOXES = boxesOf(stage, `element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')`);
+/** The main view's words that change by design inside fixed boxes: the readouts, the next-refresh line and screen-reader text. */
+const SAID_WORDS = `element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')`;
+const BOXES = boxesOf(stage, SAID_WORDS);
+/**
+ * The whole panel: the stage and, while one is open, the question over it, whose boxes are laid out in the top layer from
+ * the dialog's own place on the page.
+ */
+const PANEL_BOXES = boxesOf(generator, SAID_WORDS);
 const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]')`);
 const SHIFTED = `(() => {
   const at = element => { let x = 0, y = 0; for (let node = element; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return [x, y]; };
@@ -1455,10 +1571,104 @@ async function sheetStill(browser: BrowserInstance, what: string): Promise<void>
   assert.deepEqual(await browser.evaluate<string[]>(SHEET_MOTION), [], `Reduced motion: after ${what} every transition and animation in the sheet lasts 0s`);
 }
 
+// ---------------------------------------------------------------- the question a press waits on: geometry, shift, touch, motion
+
+/** The open question as painted, its text judged inside the viewport: it stands over the whole page, not the panel. */
+const QUESTION_PAINT = paintOf(`dialog.${G}decision`, "button", "({ left: 0, right: innerWidth })");
+/** The open question's entrance: its own short rise with motion allowed (styles.css `decision-in`), none under reduced motion. */
+const questionAnimation = `getComputedStyle(${decision}).animationName`;
+/**
+ * From 170 to 1440px of panel width the open question stands inside the viewport and paints whole (`QUESTION_PAINT`): no
+ * text cut, outside the viewport or over other text and no choice squeezed; nothing scrolls sideways, in the question or the
+ * panel; and the main view behind it paints whole too (`PAINT`), the launch line saying it waits among it. The question is
+ * fixed in the top layer, so it adds nothing to the page's own width, which at the narrowest viewports is Manifold's shell's.
+ * Only the viewport changes and nothing is pressed, so the question waits throughout. Every width is measured before the
+ * verdict.
+ */
+async function questionGeometry(browser: BrowserInstance, label: string): Promise<void> {
+  const problems: string[] = [];
+  try {
+    for (const width of WIDTHS) {
+      await panelWidth(browser, width);
+      await still(browser);
+      const where = `the ${label} question at ${width}px`;
+      const facts = await browser.evaluate<Paint>(QUESTION_PAINT);
+      if (facts.texts < 3) problems.push(`${where}: too little text paints (${facts.texts})`);
+      if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
+      problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the viewport`),
+        ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: choice ${entry} wide`));
+      problems.push(...(await browser.evaluate<string[]>(`(() => {
+        const box = ${decision}.getBoundingClientRect(), problems = [];
+        if (box.left < -0.5 || box.top < -0.5 || box.right > innerWidth + 0.5 || box.bottom > innerHeight + 0.5) {
+          problems.push('the question ' + [box.left, box.right, box.top, box.bottom].map(Math.round).join(',') + ' leaves the ' + innerWidth + 'x' + innerHeight + ' viewport');
+        }
+        return problems;
+      })()`)).map(entry => `${where}: ${entry}`));
+      const behind = await browser.evaluate<Paint>(PAINT);
+      const under = `the main view under ${where}`;
+      if (behind.overflow !== 0) problems.push(`${under}: ${behind.overflow}px horizontal overflow`);
+      problems.push(...behind.cut.map(entry => `${under}: ${entry}`), ...behind.outside.map(entry => `${under}: ${entry} paints outside the panel`),
+        ...behind.overlaps.map(entry => `${under}: ${entry}`), ...behind.small.map(entry => `${under}: control ${entry} wide`),
+        ...(await browser.evaluate<string[]>(PAST_ROUTING)).map(entry => `${under}: ${entry} past the routing pane`));
+    }
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+  assert.deepEqual(problems, [], `From 170 to 1440px the ${label} question stands inside the viewport and paints whole, nothing scrolls sideways, and the panel behind it paints whole`);
+}
+/**
+ * Pointing at each choice of the open question, and walking its choices by Tab from the first, move no layout box of the
+ * panel (`PANEL_BOXES`): neither the stage behind the question nor the question itself. Neither answers it.
+ */
+async function questionZeroShift(browser: BrowserInstance, label: string): Promise<void> {
+  const choices = await browser.evaluate<number>(`(globalThis.__codeTargets = [...${decision}.querySelectorAll('button[data-choice]')]).length`);
+  assert(choices > 0, `The ${label} question offers its choices`);
+  assert.equal(await browser.evaluate("document.activeElement === globalThis.__codeTargets[0]"), true, `The walk starts on the ${label} question's first choice`);
+  for (let index = 0; index < choices; index++) {
+    await pointAway(browser);
+    await still(browser);
+    await browser.evaluate(PANEL_BOXES);
+    await pointOf(browser, `globalThis.__codeTargets[${index}]`);
+    await settle(browser);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Pointing at choice ${index} of the ${label} question shifts no layout box`);
+  }
+  await pointAway(browser);
+  await still(browser);
+  await browser.evaluate(PANEL_BOXES);
+  for (let index = 1; index < choices; index++) {
+    await key(browser, "Tab", 9);
+    await settle(browser);
+    assert.equal(await browser.evaluate(`document.activeElement === globalThis.__codeTargets[${index}]`), true, `Tab walks the ${label} question's choices in order`);
+    assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], `Keyboard focus on choice ${index} of the ${label} question shifts no layout box`);
+  }
+}
+/** On a coarse pointer every choice of the open question is at least 44px both ways, at each width the main view's targets are measured at. */
+async function questionCoarseTargets(browser: BrowserInstance, label: string): Promise<void> {
+  const problems: string[] = [];
+  await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+  try {
+    assert.equal(await browser.evaluate("matchMedia('(pointer: coarse)').matches"), true);
+    for (const width of [1280, 860, 390, 240]) {
+      await panelWidth(browser, width);
+      await still(browser);
+      // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
+      problems.push(...(await browser.evaluate<string[]>(`[...${decision}.querySelectorAll('button[data-choice]')]
+        .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || rect.width < 43.5; })
+        .map(el => el.textContent + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`))
+        .map(entry => `the ${label} question at ${width}px: ${entry}`));
+    }
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+    await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+  }
+  assert.deepEqual(problems, [], `Every choice of the ${label} question is at least 44px on a coarse pointer`);
+}
+
 /**
  * The browser-provable acceptance of the main view on a bundled preview, which keeps every effect
  * local: panel-local keys, keys an open popover owns, the full key line, keyboard edits and refusals,
- * the wheel, touch and coarse targets, reduced motion, zero hover/focus shift and width geometry.
+ * the question a refused launch press asks, the wheel, touch and coarse targets, reduced motion, zero
+ * hover/focus shift and width geometry.
  * `recent` is the browser's one recent profile, which the digit 1 recalls from the sessions view, and
  * `draftKey` where this tab keeps an unsaved edit of the profile (`readProfile`).
  * Leaves the profile as it found it.
@@ -1472,20 +1682,21 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   const thinking = await browser.evaluate<string>(chosenKey("thinking")), advisor = await browser.evaluate<string>(chosenKey("advisor"));
   const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
   const routing = element(`${generator} [data-pane="routing"]`), usage = element(`${generator} [data-pane="usage"]`);
-  // The main view as it rests: the generator with routing and usage, no sheet, no shortcuts dialog and the fallback chains hidden.
-  const resting = `${shownView("main")} && !${shortcuts}?.open && ${element(stage)}.hidden === false && ${routing}.hidden === false && ${usage}.hidden === false &&
-    ${element(`${generator} [data-chains]`)}.getAttribute('aria-checked') !== 'true'`;
+  // The main view as it rests: the generator with routing and usage, no sheet, no shortcuts dialog, no question a press asks
+  // and the fallback chains hidden.
+  const resting = `${shownView("main")} && !${shortcuts}?.open && ${unasked} && ${element(stage)}.hidden === false && ${routing}.hidden === false &&
+    ${usage}.hidden === false && ${element(`${generator} [data-chains]`)}.getAttribute('aria-checked') !== 'true'`;
 
   // Keys are panel-local: the same keys pressed in another panel never reach the generator.
   await click(browser, element(".react-flow .react-flow__pane"));
   for (const [name, code] of [["?", 191], ["a", 65], ["e", 69], ["m", 77], ["w", 87], ["p", 80], ["d", 68], ["f", 70], ["ArrowDown", 40], ["Enter", 13]] as const) await key(browser, name, code);
   await Bun.sleep(300);
   assert.equal(await browser.evaluate(`${resting} && ${machineList} === null && !document.activeElement?.closest('${generator}')`), true,
-    "A key pressed outside the panel changes none of its views, panes, key line, sheets or focus");
+    "A key pressed outside the panel changes none of its views, panes, key line, sheets or focus, and asks nothing");
   assert.deepEqual(await readProfile(browser, draftKey), before, "Keys pressed outside the panel never edit its profile");
 
   // Behind a sheet the panel's keys do nothing, even with the panel root itself focused: not ↵ or Mod+↵ (the launch's
-  // step, here a refusal it would say aloud), not a view, not the key line, not defaults.
+  // step, here a refusal whose question it would ask), not a view, not the key line, not defaults.
   await openSheet(browser, "options");
   await click(browser, element(`${generator} .${G}options-lede`));
   assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on a sheet's text leaves focus on the panel root behind it");
@@ -1493,8 +1704,8 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     await key(browser, name, code, { modifiers });
   }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: !!${shortcuts}?.open, sheet: ${element(stage)}.hidden, said: ${liveRegion}.textContent })`),
-    { view: "main", shortcuts: false, sheet: true, said: quiet }, "No panel key acts behind a sheet: no view, shortcuts or step, nothing said");
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: !!${shortcuts}?.open, sheet: ${element(stage)}.hidden, asked: !${unasked}, said: ${liveRegion}.textContent })`),
+    { view: "main", shortcuts: false, sheet: true, asked: false, said: quiet }, "No panel key acts behind a sheet: no view, shortcuts or step, nothing asked or said");
   await closeSheet(browser);
   assert.deepEqual(await readProfile(browser, draftKey), before, "No panel key behind a sheet edits the profile");
 
@@ -1512,7 +1723,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.deepEqual(await readProfile(browser, draftKey), before, "With the machine list open no panel key edits the profile");
   await key(browser, "Enter", 13, { modifiers: CTRL });
   await until(browser, "↵ in the list chooses its machine and closes onto the machine's word", `${machineList} === null && document.activeElement === ${machinePicker}`);
-  assert.deepEqual(await browser.evaluate(`({ machine: ${machinePicker}.textContent, said: ${liveRegion}.textContent })`), { machine, said: quiet },
+  assert.deepEqual(await browser.evaluate(`({ machine: ${machinePicker}.textContent, asked: !${unasked}, said: ${liveRegion}.textContent })`), { machine, asked: false, said: quiet },
     "Mod+↵ in the open list takes no launch step, and choosing the current machine changes nothing");
   await key(browser, "w", 87);
   await until(browser, "w opens the list again", `${machineList} !== null && document.activeElement === ${machineList}`);
@@ -1528,6 +1739,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await focusRow(browser, "thinking");
   await key(browser, "?", 191);
   await until(browser, "? opens the shortcuts with focus in them", `!!${shortcuts}?.open && ${shortcuts}.matches(':modal') && ${shortcuts}.contains(document.activeElement)`);
+  // ↵ is the launch, one press that saves and launches, checking the models first when needed.
+  assert.equal(await browser.evaluate(`[...${shortcuts}.querySelectorAll('dt')].find(dt => dt.textContent === '⏎')?.nextElementSibling?.textContent`),
+    "The launch: save and launch, checking the models first when needed", "The shortcuts say what ↵ does: the launch");
   for (const [name, code] of [["a", 65], ["e", 69], ["d", 68], ["1", 49]] as const) await key(browser, name, code);
   for (const modifiers of [0, 0, 0, SHIFT, SHIFT]) await key(browser, "Tab", 9, { modifiers });
   await Bun.sleep(300);
@@ -1542,7 +1756,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "? opens the shortcuts again", `!!${shortcuts}?.open && ${shortcuts}.contains(document.activeElement)`);
   await key(browser, "Enter", 13, { modifiers: CTRL });
   await Bun.sleep(300);
-  assert.equal(await browser.evaluate(`${liveRegion}.textContent`), quiet, "Mod+↵ in the shortcuts takes no launch step");
+  assert.deepEqual(await browser.evaluate(`[!${unasked}, ${liveRegion}.textContent]`), [false, quiet], "Mod+↵ in the shortcuts takes no launch step: nothing is asked or said");
   if (await browser.evaluate<boolean>(`${shortcuts}.open`)) await key(browser, "Escape", 27);
   await until(browser, "the shortcuts close onto the row", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
 
@@ -1784,6 +1998,80 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   if (start.kind === "provider" && await browser.evaluate<string | null>(`${onlyBox}.getAttribute('aria-checked')`) !== String(start.blend === "only")) await click(browser, onlyBox);
   assert.deepEqual(await readProfile(browser, draftKey), before, "The lead row's round trips return the exact profile");
 
+  // A refused press asks its question (decision-dialog.tsx): the launch line's reason as its title, why in one sentence and
+  // the line's own fixes, then Close. The bundled starter's launch is refused because the fixture's accounts cannot be read,
+  // so the title is that reason without its detail, which the sentence gives. The press neither shakes the launch nor says
+  // the refusal in the readout or aloud, since the question says it, and the question opens over the panel with its own
+  // short rise, moving nothing in it. It holds focus on its title, from where no panel key acts and ↵ answers nothing; Tab
+  // reaches its first choice, and Esc closes it onto the launch, the panel as it was.
+  await pointAway(browser);
+  await focusLaunch(browser);
+  await until(browser, "the edited preview's launch is refused", launchIs("save & launch", "refused"));
+  const head = await browser.evaluate<string>(`${element(`${generator} .${G}launch-line .${G}launch-part`)}?.textContent`);
+  const fixes = await browser.evaluate<[string, string][]>(lineFixes);
+  await still(browser);
+  await browser.evaluate(BOXES);
+  const spoken = await watchSaid(browser);
+  await key(browser, "Enter", 13);
+  // Read at once, while a press's own words would still hold the readout: a refused press once said the launch there, warm.
+  assert.deepEqual(await browser.evaluate(`[${shaking}, ${readout}.querySelector('b')?.textContent === 'save & launch']`), [false, false],
+    "A refused press neither shakes the launch nor says the refusal in the readout");
+  const refusal = await questionOpens(browser, "refused", "a refused press asks its question");
+  assert.equal(await browser.evaluate(questionAnimation), `${G}decision-in`, "With motion allowed the question comes in with its own short rise");
+  assert.match(head, /^Accounts unreadable: ./, "The bundled starter's launch is refused because its accounts cannot be read");
+  const unreadable = head.slice("Accounts unreadable: ".length);
+  assert.deepEqual(refusal, { title: "Accounts unreadable", text: [`Code couldn't read your accounts: ${unreadable}.`], items: [], choices: [...fixes, ["dismiss", "Close"]] },
+    "The question takes the line's reason as its title, without its detail, which one sentence gives, and offers the line's own fixes, then Close");
+  await still(browser);
+  assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "The question opens over the panel and moves nothing in it");
+  for (const [name, code, modifiers] of [["a", 65, 0], ["e", 69, 0], ["m", 77, 0], ["?", 191, 0], ["w", 87, 0], ["d", 68, 0], ["ArrowDown", 40, 0], ["Enter", 13, CTRL]] as const) {
+    await key(browser, name, code, { modifiers });
+  }
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, sheet: ${element(stage)}.hidden, shortcuts: !!${shortcuts}?.open, list: ${machineList} !== null,
+    asks: ${asks("refused")}, title: document.activeElement === ${decision}.querySelector('h2') })`),
+    { view: "main", sheet: false, shortcuts: false, list: false, asks: true, title: true }, "From the question no panel key acts, and focus stays on its title");
+  assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press says nothing aloud and posts no notice: its question says it");
+  await firstChoiceByTab(browser, "refused");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+  await still(browser);
+  assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "The question closes and leaves the panel as it was");
+  // Its backdrop. A press there in the question's first moments was aimed at what stood there before and answers nothing.
+  // Once it has settled, neither a drag that starts in the question and ends on the backdrop nor a press on the question's
+  // own border answers it: only a single press that starts and ends on the backdrop is its way out, as Esc is, onto the
+  // launch. Every click the dialog itself hears is kept with where it landed, so each press is known to be what it claims.
+  await browser.evaluate(`(() => {
+    const dialog = ${decision}, presses = { opened: null, clicks: [] };
+    new MutationObserver(() => { if (dialog.open && presses.opened === null) presses.opened = performance.now(); }).observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    dialog.addEventListener('click', event => {
+      const box = dialog.getBoundingClientRect(), off = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+      presses.clicks.push({ on: event.target !== dialog ? 'inside' : off ? 'backdrop' : 'border', detail: event.detail, settled: event.timeStamp - presses.opened >= ${DECISION_SETTLE_MS} });
+    });
+    globalThis.__codeBackdrop = presses;
+    return true;
+  })()`);
+  await key(browser, "Enter", 13);
+  await press(browser, backdrop);
+  await until(browser, "the refused press asks again", asks("refused"));
+  await Bun.sleep(DECISION_SETTLE_MS);
+  assert.equal(await browser.evaluate(asks("refused")), true, "A press on the backdrop in the question's first moments answers nothing");
+  const title = await pointOf(browser, `${decision}.querySelector('h2')`);
+  await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", ...title, button: "left", buttons: 1, clickCount: 1 });
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...backdrop, button: "left", buttons: 1 });
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...backdrop, button: "left", buttons: 0, clickCount: 1 });
+  // Input lands on whole pixels: the first whole pixel at or past the dialog's left edge lies in its 1px border.
+  const border = await browser.evaluate<Point>(`(() => { const box = ${decision}.getBoundingClientRect(); return { x: Math.ceil(box.left), y: Math.round(box.top + box.height / 2) }; })()`);
+  await press(browser, border);
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(asks("refused")), true, "Neither a drag from the question onto the backdrop nor a press on its border answers it");
+  await press(browser, backdrop);
+  await until(browser, "a press on the settled question's backdrop is its way out, onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+  assert.deepEqual(await browser.evaluate("globalThis.__codeBackdrop.clicks"), [{ on: "backdrop", detail: 1, settled: false }, { on: "backdrop", detail: 1, settled: true },
+    { on: "border", detail: 1, settled: true }, { on: "backdrop", detail: 1, settled: true }],
+    "The dialog heard a single press on its backdrop before it settled, then a drag ending on the backdrop, a press on its border and a press on the backdrop");
+  assert.deepEqual(await readProfile(browser, draftKey), before, "A refused press and its question change no setting");
+
   // The wheel steps a row the keyboard has focused, or one the pointer has rested on; over a row the pointer only passes, it scrolls the panel.
   await panelWidth(browser, 860, 520);
   try {
@@ -1865,7 +2153,12 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await key(browser, "Escape", 27);
   await until(browser, "Esc closes More's menu", `${menu} === null`);
   await click(browser, launchButton);
-  await motionless("a refused launch press");
+  await until(browser, "a refused press asks its question", asks("refused"));
+  await motionless("a refused launch press and its question");
+  assert.equal(await browser.evaluate(questionAnimation), "none", "Reduced motion: the question comes in without its rise");
+  await key(browser, "Escape", 27);
+  await until(browser, "Esc closes the question", unasked);
+  await motionless("the question closing");
   // The sheets: coming in, a refused press of the next action (no shake) and the way back animate nothing, and nothing in them lasts.
   await openSheet(browser, "models");
   await motionless("a sheet");
@@ -2012,11 +2305,16 @@ async function starterConflictScenario(browser: BrowserInstance, server: TestSer
   assert.equal(keptEdit(frozen).revision, 0, "The edit rests on the absent workspace, revision 0");
   await still(browser);
   const routes = await routedRoles(browser);
+  // A refused press asks its question. A competing initializer then moves the revision under the frozen preview: unlike a
+  // model check's own initialization, it is a change made elsewhere, and the launch line offers theirs. The refusal the
+  // question was asked for has given way to another, so the question closes on its own, onto the launch, and is not asked
+  // again without a press.
+  await click(browser, launchButton);
+  await questionOpens(browser, "refused", "a press on the refused preview asks its question");
   const competing = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...target, expectedRevision: 0 });
   assert(competing.ok);
-  // A competing initializer moves the revision under the frozen preview: unlike a model check's own
-  // initialization, it is a change made elsewhere, and the launch line offers theirs.
-  await until(browser, "a revision-zero preview refuses to attach to a competing initializer", `${launchIs("save & launch", "refused")} && !!${fix("conflict")}`);
+  await until(browser, "a revision-zero preview refuses to attach to a competing initializer, and the question asked before closes onto the launch",
+    `${launchIs("save & launch", "refused")} && !!${fix("conflict")} && ${unasked} && document.activeElement === ${launchButton}`);
   // Models says the same refusal as its one next action, with the same fix beside it.
   await openSheet(browser, "models");
   await until(browser, "Models refuses checking a conflicted preview and offers theirs",
@@ -2141,8 +2439,10 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
  * and benchmark ready, a fictional account is observed and the inventory job has settled. Code's own initialization,
  * probe composition, inventory draft and the person's approval are the real server's. The benchmark that would spend is
  * refused, so nothing is probed, checked or saved. It runs as a person of its own (`asNewPerson`), who has approved
- * nothing, so the first charge asks; once their approve press records an approval, Setup's ask first withdraws it, so
- * the charges after it ask too. The account switch at the end is the real changeAccounts CAS against the real server.
+ * nothing, so the first charge asks, in its question over the page; once their Approve records an approval, Setup's ask
+ * first withdraws it, so the charges after it ask too. Each way the question is answered or left is a real press: a pointer
+ * on a choice or on the backdrop, Esc, Tab and ↵. The account switch at the end is the real changeAccounts CAS against the
+ * real server.
  */
 async function checkChargeScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Model check charge", "canvas");
@@ -2225,80 +2525,76 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     assert.equal(await browser.evaluate(profileValues), arrived, "An arrow on arrival changes no setting");
     assert.deepEqual(started, [], "Before a press nothing checks on its own: the person has approved nothing and keeps no check");
 
-    // A double-click on Launch starts one check; its second click lands on a busy launch, never on Approve.
+    // A double-click on Launch starts one check. Its second click lands on the launch while it checks, which shakes and says
+    // so in the readout, as a press of a launch waiting on a step does, never on the question the check comes to ask.
+    const spoken = await watchSaid(browser);
     const point = await pointOf(browser, launchButton);
     await press(browser, point, 1);
     await press(browser, point, 2);
-    await until(browser, "the pressed launch checks the models and keeps focus while it checks",
-      `${launchIs("checking models…", "busy")} && document.activeElement === ${launchButton} && ${launchButton}.getAttribute('aria-busy') === 'true'`);
-    await until(browser, "the charge waits on its own approval", `${launchIs("launch", "waiting")} && ${approveButton} !== null`);
+    assert.equal(await browser.evaluate(shaking), true, "The second click lands on the launch while it checks, which shakes");
+    await until(browser, "the pressed launch checks the models, keeps focus while it checks and says so for the second click",
+      `${launchIs("checking models…", "busy")} && document.activeElement === ${launchButton} && ${launchButton}.getAttribute('aria-busy') === 'true' &&
+      ${readout}.dataset.tone === 'warn' && ${readout}.querySelector('b')?.textContent === 'checking models…'`);
+    // After the hold a press cannot pass, the charge asks its question: what checking spends, by provider family, that it is
+    // asked once, then Approve and launch, and Cancel. Behind it the launch waits, refusing by aria-disabled, and its line
+    // only says so, with no approve and no Cancel beside it. Nothing of it is said aloud or posted: the question asks it.
+    const charged = await questionOpens(browser, "charge", "once the check is back its charge asks its question");
     assert.equal(started.length, 1, "A double-click on Launch starts exactly one inventory");
     assert.equal(benchmarks.length, 0, "A double-click on Launch never approves the charge");
-    assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "Approve is never focused for the person; the launch keeps focus");
-    assert.equal(await browser.evaluate(`${launchButton}.getAttribute('aria-disabled')`), "true", "While a charge waits the launch refuses by aria-disabled");
-    assert.deepEqual(await browser.evaluate(`[${approveButton}.textContent, ${approveButton}.getAttribute('aria-label')]`),
-      ["approve", `Approve: ${charge.length} ${charge.length === 1 ? "request" : "requests"}, and later checks within it`],
-      "Approve is bound to the exact charge shown, and to the later checks within it");
-    await until(browser, "the charge is announced, with approve as the next control",
-      `${liveRegion}?.textContent.includes(${JSON.stringify(`Checking models spends ${charge.length} tiny requests. Approve is the next control.`)})`);
-    assert.deepEqual(await browser.evaluate(launchParts), [[`Checking models spends ${charge.length} tiny ${charge.length === 1 ? "request" : "requests"}`, "plain"], [`Claude ${charge.length}`, "plain"]],
-      "The charge says what checking the models spends, by provider family");
-    // Pointed, the launch says the line's aside: the person is asked once, and later checks within it run on their own.
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says the approval is asked once", `${readout}.textContent.includes('asked once: later checks run on their own')`);
-    await pointAway(browser);
+    assert.deepEqual(charged, { title: "Check your models first",
+      text: ["Launch needs to know which models your accounts can use, so Code sends each one a tiny request.", "You approve this once. Later checks run on their own."],
+      items: [`${charge.length} tiny ${charge.length === 1 ? "request" : "requests"}: Claude ${charge.length}`], choices: [["approve", "Approve and launch"], ["cancel", "Cancel"]] },
+      "The charge says what checking the models spends, by provider family, and that it is asked once, then offers Approve and launch, and Cancel");
+    assert.deepEqual(await browser.evaluate(`({ waiting: ${launchIs("launch", "waiting")}, disabled: ${launchButton}.getAttribute('aria-disabled'), parts: ${launchParts},
+      controls: document.querySelectorAll('${generator} .${G}launch-line button').length })`), { waiting: true, disabled: "true", parts: [["Waiting for your approval", "busy"]], controls: 0 },
+      "Behind the question the launch waits, refusing by aria-disabled, and its line only says it waits for the approval");
+    assert.deepEqual(await spoken(), { notices: [], announced: [] }, "Neither the check nor its charge is said aloud or posted: the question asks it");
 
-    // While the charge waits, no profile, machine or account edit may start: every row and the machine refuse with the gate's reason.
+    // While the charge waits, no profile, machine or account edit may start: every row and the machine are locked, and from
+    // the question, which holds focus, no panel key acts at all.
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${stage} [data-row]')].filter(row => row.getAttribute('aria-disabled') !== 'true').map(row => row.dataset.row)`), [],
       "Every row is locked while the charge waits");
     assert.equal(await browser.evaluate(`${machinePicker}.getAttribute('aria-disabled')`), "true", "The machine is locked while the charge waits");
     const settings = await browser.evaluate<string>(profileValues), machine = await browser.evaluate<string>(`${machinePicker}.textContent`);
-    await focusRow(browser, "lane");
-    const announced = await browser.evaluate<string>(`${liveRegion}.textContent`);
-    await key(browser, "ArrowRight", 39);
-    await until(browser, "a refused edit says why", `${liveRegion}.textContent !== ${JSON.stringify(announced)} && ${liveRegion}.textContent !== ''`);
-    await key(browser, "ArrowDown", 40);
-    await key(browser, "End", 35);
-    await key(browser, "w", 87);
-    await Bun.sleep(300);
-    assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null })`), { settings, machine, list: false },
-      "No profile or machine edit lands while a charge waits, and the machine list does not open");
-    await focusLaunch(browser);
-    await key(browser, "Tab", 9);
-    assert.equal(await browser.evaluate(`document.activeElement === ${approveButton}`), true, "Approve is the next Tab stop after the launch");
-
-    // The waiting line beside the launch, its charge, approve and Cancel: pointing at or focusing anything moves no layout box,
-    // from 170 to 1440px nothing overflows, cuts or collides, and on a coarse pointer every target is 44px. None of it is a
-    // step: the charge still waits, nothing more is checked, spent or approved.
-    await zeroShift(browser, "waiting charge");
-    await geometryAcrossWidths(browser, "waiting charge");
-    await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
-    try {
-      assert.equal(await browser.evaluate("matchMedia('(pointer: coarse)').matches"), true);
-      await coarseTargets(browser, "waiting charge");
-    } finally {
-      await browser.send("Emulation.clearDeviceMetricsOverride", {});
-      await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    for (const [name, code, modifiers] of [["ArrowRight", 39, 0], ["ArrowDown", 40, 0], ["End", 35, 0], ["w", 87, 0], ["a", 65, 0], ["e", 69, 0], ["m", 77, 0], ["?", 191, 0],
+      ["d", 68, 0], ["1", 49, 0], ["Enter", 13, CTRL]] as const) {
+      await key(browser, name, code, { modifiers });
     }
-    assert.equal(await browser.evaluate(`${launchIs("launch", "waiting")} && ${approveButton} !== null`), true, "Pointing, focus, views and resizing leave the charge waiting");
-    assert.deepEqual([started.length, benchmarks.length, approvals.length], [1, 0, 0], "Pointing, focus, views and resizing check, spend and approve nothing");
-
-    // Only a deliberate single press spends: never the second click of a multi-click, never a held key.
-    await press(browser, await pointOf(browser, approveButton), 2);
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null, view: ${element(stage)}.dataset.view,
+      sheet: ${element(stage)}.hidden, shortcuts: !!${shortcuts}?.open, asks: ${asks("charge")} })`),
+      { settings, machine, list: false, view: "main", sheet: false, shortcuts: false, asks: true }, "No profile or machine edit lands while a charge waits, and from its question no panel key acts");
+    assert.deepEqual([started.length, benchmarks.length, approvals.length], [1, 0, 0], "Keys pressed in the question check, spend and approve nothing");
+    // Only a deliberate single press spends: never ↵ on the title, never key repeat on Approve once it has held focus and the
+    // question has settled, never the second click of a multi-click.
+    await firstChoiceByTab(browser, "charge");
+    await Bun.sleep(DELIBERATE_MS);
     await key(browser, "Enter", 13, { autoRepeat: true });
     await key(browser, " ", 32, { autoRepeat: true });
+    await press(browser, await pointOf(browser, choice("approve")), 2);
     await Bun.sleep(300);
-    assert.equal(benchmarks.length, 0, "Neither a second click nor key repeat approves the charge");
-    assert.deepEqual(approvals, [], "Neither a second click nor key repeat records an approval");
-    assert.equal(await browser.evaluate(`${approveButton} !== null`), true, "The charge still waits");
-    // The press that prepared the charge initialized the first-use workspace: that is the check's own
-    // effect, so a cancelled or stopped check offers Launch again, never a conflict with "theirs".
-    const launchAgain = `${launchIs("launch", "ready")} && ${approveButton} === null && !${fix("conflict")}`;
-    await click(browser, cancelCharge);
-    await until(browser, "a cancelled first-use charge offers Launch again without a conflict, and says the check was cancelled",
-      `${launchAgain} && JSON.stringify(${launchParts}) === ${JSON.stringify(JSON.stringify([["Model check cancelled", "done"]]))}`);
+    assert.deepEqual([benchmarks.length, approvals.length, await browser.evaluate(asks("charge"))], [0, 0, true],
+      "Neither ↵ on the title, key repeat nor a second click approves the charge or records an approval, and the charge still waits");
+
+    // The question and the panel behind it: pointing at or focusing a choice moves no layout box, from 170 to 1440px the
+    // question stands inside the viewport and paints whole with the panel behind it, and on a coarse pointer its choices are
+    // 44px. None of it answers: the charge still waits, and nothing more is checked, spent or approved.
+    await questionZeroShift(browser, "charge");
+    await questionGeometry(browser, "charge");
+    await questionCoarseTargets(browser, "charge");
+    assert.equal(await browser.evaluate(`${asks("charge")} && ${launchIs("launch", "waiting")}`), true, "Pointing, focus, keys and resizing leave the charge waiting");
+    assert.deepEqual([started.length, benchmarks.length, approvals.length], [1, 0, 0], "Pointing, focus, keys and resizing check, spend and approve nothing");
+
+    // Cancel, the way out, ends the check and gives focus back to the launch. The press that prepared the charge initialized
+    // the first-use workspace: that is the check's own effect, so a cancelled or stopped check offers Launch again, never a
+    // conflict with "theirs". A cancelled check is the person's own doing: it is said aloud, never posted to the notice stack.
+    const launchAgain = `${launchIs("launch", "ready")} && ${unasked} && !${fix("conflict")}`;
+    await answer(browser, "cancel");
+    await until(browser, "Cancel ends the charge: the first-use check, cancelled, offers Launch again without a conflict, says so and gives focus back to the launch",
+      `${launchAgain} && JSON.stringify(${launchParts}) === ${JSON.stringify(JSON.stringify([["Model check cancelled", "done"]]))} && document.activeElement === ${launchButton}`);
     assert.equal(benchmarks.length, 0, "Cancelling a waiting charge spends nothing");
     assert.deepEqual(cancels, [], "A charge that never spent has no native job to cancel");
+    assert.deepEqual(await spoken(), { notices: [], announced: ["Model check cancelled"] }, "A cancelled check is said aloud and posts no notice");
     const prepared = await readConfiguration(server, writer, target);
     assert.equal(prepared.configuration?.revision, 1, "The Launch press initialized the first-use workspace exactly once");
     assert.equal(prepared.configuration?.active, null, "Preparing a charge promotes nothing");
@@ -2325,8 +2621,9 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     // From here the SDK's feed probe counts the panel's own reads (`ownReads`), checked at the end of this scenario.
     await browser.evaluate("localStorage.setItem('manifold:debug', '1')");
     // On arrival a plain ↵ at the panel root takes the launch's step through the same gate as Mod+↵: it prepares the
-    // charge, and pressed again while the charge waits it never approves it. Under reduced motion neither the check nor
-    // the waiting charge animates.
+    // charge, whose question takes focus on its title, where ↵ again never approves it. Under reduced motion neither the
+    // check, the waiting charge nor its question animates. Esc is the question's way out: it cancels the check, spending
+    // nothing, and gives focus back to the panel root that had it.
     await openGenerator(browser, server, workspace.id);
     await until(browser, "the reopened panel offers Launch", launchAgain);
     await until(browser, "on arrival the panel root has focus", `document.activeElement === ${element(generator)}`);
@@ -2338,38 +2635,45 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
       await until(browser, "↵ on arrival checks the models", launchIs("checking models…", "busy"));
       await settle(browser);
       assert.equal(await browser.evaluate(running), 0, "Reduced motion: the check a launch runs does not animate");
-      await until(browser, "↵ on arrival prepares a charge", `${launchIs("launch", "waiting")} && ${approveButton} !== null`);
+      await questionOpens(browser, "charge", "↵ on arrival prepares a charge, which asks its question");
       await settle(browser);
-      assert.equal(await browser.evaluate(running), 0, "Reduced motion: the waiting charge and its approve do not animate");
+      assert.deepEqual(await browser.evaluate(`[${running}, ${questionAnimation}]`), [0, "none"], "Reduced motion: the waiting charge and its question do not animate");
     } finally {
       await browser.send("Emulation.setEmulatedMedia", { features: [] });
     }
     assert.equal(started.length, 2, "↵ on arrival takes exactly one step");
-    assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "The step leaves focus on the panel root");
     await key(browser, "Enter", 13);
     await Bun.sleep(300);
-    assert.equal(benchmarks.length, 0, "↵ at the panel root never approves a waiting charge");
-    assert.equal(await browser.evaluate(`${approveButton} !== null`), true, "The charge still waits");
-    await click(browser, cancelCharge);
-    await until(browser, "the cancelled charge offers Launch again", launchAgain);
+    assert.deepEqual([benchmarks.length, await browser.evaluate(asks("charge"))], [0, true], "↵ again, on the question's title, never approves the waiting charge");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc cancels the charge, offers Launch again and gives focus back to the panel root", `${launchAgain} && document.activeElement === ${element(generator)}`);
+    assert.deepEqual([benchmarks.length, cancels.length], [0, 0], "Esc spends nothing and cancels no native job");
 
-    // Mod+↵ takes the launch's step from a row and runs from the initialized revision (a run from the
-    // stale one would refuse before its inventory); holding it takes no other step; one deliberate
-    // press approves the charge, which records the person's approval, and spends it once.
+    // Mod+↵ takes the launch's step from a row and runs from the initialized revision (a run from the stale one would refuse
+    // before its inventory), and holding it takes no other step. Tab then ↵ in one burst as the question opens is typing
+    // meant for somewhere else, and answers nothing; the same ↵ once Approve has held focus and the question has settled is
+    // one deliberate press, which approves the charge, records the person's approval and spends it once.
     await focusRow(browser, "lane");
     await key(browser, "Enter", 13, { modifiers: CTRL });
-    await until(browser, "Mod+↵ prepares a charge from revision 1", `${launchIs("launch", "waiting")} && ${approveButton} !== null`);
-    assert.equal(started.length, 3);
+    await questionOpens(browser, "charge", "Mod+↵ prepares a charge from revision 1, which asks its question");
+    await key(browser, "Tab", 9);
+    await key(browser, "Enter", 13);
     await key(browser, "Enter", 13, { modifiers: CTRL, autoRepeat: true });
     await Bun.sleep(300);
-    assert.equal(started.length, 3, "A held Mod+↵ never takes another step");
-    assert.equal(benchmarks.length, 0);
-    await click(browser, approveButton);
+    assert.deepEqual([started.length, benchmarks.length, approvals.length, await browser.evaluate(`${asks("charge")} && document.activeElement === ${choice("approve")}`)], [3, 0, 0, true],
+      "Tab then ↵ in one burst as the question opens answers nothing, and a held Mod+↵ takes no other step");
+    const stopping = await watchSaid(browser);
+    await Bun.sleep(DELIBERATE_MS);
+    await key(browser, "Enter", 13);
     await waitFor(() => benchmarks.length === 1, timeout, 50);
     await until(browser, "the refused spend stops the check, which says so beside the launch, and the launch offers it again without a conflict",
       `${launchAgain} && ${failureLine} && ${lineText}.includes('Model check stopped while measuring models: ')`);
     assert.deepEqual(approvals, [{ expectedRevision: 0, requests: charge.length }], "The approve press records the person's approval of exactly the charge it shows");
     assert.equal((await readChecks(server, writer)).approvedRequests, charge.length, "The person's approval is kept for their later checks");
+    // The stop is how the press ended: posted to Manifold's notice stack and said aloud, each once, in the line's words.
+    const stop = await browser.evaluate<string>(`${element(`${generator} .${G}launch-part[data-tone="attention"]`)}.textContent`);
+    await until(browser, "the stopped check reaches the notice stack", noticeSays(JSON.stringify(stop)));
+    assert.deepEqual(await stopping(), { notices: [stop], announced: [stop] }, "The stopped check is posted to the notice stack and said aloud, once each");
     // A stopped check is the person's to try again: nothing checks again on its own, so no second inventory follows and
     // nothing is spent twice, and the stop stays said beside the launch.
     await Bun.sleep(1_000);
@@ -2465,7 +2769,8 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     await readsOnce(browser, "closing the sheet reads the panel's inputs", ++machineReads);
     readAt = Date.now();
     // While a step runs (a launch's check, held in flight) the panel reads nothing, away and back or not; once the step and
-    // the charge it prepares have ended, it reads, once. The approval withdrawn, the charge asks again.
+    // the charge it prepares have ended, it reads, once. The approval withdrawn, the charge asks again, and a single press on
+    // its backdrop once it has settled is its way out: the check is cancelled, nothing is spent and no job is cancelled.
     holdNextInventory = true;
     await click(browser, launchButton);
     await waitFor(() => heldInventory.held, timeout, 50);
@@ -2473,9 +2778,11 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     await lookAwayAfter(browser, readAt);
     await readsHeld(browser, "While a step runs the panel reads nothing", Date.now(), machineReads);
     heldInventory.release();
-    await until(browser, "with the approval withdrawn the checked charge waits on approve again", `${launchIs("launch", "waiting")} && ${approveButton} !== null`);
-    await click(browser, cancelCharge);
-    await until(browser, "the cancelled charge offers Launch again", launchAgain);
+    await questionOpens(browser, "charge", "with the approval withdrawn the checked charge asks again");
+    await Bun.sleep(DECISION_SETTLE_MS);
+    await press(browser, backdrop);
+    await until(browser, "a press on the settled question's backdrop cancels the charge and offers Launch again", launchAgain);
+    assert.deepEqual([benchmarks.length, cancels.length], [1, 0], "The backdrop's way out spends nothing and cancels no native job");
     await readsOnce(browser, "once the step has ended the panel reads its inputs again", ++machineReads);
     assert.deepEqual(await readConfiguration(server, writer, target), unread, "Reading on its own, a discarded pool and a cancelled check write nothing");
     await browser.evaluate("localStorage.removeItem('manifold:debug')");
@@ -2581,8 +2888,9 @@ async function ompUpgradeScenario(browser: BrowserInstance, server: TestServer, 
  * plan does not serve (`unserved`), which it answers `client_blocked`. Everything Code decides is the real
  * server's: the initialization, the probe pool, the charge (`draftInventory`), the person's approval, the derivation,
  * staging with the recorded check, reviews, promotions, imports and discards. It runs as a person of its own
- * (`asNewPerson`), so its first check asks; the approval its approve press records is withdrawn in Setup before checking
- * again, so that charge asks too. No provider is reached, no native job runs and nothing is natively approved.
+ * (`asNewPerson`), so its first check asks, in its question over the sheet; the approval its Approve records is withdrawn
+ * in Setup before checking again, so that charge asks too. No provider is reached, no native job runs and nothing is
+ * natively approved.
  */
 async function modelsSheetScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
   const workspace = await createContainer(server, "Models sheet", "canvas");
@@ -2784,7 +3092,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await sheetGeometry(browser, modelsSheet, "Models starter");
 
     // A double-click on check models starts one check: its second click lands on the busy check, which draws the hold the
-    // charge keeps before it can be approved, never on approve. Import and export refuse while it runs.
+    // charge keeps before it can be approved, never on the question that charge asks. Import and export refuse while it runs.
     holdNextInventory = true;
     const point = await pointOf(browser, goButton);
     await press(browser, point, 1);
@@ -2800,32 +3108,42 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const charge = inventoryDraft(inventories.get(firstInventory)!, "any");
     const requests = (provider: string) => charge.benchmark.candidates.filter(candidate => candidate.provider === provider).length;
     const count = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
-    await until(browser, "after the hold the charge waits on its own approval", `${phaseIs("charge")} && ${goIs(modelsSheet, "approve")} && ${sideIs("charge")}`);
-    assert.deepEqual(await browser.evaluate(`({ parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
+    // After the hold the charge asks its question over Models, which stays open behind it: Approve, with what the check spends
+    // by provider family, then Cancel. The sheet's next action only waits, saying what the charge spends and that it waits for
+    // the approval, with nothing beside it, and its side says what each provider is charged and which models are not probed.
+    const checking = await questionOpens(browser, "charge", "after the hold the charge asks its question over Models");
+    assert.deepEqual(checking, { title: "Check your models",
+      text: ["Code finds out which models your accounts can use by sending each one a tiny request.", "You approve this once. Later checks run on their own."],
+      items: [`${count(charge.benchmark.candidates.length, "tiny request")}: GPT ${requests("openai-codex")} · Claude ${requests("anthropic")}`],
+      choices: [["approve", "Approve"], ["cancel", "Cancel"]] }, "A check started in Models asks with Approve, saying what it spends by provider family, and Cancel");
+    assert.deepEqual(await browser.evaluate(`({ over: ${element(stage)}.hidden === true && !!${visibleSheet}?.contains(${element(modelsSheet)}), phase: ${phaseIs("charge")},
+      go: ${goIs(modelsSheet, "checking models…", "busy")}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
       providers: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
       unprobed: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-xid')].map(el => el.textContent) })`), {
-      parts: [[count(charge.benchmark.candidates.length, "tiny request"), "strong"], ["asked once", null]], fixes: ["cancel"],
+      over: true, phase: true, go: true, parts: [[count(charge.benchmark.candidates.length, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
       providers: [`Claude: ${count(requests("anthropic"), "request")}`, `Codex: ${count(requests("openai-codex"), "request")}`],
       unprobed: charge.exclusions.map(exclusion => `${exclusion.provider}/${exclusion.id}`),
-    }, "The charge says exactly what it spends per provider, that it is asked once, and which models are not probed");
-    await sheetGeometry(browser, modelsSheet, "Models charge");
-    // Only a deliberate single press spends: never the second click of a double-click, never a held key.
-    await press(browser, await pointOf(browser, goButton), 2);
-    await until(browser, "a double press approves nothing and says so", `${readoutLine}.dataset.tone === 'warn' && ${sheetSays(modelsSheet)} === 'approve · A double press approves nothing; press once.'`);
-    assert.equal(await browser.evaluate(`document.activeElement === ${goButton}`), true, "The next action keeps focus");
+    }, "Behind the question Models stays open, its next action waiting on the approval, and says exactly what the charge spends per provider and which models are not probed");
+    // Only a deliberate single press spends: never key repeat on Approve once it has held focus and the question has settled,
+    // never the second click of a double-click.
+    await firstChoiceByTab(browser, "charge");
+    await Bun.sleep(DELIBERATE_MS);
     await key(browser, "Enter", 13, { autoRepeat: true });
     await key(browser, " ", 32, { autoRepeat: true });
+    await press(browser, await pointOf(browser, choice("approve")), 2);
     await Bun.sleep(300);
     assert.equal(benchmarks.size, 0, "Neither a second click nor a held key approves the charge");
-    assert.equal(await browser.evaluate(phaseIs("charge")), true, "The charge still waits");
+    assert.equal(await browser.evaluate(`${phaseIs("charge")} && ${asks("charge")}`), true, "The charge still waits on its question");
     const approvals = () => trace.requests.filter(request => request.name === "atyrode.code.approveChecks").map(request => request.input);
     assert.deepEqual(approvals(), [], "Neither a second click nor a held key records an approval");
 
     // One press approves and spends: the person's approval of the charge is recorded first, then the check measures, the
-    // requests measured per provider, the rungs of the providers still owed probing.
+    // requests measured per provider, the rungs of the providers still owed probing. The question closes onto the next action.
     holdNextBenchmark = true;
-    await click(browser, goButton);
-    await until(browser, "one press approves: checking, measuring per provider", `${phaseIs("benchmark")} && ${goIs(modelsSheet, "checking…", "busy")} && ${sideIs("measuring")}`);
+    const checkSaid = await watchSaid(browser);
+    await answer(browser, "approve");
+    await until(browser, "one press approves: the question closes onto the next action, checking, measuring per provider",
+      `${unasked} && ${phaseIs("benchmark")} && ${goIs(modelsSheet, "checking…", "busy")} && ${sideIs("measuring")} && document.activeElement === ${goButton}`);
     assert.deepEqual(approvals(), [{ expectedRevision: 0, requests: charge.benchmark.candidates.length }],
       "The approve press records the person's approval of exactly the charge it shows");
     await waitFor(() => benchmarks.size === 1, timeout, 50);
@@ -2842,6 +3160,11 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     // beside it once the check's own save has been read, since a check needs a current read of the workspace.
     const settled = `${phaseIs("verified")} && ${goIs(modelsSheet, "back to code")} && ${sideIs("left out")} && JSON.stringify(${goFixes(modelsSheet)}) === '["check again"]'`;
     await until(browser, "the measured list is put in use, checked", settled);
+    // How the check ended is posted to Manifold's notice stack; it did not fail, so the live region does not say it.
+    const checkedNotice = "Models checked with your accounts, and the profile saved for the workspace.";
+    await until(browser, "the check's outcome reaches the notice stack", noticeSays(JSON.stringify(checkedNotice)));
+    const told = await checkSaid();
+    assert.deepEqual([told.notices, told.announced.includes(checkedNotice)], [[checkedNotice], false], "A check started in Models posts its outcome once, and only a failure is said aloud");
     const checked = derivedFrom(firstInventory);
     const afterFirst = await readConfiguration(server, writer, target);
     assert.deepEqual(afterFirst.configuration?.active?.document, checked.document, "The list in use is exactly the derivation of what was measured");
@@ -2916,34 +3239,38 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await openSheet(browser, "models");
     await until(browser, "Models shows the checked list again, with check again beside back to code", settled);
 
-    // Check again measures the checked list afresh. Under reduced motion its check and charge animate nothing, and Esc
-    // stops the check while its charge waits: the sheet stays open on the checked list and nothing is spent or cancelled.
+    // Check again measures the checked list afresh. Under reduced motion its check, its charge and the question it asks animate
+    // nothing, and Esc, which needs no settling, cancels the check from its question: the sheet stays open on the checked list,
+    // nothing is spent or cancelled at an owner, and the cancelled check is said aloud, never posted.
     await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     // A transition already under way when motion is reduced runs out its own duration; the check starts from rest.
     await still(browser);
+    const cancelSaid = await watchSaid(browser);
     try {
       await click(browser, goFix(modelsSheet, "check again"));
       await until(browser, "check again checks the accounts' models again", `${phaseIs("inventory")} || ${phaseIs("charge")}`);
       await sheetStill(browser, "the checking hold");
-      await until(browser, "its charge waits on approve", `${phaseIs("charge")} && ${goIs(modelsSheet, "approve")}`);
-      await sheetStill(browser, "the charge");
+      await questionOpens(browser, "charge", "its charge asks its question over Models");
+      await sheetStill(browser, "the charge and its question");
+      assert.equal(await browser.evaluate(questionAnimation), "none", "Reduced motion: the question comes in without its rise");
       assert.equal(started.length, 2, "Check again runs one more inventory");
-      await click(browser, element(`${modelsSheet} [data-cell][data-key]`));
       await key(browser, "Escape", 27);
-      await until(browser, "Esc stops the waiting charge, and the sheet stays open on the checked list", `${phaseIs("verified")} && ${element(stage)}.hidden === true`);
-      await sheetStill(browser, "a stopped check");
+      await until(browser, "Esc cancels the waiting charge, and the sheet stays open on the checked list", `${unasked} && ${phaseIs("verified")} && ${element(stage)}.hidden === true`);
+      await sheetStill(browser, "a cancelled check");
     } finally {
       await browser.send("Emulation.setEmulatedMedia", { features: [] });
     }
-    assert.deepEqual([benchmarks.size, cancels.length], [2, 0], "A stopped charge spends nothing and has no job to cancel");
+    assert.deepEqual([benchmarks.size, cancels.length], [2, 0], "A cancelled charge spends nothing and has no job to cancel");
+    const cancelled = await cancelSaid();
+    assert.deepEqual([cancelled.notices, cancelled.announced.includes("Model check cancelled")], [[], true], "A cancelled check is said aloud and posts no notice");
     await click(browser, goFix(modelsSheet, "check again"));
-    await until(browser, "check again waits on approve", `${phaseIs("charge")} && ${goIs(modelsSheet, "approve")}`);
+    await questionOpens(browser, "charge", "check again asks its charge's question");
     // This time the plan serves one GPT model, the one the first check put on GPT's first rung.
     const servedId = checked.document.models.find(model => model.provider === "openai-codex" && model.tier === 1)!.id;
     unserved = new Set(inventoryDraft(inventories.get("synthetic-inventory-3")!, "any").benchmark.candidates
       .filter(candidate => candidate.provider === "openai-codex" && candidate.id !== servedId).map(candidate => candidate.id));
     assert(unserved.size > 0, "The plan leaves some Codex model unserved");
-    await click(browser, goButton);
+    await answer(browser, "approve");
     await until(browser, "the list is measured again and checked", settled);
     assert.deepEqual(approvals().at(-1), { expectedRevision: 2, requests: inventoryDraft(inventories.get("synthetic-inventory-3")!, "any").benchmark.candidates.length },
       "Approving again records the approval again");
@@ -3060,19 +3387,19 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
  * Session preparation is refused, so a launch goes as far as the reviewed session. It runs as a person of its own
  * (`asNewPerson`), who has approved nothing and keeps nothing at first.
  *
- * - A first Launch press asks before its check spends; the approve press records the person's approval, and the same
- *   press goes on to review the saved profile and launch it.
+ * - A first Launch press asks before its check spends; the question's Approve and launch records the person's approval,
+ *   and the same press goes on to review the saved profile and launch it.
  * - In a workspace with another Claude account, a first Launch press checks within that approval and spends without
- *   asking. The check narrows the profile to what answered, so the press stops on what changed before reviewing
- *   anything, and Launch reviews and launches it.
+ *   asking. The check narrows the profile to what answered, so the press stops on a question naming what changed before
+ *   reviewing anything, and its Launch reviews and launches it.
  * - A workspace with the first account adopts the kept check without an inventory or a spend: on a first Save & launch
  *   press, which goes on to the launch, and, once set up, on its own as it opens, after which nothing reviews the launch
  *   until it is pressed.
  * - Once the accounts change under a list that passed a check, its lead still served, Launch stays ready and launches
  *   while the check that renews the list runs on its own, within the approval.
- * - When they change again and OMP refuses the renewal's benchmark, the stop is said in Models only, Launch stays ready,
- *   and nothing checks again on its own. Opened again, a renewal spending under the approval is cancelled at its owner by
- *   Setup's ask first, and writes nothing.
+ * - When they change again and OMP refuses the renewal's benchmark, the stop is said in Models only, never posted or
+ *   announced, Launch stays ready, and nothing checks again on its own. Opened again, a renewal spending under the
+ *   approval is cancelled at its owner by Setup's ask first, and writes nothing.
  *
  * A workspace never set up is never checked on its own, whatever the person keeps or approved (model-verification.ts):
  * only its first press initializes it.
@@ -3212,21 +3539,25 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
   };
   try {
     // A first Launch press asks before its check spends. The rows lead Claude only, which the check keeps as it is, so the
-    // press saves them and goes on: the approve press records the person's approval, then the press reviews and launches.
+    // press saves them and goes on: the question's Approve and launch records the person's approval, then the same press
+    // reviews and launches.
     await openEdited(first.id, leadClaudeOnly);
     let from = trace.requests.length;
     await click(browser, launchButton);
     await until(browser, "the press checks the models", launchIs("checking models…", "busy"));
-    await until(browser, "the charge waits on approve beside the launch", `${launchIs("save & launch", "waiting")} && ${approveButton}?.textContent === 'approve'`);
+    const asking = await questionOpens(browser, "charge", "the charge asks its question over the launch");
     const charge = inventoryDraft(inventories.get("kept-inventory-1")!, "any").benchmark.candidates.length;
-    await click(browser, approveButton);
+    assert.deepEqual([asking.title, asking.items, asking.choices, await browser.evaluate(launchIs("save & launch", "waiting"))],
+      ["Check your models first", [`${charge} tiny ${charge === 1 ? "request" : "requests"}: Claude ${charge}`], [["approve", "Approve and launch"], ["cancel", "Cancel"]], true],
+      "The first press's charge asks to approve and launch, saying what it spends, while Save & launch waits behind it");
+    await answer(browser, "approve");
     await waitFor(() => prepared.length === 1, timeout, 50);
-    await until(browser, "the same press goes on to the reviewed session, whose refusal is said beside the launch", failureLine);
+    await until(browser, "the same press goes on to the reviewed session, whose refusal is said beside the launch", `${failureLine} && ${unasked}`);
     assert.deepEqual(requested(from), ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.code.approveChecks",
       "atyrode.omp.startBenchmark", "atyrode.code.promoteCatalog", "atyrode.omp.reviewSession", "atyrode.omp.prepareSession"],
       "One press checks the models, asking once, then reviews the saved profile and launches it");
     assert.deepEqual(trace.requests.slice(from).find(request => request.name === "atyrode.code.approveChecks")?.input, { expectedRevision: 0, requests: charge },
-      "The first approve press records the person's approval of exactly its charge");
+      "The first Approve records the person's approval of exactly its charge");
     const checked = (await readConfiguration(server, person, { containerId: first.id })).configuration?.active;
     assert(checked?.provenance, "The check put a checked list in use");
     const checkedPool = checked.provenance.poolIdentityDigest;
@@ -3237,35 +3568,34 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
     // In a workspace with another Claude account, a first press checks within the approval and spends without asking. The
     // rows lead GPT, which the starter offers and a Claude-only list cannot host: the check narrows them, so the press stops
-    // on what it changed before it reviews anything, and Launch reviews the narrowed profile and launches it.
+    // on a question naming each setting it changed before it reviews anything, and its Launch reviews the narrowed profile
+    // and launches it.
     observed = fixtureAccounts([2]);
     await openEdited(within.id, () => choose(browser, "lane", "openai"));
-    // Whatever happens until the press ends, the approve control never shows and the launch never waits on it.
+    // Whatever happens until the press ends, the charge is never asked and the launch never waits on it.
     await browser.evaluate(`(globalThis.__codeAsked = false, new MutationObserver(() => {
-      if (${approveButton} !== null || ${launchButton}?.dataset.state === 'waiting') globalThis.__codeAsked = true;
+      if (${asks("charge")} || ${launchButton}?.dataset.state === 'waiting') globalThis.__codeAsked = true;
     }).observe(${element(generator)}, { subtree: true, childList: true, attributes: true }), true)`);
     from = trace.requests.length;
     await click(browser, launchButton);
-    await until(browser, "the check within the approval narrows the profile, and the press stops on what it changed",
-      `${element(`${generator} .${G}launch-part[data-tone="warn"]`)}?.textContent === 'The model check changed the profile'`);
-    const narrowed = await browser.evaluate<[string, string | null][]>(launchParts);
-    assert(narrowed[0]?.[1] === "warn" && narrowed.length > 1 && narrowed.slice(1).every(([text]) => text.includes(" → ")) && narrowed.some(([text]) => text.startsWith("lane ")),
-      `The stop names each setting the check moved, the lane among them: ${JSON.stringify(narrowed)}`);
-    assert.equal(await browser.evaluate("globalThis.__codeAsked"), false, "Within the approval the check never shows approve and the launch never waits on it");
+    const narrowed = await questionOpens(browser, "narrowed", "the check within the approval narrows the profile, and the press stops on its question");
+    assert.deepEqual({ ...narrowed, items: [] }, { title: "The model check changed your profile", text: ["Some models didn't answer, so the check changed these settings."], items: [],
+      choices: [["launch", "Launch"], ["dismiss", "Not now"]] }, "The narrowed stop asks whether to launch the profile as the check left it");
+    assert(narrowed.items.length > 0 && narrowed.items.every(text => text.includes(" → ")) && narrowed.items.some(text => text.startsWith("lane ")),
+      `The question names each setting the check moved, the lane among them: ${JSON.stringify(narrowed.items)}`);
+    assert.equal(await browser.evaluate(`${lineText}.includes('changed')`), false, "The launch line no longer says what the check changed: the question does");
+    assert.equal(await browser.evaluate("globalThis.__codeAsked"), false, "Within the approval the check never asks its charge and the launch never waits on it");
     const checkedOnly = ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.omp.startBenchmark", "atyrode.code.promoteCatalog"];
     assert.deepEqual(requested(from), checkedOnly,
       "The check within the approval spends without asking, and the press stops on the narrowed profile before reviewing or launching it");
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says it goes on with the narrowed profile", `${readout}.textContent.includes('launch to go on with it, or change a setting first')`);
-    await pointAway(browser);
-    await until(browser, "Launch is ready to go on with the narrowed profile", launchIs("launch", "ready"));
+    await until(browser, "behind its question Launch is ready to go on with the narrowed profile", launchIs("launch", "ready"));
     assert.deepEqual(requested(from), checkedOnly, "Once the stopped press has settled, still nothing has reviewed or launched the narrowed profile");
     from = trace.requests.length;
-    await click(browser, launchButton);
+    await answer(browser, "launch");
     await waitFor(() => prepared.length === 2, timeout, 50);
-    await until(browser, "the launch's refusal is said beside it", failureLine);
+    await until(browser, "the question's Launch goes on to the launch, whose refusal is said beside it", `${failureLine} && ${unasked}`);
     assert.deepEqual(requested(from), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"],
-      "One Launch press reviews the profile as the check left it and launches it");
+      "The question's Launch reviews the profile as the check left it and launches it");
 
     // A workspace with the first account adopts the person's kept check of it on a first Save & launch press: no inventory
     // and no charge, the kept list in use with the rows' edit, and the press goes on to the launch.
@@ -3332,20 +3662,22 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
 
     // The accounts change again under the list renewed in the workspace adopted on a press: a third Claude account joins.
     // That list passed a check and the approval covers the charge, so a renewal starts on its own, and OMP refuses its
-    // benchmark. A renewal that stopped is said in Models only, beside a launch the list in use still serves, and nothing
-    // checks again on its own, which would spend again each time.
+    // benchmark. A renewal that stopped is said in Models only, beside a launch the list in use still serves: a check the
+    // panel ran on its own held up no press, so it reaches neither the notice stack nor the live region. Nothing checks again
+    // on its own, which would spend again each time.
+    const stopSaid = `${noticeRows}.some(row => row.textContent.includes('Model check')) || ${liveRegion}.textContent.includes('Model check')`;
     observed = fixtureAccounts([1, 4, 5]);
     nextBenchmark = "refused";
     probes = [inventories.size, benchmarks.size];
     from = trace.requests.length;
     await openGenerator(browser, server, pressed.id);
     await waitFor(() => refusedBenchmarks.length === 1, timeout, 50);
-    await until(browser, "beside the stopped renewal the launch stays a ready launch and says nothing of the stop",
-      `${launchIs("launch", "ready")} && !${failureLine} && !${lineText}.includes('Model check')`);
+    await until(browser, "beside the stopped renewal the launch stays a ready launch and says nothing of the stop, nor does the panel post or announce it",
+      `${launchIs("launch", "ready")} && !${failureLine} && !${lineText}.includes('Model check') && !(${stopSaid})`);
     await Bun.sleep(2_000);
     assert.deepEqual([inventories.size, benchmarks.size, refusedBenchmarks.length], [probes[0]! + 1, probes[1]!, 1],
       "The stopped renewal ran one inventory and one refused benchmark, and nothing checks again on its own");
-    assert.equal(await browser.evaluate(`${launchIs("launch", "ready")} && !${failureLine}`), true, "The launch still says nothing of the stop");
+    assert.equal(await browser.evaluate(`${launchIs("launch", "ready")} && !${failureLine} && !(${stopSaid})`), true, "The launch still says nothing of the stop, and nothing posts or announces it");
     await openSheet(browser, "models");
     await until(browser, "Models says the renewal stopped, beside the accounts changed since the check",
       `${goParts(modelsSheet)}.some(([text, tone]) => text === 'check stopped' && tone === 'attention') && ${sheetState(modelsSheet)}.endsWith(' · accounts changed since checked')`);
@@ -3631,7 +3963,20 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await focusRow(viewerBrowser, "thinking");
     await key(viewerBrowser, "ArrowLeft", 37);
     await key(viewerBrowser, "Enter", 13, { modifiers: CTRL });
+    // A viewer's refused press asks why, read-only offering no fix: Close alone, its way out. A key answers with Close once it
+    // has held focus a moment and the question has settled, and the question closes onto the row it was asked from; a
+    // pointer press on Close, once settled, closes the next one onto the launch.
+    const readOnly = await questionOpens(viewerBrowser, "refused", "the viewer's refused Mod+↵ asks its question");
+    assert.deepEqual(readOnly, { title: "Read-only workspace", text: ["You can try settings here, but saving and launching need edit access to this workspace."], items: [],
+      choices: [["dismiss", "Close"]] }, "A viewer's refused press asks why, with Close alone");
+    await firstChoiceByTab(viewerBrowser, "refused");
+    await Bun.sleep(DELIBERATE_MS);
+    await key(viewerBrowser, "Enter", 13);
+    await until(viewerBrowser, "↵ on Close, held a moment, closes the question onto the row it was asked from", `${unasked} && !!${row("thinking")}.contains(document.activeElement)`);
     await click(viewerBrowser, launchButton);
+    await questionOpens(viewerBrowser, "refused", "a press on the viewer's launch asks again");
+    await answer(viewerBrowser, "dismiss");
+    await until(viewerBrowser, "a press on Close closes it onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
     // The viewer's accounts are managed read-only: the saved pool shows and cannot be chosen or edited.
     await showView(viewerBrowser, "accounts");
     await click(viewerBrowser, element(`${generator} [data-manage]`));
@@ -3723,8 +4068,10 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
       `${launchIs("save & launch", "ready")} && !!${revertButton} && !${fix("conflict")} && ${profileValues} === ${JSON.stringify(edits)}`);
 
     // A lead no included account serves refuses the save, as the session door would refuse its launch. The panel reads the
-    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: the save
-    // is refused with the family named, and neither a press nor Mod+↵ writes.
+    // Claude account as disabled (a GPT one stays) while the check it stands on is not observed again: the save is refused
+    // with the family named. A press asks its question, said nowhere else: the line's reason, why, and the line's own fixes,
+    // the way to the Claude accounts among them, then Close. From the question Mod+↵ writes nothing, and Esc closes it onto
+    // the launch.
     const gpt = { reference: { kind: "credential" as const, scope: fixtureScope, provider: "openai-codex", credentialId: 3 }, credentialId: 3,
       type: "api_key" as const, identityKey: null, email: null, disabled: false, blocks: [] };
     observed = { ...fixtureAccounts(), accounts: [...fixtureAccounts().accounts.map(account => account.credentialId === 1 ? { ...account, disabled: true } : account), gpt] };
@@ -3732,12 +4079,20 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(browser, "r", 82);
     await until(browser, "a lead no account serves refuses the save and names its family, with the way to its accounts",
       `${launchIs("save & launch", "refused")} && ${lineText}.includes('Claude') && !!${fix("accounts")}`);
-    const said = await browser.evaluate<string>(`${liveRegion}.textContent`);
+    const lineOffers = await browser.evaluate<[string, string][]>(lineFixes);
+    const spoken = await watchSaid(browser);
     await key(browser, "Enter", 13);
-    await until(browser, "the refused press says why", `${liveRegion}.textContent !== ${JSON.stringify(said)} && ${liveRegion}.textContent.endsWith(${launchButton}.title)`);
+    const refusedQuestion = await questionOpens(browser, "refused", "the refused press asks its question");
+    assert.deepEqual(refusedQuestion, { title: "No Claude account included", text: ["This profile leads with Claude, so it needs a Claude account."], items: [],
+      choices: [...lineOffers, ["dismiss", "Close"]] }, "The refused press asks the line's reason and why, offering the line's own fixes, then Close");
+    assert(lineOffers.some(([offer]) => offer === "accounts"), "The question offers the way to the Claude accounts");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await Bun.sleep(300);
+    assert.equal(await browser.evaluate(asks("refused")), true, "Mod+↵ in the question takes no step");
     assert.equal((await readConfiguration(server, writer, first)).revision, revision, "A save refused for an unserved lead writes nothing");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+    assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press is neither said aloud nor posted: its question says it");
     observed = fixtureAccounts();
     await key(browser, "r", 82);
     await until(browser, "with the Claude account back the save is ready again", `${launchIs("save & launch", "ready")} && ${profileValues} === ${JSON.stringify(edits)}`);
@@ -3904,9 +4259,13 @@ async function canvaslessWriterScenario(browser: BrowserInstance, server: TestSe
     await lookAwayAfter(browser, openedAt);
     await readsHeld(browser, "With a changed row unsaved, away and back past the quiet period, the panel reads nothing", Date.now(), machineReads);
     assert.equal(await browser.evaluate(`${launchIs("save", "ready")} && ${chosenKey("thinking")} !== ${JSON.stringify(thinking)}`), true, "The unsaved edit stays on show");
+    // How the save ended, a workbench message that did not fail, is posted to Manifold's notice stack, and not said aloud.
+    const saveSaid = await watchSaid(browser);
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await waitFor(async () => (await readConfiguration(server, writer, target)).revision === before.revision + 1, timeout, 50);
     await until(browser, "after the save only the launch waits for a canvas", launchIs("launch", "refused"));
+    await until(browser, "the save's message reaches the notice stack", noticeSays(JSON.stringify("The profile is saved for the workspace.")));
+    assert.deepEqual(await saveSaid(), { notices: ["The profile is saved for the workspace."], announced: [] }, "The save is posted once to the notice stack and not said aloud");
     await readsOnce(browser, "once the edit is saved the panel reads its inputs again", machineReads + 1);
     await browser.evaluate("localStorage.removeItem('manifold:debug')");
     assert.notEqual((await readConfiguration(server, writer, target)).configuration?.selection?.thinking, before.configuration?.selection?.thinking, "Save wrote the edit");
@@ -4777,6 +5136,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     // One recent profile, so a digit pressed where the panel's keys must not act would recall it.
     const savedAdvisor = saved.configuration.selection.advisor;
     await rememberTeam(browser, writer.principal.id, first.containerId, { ...saved.configuration.selection, advisor: savedAdvisor === "off" ? "glance" : "off" });
+    // From here the SDK's feed probe counts the panel's own reads (`ownReads`), which a held review's question holds.
+    await browser.evaluate("localStorage.setItem('manifold:debug', '1')");
     await openGenerator(browser, server, first.containerId);
     await chooseMachine(browser, first.machineId, machineName);
 
@@ -4792,9 +5153,19 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.deepEqual(await browser.evaluate(`[...document.querySelectorAll('${generator} [aria-label="Selected optional skills"] li .${G}options-skill-title')].map(el => el.textContent)`),
       ["Alpha", "Gamma"], "A set and individual choice render one effective selection without duplicates");
     await closeOptions(browser);
+    const posted = await watchSaid(browser);
     await launchOnce("↵ on the launch with skills chosen", async () => { await focusLaunch(browser); await key(browser, "Enter", 13); });
     assert.equal(await browser.evaluate(`document.activeElement === ${launchButton}`), true, "The launch keeps focus through its press and its refusal");
-    await until(browser, "the refusal is announced", `${liveRegion}.textContent !== '' && ${lineText}.includes(${liveRegion}.textContent)`);
+    // How the press ended, the refused preparation, is said aloud and posted to Manifold's notice stack, in the line's words.
+    // Pressed again at once, the next refusal takes the last one's place in the stack: one row, never two.
+    const refusedLaunch = await browser.evaluate<string>(`${element(`${generator} .${G}launch-part[data-tone="attention"]`)}.textContent`);
+    await until(browser, "the refusal is announced and reaches the notice stack", `${liveRegion}.textContent === ${JSON.stringify(refusedLaunch)} && ${noticeSays(JSON.stringify(refusedLaunch))}`);
+    const firstPosted = Date.now();
+    await launchOnce("↵ on the launch again at once", () => key(browser, "Enter", 13));
+    await until(browser, "the second refusal stands in the first one's place", `${noticeRows}.length === 1 && ${noticeSays(JSON.stringify(refusedLaunch))}`);
+    assert(Date.now() - firstPosted < 4_500, "The second refusal came while the first one's notice still stood");
+    assert.deepEqual(await posted(), { notices: [refusedLaunch, refusedLaunch], announced: [refusedLaunch] },
+      "Each press's refusal is posted, the second in the first one's place, and the live region says it");
     // Outcome and refusal lines clear on any change to the profile.
     await focusRow(browser, "thinking");
     const savedThinking = await browser.evaluate<string>(chosenKey("thinking"));
@@ -4854,7 +5225,9 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(reviews.length, reviewsBeforeSecond, "Returning to the machine requests no review before a press");
 
     // One press held at its review: the launch says it is launching, and where, and no profile or machine edit lands
-    // meanwhile, the focused row keeping focus. Released, the same press goes on from its review to the launch.
+    // meanwhile, the focused row keeping focus. Locked, the machine's word stays a Tab stop, the next after the launch: `w`
+    // gives it focus and it refuses with the gate's reason in the readout. Released, the same press goes on from its review
+    // to the launch.
     holdNextReview = true;
     const pressedAt = trace.requests.length, seen = await watchLaunch(browser);
     await focusLaunch(browser);
@@ -4872,6 +5245,11 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await Bun.sleep(300);
     assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null })`),
       { settings, machine: machineName, list: false }, "No profile or machine edit lands while a launch runs");
+    assert.deepEqual(await browser.evaluate(`({ focused: document.activeElement === ${machinePicker}, disabled: ${machinePicker}.getAttribute('aria-disabled'),
+      stop: ${machinePicker}.tabIndex, tone: ${readout}.dataset.tone, said: ${readout}.querySelector('b')?.textContent })`),
+      { focused: true, disabled: "true", stop: 0, tone: "warn", said: "machine" }, "Locked, the machine's word takes focus from w, stays in the Tab order and refuses with the gate's reason");
+    await key(browser, "Tab", 9, { modifiers: SHIFT });
+    await until(browser, "Shift+Tab from the locked machine reaches the launch, whose next Tab stop it is", `document.activeElement === ${launchButton}`);
     await focusRow(browser, "advisor");
     heldReview.release();
     await waitFor(() => prepareRequests === preparations + 1, timeout, 50);
@@ -4882,44 +5260,58 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     assert.equal(await browser.evaluate(`!!${row("advisor")}.contains(document.activeElement)`), true, "Keyboard focus stays on its row through the gate");
 
     // A GPT account joins the accounts OMP reports after the panel last read them, so the press's own review shows a pool
-    // other than the one the panel showed: the press stops there and holds that review, saying what differs, and the line
-    // stands while the panel reads its inputs again. Pointed, the launch says where the held review runs and why it has no
-    // live dials. The next press launches the held review without reviewing it again.
+    // other than the one the panel showed: the press stops there, holds that review and asks whether to launch it, naming
+    // what differs, with Launch it, then Not now; the launch line no longer says it. While the question is open the panel
+    // reads nothing on its own (web.tsx `held`), even shown again after a while at another tab, and the held review stands;
+    // the read it owed comes once Not now has dropped the review, launching nothing.
     gptJoins = true;
     const reviewsBeforeHold = reviews.length, preparedBeforeHold = prepareRequests, heldAt = trace.requests.length;
-    const stops = `${element(`${generator} .${G}launch-part[data-tone="warn"]`)}?.textContent === 'What will run differs'`;
     await click(browser, launchButton);
-    await until(browser, "the press stops on a review unlike what the panel showed, and says what differs", `${stops} && ${launchIs("launch", "ready")}`);
-    const differs = await browser.evaluate<[string, string | null][]>(launchParts);
-    assert(differs[0]?.[1] === "warn" && differs.some(([text]) => text === "GPT accounts join the pool"),
-      `The stop names what differs, the GPT accounts that joined the pool among it: ${JSON.stringify(differs)}`);
+    const differs = await questionOpens(browser, "differs", "the press stops on a review unlike what the panel showed, and asks whether to launch it");
+    const differsAt = Date.now();
+    await until(browser, "behind its question the launch is ready", launchIs("launch", "ready"));
+    assert.deepEqual({ ...differs, items: [] }, { title: "What will run differs", text: ["The session Code is about to start is not quite what the panel shows."], items: [],
+      choices: [["launch", "Launch it"], ["dismiss", "Not now"]] }, "The held review asks whether to launch what will run, with Launch it, then Not now");
+    assert(differs.items.includes("GPT accounts join the pool"), `The question names what differs, the GPT accounts that joined the pool among it: ${JSON.stringify(differs.items)}`);
+    assert.equal(await browser.evaluate(`${lineText}.includes('differs')`), false, "The launch line no longer says what will run differs: the question does");
     assert.deepEqual(launchDoors(heldAt), ["atyrode.omp.reviewSession"], "The press reviews once and stops before launching");
-    await browser.evaluate(`(() => {
-      const held = { lost: !(${stops}), watch: new MutationObserver(() => { if (!(${stops})) held.lost = true; }) };
-      held.watch.observe(${element(generator)}, { subtree: true, childList: true, attributes: true, characterData: true });
-      globalThis.__codeHeld = held;
-      return true;
-    })()`);
-    const refreshedAt = trace.requests.length;
-    for (let pass = 0; pass < 2; pass++) {
-      await key(browser, "r", 82);
-      await Bun.sleep(1_700);
-    }
-    assert.equal(await browser.evaluate("(globalThis.__codeHeld.watch.disconnect(), globalThis.__codeHeld.lost)"), false,
-      "The held review's line stands while the panel reads its inputs again");
-    assert(trace.requests.slice(refreshedAt).some(request => request.name === "atyrode.omp.accounts.accounts"), "The panel read the accounts again meanwhile");
-    await pointOf(browser, launchButton);
-    await until(browser, "pointed, the launch says where the held review runs and why it has no live dials",
-      `${readout}.textContent.includes(${JSON.stringify(`runs on ${machineName}`)}) && ${readout}.textContent.includes('no live dials: auto plans are on')`);
-    await pointAway(browser);
-    const launchedAt = trace.requests.length;
+    // The panel's own reads of the machine list (`ownReads`), which only its clock asks for, count what it reads on its own.
+    const machineReads = (await browser.evaluate<(number | null)[]>(ownReads))[0];
+    assert(typeof machineReads === "number", "The SDK's feed probe counts the panel's reads of the machine list");
+    await lookAwayAfter(browser, differsAt);
+    await readsHeld(browser, "While its question is open the panel reads nothing on its own, back from another tab or not", Date.now(), machineReads);
+    assert.equal(await browser.evaluate(asks("differs")), true, "The held review's question stands meanwhile");
+    await answer(browser, "dismiss");
+    await until(browser, "Not now closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+    await readsOnce(browser, "once Not now has closed the question the panel reads its inputs again", machineReads + 1);
+    assert.deepEqual([prepareRequests, reviews.length], [preparedBeforeHold, reviewsBeforeHold + 1], "Not now launches nothing");
+    await browser.evaluate("localStorage.removeItem('manifold:debug')");
+    // Not now dropped the held review, so the next press reviews again. The panel shows the GPT account by now, so that review
+    // matches what it shows, and the press goes on to the launch.
+    const againAt = trace.requests.length;
     await click(browser, launchButton);
     await waitFor(() => prepareRequests === preparedBeforeHold + 1, timeout, 50);
-    await until(browser, "the next press launches the held review, whose refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")}`);
-    assert.deepEqual(launchDoors(launchedAt), ["atyrode.omp.prepareSession"], "The next press launches the held review without reviewing it again");
-    assert.equal(reviews.length, reviewsBeforeHold + 1, "The held review was the only review of both presses");
-    // The GPT account leaves again, and the panel reads the accounts before anything below projects a launch on them.
+    await until(browser, "the next press reviews again and, matching what the panel shows, launches it, whose refusal is said beside a ready Launch",
+      `${failureLine} && ${launchIs("launch", "ready")} && ${unasked}`);
+    assert.deepEqual(launchDoors(againAt), ["atyrode.omp.reviewSession", "atyrode.omp.prepareSession"], "After Not now the next press reviews again before it launches");
+    // The GPT account leaves before the panel reads again (the launch's own end read it while it stood), so the next press's
+    // review differs once more and asks; its Launch it, the launch's own press, launches that held review without reviewing
+    // it again.
+    await waitFor(() => trace.requests.slice(againAt).some(request => request.name === "atyrode.omp.accounts.accounts"), timeout, 50);
+    await Bun.sleep(500);
     gptJoins = false;
+    const leavingAt = trace.requests.length;
+    await click(browser, launchButton);
+    const leaves = await questionOpens(browser, "differs", "a review unlike what the panel shows asks again");
+    assert(leaves.items.length > 0 && !leaves.items.includes("GPT accounts join the pool"), `The question names what differs now: ${JSON.stringify(leaves.items)}`);
+    assert.deepEqual(launchDoors(leavingAt), ["atyrode.omp.reviewSession"], "The press reviews once and asks");
+    const launchedAt = trace.requests.length;
+    await answer(browser, "launch");
+    await waitFor(() => prepareRequests === preparedBeforeHold + 2, timeout, 50);
+    await until(browser, "Launch it launches the held review, whose refusal is said beside a ready Launch", `${failureLine} && ${launchIs("launch", "ready")} && ${unasked}`);
+    assert.deepEqual(launchDoors(launchedAt), ["atyrode.omp.prepareSession"], "Launch it launches the held review without reviewing it again");
+    assert.equal(reviews.length, reviewsBeforeHold + 3, "Each of the three presses reviewed once, and Launch it reviewed nothing");
+    // The panel reads the accounts, the GPT account gone, before anything below projects a launch on them.
     const leftAt = trace.requests.length;
     await key(browser, "r", 82);
     await waitFor(() => trace.requests.slice(leftAt).some(request => request.name === "atyrode.omp.accounts.accounts"), timeout, 50);
@@ -5022,8 +5414,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     const quiet = await browser.evaluate<string>(`${liveRegion}.textContent`);
     await click(browser, rowVerb(first.machineId, "resume"));
     await waitFor(() => resumedInputs.length === 1, timeout, 50);
-    await until(browser, "the saved-state refusal is said aloud and on the sessions view's own line, in the model's words",
-      `${sessionSays(modelSaid)} && ${liveRegion}.textContent !== ${JSON.stringify(quiet)}`);
+    await until(browser, "the saved-state refusal is said aloud, on the sessions view's own line and in Manifold's notice stack, in the model's words",
+      `${sessionSays(modelSaid)} && ${liveRegion}.textContent !== ${JSON.stringify(quiet)} && ${noticeSays(modelSaid)}`);
     assert.deepEqual(await browser.evaluate<number[]>(rowTops), tops, "A resume and its refusal move no row of the sessions view");
     assert.deepEqual(resumedInputs[0], { machineId: first.machineId, sessionId: savedSessionId }, "Preserve resume must not silently inject a profile");
     await until(browser, "automatic plans refuse resuming with this profile before native resume",
@@ -5145,8 +5537,17 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await until(browser, "an offline machine's read is no longer offered",
       `${element(`${generator} [data-read-state="offline"][data-machine-id="${second.machineId}"]`)} !== null && ${savedRow(second.machineId)} === null`);
     await showView(browser, "main");
-    await click(browser, fix("machine"));
-    await until(browser, "the fix moves the launch to the online machine", `${machinePicker}.textContent === ${JSON.stringify(machineName)}`);
+    // A press on the refused launch asks its question, offering the line's fix for that refusal; the fix runs from the
+    // question, which closes, and moves the launch to the online machine.
+    const offlineFixes = await browser.evaluate<[string, string][]>(lineFixes);
+    assert.deepEqual(offlineFixes, [["machine", `Use ${machineName}`]], "The line's one fix for an offline destination is the other machine");
+    await click(browser, launchButton);
+    const offline = await questionOpens(browser, "refused", "a press on the offline destination's launch asks its question");
+    assert.deepEqual(offline, { title: `${secondName} is offline`, text: [`Launch needs ${secondName} connected. Choose another machine or reconnect it.`], items: [],
+      choices: [...offlineFixes, ["dismiss", "Close"]] }, "The offline destination's question says why and offers the line's fix, then Close");
+    await answer(browser, "machine");
+    await until(browser, "the fix runs from the question, which closes, and moves the launch to the online machine",
+      `${unasked} && ${machinePicker}.textContent === ${JSON.stringify(machineName)}`);
     fleetMachines.find(machine => machine.id === second.machineId)!.online = true;
     await key(browser, "r", 82);
     await showView(browser, "sessions");
@@ -6066,13 +6467,13 @@ async function run(): Promise<void> {
     await starterWorkbenchScenario(writerBrowser, server, writer, target);
     phase = "starter observation failures are not absence";
     await starterObservationScenario(writerBrowser, server, writer);
-    phase = "a first launch's model check: its charge, the approve press that records the approval, ask first and a refused spend";
+    phase = "a first launch's model check: its charge's question, the Approve that records the approval, ask first and a refused spend";
     await asNewPerson(writerBrowser, server, writer, "Code charge checker", person => checkChargeScenario(writerBrowser, server, person, target));
     phase = "a checked list outlives an OMP upgrade alone, and Launch checks the models again once a routed model is dropped";
     await ompUpgradeScenario(writerBrowser, server, writer, target);
-    phase = "Models: check models, the charge's hold and deliberate approve, measuring, left out, staged, imported, discarded, ask first and check again";
+    phase = "Models: check models, the charge's hold, its question over the sheet and deliberate Approve, measuring, left out, staged, imported, discarded, ask first and check again";
     await asNewPerson(writerBrowser, server, writer, "Code models checker", person => modelsSheetScenario(writerBrowser, server, person, target));
-    phase = "a person's checks across workspaces: the approval their first approve press records, a check within it that asks nothing, a kept check adopted on a press and on its own, Launch kept ready while changed accounts are checked again, a stopped renewal never retried and ask first cancelling a renewal that spends";
+    phase = "a person's checks across workspaces: the approval their first Approve records, a check within it that asks nothing, a narrowed stop's question, a kept check adopted on a press and on its own, Launch kept ready while changed accounts are checked again, a stopped renewal never retried and ask first cancelling a renewal that spends";
     await asNewPerson(writerBrowser, server, writer, "Code check keeper", person => keptChecksScenario(writerBrowser, server, person, target));
     phase = "tiered usage windows are their own rows and judge no pool";
     await tieredUsageScenario(writerBrowser, server, writer);
@@ -6104,7 +6505,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A first Launch checks the models itself: its charge waits on approve, the next Tab stop after the launch, with every row and the machine locked, and a double-click, a second click, key repeat or ↵ at the panel root never approves it; the waiting line paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px targets on a coarse pointer and animates nothing under reduced motion; one approve press records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs or a sheet is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired), back to code and, after ask first, check again, which Esc stops while its charge waits; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first approve press records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on what it changed, before any review, until Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal; a press whose own review shows an account pool the panel did not show stops on what will run, which stands while the panel reads again and, pointed, says where it runs, and the next press launches that review without another; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A press waits on the person only in a modal question that opens with focus on its title, moves nothing in the panel, keeps every panel key out, and answers only a deliberate press: never ↵ on its title, Tab then ↵ in one burst, key repeat, a second click, a press in its first moments, a drag onto the backdrop or a press on its border; Esc and a settled press on the backdrop are its way out, onto what had focus. A refused press asks the line's reason, why and the line's own fixes, then Close, never shaking or speaking, and a fix runs from it; a refusal that changes closes it. A first Launch checks the models itself: its charge asks what it spends, by family, with every row and the machine locked behind it, and a double-click on Launch never approves it; the question stands inside the viewport and paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px choices on a coarse pointer and does not animate under reduced motion; Cancel, Esc and the backdrop spend nothing and cancel no job; one Approve records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch, is said aloud and posted to the notice stack and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs, a sheet or a question is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge asked over the sheet with Approve and approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired) and posted to the notice stack, back to code and, after ask first, check again, whose question Esc cancels; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first Approve and launch records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on a question naming what it changed, before any review, whose Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, never posted or announced, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, posting that to the notice stack, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet, a question or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal, which is said aloud and posted to the notice stack, the next one in its place; a press whose own review shows an account pool the panel did not show asks whether to launch what will run, its Not now launching nothing so the next press reviews again, and its Launch it launching that review without another; locked during a launch, the machine stays the Tab stop after it; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
 }
 
 await run();
