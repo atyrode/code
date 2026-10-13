@@ -520,10 +520,10 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   keys.current = event => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const panel = app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
-    // While a layer holds the panel the panel's own keys answer nothing, wherever focus has fallen: the layer's card has its
-    // own. While the tour walks, they answer nothing either, but `Esc` ends the walk from anywhere in the panel and `→` `←`
-    // step it from the panel's root, so a press through the opening never strands the keyboard.
-    if (!panel || panelHeld(panel) || starting) return;
+    // While the tour walks, the panel's own keys answer nothing, but `Esc` ends the walk from anywhere in the panel and `→`
+    // `←` step it from the panel's root, so a press through the opening never strands the keyboard. While a layer holds the
+    // panel otherwise, they answer nothing, wherever focus has fallen: the layer's card has its own.
+    if (!panel || starting) return;
     if (walk !== null) {
       if (event.defaultPrevented || event.repeat || target?.closest("[data-layer]") || target?.matches("textarea, input, select, [contenteditable]")) return;
       if (event.key === "Escape") endWalk();
@@ -533,6 +533,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       event.stopPropagation();
       return;
     }
+    if (panelHeld(panel)) return;
     const onRoot = target !== null && target === panel;
     const action = panelKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
