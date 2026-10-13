@@ -340,15 +340,16 @@ Accounts, Sessions, Tutorial, Anywhere), with `m`, `u` and `o` under Generator, 
 open. **Tutorial** walks the tutorial again (below).
 
 Everything a Code panel shows over itself (a question a press waits on, Shortcuts, Models'
-import, the native permission reviews of Setup and Manage accounts, and the tutorial) stands
-inside that panel and never over the rest of Manifold: only the panel dims under it, and it
-stands in the part of the panel the window shows, scrolling within itself where the panel is
-short. While a question, Shortcuts, the import or a review is open, the panel under it is
-inert, so neither a pointer, a key nor an assistive tool reaches it, while the rest of
-Manifold stays as it was; the panel's live region goes on speaking. A press on the dim takes
-a question's or Shortcuts' way out once it has settled; the import and a review keep what
-they hold, and close only by `Esc` or their own buttons. Focus goes back to what had it, and
-a sheet a question's fix opens gives it back there in turn once it closes.
+import, the native permission reviews of Setup, Manage accounts and the Accounts panel, and
+the tutorial) stands inside that panel and never over the rest of Manifold: only the panel
+dims under it, and it stands in the part of the panel the window shows, scrolling within
+itself where the panel is short. While a question, Shortcuts, the import or a review is open,
+the panel under it is inert, so neither a pointer, a key nor an assistive tool reaches it,
+while the rest of Manifold stays as it was; the panel's live region goes on speaking. A press
+on the dim takes a question's way out once it has settled and closes Shortcuts at once; the
+import and a review keep what they hold, and close only by `Esc` or their own buttons. Focus
+goes back to what had it, and a sheet a question's fix opens gives it back there in turn once
+it closes.
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -395,15 +396,18 @@ and **Skip**; `→` and `←` step, `Esc` ends it, a held key steps once, and `T
 the card. Each step's card is its own and comes in as the opening lands, so moving to it
 moves focus to its Next and it is read out, and its control is scrolled into view.
 
-During the walk the panel is inert but for what a step offers to try, and only once the
-opening has landed on it, so a press, a key or an assistive tool reaches nothing else and
-the walk launches, spends and saves nothing: the profile's words, where pointing at one says
-in the readout what it would change and choosing one goes on by itself (a struck word only
-says why; it starts no model check), and a tab or Show control that opens Accounts, or
-routing or usage where the layout keeps them behind one, after which the opening glides to
-what opened and the walk waits for Next. A word tried changes the rows as any choice does,
-which Revert puts back. Focus the hold leaves nowhere goes back to the card's Next; `Esc`
-ends the walk from anywhere in the panel, and `→` `←` step it from the panel itself. Back
+During the walk the panel is inert but for what a step offers to try with the pointer, and
+only half a second after the step begins (longer than the opening's glide and than a double
+click's second press, with motion or without), so a press, a key or an assistive tool reaches
+nothing else and the walk launches, spends and saves nothing: the profile's words, where
+pointing at one says in the readout what it would change and choosing one goes on by itself
+(a struck word only says why; it starts no model check), and a tab or Show control that opens
+Accounts, or routing or usage where the layout keeps them behind one, after which the
+opening glides to what opened and the walk waits for Next. The keyboard stays on the card,
+whose Next covers every step. A word tried changes the rows as any choice does, which Revert
+puts back. Focus the hold leaves nowhere, or that falls to the page when what was tried goes
+away, goes back to the card's Next; `Esc` ends the walk from anywhere in the panel, and `→`
+`←` step it from the panel itself. Back
 onto a step another view hides brings the generator back, and a step whose control is not
 shown keeps its card in the middle of the panel with the dim closed. The walk's end,
 finished or skipped, puts focus on More, where it is replayed, so a second `↵` of a double

@@ -10,8 +10,11 @@ import { nextTutorialStep, previousTutorialStep, TUTORIAL_STEPS, TUTORIAL_WELCOM
 const G = "plugin-atyrode_code_generator__";
 /** The opening's margin around what it lights; the card's widest, and its distance from the opening and from the panel's edges. */
 const OPENING_PX = 6, CARD_MAX_PX = 320, GAP_PX = 12, EDGE_PX = 8;
-/** How long the opening takes to land on a step's control (styles.css, `tour-scrim` and `tour-ring`), and the dim to go once the tour ends. */
-const LAND_MS = 340, LEAVE_MS = 220;
+/**
+ * How long what a step lights waits before it may be tried: longer than the opening's 340 ms glide (styles.css, `tour-scrim`
+ * and `tour-ring`) and than a double click's second press, motion or not. And how long the dim takes to go once the tour ends.
+ */
+const SETTLE_MS = 500, LEAVE_MS = 220;
 
 /**
  * Whether the person has seen the tutorial: their own record, read once, else, for a sign-in that
@@ -265,22 +268,25 @@ export function TutorialLayer({ phase, step, shown, onTake, onSkip, onNext, onBa
   const hole = placed?.hole && (open || reduced) ? placed.hole : null;
   const point = view ? { x: view.left + view.width / 2, y: view.top + view.height / 2 } : { x: 0, y: 0 };
 
-  // The opening lands on each step's control before what it lights may be tried, so a press or a double click's second meant
-  // for what stood there before never reaches it.
+  // What a step lights waits a moment before it may be tried, so a press or a double click's second aimed at what stood there
+  // before (Next, Back, the card the press brought) never reaches it, with motion or without.
   const [landing, setLanding] = useState(false);
   useLayoutEffect(() => {
-    if (!walking || reduced) { setLanding(false); return; }
+    if (!walking) { setLanding(false); return; }
     setLanding(true);
-    const timer = window.setTimeout(() => setLanding(false), LAND_MS);
+    const timer = window.setTimeout(() => setLanding(false), SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [walking, step, placed?.lit]);
   const tryable = placed?.lit.endsWith(":true") === true && !landing;
-  // The walk holds the panel but what may be tried now; focus the hold leaves on something it made inert goes to Next.
+  // The walk holds the panel but what may be tried now. Focus the hold leaves on something it made inert, or that fell to the
+  // page because what was tried went away (a Show control, once its pane shows), goes to Next, so the walk's keys go on.
   useLayoutEffect(() => {
     if (!walking || !panel) return;
     const document = panel.ownerDocument, focused = document.activeElement;
     const release = holdPanel(panel, tryable ? litParts.current : []);
-    if (focused && focused !== panel && panel.contains(focused) && !focused.closest("[data-layer]") && focused.closest("[inert]")) next.current?.focus({ preventScroll: true });
+    const stranded = !focused || focused === document.body
+      || (focused !== panel && panel.contains(focused) && !focused.closest("[data-layer]") && focused.closest("[inert]") !== null);
+    if (stranded) next.current?.focus({ preventScroll: true });
     return release;
   }, [walking, panel, step, placed?.lit, tryable]);
 

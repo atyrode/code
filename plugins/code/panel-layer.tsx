@@ -78,7 +78,8 @@ const panelHolds = new WeakMap<HTMLElement, number>(), elementHolds = new WeakMa
  * element of it but the layers (`data-layer`), the live region (`data-live`), which goes on speaking,
  * and what `keep` names, which stays usable with everything inside it. Each sibling along the way from
  * a kept element up to the panel's root is held, so nothing else in the panel answers a pointer, a key
- * or an assistive tool.
+ * or an assistive tool. It holds what is there when it is taken: an element mounted later beside a kept
+ * path is not held, so a holder whose kept parts change takes its hold again.
  */
 export function holdPanel(panel: HTMLElement, keep: readonly HTMLElement[] = []): () => void {
   const path = new Set<Element>();
