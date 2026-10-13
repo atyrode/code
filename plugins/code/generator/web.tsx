@@ -594,10 +594,14 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       stepWalk(true);
     }
   });
-  // The offer: once per person, to a person and not an agent or a service, on the generator at rest with its profile shown,
-  // nothing running, no charge waiting and no other question open, until they answer it either way.
-  const offer = tutorial.seen === false && host.principal.kind === "human" && walk === null && !starting && view === "main" && sheet === null
-    && selection !== null && teamGate.open && !busy && decisionHost?.querySelector('dialog[open]:not([data-decision="tutorial"])') == null ? tutorialOffer() : null;
+  // The offer: once per person, to a person and not an agent or a service, opened on the generator at rest with its profile
+  // shown, nothing running, no charge waiting and no other question open; once open it stands until it is answered either
+  // way, since nothing behind it can be pressed meanwhile, so a check writing on its own never closes and reopens it.
+  const offerDue = tutorial.seen === false && host.principal.kind === "human" && walk === null && !starting && view === "main" && sheet === null
+    && selection !== null && teamGate.open && !busy && decisionHost?.querySelector('dialog[open]:not([data-decision="tutorial"])') == null;
+  const [offering, setOffering] = useState(false);
+  useEffect(() => { if (offerDue) setOffering(true); }, [offerDue]);
+  const offer = offering && tutorial.seen === false && walk === null && !starting ? tutorialOffer() : null;
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
   // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).

@@ -335,7 +335,7 @@ one, More reads **More · staged** and its item **Models · staged**, since noth
 until it is reviewed there. When session options are set, More and its **Options** item
 carry their summary ("· restricted", "· skills off", "· 2 skills"). **Shortcuts** opens a
 native modal dialog that lists every key under the view it acts in (Generator, Views,
-Accounts, Sessions, Anywhere), with `m`, `u` and `o` under Generator, where they act;
+Accounts, Sessions, Tutorial, Anywhere), with `m`, `u` and `o` under Generator, where they act;
 `Esc` or its Close button closes it and it owns its keys while open. **Tutorial** walks the
 tutorial again (below).
 

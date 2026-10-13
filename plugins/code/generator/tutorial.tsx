@@ -13,29 +13,35 @@ const CARD_MAX_PX = 320, GAP_PX = 10, EDGE_PX = 8, RING_PX = 4;
  * Whether the person has seen the tutorial: their own record, read once, else, for a sign-in that
  * keeps none (tutorial.ts), this browser's; null until read, and while it cannot be read, when the
  * tutorial is not offered. `see` records it, at once on screen; a record that fails to write only
- * means the tutorial is offered again next time, so nothing waits on it. Until the record is read,
- * where it is kept is unknown, so `see` writes nothing anywhere.
+ * means the tutorial is offered again next time, so nothing waits on it. Seen before the record is
+ * read (a walk replayed from More and ended at once), it is written once the read says where.
  */
 export function useTutorialSeen(host: HostServices): { readonly seen: boolean | null; readonly see: () => void } {
   const [seen, setSeen] = useState<boolean | null>(null);
   const keeps = useRef<boolean | null>(null);
+  const early = useRef(false);
   const local = `atyrode.code.tutorial:${host.principal.id}`;
+  function write(kept: boolean) {
+    if (!kept) { rememberInBrowser(local); return; }
+    codeWorkflow(host).seeTutorial().catch(() => { /* Offered again next time, as above. */ });
+  }
   useEffect(() => {
     let live = true;
     setSeen(null);
     keeps.current = null;
+    early.current = false;
     codeWorkflow(host).readTutorial().then(record => {
       if (!live) return;
       keeps.current = record.keeps;
+      if (early.current) { write(record.keeps); setSeen(true); return; }
       setSeen(record.keeps ? record.seenAt !== null : browserSeen(local));
     }, () => { /* Unread: not offered, as above. */ });
     return () => { live = false; };
   }, [host.principal.id]);
   function see() {
     setSeen(true);
-    if (keeps.current === null) return;
-    if (!keeps.current) { rememberInBrowser(local); return; }
-    codeWorkflow(host).seeTutorial().catch(() => { /* Offered again next time, as above. */ });
+    if (keeps.current === null) early.current = true;
+    else write(keeps.current);
   }
   return { seen, see };
 }
@@ -115,11 +121,24 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
   const latest = useRef(measure);
   latest.current = measure;
   // Between renders it follows what moves on its own: a resize of the panel, the stage or the control, a scroll, a popover
-  // opening or closing, a view or pane shown or hidden; at most once a frame.
+  // opening or closing, a view or pane shown or hidden, and the end of any motion under way in the panel (a pane sliding in
+  // moves its control without resizing or changing anything an observer sees); at most once a frame.
   useEffect(() => {
     const view = panel.ownerDocument.defaultView;
-    let frame = 0;
-    const follow = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; latest.current(); }); };
+    const watched = new WeakSet<Animation>();
+    let frame = 0, live = true;
+    const follow = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        latest.current();
+        for (const motion of panel.getAnimations({ subtree: true })) {
+          if (watched.has(motion)) continue;
+          watched.add(motion);
+          motion.finished.then(() => { if (live) follow(); }, () => {});
+        }
+      });
+    };
     const sizes = new ResizeObserver(follow), changes = new MutationObserver(follow);
     sizes.observe(panel);
     const stage = panel.querySelector("[data-tui]"), target = tutorialTarget(panel, current);
@@ -128,7 +147,9 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
     changes.observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-popover", "hidden"] });
     panel.addEventListener("scroll", follow, true);
     view?.addEventListener("resize", follow);
+    follow();
     return () => {
+      live = false;
       cancelAnimationFrame(frame);
       sizes.disconnect(); changes.disconnect();
       panel.removeEventListener("scroll", follow, true);
@@ -145,6 +166,9 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
     tutorialTarget(panel, current)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     measure();
     next.current?.focus({ preventScroll: true });
+    // A card taller than a short panel scrolls within itself: its choices are brought into its view with the focus.
+    const box = card.current;
+    if (box && box.scrollHeight > box.clientHeight) box.scrollTop = box.scrollHeight;
   }, [step, showing]);
 
   const place = tutorialPlace(shown, step);
