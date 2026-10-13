@@ -773,6 +773,10 @@
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-choices button { min-width: 44px; min-height: 44px; }
 }
+/* The card stands outside the stage and the sheets, whose reduced-motion rules stop their fades, so it stops its own. */
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial *, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-ring { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
+}
 
 /* Models: the list as the ladders it is, wide as a matrix (tiers down, providers across), else one ladder per provider. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-matrix { display: grid; grid-template-columns: max-content repeat(var(--cols), minmax(0, 1fr)); column-gap: 22px; min-width: 0; }
