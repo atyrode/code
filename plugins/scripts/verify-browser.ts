@@ -22,8 +22,9 @@ import { readStoredDraft, storedDraftKey, type StoredDraft } from "../code/gener
 import { recentTeamsKey } from "../code/generator/recent-teams.ts";
 import { keptAnswersKey } from "../code/generator/run-dials.ts";
 import { EDIT_QUIET_MS, HOLD_RECHECK_MS, SHOWN_AGAIN_MS } from "../code/generator/auto-read.ts";
-// Type-only: the dialog renders React, which this process does not load; its settle time is pinned by type below.
-import type * as DecisionDialogModule from "../code/generator/decision-dialog.tsx";
+// Type-only: the layer renders React, which this process does not load; its settle time is pinned by type below.
+import type * as PanelLayerModule from "../code/panel-layer.tsx";
+import { TUTORIAL_STEPS, TUTORIAL_WELCOME } from "../code/generator/tutorial-model.ts";
 import {
   BENCHMARK_OPERATION_ID, GATEWAY_OPERATION_ID, INVENTORY_OPERATION_ID, LAUNCH_OPERATION_ID, ModelCatalogSnapshotSchema, OMP_VERSION, OmpHarnessProfileSchema,
   PREPARE_WORKSPACE_OPERATION_ID, ResumeSessionInputSchema, VALIDATE_WORKSPACE_OPERATION_ID, actionSchemas as ompActionSchemas,
@@ -54,10 +55,13 @@ view and the sheets: no horizontal overflow, cut text or colliding text from 170
 view and sheet, zero hover/focus layout shift, panel-local keys that never act from a sheet or an
 open popover, More as a menu button by pointer and keyboard, arrival keys, the wheel only on a focused
 or rested row, 44px targets on a coarse pointer, focus kept through the gate and reduced motion that
-animates nothing; and the modal question a press waits on (a refused press, a check's charge, a
-review that differs, a check that changed the profile), answered only by a deliberate press; and the
-tutorial a person's first open offers once, recorded on the server, whose walk over the real controls
-lies over the panel at every width and moves nothing in it.
+animates nothing; the panel's own layer, where the question a press waits on (a refused press, a
+check's charge, a review that differs, a check that changed the profile), Shortcuts, Models' import
+and the native permission reviews stand inside their panel and never over the rest of Manifold, the
+question answered only by a deliberate press; and the tutorial a person's first open offers once,
+recorded on the server, a welcome and then a spotlight walk that dims the panel round each real
+control, holds the panel but what may be tried, and stays inside the panel at every width, moving
+nothing in it.
 Also: an unsaved edit kept across a reload, own account edits that never conflict with it while a
 foreign profile write does, a save refused for a lead no account serves, a writer without a canvas
 who saves but is told why launching waits, account switches saved through the real changeAccounts
@@ -95,6 +99,7 @@ const bundleDirectory = resolve(process.argv[2] ?? join(pluginRoot, "dist"));
 const ompBundleDirectory = resolve(process.env.CODE_OMP_BUNDLES_DIR ?? join(pluginRoot, ".integration/omp/plugins/dist"));
 const ompFamily = ["atyrode.omp", "atyrode.omp.accounts", "atyrode.omp.gateway"];
 const family = ["atyrode.code", "atyrode.code.accounts", "atyrode.code.generator", "atyrode.code.usage"];
+/** The accounts panel's root, around its scroll region: its layer, a native review, stands in it. */
 const panel = ".plugin-atyrode_code_accounts";
 const accounts = `${panel} .plugin-atyrode_code__accounts`;
 const profile = `${accounts} [aria-label="Active account pool"] select`;
@@ -322,24 +327,151 @@ const failureLine = `!!document.querySelector(${JSON.stringify(`${generator} .${
 /** The facts beside the launch, part by part, each with its tone; the line's asides are said in the readout instead. */
 const launchParts = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}launch-line .${G}launch-part`)})].map(el => [el.textContent, el.dataset.tone ?? null])`;
 /**
- * The question the panel waits on the person for (decision-dialog.tsx), opened modal over the whole page, whose
- * `data-decision` names what it asks: a check's charge, a review that differs from what the panel showed, a check that
- * changed the profile, a refused press, or, on a person's first open, whether to take the tutorial. A press's questions
- * and the tutorial's offer are two native dialogs, both mounted beside the stage and the sheets (`decisionHost`); the
- * question is the one open.
+ * THE PANEL'S LAYER (panel-layer.tsx): whatever Code shows over itself (a question a press waits on, Shortcuts, Models'
+ * import, a native review, the tour) mounts as a child of its panel's root, outside the scroll region and never in the page's
+ * top layer: a `[data-layer]` box over the whole panel, its dim (`DIM`) under the card it holds.
  */
-const decisionHost = element(`${generator} .${G}decision-host`);
-const decision = element(`${generator} dialog.${G}decision[open]`);
-type Question = "charge" | "differs" | "narrowed" | "refused" | "tutorial";
-/** The open question asks `kind`, modal over the page. */
+const layers = `${generator} > [data-layer]`;
+/** A layer's dim: a dialog's scrim, or the tour's, cut open round the step's control. */
+const DIM = `.plugin-atyrode_code__scrim, .${G}tour-scrim`;
+/** A point of Manifold's own page outside every Code panel, its top-left corner: a press there is no press on Code at all. */
+const PAGE_CORNER: Point = { x: 4, y: 4 };
+/**
+ * How a card of a panel's layer stands (`card`, an expression), as problems, none where it stands as it should: its layer a
+ * child of the panel root (`root`) over exactly the panel's box, and a dark translucent dim over that box; the card
+ * inside the part of the panel the window shows, `centred` there where it is a dialog or the welcome, never modal, and
+ * scrolling within itself where it is taller than its room; while it `holds`, every other child of the panel root inert but
+ * the live region, and none where it does not (`null`: the tour's walk, which holds step by step); the panel root a
+ * stacking context of its own (`isolation: isolate`), so nothing of the layer can rise past it; and nothing outside the
+ * panel covered or held: what the page shows at its top-left corner and just left of the panel is Manifold's own, nothing
+ * of Code, and nothing but the panel root's own children is inert, nor anything modal.
+ */
+function layerStands(root: string, card: string, { holds, centred }: { holds: boolean | null; centred: boolean }): string {
+  return `(() => {
+  const panel = document.querySelector('${root}'), card = ${card}, problems = [];
+  if (!panel || !card) return [panel ? 'nothing stands in the layer' : 'no panel ${root}'];
+  const edges = box => [box.left, box.right, box.top, box.bottom].map(Math.round).join(',');
+  const same = (a, b) => ['left', 'right', 'top', 'bottom'].every(side => Math.abs(a[side] - b[side]) <= 0.5);
+  const room = panel.getBoundingClientRect();
+  const shown = { left: Math.max(room.left, 0), right: Math.min(room.right, innerWidth), top: Math.max(room.top, 0), bottom: Math.min(room.bottom, innerHeight) };
+  const layer = card.closest('[data-layer]'), dim = layer?.querySelector(':scope > :is(${DIM})');
+  if (layer?.parentElement !== panel) problems.push('the card stands outside a layer of the panel root');
+  else if (!same(layer.getBoundingClientRect(), room)) problems.push('the layer ' + edges(layer.getBoundingClientRect()) + ' is not the panel ' + edges(room));
+  if (!dim) problems.push('the layer has no dim');
+  else if (!same(dim.getBoundingClientRect(), room)) problems.push('the dim ' + edges(dim.getBoundingClientRect()) + ' is not the panel ' + edges(room));
+  else {
+    // A dark translucent dim: the panel shows through it, but darkened.
+    const [red, green, blue, alpha = 1] = (getComputedStyle(dim).backgroundColor.match(/[0-9.]+/g) ?? []).map(Number);
+    if (!(alpha >= 0.6 && alpha < 1 && Math.max(red, green, blue) <= 64)) problems.push('the dim is no dark translucent colour: ' + getComputedStyle(dim).backgroundColor);
+  }
+  const box = card.getBoundingClientRect();
+  if (box.left < shown.left - 0.5 || box.right > shown.right + 0.5 || box.top < shown.top - 0.5 || box.bottom > shown.bottom + 0.5) {
+    problems.push('the card ' + edges(box) + ' leaves the part of the panel the window shows ' + edges(shown));
+  }
+  if (${centred} && (Math.abs(box.left + box.right - shown.left - shown.right) > 2 || Math.abs(box.top + box.bottom - shown.top - shown.bottom) > 2)) {
+    problems.push('the card ' + edges(box) + ' is not centred in ' + edges(shown));
+  }
+  if (card.scrollHeight > card.clientHeight + 1 && !['auto', 'scroll'].includes(getComputedStyle(card).overflowY)) problems.push('the card is taller than its room and cannot scroll');
+  if (${holds} !== null) for (const child of panel.children) {
+    const held = ${holds} && !child.matches('[data-layer], [data-live]');
+    if (child.inert !== held) problems.push((child.getAttribute('class') ?? child.tagName) + (held ? ' is not inert' : ' is inert'));
+  }
+  if (getComputedStyle(panel).isolation !== 'isolate') problems.push('the panel root is no stacking context of its own');
+  const strays = [...document.querySelectorAll('[inert]')].filter(el => !panel.contains(el)).map(el => el.getAttribute('class') ?? el.tagName);
+  if (strays.length) problems.push('inert outside the panel: ' + strays.slice(0, 3).join(', '));
+  const modal = document.querySelector(':modal');
+  if (modal) problems.push('modal over the page: ' + (modal.getAttribute('class') ?? modal.tagName));
+  for (const [x, y] of [[${PAGE_CORNER.x}, ${PAGE_CORNER.y}], [Math.floor(room.left) - 4, Math.round((shown.top + shown.bottom) / 2)]]) {
+    if (x < 0) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || hit.closest('[class*="plugin-atyrode_code"], [inert]')) problems.push('the page at ' + x + ',' + y + ' shows ' + (hit?.getAttribute('class') ?? 'nothing'));
+  }
+  return problems;
+})()`;
+}
+/**
+ * A point on a panel's dim, away from its card and from the tour's opening: a whole pixel inside the part of the panel the
+ * window shows where the page shows the dim itself, tried at the corners and the middles of that part's sides.
+ */
+async function dimPoint(browser: BrowserInstance, root = generator): Promise<Point> {
+  const point = await browser.evaluate<Point | null>(`(() => {
+    const room = document.querySelector('${root}').getBoundingClientRect();
+    const left = Math.ceil(Math.max(room.left, 0)) + 6, right = Math.floor(Math.min(room.right, innerWidth)) - 6;
+    const top = Math.ceil(Math.max(room.top, 0)) + 6, bottom = Math.floor(Math.min(room.bottom, innerHeight)) - 6;
+    const across = Math.round((left + right) / 2), down = Math.round((top + bottom) / 2);
+    return [[left, bottom], [right, bottom], [left, top], [right, top], [left, down], [right, down], [across, bottom], [across, top]]
+      .map(([x, y]) => ({ x, y })).find(({ x, y }) => !!document.elementFromPoint(x, y)?.matches('${DIM}')) ?? null;
+  })()`);
+  if (!point) throw new ProofFailure(`The dim of ${root} shows nowhere outside its card`);
+  return point;
+}
+/** Where a click landed (`watchPresses`), with its `detail` and whether the layer it pressed had stood `DECISION_SETTLE_MS`. */
+type Pressed = { on: "outside" | "dim" | "layer" | "border" | "inside" | "panel"; detail: number; settled: boolean };
+/**
+ * From now until the page next loads, every click the page hears kept with where it landed: `outside` the generator panel,
+ * on a layer's `dim`, on the `layer` itself (a drag between its card and its dim clicks the box the two share), on the open
+ * card's own `border` (the card itself), `inside` the card, or on the `panel` under the layer. Whether the layer had stood
+ * long enough is timed from its arrival, watched on the panel root where it mounts, so each press is known to be what it
+ * claims. The returned read gives them so far.
+ */
+async function watchPresses(browser: BrowserInstance): Promise<() => Promise<Pressed[]>> {
+  await browser.evaluate(`(() => {
+    const panel = ${element(generator)}, presses = { opened: null, clicks: [] };
+    new MutationObserver(() => {
+      if (!panel.querySelector(':scope > [data-layer]')) presses.opened = null;
+      else if (presses.opened === null) presses.opened = performance.now();
+    }).observe(panel, { childList: true });
+    document.addEventListener('click', event => {
+      const target = event.target, card = target.closest('[data-layer] :is(dialog, [role="dialog"])');
+      const on = !panel.contains(target) ? 'outside' : target.matches('${DIM}') ? 'dim' : target.matches('[data-layer]') ? 'layer'
+        : target === card ? 'border' : card ? 'inside' : 'panel';
+      presses.clicks.push({ on, detail: event.detail, settled: presses.opened !== null && event.timeStamp - presses.opened >= ${DECISION_SETTLE_MS} });
+    }, true);
+    globalThis.__codePresses = presses;
+    return true;
+  })()`);
+  return () => browser.evaluate<Pressed[]>("globalThis.__codePresses.clicks");
+}
+/**
+ * A native review (permission-review.tsx): the capabilities Setup or Manage accounts would ask a native owner to approve, a
+ * dialog in the layer of the panel it was opened from (`root`), never modal.
+ */
+function reviewIn(root: string): string {
+  return `${root} > [data-layer] dialog.plugin-atyrode_code__permission-dialog`;
+}
+/**
+ * The open native review of `root` stands as a dialog of its panel's layer should (`layerStands`), with focus on its heading,
+ * and a press on its dim, even once settled, closes nothing and keeps what it has chosen.
+ */
+async function reviewStands(browser: BrowserInstance, root: string, description: string): Promise<void> {
+  const review = element(reviewIn(root));
+  await until(browser, `${description} opens with focus on its heading`, `document.activeElement === ${review}?.querySelector('h2')`);
+  assert.deepEqual(await browser.evaluate(layerStands(root, review, { holds: true, centred: true })), [],
+    `${description} stands in its panel's layer: over the panel's box, centred in what the window shows of it, the panel under it inert and nothing outside it covered, held or modal`);
+  const chosen = `JSON.stringify([...${review}.querySelectorAll('[data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability))`;
+  const before = await browser.evaluate<string>(chosen);
+  await Bun.sleep(DECISION_SETTLE_MS);
+  await press(browser, await dimPoint(browser, root));
+  await Bun.sleep(300);
+  assert.deepEqual(await browser.evaluate(`[${review} !== null, ${chosen}, document.activeElement === ${review}.querySelector('h2')]`), [true, before, true],
+    `A press on the dim keeps ${description}, what it has chosen and its focus`);
+}
+/**
+ * The question the panel waits on the person for (decision-dialog.tsx), a dialog in the panel's layer whose `data-decision`
+ * names what it asks: a check's charge, a review that differs from what the panel showed, a check that changed the profile,
+ * or a refused press. It is mounted while it asks and gone once it is answered.
+ */
+const decision = element(`${layers} dialog.${G}decision`);
+type Question = "charge" | "differs" | "narrowed" | "refused";
+/** The open question asks `kind`. */
 function asks(kind: Question): string {
-  return `(!!${decision}?.open && ${decision}.matches(':modal') && ${decision}.dataset.decision === '${kind}')`;
+  return `(${decision}?.dataset.decision === '${kind}')`;
 }
 /** No question is open. */
-const unasked = `!${decision}?.open`;
+const unasked = `(${decision} === null)`;
 /** A choice of the open question by its `data-choice`: approve, cancel, launch, dismiss, or the key of a fix the launch line offers. */
 function choice(key: string): string {
-  return element(`${generator} dialog.${G}decision[open] button[data-choice="${key}"]`);
+  return element(`${layers} dialog.${G}decision button[data-choice="${key}"]`);
 }
 /** What the open question asks, as a person reads it: its title, its sentences, what it is about, and its choices in order, each by its `data-choice` and words. */
 type Asked = { title: string; text: string[]; items: string[]; choices: [string, string][] };
@@ -354,11 +486,11 @@ const lineFixes = `[...document.querySelectorAll(${JSON.stringify(`${generator} 
 /**
  * How long the question ignores any press but Esc once it opens or its words change (one that lands this soon was aimed at
  * what stood there before), and how long a choice must have held focus before a key answers with it (Tab then ↵ in one
- * burst is typing meant for somewhere else). Typed as decision-dialog.tsx's own `DECISION_SETTLE_MS` and
+ * burst is typing meant for somewhere else). Typed as panel-layer.tsx's own `DECISION_SETTLE_MS` and
  * `DECISION_FOCUS_MS`, so this stops compiling if either changes.
  */
-const DECISION_SETTLE_MS: typeof DecisionDialogModule.DECISION_SETTLE_MS = 400;
-const DECISION_FOCUS_MS: typeof DecisionDialogModule.DECISION_FOCUS_MS = 300;
+const DECISION_SETTLE_MS: typeof PanelLayerModule.DECISION_SETTLE_MS = 400;
+const DECISION_FOCUS_MS: typeof PanelLayerModule.DECISION_FOCUS_MS = 300;
 /** A wait after which ↵ on the choice just focused is a deliberate press: the question has settled and the choice has held focus. */
 const DELIBERATE_MS = Math.max(DECISION_SETTLE_MS, DECISION_FOCUS_MS);
 /** Manifold's notice stack (notice.tsx): its rows on show, newest first. A press's outcome takes one row, each new one in the last one's place. */
@@ -367,7 +499,9 @@ const noticeRows = `[...document.querySelectorAll('.notice-layer .notice:not(.no
 function noticeSays(words: string): string {
   return `${noticeRows}.some(row => row.getAttribute('role') === 'status' && row.querySelector('.notice-message')?.textContent === ${words})`;
 }
-const shortcuts = element(`${generator} dialog.${G}shortcuts`);
+/** Shortcuts, a dialog in the panel's layer while open, and its Close button, which takes focus as it opens. */
+const shortcuts = element(`${layers} dialog.${G}shortcuts`);
+const shortcutsClose = `${shortcuts}?.querySelector('button')`;
 const machinePicker = element(`${generator} [data-machine-picker]`);
 const machineList = element(`${generator} [role="listbox"][aria-label="machines"]`);
 const visibleSheet = `[...document.querySelectorAll(${JSON.stringify(`${generator} .${G}sheet-host`)})].find(el => !el.hidden)`;
@@ -375,6 +509,8 @@ const skillsSection = element(`${generator} [aria-label="Optional skills"]`);
 /** Models and Setup, each a sheet of its own over the stage (models-sheet.tsx, setup-sheet.tsx), by their selectors. */
 const modelsSheet = `${generator} [data-sheet="models"]`;
 const setupSheet = `${generator} [data-sheet="setup"]`;
+/** Models' import, a dialog of the panel's layer by its title (models-sheet.tsx), never in the sheet. */
+const importDialog = `${layers} dialog[aria-labelledby="${G}import-title"]`;
 const routeRows = `${generator} [data-pane="routing"] .${G}route`;
 const starterProviders = ["anthropic", "deepseek", "openai-codex"];
 const profileRoles = ["default", "task", "plan", "slow", "reviewer", "security-reviewer", "scout", "sonic", "vision", "smol", "tiny", "commit"];
@@ -515,7 +651,7 @@ async function chooseMachine(browser: BrowserInstance, machineId: string, name: 
   await until(browser, `the launch runs on ${name}`, `${machineList} === null && ${machinePicker}?.textContent === ${JSON.stringify(name)}`);
 }
 /**
- * The question `kind` opens, modal over the page, with focus on its title, never on a choice: it comes back while the person
+ * The question `kind` opens in the panel's layer with focus on its title, never on a choice: it comes back while the person
  * may be typing elsewhere, and no key meant for something else may answer it. Returns what it asks.
  */
 async function questionOpens(browser: BrowserInstance, kind: Question, description: string): Promise<Asked> {
@@ -544,8 +680,6 @@ async function answer(browser: BrowserInstance, which: string): Promise<void> {
   await Bun.sleep(DECISION_SETTLE_MS);
   await click(browser, choice(which));
 }
-/** A point on the open question's backdrop, the page's top-left corner: a press there is a press on the dialog itself. */
-const backdrop: Point = { x: 4, y: 4 };
 /**
  * From now until the page next loads, every row Manifold's notice stack shows (each by its words) and everything the
  * panel's live region says, each once as it appears. Rows are watched rather than sampled: a notice fades after five
@@ -758,7 +892,7 @@ async function readTutorial(server: TestServer, grant: TokenGrant): Promise<Acti
 }
 /**
  * Marks `grant` as a person who has seen the tutorial, through the real door, before their browser opens the panel. A
- * person's first open offers the tutorial in a modal question that nothing behind it can be pressed through, so every
+ * person's first open offers the tutorial in a welcome that holds the panel inert until it is answered, so every
  * scenario but the tutorial's own starts from a person past it, as anyone who has opened the panel once is. Every
  * principal here is a person whose sign-in reaches the whole workspace tree, so each keeps the record on the server and
  * none needs the browser's key that a sign-in keeping none would.
@@ -1155,13 +1289,13 @@ async function showView(browser: BrowserInstance, view: View): Promise<void> {
 }
 
 /**
- * The shown view's text and controls, as painted: the stage's (`[data-tui]`), an open sheet's or the open question's. Glyphs
- * paint inside the middle of a text box: a font's ascent and descent may reach into a neighbouring line without any ink
- * touching, so each box is trimmed by a fifth top and bottom before two are compared. Text that runs past a box that clips
- * it sideways is cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by a clip is still
- * overflow. Screen-reader text is clipped to a pixel on purpose and is left out. A control (`controls`) narrower than 24px
- * can no longer be read or pressed. Text paints inside `bounds`: the panel, or the viewport for the question, which stands
- * over the whole page in the top layer, where no box around it clips it.
+ * The shown view's text and controls, as painted: the stage's (`[data-tui]`), an open sheet's, or a card of the panel's
+ * layer. Glyphs paint inside the middle of a text box: a font's ascent and descent may reach into a neighbouring line
+ * without any ink touching, so each box is trimmed by a fifth top and bottom before two are compared. Text that runs past
+ * a box that clips it sideways is cut, unless that box ends it in an ellipsis or a line clamp; a scroll width hidden by a
+ * clip is still overflow. Screen-reader text is clipped to a pixel on purpose and is left out. A control (`controls`)
+ * narrower than 24px can no longer be read or pressed. Text paints inside `bounds`: the panel, or for a card of its layer
+ * the part of the panel the window shows (`SHOWN_BOUNDS`).
  */
 type Paint = { overflow: number; overlaps: string[]; outside: string[]; cut: string[]; small: string[]; texts: number };
 function paintOf(view: string, controls: string, bounds = "root.getBoundingClientRect()"): string {
@@ -1170,12 +1304,10 @@ function paintOf(view: string, controls: string, bounds = "root.getBoundingClien
   const view = root.querySelector('${view}');
   const viewport = root.querySelector('.scroll-region__viewport');
   const bounds = ${bounds};
-  // A modal view stands in the top layer: only it and what it holds clip its text.
-  const top = view.matches(':modal') ? view : root;
   const clips = new Map();
   const clipOf = element => {
     if (clips.has(element)) return clips.get(element);
-    const parent = element.parentElement && element !== top ? clipOf(element.parentElement) : { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+    const parent = element.parentElement && element !== root ? clipOf(element.parentElement) : { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
     const style = getComputedStyle(element);
     let clip = parent;
     if (style.overflowX !== 'visible' || style.overflowY !== 'visible') {
@@ -1197,7 +1329,7 @@ function paintOf(view: string, controls: string, bounds = "root.getBoundingClien
     range.selectNodeContents(node);
     for (const rect of range.getClientRects()) {
       if (rect.width < 1) continue;
-      for (let box = parent; box && box !== top.parentElement; box = box.parentElement) {
+      for (let box = parent; box && box !== root.parentElement; box = box.parentElement) {
         const style = getComputedStyle(box);
         if (style.overflowX === 'visible') continue;
         const edge = box.getBoundingClientRect();
@@ -1230,6 +1362,8 @@ function paintOf(view: string, controls: string, bounds = "root.getBoundingClien
 })()`;
 }
 const PAINT = paintOf("[data-tui]", `button, [role="tab"], [role="switch"], [role="checkbox"], [role="listbox"]`);
+/** The part of the panel the window shows, as `paintOf` bounds: where a card of the panel's layer paints. */
+const SHOWN_BOUNDS = "(box => ({ left: Math.max(box.left, 0), right: Math.min(box.right, innerWidth) }))(root.getBoundingClientRect())";
 /** The open sheet over the stage, and the controls it offers: every one a target, the list's cells and the left-out ids among them. */
 const openSheetHost = `.${G}sheet-host:not([hidden])`;
 const SHEET_CONTROLS = `button, select, input, textarea, [role="radio"], [role="gridcell"], [tabindex="0"]`;
@@ -1261,10 +1395,7 @@ function boxesOf(view: string, skip: string): string {
 /** The main view's words that change by design inside fixed boxes: the readouts, the next-refresh line and screen-reader text. */
 const SAID_WORDS = `element.parentElement?.closest('.${G}readout, .${G}route-readout, .${G}usage-refresh, .plugin-atyrode_code__sr')`;
 const BOXES = boxesOf(stage, SAID_WORDS);
-/**
- * The whole panel: the stage and, while one is open, the question over it, whose boxes are laid out in the top layer from
- * the dialog's own place on the page.
- */
+/** The whole panel: the stage and, while one is open, the layer over it, laid out in the panel's root. */
 const PANEL_BOXES = boxesOf(generator, SAID_WORDS);
 const SHEET_BOXES = boxesOf(`${generator} ${openSheetHost}`, `element.closest('.${G}sheet-state, .plugin-atyrode_code__sr') || element.parentElement?.closest('[data-readout]')`);
 const SHIFTED = `(() => {
@@ -1600,20 +1731,29 @@ async function sheetStill(browser: BrowserInstance, what: string): Promise<void>
     `Reduced motion: ${what} does not animate`);
   assert.deepEqual(await browser.evaluate<string[]>(SHEET_MOTION), [], `Reduced motion: after ${what} every transition and animation in the sheet lasts 0s`);
 }
+/**
+ * What of a panel's layer would still move under reduced motion: a layer, an element of one or a pseudo-element of either,
+ * whose transition or animation lasts or waits. Nothing of a question, Shortcuts, the import or the tour may.
+ */
+const LAYER_MOTION = `[...document.querySelectorAll('${layers}, ${layers} *')].flatMap(el => [null, '::before', '::after'].flatMap(pseudo => {
+  const style = getComputedStyle(el, pseudo);
+  return [style.transitionDuration, style.transitionDelay, style.animationDuration, style.animationDelay].flatMap(value => value.split(',')).some(value => parseFloat(value) > 0)
+    ? [(el.getAttribute('class') ?? el.tagName) + (pseudo ?? '')] : [];
+})).slice(0, 6)`;
 
 // ---------------------------------------------------------------- the question a press waits on: geometry, shift, touch, motion
 
-/** The open question as painted, its text judged inside the viewport: it stands over the whole page, not the panel. */
-const QUESTION_PAINT = paintOf(`dialog.${G}decision[open]`, "button", "({ left: 0, right: innerWidth })");
-/** The open question's entrance: its own short rise with motion allowed (styles.css `decision-in`), none under reduced motion. */
-const questionAnimation = `getComputedStyle(${decision}).animationName`;
+/** The open question as painted, its text judged inside the part of the panel the window shows, where its layer keeps it. */
+const QUESTION_PAINT = paintOf(`:scope > [data-layer] dialog.${G}decision`, "button", SHOWN_BOUNDS);
+/** Whether the open question's card and its dim each come in with an entrance of their own: an animation that runs for a while. */
+const questionMotion = `[${decision}, ${decision}.closest('[data-layer]').querySelector(':scope > :is(${DIM})')].map(el => getComputedStyle(el).animationName !== 'none' && parseFloat(getComputedStyle(el).animationDuration) > 0)`;
 /**
- * From 170 to 1440px of panel width the open question stands inside the viewport and paints whole (`QUESTION_PAINT`): no
- * text cut, outside the viewport or over other text and no choice squeezed; nothing scrolls sideways, in the question or the
- * panel; and the main view behind it paints whole too (`PAINT`), the launch line saying it waits among it. The question is
- * fixed in the top layer, so it adds nothing to the page's own width, which at the narrowest viewports is Manifold's shell's.
- * Only the viewport changes and nothing is pressed, so the question waits throughout. Every width is measured before the
- * verdict.
+ * From 170 to 1440px of panel width the open question stands in the panel's layer as it should (`layerStands`: over the
+ * panel's box, centred in the part of it the window shows, the panel under it inert, nothing outside it covered or held) and
+ * paints whole there (`QUESTION_PAINT`): no text cut, outside that part or over other text and no choice squeezed; nothing
+ * scrolls sideways, in the question or the panel; and the main view behind it paints whole too (`PAINT`), the launch line
+ * saying it waits among it. Only the viewport changes and nothing is pressed, so the question waits throughout, its layer
+ * following each resize. Every width is measured before the verdict.
  */
 async function questionGeometry(browser: BrowserInstance, label: string): Promise<void> {
   const problems: string[] = [];
@@ -1625,15 +1765,9 @@ async function questionGeometry(browser: BrowserInstance, label: string): Promis
       const facts = await browser.evaluate<Paint>(QUESTION_PAINT);
       if (facts.texts < 3) problems.push(`${where}: too little text paints (${facts.texts})`);
       if (facts.overflow !== 0) problems.push(`${where}: ${facts.overflow}px horizontal overflow`);
-      problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the viewport`),
+      problems.push(...facts.cut.map(entry => `${where}: ${entry}`), ...facts.outside.map(entry => `${where}: ${entry} paints outside the part of the panel the window shows`),
         ...facts.overlaps.map(entry => `${where}: ${entry}`), ...facts.small.map(entry => `${where}: choice ${entry} wide`));
-      problems.push(...(await browser.evaluate<string[]>(`(() => {
-        const box = ${decision}.getBoundingClientRect(), problems = [];
-        if (box.left < -0.5 || box.top < -0.5 || box.right > innerWidth + 0.5 || box.bottom > innerHeight + 0.5) {
-          problems.push('the question ' + [box.left, box.right, box.top, box.bottom].map(Math.round).join(',') + ' leaves the ' + innerWidth + 'x' + innerHeight + ' viewport');
-        }
-        return problems;
-      })()`)).map(entry => `${where}: ${entry}`));
+      problems.push(...(await browser.evaluate<string[]>(layerStands(generator, decision, { holds: true, centred: true }))).map(entry => `${where}: ${entry}`));
       const behind = await browser.evaluate<Paint>(PAINT);
       const under = `the main view under ${where}`;
       if (behind.overflow !== 0) problems.push(`${under}: ${behind.overflow}px horizontal overflow`);
@@ -1644,7 +1778,7 @@ async function questionGeometry(browser: BrowserInstance, label: string): Promis
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert.deepEqual(problems, [], `From 170 to 1440px the ${label} question stands inside the viewport and paints whole, nothing scrolls sideways, and the panel behind it paints whole`);
+  assert.deepEqual(problems, [], `From 170 to 1440px the ${label} question stands in the panel's layer inside the part of the panel the window shows and paints whole, nothing scrolls sideways, and the panel behind it paints whole`);
 }
 /**
  * Pointing at each choice of the open question, and walking its choices by Tab from the first, move no layout box of the
@@ -1714,7 +1848,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   const routing = element(`${generator} [data-pane="routing"]`), usage = element(`${generator} [data-pane="usage"]`);
   // The main view as it rests: the generator with routing and usage, no sheet, no shortcuts dialog, no question a press asks
   // and the fallback chains hidden.
-  const resting = `${shownView("main")} && !${shortcuts}?.open && ${unasked} && ${element(stage)}.hidden === false && ${routing}.hidden === false &&
+  const resting = `${shownView("main")} && ${shortcuts} === null && ${unasked} && ${element(stage)}.hidden === false && ${routing}.hidden === false &&
     ${usage}.hidden === false && ${element(`${generator} [data-chains]`)}.getAttribute('aria-checked') !== 'true'`;
 
   // Keys are panel-local: the same keys pressed in another panel never reach the generator.
@@ -1734,7 +1868,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     await key(browser, name, code, { modifiers });
   }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: !!${shortcuts}?.open, sheet: ${element(stage)}.hidden, asked: !${unasked}, said: ${liveRegion}.textContent })`),
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, shortcuts: ${shortcuts} !== null, sheet: ${element(stage)}.hidden, asked: !${unasked}, said: ${liveRegion}.textContent })`),
     { view: "main", shortcuts: false, sheet: true, asked: false, said: quiet }, "No panel key acts behind a sheet: no view, shortcuts or step, nothing asked or said");
   await closeSheet(browser);
   assert.deepEqual(await readProfile(browser, draftKey), before, "No panel key behind a sheet edits the profile");
@@ -1764,31 +1898,56 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await click(browser, element(`${generator} [data-pane="routing"] .${G}title`));
   await until(browser, "a press outside closes the list", `${machineList} === null`);
 
-  // `?` opens the shortcuts as a modal dialog with focus in it; from there the panel's keys take no step and change no view,
-  // Tab never reaches a control behind it, and Esc closes it onto the row it was opened from.
+  // `?` opens the shortcuts in the panel's layer with focus on their Close button: they stand centred in the part of the
+  // panel the window shows, over the panel's dim, the panel under them inert and nothing outside the panel covered or held,
+  // and in a panel grown too short for them they keep to that part, scrolling within themselves. From there the panel's keys
+  // take no step and change no view, Tab never reaches a control behind them, and Esc closes them onto the row they were
+  // opened from.
   await focusRow(browser, "thinking");
   await key(browser, "?", 191);
-  await until(browser, "? opens the shortcuts with focus in them", `!!${shortcuts}?.open && ${shortcuts}.matches(':modal') && ${shortcuts}.contains(document.activeElement)`);
+  await until(browser, "? opens the shortcuts with focus on their Close button", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
+  assert.deepEqual(await browser.evaluate(layerStands(generator, shortcuts, { holds: true, centred: true })), [],
+    "The shortcuts stand in the panel's layer: over the panel's box, centred in what the window shows of it, the panel under them inert and nothing outside it covered, held or modal");
+  try {
+    await panelWidth(browser, 1280, 520);
+    assert.deepEqual(await browser.evaluate(`[${shortcuts}.scrollHeight > ${shortcuts}.clientHeight, ${layerStands(generator, shortcuts, { holds: true, centred: true })}]`), [true, []],
+      "In a panel too short for them the shortcuts keep to what the window shows of it and scroll within themselves");
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
   // ↵ is the launch, one press that saves and launches, checking the models first when needed.
   assert.equal(await browser.evaluate(`[...${shortcuts}.querySelectorAll('dt')].find(dt => dt.textContent === '⏎')?.nextElementSibling?.textContent`),
     "The launch: save and launch, checking the models first when needed", "The shortcuts say what ↵ does: the launch");
   for (const [name, code] of [["a", 65], ["e", 69], ["d", 68], ["1", 49]] as const) await key(browser, name, code);
   for (const modifiers of [0, 0, 0, SHIFT, SHIFT]) await key(browser, "Tab", 9, { modifiers });
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, open: ${shortcuts}.open,
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, open: ${shortcuts} !== null,
     behind: !!document.activeElement?.closest('${generator}') && !${shortcuts}.contains(document.activeElement), said: ${liveRegion}.textContent })`),
     { view: "main", open: true, behind: false, said: quiet }, "From the shortcuts no panel key acts, and Tab reaches no control behind them");
   assert.deepEqual(await readProfile(browser, draftKey), before, "Keys pressed in the shortcuts never edit the profile");
   await key(browser, "Escape", 27);
-  await until(browser, "Esc closes the shortcuts onto the row they were opened from", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
+  await until(browser, "Esc closes the shortcuts onto the row they were opened from", `${shortcuts} === null && !!${row("thinking")}.contains(document.activeElement)`);
   // Mod+↵ in the shortcuts is their Close button's own press: it closes them and takes no launch step.
   await key(browser, "?", 191);
-  await until(browser, "? opens the shortcuts again", `!!${shortcuts}?.open && ${shortcuts}.contains(document.activeElement)`);
+  await until(browser, "? opens the shortcuts again", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
   await key(browser, "Enter", 13, { modifiers: CTRL });
   await Bun.sleep(300);
   assert.deepEqual(await browser.evaluate(`[!${unasked}, ${liveRegion}.textContent]`), [false, quiet], "Mod+↵ in the shortcuts takes no launch step: nothing is asked or said");
-  if (await browser.evaluate<boolean>(`${shortcuts}.open`)) await key(browser, "Escape", 27);
-  await until(browser, "the shortcuts close onto the row", `!${shortcuts}.open && !!${row("thinking")}.contains(document.activeElement)`);
+  if (await browser.evaluate<boolean>(`${shortcuts} !== null`)) await key(browser, "Escape", 27);
+  await until(browser, "the shortcuts close onto the row", `${shortcuts} === null && !!${row("thinking")}.contains(document.activeElement)`);
+  // The shortcuts ask nothing that needs settling: a press on the dim closes them at once, onto the row. A press on their
+  // own box closes nothing, and a press on Close closes them onto the row too.
+  await key(browser, "?", 191);
+  await until(browser, "? opens the shortcuts for the pointer", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
+  await press(browser, await dimPoint(browser));
+  await until(browser, "a press on the dim closes the shortcuts at once, onto the row", `${shortcuts} === null && !!${row("thinking")}.contains(document.activeElement)`);
+  await key(browser, "?", 191);
+  await until(browser, "? opens the shortcuts once more", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
+  await click(browser, `${shortcuts}.querySelector('h2')`);
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(`${shortcuts} !== null`), true, "A press on the shortcuts' own box closes nothing");
+  await click(browser, shortcutsClose);
+  await until(browser, "a press on Close closes the shortcuts onto the row", `${shortcuts} === null && !!${row("thinking")}.contains(document.activeElement)`);
 
   // More, the bar's one menu, is a WAI-ARIA menu button. A press opens it with focus on its first item, which names the
   // key that does the same from the main view (the tutorial, last, has none); ↑/↓ walk its items round from end to end,
@@ -1849,9 +2008,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await key(browser, "ArrowUp", 38);
   await until(browser, "↑ moves to More's Shortcuts item", `document.activeElement === ${menuItem("shortcuts")}`);
   await key(browser, "Enter", 13);
-  await until(browser, "↵ on More's Shortcuts item opens the shortcuts", `!!${shortcuts}?.open && ${shortcuts}.matches(':modal') && ${shortcuts}.contains(document.activeElement)`);
+  await until(browser, "↵ on More's Shortcuts item opens the shortcuts with focus on Close", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
   await key(browser, "Escape", 27);
-  await until(browser, "Esc closes the shortcuts onto More", `!${shortcuts}.open && document.activeElement === ${more}`);
+  await until(browser, "Esc closes the shortcuts onto More", `${shortcuts} === null && document.activeElement === ${more}`);
   await key(browser, "ArrowDown", 40);
   await until(browser, "↓ on More opens its menu on its first item", `document.activeElement === ${menuItem("models")}`);
   await key(browser, "o", 79);
@@ -2035,9 +2194,11 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   // A refused press asks its question (decision-dialog.tsx): the launch line's reason as its title, why in one sentence and
   // the line's own fixes, then Close. The bundled starter's launch is refused because the fixture's accounts cannot be read,
   // so the title is that reason without its detail, which the sentence gives. The press neither shakes the launch nor says
-  // the refusal in the readout or aloud, since the question says it, and the question opens over the panel with its own
-  // short rise, moving nothing in it. It holds focus on its title, from where no panel key acts and ↵ answers nothing; Tab
-  // reaches its first choice, and Esc closes it onto the launch, the panel as it was.
+  // the refusal in the readout or aloud, since the question says it. The question stands in the panel's layer, never modal:
+  // over the panel's box, centred in what the window shows of it, as its card rises and the panel dims under it, the panel
+  // inert and nothing outside it covered or held, and it moves nothing in the panel. It holds focus on its title, from where
+  // no panel key acts and ↵ answers nothing; Tab reaches its first choice, and Esc closes it onto the launch, the panel as
+  // it was.
   await pointAway(browser);
   await focusLaunch(browser);
   await until(browser, "the edited preview's launch is refused", launchIs("save & launch", "refused"));
@@ -2051,7 +2212,11 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   assert.deepEqual(await browser.evaluate(`[${shaking}, ${readout}.querySelector('b')?.textContent === 'save & launch']`), [false, false],
     "A refused press neither shakes the launch nor says the refusal in the readout");
   const refusal = await questionOpens(browser, "refused", "a refused press asks its question");
-  assert.equal(await browser.evaluate(questionAnimation), `${G}decision-in`, "With motion allowed the question comes in with its own short rise");
+  assert.deepEqual(await browser.evaluate(questionMotion), [true, true],
+    "With motion allowed the question rises in its card as the panel dims under it");
+  await still(browser);
+  assert.deepEqual(await browser.evaluate(layerStands(generator, decision, { holds: true, centred: true })), [],
+    "The question stands in the panel's layer: over the panel's box, centred in what the window shows of it, the panel under it inert and nothing outside it covered, held or modal");
   assert.match(head, /^Accounts unreadable: ./, "The bundled starter's launch is refused because its accounts cannot be read");
   const unreadable = head.slice("Accounts unreadable: ".length);
   assert.deepEqual(refusal, { title: "Accounts unreadable", text: [`Code couldn't read your accounts: ${unreadable}.`], items: [], choices: [...fixes, ["dismiss", "Close"]] },
@@ -2062,7 +2227,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     await key(browser, name, code, { modifiers });
   }
   await Bun.sleep(300);
-  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, sheet: ${element(stage)}.hidden, shortcuts: !!${shortcuts}?.open, list: ${machineList} !== null,
+  assert.deepEqual(await browser.evaluate(`({ view: ${element(stage)}.dataset.view, sheet: ${element(stage)}.hidden, shortcuts: ${shortcuts} !== null, list: ${machineList} !== null,
     asks: ${asks("refused")}, title: document.activeElement === ${decision}.querySelector('h2') })`),
     { view: "main", sheet: false, shortcuts: false, list: false, asks: true, title: true }, "From the question no panel key acts, and focus stays on its title");
   assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press says nothing aloud and posts no notice: its question says it");
@@ -2074,42 +2239,41 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
   await still(browser);
   assert.deepEqual(await browser.evaluate<string[]>(SHIFTED), [], "The question closes and leaves the panel as it was");
-  // Its backdrop. A press there in the question's first moments was aimed at what stood there before and answers nothing.
-  // Once it has settled, neither a drag that starts in the question and ends on the backdrop nor a press on the question's
-  // own border answers it: only a single press that starts and ends on the backdrop is its way out, as Esc is, onto the
-  // launch. Every click the dialog itself hears is kept with where it landed, so each press is known to be what it claims.
-  await browser.evaluate(`(() => {
-    // Either dialog in the host may be the one that opens, so the host is watched rather than one dialog.
-    const host = ${decisionHost}, presses = { opened: null, clicks: [] };
-    new MutationObserver(() => { if (host.querySelector('dialog[open]') && presses.opened === null) presses.opened = performance.now(); })
-      .observe(host, { subtree: true, attributes: true, attributeFilter: ['open'] });
-    host.addEventListener('click', event => {
-      const dialog = event.target.closest('dialog'), box = dialog.getBoundingClientRect();
-      const off = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
-      presses.clicks.push({ on: event.target !== dialog ? 'inside' : off ? 'backdrop' : 'border', detail: event.detail, settled: event.timeStamp - presses.opened >= ${DECISION_SETTLE_MS} });
-    });
-    globalThis.__codeBackdrop = presses;
-    return true;
-  })()`);
+  // The dim, the panel outside the question. A press there in the question's first moments was aimed at what stood there
+  // before: it answers nothing and moves no focus from the title. Once the question has settled, a press outside the panel,
+  // on Manifold's own page, is no press on Code at all; neither a drag that starts in the question and ends on the dim (its
+  // click lands on the layer the two share) nor a press on the question's own border answers it: only a single press that
+  // starts and ends on the dim is its way out, as Esc is, onto the launch. Every click the page hears is kept with where
+  // it landed (`watchPresses`), so each press is known to be what it claims.
+  const presses = await watchPresses(browser);
   await key(browser, "Enter", 13);
-  await press(browser, backdrop);
+  await press(browser, await dimPoint(browser));
   await until(browser, "the refused press asks again", asks("refused"));
   await Bun.sleep(DECISION_SETTLE_MS);
-  assert.equal(await browser.evaluate(asks("refused")), true, "A press on the backdrop in the question's first moments answers nothing");
-  const title = await pointOf(browser, `${decision}.querySelector('h2')`);
+  assert.equal(await browser.evaluate(`${asks("refused")} && document.activeElement === ${decision}.querySelector('h2')`), true,
+    "A press on the dim in the question's first moments answers nothing and moves no focus from its title");
+  await press(browser, PAGE_CORNER);
+  await Bun.sleep(300);
+  assert.equal(await browser.evaluate(asks("refused")), true, "A press outside the panel, on Manifold's own page, answers nothing");
+  const title = await pointOf(browser, `${decision}.querySelector('h2')`), dim = await dimPoint(browser);
   await browser.send("Input.dispatchMouseEvent", { type: "mousePressed", ...title, button: "left", buttons: 1, clickCount: 1 });
-  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...backdrop, button: "left", buttons: 1 });
-  await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...backdrop, button: "left", buttons: 0, clickCount: 1 });
-  // Input lands on whole pixels: the first whole pixel at or past the dialog's left edge lies in its 1px border.
-  const border = await browser.evaluate<Point>(`(() => { const box = ${decision}.getBoundingClientRect(); return { x: Math.ceil(box.left), y: Math.round(box.top + box.height / 2) }; })()`);
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...dim, button: "left", buttons: 1 });
+  await browser.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...dim, button: "left", buttons: 0, clickCount: 1 });
+  // Input lands on whole pixels and layout snaps to them: the border's pixel is the whole one at the dialog's left edge where
+  // the page shows the dialog itself.
+  const border = await browser.evaluate<Point | null>(`(() => {
+    const dialog = ${decision}, box = dialog.getBoundingClientRect(), y = Math.round(box.top + box.height / 2);
+    return [Math.round(box.left), Math.floor(box.left), Math.ceil(box.left)].map(x => ({ x, y })).find(point => document.elementFromPoint(point.x, point.y) === dialog) ?? null;
+  })()`);
+  assert(border, "The question's border shows on a whole pixel at its left edge");
   await press(browser, border);
   await Bun.sleep(300);
-  assert.equal(await browser.evaluate(asks("refused")), true, "Neither a drag from the question onto the backdrop nor a press on its border answers it");
-  await press(browser, backdrop);
-  await until(browser, "a press on the settled question's backdrop is its way out, onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
-  assert.deepEqual(await browser.evaluate("globalThis.__codeBackdrop.clicks"), [{ on: "backdrop", detail: 1, settled: false }, { on: "backdrop", detail: 1, settled: true },
-    { on: "border", detail: 1, settled: true }, { on: "backdrop", detail: 1, settled: true }],
-    "The dialog heard a single press on its backdrop before it settled, then a drag ending on the backdrop, a press on its border and a press on the backdrop");
+  assert.equal(await browser.evaluate(asks("refused")), true, "Neither a drag from the question onto the dim nor a press on its border answers it");
+  await press(browser, await dimPoint(browser));
+  await until(browser, "a press on the settled question's dim is its way out, onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+  assert.deepEqual(await presses(), [{ on: "panel", detail: 0, settled: false }, { on: "dim", detail: 1, settled: false }, { on: "outside", detail: 1, settled: true },
+    { on: "layer", detail: 1, settled: true }, { on: "border", detail: 1, settled: true }, { on: "dim", detail: 1, settled: true }],
+    "The page heard ↵'s click on the launch, then a single press on the dim before the question settled, a press outside the panel, a drag ending on the dim, a press on the question's border and a press on the dim");
   assert.deepEqual(await readProfile(browser, draftKey), before, "A refused press and its question change no setting");
 
   // The wheel steps a row the keyboard has focused, or one the pointer has rested on; over a row the pointer only passes, it scrolls the panel.
@@ -2195,7 +2359,7 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
   await click(browser, launchButton);
   await until(browser, "a refused press asks its question", asks("refused"));
   await motionless("a refused launch press and its question");
-  assert.equal(await browser.evaluate(questionAnimation), "none", "Reduced motion: the question comes in without its rise");
+  assert.deepEqual(await browser.evaluate(LAYER_MOTION), [], "Reduced motion: nothing of the question's layer, its dim, its card or what it holds, lasts or waits");
   await key(browser, "Escape", 27);
   await until(browser, "Esc closes the question", unasked);
   await motionless("the question closing");
@@ -2479,9 +2643,9 @@ async function starterObservationScenario(browser: BrowserInstance, server: Test
  * and benchmark ready, a fictional account is observed and the inventory job has settled. Code's own initialization,
  * probe composition, inventory draft and the person's approval are the real server's. The benchmark that would spend is
  * refused, so nothing is probed, checked or saved. It runs as a person of its own (`asNewPerson`), who has approved
- * nothing, so the first charge asks, in its question over the page; once their Approve records an approval, Setup's ask
+ * nothing, so the first charge asks, in its question over the panel; once their Approve records an approval, Setup's ask
  * first withdraws it, so the charges after it ask too. Each way the question is answered or left is a real press: a pointer
- * on a choice or on the backdrop, Esc, Tab and ↵. The account switch at the end is the real changeAccounts CAS against the
+ * on a choice or on the panel's dim, Esc, Tab and ↵. The account switch at the end is the real changeAccounts CAS against the
  * real server.
  */
 async function checkChargeScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant, destination: Target): Promise<void> {
@@ -2602,7 +2766,7 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     }
     await Bun.sleep(300);
     assert.deepEqual(await browser.evaluate(`({ settings: ${profileValues}, machine: ${machinePicker}.textContent, list: ${machineList} !== null, view: ${element(stage)}.dataset.view,
-      sheet: ${element(stage)}.hidden, shortcuts: !!${shortcuts}?.open, asks: ${asks("charge")} })`),
+      sheet: ${element(stage)}.hidden, shortcuts: ${shortcuts} !== null, asks: ${asks("charge")} })`),
       { settings, machine, list: false, view: "main", sheet: false, shortcuts: false, asks: true }, "No profile or machine edit lands while a charge waits, and from its question no panel key acts");
     assert.deepEqual([started.length, benchmarks.length, approvals.length], [1, 0, 0], "Keys pressed in the question check, spend and approve nothing");
     // Only a deliberate single press spends: never ↵ on the title, never key repeat on Approve once it has held focus and the
@@ -2617,8 +2781,9 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
       "Neither ↵ on the title, key repeat nor a second click approves the charge or records an approval, and the charge still waits");
 
     // The question and the panel behind it: pointing at or focusing a choice moves no layout box, from 170 to 1440px the
-    // question stands inside the viewport and paints whole with the panel behind it, and on a coarse pointer its choices are
-    // 44px. None of it answers: the charge still waits, and nothing more is checked, spent or approved.
+    // question stands in the panel's layer inside what the window shows of the panel and paints whole with the panel behind
+    // it, and on a coarse pointer its choices are 44px. None of it answers: the charge still waits, and nothing more is
+    // checked, spent or approved.
     await questionZeroShift(browser, "charge");
     await questionGeometry(browser, "charge");
     await questionCoarseTargets(browser, "charge");
@@ -2677,7 +2842,7 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
       assert.equal(await browser.evaluate(running), 0, "Reduced motion: the check a launch runs does not animate");
       await questionOpens(browser, "charge", "↵ on arrival prepares a charge, which asks its question");
       await settle(browser);
-      assert.deepEqual(await browser.evaluate(`[${running}, ${questionAnimation}]`), [0, "none"], "Reduced motion: the waiting charge and its question do not animate");
+      assert.deepEqual(await browser.evaluate(`[${running}, ${LAYER_MOTION}]`), [0, []], "Reduced motion: the waiting charge and its question do not animate, nothing of its layer lasting or waiting");
     } finally {
       await browser.send("Emulation.setEmulatedMedia", { features: [] });
     }
@@ -2822,7 +2987,7 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     readAt = Date.now();
     // While a step runs (a launch's check, held in flight) the panel reads nothing, away and back or not; once the step and
     // the charge it prepares have ended, it reads, once. The approval withdrawn, the charge asks again, and a single press on
-    // its backdrop once it has settled is its way out: the check is cancelled, nothing is spent and no job is cancelled.
+    // the panel's dim once it has settled is its way out: the check is cancelled, nothing is spent and no job is cancelled.
     holdNextInventory = true;
     await click(browser, launchButton);
     await waitFor(() => heldInventory.held, timeout, 50);
@@ -2832,9 +2997,9 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     heldInventory.release();
     await questionOpens(browser, "charge", "with the approval withdrawn the checked charge asks again");
     await Bun.sleep(DECISION_SETTLE_MS);
-    await press(browser, backdrop);
-    await until(browser, "a press on the settled question's backdrop cancels the charge and offers Launch again", launchAgain);
-    assert.deepEqual([benchmarks.length, cancels.length], [1, 0], "The backdrop's way out spends nothing and cancels no native job");
+    await press(browser, await dimPoint(browser));
+    await until(browser, "a press on the settled question's dim cancels the charge and offers Launch again", launchAgain);
+    assert.deepEqual([benchmarks.length, cancels.length], [1, 0], "The dim's way out spends nothing and cancels no native job");
     await readsOnce(browser, "once the step has ended the panel reads its inputs again", ++machineReads);
     assert.deepEqual(await readConfiguration(server, writer, target), unread, "Reading on its own, a discarded pool and a cancelled check write nothing");
     await browser.evaluate("localStorage.removeItem('manifold:debug')");
@@ -3067,9 +3232,9 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       results: receipts.flatMap(receipt => receipt.results) };
     return { benchmark, ...catalogFromObservations(inventory, benchmark, { budget: "any" }) };
   };
-  const dialog = element(`${modelsSheet} dialog`);
-  const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
-  const stageButton = element(`${modelsSheet} dialog [data-stage]`);
+  const dialog = element(importDialog);
+  const field = element(`${importDialog} textarea[aria-label="model list JSON"]`);
+  const stageButton = element(`${importDialog} [data-stage]`);
   const importCue = element(`${modelsSheet} [data-cue="import"]`);
   /** What the import says it does with the pasted list. */
   const importEffect = `${dialog}?.querySelector('h2 + p')?.textContent`;
@@ -3080,12 +3245,12 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
    * of it, whatever `use` it will rest on.
    */
   const stageList = async (list: CatalogDocument, use: "ready" | "refused" = "ready") => {
-    await until(browser, "the import opens as a modal dialog with focus in its field", `!!${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
+    await until(browser, "the import opens in the panel's layer with focus in its field", `${dialog} !== null && document.activeElement === ${field}`);
     await browser.send("Input.insertText", { text: JSON.stringify(list) });
     await until(browser, "the pasted list can be staged", `!${stageButton}.hasAttribute('aria-disabled')`);
     await click(browser, stageButton);
     await until(browser, "the staged list waits beside the one in use, written and read back",
-      `!${dialog}.open && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list", use)} && ${sideIs("staged changes")} && !${importCue}.hasAttribute('aria-disabled')`);
+      `${dialog} === null && ${phaseIs("staged")} && ${goIs(modelsSheet, "use staged list", use)} && ${sideIs("staged changes")} && !${importCue}.hasAttribute('aria-disabled')`);
   };
   try {
     await openGenerator(browser, server, workspace.id);
@@ -3244,15 +3409,37 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     await click(browser, goButton);
     await until(browser, "back to code returns to the stage and gives focus back to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
 
-    // Import, with i, stages a pasted list beside the one in use: one rung measured faster. Nothing is in use until it is used;
-    // an import over it says it replaces it, in the dialog and once staged; discard drops it, and the checked list stays in use.
+    // Import, with i, opens in the panel's layer, never in the sheet: centred in what the window shows of the panel over its
+    // dim, the panel (the sheet with it) inert and nothing outside it covered or held, with focus in its field. It keeps what
+    // was pasted: a press on the dim, even once it has settled, closes nothing and keeps the words and the focus. Esc closes
+    // it onto the sheet's way back, which had focus, the sheet still open, and so does cancel; i opens it again, empty.
     await openSheet(browser, "models");
+    const back = `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`;
+    await key(browser, "i", 73);
+    await until(browser, "i opens the import in the panel's layer with focus in its field", `${dialog} !== null && document.activeElement === ${field}`);
+    assert.deepEqual(await browser.evaluate(layerStands(generator, dialog, { holds: true, centred: true })), [],
+      "The import stands in the panel's layer: over the panel's box, centred in what the window shows of it, the panel and its sheet inert under it and nothing outside it covered, held or modal");
+    await browser.send("Input.insertText", { text: "{" });
+    await Bun.sleep(DECISION_SETTLE_MS);
+    await press(browser, await dimPoint(browser));
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate(`[${dialog} !== null, ${field}?.value, document.activeElement === ${field}]`), [true, "{", true],
+      "A press on the dim keeps the import and what was pasted, with focus in its field");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes the import onto the sheet's way back, the sheet still open", `${dialog} === null && ${element(stage)}.hidden === true && document.activeElement === ${back}`);
+    await key(browser, "i", 73);
+    await until(browser, "i opens the import again, empty", `${dialog} !== null && document.activeElement === ${field} && ${field}.value === ''`);
+    await click(browser, `[...${dialog}.querySelectorAll('button')].find(el => el.textContent.trim() === 'cancel')`);
+    await until(browser, "cancel closes the import onto the sheet's way back", `${dialog} === null && ${element(stage)}.hidden === true && document.activeElement === ${back}`);
+
+    // Import stages a pasted list beside the one in use: one rung measured faster. Nothing is in use until it is used; an
+    // import over it says it replaces it, in the dialog and once staged; discard drops it, and the checked list stays in use.
     const active = afterFirst.configuration!.active!.document;
     const faster: CatalogDocument = { ...active, models: active.models.map((model, index) => index === 0 ? { ...model, tokensPerSecond: 101 } : model) };
     let from = trace.requests.length;
     await key(browser, "i", 73);
     await until(browser, "with nothing staged, the import says it stages the list beside the one in use",
-      `!!${dialog}?.open && ${importEffect} === 'Paste a Code model list, or drop its file here. It is staged beside the list in use; nothing changes until you use it.'`);
+      `${dialog} !== null && ${importEffect} === 'Paste a Code model list, or drop its file here. It is staged beside the list in use; nothing changes until you use it.'`);
     await stageList(faster);
     const staged = await readConfiguration(server, writer, target);
     assert.deepEqual(writes(from), [{ name: "atyrode.code.stageCatalog", input: { containerId: target.containerId, expectedRevision: afterFirst.revision, document: faster } }],
@@ -3270,7 +3457,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     from = trace.requests.length;
     await click(browser, importCue);
     await until(browser, "an import over the staged list says it replaces it",
-      `!!${dialog}?.open && ${importEffect} === 'Paste a Code model list, or drop its file here. It replaces the staged list; the list in use changes only when you use it.'`);
+      `${dialog} !== null && ${importEffect} === 'Paste a Code model list, or drop its file here. It replaces the staged list; the list in use changes only when you use it.'`);
     await stageList(fastest);
     await until(browser, "once staged, the readout says it replaced the list staged before",
       `${sheetSays(modelsSheet)} === 'staged · 1 change beside the list in use; it replaced the list staged before'`);
@@ -3306,7 +3493,7 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
       await sheetStill(browser, "the checking hold");
       await questionOpens(browser, "charge", "its charge asks its question over Models");
       await sheetStill(browser, "the charge and its question");
-      assert.equal(await browser.evaluate(questionAnimation), "none", "Reduced motion: the question comes in without its rise");
+      assert.deepEqual(await browser.evaluate(LAYER_MOTION), [], "Reduced motion: nothing of the question's layer over Models lasts or waits");
       assert.equal(started.length, 2, "Check again runs one more inventory");
       await key(browser, "Escape", 27);
       await until(browser, "Esc cancels the waiting charge, and the sheet stays open on the checked list", `${unasked} && ${phaseIs("verified")} && ${element(stage)}.hidden === true`);
@@ -3957,129 +4144,235 @@ async function leadStruckScenario(browser: BrowserInstance, server: TestServer, 
 // ---------------------------------------------------------------- the tutorial
 
 /**
- * The tutorial's walk (tutorial.tsx): its card, laid over the panel beside the control a step points at, the ring it draws
- * around that control, and the card's Next (Done at the last); its other choices are Back and Skip, each by its
- * `data-tutorial-choice`. No walk is on while neither card nor ring is in the panel.
+ * The tour (tutorial.tsx), a layer of the panel's own (`[data-layer]`, its phase in `data-tour`): a welcome card over the
+ * dimmed panel, then for each step of the walk a card beside the opening the dim cuts round the step's control, with a ring
+ * (`tour-ring`) on the opening, and its choices by `data-tutorial-choice`: Take the tour and Skip on the welcome; Next (Done
+ * at the last), Back and Skip on the walk's card. No tour is on while its layer is gone.
  */
-const tutorialCard = element(`${generator} section.${G}tutorial`);
-const tutorialRing = element(`${generator} .${G}tutorial-ring`);
-const tutorialNext = element(`${generator} section.${G}tutorial [data-tutorial-choice="next"]`);
-const unwalked = `${tutorialCard} === null && ${tutorialRing} === null`;
-type TourStep = "rows" | "readout" | "defaults" | "routing" | "usage" | "machine" | "launch" | "accounts" | "sessions" | "more";
-const TOUR: readonly TourStep[] = ["rows", "readout", "defaults", "routing", "usage", "machine", "launch", "accounts", "sessions", "more"];
+const tour = element(`${generator} > .${G}tour[data-layer]`);
+const untoured = `(${tour} === null)`;
+const welcomeCard = element(`${generator} > .${G}tour section.${G}tour-welcome[role="dialog"][data-tutorial="welcome"]`);
+/** The welcome stands, the tour in its welcome phase. */
+const welcoming = `(${tour}?.dataset.tour === 'welcome' && ${welcomeCard} !== null)`;
+function welcomeChoice(id: "take" | "skip"): string {
+  return `${welcomeCard}?.querySelector('[data-tutorial-choice="${id}"]')`;
+}
+/** What the welcome says, as a person reads it: its title, its sentence and its choices, each by its `data-tutorial-choice` and words. */
+const welcomeSays = `(card => ({ title: card.querySelector('h2')?.textContent, text: card.querySelector('p')?.textContent,
+  choices: [...card.querySelectorAll('[data-tutorial-choice]')].map(el => [el.dataset.tutorialChoice, el.textContent]) }))(${welcomeCard})`;
+const tourCard = element(`${generator} > .${G}tour section.${G}tour-card:not(.${G}tour-welcome)`);
+const tourRing = element(`${generator} > .${G}tour > .${G}tour-ring`);
+const tourNext = `${tourCard}?.querySelector('[data-tutorial-choice="next"]')`;
+type TourStep = "profile" | "estimates" | "routing" | "usage" | "launch" | "accounts" | "sessions" | "more";
+const TOUR: readonly TourStep[] = ["profile", "estimates", "routing", "usage", "launch", "accounts", "sessions", "more"];
 /**
- * What each step's ring must go around, as this verifier finds it in the panel: the generator's five rows, its readout,
- * Defaults, routing and usage where the layout puts them (their pane beside or under the generator, else their tab), the
- * machine, the launch, the Accounts and Sessions tabs and More. None where the panel shows no such control.
+ * What each step must light, as this verifier finds it in the panel: the generator's rows with the readout under them, both
+ * estimates, routing and usage where the layout puts them (their pane, else their tab, else their Show control), the launch
+ * with its machine, the accounts once open, else their tab, the Sessions tab and More. None where the panel shows none.
  */
 const TOUR_CONTROLS = `(() => {
-  const root = ${element(generator)}, shown = el => !!el && el.getClientRects().length > 0, first = (...found) => found.filter(shown).slice(0, 1);
+  const root = ${element(generator)}, all = selector => [...root.querySelectorAll(selector)].filter(el => el.getClientRects().length > 0);
+  const first = (...lists) => lists.find(list => list.length > 0) ?? [];
   return {
-    rows: () => [...root.querySelectorAll('[data-pane="generator"] [data-row]')].filter(shown),
-    readout: () => first(root.querySelector('[data-pane="generator"] .${G}readout')),
-    defaults: () => first(root.querySelector('[data-pane="generator"] [data-defaults]')),
-    routing: () => first(root.querySelector('[data-pane="routing"]'), root.querySelector('[data-view-tab="routing"]')),
-    usage: () => first(root.querySelector('[data-pane="usage"]'), root.querySelector('[data-view-tab="usage"]')),
-    machine: () => first(${machinePicker}),
-    launch: () => first(${launchButton}),
-    accounts: () => first(root.querySelector('[data-view-tab="accounts"]')),
-    sessions: () => first(root.querySelector('[data-view-tab="sessions"]')),
-    more: () => first(${more}),
+    profile: () => { const dials = all('[data-pane="generator"] .${G}dials'); return dials.length ? [...dials, ...all('[data-pane="generator"] .${G}readout')] : []; },
+    estimates: () => all('[data-pane="generator"] .${G}meter'),
+    routing: () => first(all('[data-pane="routing"]'), all('[data-view-tab="routing"]'), all('[data-reveal][aria-keyshortcuts="p"]')),
+    usage: () => first(all('[data-pane="usage"]'), all('[data-view-tab="usage"]'), all('[data-reveal][aria-keyshortcuts="s"]')),
+    launch: () => all('[data-pane="generator"] .${G}launch-what'),
+    accounts: () => first(all('[data-pane="accounts"]'), all('[data-view-tab="accounts"]')),
+    sessions: () => all('[data-view-tab="sessions"]'),
+    more: () => all('[data-more]'),
   };
 })()`;
 /** The steps whose control the panel shows now, in order: those a walk started now keeps to. */
 const TOUR_SHOWN = `(() => { const controls = ${TOUR_CONTROLS}; return ${JSON.stringify(TOUR)}.filter(step => controls[step]().length > 0); })()`;
-/**
- * Where the walk stands, as painted: the card's step, its count and its choices, whether focus is on its Next, whether a
- * question is open, the view shown, whether the card is placed with its ring, and what is wrong with its place: the card or
- * the ring leaving the part of the panel the window shows, the ring not around what the window shows of its control, the
- * control not scrolled into view (inside every box that clips it, wholly where it fits), and the card over its control
- * though the panel has room for it above or below. Null while no walk is on.
- */
-type TourPlace = { step: string; count: string | null; choices: string[][]; focused: boolean; asked: boolean; view: string; placed: boolean; problems: string[] };
-const TOUR_PLACE = `(() => {
-  const card = ${tutorialCard}, ring = ${tutorialRing};
-  if (!card) return null;
-  const controls = ${TOUR_CONTROLS}[card.dataset.tutorial]?.() ?? [];
-  const edges = box => [box.left, box.right, box.top, box.bottom].map(Math.round).join(',');
-  const within = (box, room, slack) => box.left >= room.left - slack && box.right <= room.right + slack && box.top >= room.top - slack && box.bottom <= room.bottom + slack;
-  const panel = ${element(generator)}.getBoundingClientRect();
-  const shown = { left: panel.left, right: panel.right, top: Math.max(panel.top, 0), bottom: Math.min(panel.bottom, innerHeight) };
-  const clipOf = el => {
-    let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
-    for (let node = el.parentElement; node; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
-      const edge = node.getBoundingClientRect();
-      clip = { left: Math.max(clip.left, edge.left), top: Math.max(clip.top, edge.top), right: Math.min(clip.right, edge.right), bottom: Math.min(clip.bottom, edge.bottom) };
-    }
-    return clip;
-  };
-  const placed = card.hasAttribute('data-placed') && ring !== null, problems = [];
-  if (placed) {
-    const box = card.getBoundingClientRect(), around = ring.getBoundingClientRect();
-    if (!within(box, shown, 0.5)) problems.push('the card ' + edges(box) + ' leaves the panel ' + edges(shown));
-    if (!within(around, shown, 0.5)) problems.push('the ring ' + edges(around) + ' leaves the panel ' + edges(shown));
-    if (controls.length === 0) problems.push('the panel shows no control for ' + card.dataset.tutorial);
-    for (const control of controls) {
-      const at = control.getBoundingClientRect(), clip = clipOf(control);
-      const name = control.dataset.row ?? control.dataset.pane ?? control.dataset.viewTab ?? String(control.className);
-      const visible = { left: Math.max(at.left, shown.left), right: Math.min(at.right, shown.right), top: Math.max(at.top, shown.top), bottom: Math.min(at.bottom, shown.bottom) };
-      if (!within(visible, around, 1)) problems.push('the ring ' + edges(around) + ' is not around ' + name + ' ' + edges(visible));
-      const fits = at.width <= clip.right - clip.left + 1 && at.height <= clip.bottom - clip.top + 1;
-      const seen = fits ? within(at, clip, 1) : Math.min(at.right, clip.right) > Math.max(at.left, clip.left) && Math.min(at.bottom, clip.bottom) > Math.max(at.top, clip.top);
-      if (!seen) problems.push(name + ' ' + edges(at) + ' is not scrolled into view ' + edges(clip));
-    }
-    if (controls.length) {
-      const boxes = controls.map(control => control.getBoundingClientRect());
-      const all = { left: Math.min(...boxes.map(b => b.left)), right: Math.max(...boxes.map(b => b.right)), top: Math.min(...boxes.map(b => b.top)), bottom: Math.max(...boxes.map(b => b.bottom)) };
-      // The card keeps a little distance from its control and from the panel's edges (tutorial.tsx), so there is room for
-      // it beside the control where its height and 24px more fit above or below.
-      const room = Math.max(all.top - shown.top, shown.bottom - all.bottom) - 24;
-      const covers = Math.min(box.right, all.right) - Math.max(box.left, all.left) > 1 && Math.min(box.bottom, all.bottom) - Math.max(box.top, all.top) > 1;
-      if (covers && room >= box.height) problems.push('the card ' + edges(box) + ' covers its control ' + edges(all) + ' though the panel has room for it above or below');
-    }
-  }
-  return { step: card.dataset.tutorial, count: card.querySelector('.${G}tutorial-count')?.textContent ?? null,
-    choices: [...card.querySelectorAll('[data-tutorial-choice]')].map(el => [el.dataset.tutorialChoice, el.textContent]),
-    focused: document.activeElement === card.querySelector('[data-tutorial-choice="next"]'), asked: !!${decision}?.open,
-    view: ${element(stage)}.dataset.view, placed, problems };
+/** A box on the page by its edges. */
+type Edges = { left: number; right: number; top: number; bottom: number };
+/** The tour's opening as painted now, on the page: the hole its dim's `clip-path` cuts (its last five points); null without a dim. */
+const OPENING = `(() => {
+  const dim = document.querySelector('${generator} > .${G}tour > .${G}tour-scrim');
+  if (!dim) return null;
+  const points = [...getComputedStyle(dim).clipPath.matchAll(/(-?[0-9.]+)px (-?[0-9.]+)px/g)].slice(-5).map(match => [Number(match[1]), Number(match[2])]);
+  if (points.length < 5) return null;
+  const at = dim.getBoundingClientRect(), xs = points.map(point => point[0]), ys = points.map(point => point[1]);
+  return { left: at.left + Math.min(...xs), right: at.left + Math.max(...xs), top: at.top + Math.min(...ys), bottom: at.top + Math.max(...ys) };
 })()`;
-/** The walk shows `step`, its card placed. */
+/**
+ * Where the walk stands, as painted: the card's step, its title and sentence (what its `aria-labelledby` names and its text),
+ * its progress (`role="img"`, its label, which of its blocks are on, and whether it is the first thing the card's
+ * `aria-describedby` names), its choices, whether focus is on its Next, whether a question is open, the view shown, whether
+ * the card is placed, whether the ring holds the pointer (`data-look`; null without a ring), the tour layer's phase, hold
+ * and leaving, and what is wrong: the layer not standing in the panel as it should (`layerStands`); the ring not on the
+ * opening, or the opening not the lit controls with a 6px margin kept a pixel inside the part of the panel the window
+ * shows; a control not inside the opening or not scrolled into view; the card not under the opening where the panel has
+ * room there, not over it where it has room only there, or over it at all where it has room beside it; and the walk's hold
+ * leaving a control free that is not what the step offers to try now (the ring without `data-look`), or holding what it
+ * offers. Null while no walk is on.
+ */
+type TourPlace = { step: string; title: string | null; text: string | null; progress: { role: string | null; label: string | null; on: string; first: boolean } | null;
+  choices: string[][]; focused: boolean; asked: boolean; view: string; placed: boolean; look: boolean | null; layer: (string | boolean | null)[]; problems: string[] };
+const TOUR_PLACE = `(() => {
+  const panel = ${element(generator)}, card = ${tourCard}, ring = ${tourRing}, tour = ${tour};
+  if (!card) return null;
+  const parts = ${TOUR_CONTROLS}[card.dataset.tutorial]?.() ?? [];
+  const sides = ['left', 'right', 'top', 'bottom'], edges = box => sides.map(side => Math.round(box[side])).join(',');
+  const within = (box, room, slack) => box.left >= room.left - slack && box.right <= room.right + slack && box.top >= room.top - slack && box.bottom <= room.bottom + slack;
+  const room = panel.getBoundingClientRect();
+  const shown = { left: Math.max(room.left, 0), right: Math.min(room.right, innerWidth), top: Math.max(room.top, 0), bottom: Math.min(room.bottom, innerHeight) };
+  const placed = card.hasAttribute('data-placed'), opening = ${OPENING}, problems = [];
+  if (placed) problems.push(...${layerStands(generator, tourCard, { holds: null, centred: false })});
+  if (placed && ring && opening) {
+    const around = ring.getBoundingClientRect(), box = card.getBoundingClientRect();
+    if (sides.some(side => Math.abs(around[side] - opening[side]) > 0.5)) problems.push('the ring ' + edges(around) + ' is not on the opening ' + edges(opening));
+    if (parts.length === 0) problems.push('the panel shows nothing for ' + card.dataset.tutorial);
+    else {
+      const boxes = parts.map(part => part.getBoundingClientRect());
+      const lit = { left: Math.max(shown.left + 1, Math.min(...boxes.map(b => b.left)) - 6), right: Math.min(shown.right - 1, Math.max(...boxes.map(b => b.right)) + 6),
+        top: Math.max(shown.top + 1, Math.min(...boxes.map(b => b.top)) - 6), bottom: Math.min(shown.bottom - 1, Math.max(...boxes.map(b => b.bottom)) + 6) };
+      if (sides.some(side => Math.abs(opening[side] - lit[side]) > 1)) problems.push('the opening ' + edges(opening) + ' is not the lit ' + edges(lit));
+      for (const [index, part] of parts.entries()) {
+        const at = boxes[index], name = part.dataset.pane ?? part.dataset.viewTab ?? String(part.className);
+        // What the window shows of the control, but the pixel at the panel's edges the opening keeps inside.
+        const visible = { left: Math.max(at.left, shown.left + 1), right: Math.min(at.right, shown.right - 1), top: Math.max(at.top, shown.top + 1), bottom: Math.min(at.bottom, shown.bottom - 1) };
+        if (!within(visible, opening, 0.5)) problems.push(name + ' ' + edges(visible) + ' is not inside the opening ' + edges(opening));
+      }
+      // Everything the step lights is brought into view together: wholly, inside every box that clips it, where it all fits
+      // there, else from its top.
+      let clip = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+      for (let node = parts[0].parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+        const edge = node.getBoundingClientRect();
+        clip = { left: Math.max(clip.left, edge.left), top: Math.max(clip.top, edge.top), right: Math.min(clip.right, edge.right), bottom: Math.min(clip.bottom, edge.bottom) };
+      }
+      const all = { left: Math.min(...boxes.map(b => b.left)), right: Math.max(...boxes.map(b => b.right)), top: Math.min(...boxes.map(b => b.top)), bottom: Math.max(...boxes.map(b => b.bottom)) };
+      const fits = all.right - all.left <= clip.right - clip.left + 1 && all.bottom - all.top <= clip.bottom - clip.top + 1;
+      if (!(fits ? within(all, clip, 1) : all.top >= clip.top - 1 && all.top < clip.bottom && Math.min(all.right, clip.right) > Math.max(all.left, clip.left))) {
+        problems.push('what ' + card.dataset.tutorial + ' lights ' + edges(all) + ' is not scrolled into view ' + edges(clip));
+      }
+    }
+    // The card stands under the opening where the panel shows room there, else over it, else beside it: room is its own size
+    // and 24px more, past the 12px it keeps from the opening and the 8px from the panel's edges (tutorial.tsx).
+    const under = shown.bottom - opening.bottom, over = opening.top - shown.top, right = shown.right - opening.right, left = opening.left - shown.left;
+    const covers = Math.min(box.right, opening.right) - Math.max(box.left, opening.left) > 0.5 && Math.min(box.bottom, opening.bottom) - Math.max(box.top, opening.top) > 0.5;
+    if (under >= box.height + 24 && box.top < opening.bottom) problems.push('the card ' + edges(box) + ' is not under the opening ' + edges(opening) + ' though the panel has room there');
+    else if (under < box.height + 16 && over >= box.height + 24 && box.bottom > opening.top) problems.push('the card ' + edges(box) + ' is not over the opening ' + edges(opening) + ' though the panel has room there only');
+    if (covers && Math.max(under - box.height, over - box.height, right - box.width, left - box.width) >= 24) problems.push('the card ' + edges(box) + ' covers the opening ' + edges(opening) + ' though the panel has room beside it');
+    // The hold: nothing in the panel answers but what the step offers to try now, which nothing holds.
+    const tryable = !ring.hasAttribute('data-look');
+    const loose = [...panel.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]')]
+      .filter(el => !el.closest('[data-layer], [data-live], [inert]') && el.getClientRects().length > 0 && !parts.some(part => el.contains(part)) && !(tryable && parts.some(part => part.contains(el))));
+    if (loose.length) problems.push('the walk leaves free ' + loose.slice(0, 3).map(el => (el.getAttribute('aria-label') || el.textContent.trim()).slice(0, 24) || el.tagName).join(', '));
+    if (tryable && parts.some(part => part.closest('[inert]'))) problems.push('the walk holds what it offers to try');
+  }
+  const progress = card.querySelector('.${G}tour-progress'), blocks = progress ? [...progress.querySelectorAll(':scope > i')] : [];
+  return { step: card.dataset.tutorial, title: document.getElementById(card.getAttribute('aria-labelledby'))?.textContent ?? null, text: card.querySelector('p')?.textContent ?? null,
+    progress: progress && { role: progress.getAttribute('role'), label: progress.getAttribute('aria-label'), on: blocks.map(block => block.hasAttribute('data-on') ? 1 : 0).join(''),
+      first: !!progress.id && (card.getAttribute('aria-describedby') ?? '').split(' ')[0] === progress.id },
+    choices: [...card.querySelectorAll('[data-tutorial-choice]')].map(el => [el.dataset.tutorialChoice, el.textContent]),
+    focused: document.activeElement === card.querySelector('[data-tutorial-choice="next"]'), asked: ${decision} !== null,
+    view: ${element(stage)}.dataset.view, placed, look: ring ? ring.hasAttribute('data-look') : null,
+    layer: [tour?.dataset.tour ?? null, tour?.hasAttribute('data-holds') ?? null, tour?.hasAttribute('data-leaving') ?? null], problems };
+})()`;
+/** The walk shows `step`, its card placed beside the opening, the ring on it. */
 function tourShows(step: TourStep): string {
-  return `(() => { const place = ${TOUR_PLACE}; return place?.step === '${step}' && place.placed; })()`;
+  return `(() => { const place = ${TOUR_PLACE}; return place?.step === '${step}' && place.placed && place.look !== null; })()`;
 }
 /**
- * The walk shows `step`, `position` of `count`, with `view` on show: its card placed with the step's choices (Next, or Done
- * at the last; Back past the first; Skip before the last), focus on its Next, no question open, and, once the panel is at
- * rest (a pane the step brought back slides in), its place sound (`TOUR_PLACE`).
+ * The walk shows `step`, `position` of `count`, with `view` on show, once the opening has landed: its card placed with the
+ * step's own words, its progress (`position` blocks of `count` on, read out first) and choices (Next, or Done at the last;
+ * Back past the first; Skip before the last), focus on its Next, no question open, the tour walking without holding its
+ * phase or leaving, the ring holding the pointer exactly where the step offers nothing to try now (`look`), and, once the
+ * panel is at rest, nothing wrong with its place or its hold (`TOUR_PLACE`). At 1280px routing and usage are panes, so only
+ * the rows and the Accounts tab may be tried.
  */
-async function tourStep(browser: BrowserInstance, step: TourStep, position: number, count: number, description: string, view: View = "main"): Promise<void> {
+async function tourStep(browser: BrowserInstance, step: TourStep, position: number, count: number, description: string,
+  { view = "main", look = !(step === "profile" || (step === "accounts" && view === "main")) }: { view?: View; look?: boolean } = {}): Promise<void> {
   await until(browser, description, tourShows(step));
   await still(browser);
+  await until(browser, `${description}: the opening has landed`, `${TOUR_PLACE}?.look === ${look}`);
   await settle(browser);
+  const words = TUTORIAL_STEPS.find(entry => entry.id === step)!;
   const choices = [["next", position === count ? "Done" : "Next"], ...(position > 1 ? [["back", "Back"]] : []), ...(position < count ? [["skip", "Skip"]] : [])];
-  assert.deepEqual(await browser.evaluate<TourPlace>(TOUR_PLACE), { step, count: `${position} of ${count}`, choices, focused: true, asked: false, view, placed: true, problems: [] },
-    `${description}: ${position} of ${count}, its card inside the panel beside the control, the ring around it, focus on Next and nothing asked`);
+  assert.deepEqual(await browser.evaluate<TourPlace>(TOUR_PLACE), { step, title: words.title, text: words.text,
+    progress: { role: "img", label: `Step ${position} of ${count}`, on: "1".repeat(position) + "0".repeat(count - position), first: true },
+    choices, focused: true, asked: false, view, placed: true, look, layer: ["walk", false, false], problems: [] },
+    `${description}: step ${position} of ${count}, its card beside the opening inside the panel, the ring on the opening round its control, focus on Next and the panel held but what may be tried`);
 }
-/** The whole panel's layout boxes, but for the walk's own card and ring, which lie over it, and the words that change by design. */
-const TOUR_BOXES = boxesOf(generator, `${SAID_WORDS} || element.closest('.${G}tutorial, .${G}tutorial-ring')`);
-/** The walk's card as painted, its text judged inside the panel it stands in. */
-const TOUR_PAINT = paintOf(`section.${G}tutorial`, "button");
-/** What of the walk would still move under reduced motion: the card, what it holds or the ring, or a pseudo-element of one, whose transition or animation lasts. */
-const TOUR_MOTION = `[...document.querySelectorAll('${generator} :is(.${G}tutorial, .${G}tutorial *, .${G}tutorial-ring)')].flatMap(el => [null, '::before', '::after'].flatMap(pseudo => {
-  const style = getComputedStyle(el, pseudo);
-  return [...style.transitionDuration.split(','), ...style.animationDuration.split(',')].some(value => parseFloat(value) > 0) ? [(el.getAttribute('class') ?? el.tagName) + (pseudo ?? '')] : [];
-})).slice(0, 6)`;
+/** The whole panel's layout boxes but for its layers, which lie over it, and the words that change by design. */
+const TOUR_BOXES = boxesOf(generator, `${SAID_WORDS} || element.closest('[data-layer]')`);
+/** The walk's card as painted, its text judged inside the part of the panel the window shows. */
+const TOUR_PAINT = paintOf(`:scope > .${G}tour section.${G}tour-card:not(.${G}tour-welcome)`, "button", SHOWN_BOUNDS);
+/** A state the tour's layer takes (`watchTour`): its phase, `leaving` or `gone`, when it came and how many children of the panel root were inert then. */
+type TourState = { state: string; at: number; inert: number };
+/**
+ * From now until the returned read, each state the tour's layer takes, once and in order: its phase (`welcome`, `starting`,
+ * `walk`), `leaving` while its dim fades out once the tour has ended, and `gone` once the layer is removed.
+ */
+async function watchTour(browser: BrowserInstance): Promise<() => Promise<TourState[]>> {
+  await browser.evaluate(`(() => {
+    globalThis.__codeTour?.watch.disconnect();
+    const panel = ${element(generator)}, seen = [];
+    const note = () => {
+      const layer = panel.querySelector(':scope > .${G}tour');
+      const state = !layer ? 'gone' : layer.hasAttribute('data-leaving') ? 'leaving' : layer.dataset.tour ?? 'none';
+      if (seen.at(-1)?.state !== state) seen.push({ state, at: performance.now(), inert: [...panel.children].filter(child => child.inert).length });
+    };
+    note();
+    const watch = new MutationObserver(note);
+    watch.observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-tour', 'data-leaving', 'inert'] });
+    globalThis.__codeTour = { seen, watch };
+    return true;
+  })()`);
+  return () => browser.evaluate<TourState[]>("(globalThis.__codeTour.watch.disconnect(), globalThis.__codeTour.seen)");
+}
+/**
+ * The tour, in its `from` phase when `seen` began, ends: its layer goes, after its dim has faded (`leaving`, within 2s) where
+ * motion is allowed and at once where it is reduced, and nothing in the panel is inert from the moment it ends.
+ */
+async function tourEnds(browser: BrowserInstance, seen: () => Promise<TourState[]>, from: string, faded: boolean, description: string): Promise<void> {
+  await until(browser, `${description}: the tour's layer goes`, untoured);
+  const states = await seen(), tail = states.slice(states.map(entry => entry.state).lastIndexOf(from));
+  assert.deepEqual(tail.map(entry => entry.state), faded ? [from, "leaving", "gone"] : [from, "gone"], `${description}: the tour ends ${faded ? "as its dim fades" : "at once"}`);
+  assert.deepEqual(tail.slice(1).map(entry => entry.inert), faded ? [0, 0] : [0], `${description}: nothing in the panel is held once the tour ends`);
+  if (faded) {
+    const fade = tail[2]!.at - tail[1]!.at;
+    assert(fade < 2_000, `${description}: the dim fades before the layer goes, within 2s (${Math.round(fade)}ms)`);
+  }
+}
+/**
+ * From now until the returned read, how long the walk held what a step lights before offering it to be tried, each time it
+ * did: from the moment the step's card or ring mounts, or its ring takes `data-look` again as what it lights changes, to the
+ * moment the ring lets the pointer through (drops `data-look`), in milliseconds, each once.
+ */
+async function watchSettle(browser: BrowserInstance): Promise<() => Promise<number[]>> {
+  await browser.evaluate(`(() => {
+    globalThis.__codeSettle?.watch.disconnect();
+    const panel = ${element(generator)}, settle = { began: null, gaps: [] }, lit = '.${G}tour-card:not(.${G}tour-welcome), .${G}tour-ring';
+    settle.watch = new MutationObserver(records => {
+      const now = performance.now();
+      for (const record of records) {
+        if (record.type === 'childList') {
+          if ([...record.addedNodes].some(node => node instanceof Element && (node.matches(lit) || node.querySelector(lit)))) settle.began = now;
+        } else if (record.target.hasAttribute('data-look')) settle.began = now;
+        else if (settle.began !== null) { settle.gaps.push(now - settle.began); settle.began = null; }
+      }
+    });
+    settle.watch.observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-look'] });
+    globalThis.__codeSettle = settle;
+    return true;
+  })()`);
+  return () => browser.evaluate<number[]>("(globalThis.__codeSettle.watch.disconnect(), globalThis.__codeSettle.gaps)");
+}
 
 /**
  * From 170 to 1440px of panel width, and narrow but tall with routing and usage under the generator, a walk replayed from
- * More keeps to the steps whose control the panel shows, every one of them, and takes them in order by →, "1 of 10" to "10
- * of 10", each with focus on its Next: its card paints whole inside the panel (`TOUR_PAINT`: no text cut, outside the
- * panel or over other text, and no squeezed choice), its ring goes around the step's control, scrolled into view, and the
- * card covers that control only where the panel has no room beside it (`TOUR_PLACE`). Nothing in the panel moves
- * (`TOUR_BOXES`) as the card appears, moves from step to step and goes, and → at the last step ends the walk with focus
- * on More. Every width is measured before the verdict, so one run names every place that fails.
+ * More keeps to the steps whose control the panel shows, every one of them, and takes them in order by →, "Step 1 of 8" to
+ * "Step 8 of 8", each with focus on its Next: once each opening has landed, nothing is wrong with the card's place, the
+ * ring, the opening or the hold (`TOUR_PLACE`), and the card paints whole inside the part of the panel the window shows
+ * (`TOUR_PAINT`: no text cut, outside it or over other text, and no squeezed choice). Nothing in the panel moves
+ * (`TOUR_BOXES`) as the card appears, moves from step to step and goes, and → at the last step ends the walk with focus on
+ * More. Every width is measured before the verdict, so one run names every place that fails.
  */
 async function tourAcrossWidths(browser: BrowserInstance): Promise<void> {
   const problems: string[] = [];
@@ -4098,30 +4391,34 @@ async function tourAcrossWidths(browser: BrowserInstance): Promise<void> {
       for (const [index, step] of steps.entries()) {
         if (index > 0) await key(browser, "ArrowRight", 39);
         await until(browser, `at ${where} the walk shows ${step}`, tourShows(step));
+        await still(browser);
         await settle(browser);
         const at = `${where}, ${step}`;
         const place = await browser.evaluate<TourPlace>(TOUR_PLACE);
-        if (place.count !== `${index + 1} of ${steps.length}`) problems.push(`${at}: the count says ${place.count}`);
+        if (place.progress?.label !== `Step ${index + 1} of ${steps.length}`) problems.push(`${at}: the progress says ${place.progress?.label}`);
         if (!place.focused) problems.push(`${at}: focus is not on Next`);
         const paint = await browser.evaluate<Paint>(TOUR_PAINT);
         problems.push(...place.problems.map(entry => `${at}: ${entry}`), ...paint.cut.map(entry => `${at}: ${entry}`),
-          ...paint.outside.map(entry => `${at}: ${entry} paints outside the panel`), ...paint.overlaps.map(entry => `${at}: ${entry}`),
+          ...paint.outside.map(entry => `${at}: ${entry} paints outside the part of the panel the window shows`), ...paint.overlaps.map(entry => `${at}: ${entry}`),
           ...paint.small.map(entry => `${at}: choice ${entry} wide`), ...(await browser.evaluate<string[]>(SHIFTED)).map(entry => `${at}: ${entry}`));
       }
       await key(browser, "ArrowRight", 39);
-      await until(browser, `at ${where} → at the last step ends the walk, focus on More`, `${unwalked} && document.activeElement === ${more}`);
+      await until(browser, `at ${where} → at the last step ends the walk with focus on More, and its layer goes`, `${untoured} && document.activeElement === ${more}`);
       await settle(browser);
       problems.push(...(await browser.evaluate<string[]>(SHIFTED)).map(entry => `${where}, once the walk ended: ${entry}`));
     }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
   }
-  assert.deepEqual(problems, [], "From 170 to 1440px the walk takes every step, its card paints whole inside the panel beside its control, the ring goes around it, and nothing in the panel moves as the card appears, moves and goes");
+  assert.deepEqual(problems, [], "From 170 to 1440px, and tall and stacked, the walk takes every step, its card paints whole inside the panel beside the opening, the ring sits on the opening round its control, the panel is held but what may be tried, and nothing in the panel moves as the card appears, moves and goes");
 }
 
 /**
- * Under reduced motion a walk replayed from More animates nothing as its card appears, moves from step to step and goes:
- * no animation runs in the panel, and neither the card, what it holds nor the ring has a transition or animation that lasts.
+ * Under reduced motion a walk replayed from More animates nothing as its card appears, moves from step to step and goes: no
+ * animation runs in the panel, nothing of the tour's layer (its dim, ring, card or what the card holds) has a transition or
+ * animation that lasts or waits, each card is opaque at once, and the walk's end removes the layer at once, with no fade.
+ * Without motion the profile's rows still wait before they may be tried: the page measures at least 450ms, and at most
+ * 1.5s, from the step's card to its ring letting the pointer through.
  */
 async function tourStill(browser: BrowserInstance): Promise<void> {
   await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
@@ -4130,18 +4427,22 @@ async function tourStill(browser: BrowserInstance): Promise<void> {
     // A transition already under way when motion is reduced runs out its own duration; the walk starts from rest.
     await still(browser);
     const steps = await browser.evaluate<TourStep[]>(TOUR_SHOWN);
+    const seen = await watchTour(browser), settled = await watchSettle(browser);
     await openMenu(browser);
     await click(browser, menuItem("tutorial"));
     for (const [index, step] of steps.entries()) {
       if (index > 0) await key(browser, "ArrowRight", 39);
       await until(browser, `under reduced motion the walk shows ${step}`, tourShows(step));
-      await settle(browser);
-      assert.deepEqual(await browser.evaluate(`[${running}, ${TOUR_MOTION}]`), [0, []], `Reduced motion: the walk's ${step} step animates nothing`);
+      assert.deepEqual(await browser.evaluate(`[${running}, ${LAYER_MOTION}, getComputedStyle(${tourCard}).opacity]`), [0, [], "1"],
+        `Reduced motion: the walk's ${step} step animates nothing, nothing of its layer lasts or waits, and its card is opaque at once`);
+      if (step !== "profile") continue;
+      await until(browser, "under reduced motion the profile may be tried once it has waited", `${TOUR_PLACE}?.look === false`);
+      const gaps = await settled();
+      assert(gaps.length > 0 && gaps.every(gap => gap >= 450 && gap <= 1_500), `Under reduced motion the rows wait 450ms to 1.5s before they may be tried: ${gaps.map(Math.round).join(", ")}ms`);
     }
     await key(browser, "ArrowRight", 39);
-    await until(browser, "under reduced motion → at the last step ends the walk", `${unwalked} && document.activeElement === ${more}`);
-    await settle(browser);
-    assert.equal(await browser.evaluate(running), 0, "Reduced motion: the walk's end animates nothing");
+    await tourEnds(browser, seen, "walk", false, "Under reduced motion → at the last step");
+    assert.equal(await browser.evaluate(`document.activeElement === ${more}`), true, "Under reduced motion the walk's end puts focus on More");
   } finally {
     await browser.send("Emulation.setEmulatedMedia", { features: [] });
   }
@@ -4159,17 +4460,17 @@ async function tourCoarseTargets(browser: BrowserInstance): Promise<void> {
       await tap(browser, more);
       await until(browser, "a tap on More opens its menu", `${menu} !== null`);
       await tap(browser, menuItem("tutorial"));
-      await until(browser, "a tap on More's Tutorial item starts the walk", tourShows("rows"));
+      await until(browser, "a tap on More's Tutorial item starts the walk", tourShows("profile"));
       // The second step offers all three choices: Next, Back and Skip.
       await key(browser, "ArrowRight", 39);
-      await until(browser, "→ goes on to the readout", tourShows("readout"));
+      await until(browser, "→ goes on to the estimates", tourShows("estimates"));
       // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
-      problems.push(...(await browser.evaluate<string[]>(`[...${tutorialCard}.querySelectorAll('[data-tutorial-choice]')]
+      problems.push(...(await browser.evaluate<string[]>(`[...${tourCard}.querySelectorAll('[data-tutorial-choice]')]
         .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || rect.width < 43.5; })
         .map(el => el.textContent + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`))
         .map(entry => `the walk's card at ${width}px: ${entry}`));
       await key(browser, "Escape", 27);
-      await until(browser, "Esc ends the walk", `${unwalked} && document.activeElement === ${more}`);
+      await until(browser, "Esc ends the walk", `${untoured} && document.activeElement === ${more}`);
     }
   } finally {
     await browser.send("Emulation.clearDeviceMetricsOverride", {});
@@ -4179,18 +4480,80 @@ async function tourCoarseTargets(browser: BrowserInstance): Promise<void> {
 }
 
 /**
+ * A step whose control the window no longer shows keeps its card, so the walk can always go on. The window is made short
+ * enough that the panel's scroll region, scrolled to its end, shows nothing of the profile's rows and readout: its height
+ * comes from what the page measures (how tall the region's content is and where the profile ends in it), so fonts that lay
+ * the panel out taller or shorter change the height, never the precondition, and a layout that leaves no such height says
+ * so. With the walk on the profile the region is brought to its end (the fallback under test is the walk's, not the
+ * browser's scrolling, so the region is scrolled directly): the card then stands centred in the part of the panel the
+ * window shows, the dim closed in its middle and no ring, focus still on Next, and Next goes on to the estimates, which the
+ * walk brings into view.
+ */
+async function tourUnshown(browser: BrowserInstance): Promise<void> {
+  const region = `${element(generator)}.querySelector('.scroll-region__viewport')`;
+  const profileGone = `${TOUR_CONTROLS}.profile().every(part => part.getBoundingClientRect().bottom <= ${region}.getBoundingClientRect().top + 0.5)`;
+  try {
+    // Measured in a window the content overflows: the content's height, where the profile ends in it, and what of the
+    // panel's height (the window's, here) the region does not take.
+    await panelWidth(browser, 860, 300);
+    await showView(browser, "main");
+    const extent = await browser.evaluate<{ content: number; fits: boolean; lit: number; beside: number }>(`(view => {
+      const top = view.getBoundingClientRect().top - view.scrollTop;
+      return { content: view.scrollHeight, fits: view.scrollHeight <= view.clientHeight, beside: ${element(generator)}.getBoundingClientRect().height - view.clientHeight,
+        lit: Math.max(...${TOUR_CONTROLS}.profile().map(part => part.getBoundingClientRect().bottom - top)) };
+    })(${region})`);
+    // In a window `height` tall the region, scrolled to its end, shows only what lies past `content - (height - beside)`;
+    // 16px to spare, and never so short that the centred card has no room.
+    const height = Math.min(400, Math.floor(extent.content - extent.lit) - 16 + extent.beside);
+    assert(!extent.fits && height >= 220, `At 860px wide the generator leaves too little below the profile to scroll it out of view in a window tall enough for the card: ${JSON.stringify(extent)}`);
+    await panelWidth(browser, 860, height);
+    await showView(browser, "main");
+    await openMenu(browser);
+    await click(browser, menuItem("tutorial"));
+    await until(browser, "in a short window More's Tutorial starts the walk at the profile, which may be tried", `${tourShows("profile")} && ${TOUR_PLACE}.look === false`);
+    await browser.evaluate(`(view => (view.scrollTop = view.scrollHeight, true))(${region})`);
+    await until(browser, `in a ${height}px window the panel's region scrolled to its end shows the profile wholly out of view`,
+      `(view => view.scrollTop >= view.scrollHeight - view.clientHeight - 1)(${region}) && ${profileGone}`);
+    await until(browser, "scrolled out of view, the profile's controls leave its card with no opening and no ring",
+      `(place => place?.step === 'profile' && place.placed && place.look === null)(${TOUR_PLACE})`);
+    await still(browser);
+    assert.deepEqual(await browser.evaluate(`(() => {
+      const box = ${element(generator)}.getBoundingClientRect(), opening = ${OPENING};
+      const middle = { x: (Math.max(box.left, 0) + Math.min(box.right, innerWidth)) / 2, y: (Math.max(box.top, 0) + Math.min(box.bottom, innerHeight)) / 2 };
+      return [${layerStands(generator, tourCard, { holds: null, centred: true })}, !!opening && opening.right - opening.left < 0.5 && opening.bottom - opening.top < 0.5 &&
+        Math.abs(opening.left - middle.x) <= 1 && Math.abs(opening.top - middle.y) <= 1, document.activeElement === ${tourNext}];
+    })()`), [[], true, true], "With its control out of view the step's card stands centred in the panel, the dim closed in its middle, focus still on Next");
+    await click(browser, tourNext);
+    await until(browser, "Next goes on to the estimates, brought into view", tourShows("estimates"));
+    await still(browser);
+    assert.deepEqual((await browser.evaluate<TourPlace>(TOUR_PLACE)).problems, [], "The estimates are lit as they should be once brought into view");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc ends the walk", `${untoured} && document.activeElement === ${more}`);
+  } finally {
+    await browser.send("Emulation.clearDeviceMetricsOverride", {});
+  }
+}
+
+/**
  * The tutorial a person's first open offers (docs/configuration.md "The tutorial"), for four people new to Code signed in to
- * this browser in turn, on a workspace with a checked list in use and another only set up. The offer opens once the
- * generator shows the profile, modal over the page with focus on its title; Skip, Esc and a settled press on its backdrop
- * each mark the tutorial seen in the person's own record on the real server, never the browser, and neither a reload nor
- * another workspace offers it again. Take the tour, by the keyboard, walks the real controls one at a time by ↵ on Next, →,
- * ← and a press, the count, the ring, the card's place and focus on Next checked at every step; a held key steps once. A
- * word tried in the rows and the accounts opened go on by themselves, a step waits unseen while More's menu is open or
- * another view hides its control, Back onto the launch from the accounts brings the generator back, and Done ends it with
- * focus on More, where a second ↵ opens the menu. More replays it from the sessions and Esc ends that; the shortcuts name
- * its keys; it is then walked at every width with nothing in the panel moving, under reduced motion with nothing
- * animating, and on a coarse pointer with 44px choices. The offer and the walk launch, spend and save nothing: the word
- * tried is the rows' ordinary unsaved edit, which Revert puts back. The accounts and their usage are synthetic.
+ * this browser in turn, on a workspace with a checked list in use, another only set up and a third whose list lacks GPT's
+ * models while a Codex account is signed in. The welcome card stands centred in the dimmed panel, in the panel's own layer,
+ * the panel inert under it and nothing outside it covered or held, with focus on its title and the question's guards: no
+ * press in its first moments, on a choice or the dim, answers it, a key only on a choice that has held focus, never a key's
+ * repeat or a second click. Skip, Esc at any moment and a settled press on the dim each mark the tutorial seen in the
+ * person's own record on the real server, never the browser, give focus back where it was and let the dim fade out, and
+ * neither a reload nor another workspace offers it again; under reduced motion nothing of it moves and its choices are 44px
+ * on a coarse pointer. Take the tour, by the keyboard, grows the opening from the middle of the panel and walks the real
+ * controls one at a time by ↵ on Next, →, ← and a press, its card, progress, opening, ring, hold and focus checked at every
+ * step; a held key steps once and Tab goes round the card. Through the opening a word chosen goes on by itself and the
+ * Accounts tab opens the accounts, which the opening then lights, waiting for Next; a word pressed in a step's first moments, a
+ * look-only control under the ring and the dim do nothing; with focus off the card no panel key acts, Tab never reaches the
+ * launch, → and ← step from the panel's root and Esc from a row ends the walk; a struck word only says why. Back onto the
+ * launch from the accounts brings the generator back, and Done ends the walk with focus on More, the dim fading out, where
+ * a second ↵ opens the menu. More replays it from the sessions; the shortcuts name its keys; it is then walked at every
+ * width, under reduced motion, on a coarse pointer, and in a panel so short that the profile scrolls out of view, where its
+ * card stands centred with the dim closed and Next goes on. The tour launches, spends and saves nothing: the word tried is
+ * the rows' ordinary unsaved edit, which Revert puts back. The accounts and their usage are synthetic.
  */
 async function tutorialScenario(browser: BrowserInstance, server: TestServer, writer: TokenGrant): Promise<void> {
   // A Claude slot beside a Codex one, so the Mixed profile's words are there to try.
@@ -4200,35 +4563,56 @@ async function tutorialScenario(browser: BrowserInstance, server: TestServer, wr
     const claude = fixtureAccounts([1]);
     return { ...claude, accounts: [...claude.accounts, codex] };
   };
-  // The walk's workspace has a list in use, checked for that pool as the workflow records a check, so the rows show its saved
-  // profile and an edit of them offers Revert; the other is only set up, and shows the bundled preview.
-  const first = { containerId: (await createContainer(server, "Tutorial", "canvas")).id };
-  const elsewhere = { containerId: (await createContainer(server, "Tutorial elsewhere", "canvas")).id };
-  for (const workspace of [first, elsewhere]) {
+  /**
+   * A workspace whose list in use, of `providers`' models, was checked for the fixture's pool as the workflow records a check,
+   * so the rows show its saved profile and an edit of them offers Revert.
+   */
+  const checked = async (name: string, providers: readonly string[]): Promise<{ containerId: string }> => {
+    const workspace = { containerId: (await createContainer(server, name, "canvas")).id };
     const created = await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...workspace, expectedRevision: 0 });
-    assert(created.ok, "The tutorial's workspaces have a profile to show");
-  }
-  const bundled = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers: ["anthropic", "openai-codex"] });
-  assert(bundled.ok);
-  const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
-  const set = await readConfiguration(server, writer, first);
-  const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { ...first, expectedRevision: set.revision, accounts: observation() });
-  assert(probe.ok);
-  const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...first, expectedRevision: set.revision,
-    document: catalogFromMetadata(metadata, "any"), verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(),
-      catalogRevision: metadata.revision, inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observation(),
-      poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" } });
-  assert(staged.ok, staged.ok ? "" : `The walk's workspace stages a checked list: ${staged.denial.message}`);
-  const reviewInput = { ...first, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
-  const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
-  assert(reviewed.ok);
-  const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
-  assert(promoted.ok, "The walk's workspace has the checked list in use");
+    assert(created.ok, `${name} has a profile to show`);
+    const bundled = await callAction(server, writer.token, "atyrode.omp.readModelCatalog", { providers });
+    assert(bundled.ok);
+    const metadata = ModelCatalogSnapshotSchema.parse(bundled.result);
+    const set = await readConfiguration(server, writer, workspace);
+    const probe = await callAction(server, writer.token, "atyrode.code.composeProbe", { ...workspace, expectedRevision: set.revision, accounts: observation() });
+    assert(probe.ok);
+    const staged = await callAction(server, writer.token, "atyrode.code.stageCatalog", { ...workspace, expectedRevision: set.revision,
+      document: catalogFromMetadata(metadata, "any"), verification: { ompVersion: OMP_VERSION, inventoryArtifactSha256: pinnedOmpArtifact(),
+        catalogRevision: metadata.revision, inventoryObservedAt: Date.now() - 3_000, benchmarkCompletedAt: Date.now() - 2_000, accounts: observation(),
+        poolIdentityDigest: (probe.result as ActionResult<"composeProbe">).poolIdentityDigest, budget: "any" } });
+    assert(staged.ok, staged.ok ? "" : `${name} stages a checked list: ${staged.denial.message}`);
+    const reviewInput = { ...workspace, expectedRevision: (staged.result as Configuration).revision, source: "draft" };
+    const reviewed = await callAction(server, writer.token, "atyrode.code.reviewCatalog", reviewInput);
+    assert(reviewed.ok);
+    const promoted = await callAction(server, writer.token, "atyrode.code.promoteCatalog", { ...reviewInput, reviewDigest: (reviewed.result as ActionResult<"reviewCatalog">).reviewDigest });
+    assert(promoted.ok, `${name} has its checked list in use`);
+    return workspace;
+  };
+  const first = await checked("Tutorial", ["anthropic", "openai-codex"]);
+  // Only set up, it shows the bundled preview.
+  const elsewhere = { containerId: (await createContainer(server, "Tutorial elsewhere", "canvas")).id };
+  assert((await callAction(server, writer.token, "atyrode.code.initializeConfiguration", { ...elsewhere, expectedRevision: 0 })).ok, "Tutorial elsewhere has a profile to show");
+  // Its list lacks GPT's models while a Codex account is signed in, so GPT's lead is struck there, one model check away.
+  const unlisted = await checked("Tutorial without GPT", ["anthropic"]);
   const base = await readConfiguration(server, writer, first);
-  const fixture = await intercept(browser, server, name => name === "atyrode.omp.accounts.accounts" ? { ok: true, result: observation() }
-    : name === "atyrode.omp.accounts.usage" ? { ok: true, result: fixtureUsage(observation()) } : undefined);
+  // A person's record is read once per load; that read may be held, so what watches the welcome is in place before it opens.
+  const readHold = holdable();
+  let holdRead = false;
+  const fixture = await intercept(browser, server, async name => {
+    if (name === "atyrode.omp.accounts.accounts") return { ok: true, result: observation() };
+    if (name === "atyrode.omp.accounts.usage") return { ok: true, result: fixtureUsage(observation()) };
+    if (name === "atyrode.code.readTutorial" && holdRead) {
+      holdRead = false;
+      await readHold.wait();
+    }
+    return undefined;
+  });
   const answers = await watchAnswers(browser, server, ["atyrode.code.readTutorial"]);
   const trace = await watchActions(browser, server);
+  /** What the tour must never ask for since `from`: a review, a launch, a model check or its spend, or a save. */
+  const effects = (from: number) => trace.requests.slice(from).map(request => request.name)
+    .filter(name => /^atyrode\.(omp\.(reviewSession|prepareSession|startInventory|startBenchmark)|code\.(initializeConfiguration|stageCatalog|promoteCatalog|select|changeAccounts|approveChecks))$/.test(name));
   /** A person new to Code, who has not seen the tutorial, signed in to this browser with the canvas and the panel side by side. */
   const newcomer = async (name: string): Promise<TokenGrant> => {
     const person = await mintToken(server, { principal: { kind: "human", name, color: "#2e8b57" }, caps: WRITER_CAPS });
@@ -4237,17 +4621,19 @@ async function tutorialScenario(browser: BrowserInstance, server: TestServer, wr
     await browser.evaluate(identity(person));
     return person;
   };
-  /** Opens a workspace; once the generator shows the profile and the panel has read the person's record, an offer due is open. */
+  /** Opens a workspace; once the generator shows the profile and the panel has read the person's record, a welcome due is open. */
   const arrive = async (workspace: { containerId: string }) => {
     await openGenerator(browser, server, workspace.containerId);
     await until(browser, "the generator shows the profile", `${chosenKey("lane")} !== undefined`);
     await waitFor(() => answers.answered("atyrode.code.readTutorial") > 0, timeout, 50);
   };
-  /** No offer opens, nor a walk, on the generator at rest whose panel has read the person's record. */
+  /** No welcome opens, nor a walk, on the generator at rest whose panel has read the person's record. */
   const unoffered = async (description: string) => {
     await Bun.sleep(DECISION_SETTLE_MS);
-    assert.equal(await browser.evaluate(`${unasked} && ${unwalked} && ${shownView("main")}`), true, description);
+    assert.equal(await browser.evaluate(`${unasked} && ${untoured} && ${shownView("main")}`), true, description);
   };
+  /** The welcome stands with focus on its title. */
+  const welcomed = (description: string) => until(browser, description, `${welcoming} && document.activeElement === ${welcomeCard}.querySelector('h2')`);
   /** The person's own record on the server says when they saw the tutorial; the browser keeps no key for them, as it would for a sign-in that keeps none. */
   const seenAt = async (person: TokenGrant, description: string): Promise<number> => {
     const record = await waitFor(async () => { const read = await readTutorial(server, person); return read.seenAt === null ? undefined : read; }, timeout, 50);
@@ -4256,17 +4642,76 @@ async function tutorialScenario(browser: BrowserInstance, server: TestServer, wr
       `${description} in the person's own record, not the browser's`);
     return record.seenAt!;
   };
+  /**
+   * A press on the middle of `target`, where the page shows the walk's dim or its look-only ring (`by`), does nothing: the
+   * walk, its focus, the profile, More's menu and the machine list stay as they were, and nothing is asked of a server.
+   */
+  const pressHeld = async (target: string, by: "dim" | "ring", description: string) => {
+    const point = await browser.evaluate<Point>(`(box => ({ x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }))(${target}.getBoundingClientRect())`);
+    assert.equal(await browser.evaluate(`!!document.elementFromPoint(${point.x}, ${point.y})?.matches('${by === "dim" ? `.${G}tour-scrim` : `.${G}tour-ring[data-look]`}')`), true,
+      `${description}: the walk's ${by} lies over it`);
+    const now = `[${TOUR_PLACE}, ${profileValues}, ${menu} === null, ${machineList} === null]`;
+    const before = await browser.evaluate(now), from = trace.requests.length;
+    await press(browser, point);
+    await Bun.sleep(300);
+    assert.deepEqual([await browser.evaluate(now), effects(from)], [before, []], description);
+  };
+  /** A press on the readout, through the opening, leaves focus on the panel's root, off the card: the readout is no control. */
+  const offCard = async () => {
+    await click(browser, readout);
+    await until(browser, "a press on the readout through the opening leaves focus on the panel's root, off the card", `document.activeElement === ${element(generator)}`);
+  };
   try {
-    // A person's first open asks whether to take the tour once the generator shows their profile: modal over the page, with
-    // focus on its title. Skip marks the tutorial seen in their own record, so neither a reload nor another workspace offers
-    // it again, and the record keeps the moment Skip made it.
+    // A person's first open dims the panel under the welcome once the generator shows their profile: its card stands
+    // centred in the panel's own layer, the panel inert under it and nothing outside it covered or held, with focus on its
+    // title, and says what Code is, offering Take the tour and Skip. A press in its first moments, on the dim or on Take,
+    // answers nothing (the page keeps each press with how long the welcome had stood), nor does a panel key behind it. Skip,
+    // a press once it has settled, marks the tutorial seen in the person's own record, gives focus back to the panel's root,
+    // which had it, and lets the dim fade out before the layer goes; neither a reload nor another workspace offers it again,
+    // and the record keeps the moment Skip made it.
     const skipper = await newcomer("Code tutorial skipper");
-    await arrive(first);
-    const welcome = await questionOpens(browser, "tutorial", "a person's first open offers the tutorial once the generator shows the profile");
-    assert.deepEqual(welcome, { title: "Welcome to Code", text: ["Code starts OMP coding sessions with the models you choose. A short tour shows where everything is."],
-      items: [], choices: [["tour", "Take the tour"], ["dismiss", "Skip"]] }, "The offer welcomes the person and asks whether to take the tour, Skip its way out");
-    await answer(browser, "dismiss");
-    await until(browser, "Skip closes the offer onto the panel and walks nothing", `${unasked} && ${unwalked} && !!document.activeElement?.closest('${generator}')`);
+    holdRead = true;
+    await openGenerator(browser, server, first.containerId);
+    await until(browser, "the generator shows the profile", `${chosenKey("lane")} !== undefined`);
+    await waitFor(() => readHold.held, timeout, 50);
+    const presses = await watchPresses(browser);
+    readHold.release();
+    // The page waits for the welcome itself and answers at once with where Take and the dim are, so the two presses land in
+    // its first moments however slow the machine; the recorder says whether they did before anything is judged.
+    const early = await browser.evaluate<{ titled: boolean; take: Point; dim: Point | null } | null>(`(async () => {
+      for (const started = performance.now(); performance.now() - started < ${timeout};) {
+        const card = ${welcomeCard};
+        if (card && ${welcoming}) {
+          const box = ${welcomeChoice("take")}.getBoundingClientRect(), room = ${element(generator)}.getBoundingClientRect();
+          const left = Math.ceil(room.left) + 6, top = Math.ceil(Math.max(room.top, 0)) + 6, bottom = Math.floor(Math.min(room.bottom, innerHeight)) - 6;
+          return { titled: document.activeElement === card.querySelector('h2'), take: { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) },
+            dim: [[left, bottom], [left, top]].map(([x, y]) => ({ x, y })).find(({ x, y }) => !!document.elementFromPoint(x, y)?.matches('${DIM}')) ?? null };
+        }
+        const frame = Promise.withResolvers();
+        requestAnimationFrame(frame.resolve);
+        await frame.promise;
+      }
+      return null;
+    })()`);
+    assert(early?.titled && early.dim, "A person's first open offers the welcome once the generator shows the profile, with focus on its title, over the panel's dim");
+    await press(browser, early.dim);
+    await press(browser, early.take);
+    assert.deepEqual(await presses(), [{ on: "dim", detail: 1, settled: false }, { on: "inside", detail: 1, settled: false }],
+      "The page heard a press on the dim and one on Take before the welcome had stood its first moments");
+    await key(browser, "a", 65);
+    await Bun.sleep(DECISION_SETTLE_MS);
+    assert.deepEqual(await browser.evaluate(`[${welcoming}, ${shownView("main")}]`), [true, true],
+      "Neither a press in the welcome's first moments, on the dim or on Take, nor a panel key behind it answers it or opens anything");
+    assert.deepEqual(await browser.evaluate(welcomeSays), { title: "Welcome to Code", text: TUTORIAL_WELCOME.text, choices: [["take", "Take the tour"], ["skip", "Skip"]] },
+      "The welcome says what Code is and offers Take the tour and Skip");
+    assert.deepEqual(await browser.evaluate(layerStands(generator, welcomeCard, { holds: true, centred: true })), [],
+      "The welcome stands in the panel's layer: over the panel's box, centred in what the window shows of it, the panel under it inert and nothing outside it covered, held or modal");
+    const skipping = await watchTour(browser);
+    await click(browser, welcomeChoice("skip"));
+    await tourEnds(browser, skipping, "welcome", true, "Skip");
+    assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)} && ${shownView("main")}`), true, "Skip gives focus back to the panel's root, which had it, and walks nothing");
+    assert.deepEqual(await presses(), [{ on: "dim", detail: 1, settled: false }, { on: "inside", detail: 1, settled: false }, { on: "inside", detail: 1, settled: true }],
+      "The page heard a press on the dim and one on Take before the welcome settled, then the press on Skip");
     const skipped = await seenAt(skipper, "Skip marks the tutorial seen");
     await arrive(first);
     await unoffered("A reload never offers the tutorial again");
@@ -4274,158 +4719,329 @@ async function tutorialScenario(browser: BrowserInstance, server: TestServer, wr
     await unoffered("Another workspace never offers the tutorial again");
     assert.equal((await readTutorial(server, skipper)).seenAt, skipped, "The record stands as Skip made it");
 
-    // Until it is answered the offer is modal: a panel key behind it opens nothing. Esc is its way out at any moment, as Skip
-    // is, and marks the tutorial seen too; so does a press on its backdrop once it has settled.
+    // Esc skips the welcome too, marking the tutorial seen, focus back on the panel's root and the dim fading out.
     const leaver = await newcomer("Code tutorial leaver");
     await arrive(first);
-    await questionOpens(browser, "tutorial", "the offer opens for another new person");
-    await key(browser, "a", 65);
-    await Bun.sleep(300);
-    assert.equal(await browser.evaluate(`${asks("tutorial")} && ${shownView("main")}`), true, "Behind the offer a panel key opens nothing");
+    await welcomed("the welcome opens for another new person");
+    const leaving = await watchTour(browser);
     await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the offer and walks nothing", `${unasked} && ${unwalked}`);
+    await tourEnds(browser, leaving, "welcome", true, "Esc");
+    assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "Esc gives focus back to the panel's root");
     const left = await seenAt(leaver, "Esc marks the tutorial seen");
     await arrive(first);
     await unoffered("Left by Esc, the tutorial is never offered again");
-    const passer = await newcomer("Code tutorial passer-by");
-    await arrive(first);
-    await questionOpens(browser, "tutorial", "the offer opens for a third new person");
-    await Bun.sleep(DECISION_SETTLE_MS);
-    await press(browser, backdrop);
-    await until(browser, "a press on the settled offer's backdrop closes it and walks nothing", `${unasked} && ${unwalked}`);
-    const passed = await seenAt(passer, "A press on the backdrop marks the tutorial seen");
 
-    // Take the tour, by the keyboard: Tab from the title reaches it, and ↵ once it has held focus starts the walk on the
-    // generator at its rows, which marks the tutorial seen at once.
+    // Under reduced motion nothing of the welcome moves: no animation runs, nothing of its layer lasts or waits, and its card
+    // is opaque at once. On a coarse pointer its choices are 44px at every width the main view's targets are measured at, the
+    // card standing in the panel as it should at each, resizing answering nothing. A press on the dim once it has settled
+    // skips it, marking the tutorial seen, focus back on the panel's root, and under reduced motion the layer goes at once.
+    const passer = await newcomer("Code tutorial passer-by");
+    const coarse: string[] = [];
+    await browser.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    try {
+      await browser.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+      try {
+        await arrive(first);
+        await welcomed("the welcome opens for a third new person, under reduced motion and on a coarse pointer");
+        assert.deepEqual(await browser.evaluate(`[${running}, ${LAYER_MOTION}, getComputedStyle(${welcomeCard}).opacity]`), [0, [], "1"],
+          "Reduced motion: the welcome animates nothing, nothing of its layer lasts or waits, and its card is opaque at once");
+        for (const width of [1280, 860, 390, 240]) {
+          await panelWidth(browser, width);
+          // Fractional layout may leave a 44px target a fraction of a pixel short; half a pixel is the tolerance.
+          coarse.push(...(await browser.evaluate<string[]>(`[...${welcomeCard}.querySelectorAll('[data-tutorial-choice]')]
+            .filter(el => { const rect = el.getBoundingClientRect(); return rect.height < 43.5 || rect.width < 43.5; })
+            .map(el => el.textContent + ' ' + el.getBoundingClientRect().width.toFixed(1) + 'x' + el.getBoundingClientRect().height.toFixed(1))`)).map(entry => `the welcome at ${width}px: ${entry}`),
+            ...(await browser.evaluate<string[]>(layerStands(generator, welcomeCard, { holds: true, centred: true }))).map(entry => `the welcome at ${width}px: ${entry}`));
+        }
+      } finally {
+        await browser.send("Emulation.clearDeviceMetricsOverride", {});
+        await browser.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+      }
+      assert.deepEqual(coarse, [], "On a coarse pointer the welcome's choices are 44px and it stands in the panel as it should at every width");
+      assert.equal(await browser.evaluate(welcoming), true, "Resizing and a coarse pointer leave the welcome standing");
+      const passing = await watchTour(browser);
+      await press(browser, await dimPoint(browser));
+      await tourEnds(browser, passing, "welcome", false, "Under reduced motion a settled press on the dim");
+      assert.equal(await browser.evaluate(`document.activeElement === ${element(generator)}`), true, "A press on the dim gives focus back to the panel's root");
+    } finally {
+      await browser.send("Emulation.setEmulatedMedia", { features: [] });
+    }
+    const passed = await seenAt(passer, "A settled press on the dim marks the tutorial seen");
+
+    // Take the tour, by the keyboard, under the welcome's guards: ↵ on its title answers nothing; Tab reaches Take the tour,
+    // drawn as the way on, and ↵ the moment it took focus answers nothing (the page keeps both times); a held ↵ once it has
+    // held focus and a second click answer nothing either; ↵ then takes it. The walk starts on the generator at the
+    // profile, marking the tutorial seen at once, its opening growing from the closed point in the middle of the panel, where
+    // the welcome stood, to the profile's rows and readout.
     const walker = await newcomer("Code tutorial walker");
     await arrive(first);
-    await questionOpens(browser, "tutorial", "the offer opens for the person who takes the tour");
+    await welcomed("the welcome opens for the person who takes the tour");
     await panelWidth(browser, 1280);
     await until(browser, "the launch names the machine the panel picked", `!!${machinePicker}?.textContent && ${machinePicker}.getAttribute('aria-label') !== 'Machine: none'`);
     const saved = await browser.evaluate<string>(profileValues);
-    await firstChoiceByTab(browser, "tutorial");
-    await Bun.sleep(DELIBERATE_MS);
     await key(browser, "Enter", 13);
-    await tourStep(browser, "rows", 1, 10, "↵ on Take the tour starts the walk at the generator's rows");
+    await Bun.sleep(300);
+    assert.equal(await browser.evaluate(`${welcoming} && document.activeElement === ${welcomeCard}.querySelector('h2')`), true, "↵ on the welcome's title answers nothing");
+    await browser.evaluate(`(() => {
+      const card = ${welcomeCard}, burst = { focused: null, entered: null };
+      card.addEventListener('focusin', event => { if (event.target.dataset?.tutorialChoice === 'take' && burst.focused === null) burst.focused = event.timeStamp; });
+      card.addEventListener('keydown', event => { if (event.key === 'Enter' && burst.entered === null) burst.entered = event.timeStamp; }, true);
+      globalThis.__codeBurst = burst;
+      return true;
+    })()`);
+    await key(browser, "Tab", 9);
+    await key(browser, "Enter", 13);
+    await Bun.sleep(300);
+    assert.equal(await browser.evaluate(`${welcoming} && document.activeElement === ${welcomeChoice("take")} && document.activeElement.matches(':focus-visible') &&
+      document.activeElement.classList.contains('${G}decision-go')`), true, "Tab from the title reaches Take the tour, drawn as the way on, and ↵ in the same burst answers nothing");
+    const burst = await browser.evaluate<{ focused: number | null; entered: number | null }>("globalThis.__codeBurst");
+    assert(burst.focused !== null && burst.entered !== null && burst.entered - burst.focused < DECISION_FOCUS_MS,
+      `↵ came before Take the tour had held focus ${DECISION_FOCUS_MS}ms: ${JSON.stringify(burst)}`);
+    await Bun.sleep(DECISION_FOCUS_MS);
+    await key(browser, "Enter", 13, { autoRepeat: true });
+    await press(browser, await pointOf(browser, welcomeChoice("take")), 2);
+    await Bun.sleep(300);
+    assert.equal(await browser.evaluate(welcoming), true, "Neither a held ↵ nor a second click takes the tour");
+    await browser.evaluate(`(() => {
+      const sampler = { frames: [], live: true };
+      const sample = () => {
+        if (!sampler.live) return;
+        const now = ${OPENING};
+        if (now && JSON.stringify(now) !== JSON.stringify(sampler.frames.at(-1))) sampler.frames.push(now);
+        requestAnimationFrame(sample);
+      };
+      sample();
+      globalThis.__codeOpening = sampler;
+      return true;
+    })()`);
+    const settling = await watchSettle(browser);
+    await key(browser, "Enter", 13);
+    await tourStep(browser, "profile", 1, 8, "↵ on Take the tour, once it has held focus, starts the walk at the profile");
+    const gaps = await settling();
+    assert(gaps.length > 0 && gaps.every(gap => gap >= 450 && gap <= 1_500), `The profile's rows wait 450ms to 1.5s before they may be tried: ${gaps.map(Math.round).join(", ")}ms`);
     const toured = await seenAt(walker, "Taking the tour marks the tutorial seen at once");
+    const frames = await browser.evaluate<Edges[]>("(globalThis.__codeOpening.live = false, globalThis.__codeOpening.frames)");
+    const middle = await browser.evaluate<Point>(`(box => ({ x: (Math.max(box.left, 0) + Math.min(box.right, innerWidth)) / 2, y: (Math.max(box.top, 0) + Math.min(box.bottom, innerHeight)) / 2 }))(${element(generator)}.getBoundingClientRect())`);
+    const landed = await browser.evaluate<Edges>(OPENING), closed = frames[0]!, last = frames.at(-1)!;
+    assert.deepEqual({
+      closedInTheMiddle: closed.right - closed.left < 0.5 && closed.bottom - closed.top < 0.5 && Math.abs(closed.left - middle.x) <= 1 && Math.abs(closed.top - middle.y) <= 1,
+      seenGrowing: frames.length >= 3 && frames.every((frame, index) => index === 0 ||
+        (frame.right - frame.left >= frames[index - 1]!.right - frames[index - 1]!.left - 0.5 && frame.bottom - frame.top >= frames[index - 1]!.bottom - frames[index - 1]!.top - 0.5)),
+      landedOnTheProfile: (["left", "right", "top", "bottom"] as const).every(side => Math.abs(last[side] - landed[side]) <= 0.5),
+    }, { closedInTheMiddle: true, seenGrowing: true, landedOnTheProfile: true },
+    `The opening grows, frame by frame, from the closed point in the middle of the panel to the profile: ${frames.length} frames, ${JSON.stringify([closed, last])}`);
 
-    // ← at the first step goes nowhere. A word chosen in the rows, as the card asks, is the rows' ordinary edit, and the walk
-    // goes on to the readout by itself; ← and → step back and on, and the word tried before the step began takes it on no more.
+    // On the profile, ← at the first step goes nowhere, and the panel is held but for the rows and the readout: a press on the
+    // dim over the Sessions tab opens nothing and moves no focus.
     await key(browser, "ArrowLeft", 37);
     await Bun.sleep(300);
-    await tourStep(browser, "rows", 1, 10, "← at the first step goes nowhere");
+    await tourStep(browser, "profile", 1, 8, "← at the first step goes nowhere");
+    await pressHeld(element(`${generator} [data-view-tab="sessions"]`), "dim", "A press on the dim over the Sessions tab opens nothing and moves no focus");
+
+    // With focus off the card no panel key acts. A press on the readout, through the opening, leaves focus on the panel's
+    // root, from where no key opens a view, a sheet, a popover or Shortcuts, edits the profile or takes a launch step. Tab
+    // from there goes through the rows to the card, never to the launch, and neither ↵ nor Mod+↵ on a row takes a step.
+    await offCard();
+    const held = await browser.evaluate<TourPlace>(TOUR_PLACE);
+    let from = trace.requests.length;
+    for (const [name, code, modifiers] of [["a", 65, 0], ["e", 69, 0], ["?", 191, 0], ["w", 87, 0], ["m", 77, 0], ["u", 85, 0], ["o", 79, 0], ["d", 68, 0],
+      ["Enter", 13, 0], ["Enter", 13, CTRL]] as const) {
+      await key(browser, name, code, { modifiers });
+    }
+    await Bun.sleep(300);
+    assert.deepEqual([await browser.evaluate(`[${TOUR_PLACE}, ${profileValues}, document.activeElement === ${element(generator)}, ${shortcuts} === null, ${machineList} === null,
+      ${menu} === null, ${element(stage)}.hidden]`), effects(from)], [[held, saved, true, true, true, true, false], []],
+      "From the panel's root during the walk no panel key opens a view, a sheet, a popover or Shortcuts, edits the profile, steps the walk or takes a launch step");
+    // Each row is a Tab stop of its own, the lead row's only box too; past them the next stop is the card's.
+    const stops: string[] = [];
+    for (let stop = 0; stop < 12 && stops.at(-1) !== "card"; stop++) {
+      await key(browser, "Tab", 9);
+      stops.push(await browser.evaluate<string>(`(active => active.closest('${generator} > [data-layer]') ? 'card' : active.closest('[data-pane="generator"] .${G}dials') ? 'rows'
+        : (active.getAttribute('aria-label') || active.textContent.trim()).slice(0, 24))(document.activeElement)`));
+    }
+    assert(stops[0] === "rows" && stops.includes("card") && stops.every(stop => stop === "rows" || stop === "card"),
+      `Tab from the panel's root during the walk goes through the rows to the card, never to the launch: ${stops.join(", ")}`);
+    await offCard();
+    await key(browser, "Tab", 9);
+    await until(browser, "Tab from the panel's root reaches the rows", `!!document.activeElement?.closest('[data-pane="generator"] .${G}dials')`);
+    from = trace.requests.length;
+    await key(browser, "Enter", 13);
+    await key(browser, "Enter", 13, { modifiers: CTRL });
+    await Bun.sleep(300);
+    assert.deepEqual([effects(from), await browser.evaluate(profileValues), (await browser.evaluate<TourPlace>(TOUR_PLACE)).step], [[], saved, "profile"],
+      "Neither ↵ nor Mod+↵ on a row during the walk takes a launch step or edits the profile");
+
+    // → steps the walk from the panel's root, and ← back from the card. A word pressed in a step's first moments answers
+    // nothing: back on the profile what it lights may be tried only half a second after the step begins, its ring holding
+    // the pointer and the rows held meanwhile; then the same press chooses the word, an ordinary edit of the rows, and the
+    // walk goes on by itself.
     const tried = await browser.evaluate<string | undefined>(`[...${row("thinking")}.querySelectorAll('.${G}word:not([data-selected]):not([data-off])')][0]?.dataset.key`);
     assert(tried, "The thinking row offers another word to try");
-    await click(browser, word("thinking", tried));
-    await tourStep(browser, "readout", 2, 10, "a word chosen in the rows goes on to the readout by itself");
-    assert.equal(await browser.evaluate(chosenKey("thinking")), tried, "The tried word is chosen, as any choice is");
+    const triedAt = await browser.evaluate<Point>(`(box => ({ x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }))(${word("thinking", tried)}.getBoundingClientRect())`);
+    await offCard();
+    await key(browser, "ArrowRight", 39);
+    await tourStep(browser, "estimates", 2, 8, "→ from the panel's root goes on to the estimates");
+    // The page notes, as the press lands, which step the card shows and whether the ring still holds the pointer.
+    await browser.evaluate(`(document.addEventListener('pointerdown', () => { globalThis.__codeLanding = { step: ${tourCard}?.dataset.tutorial ?? null, look: !!${tourRing}?.hasAttribute('data-look') }; },
+      { capture: true, once: true }), true)`);
     await key(browser, "ArrowLeft", 37);
-    await tourStep(browser, "rows", 1, 10, "← goes back to the rows");
-    await key(browser, "ArrowRight", 39);
-    await tourStep(browser, "readout", 2, 10, "→ goes on to the readout");
-    await key(browser, "ArrowRight", 39);
-    await tourStep(browser, "defaults", 3, 10, "→ goes on to Defaults");
-    // A held key steps once: the repeats of a held →, ↵ or ← take the walk nowhere.
+    await press(browser, triedAt);
+    await Bun.sleep(100);
+    assert.deepEqual([await browser.evaluate("globalThis.__codeLanding"), await browser.evaluate(chosenKey("thinking")) === tried], [{ step: "profile", look: true }, false],
+      "Back on the profile, a press on a word in the step's first moments, its ring holding the pointer, chooses nothing");
+    await tourStep(browser, "profile", 1, 8, "← on the card goes back to the profile, which may be tried half a second on");
+    assert.equal(await browser.evaluate(profileValues), saved, "The word pressed in the step's first moments was never chosen");
+    await click(browser, word("thinking", tried));
+    await tourStep(browser, "estimates", 2, 8, "a word chosen through the opening goes on to the estimates by itself");
+    assert.equal(await browser.evaluate(chosenKey("thinking")), tried, "The tried word is chosen, as any choice is");
+
+    // A held key steps once: the repeats of a held →, ↵ or ← take the walk nowhere. Tab and Shift+Tab go round the card.
     for (const [name, code] of [["ArrowRight", 39], ["Enter", 13], ["ArrowLeft", 37]] as const) await key(browser, name, code, { autoRepeat: true });
     await Bun.sleep(300);
-    await tourStep(browser, "defaults", 3, 10, "the repeats of a held →, ↵ or ← take the walk nowhere");
-    for (const [index, step] of (["routing", "usage", "machine"] as const).entries()) {
+    await tourStep(browser, "estimates", 2, 8, "the repeats of a held →, ↵ or ← take the walk nowhere");
+    const round: (string | null)[] = [];
+    for (const modifiers of [0, 0, 0, SHIFT, 0]) {
+      await key(browser, "Tab", 9, { modifiers });
+      round.push(await browser.evaluate<string | null>(`document.activeElement?.closest('${generator} > [data-layer]') ? document.activeElement.dataset.tutorialChoice ?? 'card' : null`));
+    }
+    assert.deepEqual(round, ["back", "skip", "next", "skip", "next"], "Tab and Shift+Tab go round the card's own choices");
+    for (const [index, step] of (["routing", "usage", "launch"] as const).entries()) {
       await key(browser, "Enter", 13);
-      await tourStep(browser, step, index + 4, 10, `↵ on Next goes on to the ${step}`);
+      await tourStep(browser, step, index + 3, 8, `↵ on Next goes on to ${step === "launch" ? "the launch with its machine" : step}`);
     }
 
-    // Any step waits unseen while a popover of the panel is open: More's menu, opened at the machine's step, hides its card
-    // and ring; Esc closes the menu onto More and they show again, taking no focus from More. A press on Next goes on.
-    await click(browser, more);
-    await until(browser, "with More's menu open the machine's card waits unseen, without its ring",
-      `${menu} !== null && ${tutorialCard}?.dataset.tutorial === 'machine' && !${tutorialCard}.hasAttribute('data-placed') && ${tutorialRing} === null`);
-    await key(browser, "Escape", 27);
-    await until(browser, "Esc closes More's menu onto More, and the machine's card shows again with its ring", `${menu} === null && ${tourShows("machine")}`);
-    await settle(browser);
-    assert.equal(await browser.evaluate(`document.activeElement === ${more}`), true, "Shown again, the card takes no focus from More");
-    await click(browser, tutorialNext);
-    await tourStep(browser, "launch", 7, 10, "a press on Next goes on to the launch");
+    // The launch is only shown: its ring holds a press on the launch and on the machine, which launch nothing and open no list.
+    assert.equal(await browser.evaluate(`(what => what.contains(${launchButton}) && what.contains(${machinePicker}))(${element(`${generator} [data-pane="generator"] .${G}launch-what`)})`), true,
+      "The launch's step lights the launch with its machine");
+    await pressHeld(launchButton, "ring", "A press on the launch under its ring launches nothing and moves no focus");
+    await pressHeld(machinePicker, "ring", "A press on the machine under the ring opens no list and moves no focus");
+    await click(browser, tourNext);
+    await tourStep(browser, "accounts", 6, 8, "a press on Next goes on to the Accounts tab, which may be tried");
 
-    // A step whose control another view hides waits unseen: opening the accounts by their tab hides the launch's card and its
-    // ring, and the walk stays where it was; back on the generator the card shows again, taking no focus from where the
-    // person's press left it. A press on Next goes on.
+    // The Accounts tab, tried through the opening, opens the accounts, which the opening then lights, only shown: the walk
+    // waits at the accounts for Next, focus back on it, and a press on the accounts under the ring does nothing. → goes on to
+    // the Sessions tab, the accounts still on show, whose press under the ring opens nothing; settled, the accounts take no
+    // focus from the card. ← goes back to the accounts and stays as the panel renders again (the person looks at another tab
+    // and back); ← again, onto the launch the accounts hide, brings the generator back.
     await click(browser, element(`${generator} [data-view-tab="accounts"]`));
-    await until(browser, "with the accounts on show the launch's card waits unseen, without its ring",
-      `${shownView("accounts")} && ${tutorialCard}?.dataset.tutorial === 'launch' && !${tutorialCard}.hasAttribute('data-placed') && ${tutorialRing} === null`);
-    await click(browser, element(`${generator} [data-view-tab="main"]`));
-    await until(browser, "back on the generator the launch's card shows again with its ring", tourShows("launch"));
-    await settle(browser);
-    assert.equal(await browser.evaluate(`document.activeElement !== ${tutorialNext} && !!document.activeElement?.closest('${generator}')`), true,
-      "Shown again, the card takes no focus: it stays in the panel where the person's press left it");
-    await click(browser, tutorialNext);
-    await tourStep(browser, "accounts", 8, 10, "a press on Next goes on to the Accounts tab");
-
-    // Opening the accounts during their step goes on to the Sessions tab by itself; the accounts stay on show and focus stays
-    // on the card's Next, even once the accounts have settled. ← goes back to the Accounts tab, the accounts still on show,
-    // and stays there as the panel renders again (the person looks at another tab and back); ← again, onto the launch the
-    // accounts hide, brings the generator back.
-    await click(browser, element(`${generator} [data-view-tab="accounts"]`));
-    await tourStep(browser, "sessions", 9, 10, "opening the accounts goes on to the Sessions tab by itself", "accounts");
+    await tourStep(browser, "accounts", 6, 8, "the Accounts tab tried through the opening opens the accounts, which the opening lights, the walk waiting for Next", { view: "accounts" });
+    await pressHeld(element(`${generator} [data-manage]`), "ring", "A press on Manage accounts under the ring opens nothing");
+    await key(browser, "ArrowRight", 39);
+    await tourStep(browser, "sessions", 7, 8, "→ goes on to the Sessions tab, the accounts still on show", { view: "accounts" });
+    await pressHeld(element(`${generator} [data-view-tab="sessions"]`), "ring", "A press on the Sessions tab under its ring opens nothing");
     await Bun.sleep(500);
-    await tourStep(browser, "sessions", 9, 10, "settled, the accounts take no focus from the card", "accounts");
+    await tourStep(browser, "sessions", 7, 8, "settled, the accounts take no focus from the card", { view: "accounts" });
     await key(browser, "ArrowLeft", 37);
-    await tourStep(browser, "accounts", 8, 10, "← goes back to the Accounts tab, the accounts still on show", "accounts");
+    await tourStep(browser, "accounts", 6, 8, "← goes back to the accounts, still on show", { view: "accounts" });
     await lookAway(browser);
     await settle(browser);
-    await tourStep(browser, "accounts", 8, 10, "the walk stays on the Accounts tab as the panel renders again", "accounts");
+    await tourStep(browser, "accounts", 6, 8, "the walk stays on the accounts as the panel renders again", { view: "accounts" });
     await key(browser, "ArrowLeft", 37);
-    await tourStep(browser, "launch", 7, 10, "← onto the launch, which the accounts hide, brings the generator back");
+    await tourStep(browser, "launch", 5, 8, "← onto the launch, which the accounts hide, brings the generator back with the ring at rest on the launch");
 
-    // Next goes on where a step can be tried too: ↵ on the Accounts tab's step goes on without opening them. Done, at the
-    // last step, ends the walk with focus on More, where it is replayed, and the record keeps the moment the tour was taken;
-    // ↵ again, as the second of a double press on Done, opens More's menu rather than launching.
+    // ↵ on Next goes on where a step may be tried too, without trying it. More is only shown: a press under its ring opens no
+    // menu. Done, at the last step, ends the walk with focus on More, where it is replayed, its dim fading out before the layer
+    // goes, and the record keeps the moment the tour was taken; ↵ again, as the second of a double press on Done, opens More's
+    // menu rather than launching.
     for (const [index, step] of (["accounts", "sessions", "more"] as const).entries()) {
       await key(browser, "Enter", 13);
-      await tourStep(browser, step, index + 8, 10, `↵ on Next goes on to ${step === "more" ? "More" : `the ${step === "accounts" ? "Accounts" : "Sessions"} tab`}`);
+      await tourStep(browser, step, index + 6, 8, `↵ on Next goes on to ${step === "more" ? "More" : `the ${step === "accounts" ? "Accounts" : "Sessions"} tab`}`);
     }
+    await pressHeld(more, "ring", "A press on More under its ring opens no menu");
+    const done = await watchTour(browser);
     await key(browser, "Enter", 13);
-    await until(browser, "Done ends the walk with focus on More", `${unwalked} && document.activeElement === ${more} && ${shownView("main")}`);
+    await tourEnds(browser, done, "walk", true, "Done");
+    await until(browser, "Done ends the walk with focus on More, on the generator", `document.activeElement === ${more} && ${shownView("main")}`);
     assert.equal((await readTutorial(server, walker)).seenAt, toured, "Ending the walk leaves the record as taking the tour made it");
     await key(browser, "Enter", 13);
     await until(browser, "↵ again opens More's menu on its first item", `${menu} !== null && document.activeElement === ${menuItems}[0]`);
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes More's menu onto More", `${menu} === null && document.activeElement === ${more}`);
 
-    // More replays the walk from another view: from the sessions it starts on the generator again, at its rows, counting the
-    // same ten steps; Esc ends it with focus on More. The shortcuts name the walk's keys.
+    // More replays the walk from another view: from the sessions it starts on the generator again, at the profile, with the
+    // same eight steps. Esc ends it from anywhere in the panel: with focus on a row that may be tried (Tab from the panel's
+    // root), Esc ends the walk with focus on More as the dim fades. The shortcuts name the walk's keys.
     await showView(browser, "sessions");
     await openMenu(browser);
     await click(browser, menuItem("tutorial"));
-    await tourStep(browser, "rows", 1, 10, "More's Tutorial, chosen from the sessions, replays the walk on the generator at its rows");
+    await tourStep(browser, "profile", 1, 8, "More's Tutorial, chosen from the sessions, replays the walk on the generator at the profile");
+    await offCard();
+    await key(browser, "Tab", 9);
+    await until(browser, "Tab from the panel's root reaches the rows the walk offers to try", `!!document.activeElement?.closest('[data-pane="generator"] .${G}dials')`);
+    const escaped = await watchTour(browser);
     await key(browser, "Escape", 27);
-    await until(browser, "Esc ends the walk with focus on More", `${unwalked} && document.activeElement === ${more} && ${shownView("main")}`);
+    await tourEnds(browser, escaped, "walk", true, "Esc from a row");
+    await until(browser, "Esc from a row ends the walk with focus on More", `document.activeElement === ${more} && ${shownView("main")}`);
     await click(browser, generatorTitle);
     await key(browser, "?", 191);
-    await until(browser, "? opens the shortcuts", `!!${shortcuts}?.open && ${shortcuts}.contains(document.activeElement)`);
+    await until(browser, "? opens the shortcuts", `${shortcuts} !== null && document.activeElement === ${shortcutsClose}`);
     assert.deepEqual(await browser.evaluate(`[...${shortcuts}.querySelectorAll('section[aria-label="Tutorial"] dt')].map(dt => [dt.textContent, dt.nextElementSibling?.textContent])`),
       [["→ ←", "Next or back a step"], ["Esc", "End the tutorial"]], "The shortcuts name the walk's keys: → and ← step, Esc ends it");
     await key(browser, "Escape", 27);
-    await until(browser, "Esc closes the shortcuts", `!${shortcuts}.open`);
+    await until(browser, "Esc closes the shortcuts", `${shortcuts} === null`);
 
     // The word tried is the rows' unsaved edit, which Revert puts back.
     assert.notEqual(await browser.evaluate(profileValues), saved, "The word tried stays the rows' edit once the walk has ended");
     await click(browser, revertButton);
     await until(browser, "Revert puts the saved profile back", `${profileValues} === ${JSON.stringify(saved)} && !${revertButton}`);
 
+    // Where routing is hidden the walk lights Show routing, which may be tried once the step has waited. A press on it through
+    // the opening shows the routing pane, which the opening then lights, only shown, the walk waiting on the routing step;
+    // focus, which fell to the page as Show routing went, is back on Next, and nothing is asked or saved.
+    const routingPane = element(`${generator} [data-pane="routing"]`), showRouting = element(`${generator} [data-reveal][aria-keyshortcuts="p"]`);
+    await click(browser, generatorTitle);
+    await key(browser, "p", 80);
+    await until(browser, "p hides routing, Show routing standing in its place", `!${routingPane}.checkVisibility() && !!${showRouting}`);
+    await openMenu(browser);
+    await click(browser, menuItem("tutorial"));
+    await tourStep(browser, "profile", 1, 8, "More's Tutorial replays the walk with routing hidden");
+    await key(browser, "ArrowRight", 39);
+    await tourStep(browser, "estimates", 2, 8, "→ goes on to the estimates");
+    await key(browser, "ArrowRight", 39);
+    await tourStep(browser, "routing", 3, 8, "→ goes on to routing, whose Show control may be tried", { look: false });
+    from = trace.requests.length;
+    await click(browser, showRouting);
+    await tourStep(browser, "routing", 3, 8, "Show routing tried through the opening shows the routing pane, which the opening lights, the walk waiting on routing with focus on Next", { look: true });
+    assert.deepEqual([effects(from), await browser.evaluate(profileValues), await browser.evaluate(`${routingPane}.checkVisibility()`)], [[], saved, true],
+      "Trying Show routing shows the routing pane and asks or saves nothing");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc ends that walk with focus on More", `${untoured} && document.activeElement === ${more}`);
+
     await tourAcrossWidths(browser);
     await tourStill(browser);
     await tourCoarseTargets(browser);
+    await tourUnshown(browser);
+
+    // Where the list lacks GPT's models while a Codex account is signed in, GPT's lead is struck, one model check away. During
+    // the walk a press on it through the opening only says why in the readout: it starts no model check, changes nothing and
+    // leaves the walk where it was.
+    await arrive(unlisted);
+    await unoffered("A person who took the tour is welcomed nowhere again");
+    await openMenu(browser);
+    await click(browser, menuItem("tutorial"));
+    await tourStep(browser, "profile", 1, 8, "More's Tutorial walks the workspace without GPT's models from its profile");
+    const unlistedValues = await browser.evaluate<string>(profileValues);
+    from = trace.requests.length;
+    await click(browser, word("lane", "openai"));
+    await until(browser, "a press on GPT's struck lead through the opening says why in the readout",
+      `${readout}.dataset.tone === 'warn' && ${readout}.textContent.includes('in your model list') && ${readout}.textContent.includes('a press checks the models')`);
+    await Bun.sleep(300);
+    assert.deepEqual([effects(from), await browser.evaluate(profileValues), (await browser.evaluate<TourPlace>(TOUR_PLACE)).step], [[], unlistedValues, "profile"],
+      "During the walk a struck word starts no model check, changes nothing and leaves the walk on the profile");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc ends that walk", `${untoured} && document.activeElement === ${more}`);
 
     // Nothing was launched, spent or saved: no review, preparation, terminal, check or approval was asked for, and the
     // workspace profile is as it was.
     noNativeEffects(trace.requests);
     assert.deepEqual(trace.requests.filter(request => /^atyrode\.code\.(initializeConfiguration|stageCatalog|promoteCatalog|discardCatalog|select|changeAccounts|approveChecks|adoptCheck|recordCheck)$/.test(request.name)), [],
-      "The offer and the walk save, check, approve and adopt nothing");
-    assert.deepEqual(await readConfiguration(server, writer, first), base, "The offer and the walk leave the workspace profile as it was");
+      "The welcome and the walk save, check, approve and adopt nothing");
+    assert.deepEqual(await readConfiguration(server, writer, first), base, "The welcome and the walk leave the workspace profile as it was");
     assert.deepEqual(await Promise.all([skipper, leaver, passer, walker].map(async person => (await readTutorial(server, person)).seenAt)), [skipped, left, passed, toured],
       "Every record stands as the person's first answer made it");
     fixture.check();
   } finally {
+    readHold.release();
     trace.stop();
     answers.stop();
     await fixture.stop();
@@ -4512,15 +5128,15 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     // opens, answers nothing, as any press in its first moments; the second, once the question has settled, on Close while
     // focus is still on the title, takes the way out, onto the launch.
     await viewerBrowser.evaluate(`(() => {
-      // The host holds the tutorial's offer and the press's question; the click goes to the refused question the moment it opens.
+      // The question mounts in the panel root's layer as it opens; the click goes to the refused question the moment it does.
       globalThis.__codeAssisted = false;
       new MutationObserver((records, observer) => {
-        const dialog = records.map(record => record.target).find(node => node.open && node.dataset.decision === 'refused');
+        const dialog = records.flatMap(record => [...record.addedNodes]).map(node => node.querySelector?.('dialog.${G}decision[data-decision="refused"]')).find(Boolean);
         if (!dialog) return;
         observer.disconnect();
         dialog.querySelector('button[data-choice="dismiss"]').click();
         globalThis.__codeAssisted = true;
-      }).observe(${decisionHost}, { subtree: true, attributes: true, attributeFilter: ['open'] });
+      }).observe(${element(generator)}, { childList: true });
       return true;
     })()`);
     await click(viewerBrowser, launchButton);
@@ -4673,6 +5289,19 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await until(browser, "Back to accounts goes back to the accounts", shownView("accounts"));
     await key(browser, "m", 77);
     await until(browser, "m opens the management again, with the draft as it was left", `${shownView("manage")} && ${accountDraft}?.value === ${JSON.stringify(accountDraftName)}`);
+    // The management's own native review, from its diagnostics, stands in the generator panel's layer; Esc closes it onto
+    // its trigger, the draft kept.
+    const manageReview = element(reviewIn(generator));
+    const manageTrigger = `[...document.querySelectorAll('${manage} button')].find(el => el.textContent.trim() === 'Review account capabilities')`;
+    await click(browser, element(`${manage} .plugin-atyrode_code__account-diagnostics > summary`));
+    await control(browser, "the management offers its account review", manageTrigger, false);
+    await click(browser, manageTrigger);
+    await until(browser, "the management's review opens in the panel's layer, its account capability chosen",
+      `!!${manageReview}?.querySelector('[data-code-capability="accounts"] input[type="checkbox"]')?.checked`);
+    await reviewStands(browser, generator, "the management's review");
+    await key(browser, "Escape", 27);
+    await until(browser, "Esc closes the management's review onto its trigger, the draft kept",
+      `${manageReview} === null && document.activeElement === ${manageTrigger} && ${accountDraft}.value === ${JSON.stringify(accountDraftName)}`);
     await click(browser, element(`${manage} .${G}title`));
     await key(browser, "a", 65);
     await until(browser, "a goes from the management to the generator", shownView("main"));
@@ -4940,11 +5569,11 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
     tokensPerSecond: 30, timeToFirstTokenMs: 100, contextWindow: 200_000,
     thinkingLevels: ["minimal", "low", "medium", "high"], images: true,
   })) };
-  const dialog = element(`${modelsSheet} dialog`);
-  const field = element(`${modelsSheet} dialog textarea[aria-label="model list JSON"]`);
-  const stageButton = element(`${modelsSheet} dialog [data-stage]`);
-  const importSays = `${element(`${modelsSheet} .${G}models-import-error[role="status"]`)}.textContent`;
-  const discardEdit = `[...document.querySelectorAll('${modelsSheet} dialog .${G}go-fix')].find(el => el.textContent.trim() === 'discard edit')`;
+  const dialog = element(importDialog);
+  const field = element(`${importDialog} textarea[aria-label="model list JSON"]`);
+  const stageButton = element(`${importDialog} [data-stage]`);
+  const importSays = `${element(`${importDialog} .${G}models-import-error[role="status"]`)}.textContent`;
+  const discardEdit = `[...document.querySelectorAll('${importDialog} .${G}go-fix')].find(el => el.textContent.trim() === 'discard edit')`;
   const absent = { configuration: null, legacyMachineId: null, revision: 0 };
   const deployments = await ownerAction(server, "engine.jobs.listDeployments", { pluginId: "atyrode.omp", limit: 100 });
   const trace = await watchActions(browser, server);
@@ -4993,7 +5622,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
       await openSheet(browser, "models");
       const from = trace.requests.length;
       await click(browser, element(`${modelsSheet} [data-cue="import"]`));
-      await until(browser, "import opens from the head as a modal dialog with focus in its field", `${dialog}?.open && ${dialog}.matches(':modal') && document.activeElement === ${field}`);
+      await until(browser, "import opens from the head in the panel's layer with focus in its field", `${dialog} !== null && document.activeElement === ${field}`);
       await browser.send("Input.insertText", { text: '{ "schemaVersion": 1, "models": [' });
       await until(browser, "what is not a Code model list is said so, and stage refuses", `${importSays} === 'not a Code model list' && ${stageButton}.getAttribute('aria-disabled') === 'true'`);
       await click(browser, stageButton);
@@ -5018,7 +5647,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
         readsAnswered = [];
         await click(browser, stageButton);
         await until(browser, "a stage refused after the import's own initialization is said in the dialog, which stays open",
-          `${dialog}.open && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
+          `${dialog} !== null && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
         refuseStage = false;
         assert.deepEqual(writes(from), [
           { name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } },
@@ -5036,7 +5665,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
         assert(checkLine.refused && !checkLine.parts.some(([text]) => text === "The workspace profile changed elsewhere") && !checkLine.fixes.includes("use theirs"),
           `The panel's own initialization is no conflict: ${JSON.stringify(checkLine)}`);
         await key(browser, "Escape", 27);
-        await until(browser, "Esc closes the import, and the sheet stays open", `!${dialog}.open && ${element(stage)}.hidden === true`);
+        await until(browser, "Esc closes the import, and the sheet stays open", `${dialog} === null && ${element(stage)}.hidden === true`);
         await closeSheet(browser);
         continue;
       }
@@ -5046,7 +5675,7 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
         assert(initialized.ok);
         await click(browser, stageButton);
         await until(browser, "staging against the absent workspace the panel read is refused, and said in the dialog, which stays open",
-          `${dialog}.open && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
+          `${dialog} !== null && ${importSays} !== '' && ${importSays} !== 'not a Code model list' && ${stageButton}.getAttribute('aria-busy') === null`);
         assert.deepEqual(writes(from), [{ name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } }],
           "The import initializes at the revision the panel read and stages nothing once that is refused");
         const after = await readConfiguration(server, writer, target);
@@ -5055,13 +5684,13 @@ async function importedCatalogScenario(browser: BrowserInstance, server: TestSer
         holdReads = false;
         for (const release of [...held]) release();
         await key(browser, "Escape", 27);
-        await until(browser, "Esc closes the import, and the sheet stays open", `!${dialog}.open && ${element(stage)}.hidden === true`);
+        await until(browser, "Esc closes the import, and the sheet stays open", `${dialog} === null && ${element(stage)}.hidden === true`);
         await closeSheet(browser);
         continue;
       }
       await click(browser, stageButton);
       await until(browser, "the staged list waits with nothing in use, use staged list its one next action",
-        `!${dialog}.open && ${element(modelsSheet)}.dataset.phase === 'staged' && ${goIs(modelsSheet, "use staged list")}`);
+        `${dialog} === null && ${element(modelsSheet)}.dataset.phase === 'staged' && ${goIs(modelsSheet, "use staged list")}`);
       const staged = await readConfiguration(server, writer, target);
       assert.deepEqual(writes(from), [
         { name: "atyrode.code.initializeConfiguration", input: { ...target, expectedRevision: 0 } },
@@ -5133,7 +5762,7 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
     return undefined;
   });
   try {
-    const modal = "dialog.plugin-atyrode_code__permission-dialog:modal";
+    const review = element(reviewIn(generator));
     // Each sheet is reached from More before the configuration arrives, and More's menu keeps its order after it.
     for (const [sheet, next] of [["models", "setup"], ["setup", "options"]] as const) {
       holdConfiguration = true;
@@ -5146,8 +5775,8 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       holdConfiguration = false;
       for (const release of [...held]) release();
       await until(browser, "the absent configuration fills the hidden stage", `${element(stage)}.hidden === true && ${row("thinking")} !== null`);
-      assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(modal)}) === null`), true,
-        "A first-use review in a hidden frame must not make the visible document inert");
+      assert.equal(await browser.evaluate(`${review} === null && document.querySelector('[inert]') === null`), true,
+        "No review opens on its own while the configuration fills the hidden stage, and nothing of the page is held");
       await click(browser, `${visibleSheet}.querySelector('[aria-label="Back to Code"]')`);
       await until(browser, "the sheet returns focus to More, which opened it", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
       await key(browser, "ArrowDown", 40);
@@ -5159,24 +5788,26 @@ async function configurationRecoveryScenario(browser: BrowserInstance, server: T
       await key(browser, "Escape", 27);
       await until(browser, "Esc returns from the sheet to More", `${element(stage)}.hidden === false && document.activeElement === ${more}`);
       await usableStarter(browser);
-      assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "The first-use main view does not open an automatic review");
-      // A review opens only from Setup's next action, the fix of the row it points at; closing it approves nothing.
+      assert.equal(await browser.evaluate(`${review} === null`), true, "The first-use main view does not open an automatic review");
+      // A review opens only from Setup's next action, the fix of the row it points at, in the panel's layer; closing it
+      // approves nothing.
       await openSheet(browser, "setup");
       await until(browser, "Setup points at its first unready row, whose fix is a review", `document.querySelectorAll('${setupSheet} [data-row][data-next]').length === 1 &&
         /^(review|enable) /.test(${element(`${setupSheet} [data-go] .${G}go-label`)}?.textContent ?? '')`);
       const fixLabel = await browser.evaluate<string>(`${element(`${setupSheet} [data-go] .${G}go-label`)}.textContent`);
       await click(browser, element(`${setupSheet} [data-go]`));
-      await until(browser, "the next action opens its native review, titled for it", `${element(modal)} !== null && ${element(modal)}.getClientRects().length > 0 &&
-        ${element(modal)}.querySelector('h2').textContent === ${JSON.stringify(`Review: ${fixLabel}`)}`);
-      await until(browser, "review offers one selection control per capability", `${element(modal)}.querySelectorAll('[data-code-capability] input[type="checkbox"]').length === 7`);
+      await until(browser, "the next action opens its native review, titled for it", `${review} !== null && ${review}.getClientRects().length > 0 &&
+        ${review}.querySelector('h2').textContent === ${JSON.stringify(`Review: ${fixLabel}`)}`);
+      await until(browser, "review offers one selection control per capability", `${review}.querySelectorAll('[data-code-capability] input[type="checkbox"]').length === 7`);
+      await reviewStands(browser, generator, "the first-use review");
       await key(browser, "Escape", 27);
       // Setup gives focus back to its next action in the frame after the review closes (setup-sheet.tsx `onClose`).
       await until(browser, "the review closes normally, and Escape returns focus to Setup's next action",
-        `${element(modal)} === null && document.activeElement === ${element(`${setupSheet} [data-go]`)}`);
+        `${review} === null && document.activeElement === ${element(`${setupSheet} [data-go]`)}`);
       await closeSheet(browser);
       await openSheet(browser, "models");
       await closeSheet(browser);
-      assert.equal(await browser.evaluate(`${element(modal)} === null`), true, "Revisiting does not repeat an automatic first-use modal");
+      assert.equal(await browser.evaluate(`${review} === null`), true, "Revisiting does not repeat an automatic first-use review");
     }
     assert.equal((await readConfiguration(server, writer, firstUse)).configuration, null,
       "Navigation and deferred dialogs never initialize the workspace");
@@ -5355,23 +5986,25 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
   const rowsAre = (expected: Record<string, readonly [string, string]>, next: string | null) =>
     `JSON.stringify(${rows}) === ${JSON.stringify(JSON.stringify(expected))} && JSON.stringify(${pointed}) === ${JSON.stringify(JSON.stringify(next ? [next] : []))}`;
   const folderWord = (route: "existing" | "create") => element(`${setupSheet} [role="radiogroup"][aria-label="folders"] [data-word="${route}"]`);
-  const permissionDialog = "dialog.plugin-atyrode_code__permission-dialog[open]";
+  const permissionDialog = reviewIn(generator);
   const plan = `JSON.parse(${element(`${permissionDialog} [aria-label="Typed headless permission plan"] pre`)}?.textContent ?? 'null')?.result`;
   /** Back to the stage and Setup again, which reads everything once: what a person sees after a fix lands elsewhere. */
   const reread = async () => {
     await closeSheet(browser);
     await openSheet(browser, "setup");
   };
-  /** The next action is a review: it opens the real native review titled for it, choosing what its row needs and requesting
-   * exactly those operations; Esc closes it onto the next action, approving nothing. */
+  /** The next action is a review: it opens the real native review in the panel's layer (`reviewStands`), titled for it,
+   * choosing what its row needs and requesting exactly those operations; Esc closes it onto the next action, approving
+   * nothing. */
   const review = async (label: string, chosen: readonly string[], operationIds: readonly (readonly string[])[]) => {
     await until(browser, `the next action is ${label}`, goIs(setupSheet, label));
     await click(browser, go);
-    await until(browser, `${label} opens its native review, modal and titled for it`,
-      `!!${element(permissionDialog)}?.matches(':modal') && ${element(`${permissionDialog} h2`)}?.textContent === ${JSON.stringify(`Review: ${label}`)}`);
+    await until(browser, `${label} opens its native review in the panel's layer, titled for it`,
+      `${element(`${permissionDialog} h2`)}?.textContent === ${JSON.stringify(`Review: ${label}`)}`);
     await until(browser, `the review for ${label} chooses what its row needs and requests exactly its operations`,
       `JSON.stringify([...document.querySelectorAll('${permissionDialog} [data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability).sort()) === ${JSON.stringify(JSON.stringify([...chosen].sort()))} &&
       JSON.stringify(${plan}?.steps.map(step => step.request.operationIds)) === ${JSON.stringify(JSON.stringify(operationIds))}`);
+    await reviewStands(browser, generator, `the review for ${label}`);
     await key(browser, "Escape", 27);
     await until(browser, "Esc closes the review and gives focus back to the next action", `${element(permissionDialog)} === null && document.activeElement === ${go}`);
   };
@@ -5449,8 +6082,9 @@ async function setupSheetScenario(browser: BrowserInstance, server: TestServer, 
       await sheetStill(browser, "choosing a folder route");
       await click(browser, folderWord("existing"));
       await click(browser, go);
-      await until(browser, "the native review opens", `!!${element(permissionDialog)}`);
+      await until(browser, "the native review opens in the panel's layer", `${element(permissionDialog)} !== null`);
       await sheetStill(browser, "the native review opening");
+      assert.deepEqual(await browser.evaluate(LAYER_MOTION), [], "Reduced motion: nothing of the native review's layer lasts or waits");
       await key(browser, "Escape", 27);
       await until(browser, "Esc closes the review", `${element(permissionDialog)} === null`);
     } finally {
@@ -5824,13 +6458,14 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     gptJoins = true;
     const reviewsBeforeHold = reviews.length, preparedBeforeHold = prepareRequests, heldAt = trace.requests.length;
     await browser.evaluate(`(() => {
-      // The host holds the tutorial's offer and the press's question: the recorder follows whichever of them opens.
-      const host = ${decisionHost}, early = { opened: null, clicks: [] };
-      new MutationObserver(records => {
-        if (early.opened === null && records.some(record => record.target.open)) early.opened = performance.now();
-      }).observe(host, { subtree: true, attributes: true, attributeFilter: ['open'] });
-      host.addEventListener('click', event => early.clicks.push({ choice: event.target.closest('button[data-choice]')?.dataset.choice ?? null,
-        detail: event.detail, settled: event.timeStamp - early.opened >= ${DECISION_SETTLE_MS} }), true);
+      // The question mounts in the panel root's layer as it opens: the root is watched for it, and only clicks on its layer count.
+      const panel = ${element(generator)}, early = { opened: null, clicks: [] };
+      new MutationObserver(() => { if (early.opened === null && ${decision} !== null) early.opened = performance.now(); }).observe(panel, { childList: true });
+      panel.addEventListener('click', event => {
+        if (!event.target.closest('[data-layer]')) return;
+        early.clicks.push({ choice: event.target.closest('button[data-choice]')?.dataset.choice ?? null, detail: event.detail,
+          settled: event.timeStamp - early.opened >= ${DECISION_SETTLE_MS} });
+      }, true);
       globalThis.__codeEarly = early;
       return true;
     })()`);
@@ -6929,11 +7564,13 @@ async function run(): Promise<void> {
     const reviewTrigger = button("Review account capabilities");
     await control(writerBrowser, "contextual account review available while editing", reviewTrigger, false);
     await click(writerBrowser, reviewTrigger);
-    const permissionDialog = "dialog.plugin-atyrode_code__permission-dialog[open]";
+    // The accounts panel's native review stands in that panel's own layer, never over the rest of Manifold.
+    const permissionDialog = reviewIn(panel);
     const capability = (id: string) => element(`${permissionDialog} [data-code-capability="${id}"] input[type="checkbox"]`);
     const displayedPlan = element(`${permissionDialog} [aria-label="Typed headless permission plan"] pre`);
     await control(writerBrowser, "account capability choice", capability("accounts"), false);
     await until(writerBrowser, "context selects account capability", `${capability("accounts")}.checked === true`);
+    await reviewStands(writerBrowser, panel, "the accounts panel's review");
     await click(writerBrowser, capability("accounts"));
     await click(writerBrowser, capability("discovery"));
     await click(writerBrowser, capability("benchmark"));
@@ -7017,26 +7654,28 @@ async function run(): Promise<void> {
     await arrangeWorkbench(server, writer);
     await openGenerator(writerBrowser, server, firstUse.id);
     await usableStarter(writerBrowser);
-    assert.equal(await writerBrowser.evaluate(`${element(permissionDialog)} === null`), true,
+    const setupReview = reviewIn(generator);
+    const setupCapability = (id: string) => element(`${setupReview} [data-code-capability="${id}"] input[type="checkbox"]`);
+    assert.equal(await writerBrowser.evaluate(`${element(setupReview)} === null`), true,
       "Bundled starter does not open a permission dialog");
     // Setup points at the first row with a fix due, and that fix is its one next action: the native review of what the row
-    // needs. Its choices are requests the person may change, never grants: the existing-folder check chosen alone requests
-    // exactly its operation, and nothing is approved.
+    // needs, in the panel's layer. Its choices are requests the person may change, never grants: the existing-folder check
+    // chosen alone requests exactly its operation, and nothing is approved.
     await openFromMore(writerBrowser, "setup");
     const setupNext = element(`${setupSheet} [data-go]`);
-    await until(writerBrowser, "Setup's next action is a review, and none is open", `/^(review|enable) /.test(${setupNext}?.querySelector('.${G}go-label')?.textContent ?? '') && ${element(permissionDialog)} === null`);
+    await until(writerBrowser, "Setup's next action is a review, and none is open", `/^(review|enable) /.test(${setupNext}?.querySelector('.${G}go-label')?.textContent ?? '') && ${element(setupReview)} === null`);
     await click(writerBrowser, setupNext);
-    await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${permissionDialog} [data-code-capability] input[type="checkbox"]').length === 7`);
-    const requested = await writerBrowser.evaluate<string[]>(`[...document.querySelectorAll('${permissionDialog} [data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability)`);
+    await until(writerBrowser, "initial independent capability checklist", `document.querySelectorAll('${setupReview} [data-code-capability] input[type="checkbox"]').length === 7`);
+    const requested = await writerBrowser.evaluate<string[]>(`[...document.querySelectorAll('${setupReview} [data-code-capability] input:checked')].map(el => el.closest('[data-code-capability]').dataset.codeCapability)`);
     assert(requested.length > 0, "Setup's review chooses what its row needs");
-    for (const id of requested) await click(writerBrowser, capability(id));
-    await click(writerBrowser, capability("workspace-existing"));
+    for (const id of requested) await click(writerBrowser, setupCapability(id));
+    await click(writerBrowser, setupCapability("workspace-existing"));
     await until(writerBrowser, "workspace-only request keeps its exact operation", `(() => {
-      const text = ${displayedPlan}?.textContent;
+      const text = ${element(`${setupReview} [aria-label="Typed headless permission plan"] pre`)}?.textContent;
       return !!text && JSON.stringify(JSON.parse(text).result.steps.map(step => step.request.operationIds)) === JSON.stringify([["atyrode.omp.validate-workspace"]]);
     })()`);
     await key(writerBrowser, "Escape", 27);
-    await until(writerBrowser, "onboarding can defer permission review, and focus returns to the next action", `${element(permissionDialog)} === null && document.activeElement === ${setupNext}`);
+    await until(writerBrowser, "onboarding can defer permission review, and focus returns to the next action", `${element(setupReview)} === null && document.activeElement === ${setupNext}`);
     await closeSheet(writerBrowser);
     assert.equal((await readConfiguration(server, writer, { containerId: firstUse.id })).configuration, null,
       "Initial choices and closing review do not initialize or promote a profile");
@@ -7057,7 +7696,7 @@ async function run(): Promise<void> {
     await tieredUsageScenario(writerBrowser, server, writer);
     phase = "struck leads and the only box say why";
     await leadStruckScenario(writerBrowser, server, writer);
-    phase = "the tutorial: offered once per person and seen by Skip, Esc or the backdrop, walked over the real controls by key and pointer, tried, stepped back across views, replayed from More, and laid over the panel at every width without moving it";
+    phase = "the tutorial: a welcome in the panel's layer seen once per person by Skip, Esc or the dim, then a spotlight walk over the real controls by key and pointer, tried through its opening, held elsewhere, stepped back across views, replayed from More, and kept inside the panel at every width without moving it";
     await tutorialScenario(writerBrowser, server, writer);
     phase = "an imported first list, a refused competing first import, a refused first stage and the exact review a staged list is used by";
     await importedCatalogScenario(writerBrowser, server, writer);
@@ -7085,7 +7724,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A press waits on the person only in a modal question that opens with focus on its title, moves nothing in the panel, keeps every panel key out, and answers only a deliberate press: never ↵ on its title, Tab then ↵ in one burst once it has settled, key repeat, a second click, a press in its first moments on a choice or the backdrop, a drag onto the backdrop or a press on its border; an assistive activation counts once it has settled, with no focus on the choice; Esc and a settled press on the backdrop are its way out, onto what had focus. A refused press asks the line's reason, why and the line's own fixes, then Close, 44px each on a coarse pointer, never shaking or speaking, and a fix runs from it; a refusal that changes closes it. A first Launch checks the models itself: its charge asks what it spends, by family, with every row and the machine locked behind it, and a double-click on Launch never approves it; the question stands inside the viewport and paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px choices on a coarse pointer and does not animate under reduced motion; Cancel, Esc and the backdrop spend nothing and cancel no job; one Approve records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch, is said aloud and posted to the notice stack and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs, a sheet or a question is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge asked over the sheet with Approve, the sheet still waiting behind it and painting whole from 170 to 1440px, approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired) and posted to the notice stack, back to code and, after ask first, check again, whose question Esc cancels; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first Approve and launch records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on a question naming what it changed, before any review, whose Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, never posted or announced, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, posting that to the notice stack, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet, a question or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal, which is said aloud and posted to the notice stack, the next one in its place; a press whose own review shows an account pool the panel did not show asks whether to launch what will run, a press on its Launch it in its first moments launching nothing, its Not now launching nothing so the next press reviews again, and its Launch it launching that review without another; locked during a launch, the machine stays the Tab stop after it; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows. A person's first open offers the tutorial in a modal question with focus on its title once the generator shows the profile, and Skip, Esc or a settled press on its backdrop marks it seen in their own record on the server, never the browser, so neither a reload nor another workspace offers it again; every other scenario's people have seen it. Take the tour walks the rows, readout, Defaults, routing, usage, machine, launch, Accounts, Sessions and More, 1 of 10 to 10 of 10, by ↵, →, ← and a press, with its ring around each control at rest and focus on each step's Next, and a held key steps once; a word tried in the rows and the accounts opened go on by themselves, a step waits unseen while More's menu is open or another view hides its control and takes no focus when shown again, Back onto the launch from the accounts brings the generator back and stays where Back put it, Done and Esc end it with focus on More, where a second ↵ opens the menu, More replays it from the sessions and the shortcuts name its keys; from 170 to 1440px its card paints whole inside the panel beside its control and nothing in the panel moves as it appears, moves or goes, reduced motion leaves nothing in it to animate, its choices are 44px on a coarse pointer, and it launches, spends, asks and saves nothing, the tried word being an unsaved edit Revert puts back. Every preparation and resume is refused here, so a successful launch or resume, and its "Launched on" or "Resumed on" notice and announcement, is never reached.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. Everything Code shows over itself stands in its panel's own layer, never modal and never over the rest of Manifold: over the panel's box, centred in the part of it the window shows, the panel dimmed and inert under it, nothing outside the panel covered or held. A press waits on the person only in such a question, which rises in its card as the panel dims, opens with focus on its title, moves nothing in the panel, keeps every panel key out, and answers only a deliberate press: never ↵ on its title, Tab then ↵ in one burst once it has settled, key repeat, a second click, a press in its first moments on a choice or the dim (which moves no focus), a press outside the panel, a drag from it onto the dim or a press on its border; an assistive activation counts once it has settled, with no focus on the choice; Esc and a settled press on the dim are its way out, onto what had focus. A refused press asks the line's reason, why and the line's own fixes, then Close, 44px each on a coarse pointer, never shaking or speaking, and a fix runs from it; a refusal that changes closes it. A first Launch checks the models itself: its charge asks what it spends, by family, with every row and the machine locked behind it, and a double-click on Launch never approves it; the question stands in the panel's layer inside the part of the panel the window shows and paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px choices on a coarse pointer, and under reduced motion nothing of its layer lasts; Cancel, Esc and the dim spend nothing and cancel no job; one Approve records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch, is said aloud and posted to the notice stack and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs, a sheet or a question is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge asked over the sheet with Approve, the sheet still waiting behind it and painting whole from 170 to 1440px, approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired) and posted to the notice stack, back to code and, after ask first, check again, whose question Esc cancels; its import opens in the panel's layer with focus in its field, keeps what was pasted through a press on the dim and closes by Esc or cancel onto the sheet's way back; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first Approve and launch records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on a question naming what it changed, before any review, whose Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, never posted or announced, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review, in the panel's layer with focus on its heading, kept with its choices through a press on the dim (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. The native reviews of the accounts panel and of the generator's account management stand in their own panel's layer the same way, Esc closing each onto its trigger. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, posting that to the notice stack, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; Shortcuts stand in the panel's layer with focus on Close, keep to what the window shows of the panel, scrolling within themselves where it is short, keep every panel key and Tab in, and close by Esc, Mod+↵, Close or at once by a press on the dim, never by a press on their own box, onto what had focus; keys stay panel-local and never act from a sheet, a question or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet or layer duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal, which is said aloud and posted to the notice stack, the next one in its place; a press whose own review shows an account pool the panel did not show asks whether to launch what will run, a press on its Launch it in its first moments launching nothing, its Not now launching nothing so the next press reviews again, and its Launch it launching that review without another; locked during a launch, the machine stays the Tab stop after it; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows. A person's first open, once the generator shows the profile, dims the panel under a welcome card centred in the panel's own layer, the panel inert and nothing outside it covered or held, with focus on its title and the question's guards: no press in its first moments on Take or the dim, no ↵ on its title or in one burst with Tab, no key repeat or second click and no panel key behind it answers it; Skip, Esc or a settled press on the dim marks it seen in the person's own record on the server, never the browser, gives focus back to the panel's root and lets the dim fade before the layer goes (at once under reduced motion, where nothing of it lasts), so neither a reload nor another workspace offers it again; its choices are 44px on a coarse pointer, and every other scenario's people have seen it. Take the tour grows an opening in the dim from the middle of the panel to the profile and walks the profile's rows and readout, the cost and speed, routing, usage, the launch with its machine, the Accounts tab, the Sessions tab and More, Step 1 of 8 to Step 8 of 8 in blocks read out first, by ↵, →, ← and a press: at rest each opening is the lit controls with a 6px margin inside the part of the panel the window shows, the ring sits on it, the card stands beside it (under where there is room, else over) with focus on its Next and Tab kept round it, a held key steps once, and the panel is held but for what the step offers to try, and that only once it has waited (the page measures 450ms to 1.5s from the step's card to its ring letting the pointer through, with motion and without). Through the opening a word chosen goes on by itself and the Accounts tab opens the accounts, which the opening then lights, waiting for Next, as Show routing, where routing is hidden, shows the routing pane, focus back on Next; a word pressed before its step has waited, a press on the dim or on a look-only control under the ring (the launch, the machine, Manage accounts, the Sessions tab, More) and a struck lead do nothing, the struck lead only saying why and starting no model check; with focus off the card no panel key acts and Tab reaches the rows and the card, never the launch, → steps the walk from the panel's root and Esc from a row ends it. Back onto the launch from the accounts brings the generator back; Done and Esc end the walk with focus on More, the dim fading before the layer goes, and a second ↵ opens More's menu; More replays it from the sessions and the shortcuts name its keys; from 170 to 1440px, and tall and stacked, every step shows, its card paints whole inside the panel beside its opening, the ring sits on the opening round its control, the panel is held but what may be tried, and nothing in the panel moves as the card appears, moves or goes; a step whose control is scrolled out of view keeps its card centred in the panel with the dim closed and no ring, and Next goes on; reduced motion leaves nothing of the tour lasting, each card opaque at once and the layer gone at once; its choices are 44px on a coarse pointer, and it launches, spends, asks and saves nothing, the tried word being an unsaved edit Revert puts back. Every preparation and resume is refused here, so a successful launch or resume, and its "Launched on" or "Resumed on" notice and announcement, is never reached.`);
 }
 
 await run();

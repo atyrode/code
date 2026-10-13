@@ -334,10 +334,22 @@ menu shows each key beside its item). While a staged model list waits beside the
 one, More reads **More · staged** and its item **Models · staged**, since nothing changes
 until it is reviewed there. When session options are set, More and its **Options** item
 carry their summary ("· restricted", "· skills off", "· 2 skills"). **Shortcuts** opens a
-native modal dialog that lists every key under the view it acts in (Generator, Views,
+dialog inside the panel that lists every key under the view it acts in (Generator, Views,
 Accounts, Sessions, Tutorial, Anywhere), with `m`, `u` and `o` under Generator, where they act;
-`Esc` or its Close button closes it and it owns its keys while open. **Tutorial** walks the
-tutorial again (below).
+`Esc`, a press on the dimmed panel or its Close button closes it and it owns its keys while
+open. **Tutorial** walks the tutorial again (below).
+
+Everything a Code panel shows over itself (a question a press waits on, Shortcuts, Models'
+import, the native permission reviews of Setup, Manage accounts and the Accounts panel, and
+the tutorial) stands inside that panel and never over the rest of Manifold: only the panel
+dims under it, and it stands in the part of the panel the window shows, scrolling within
+itself where the panel is short. While a question, Shortcuts, the import or a review is open,
+the panel under it is inert, so neither a pointer, a key nor an assistive tool reaches it,
+while the rest of Manifold stays as it was; the panel's live region goes on speaking. A press
+on the dim takes a question's way out once it has settled and closes Shortcuts at once; the
+import and a review keep what they hold, and close only by `Esc` or their own buttons. Focus
+goes back to what had it, and a sheet a question's fix opens gives it back there in turn once
+it closes.
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -359,32 +371,48 @@ sheet reads everything in one pass and restarts both.
 
 ### The tutorial
 
-On a person's first open of the panel, wherever they open it, a question asks "Welcome
-to Code" with **Take the tour** and **Skip** (`Esc` and the backdrop skip), once the
-generator shows its profile in the main view with no sheet open, nothing running, no
-charge waiting and no other question open. It is offered to people only: an agent or a
+On a person's first open of the panel, wherever they open it, the panel dims and a card in
+its middle says "Welcome to Code", what Code is in a sentence, and offers **Take the tour**
+and **Skip** (`Esc` and a settled press on the dim skip), once the generator shows its
+profile in the main view with no sheet open, nothing running, no charge waiting and no
+question open; the panel under it is inert until it is answered, and the welcome keeps
+the question dialog's guards (focus on its title, no press in its first moments, a key
+only on a choice that has held focus). It is offered to people only: an agent or a
 service is never asked. Either answer marks the tutorial seen for that person
 (`seeTutorial`, or the browser for a sign-in that keeps no record), so it is never offered
-again; **Tutorial** in More walks it whenever they like. The walk starts on the generator
-(a sheet closes and the view goes back to it) and keeps to the steps the panel shows
-there, so its count holds when a step opens another view: the profile's rows, the
-readout, Defaults and Revert, routing, usage, the machine, the launch, the Accounts and
-Sessions tabs, and More. Each step draws a thin ring in the accent around its control and
-a card beside it (under it where the panel shows room, else over it), both laid over the
-panel so nothing in it moves, and both kept to the part of the panel the window shows: the
-step's name, where the walk stands ("3 of 10"), one sentence, and **Next** (**Done** at
-the last), **Back** and **Skip**; `→` and `←` step, `Esc` skips, and a held key steps once.
-Each step's card is its own, so moving to it moves focus to its Next and it is read out,
-and its control is scrolled into view. Routing and usage are pointed at where the layout
-puts them: beside the generator, else their tab or Show control. A step may be tried:
-choosing a word in the rows, or opening Accounts, goes on by itself once done since the
-step began, and Next always works too; Back onto a step another view hides brings the
-generator back. The walk launches nothing and spends nothing; a word tried changes the
-rows as any choice does, which Revert puts back. A step whose control is not shown (another
-view or a sheet has the panel), or any step while a popover of the panel is open (More's
-menu, the machine list), hides its card until that changes. The walk's end, finished or
-skipped, puts focus on More, where it is replayed, so a second `↵` of a double press opens
-a menu rather than launching.
+again; **Tutorial** in More walks it whenever they like.
+
+The walk starts on the generator (a sheet closes and the view goes back to it) and keeps
+to the steps the panel shows there, so its progress holds when a step opens another view.
+It goes in the order a person uses Code: the profile's rows with the readout under them,
+cost and speed, routing, usage, the launch with its machine, then Accounts, the Sessions
+tab and More. The dim opens around the first step's control, growing from where the
+welcome stood, and each step glides the opening to its control, a thin rule in the accent
+round it, with a card beside it (under it where the panel shows room, else over it, else
+beside it), everything kept to the part of the panel the window shows and nothing in the
+panel moved: the step's name, how far the walk has come (a row of blocks, read out with the
+card as "Step 3 of 8"), one or two sentences, and **Next** (**Done** at the last), **Back**
+and **Skip**; `→` and `←` step, `Esc` ends it, a held key steps once, and `Tab` goes round
+the card. Each step's card is its own and comes in as the opening lands, so moving to it
+moves focus to its Next and it is read out, and its control is scrolled into view.
+
+During the walk the panel is inert but for what a step offers to try with the pointer, and
+only half a second after the step begins (longer than the opening's glide and as long as the
+usual double-click interval, with motion or without), so a press, a key or an assistive tool reaches
+nothing else and the walk launches, spends and saves nothing: the profile's words, where
+pointing at one says in the readout what it would change and choosing one goes on by itself
+(a struck word only says why; it starts no model check), and a tab or Show control that opens
+Accounts, or routing or usage where the layout keeps them behind one, after which the
+opening glides to what opened and the walk waits for Next. The keyboard stays on the card,
+whose Next covers every step. A word tried changes the rows as any choice does, which Revert
+puts back. Focus the hold leaves nowhere, or that falls to the page when what was tried goes
+away, goes back to the card's Next; `Esc` ends the walk from anywhere in the panel, and `→`
+`←` step it from the panel itself. Back
+onto a step another view hides brings the generator back, and a step whose control is not
+shown keeps its card in the middle of the panel with the dim closed. The walk's end,
+finished or skipped, puts focus on More, where it is replayed, so a second `↵` of a double
+press opens a menu rather than launching, and the dim fades as the opening closes. Reduced
+motion places all of it without movement.
 
 ### The generator
 
@@ -562,8 +590,8 @@ OMP's defaults again itself and refuses when they moved under its review. Choosi
 saved session does not stop a launch. Outcome and refusal lines clear whenever the team,
 machine or account pool changes.
 
-**Questions and notices.** Whatever a press waits on the person for is asked in a modal
-dialog over the whole page rather than said beside the launch, so it cannot be missed: a
+**Questions and notices.** Whatever a press waits on the person for is asked in a dialog
+over the dimmed panel rather than said beside the launch, so it cannot be missed: a
 check's charge (from the launch, Models or a struck lane), a review that differs, a check
 that changed the profile, and a refused Launch press. Each question says what it waits on
 and, where it can, why in a sentence, what it is about one fact per line, then its choices
@@ -579,9 +607,10 @@ title, never on a choice, since a charge or a review comes back while the person
 typing elsewhere: `Tab` reaches the choices, the next action first. No press answers it in
 the 400 ms after it opens or its question changes, and a key answers with a choice only once
 that choice has held focus for 300 ms, so `Tab` then `↵` in one burst answers nothing;
-neither does the second click of a double click or a held key. `Esc`, a press that starts
-and ends on the backdrop, and a close the browser forces take the way out at any time.
-Closing gives focus back to what had it. Reads on their own wait while a question is open.
+neither does the second click of a double click or a held key. `Esc` takes the way out at
+any time, and so does a press that starts and ends on the dimmed panel once the question
+has settled. Closing gives focus back to what had it. Reads on their own wait while a
+question is open.
 How a press ended is also posted to Manifold's one notice stack, which shows it at the foot
 of the page, each outcome replacing the last: "Launched on <machine>. Type your task in its
 terminal.", "Resumed on <machine>.", a save, a failed step in its words, and a check the

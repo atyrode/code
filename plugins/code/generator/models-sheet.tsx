@@ -11,6 +11,7 @@ import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../ma
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { WorkflowError, type CodeCall } from "../workflow.ts";
 import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
+import { PanelDialog } from "../panel-layer.tsx";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,
@@ -171,7 +172,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   }
 
   // ------------------------------------------------------------ import and export: two quiet actions in the head
-  const dialog = useRef<HTMLDialogElement>(null);
+  const [importing, setImporting] = useState(false);
   const [paste, setPaste] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const imported = useMemo(() => paste.trim() ? parseList(paste) : null, [paste]);
@@ -184,7 +185,11 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
   const exportRefusal = running ? "A model check is running." : !(active?.document ?? inUseDocument) ? "There is no list to export." : null;
   function openImport() {
     setPaste(""); setImportError(null);
-    dialog.current?.showModal();
+    setImporting(true);
+  }
+  function closeImport() {
+    setImporting(false);
+    setPaste("");
   }
   function stageImport() {
     const document = imported;
@@ -201,7 +206,7 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       if (!base) wrote(absentAt, initialized);
       const staged = await code("stageCatalog", { containerId, expectedRevision: initialized.revision, document });
       wrote(initialized.revision, staged);
-      dialog.current?.close();
+      closeImport();
       const beside = `${count(added, "change")} beside the list in use`;
       return { value: "staged", text: replacing ? `${beside}; it replaced the ${replacing.provenance ? "checked " : ""}list staged before` : beside };
     }, setImportError);
@@ -505,7 +510,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
       </section>}
     </main>
     <SheetKeys keys={[["↑↓←→", "move"], ["⏎", next.label.replace("…", "")], ["i", "import"], ["esc", running && phase !== "finishing" ? "cancel" : "code"]]} />
-    <dialog ref={dialog} className={`${G}sheet-dialog`} aria-labelledby={`${G}import-title`} onClose={() => setPaste("")}>
+    <PanelDialog open={importing} className={`${G}sheet-dialog`} labelledBy={`${G}import-title`} scrimDismisses={false}
+      focus={dialog => dialog.querySelector("textarea")} onDismiss={closeImport}>
       <h2 id={`${G}import-title`}>import a model list</h2>
       <p>Paste a Code model list, or drop its file here. {importEffect}</p>
       <textarea aria-label="model list JSON" spellCheck={false} value={paste} placeholder={'{ "schemaVersion": 1, "models": [ … ] }'}
@@ -523,8 +529,8 @@ export function ModelsSheet({ host, model, machine, onBack, backRef, onPlace }: 
           <span className={`${G}go-label`}>stage</span>
         </button>
         {stageHold && <button type="button" className={`${G}go-fix`} onClick={() => { setImportError(null); model.actions.discardChanges(); }}>discard edit</button>}
-        <button type="button" className={`${G}go-fix`} onClick={() => dialog.current?.close()}>cancel</button>
+        <button type="button" className={`${G}go-fix`} onClick={closeImport}>cancel</button>
       </div>
-    </dialog>
+    </PanelDialog>
   </section>;
 }

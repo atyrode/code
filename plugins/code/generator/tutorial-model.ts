@@ -1,43 +1,58 @@
 /*
- * THE TUTORIAL: a short walk through the panel, one real control at a time, offered once per person
- * and replayed from More. Each step names what it points at with its own selectors, in the order the
- * layout may show it (a pane beside the generator, else its tab, else its Show control), so the same
- * walk serves every width. A step whose control is not shown is passed over, and the count says how
- * many the walk has now. Pure, so the walk's order and bounds are tested apart from the card that
- * draws it (tutorial.tsx).
+ * THE TUTORIAL: a welcome, then a short walk through the panel in the order a person uses it, one real
+ * control at a time, offered once per person and replayed from More. Each step names what it lights
+ * with its own selectors, in the order the layout may show it (a pane beside the generator, else its
+ * tab, else its Show control), so the same walk serves every width. A step whose control is not shown
+ * when the walk begins is passed over, and the progress counts the steps the walk has. Pure, so the
+ * walk's order and bounds are tested apart from the layer that draws it (tutorial.tsx).
  */
 
 /** Generator-panel class prefix; the selectors below name parts of the panel by it. */
 const G = "plugin-atyrode_code_generator__";
 
-/** Something the person may try at a step, which takes the walk on once done: choosing a word, or opening the accounts. */
-export type TutorialTry = "word" | "accounts";
+/** What the welcome says before the walk: what Code is, in a sentence, and the offer. */
+export const TUTORIAL_WELCOME = {
+  title: "Welcome to Code",
+  text: "Code starts OMP coding sessions on your machines, with the models you choose here. A short tour shows you around.",
+  take: "Take the tour",
+  skip: "Skip",
+} as const;
+
+/** One thing a step may light: selectors whose shown elements the opening takes in together. */
+export type TutorialTarget = {
+  /** It shows when its first selector finds a shown element; the rest join it where they show. */
+  readonly parts: readonly string[];
+  /** Whether what it lights answers the person through the opening (a word to choose, a tab to open); otherwise it is only shown. */
+  readonly tryable?: true;
+};
 export type TutorialStep = {
   readonly id: string;
   readonly title: string;
   readonly text: string;
-  /** Where the step points: the first of these the panel shows. */
-  readonly targets: readonly string[];
-  readonly tries?: TutorialTry;
+  /** What the step lights: the first of these the panel shows. */
+  readonly targets: readonly TutorialTarget[];
+  /** A step that goes on by itself once the person has done what it invites: chosen a word through its opening. */
+  readonly goesOn?: "word";
 };
 
 export const TUTORIAL_STEPS: readonly TutorialStep[] = [
-  { id: "rows", title: "Your profile", text: "These words choose which models do the work and how hard they think. Click one to try it.",
-    targets: [`[data-pane="generator"] .${G}dials`], tries: "word" },
-  { id: "readout", title: "What it would do", text: "This line says what anything you point at would change, quota included.",
-    targets: [`[data-pane="generator"] .${G}readout`] },
-  { id: "defaults", title: "Defaults and Revert", text: "Defaults gives the standard profile. After a change, Revert brings back the saved one.",
-    targets: [`[data-pane="generator"] [data-defaults]`] },
-  { id: "routing", title: "Routing", text: "Each role in a session and the model it gets.",
-    targets: [`[data-pane="routing"]`, `[data-view-tab="routing"]`, `[data-reveal][aria-keyshortcuts="p"]`] },
-  { id: "usage", title: "Usage", text: "How much of each account's quota is left, over 5 hours and over a week.",
-    targets: [`[data-pane="usage"]`, `[data-view-tab="usage"]`, `[data-reveal][aria-keyshortcuts="s"]`] },
-  { id: "machine", title: "Machine", text: "Where the session runs.", targets: ["[data-machine-picker]"] },
-  { id: "launch", title: "Launch", text: "Opens a terminal on that machine with OMP running; you type your task there. The first launch checks your models once, after asking you.",
-    targets: [`[data-pane="generator"] button.${G}launch`] },
-  { id: "accounts", title: "Accounts", text: "Which of your accounts this workspace may use. Open it to see.", targets: [`[data-view-tab="accounts"]`], tries: "accounts" },
-  { id: "sessions", title: "Sessions", text: "What is running, with live dials, and saved sessions to reopen.", targets: [`[data-view-tab="sessions"]`] },
-  { id: "more", title: "More", text: "Models, Setup, Options and Shortcuts. Replay this tutorial here any time.", targets: ["[data-more]"] },
+  { id: "profile", title: "Your profile", text: "These words choose which models do the work and how hard they think. The line under them says what a word would change; choose one to try it.",
+    targets: [{ parts: [`[data-pane="generator"] .${G}dials`, `[data-pane="generator"] .${G}readout`], tryable: true }], goesOn: "word" },
+  { id: "estimates", title: "Cost and speed", text: "What this profile costs, as a relative list price, and how fast it answers once a model check has measured it.",
+    targets: [{ parts: [`[data-pane="generator"] .${G}meter`] }] },
+  // Where the layout keeps routing and usage behind a tab or a Show control, that is lit and may be opened, and the opening
+  // then glides to the pane it shows; the walk waits for Next.
+  { id: "routing", title: "Routing", text: "Each role in a session and the model it gets from your profile.",
+    targets: [{ parts: [`[data-pane="routing"]`] }, { parts: [`[data-view-tab="routing"]`], tryable: true }, { parts: [`[data-reveal][aria-keyshortcuts="p"]`], tryable: true }] },
+  { id: "usage", title: "Usage", text: "How much each account has left, over 5 hours and over a week.",
+    targets: [{ parts: [`[data-pane="usage"]`] }, { parts: [`[data-view-tab="usage"]`], tryable: true }, { parts: [`[data-reveal][aria-keyshortcuts="s"]`], tryable: true }] },
+  { id: "launch", title: "Launch", text: "Choose the machine, then launch: a terminal opens there with OMP running, ready for your task. If your models are not checked yet, it checks them first.",
+    targets: [{ parts: [`[data-pane="generator"] .${G}launch-what`] }] },
+  // Opened, the accounts show under the opening, which glides from the tab to them; the walk waits for Next.
+  { id: "accounts", title: "Accounts", text: "Which of your accounts this workspace may use. Open it to see.",
+    targets: [{ parts: [`[data-pane="accounts"]`] }, { parts: [`[data-view-tab="accounts"]`], tryable: true }] },
+  { id: "sessions", title: "Sessions", text: "What is running, with live dials, and saved sessions to reopen.", targets: [{ parts: [`[data-view-tab="sessions"]`] }] },
+  { id: "more", title: "More", text: "Models, Setup, Options and Shortcuts live here, and Tutorial takes this tour again.", targets: [{ parts: ["[data-more]"] }] },
 ];
 
 /** Where the walk stands among the steps shown now: 1-based, and how many there are; null when the step is not shown. */
