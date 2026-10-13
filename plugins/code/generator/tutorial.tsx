@@ -115,15 +115,17 @@ function dimmed(hole: Box | null, point: { readonly x: number; readonly y: numbe
   return `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${left}px ${top}px, ${left}px ${bottom}px, ${right}px ${bottom}px, ${right}px ${top}px, ${left}px ${top}px)`;
 }
 /**
- * Brings `element` into view by the nearest scrolling box between it and the panel's root, the least
- * distance that shows it (its top, when it is taller than the box); nothing else scrolls.
+ * Brings what a step lights into view together, by the nearest scrolling box between it and the
+ * panel's root, the least distance that shows all of it (its top, when it is taller than the box);
+ * nothing else scrolls.
  */
-function revealIn(panel: HTMLElement, element: HTMLElement) {
-  for (let node = element.parentElement; node && node !== panel; node = node.parentElement) {
+function revealIn(panel: HTMLElement, parts: readonly HTMLElement[]) {
+  for (let node = parts[0]?.parentElement ?? null; node && node !== panel; node = node.parentElement) {
     if (!/(auto|scroll)/.test(getComputedStyle(node).overflowY) || node.scrollHeight <= node.clientHeight) continue;
-    const box = node.getBoundingClientRect(), at = element.getBoundingClientRect();
-    if (at.top < box.top) node.scrollTop -= box.top - at.top;
-    else if (at.bottom > box.bottom) node.scrollTop += Math.min(at.bottom - box.bottom, at.top - box.top);
+    const box = node.getBoundingClientRect(), rects = parts.map(part => part.getBoundingClientRect());
+    const top = Math.min(...rects.map(rect => rect.top)), bottom = Math.max(...rects.map(rect => rect.bottom));
+    if (top < box.top) node.scrollTop -= box.top - top;
+    else if (bottom > box.bottom) node.scrollTop += Math.min(bottom - box.bottom, top - box.top);
     return;
   }
 }
@@ -200,10 +202,10 @@ export function TutorialLayer({ phase, step, shown, onTake, onSkip, onNext, onBa
   useLayoutEffect(() => {
     if (!panel || !current) { scrolled.current = null; return; }
     if (scrolled.current === step) return;
-    const first = tutorialLit(panel, current)?.parts[0];
-    if (!first) return;
+    const parts = tutorialLit(panel, current)?.parts ?? [];
+    if (parts.length === 0) return;
     scrolled.current = step;
-    revealIn(panel, first);
+    revealIn(panel, parts);
   });
   function measure() {
     let found: Placed | null = null;
