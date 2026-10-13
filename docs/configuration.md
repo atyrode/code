@@ -509,10 +509,10 @@ or left the pool, or that the accounts were not known before), with "launch agai
 it, or change a setting first"; while the launch is pointed the readout says where it
 runs and its pool ("runs on <machine>: GPT 2"). The next press launches the held review
 while the press's own inputs hold (team, options, machine, the saved profile and
-authority), OMP's defaults and skill catalog revisions are those it was made with, the
-reads it rests on succeed and its launch is still the step (the list in use serves it);
-the first of them that fails drops it for good, and the press after that reviews again.
-Accounts that moved after it are refused by the launch's own check (below). A press
+authority), a selected skill catalog's revision is the one it was made with, the reads it
+rests on succeed and its launch is still the step (the list in use serves it); the first
+of them that fails drops it for good, and the press after that reviews again. Accounts
+or OMP defaults that moved after it are refused by the launch's own check (below). A press
 stands on the same inputs: a change of one of them while it runs stops it, while an
 observation that moves meanwhile does not, since the launch reads the accounts and
 OMP's defaults again itself and refuses when they moved under its review. Choosing a
