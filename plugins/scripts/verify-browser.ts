@@ -4512,14 +4512,15 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     // opens, answers nothing, as any press in its first moments; the second, once the question has settled, on Close while
     // focus is still on the title, takes the way out, onto the launch.
     await viewerBrowser.evaluate(`(() => {
-      const dialog = ${decision};
+      // The host holds the tutorial's offer and the press's question; the click goes to the refused question the moment it opens.
       globalThis.__codeAssisted = false;
       new MutationObserver((records, observer) => {
-        if (!dialog.open) return;
+        const dialog = records.map(record => record.target).find(node => node.open && node.dataset.decision === 'refused');
+        if (!dialog) return;
         observer.disconnect();
         dialog.querySelector('button[data-choice="dismiss"]').click();
         globalThis.__codeAssisted = true;
-      }).observe(dialog, { attributes: true, attributeFilter: ['open'] });
+      }).observe(${decisionHost}, { subtree: true, attributes: true, attributeFilter: ['open'] });
       return true;
     })()`);
     await click(viewerBrowser, launchButton);
@@ -5823,10 +5824,12 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     gptJoins = true;
     const reviewsBeforeHold = reviews.length, preparedBeforeHold = prepareRequests, heldAt = trace.requests.length;
     await browser.evaluate(`(() => {
-      const dialog = ${decision}, early = { opened: null, open: dialog.open, clicks: [] };
-      new MutationObserver(() => { if (dialog.open && !early.open) early.opened = performance.now(); early.open = dialog.open; })
-        .observe(dialog, { attributes: true, attributeFilter: ['open'] });
-      dialog.addEventListener('click', event => early.clicks.push({ choice: event.target.closest('button[data-choice]')?.dataset.choice ?? null,
+      // The host holds the tutorial's offer and the press's question: the recorder follows whichever of them opens.
+      const host = ${decisionHost}, early = { opened: null, clicks: [] };
+      new MutationObserver(records => {
+        if (early.opened === null && records.some(record => record.target.open)) early.opened = performance.now();
+      }).observe(host, { subtree: true, attributes: true, attributeFilter: ['open'] });
+      host.addEventListener('click', event => early.clicks.push({ choice: event.target.closest('button[data-choice]')?.dataset.choice ?? null,
         detail: event.detail, settled: event.timeStamp - early.opened >= ${DECISION_SETTLE_MS} }), true);
       globalThis.__codeEarly = early;
       return true;
