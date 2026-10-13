@@ -361,22 +361,30 @@ sheet reads everything in one pass and restarts both.
 
 On a person's first open of the panel, wherever they open it, a question asks "Welcome
 to Code" with **Take the tour** and **Skip** (`Esc` and the backdrop skip), once the
-generator shows its profile with no sheet open. Either answer marks the tutorial seen for
-that person (`seeTutorial`, or the browser for a sign-in that keeps no record), so it is
-never offered again; **Tutorial** in More walks it whenever they like. The walk starts on
-the generator and points at the real controls one at a time: the profile's rows, the
+generator shows its profile in the main view with no sheet open, nothing running, no
+charge waiting and no other question open. It is offered to people only: an agent or a
+service is never asked. Either answer marks the tutorial seen for that person
+(`seeTutorial`, or the browser for a sign-in that keeps no record), so it is never offered
+again; **Tutorial** in More walks it whenever they like. The walk starts on the generator
+(a sheet closes and the view goes back to it) and keeps to the steps the panel shows
+there, so its count holds when a step opens another view: the profile's rows, the
 readout, Defaults and Revert, routing, usage, the machine, the launch, the Accounts and
 Sessions tabs, and More. Each step draws a thin ring in the accent around its control and
-a card beside it (under it where the panel has room, else over it), both laid over the
-panel so nothing in it moves: the step's name, where the walk stands ("3 of 10", counting
-only the steps the layout shows), one sentence, and **Next** (**Done** at the last),
-**Back** and **Skip**; `→` and `←` step, `Esc` skips, and every step takes focus on Next
-once, scrolling its control into view. Routing and usage are pointed at where the layout
+a card beside it (under it where the panel shows room, else over it), both laid over the
+panel so nothing in it moves, and both kept to the part of the panel the window shows: the
+step's name, where the walk stands ("3 of 10"), one sentence, and **Next** (**Done** at
+the last), **Back** and **Skip**; `→` and `←` step, `Esc` skips, and a held key steps once.
+Each step's card is its own, so moving to it moves focus to its Next and it is read out,
+and its control is scrolled into view. Routing and usage are pointed at where the layout
 puts them: beside the generator, else their tab or Show control. A step may be tried:
-choosing a word in the rows, or opening Accounts, goes on by itself, and Next always
-works too. The walk launches nothing and spends nothing; a word tried changes the rows as
-any choice does, which Revert puts back. A step whose control is not shown (another view
-or a sheet has the panel) hides its card until it is.
+choosing a word in the rows, or opening Accounts, goes on by itself once done since the
+step began, and Next always works too; Back onto a step another view hides brings the
+generator back. The walk launches nothing and spends nothing; a word tried changes the
+rows as any choice does, which Revert puts back. A step whose control is not shown (another
+view or a sheet has the panel), or any step while a popover of the panel is open (More's
+menu, the machine list), hides its card until that changes. The walk's end, finished or
+skipped, puts focus on More, where it is replayed, so a second `↵` of a double press opens
+a menu rather than launching.
 
 ### The generator
 

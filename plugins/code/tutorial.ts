@@ -6,20 +6,23 @@ import { bound, personOf } from "./person.ts";
 
 /*
   WHETHER A PERSON HAS SEEN THE TUTORIAL. The panel offers its tutorial once per person, on whichever
-  device and in whichever workspace they first open it; finishing it, skipping it or leaving it marks
-  it seen, and More replays it whenever they like. It is a person's own record (person.ts): nobody
-  reads or writes another person's, and a caller that keeps none is answered as keeping none rather
-  than refused, so the panel keeps it in the browser instead.
+  device and in whichever workspace they first open it; answering the offer either way, or ending a
+  walk, marks it seen, and More replays it whenever they like. It is a person's own record
+  (person.ts): nobody reads or writes another person's, and a caller that keeps none is answered as
+  keeping none rather than refused, so the panel keeps it in the browser instead.
 */
 
 const StoredTutorialSchema = z.strictObject({ schemaVersion: z.literal(1), principalId: id, seenAt: epochMilliseconds });
 const tutorialKey = (person: string) => `tutorial/${person}`;
 
-export async function readTutorial(ctx: CodeContext): Promise<Tutorial> {
-  const person = await personOf(ctx);
-  if (person === null) return { keeps: false, seenAt: null };
+async function readRecord(ctx: CodeContext, person: string): Promise<Tutorial> {
   const raw = await ctx.storage.get(tutorialKey(person));
   return { keeps: true, seenAt: raw === null ? null : bound(ctx, StoredTutorialSchema.parse(JSON.parse(raw))).seenAt };
+}
+
+export async function readTutorial(ctx: CodeContext): Promise<Tutorial> {
+  const person = await personOf(ctx);
+  return person === null ? { keeps: false, seenAt: null } : readRecord(ctx, person);
 }
 
 /** Records that the caller has seen the tutorial, once: a record already there, from another tab or device, stands as it is. */
@@ -27,6 +30,5 @@ export async function seeTutorial(ctx: CodeContext): Promise<Tutorial> {
   const person = await personOf(ctx);
   if (person === null) return { keeps: false, seenAt: null };
   const record = StoredTutorialSchema.parse({ schemaVersion: 1, principalId: ctx.auth.principal.id, seenAt: ctx.now() });
-  await ctx.storage.compareAndSet(tutorialKey(person), null, JSON.stringify(record));
-  return readTutorial(ctx);
+  return await ctx.storage.compareAndSet(tutorialKey(person), null, JSON.stringify(record)) ? { keeps: true, seenAt: record.seenAt } : readRecord(ctx, person);
 }

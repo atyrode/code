@@ -234,6 +234,7 @@ const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (rea
     ["Esc", "Back to the generator; from Manage accounts, back to the accounts"]] },
   { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
   { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
+  { title: "Tutorial", keys: [["→ ←", "Next or back a step"], ["Esc", "End the tutorial"]] },
   { title: "Anywhere", keys: [["r", "Refresh now: read everything again at once, as the panel also does on its own"], ["?", "These shortcuts"]] },
 ];
 
@@ -564,11 +565,14 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     const shown = tutorialShown(panelRoot), first = nextTutorialStep(shown, -1);
     setWalk(first === null ? null : { step: first, shown });
   });
-  /** The walk ends, finished or skipped: it counts as seen, and focus comes back into the panel from the card that goes. */
+  /**
+   * The walk ends, finished or skipped: it counts as seen, and focus comes back into the panel on More, where the tutorial is
+   * replayed, rather than on the rows, where a second `↵` of a double press would launch.
+   */
   function endWalk() {
     setWalk(null);
     tutorial.see();
-    keepFocus();
+    requestAnimationFrame(() => app.current?.querySelector<HTMLElement>("[data-more]")?.focus({ preventScroll: true }));
   }
   /** A step whose control another view hides (the generator's, from the accounts) brings the generator back with it. */
   function stepWalk(forward: boolean) {
@@ -578,17 +582,22 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     if (view !== "main" && !tutorialTarget(panelRoot, TUTORIAL_STEPS[to]!)) changeView("main");
     setWalk({ step: to, shown: walk.shown });
   }
-  // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened.
+  // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened
+  // since it began, so a step come back to with the accounts already open waits for Next.
   const selectionKey = JSON.stringify(selection);
-  const walkBegan = useRef<{ readonly step: number; readonly selection: string } | null>(null);
+  const walkBegan = useRef<{ readonly step: number; readonly selection: string; readonly view: PanelView } | null>(null);
   useEffect(() => {
     if (walk === null) { walkBegan.current = null; return; }
-    if (walkBegan.current?.step !== walk.step) { walkBegan.current = { step: walk.step, selection: selectionKey }; return; }
+    if (walkBegan.current?.step !== walk.step) { walkBegan.current = { step: walk.step, selection: selectionKey, view }; return; }
     const tries = TUTORIAL_STEPS[walk.step]?.tries;
-    if ((tries === "word" && selectionKey !== walkBegan.current.selection) || (tries === "accounts" && view === "accounts")) stepWalk(true);
+    if ((tries === "word" && selectionKey !== walkBegan.current.selection) || (tries === "accounts" && view === "accounts" && walkBegan.current.view !== "accounts")) {
+      stepWalk(true);
+    }
   });
-  // The offer: once per person, on the generator at rest with its profile shown, until they answer it either way.
-  const offer = tutorial.seen === false && walk === null && !starting && view === "main" && sheet === null && selection !== null ? tutorialOffer() : null;
+  // The offer: once per person, to a person and not an agent or a service, on the generator at rest with its profile shown,
+  // nothing running, no charge waiting and no other question open, until they answer it either way.
+  const offer = tutorial.seen === false && host.principal.kind === "human" && walk === null && !starting && view === "main" && sheet === null
+    && selection !== null && teamGate.open && !busy && decisionHost?.querySelector('dialog[open]:not([data-decision="tutorial"])') == null ? tutorialOffer() : null;
 
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
   // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).

@@ -584,8 +584,15 @@ test("the tutorial is seen once per person: recorded when first seen, kept as it
   f.caller.principal = { id: "reader", kind: "human", name: "Reader", color: "#abcdef" };
   f.caller.containerScope = target.containerId;
   expect(await f.workflow.seeTutorial()).toEqual({ keeps: false, seenAt: null });
-  f.caller.containerScope = null;
+  f.caller.containerScope = null; f.caller.ceiling = true;
+  expect(await f.workflow.seeTutorial()).toEqual({ keeps: false, seenAt: null });
+  f.caller.ceiling = false;
   expect(await f.workflow.readTutorial()).toEqual({ keeps: true, seenAt: null });
+  // A record filed under the reader's key that names another principal is corruption, never the reader's.
+  await f.workflow.seeTutorial();
+  const readers = [...f.store.keys()].find(entry => entry.startsWith("tutorial/") && entry !== key)!;
+  f.store.set(readers, f.store.get(key)!);
+  await expect(f.workflow.readTutorial()).rejects.toThrow("code_invalid_configuration");
 });
 
 test("a check derived under another budget is never adopted: the workspace checks for itself", async () => {

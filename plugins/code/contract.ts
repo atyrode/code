@@ -117,7 +117,7 @@ export type Checks = z.infer<typeof ChecksSchema>;
 /**
  * WHETHER A PERSON HAS SEEN THE PANEL'S TUTORIAL. `keeps` says whether the caller keeps the record
  * at all (false for an agent, a service or a confined sign-in, whose browser keeps it instead);
- * `seenAt` is when they first finished, skipped or left it, null before.
+ * `seenAt` is when they first answered its offer or ended a walk, null before.
  */
 export const TutorialSchema = z.strictObject({ keeps: z.boolean(), seenAt: epochMilliseconds.nullable() });
 export type Tutorial = z.infer<typeof TutorialSchema>;

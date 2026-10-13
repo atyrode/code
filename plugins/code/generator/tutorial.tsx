@@ -13,15 +13,17 @@ const CARD_MAX_PX = 320, GAP_PX = 10, EDGE_PX = 8, RING_PX = 4;
  * Whether the person has seen the tutorial: their own record, read once, else, for a sign-in that
  * keeps none (tutorial.ts), this browser's; null until read, and while it cannot be read, when the
  * tutorial is not offered. `see` records it, at once on screen; a record that fails to write only
- * means the tutorial is offered again next time, so nothing waits on it.
+ * means the tutorial is offered again next time, so nothing waits on it. Until the record is read,
+ * where it is kept is unknown, so `see` writes nothing anywhere.
  */
 export function useTutorialSeen(host: HostServices): { readonly seen: boolean | null; readonly see: () => void } {
   const [seen, setSeen] = useState<boolean | null>(null);
-  const keeps = useRef(false);
+  const keeps = useRef<boolean | null>(null);
   const local = `atyrode.code.tutorial:${host.principal.id}`;
   useEffect(() => {
     let live = true;
     setSeen(null);
+    keeps.current = null;
     codeWorkflow(host).readTutorial().then(record => {
       if (!live) return;
       keeps.current = record.keeps;
@@ -31,13 +33,18 @@ export function useTutorialSeen(host: HostServices): { readonly seen: boolean | 
   }, [host.principal.id]);
   function see() {
     setSeen(true);
+    if (keeps.current === null) return;
     if (!keeps.current) { rememberInBrowser(local); return; }
     codeWorkflow(host).seeTutorial().catch(() => { /* Offered again next time, as above. */ });
   }
   return { seen, see };
 }
+/** A browser that cannot keep anything has not seen it; one that throws on access neither. */
 function browserSeen(key: string): boolean {
-  try { return globalThis.localStorage?.getItem(key) !== null; } catch { return false; }
+  try {
+    const store = globalThis.localStorage;
+    return store ? store.getItem(key) !== null : false;
+  } catch { return false; }
 }
 function rememberInBrowser(key: string) {
   try { globalThis.localStorage?.setItem(key, String(Date.now())); } catch { /* A browser that keeps nothing offers it again. */ }
@@ -58,17 +65,19 @@ export function tutorialShown(panel: HTMLElement): boolean[] {
 
 type Box = { readonly top: number; readonly left: number; readonly width: number; readonly height: number };
 type Layout = { readonly card: Box | null; readonly ring: Box | null };
+const HIDDEN: Layout = { card: null, ring: null };
 
 /**
  * One step of the tutorial: a thin ring in the accent around the real control and a card beside it,
- * under it where there is room in the panel, else over it, both laid over the panel without moving
- * anything in it. The card says what the control is, where the walk stands among the steps it keeps
- * to (`shown`, "3 of 10"), and offers Next (Done at the last), Back and Skip; `→` and `←` step too,
- * and `Esc` skips. Each step takes
- * focus on Next once, so the walk reads out and `↵` goes on, and scrolls its control into view.
- * A step whose control is not shown now (another view or a sheet has the panel) hides the card and
- * the ring until it is. Placed in the panel's own coordinates, so a panel inside a transformed
- * canvas places it as well as one that is not.
+ * under it where the panel shows room, else over it, both laid over the panel without moving anything
+ * in it and both kept to the part of the panel the window shows. The card says what the control is,
+ * where the walk stands among the steps it keeps to (`shown`, "3 of 10"), and offers Next (Done at
+ * the last), Back and Skip; `→` and `←` step too, and `Esc` skips; a held key steps once. Each step's
+ * card is a card of its own, so moving to it moves focus to its Next and it is read out, and its
+ * control is scrolled into view. A step whose control is not shown now (another view or a sheet has
+ * the panel), and any step while a popover of the panel is open (More's menu, the machine list), hides
+ * the card and the ring until that changes. Placed in the panel's own coordinates, so a panel in a
+ * translated canvas places it as well as one that is not.
  */
 export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd }: {
   panel: HTMLElement; step: number; shown: readonly boolean[]; accent: string; onNext: () => void; onBack: () => void; onEnd: () => void;
@@ -76,25 +85,28 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
   const id = useId();
   const card = useRef<HTMLElement>(null);
   const next = useRef<HTMLButtonElement>(null);
-  const [layout, setLayout] = useState<Layout>({ card: null, ring: null });
+  const [layout, setLayout] = useState<Layout>(HIDDEN);
   const current = TUTORIAL_STEPS[step]!;
 
   function measure() {
     const target = tutorialTarget(panel, current);
-    let placed: Layout = { card: null, ring: null };
-    if (target) {
+    let placed = HIDDEN;
+    if (target && !panel.querySelector("[data-popover]")) {
       const room = panel.getBoundingClientRect(), at = target.getBoundingClientRect();
-      // What of the panel the window shows: a panel taller than the window keeps the card where it can be seen.
-      const bottom = Math.min(room.height, innerHeight - room.top);
+      // The part of the panel the window shows, in the panel's coordinates.
+      const view = { top: Math.max(0, -room.top), bottom: Math.min(room.height, innerHeight - room.top) };
       const width = Math.max(0, Math.min(CARD_MAX_PX, room.width - 2 * EDGE_PX));
       const height = card.current?.offsetHeight ?? 0;
-      const top = at.top - room.top, under = at.bottom - room.top + GAP_PX, over = top - GAP_PX - height;
-      const cardTop = under + height <= bottom - EDGE_PX ? under : over >= EDGE_PX ? over : Math.max(EDGE_PX, bottom - EDGE_PX - height);
+      const top = at.top - room.top, bottom = at.bottom - room.top;
+      const under = bottom + GAP_PX, over = top - GAP_PX - height;
+      const highest = view.top + EDGE_PX, lowest = Math.max(highest, view.bottom - EDGE_PX - height);
+      const cardTop = Math.min(Math.max(under + height <= view.bottom - EDGE_PX ? under : over >= highest ? over : lowest, highest), lowest);
       const left = Math.min(Math.max(at.left - room.left, EDGE_PX), room.width - EDGE_PX - width);
-      const ringLeft = Math.max(1, at.left - room.left - RING_PX), ringTop = Math.max(1, top - RING_PX);
+      // The ring around the control, within what the panel shows of it; none when nothing of it shows.
+      const ringTop = Math.max(view.top + 1, top - RING_PX), ringBottom = Math.min(view.bottom - 1, bottom + RING_PX);
+      const ringLeft = Math.max(1, at.left - room.left - RING_PX), ringRight = Math.min(room.width - 1, at.right - room.left + RING_PX);
       placed = { card: { top: cardTop, left, width, height },
-        ring: { top: ringTop, left: ringLeft, width: Math.min(room.width - 1, at.right - room.left + RING_PX) - ringLeft,
-          height: Math.min(room.height - 1, at.bottom - room.top + RING_PX) - ringTop } };
+        ring: ringBottom > ringTop && ringRight > ringLeft ? { top: ringTop, left: ringLeft, width: ringRight - ringLeft, height: ringBottom - ringTop } : null };
     }
     setLayout(previous => JSON.stringify(previous) === JSON.stringify(placed) ? previous : placed);
   }
@@ -102,14 +114,27 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
   useLayoutEffect(measure);
   const latest = useRef(measure);
   latest.current = measure;
+  // Between renders it follows what moves on its own: a resize of the panel, the stage or the control, a scroll, a popover
+  // opening or closing, a view or pane shown or hidden; at most once a frame.
   useEffect(() => {
-    const view = panel.ownerDocument.defaultView, follow = () => latest.current();
-    const observer = new ResizeObserver(follow);
-    observer.observe(panel);
+    const view = panel.ownerDocument.defaultView;
+    let frame = 0;
+    const follow = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; latest.current(); }); };
+    const sizes = new ResizeObserver(follow), changes = new MutationObserver(follow);
+    sizes.observe(panel);
+    const stage = panel.querySelector("[data-tui]"), target = tutorialTarget(panel, current);
+    if (stage) sizes.observe(stage);
+    if (target) sizes.observe(target);
+    changes.observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-popover", "hidden"] });
     panel.addEventListener("scroll", follow, true);
     view?.addEventListener("resize", follow);
-    return () => { observer.disconnect(); panel.removeEventListener("scroll", follow, true); view?.removeEventListener("resize", follow); };
-  }, [panel]);
+    return () => {
+      cancelAnimationFrame(frame);
+      sizes.disconnect(); changes.disconnect();
+      panel.removeEventListener("scroll", follow, true);
+      view?.removeEventListener("resize", follow);
+    };
+  }, [panel, step]);
   // A step brings its control into view and takes focus on Next once its card shows, once per step: a card hidden while
   // another view has the panel and shown again takes nothing from what the person is doing.
   const showing = layout.card !== null;
@@ -118,12 +143,14 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
     if (!showing || focused.current === step) return;
     focused.current = step;
     tutorialTarget(panel, current)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    measure();
     next.current?.focus({ preventScroll: true });
   }, [step, showing]);
 
   const place = tutorialPlace(shown, step);
   const last = nextTutorialStep(shown, step) === null, first = previousTutorialStep(shown, step) === null;
   function keys(event: KeyboardEvent<HTMLElement>) {
+    if (event.repeat && event.key !== "Escape") { event.preventDefault(); return; }
     if (event.key === "Escape") onEnd();
     else if (event.key === "ArrowRight") onNext();
     else if (event.key === "ArrowLeft" && !first) onBack();
@@ -135,7 +162,7 @@ export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd
   return createPortal(<>
     {layout.ring && <div className={`${G}tutorial-ring`} aria-hidden="true"
       style={{ ...box(layout.ring), height: layout.ring.height, "--tui-acc": accent } as CSSProperties} />}
-    <section ref={card} className={`${G}tutorial`} role="dialog" aria-modal="false" aria-labelledby={`${id}-title`} aria-describedby={`${id}-text`}
+    <section key={step} ref={card} className={`${G}tutorial`} role="dialog" aria-modal="false" aria-labelledby={`${id}-title`} aria-describedby={`${id}-text`}
       data-tutorial={current.id} data-placed={showing || undefined} style={{ ...box(layout.card), "--tui-acc": accent } as CSSProperties} onKeyDown={keys}>
       <div className={`${G}tutorial-head`}>
         <h2 id={`${id}-title`}>{current.title}</h2>

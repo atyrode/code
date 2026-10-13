@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { answer, decisionFor, type Decision, type DecisionFacts } from "../code/generator/decision-model.ts";
+import { answer, decisionFor, tutorialOffer, type Decision, type DecisionFacts } from "../code/generator/decision-model.ts";
 import type { GateRefusal } from "../code/generator/launch-step.ts";
 import { refusalView, type StatusFacts, type Vocabulary } from "../code/generator/statement-model.ts";
 
@@ -78,5 +78,11 @@ describe("what answering does", () => {
       const effects = answer(question!, question!.choices.at(-1)!);
       expect(effects.some(effect => effect.kind === "launch" || effect.kind === "approve")).toBe(false);
     }
+  });
+});
+
+describe("the tutorial's offer", () => {
+  test("taking the tour is its first choice and never its way out, which Esc and the backdrop take", () => {
+    expect(does(tutorialOffer())).toEqual(["tour", "dismiss"]);
   });
 });
