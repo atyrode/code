@@ -22,6 +22,8 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* Its layer's stacking stays within the panel, under whatever Manifold draws over panels. */
+  isolation: isolate;
   font-size: 0.78rem;
   line-height: 1.4;
   overflow-wrap: normal;
@@ -200,8 +202,8 @@
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__menu-label { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; overflow-wrap: anywhere; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__menu-key { flex: none; color: var(--tui-dim); font: inherit; font-size: 13px; }
 /* The panel's buttons on the stage and in its layer read in its greys: quiet at rest, the text colour under the pointer. */
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tui, .plugin-atyrode_code_generator__layer) .plugin-atyrode_code__button { color: var(--tui-mid); font-size: 13px; }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tui, .plugin-atyrode_code_generator__layer) .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { color: var(--tui-fg); }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tui, .plugin-atyrode_code__layer) .plugin-atyrode_code__button { color: var(--tui-mid); font-size: 13px; }
+.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__tui, .plugin-atyrode_code__layer) .plugin-atyrode_code__button:is(:hover, [aria-expanded="true"]):not(:disabled) { color: var(--tui-fg); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check { color: var(--tui-mid); font-size: 13px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check[aria-checked="true"] { color: var(--tui-fg); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tui .plugin-atyrode_code__check[aria-checked="true"] .plugin-atyrode_code__check-box { border-color: var(--tui-acc); background: var(--tui-acc); }
@@ -745,33 +747,25 @@
 @container code (width < 300px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 14px 12px 12px; }
 }
-/*
- * The panel's layer (panel-layer.tsx): everything Code shows over itself stands in the panel's root,
- * over the panel and never past it, with the panel dimmed under it. A dialog stands centred in the
- * part of the panel the window shows (`layer-room`, placed by measure) and scrolls within itself when
- * the panel is short; the dim comes in with it.
- */
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__layer { position: absolute; inset: 0; z-index: 40; overflow: hidden; }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__scrim, .plugin-atyrode_code_generator__tour-scrim) { position: absolute; inset: 0; background: rgb(8 9 12 / 74%); animation: plugin-atyrode_code_generator__dim-in 180ms var(--tui-ease); }
-.plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__layer-room, .plugin-atyrode_code_generator__tour-room) { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 12px; pointer-events: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__layer-room > dialog { position: relative; inset: auto; box-sizing: border-box; max-width: 100%; max-height: 100%; margin: 0; overflow-y: auto; pointer-events: auto; }
-@keyframes plugin-atyrode_code_generator__dim-in { from { opacity: 0; } }
 @keyframes plugin-atyrode_code_generator__card-in { from { opacity: 0; transform: translateY(4px); } }
 /*
- * The tour (tutorial.tsx), in the layer: the dim with an opening cut round the step's control
- * (`clip-path`, which lets the pointer through the opening too), a thin rule in the accent round the
- * opening, and a card beside it in the dialog's grammar, its progress in blocks like the usage bars.
- * The opening and its rule glide together from control to control, and each step's card comes in as
- * the opening lands. Where a step offers nothing to try, the rule's box holds the pointer
- * (`data-look`). Once the tour ends the dim fades as the opening closes.
+ * The tour (tutorial.tsx), a layer of the panel's own (the shared layer's parts are in Code's root
+ * stylesheet): the dim with an opening cut round the step's control (`clip-path`, which lets the
+ * pointer through the opening too), a thin rule in the accent round the opening, and a card beside it
+ * in the dialog's grammar, its progress in blocks like the usage bars. The opening and its rule glide
+ * together from control to control, and each step's card comes in as the opening lands. Where a step
+ * offers nothing to try now, the rule's box holds the pointer (`data-look`), so a press there keeps
+ * focus on the card. Once the tour ends the dim fades as the opening closes.
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour { position: absolute; inset: 0; z-index: 40; overflow: hidden; pointer-events: none; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-scrim { pointer-events: auto; transition: clip-path 340ms var(--tui-ease), opacity 220ms var(--tui-ease); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-scrim { position: absolute; inset: 0; background: var(--code-scrim); pointer-events: auto;
+  animation: plugin-atyrode_code__dim-in 180ms var(--tui-ease); transition: clip-path 340ms var(--tui-ease), opacity 220ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour[data-leaving] .plugin-atyrode_code_generator__tour-scrim { opacity: 0; pointer-events: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-room { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 12px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-ring { position: absolute; box-sizing: border-box; border: 1px solid var(--tui-acc); pointer-events: none;
   transition: top 340ms var(--tui-ease), left 340ms var(--tui-ease), width 340ms var(--tui-ease), height 340ms var(--tui-ease), opacity 220ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-ring[data-look] { pointer-events: auto; }
-.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-card { position: absolute; box-sizing: border-box; max-height: calc(100% - 16px); overflow-y: auto; padding: 14px 16px 12px; border: 1px solid var(--tui-rule); color: var(--tui-fg); background: var(--code-panel); font: 14px/20px var(--code-sans); pointer-events: auto;
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-card { position: absolute; box-sizing: border-box; overflow-y: auto; padding: 14px 16px 12px; border: 1px solid var(--tui-rule); color: var(--tui-fg); background: var(--code-panel); font: 14px/20px var(--code-sans); pointer-events: auto;
   animation: plugin-atyrode_code_generator__card-in 220ms var(--tui-ease) 180ms both; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-card:not([data-placed], .plugin-atyrode_code_generator__tour-welcome) { top: 0; left: 0; visibility: hidden; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-welcome { position: relative; width: min(380px, 100%); max-height: 100%; padding: 18px 20px 16px; animation-delay: 0ms; }
@@ -790,10 +784,10 @@
 @media (pointer: coarse) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-choices button { min-width: 44px; min-height: 44px; }
 }
-/* The layer stands outside the stage and the sheets, whose reduced-motion rules stop their motion, so it stops its own. */
+/* The tour stands outside the stage and the sheets, whose reduced-motion rules stop their motion, so it stops its own. */
 @media (prefers-reduced-motion: reduce) {
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__layer, .plugin-atyrode_code_generator__tour),
-  .plugin-atyrode_code_generator :is(.plugin-atyrode_code_generator__layer, .plugin-atyrode_code_generator__tour) * { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour,
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour * { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
 }
 
 /* Models: the list as the ladders it is, wide as a matrix (tiers down, providers across), else one ladder per provider. */

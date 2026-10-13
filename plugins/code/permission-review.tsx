@@ -5,6 +5,7 @@ import type { PermissionFeatureId, Target } from "./contract.ts";
 import type { PermissionPlan as Plan, PermissionPlanInput } from "./permission-plan.ts";
 import { WorkflowError, type RuntimeConfigurationReview } from "./workflow.ts";
 import { ACCOUNT_REFRESH_MS, codeWorkflow, canWriteCodeWorkspace, codeOperationFailure } from "./machine-web.ts";
+import { PanelDialog } from "./panel-layer.tsx";
 
 function reviewStatus(detail: string): string {
   if (/waiting for OMP/i.test(detail)) return "Waiting for runtime readiness. Review the current status again.";
@@ -56,10 +57,13 @@ export function PermissionReview(props: PermissionReviewProps) {
   </>;
 }
 
-/** The native review itself, open from mount: a trigger of its own (`PermissionReview`) or a sheet's next action opens it. */
+/**
+ * The native review itself, open from mount: a trigger of its own (`PermissionReview`) or a sheet's next action opens it. It
+ * stands in the panel's layer (panel-layer.tsx), over the dimmed panel and nothing else; `Esc`, Close and Not now close it,
+ * a press on the dim keeps it, and focus goes back to what opened it.
+ */
 export function PermissionDialog({ host, target, intent, label, onReady, onClose, containerId }: PermissionReviewProps & { containerId: string; onClose: () => void }) {
   const id = useId();
-  const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [choices, setChoices] = useState<PermissionFeatureId[] | null>(null);
@@ -89,8 +93,7 @@ export function PermissionDialog({ host, target, intent, label, onReady, onClose
   const writable = canWriteCodeWorkspace(host);
   useEffect(() => {
     active.current = true;
-    dialog.current?.showModal();
-    return () => { active.current = false; generation.current += 1; dialog.current?.close(); };
+    return () => { active.current = false; generation.current += 1; };
   }, []);
   useEffect(() => { if (flow) heading.current?.focus({ preventScroll: true }); }, [flow?.phase, flow?.index]);
   useEffect(() => {
@@ -212,8 +215,8 @@ export function PermissionDialog({ host, target, intent, label, onReady, onClose
   const shownPlan = flow?.plan ?? plan;
   const step = flow && flow.plan.steps[flow.index];
   const configuration = flow?.configuration;
-  return <dialog ref={dialog} className="plugin-atyrode_code plugin-atyrode_code__permission-dialog" aria-labelledby={`${id}-title`} aria-busy={busy}
-    onCancel={event => { event.preventDefault(); onClose(); }}>
+  return <PanelDialog open className="plugin-atyrode_code plugin-atyrode_code__permission-dialog" labelledBy={`${id}-title`} busy={busy}
+    focus={() => heading.current} scrimDismisses={false} onDismiss={onClose}>
     <header className="plugin-atyrode_code__section-heading"><h2 ref={heading} tabIndex={-1} id={`${id}-title`}>Review: {label}</h2><button type="button" onClick={onClose} aria-label="Close permission review">Close</button></header>
     <details className="plugin-atyrode_code__details"><summary>How permission reviews work</summary>
       <p>Choices are requests, not grants. Native rights and OMP runtime configuration are separate approvals. Code’s shared catalog and account choices remain separate saves. Closing this dialog never revokes existing access.</p>
@@ -271,5 +274,5 @@ export function PermissionDialog({ host, target, intent, label, onReady, onClose
     {flow && <button type="button" disabled={busy} onClick={restart}>Reconsider choices / review current scope</button>}
     {message && <ReviewStatus detail={message} />}
     {busy && <p role="status">Reading or applying the exact reviewed request…</p>}
-  </dialog>;
+  </PanelDialog>;
 }

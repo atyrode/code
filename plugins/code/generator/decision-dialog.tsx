@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef } from "react";
 import type { Decision, DecisionChoice } from "./decision-model.ts";
-import { PanelDialog, useDeliberate } from "./panel-layer.tsx";
+import { PanelDialog, useDeliberate } from "../panel-layer.tsx";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";

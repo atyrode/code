@@ -25,12 +25,12 @@ import { SetupSheet } from "./setup-sheet.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { readHeld } from "./auto-read.ts";
-import { PanelDialog, PanelLayer, panelHeld } from "./panel-layer.tsx";
+import { focusBehind, PanelDialog, PanelLayer, panelHeld } from "../panel-layer.tsx";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { tabMark } from "./runs-model.ts";
-import { TutorialLayer, tutorialParts, tutorialShown, useTutorialSeen, type TourPhase } from "./tutorial.tsx";
+import { TutorialLayer, tutorialLit, tutorialShown, useTutorialSeen, type TourPhase } from "./tutorial.tsx";
 import { nextTutorialStep, previousTutorialStep, TUTORIAL_STEPS } from "./tutorial-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
@@ -369,7 +369,9 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
 
   function openSheet(next: PanelSheet) {
     if (!currentSheet.current) {
-      returnFocus.current = app.current?.ownerDocument.activeElement as HTMLElement | null;
+      // A sheet a question's fix opens gives focus back, once closed, to what the question would have given it back to.
+      const active = app.current?.ownerDocument.activeElement ?? null;
+      returnFocus.current = (active && focusBehind(active)) as HTMLElement | null;
       stageScroll.current = scrollParent(app.current)?.scrollTop ?? 0;
     }
     setSheet(next);
@@ -518,9 +520,19 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   keys.current = event => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const panel = app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null;
-    // While a layer holds the panel or the tour walks it, the panel's own keys answer nothing, wherever focus has fallen: the
-    // layer's card has its own.
-    if (!panel || panelHeld(panel) || walk !== null || starting) return;
+    // While a layer holds the panel the panel's own keys answer nothing, wherever focus has fallen: the layer's card has its
+    // own. While the tour walks, they answer nothing either, but `Esc` ends the walk from anywhere in the panel and `→` `←`
+    // step it from the panel's root, so a press through the opening never strands the keyboard.
+    if (!panel || panelHeld(panel) || starting) return;
+    if (walk !== null) {
+      if (event.defaultPrevented || event.repeat || target?.closest("[data-layer]") || target?.matches("textarea, input, select, [contenteditable]")) return;
+      if (event.key === "Escape") endWalk();
+      else if (target === panel && (event.key === "ArrowRight" || event.key === "ArrowLeft")) stepWalk(event.key === "ArrowRight");
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const onRoot = target !== null && target === panel;
     const action = panelKey({
       key: event.key, mod: event.ctrlKey || event.metaKey, alt: event.altKey, repeat: event.repeat, defaultPrevented: event.defaultPrevented,
@@ -582,20 +594,16 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     if (walk === null || !panelRoot) return;
     const to = forward ? nextTutorialStep(walk.shown, walk.step) : previousTutorialStep(walk.shown, walk.step);
     if (to === null) { if (forward) endWalk(); return; }
-    if (view !== "main" && tutorialParts(panelRoot, TUTORIAL_STEPS[to]!).length === 0) changeView("main");
+    if (view !== "main" && tutorialLit(panelRoot, TUTORIAL_STEPS[to]!) === null) changeView("main");
     setWalk({ step: to, shown: walk.shown });
   }
-  // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened
-  // since it began, so a step come back to with the accounts already open waits for Next.
+  // A step that goes on by itself does once the person has done what it invites: a profile word chosen since it began.
   const selectionKey = JSON.stringify(selection);
-  const walkBegan = useRef<{ readonly step: number; readonly selection: string; readonly view: PanelView } | null>(null);
+  const walkBegan = useRef<{ readonly step: number; readonly selection: string } | null>(null);
   useEffect(() => {
     if (walk === null) { walkBegan.current = null; return; }
-    if (walkBegan.current?.step !== walk.step) { walkBegan.current = { step: walk.step, selection: selectionKey, view }; return; }
-    const tries = TUTORIAL_STEPS[walk.step]?.tries;
-    if ((tries === "word" && selectionKey !== walkBegan.current.selection) || (tries === "accounts" && view === "accounts" && walkBegan.current.view !== "accounts")) {
-      stepWalk(true);
-    }
+    if (walkBegan.current?.step !== walk.step) { walkBegan.current = { step: walk.step, selection: selectionKey }; return; }
+    if (TUTORIAL_STEPS[walk.step]?.goesOn === "word" && selectionKey !== walkBegan.current.selection) stepWalk(true);
   });
   // The offer: once per person, to a person and not an agent or a service, opened on the generator at rest with its profile
   // shown, nothing running, no charge waiting and no question open; once open it stands until it is answered either way,
@@ -678,7 +686,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     <main className={`${G}stage`}>
       <GeneratorPane model={model} pools={pools} machines={roster} presence={presence} selectMachine={select} recents={recents} connected={connected} ledger={ledger} shown={shown}
         profile={!showRouting} hidden={view !== "main"} listFailure={listFailure} announce={announce} onOpen={open}
-        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator}
+        onRefresh={refresh} onLaunchState={setLaunch} onExtras={setExtras} controls={generator} touring={walk !== null || starting}
         reveal={withGenerator && (hidden.routing || hidden.usage) ? <>
           {hidden.routing && <Button aria-keyshortcuts="p" title="Show routing (p)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "routing" })}>Show routing</Button>}
           {hidden.usage && <Button aria-keyshortcuts="s" title="Show usage (s)" data-reveal="" onClick={() => run({ kind: "toggle", pane: "usage" })}>Show usage</Button>}

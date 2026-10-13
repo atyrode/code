@@ -11,7 +11,7 @@ import { canWriteCodeWorkspace, codeOperationFailure, codeWorkflow } from "../ma
 import { accountWord, familyWord, hueOf, since, useMinuteTick } from "../ui.tsx";
 import { WorkflowError, type CodeCall } from "../workflow.ts";
 import { editHoldsCatalogWrite, type CatalogWrite, type GateRefusal } from "./launch-step.ts";
-import { PanelDialog } from "./panel-layer.tsx";
+import { PanelDialog } from "../panel-layer.tsx";
 import { Blocks, pressesGo, SheetCue, SheetGo, SheetHead, SheetKeys, SheetReadout, sheetKeyFree, useReadout, useSheetMode,
   type GoAction, type GoFix, type GoHandle, type GoPress, type GoTone, type Said } from "./sheet-frame.tsx";
 import { contextWords, exclusionWords, followPress, listChanges, modelRows, modelsPhase, money, saveFailure, speedLevel, thinkingRange, TIERS,

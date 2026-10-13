@@ -117,6 +117,8 @@ export type GeneratorPaneProps = {
   /** Hears the profile switches kept outside the rows (the session options sheet draws them) whenever they change. */
   readonly onExtras: (extras: readonly SlotOption[]) => void;
   readonly controls: RefObject<GeneratorControls | null>;
+  /** While the tour walks (tutorial.tsx) a word may be tried through its opening, and a struck one only says why: it starts no check. */
+  readonly touring: boolean;
 };
 
 /** What the readout says: a value in bold, then what it means or does, warm when it refuses or strains. */
@@ -139,7 +141,7 @@ type Scrub = { readonly row: RowId; readonly origin: Review | null; readonly cat
  * is pointed, pressed or scrubbed in the readout.
  */
 export function GeneratorPane(props: GeneratorPaneProps) {
-  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls } = props;
+  const { model, pools, machines, presence, selectMachine, recents, connected, ledger, shown, profile, hidden, listFailure, reveal, announce, onOpen, onRefresh, onLaunchState, onExtras, controls, touring } = props;
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const launchButton = useRef<HTMLButtonElement>(null);
@@ -339,7 +341,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     // A lane whose family the model list lacks is one check away: a press starts it, through its own gate (it spends nothing
     // before Approve, unless the person approved checks).
     const verify = model.gate("verify");
-    if (word.verifies && verify.open) {
+    if (word.verifies && verify.open && !touring) {
       model.actions.verify();
       say({ value: "check models", text: `finds the models your accounts reach · ${word.reason ?? ""}`, warn: false, color: null });
       announce(`Checking models: ${word.reason ?? ""}`);

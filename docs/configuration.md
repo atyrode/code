@@ -339,12 +339,16 @@ Accounts, Sessions, Tutorial, Anywhere), with `m`, `u` and `o` under Generator, 
 `Esc`, a press on the dimmed panel or its Close button closes it and it owns its keys while
 open. **Tutorial** walks the tutorial again (below).
 
-Everything Code shows over itself (a question a press waits on, Shortcuts, Models' import
-and the tutorial) stands inside the Code panel and never over the rest of Manifold: only
-the panel dims under it, and it stands in the part of the panel the window shows,
-scrolling within itself where the panel is short. While a question, Shortcuts or the
-import is open, the panel under it is inert, so neither a pointer nor a key reaches it,
-while the rest of Manifold stays as it was; the panel's live region goes on speaking.
+Everything a Code panel shows over itself (a question a press waits on, Shortcuts, Models'
+import, the native permission reviews of Setup and Manage accounts, and the tutorial) stands
+inside that panel and never over the rest of Manifold: only the panel dims under it, and it
+stands in the part of the panel the window shows, scrolling within itself where the panel is
+short. While a question, Shortcuts, the import or a review is open, the panel under it is
+inert, so neither a pointer, a key nor an assistive tool reaches it, while the rest of
+Manifold stays as it was; the panel's live region goes on speaking. A press on the dim takes
+a question's or Shortcuts' way out once it has settled; the import and a review keep what
+they hold, and close only by `Esc` or their own buttons. Focus goes back to what had it, and
+a sheet a question's fix opens gives it back there in turn once it closes.
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -380,26 +384,31 @@ again; **Tutorial** in More walks it whenever they like.
 The walk starts on the generator (a sheet closes and the view goes back to it) and keeps
 to the steps the panel shows there, so its progress holds when a step opens another view.
 It goes in the order a person uses Code: the profile's rows with the readout under them,
-cost and speed, routing, usage, the launch with its machine, then the Accounts and
-Sessions tabs and More. The dim opens around the first step's control, growing from where
-the welcome stood, and each step glides the opening to its control, a thin rule in the
-accent round it, with a card beside it (under it where the panel shows room, else over it,
-else beside it), everything kept to the part of the panel the window shows and nothing in
-the panel moved: the step's name, how far the walk has come (a row of blocks, read out as
-"Step 3 of 8"), one or two sentences, and **Next** (**Done** at the last), **Back** and
-**Skip**; `→` and `←` step, `Esc` ends it, a held key steps once, and `Tab` goes round the
-card. Each step's card is its own and comes in as the opening lands, so moving to it moves
-focus to its Next and it is read out, and its control is scrolled into view. Routing and
-usage are lit where the layout puts them: beside the generator, else their tab or Show
-control. A step may be tried through its opening: pointing at a word says in the readout
-what it would change, and choosing one, or opening Accounts, goes on by itself once done
-since the step began; Next always works too. Every other press on the dim or on a control
-that is only shown is held, so the walk launches nothing and spends nothing; a word tried
-changes the rows as any choice does, which Revert puts back. Back onto a step another view
-hides brings the generator back, and a step whose control is not shown hides its card
-until it is. The walk's end, finished or skipped, puts focus on More, where it is
-replayed, so a second `↵` of a double press opens a menu rather than launching, and the
-dim fades as the opening closes. Reduced motion places all of it without movement.
+cost and speed, routing, usage, the launch with its machine, then Accounts, the Sessions
+tab and More. The dim opens around the first step's control, growing from where the
+welcome stood, and each step glides the opening to its control, a thin rule in the accent
+round it, with a card beside it (under it where the panel shows room, else over it, else
+beside it), everything kept to the part of the panel the window shows and nothing in the
+panel moved: the step's name, how far the walk has come (a row of blocks, read out with the
+card as "Step 3 of 8"), one or two sentences, and **Next** (**Done** at the last), **Back**
+and **Skip**; `→` and `←` step, `Esc` ends it, a held key steps once, and `Tab` goes round
+the card. Each step's card is its own and comes in as the opening lands, so moving to it
+moves focus to its Next and it is read out, and its control is scrolled into view.
+
+During the walk the panel is inert but for what a step offers to try, and only once the
+opening has landed on it, so a press, a key or an assistive tool reaches nothing else and
+the walk launches, spends and saves nothing: the profile's words, where pointing at one says
+in the readout what it would change and choosing one goes on by itself (a struck word only
+says why; it starts no model check), and a tab or Show control that opens Accounts, or
+routing or usage where the layout keeps them behind one, after which the opening glides to
+what opened and the walk waits for Next. A word tried changes the rows as any choice does,
+which Revert puts back. Focus the hold leaves nowhere goes back to the card's Next; `Esc`
+ends the walk from anywhere in the panel, and `→` `←` step it from the panel itself. Back
+onto a step another view hides brings the generator back, and a step whose control is not
+shown keeps its card in the middle of the panel with the dim closed. The walk's end,
+finished or skipped, puts focus on More, where it is replayed, so a second `↵` of a double
+press opens a menu rather than launching, and the dim fades as the opening closes. Reduced
+motion places all of it without movement.
 
 ### The generator
 

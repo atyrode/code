@@ -2,15 +2,17 @@ import { createContext, useContext, useLayoutEffect, useRef, useState, type CSSP
 import { createPortal } from "react-dom";
 
 /*
- * THE PANEL'S LAYER: where everything Code shows over itself stands, the questions a press waits on,
- * Shortcuts, Models' import and the tutorial, always inside the Code panel and never over the rest of
- * Manifold. Each mounts in the panel's root, outside its scroll region, dims the panel under it and
- * keeps to the part of the panel the window shows. While one asks, the panel's content is inert, so
- * neither a pointer nor a key reaches it, while the rest of Manifold stays as it was.
+ * THE PANEL'S LAYER: where everything a Code panel shows over itself stands (the questions a press
+ * waits on, Shortcuts, Models' import, the native permission reviews and the tutorial), always inside
+ * that panel and never over the rest of Manifold. Each mounts in the panel's root, outside its scroll
+ * region, dims the panel under it and keeps to the part of the panel the window shows. While one
+ * asks, the panel's content is inert, so neither a pointer, a key nor an assistive tool reaches it,
+ * while the rest of Manifold stays as it was. A panel that shows a layer provides its root
+ * (`PanelLayer`); a layer outside one renders nothing.
  */
 
-/** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
-const G = "plugin-atyrode_code_generator__";
+/** Root class prefix: the layer's parts hang from the shared `.plugin-atyrode_code` root (styles.css). */
+const C = "plugin-atyrode_code__";
 
 /**
  * How long a press is ignored once a question opens or changes: one that lands this soon was aimed at
@@ -24,7 +26,7 @@ export const DECISION_SETTLE_MS = 400;
  */
 export const DECISION_FOCUS_MS = 300;
 
-/** The panel the layer stands in, and the lane's accent its cards carry; null until the panel has mounted. */
+/** The panel the layer stands in, and the accent its cards carry; null until the panel has mounted. */
 export const PanelLayer = createContext<{ readonly panel: HTMLElement; readonly accent: string } | null>(null);
 
 /** A rectangle in the panel's own coordinates. */
@@ -69,29 +71,65 @@ export function useVisibleBox(panel: HTMLElement | null, active: boolean): Box |
   return box;
 }
 
-/** How many layers hold each panel's content inert, so one that closes never frees another's hold. */
-const holds = new WeakMap<HTMLElement, number>();
-/** What a hold makes inert: every child of the panel's root but the layers and the live region, which goes on speaking. */
-function setHeld(panel: HTMLElement, held: boolean) {
-  for (const child of panel.children) if (child instanceof HTMLElement && !child.matches("[data-layer], [data-live]")) child.inert = held;
-}
-/** Holds the panel's content inert until the returned release, which is safe to call more than once. */
-export function holdPanel(panel: HTMLElement): () => void {
-  const count = holds.get(panel) ?? 0;
-  holds.set(panel, count + 1);
-  if (count === 0) setHeld(panel, true);
+/** How many holds each panel and each element it makes inert are under, so one released never frees another's. */
+const panelHolds = new WeakMap<HTMLElement, number>(), elementHolds = new WeakMap<HTMLElement, number>();
+/**
+ * Holds the panel's content inert until the returned release (safe to call more than once): every
+ * element of it but the layers (`data-layer`), the live region (`data-live`), which goes on speaking,
+ * and what `keep` names, which stays usable with everything inside it. Each sibling along the way from
+ * a kept element up to the panel's root is held, so nothing else in the panel answers a pointer, a key
+ * or an assistive tool.
+ */
+export function holdPanel(panel: HTMLElement, keep: readonly HTMLElement[] = []): () => void {
+  const path = new Set<Element>();
+  for (const element of keep) for (let node: Element | null = element; node && node !== panel; node = node.parentElement) path.add(node);
+  const held: HTMLElement[] = [];
+  const visit = (parent: Element) => {
+    for (const child of parent.children) {
+      if (!(child instanceof HTMLElement) || child.matches("[data-layer], [data-live]") || keep.includes(child)) continue;
+      if (path.has(child)) { visit(child); continue; }
+      const count = elementHolds.get(child) ?? 0;
+      elementHolds.set(child, count + 1);
+      if (count === 0) child.inert = true;
+      held.push(child);
+    }
+  };
+  visit(panel);
+  panelHolds.set(panel, (panelHolds.get(panel) ?? 0) + 1);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    const left = Math.max(0, (holds.get(panel) ?? 1) - 1);
-    holds.set(panel, left);
-    if (left === 0) setHeld(panel, false);
+    panelHolds.set(panel, Math.max(0, (panelHolds.get(panel) ?? 1) - 1));
+    for (const element of held) {
+      const count = Math.max(0, (elementHolds.get(element) ?? 1) - 1);
+      elementHolds.set(element, count);
+      if (count === 0) element.inert = false;
+    }
   };
 }
 /** Whether a layer holds the panel now: its keys then answer nothing, whatever has focus. */
 export function panelHeld(panel: HTMLElement): boolean {
-  return (holds.get(panel) ?? 0) > 0;
+  return (panelHolds.get(panel) ?? 0) > 0;
+}
+
+/** What each open layer gives focus back to once it goes. */
+const focusBehindLayer = new WeakMap<Element, Element | null>();
+/** Where focus goes back once the layer holding `element` has gone, or `element` itself when it is in none. */
+export function focusBehind(element: Element): Element | null {
+  const layer = element.closest("[data-layer]");
+  return layer && focusBehindLayer.has(layer) ? focusBehindLayer.get(layer)! : element;
+}
+/**
+ * Gives focus back once a layer has gone: where it was before the layer took it, unless something else
+ * took it since (a sheet a fix opened) or that place is gone or hidden, when the panel's root takes it.
+ */
+export function giveFocusBack(panel: HTMLElement, layer: Element | null, before: Element | null) {
+  const document = panel.ownerDocument, active = document.activeElement;
+  if (active && active !== document.body && active !== panel && !layer?.contains(active)) return;
+  const back = before instanceof HTMLElement && before.isConnected && before.closest("[inert]") === null
+    && (before === panel || before.getClientRects().length > 0) ? before : panel;
+  back.focus({ preventScroll: true });
 }
 
 /**
@@ -125,7 +163,7 @@ export function useDeliberate(asked: string | null) {
   };
 }
 
-const FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+const FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex='-1'])";
 /** `Tab` and `Shift+Tab` go round the card's own controls, so focus never falls into the panel under it. */
 export function keepTab(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== "Tab") return;
@@ -138,17 +176,6 @@ export function keepTab(event: KeyboardEvent<HTMLElement>) {
     (event.shiftKey ? last : first).focus();
   }
 }
-/**
- * Gives focus back once a layer has gone: where it was before the layer took it, unless something else
- * took it since (a sheet a fix opened) or that place is gone or hidden, when the panel's root takes it.
- */
-export function giveFocusBack(panel: HTMLElement, layer: Element | null, before: Element | null) {
-  const document = panel.ownerDocument, active = document.activeElement;
-  if (active && active !== document.body && active !== panel && !layer?.contains(active)) return;
-  const back = before instanceof HTMLElement && before.isConnected && before.closest("[inert]") === null
-    && (before === panel || before.getClientRects().length > 0) ? before : panel;
-  back.focus({ preventScroll: true });
-}
 
 /**
  * A DIALOG INSIDE THE PANEL: the panel dims under it and is inert while it is open, and the dialog
@@ -157,18 +184,20 @@ export function giveFocusBack(panel: HTMLElement, layer: Element | null, before:
  * a settled press that starts and ends on the dimmed panel where `scrimDismisses`. Closing gives focus
  * back to what had it, as a modal dialog does. Nothing outside the panel is covered or held.
  */
-export function PanelDialog({ open, className, labelledBy, describedBy, data, focus, settled, scrimDismisses = true, onDismiss, children }: {
+export function PanelDialog({ open, className, labelledBy, describedBy, data, busy, focus, settled, scrimDismisses = true, onDismiss, children }: {
   readonly open: boolean;
   readonly className: string;
   readonly labelledBy: string;
   readonly describedBy?: string;
   /** The `data-` attributes the dialog carries, which name what it is. */
   readonly data?: Readonly<Record<`data-${string}`, string | undefined>>;
+  /** Whether what it shows is being read or applied. */
+  readonly busy?: boolean;
   /** What takes focus as it opens. */
   readonly focus?: (dialog: HTMLDialogElement) => HTMLElement | null;
   /** Whether a press on the dimmed panel now is past the dialog's first moments; always, when not given. */
   readonly settled?: () => boolean;
-  /** Whether a press on the dimmed panel takes the way out; an import keeps what was pasted instead. */
+  /** Whether a press on the dimmed panel takes the way out; a dialog holding work (an import, a review) keeps it instead. */
   readonly scrimDismisses?: boolean;
   readonly onDismiss: () => void;
   readonly children: ReactNode;
@@ -186,13 +215,14 @@ export function PanelDialog({ open, className, labelledBy, describedBy, data, fo
     const node = dialog.current, around = root.current;
     if (!shown || !panel || !node || !around) return;
     const before = panel.ownerDocument.activeElement;
+    focusBehindLayer.set(around, before);
     const release = holdPanel(panel);
     (first.current?.(node) ?? node).focus({ preventScroll: true });
     return () => { release(); giveFocusBack(panel, around, before); };
   }, [shown, panel]);
   if (!shown || !layer) return null;
-  return createPortal(<div ref={root} className={`${G}layer`} data-layer="" data-holds="" style={{ "--tui-acc": layer.accent } as CSSProperties}>
-    <div className={`${G}scrim`} aria-hidden="true" onMouseDown={event => event.preventDefault()}
+  return createPortal(<div ref={root} className={`${C}layer`} data-layer="" data-holds="" style={{ "--tui-acc": layer.accent } as CSSProperties}>
+    <div className={`${C}scrim`} aria-hidden="true" onMouseDown={event => event.preventDefault()}
       onPointerDown={event => { pressed.current = event.target === event.currentTarget; }}
       onClick={event => {
         const began = pressed.current;
@@ -200,8 +230,8 @@ export function PanelDialog({ open, className, labelledBy, describedBy, data, fo
         if (!scrimDismisses || !began || event.target !== event.currentTarget || event.detail > 1 || !(settled?.() ?? true)) return;
         onDismiss();
       }} />
-    <div className={`${G}layer-room`} style={box ?? undefined}>
-      <dialog ref={dialog} open tabIndex={-1} className={className} aria-labelledby={labelledBy} aria-describedby={describedBy} {...data}
+    <div className={`${C}layer-room`} style={box ?? undefined}>
+      <dialog ref={dialog} open tabIndex={-1} className={className} aria-labelledby={labelledBy} aria-describedby={describedBy} aria-busy={busy || undefined} {...data}
         onKeyDown={event => {
           if (event.key === "Escape") {
             event.preventDefault();

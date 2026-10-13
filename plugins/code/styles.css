@@ -3,7 +3,7 @@
  * tokens live here as custom properties and the shared primitives (ui.tsx) are styled here.
  * Every value is one Manifold already paints with (the shell sidebar and the Plugin Manager);
  * no colour is introduced by this file. Sections: tokens · Phase 2 views (sheets and the
- * standalone panels, still on element defaults) · primitives · sheet frame · motion.
+ * standalone panels, still on element defaults) · the panel's layer · primitives · sheet frame · motion.
  * Layout answers container queries on the `code` container, never the viewport.
  */
 
@@ -20,6 +20,8 @@
   --code-line: #343a40;
   --code-line-hover: #495057;
   --code-hairline: #2b3036;
+  /* The dim over a panel while its layer asks or guides (panel-layer.tsx): deep enough that what stays lit stands out. */
+  --code-scrim: rgb(8 9 12 / 74%);
   /* Text */
   --code-text: #e9ecef;
   --code-text-strong: #dee2e6;
@@ -600,12 +602,10 @@
   .plugin-atyrode_code .plugin-atyrode_code__account-facts { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
   .plugin-atyrode_code .plugin-atyrode_code__account-facts dd { margin-block-end: 0.4rem; }
 }
+/* The native permission review (permission-review.tsx), a dialog in the panel's layer as wide as the panel lets it be. */
 .plugin-atyrode_code__permission-dialog {
-  width: min(58rem, calc(100vw - 2rem));
-  max-height: calc(100dvh - 2rem);
-  margin: auto;
+  width: min(58rem, 100%);
   padding: 1.25rem;
-  overflow: auto;
   border: 1px solid var(--code-rule);
   border-radius: 8px;
 }
@@ -615,7 +615,6 @@
   display: grid;
   gap: 0.8rem;
 }
-.plugin-atyrode_code__permission-dialog::backdrop { background: rgb(0 0 0 / 65%); }
 .plugin-atyrode_code__permission-choice {
   padding-block: 0.8rem;
   border-bottom: 1px solid var(--code-rule);
@@ -630,6 +629,22 @@
 }
 .plugin-atyrode_code__permission-choice > button,
 .plugin-atyrode_code__permission-dialog section > button { justify-self: start; }
+
+/* ---------------------------------------------------------------- the panel's layer (panel-layer.tsx)
+ * Everything a Code panel shows over itself stands in the panel's root, over the panel and never past
+ * it, with the panel dimmed under it. A dialog stands centred in the part of the panel the window
+ * shows (`layer-room`, placed by measure) and scrolls within itself when the panel is short; the dim
+ * comes in with it, and nothing in it moves under reduced motion.
+ */
+.plugin-atyrode_code .plugin-atyrode_code__layer { position: absolute; inset: 0; z-index: 40; overflow: hidden; }
+.plugin-atyrode_code .plugin-atyrode_code__scrim { position: absolute; inset: 0; background: var(--code-scrim); animation: plugin-atyrode_code__dim-in 180ms cubic-bezier(.2, .8, .2, 1); }
+.plugin-atyrode_code .plugin-atyrode_code__layer-room { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 12px; pointer-events: none; }
+.plugin-atyrode_code .plugin-atyrode_code__layer-room > dialog { position: relative; inset: auto; box-sizing: border-box; max-width: 100%; max-height: 100%; margin: 0; overflow-y: auto; pointer-events: auto; }
+@keyframes plugin-atyrode_code__dim-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code .plugin-atyrode_code__layer,
+  .plugin-atyrode_code .plugin-atyrode_code__layer * { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
+}
 
 /* ---------------------------------------------------------------- primitives (ui.tsx)
  * Precise, not rounded: radius 0 for rules, marks and tags; 3px for inputs and buttons. Only
