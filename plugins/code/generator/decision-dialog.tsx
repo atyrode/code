@@ -9,8 +9,9 @@ const G = "plugin-atyrode_code_generator__";
  */
 export const DECISION_SETTLE_MS = 400;
 /**
- * How long a choice must have held focus before a key answers with it: Tab then Enter in one burst,
- * as typing meant for somewhere else lands, is never an answer.
+ * How long a choice must have held focus before `↵` or `Space` answers with it: `Tab` then `↵` in one
+ * burst, as typing meant for somewhere else lands, is never an answer. It holds keys only, so an
+ * assistive tool's activation, which sends no key, is never refused.
  */
 export const DECISION_FOCUS_MS = 300;
 
@@ -57,14 +58,9 @@ export function DecisionDialog({ decision, onChoose }: { decision: Decision | nu
   useLayoutEffect(() => () => { if (dialog.current?.open) { closes.current += 1; dialog.current.close(); } }, []);
 
   const wayOut = () => { const out = current.current?.choices.at(-1); if (out) onChoose(out, 0); };
-  /**
-   * A press of a choice: a pointer's (`detail` 1) once the question has settled, a key's (`detail` 0)
-   * once the question has settled and the choice has held focus, never a multi-click's second.
-   */
+  /** A press of a choice, once the question has settled, never a multi-click's second; keys are held to the focus rule before they press (`keys`). */
   function choose(choice: DecisionChoice, detail: number) {
-    const now = performance.now();
-    if (detail > 1 || now - openedAt.current < DECISION_SETTLE_MS) return;
-    if (detail === 0 && now - (focusedAt.current.get(choice.label) ?? now) < DECISION_FOCUS_MS) return;
+    if (detail > 1 || performance.now() - openedAt.current < DECISION_SETTLE_MS) return;
     onChoose(choice, detail);
   }
   const outside = (event: MouseEvent<HTMLDialogElement>) => {
@@ -72,7 +68,12 @@ export function DecisionDialog({ decision, onChoose }: { decision: Decision | nu
     return event.target === event.currentTarget &&
       (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom);
   };
-  const held = (event: KeyboardEvent<HTMLButtonElement>) => { if (event.repeat && (event.key === "Enter" || event.key === " ")) event.preventDefault(); };
+  /** `↵` or `Space` presses a choice only once it has held focus `DECISION_FOCUS_MS`, and never as a held key's repeat. */
+  const keys = (choice: DecisionChoice) => (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const at = focusedAt.current.get(choice.label);
+    if (event.repeat || at === undefined || performance.now() - at < DECISION_FOCUS_MS) event.preventDefault();
+  };
   return <dialog ref={dialog} className={`${G}sheet-dialog ${G}decision`} aria-labelledby={`${id}-title`} aria-describedby={`${id}-text`}
     data-decision={decision?.kind}
     onCancel={event => { event.preventDefault(); wayOut(); }}
@@ -91,7 +92,7 @@ export function DecisionDialog({ decision, onChoose }: { decision: Decision | nu
       </div>
       <div className={`${G}sheet-dialog-row ${G}decision-choices`}>
         {decision.choices.map((choice, index) => <button key={choice.label} type="button" className={index === 0 && decision.choices.length > 1 ? `${G}decision-go` : `${G}go-fix`}
-          data-choice={choice.does.kind === "fix" ? choice.does.action.key : choice.does.kind} onKeyDown={held}
+          data-choice={choice.does.kind === "fix" ? choice.does.action.key : choice.does.kind} onKeyDown={keys(choice)}
           onFocus={() => focusedAt.current.set(choice.label, performance.now())} onBlur={() => focusedAt.current.delete(choice.label)}
           onClick={event => choose(choice, event.detail)}>{choice.label}</button>)}
       </div>

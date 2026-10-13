@@ -512,8 +512,9 @@ joined or left the pool, or that the accounts were not known before), **Launch i
 ("runs on <machine>: GPT 2"). **Launch it** is the launch's own press and launches the held
 review while the press's own inputs hold (team, options, machine, the saved profile and
 authority), a selected skill catalog's revision is the one it was made with, the reads it
-rests on succeed and its launch is still the step (the list in use serves it); **Not now**
-or the first of them that fails drops it for good, and the press after that reviews again.
+rests on succeed and its launch is still the step (the list in use serves it); **Not now**,
+a moment when the launch cannot go on (a machine gone offline, a check writing the model
+list), or the first of them that fails drops it for good, and the press after that reviews again.
 Accounts or OMP defaults that moved after it are refused by the launch's own check (below). A press
 stands on the same inputs: a change of one of them while it runs stops it, while an
 observation that moves meanwhile does not, since the launch reads the accounts and

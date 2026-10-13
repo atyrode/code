@@ -225,9 +225,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const profileKey = JSON.stringify([model.record?.revision ?? null, model.record?.selection ?? null, model.localDraft !== null, model.machineId]);
   const shownNarrowed = narrowed !== null && narrowed.on === profileKey ? narrowed.differs : null;
   useEffect(() => { if (narrowed !== null && (narrowed.on !== profileKey || verb.state !== "ready")) setNarrowed(null); });
-  // What a held review shows unlike what the panel showed, in the statement's words, while it stands.
+  // What a held review shows unlike what the panel showed, in the statement's words, while it stands. Like a narrowed stop, it
+  // is asked when it happens or never: a launch that cannot go on drops it for good, unless that launch is its own.
   const differs = useMemo(() => model.held && catalog
     ? reviewDifferences(catalog, model.held.projected, model.held.providers, model.held.review.composition, vocab) : null, [model.held, catalog, vocab]);
+  useEffect(() => { if (model.held && verb.state !== "ready" && model.inFlight !== "launch") model.actions.dropHeld(); });
   const status: StatusFacts = {
     verb, phase: verification.phase, mode: verification.mode, progress, charge, inFlight: model.inFlight,
     busy: model.busy, chaining: model.chaining, launching,
