@@ -104,7 +104,6 @@ export type LaunchFacts = {
    */
   accounts: "usable" | "unreadable" | "none";
   launchReady: boolean;
-  previewCurrent: boolean;
   profile: { source: ProfileSource } | null;
   localDraft: { source: ProfileSource } | null;
   /** The shared record: only whether it holds an active and a staged catalog is read. */
@@ -128,7 +127,7 @@ export type LaunchBlockerCode =
 export type LaunchBlockerAction = "refresh" | "models" | "discard" | "permissions" | "options";
 export type LaunchBlocker = { code: LaunchBlockerCode; text: string; action?: LaunchBlockerAction };
 export type LaunchStep =
-  | { step: "verify" | "save" | "review" | "launch"; reason: null }
+  | { step: "verify" | "save" | "launch"; reason: null }
   | { step: "blocked"; reason: LaunchBlocker };
 
 /** Each blocker in the main view's words: the profile, the model list, the machine; never Code's internal nouns. */
@@ -198,7 +197,7 @@ function verifyGate(facts: LaunchFacts): LaunchBlockerCode | "verify" | null {
   if (facts.verification.status === "verifying") return "verifying";
   return verifyPreconditions(facts) ?? "verify";
 }
-/** Launch preconditions once the verification is current: the first unmet one, or null when review/launch may proceed. */
+/** Launch preconditions once the verification is current: the first unmet one, or null when the launch may proceed. */
 function launchGate(facts: LaunchFacts): LaunchBlockerCode | null {
   if (facts.unsaved || !facts.record?.active) return "unsaved";
   if (!facts.writable) return "read-only";
@@ -228,9 +227,10 @@ export function saveGate(facts: LaunchFacts): LaunchBlockerCode | null {
  * Precedence: configuration not current → staged catalog previewed → list in use cannot serve a
  * launch → unsaved team (or no saved active catalog) → read-only → no canvas to place a terminal →
  * runtime unavailable → sessions unavailable → launch permission not ready → no local model
- * review → skill problems → `launch` when the review is current, else `review`.
+ * review → skill problems → `launch`. A launch reviews its session inside the press, immediately
+ * before it starts it, so a review is never a step of its own and nothing reviews without a press.
  *
- * A check precedes saving and reviewing when the list in use cannot serve a launch
+ * A check precedes saving and launching when the list in use cannot serve a launch
  * (`listServes`): a first launch, an imported list, a routed model OMP no longer lists, or a lead
  * the changed accounts no longer serve. The step is then `verify`, which the Launch press runs
  * before going on to the launch, or the first failing check precondition in its order (checking →
@@ -255,7 +255,7 @@ export function nextLaunchStep(facts: LaunchFacts): LaunchStep {
   if (verify === "verify") return { step: "verify", reason: null };
   if (verify !== null) return blocked(verify);
   const gate = launchGate(facts);
-  if (gate === null) return { step: facts.previewCurrent ? "launch" : "review", reason: null };
+  if (gate === null) return { step: "launch", reason: null };
   if (gate !== "unsaved") return blocked(gate);
   const save = saveGate(facts);
   return save === null ? { step: "save", reason: null } : blocked(save);
@@ -269,12 +269,12 @@ export function launchStatusText(facts: LaunchFacts): string {
   if (verify === "verify" && held !== "current" && held !== "verifying") return verifyText[held];
   if (verify !== null && verify !== "verify") return blockerText[verify];
   const gate = launchGate(facts);
-  return gate ? blockerText[gate] : facts.previewCurrent ? "Ready to open a terminal." : "Review before opening a terminal.";
+  return gate ? blockerText[gate] : "Ready to open a terminal.";
 }
 
 /** What the gate reads beyond the launch facts. */
 export type GateFacts = LaunchFacts & {
-  /** A step is in flight: a save, review, launch or resume, a chain between its steps, a check the person started, a background
+  /** A step is in flight: a save, launch or resume, a chain between its steps, a check the person started, a background
    * check writing the model list, or Models writing it. */
   running: boolean;
   /** The charge a prepared check shows and waits on, until it is approved or cancelled. */
@@ -290,7 +290,7 @@ export type GateFacts = LaunchFacts & {
  * team (dials, defaults, a recalled team, discarding), the session options, the destination
  * machine, or the account pool.
  */
-export type WorkbenchIntent = "verify" | "confirm" | "save" | "review" | "launch" | "resume" | "resume-with-team" | "open"
+export type WorkbenchIntent = "verify" | "confirm" | "save" | "launch" | "resume" | "resume-with-team" | "open"
   | "edit-team" | "edit-options" | "edit-machine" | "edit-accounts";
 export type GateRefusalCode = LaunchBlockerCode | "running" | "charge" | "no-charge" | "no-account" | "no-session" | "plans" | "not-next";
 export type GateRefusal = { code: GateRefusalCode; text: string; action?: LaunchBlockerAction; gap?: ServiceGap };
@@ -327,7 +327,7 @@ function stopped(code: LaunchBlockerCode): GateVerdict {
  * `nextLaunchStep`, except that a check is judged by its own preconditions and a save by
  * `saveGate`. A list in use that holds may still be checked again on purpose — what OMP or the
  * accounts can reach changes in ways no observation proves. Save and resuming with the team stand
- * on a list in use that serves a launch (`listServes`). Save, review and launch also refuse a lead
+ * on a list in use that serves a launch (`listServes`). Save and launch also refuse a lead
  * no included account serves, as the session door does, so a team the door refuses is never saved
  * on the way to a launch it cannot reach.
  * Resuming needs write access, a canvas to place the terminal, the machine and a chosen session;
@@ -357,9 +357,9 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
       if (save !== null) return stopped(save);
       return facts.unservedLead ? refuse("no-account", facts.unservedLead) : OPEN;
     }
-    case "review": case "launch": {
+    case "launch": {
       const step = nextLaunchStep(facts);
-      if (step.step !== intent) return closed(step, facts);
+      if (step.step !== "launch") return closed(step, facts);
       return facts.unservedLead ? refuse("no-account", facts.unservedLead) : OPEN;
     }
     case "resume": case "resume-with-team": {
@@ -388,18 +388,4 @@ export function actionGate(facts: GateFacts, intent: WorkbenchIntent): GateVerdi
 export function resumeTeam(withTeam: boolean, target: Target, record: Configuration | null): { readonly profile?: { readonly target: Target; readonly expectedRevision: number } } | null {
   if (!withTeam) return {};
   return record ? { profile: { target, expectedRevision: record.revision } } : null;
-}
-
-/** How long a saved team's inputs must hold still before Code reviews its launch on its own. */
-export const AUTO_REVIEW_SETTLE_MS = 800;
-
-/**
- * Whether Code should review the launch now, without a press: only where the gate would let the
- * verb review, which needs the saved, verified team and every launch precondition, so an unsaved
- * edit, a starter or a staged catalog never reviews by itself, and nothing does while a step runs
- * or a lead is unserved. Once per review scope (`scope`, against the scope of the last review
- * attempt): a refused review or launch waits for an explicit Review or a changed input.
- */
-export function autoReviewDue(facts: GateFacts, scope: number, attempted: number | null): boolean {
-  return scope !== attempted && actionGate(facts, "review").open;
 }

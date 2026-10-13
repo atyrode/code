@@ -65,14 +65,16 @@ quota preservation and Code-owned upstream fallback repair are not planned.
 - **Model checks:** a launch needs a model list checked against the account pool,
   and Launch runs that check itself when the list in use cannot serve it (a first
   launch, a model OMP no longer lists, or a lead the accounts no longer serve), then
-  goes on to the review and the launch. The first check asks the person to approve its
+  goes on to the launch. The first check asks the person to approve its
   cost, once: later checks within twice that charge run without asking, and Setup can
   withdraw the approval. A finished check is kept as that person's check of the exact
   account pool, so another workspace whose choices select the same pool adopts it on its
   first launch, without spending. When accounts change, a check renews a list that passed one on its
   own while the panel is open, within the approval, and Launch keeps working with the last
   list that passed meanwhile.
-- **Agent launch:** the launch is still one press. Where an Agent Run can carry it,
+- **Agent launch:** the launch is one press, with no review step: the press reviews the
+  session immediately before starting it, and stops only when what would run differs
+  from what the panel showed, saying what differs. Where an Agent Run can carry it,
   Code registers one Manifold Agent per sponsor and workspace profile with OMP's TUI
   harness, updates it when the profile changes, and launches a Run whose terminal is
   OMP's own terminal UI. **Sessions** heads each machine's group with these Runs: their

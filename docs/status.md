@@ -102,6 +102,14 @@ files, service state, credentials or backups.
   a level changed in the TUI alone is not seen.
   A Run is attributed for at most about 13 leases. After that, or after a missed
   renewal, its TUI goes on detached and unattributed, with no dials.
+- Manifold validates an Agent's profile in OMP's isolate (registration, update and
+  `launchRun`) only while that isolate serves nothing else, and refuses rather than
+  waits (`exclusive request requires a drained guest`). Ordinary reads of OMP from
+  open panels made two preview launches fail that way before Code asked such a door
+  again. Code now retries those two refusals for about two seconds; unit tests prove
+  the retry and its words against a scripted dispatch, and the disposable verifier's
+  registrations pass the real validation, but no busy refusal is provoked there.
+  Waiting instead of refusing would be Manifold's change.
 - The main view's presentation has these bounds. Cost is a relative list-price index,
   not billing, and the speed meter stays unlit and says "unmeasured" until every lead
   model has measured throughput. The usage pane reads again every five minutes

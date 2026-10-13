@@ -24,7 +24,7 @@ export class WorkflowError extends Error {}
 /** Refusal tokens in a person's words. A token missing here is still never shown raw (`failureWords`). */
 const messages: Readonly<Record<string, string>> = {
   code_stale_preferences: "The workspace profile changed. Read it again before saving your edit.",
-  code_composition_changed: "The workspace profile, account pool or OMP defaults changed. Review the session again before launching.",
+  code_composition_changed: "The workspace profile, accounts, or OMP's defaults or model list changed meanwhile, so nothing was opened. Try again.",
   code_configuration_missing: "This workspace has no Code choices yet.",
   code_catalog_missing: "No model list is in use yet. Review one in Models.",
   code_account_unavailable: "The selected accounts are unavailable or no longer resolve exactly. Review the account choices.",
@@ -55,10 +55,10 @@ const messages: Readonly<Record<string, string>> = {
   code_service_configuration_changed: "Native service configuration changed. Read and review its current revision again.",
   code_service_owner_required: "Native service setup requires the root owner's current machine configuration authority.",
   code_invalid_service_result: "The native service returned an invalid or undisclosed result.",
-  code_destination_changed: "The destination changed. Review the current machine before continuing.",
-  omp_review_changed: "OMP's review changed. Review again.",
+  code_destination_changed: "The machine, workspace or profile changed meanwhile, so this stopped. Try again.",
+  omp_review_changed: "OMP's answer changed meanwhile, so this stopped. Try again.",
   omp_result_unavailable: "OMP's result is unavailable.",
-  omp_defaults_changed: "OMP defaults changed. Review again.",
+  omp_defaults_changed: "OMP's defaults changed meanwhile, so this stopped. Try again.",
   omp_session_unavailable: "That saved session is no longer on the machine.",
   omp_session_binding_changed: "That saved session moved or changed. Read the machine again.",
   omp_resume_plan_unsupported: "Resuming with the current profile cannot approve plans automatically.",
@@ -97,6 +97,10 @@ const agentRefusals: Readonly<Record<string, string>> = {
   "run launch credential unavailable": "The run's launch expired before its terminal opened.",
   "run launch already in progress": "That run is already launching.",
   "harness launch target changed": "The run was created for another machine or workspace.",
+  // Manifold's refusals of any door while it cannot have OMP's isolate to itself (`BUSY_REFUSALS`). The doors that validate an
+  // Agent's profile are asked again first (`patient`), so for those these words come only once the retries have run out.
+  "exclusive request requires a drained guest": "OMP was busy for a moment. Try again.",
+  "profile validation requires exclusive guest access": "OMP was busy for a moment. Try again.",
 };
 /** Refusals whose detail is a list of identifiers, with the label that introduces it; the list stays exactly as written. */
 const listedDetails: Readonly<Record<string, string>> = {
@@ -111,6 +115,33 @@ const REFUSAL_TOKEN = /^((?:code|omp)_[a-z0-9_]+)(?:[:;] ([^]*))?$/;
 /** The refusal token a failure carries (`omp_operation_unavailable`), with its door's name stripped; null when it carries none. */
 export function refusalToken(message: string): string | null {
   return REFUSAL_TOKEN.exec(DOOR_DENIAL.exec(message)?.[1] ?? message)?.[1] ?? null;
+}
+/**
+ * Manifold's refusals of a door while it cannot have OMP's isolate to itself. It validates an Agent's
+ * profile there (registering or updating Code's Agent, and launching its Run) only when the isolate
+ * serves nothing else, and refuses rather than waits: the validation that finds the isolate busy, and
+ * any request that arrives while one runs. Ordinary reads of OMP keep the isolate busy often enough
+ * that a single attempt fails a launch, so the doors that validate (`VALIDATING_DOORS`) are asked
+ * again after each of `BUSY_RETRY_MS`. Both refusals come before the door does anything, and the
+ * launch asks whether its press still stands right after each of those doors. No other door is
+ * retried: a model check checks its cancellation and currency only before its own doors.
+ */
+const BUSY_REFUSALS: ReadonlySet<string> = new Set(["exclusive request requires a drained guest", "profile validation requires exclusive guest access"]);
+const VALIDATING_DOORS: ReadonlySet<string> = new Set(["core.access.registerAgentV2", "core.access.updateAgentV2", "core.access.launchRun"]);
+/** The waits before each new attempt of a door refused as busy: about two seconds in all before the refusal stands. */
+const BUSY_RETRY_MS = [150, 300, 600, 1_200] as const;
+function patient(transport: Dispatch): Dispatch {
+  return async (door, input) => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await transport(door, input); }
+      catch (error) {
+        const wait = BUSY_RETRY_MS[attempt];
+        if (wait === undefined || !VALIDATING_DOORS.has(door) || !(error instanceof WorkflowError) ||
+          !BUSY_REFUSALS.has(DOOR_DENIAL.exec(error.message)?.[1] ?? "")) throw error;
+        await new Promise(resolve => setTimeout(resolve, wait));
+      }
+    }
+  };
 }
 
 /**
@@ -466,8 +497,10 @@ function inspected(inspection: InspectRunV2Result): NonNullable<CodeRun["inspect
 export type CodeCall = <K extends CodeAction>(name: K, input: ActionInput<K>) => Promise<ActionResult<K>>;
 
 /** Ordinary caller transport only. No server contexts, credentials, shell descriptors,
- * grants or React state are available to this browser/headless decision path. */
-export function createCodeWorkflowClient(dispatch: Dispatch) {
+ * grants or React state are available to this browser/headless decision path. A door that
+ * validates an Agent's profile, refused while OMP's isolate is busy, is asked again (`patient`). */
+export function createCodeWorkflowClient(transport: Dispatch) {
+  const dispatch = patient(transport);
   const codeClient = createCodeClient(dispatch);
   const ompClient = createOmpClient(dispatch);
   const code: CodeCall = async (name, input) => accepted(await codeClient.call(name, input));

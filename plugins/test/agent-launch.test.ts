@@ -181,6 +181,39 @@ describe("the agent door sequence", () => {
     await expect(h.workflow.launchAgent(h.review)).rejects.toThrow(/could not be cancelled .*ends with its lease/);
   });
 
+  test("a door Manifold refuses while OMP's isolate is busy validating is asked again, and the launch goes on", async () => {
+    const f = agentFixture();
+    let refusals = 2;
+    f.answers["core.access.launchRun"] = () => refusals-- > 0 ? f.deny("core.access.launchRun", "exclusive request requires a drained guest") : launchedOf();
+    await f.workflow.launchAgent(f.review);
+    expect(f.doors()).toEqual(["core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun", "core.access.launchRun", "core.access.launchRun"]);
+    // Registration validates the same profile in the same isolate, so it is asked again the same way.
+    const g = agentFixture();
+    let busy = 1;
+    const register = g.answers["core.access.registerAgentV2"]!;
+    g.answers["core.access.registerAgentV2"] = input => busy-- > 0 ? g.deny("core.access.registerAgentV2", "profile validation requires exclusive guest access") : register(input);
+    await g.workflow.launchAgent(g.review);
+    expect(g.doors()).toEqual(["core.access.registerAgentV2", "core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun"]);
+  });
+
+  test("a busy refusal that outlasts the retries is said in words and its Run cancelled; no other refusal or door is asked again", async () => {
+    const f = agentFixture();
+    f.answers["core.access.launchRun"] = () => f.deny("core.access.launchRun", "exclusive request requires a drained guest");
+    const refused = await f.workflow.launchAgent(f.review).then(() => null, (error: unknown) => error);
+    expect(failureWords((refused as Error).message)).toBe("OMP was busy for a moment. Try again.");
+    expect(f.doors().filter(door => door === "core.access.launchRun")).toHaveLength(5);
+    expect(f.calls.at(-1)).toEqual({ door: "core.access.finishAgentRunV2", input: { runId: "run-1", outcome: "cancelled" } });
+    const g = agentFixture();
+    g.answers["core.access.launchRun"] = () => g.deny("core.access.launchRun", "run_launch_owner_unavailable");
+    await expect(g.workflow.launchAgent(g.review)).rejects.toThrow("run_launch_owner_unavailable");
+    expect(g.doors()).toEqual(["core.access.registerAgentV2", "core.access.createRunV2", "core.access.launchRun", "core.access.finishAgentRunV2"]);
+    // A door that validates nothing is never asked again, busy or not: only Manifold's profile validation refuses that way before acting.
+    const h = agentFixture();
+    h.answers["core.access.createRunV2"] = () => h.deny("core.access.createRunV2", "exclusive request requires a drained guest");
+    await expect(h.workflow.launchAgent(h.review)).rejects.toThrow("exclusive request requires a drained guest");
+    expect(h.doors()).toEqual(["core.access.registerAgentV2", "core.access.createRunV2"]);
+  });
+
   test("automatic plans, session options, a missing harness or a caller who cannot sponsor keep the launch a reviewed session", async () => {
     const f = agentFixture();
     expect(agentLaunchBlocker(f.review, true, false, true)).toBeNull();

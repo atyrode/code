@@ -10,7 +10,7 @@ import { projectUsage } from "../domain/usage.ts";
 import { optionConsequence, rescue } from "../code/generator/consequences.ts";
 import type { GateRefusal, LaunchStep } from "../code/generator/launch-step.ts";
 import {
-  causalRedline, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, machineSlot, movesText, projectionOf, reviewMatches, statementSlots, verbView,
+  causalRedline, commitKind, estimateReadouts, fixView, launchLine, launchReadout, machineSlot, movesText, projectionOf, reviewDifferences, reviewMatches, statementSlots, verbView,
   type SlotOption, type StatementContext, type StatusFacts, type StatusLine, type VerbFacts, type Vocabulary,
 } from "../code/generator/statement-model.ts";
 
@@ -143,18 +143,18 @@ describe("the verb names the model's step", () => {
   const facts = (step: LaunchStep["step"], changes: Partial<VerbFacts> = {}): VerbFacts => ({
     step: step === "blocked" ? { step, reason: { code: "read-only", text: "Edit access needed." } } : { step, reason: null },
     verdict: open, busy: false, inFlight: null, chaining: false, unsaved: false, draft: false, edited: false, phase: null, mode: null, serves: true,
-    stranded: false, grounded: true, placeable: true, launching: false, ...changes,
+    stranded: false, placeable: true, launching: false, ...changes,
   });
 
-  test("an edited team saves first, and continues to the launch only when the readings are present", () => {
-    expect(verbView(facts("save", { unsaved: true, draft: true }))).toMatchObject({ label: "Save & launch", state: "ready", saves: true, launches: true });
-    expect(verbView(facts("save", { unsaved: true, draft: true, grounded: false }))).toMatchObject({ label: "Save & review", saves: true, launches: false });
+  test("an edited team saves first and goes on to the launch; no label names a review", () => {
+    expect(verbView(facts("save", { unsaved: true, draft: true }))).toMatchObject({ label: "Save & launch", state: "ready", saves: true });
+    expect(verbView(facts("launch"))).toMatchObject({ label: "Launch", state: "ready", saves: false });
   });
 
   test("a team with a role that has no route launches anyway; the gate, not quota, decides whether it may", () => {
     expect(verbView(facts("launch", { stranded: true }))).toMatchObject({ label: "Launch anyway", state: "ready" });
     const refusal: GateRefusal = { code: "no-account", text: "No included account serves a provider this team leads on." };
-    expect(verbView(facts("review", { verdict: { open: false, refusal } }))).toMatchObject({ label: "Review", state: "refused", refusal });
+    expect(verbView(facts("launch", { stranded: true, verdict: { open: false, refusal } }))).toMatchObject({ label: "Launch", state: "refused", refusal });
   });
 
   test("Launch anyway is never the label of a save the door refuses for its lead", () => {
@@ -165,7 +165,7 @@ describe("the verb names the model's step", () => {
   });
 
   test("with no canvas to place a terminal, an edited team only saves; a staged model list is opened, not refused", () => {
-    expect(verbView(facts("save", { unsaved: true, draft: true, placeable: false }))).toMatchObject({ label: "Save", state: "ready", saves: true, launches: false });
+    expect(verbView(facts("save", { unsaved: true, draft: true, placeable: false }))).toMatchObject({ label: "Save", state: "ready", saves: true });
     const staged = { step: "blocked", reason: { code: "staged", text: "A staged model list waits in Models." } } as const;
     expect(verbView(facts("blocked", { step: staged, verdict: { open: false, refusal: staged.reason } }))).toMatchObject({ state: "ready", opens: "models" });
   });
@@ -188,13 +188,13 @@ describe("the verb names the model's step", () => {
       .toMatchObject({ label: "Checking models…", state: "busy" });
   });
 
-  test("while a step runs the verb names the step", () => {
+  test("while a step runs the verb names the step, and a save on its way to the launch is already launching", () => {
     expect(verbView(facts("launch", { busy: true, inFlight: "launch" }))).toMatchObject({ label: "Launching…", state: "busy" });
-    expect(verbView(facts("save", { chaining: true }))).toMatchObject({ label: "Reviewing…", state: "busy" });
+    expect(verbView(facts("save", { chaining: true }))).toMatchObject({ label: "Launching…", state: "busy" });
   });
 });
 
-describe("Save & launch stops at a review that differs from the projection", () => {
+describe("a Launch press stops on a review unlike what the panel showed", () => {
   const shown = review({ lane: gptLed });
   const pool = { "openai-codex": [{}], anthropic: [{}] };
 
@@ -212,10 +212,23 @@ describe("Save & launch stops at a review that differs from the projection", () 
     expect(movesText(catalog, shown, shown)).toBe("");
   });
 
-  test("a projection rests on present readings only when every lead's pool is judged fresh and the pool is known", () => {
-    expect(grounded(catalog, shown.routes, pools(), new Set(["openai-codex", "anthropic"]))).toBe(true);
-    expect(grounded(catalog, shown.routes, pools({ stale: true }), new Set(["openai-codex", "anthropic"]))).toBe(false);
-    expect(grounded(catalog, shown.routes, pools(), null)).toBe(false);
+  test("a pool that moved is said as the families that joined or left it, or that the accounts were not known", () => {
+    const reviewed = { review: shown, accountPool: pool };
+    expect(reviewDifferences(catalog, shown, ["openai-codex"], reviewed, vocab)).toEqual(["Claude accounts join the pool"]);
+    expect(reviewDifferences(catalog, shown, ["openai-codex", "anthropic", "deepseek"], reviewed, vocab)).toEqual(["no deepseek account in the pool"]);
+    expect(reviewDifferences(catalog, shown, null, reviewed, vocab)).toEqual(["the accounts were not known before"]);
+  });
+
+  test("the line says what will run differs and both ways on, never as a failure", () => {
+    const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
+      draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false });
+    const line = launchLine({ verb: ready, phase: null, mode: null, progress: null, charge: null, keepsChecks: true, inFlight: null, busy: false, chaining: false,
+      launching: false, machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null,
+      outcome: null, stop: null, fix: null, differs: ["Claude accounts join the pool"], narrowed: null, laneFix: null, nobodyServes: false, listFailure: "none",
+      ompMissing: false, accountsProblem: null, configurationFailed: false }, vocab)!;
+    expect(line.parts).toEqual([{ text: "What will run differs", tone: "warn" }, { text: "Claude accounts join the pool", tone: "plain" },
+      { text: "launch again to run it, or change a setting first", tone: "meta" }]);
+    expect(line.actions).toEqual([]);
   });
 });
 
@@ -240,7 +253,7 @@ describe("the fix for roles with no route", () => {
 describe("the launch line, in precedence", () => {
   const charge = { requests: 19, providers: [{ provider: "openai-codex", requests: 12 }, { provider: "anthropic", requests: 7 }] };
   const ready = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-    draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, grounded: true, placeable: true, launching: false });
+    draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false });
   const facts = (changes: Partial<StatusFacts> = {}): StatusFacts => ({
     verb: ready, phase: null, mode: null, progress: null, charge: null, keepsChecks: true, inFlight: null, busy: false, chaining: false, launching: false,
     machine: { name: "Studio", online: true, revoked: false }, machineChosen: true, rosterUnread: false, otherMachine: null, message: null, outcome: null,
@@ -254,7 +267,7 @@ describe("the launch line, in precedence", () => {
   test("at rest it says nothing: the label, the routing and the usage say the rest", () => {
     expect(launchLine(facts(), vocab)).toBeNull();
     const verify = verbView({ step: { step: "verify", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-      draft: false, edited: false, phase: null, mode: null, serves: false, stranded: false, grounded: true, placeable: true, launching: false });
+      draft: false, edited: false, phase: null, mode: null, serves: false, stranded: false, placeable: true, launching: false });
     expect(launchLine(facts({ verb: verify }), vocab)).toBeNull();
     // A check the panel runs beside a launch the list in use serves is said only while the launch is pointed.
     const beside = launchLine(facts({ phase: "benchmark", mode: "background", progress: { done: 3, total: 19 } }), vocab);
@@ -377,29 +390,27 @@ describe("the launch line, in precedence", () => {
 
 describe("what the launch says while it is pointed", () => {
   const verb = (changes: Partial<VerbFacts> = {}) => verbView({ step: { step: "save", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false,
-    unsaved: true, draft: true, edited: true, phase: null, mode: null, serves: true, stranded: false, grounded: true, placeable: true, launching: false, ...changes });
+    unsaved: true, draft: true, edited: true, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false, ...changes });
 
   test("a press that saves says what it changes on the workspace profile; a refused one says only its reason", () => {
     const edits = [{ word: "thinking" as const, from: "medium", to: "high" }];
-    expect(launchReadout({ verb: verb(), edits, reviewed: null, dials: null, grounded: true, launchStatus: "Ready." }, vocab))
+    expect(launchReadout({ verb: verb(), edits, reviewed: null, dials: null, launchStatus: "Ready." }, vocab))
       .toEqual({ text: "1 change to the profile: thinking medium → high", warn: false });
     const refusal: GateRefusal = { code: "read-only", text: "Edit access needed." };
-    expect(launchReadout({ verb: verb({ verdict: { open: false, refusal } }), edits, reviewed: null, dials: null, grounded: true, launchStatus: "Ready." }, vocab))
+    expect(launchReadout({ verb: verb({ verdict: { open: false, refusal } }), edits, reviewed: null, dials: null, launchStatus: "Ready." }, vocab))
       .toEqual({ text: "Edit access needed.", warn: true });
   });
 
-  test("a reviewed launch names the pool it reviewed; an unreviewed one on readings not current says the review shows it", () => {
+  test("a held review names what the next press runs and where; with none held the launch says its status", () => {
     const launch = verbView({ step: { step: "launch", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-      draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, grounded: true, placeable: true, launching: false });
-    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [{ family: "openai", count: 2 }] }, dials: null, grounded: true, launchStatus: "Ready." }, vocab).text)
-      .toBe("reviewed on Studio: GPT 2");
+      draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, placeable: true, launching: false });
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [{ family: "openai", count: 2 }] }, dials: null, launchStatus: "Ready." }, vocab).text)
+      .toBe("runs on Studio: GPT 2");
     // Pointed, the launch says whether it runs with live dials, or why not.
-    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "run", grounded: true, launchStatus: "Ready." }, vocab).text)
-      .toBe("reviewed on Studio · live dials in Sessions");
-    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "options", grounded: true, launchStatus: "Ready." }, vocab).text)
-      .toBe("reviewed on Studio · no live dials: session options are set");
-    const review = verbView({ step: { step: "review", reason: null }, verdict: { open: true }, busy: false, inFlight: null, chaining: false, unsaved: false,
-      draft: false, edited: false, phase: null, mode: null, serves: true, stranded: false, grounded: false, placeable: true, launching: false });
-    expect(launchReadout({ verb: review, edits: [], reviewed: null, dials: null, grounded: false, launchStatus: "Ready." }, vocab).text).toBe("the review shows the pool before anything runs");
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "run", launchStatus: "Ready." }, vocab).text)
+      .toBe("runs on Studio · live dials in Sessions");
+    expect(launchReadout({ verb: launch, edits: [], reviewed: { machine: "Studio", pool: [] }, dials: "options", launchStatus: "Ready." }, vocab).text)
+      .toBe("runs on Studio · no live dials: session options are set");
+    expect(launchReadout({ verb: launch, edits: [], reviewed: null, dials: null, launchStatus: "Ready to open a terminal." }, vocab).text).toBe("Ready to open a terminal.");
   });
 });

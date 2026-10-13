@@ -9,19 +9,19 @@ function checked(status: VerificationStatus, ready = true): GateFacts["verificat
 }
 /** A verified, saved, launchable workbench with a saved session chosen and nothing in flight; each test changes only what it is about. */
 function facts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "current"): GateFacts {
-  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
+  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
     queries: { setup: { error: null } }, verification: checked(status),
     running: false, charge: null, unservedLead: null, savedSessionId: "session-1", planYolo: false, ...changes };
 }
-const every: readonly WorkbenchIntent[] = ["verify", "confirm", "save", "review", "launch", "resume", "resume-with-team", "open",
+const every: readonly WorkbenchIntent[] = ["verify", "confirm", "save", "launch", "resume", "resume-with-team", "open",
   "edit-team", "edit-options", "edit-machine", "edit-accounts"];
 const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer", "security-reviewer"] };
 const code = (verdict: GateVerdict) => verdict.open ? "open" : verdict.refusal.code;
 
 describe("one gate for every action", () => {
   test("nothing starts and nothing it depends on changes while a step runs", () => {
-    for (const intent of every) expect(code(actionGate(facts({ running: true, previewCurrent: true }), intent))).toBe("running");
+    for (const intent of every) expect(code(actionGate(facts({ running: true }), intent))).toBe("running");
   });
 
   test("while a check's charge waits only its Approve proceeds; edits of the team, session options, machine and accounts wait with it", () => {
@@ -31,9 +31,8 @@ describe("one gate for every action", () => {
     expect(code(actionGate(facts({}, "unverified"), "confirm"))).toBe("not-next");
   });
 
-  test("save, review and launch refuse a lead no included account serves, naming it, so a team the door refuses is never saved on the way", () => {
-    expect(actionGate(facts({ unservedLead: claude }), "review")).toEqual({ open: false, refusal: expect.objectContaining({ code: "no-account", gap: claude }) });
-    expect(code(actionGate(facts({ unservedLead: claude, previewCurrent: true }), "launch"))).toBe("no-account");
+  test("save and launch refuse a lead no included account serves, naming it, so a team the door refuses is never saved on the way", () => {
+    expect(actionGate(facts({ unservedLead: claude }), "launch")).toEqual({ open: false, refusal: expect.objectContaining({ code: "no-account", gap: claude }) });
     expect(code(actionGate(facts({ unservedLead: claude, unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("no-account");
     expect(code(actionGate(facts({ unservedLead: claude }), "resume-with-team"))).toBe("no-account");
     // Resuming saved state keeps the session's own models, so the team's lead is not its concern.
@@ -41,14 +40,12 @@ describe("one gate for every action", () => {
   });
 
   test("a chain asking again before its next step is stopped by a premise that changed while it ran", () => {
-    // Launch is the step only while the review is current; a changed input revokes it, and the gate says so.
-    expect(code(actionGate(facts({ previewCurrent: true }), "launch"))).toBe("open");
-    expect(actionGate(facts({ previewCurrent: false }), "launch")).toEqual({ open: false, refusal: { code: "not-next", text: "Review before opening a terminal." } });
-    expect(code(actionGate(facts({ previewCurrent: true, writable: false }), "launch"))).toBe("read-only");
-    expect(code(actionGate(facts({ previewCurrent: true, available: false }), "launch"))).toBe("unavailable");
-    // After a save, the review proceeds only for the saved team.
-    expect(code(actionGate(facts(), "review"))).toBe("open");
-    expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }), "review"))).toBe("not-next");
+    // A saved team with every launch precondition is launched, its review inside the press; a changed premise stops it with its reason.
+    expect(code(actionGate(facts(), "launch"))).toBe("open");
+    expect(code(actionGate(facts({ writable: false }), "launch"))).toBe("read-only");
+    expect(code(actionGate(facts({ available: false }), "launch"))).toBe("unavailable");
+    // A save goes on to the launch only for the saved team: an edit still unsaved is not launched.
+    expect(code(actionGate(facts({ unsaved: true, localDraft: { source: "active" } }), "launch"))).toBe("not-next");
   });
 
   test("verify is judged by its own preconditions, save by the save's", () => {
@@ -113,8 +110,7 @@ describe("one gate for every action", () => {
     expect(code(actionGate(panelAlone({}, "unverified"), "verify"))).toBe("open");
     expect(code(actionGate(panelAlone({ unsaved: true, localDraft: { source: "active" } }), "save"))).toBe("open");
     expect(code(actionGate(panelAlone(), "edit-accounts"))).toBe("open");
-    for (const intent of ["review", "resume", "resume-with-team"] as const) expect(code(actionGate(panelAlone(), intent))).toBe("placement");
-    expect(code(actionGate(panelAlone({ previewCurrent: true }), "launch"))).toBe("placement");
+    for (const intent of ["launch", "resume", "resume-with-team"] as const) expect(code(actionGate(panelAlone(), intent))).toBe("placement");
     // A writer without a canvas is never told the workspace is read-only.
     for (const intent of every) expect(code(actionGate(panelAlone(), intent))).not.toBe("read-only");
   });

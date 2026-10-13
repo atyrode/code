@@ -22,9 +22,9 @@ import { profileGroups, type LedgerRow } from "./routing-model.ts";
 import { Profile, rippleTeam } from "./routing-pane.tsx";
 import { generatorRows, ROW_EXTRAS, type GeneratorRow, type RowId, type RowWord } from "./rows-model.ts";
 import {
-  changeSentence, commitKind, estimateReadouts, fixView, grounded, launchLine, launchReadout, laneFix, poolCounts, projectionOf, quotaParts, reviewDifferences,
-  machineSlot, reviewMatches, sameTeam, standstill, statementSlots, teamEdits, verbView, WORD_NAMES,
-  type EstimateReadout, type Projection, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
+  changeSentence, commitKind, estimateReadouts, fixView, launchLine, launchReadout, laneFix, poolCounts, quotaParts, reviewDifferences,
+  machineSlot, sameTeam, standstill, statementSlots, teamEdits, verbView, WORD_NAMES,
+  type EstimateReadout, type SlotOption, type StatementContext, type StatusAction, type StatusFix, type StatusLine, type Vocabulary,
 } from "./statement-model.ts";
 import type { WorkbenchModel } from "./workbench-model.ts";
 
@@ -94,7 +94,7 @@ export type GeneratorPaneProps = {
   readonly connected: ReadonlySet<string> | null;
   /** The routing's rows, which the grouped profile groups. */
   readonly ledger: readonly LedgerRow[] | null;
-  /** The review the routing shows: the reviewed composition while current, else the local review. */
+  /** The review the routing shows: a held review's composition while it stands, else the local review. */
   readonly shown: Review | null;
   /** Routing is not shown with the generator, so the profile shows grouped under its rows. */
   readonly profile: boolean;
@@ -144,14 +144,11 @@ export function GeneratorPane(props: GeneratorPaneProps) {
   const [keySaid, setKeySaid] = useState<Said | null>(null);
   const [scrub, setScrub] = useState<Scrub | null>(null);
   const [launching, setLaunching] = useState(false);
-  // A Save & launch press that stopped at its review: the review, and what it shows unlike the projection. A Launch press
-  // whose check narrowed the profile stops the same way, naming the settings the check moved.
-  const [stopped, setStopped] = useState<{ readonly review: object; readonly differs: readonly string[]; readonly by: "review" | "check" } | null>(null);
-  // The press in progress: a Save & launch on its projection, or a Launch that checks the models first, on the profile it was
-  // pressed on, the last check failure and message before the press, and whether it has asked for its review yet.
-  const chain = useRef<{ readonly kind: "save"; readonly projection: Projection; readonly review: Review }
-    | { readonly kind: "check"; readonly wanted: Selection | null; readonly failure: VerificationFailure | null; readonly message: unknown; readonly reviewed: boolean }
-    | null>(null);
+  // A Launch press whose check narrowed the profile to what answered stopped before launching: the saved profile it stopped
+  // on (`profileKey`) and the settings the check moved.
+  const [narrowed, setNarrowed] = useState<{ readonly on: string; readonly differs: readonly string[] } | null>(null);
+  // A Launch press that checks the models first: the profile it was pressed on, and the last check failure and message before it.
+  const chain = useRef<{ readonly wanted: Selection | null; readonly failure: VerificationFailure | null; readonly message: unknown } | null>(null);
   const keyTimer = useRef(0), scrubTimer = useRef(0);
 
   const { compiled: catalog, selection, controlsReview, served, verification } = model;
@@ -179,7 +176,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     if (!catalog || !shown) return null;
     const stop = standstill(catalog, shown.routes, pools);
     const found = stop ? rescue(catalog, shown, pools, { served, nowMs: Date.now() }) : null;
-    return { stop, fix: found && fixView(found, catalog, pools, vocab), grounded: grounded(catalog, shown.routes, pools, served) };
+    return { stop, fix: found && fixView(found, catalog, pools, vocab) };
   }, [catalog, shown, pools, served, vocab]);
   const estimates = useMemo(() => catalog && shown ? estimateReadouts(catalog, shown) : null, [catalog, shown]);
   const groups = useMemo(() => profile && ledger ? profileGroups(ledger) : null, [profile, ledger]);
@@ -190,7 +187,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     serves: listServes({ verification, unservedLead: model.unservedLead }),
     // Launch anyway is for roles whose pools are out; a lead no account serves is the door's refusal, never "anyway".
     stranded: quota?.stop?.waits.some(pool => pool.verdict.kind === "blocked" || pool.verdict.kind === "maxed") ?? false,
-    grounded: quota?.grounded ?? false, placeable: model.placeable, launching,
+    placeable: model.placeable, launching,
   });
 
   const ready = verb.state === "ready", reason = verb.refusal?.text ?? null;
@@ -209,14 +206,21 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     text: verification.failure.cancelled ? "Model check cancelled" : `Model check stopped while ${STEP_WORDS[verification.failure.step]}: ${verification.failure.reason}`,
     failed: !verification.failure.cancelled,
   } : null;
-  const shownStop = stopped !== null && stopped.review === model.launchReview ? stopped : null;
+  // What a narrowed stop stands on: the saved profile (a write of another revision or team drops it), the rows holding no
+  // edit, and the machine. Changing a setting or the machine is the stop's other way on, so either drops it for good.
+  const profileKey = JSON.stringify([model.record?.revision ?? null, model.record?.selection ?? null, model.localDraft !== null, model.machineId]);
+  const shownNarrowed = narrowed !== null && narrowed.on === profileKey ? narrowed.differs : null;
+  useEffect(() => { if (narrowed !== null && narrowed.on !== profileKey) setNarrowed(null); });
+  // What a held review shows unlike what the panel showed, in the statement's words, while it stands.
+  const differs = useMemo(() => model.held && catalog
+    ? reviewDifferences(catalog, model.held.projected, model.held.providers, model.held.review.composition, vocab) : null, [model.held, catalog, vocab]);
   const line = launchLine({
     verb, phase: verification.phase, mode: verification.mode, progress, charge, keepsChecks: verification.keepsChecks !== false, inFlight: model.inFlight,
     busy: model.busy, chaining: model.chaining, launching,
     machine: machine && { name: machine.name, online: machine.online, revoked: machine.revoked === true }, machineChosen: model.machineId !== "",
     rosterUnread: rosterError, otherMachine: other && { id: other.id, name: other.name },
     message: model.message ?? stoppedVerifying, outcome: model.outcome, stop: quota?.stop ?? null, fix: quota?.fix ?? null,
-    differs: shownStop?.by === "review" ? shownStop.differs : null, narrowed: shownStop?.by === "check" ? shownStop.differs : null,
+    differs, narrowed: shownNarrowed,
     laneFix: verb.refusal?.code === "no-account" && slots && selection ? laneFix(slots.lane, selection) : null,
     nobodyServes: served !== null && served.size === 0, listFailure,
     ompMissing: model.ompMissing || presence?.get(model.machineId) === "absent", accountsProblem: model.accountsProblem, configurationFailed: model.configurationFailed,
@@ -226,7 +230,7 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     pool: poolCounts(catalog, model.launchReview.composition.review.routes, model.launchReview.composition.accountPool),
   } : null;
   const readout = launchReadout({ verb, edits: saved && selection ? teamEdits(saved, selection, familyWord) : [], reviewed, dials: reviewed ? model.launchDials : null,
-    grounded: quota?.grounded ?? false, launchStatus: model.launchStatus }, vocab);
+    launchStatus: model.launchStatus }, vocab);
   // The line beside the launch keeps to its facts and fixes; its asides ("changes stay a local preview") are said only when the launch is pointed.
   const asides = line?.parts.filter(entry => entry.tone === "meta").map(entry => entry.text) ?? [];
   // A staged model list beside the active one changes nothing until it is reviewed in Models; the launch's words say it waits there.
@@ -382,11 +386,10 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     }
   }
 
-  // ------------------------------------------------------------ the launch: Save & launch, and a Launch that checks first, as one gesture
+  // ------------------------------------------------------------ the launch: a Launch that checks first, as one gesture
   function act() {
-    setStopped(null);
-    if (verb.checks) { chain.current = { kind: "check", wanted: selection, failure: verification.failure, message: model.message, reviewed: false }; setLaunching(true); }
-    else if (verb.launches && shown) { chain.current = { kind: "save", projection: projectionOf(shown, served), review: shown }; setLaunching(true); }
+    setNarrowed(null);
+    if (verb.checks) { chain.current = { wanted: selection, failure: verification.failure, message: model.message }; setLaunching(true); }
     model.actions.next();
   }
   /** The press: a refused one shakes and says why; one that runs plays its charge and check, and the team lights up. */
@@ -416,46 +419,29 @@ export function GeneratorPane(props: GeneratorPaneProps) {
     button.dataset.pressing = "";
     window.setTimeout(() => { delete button.dataset.pressing; fire(); }, 160);
   }
-  // A Launch that checks first goes on once its check is done: it reviews the saved team once, then launches it, unless the
-  // check narrowed the profile to what answered, which is said for the person to choose. A check that stopped, a failed or
-  // unread workspace profile, a failed review or one that left the step at review ends the press, never retries it.
-  // A Save & launch press goes on from its review to the launch only when the review shows what was projected. `next` asks
-  // the gate again before each step. A chain that ends anywhere else stops, and a review that differs is said as what
-  // differs, for the person to choose.
+  // A Launch that checks first goes on to the launch once its check is done, unless the check narrowed the profile to what
+  // answered, which is said for the person to choose. A check that stopped, or a failed or unread workspace profile, ends the
+  // press and never retries it. `next` asks the gate again, and a launch the gate refuses then is said by the verb.
   useLayoutEffect(() => {
     const pressed = chain.current;
     if (!pressed) return;
     const end = () => { chain.current = null; setLaunching(false); };
-    if (pressed.kind === "check") {
-      if (verification.phase !== null) return;
-      if (verification.failure !== null && verification.failure !== pressed.failure) { end(); return; }
-      if (model.configurationFailed || (model.message?.failed && model.message !== pressed.message)) { end(); return; }
-      if (model.busy || model.chaining || !model.configurationCurrent) return;
-      if (model.step.step === "review") {
-        if (pressed.reviewed || !model.verb.open) { end(); return; }
-        chain.current = { ...pressed, reviewed: true };
-        model.actions.next();
-        return;
-      }
-      end();
-      const review = model.launchReview;
-      if (model.step.step !== "launch" || !review) return;
-      const moved = pressed.wanted && model.record?.selection ? teamEdits(pressed.wanted, model.record.selection, familyWord) : [];
-      if (moved.length === 0) { model.actions.next(); return; }
-      const differs = moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`);
-      setStopped({ review, differs, by: "check" });
-      announce(`The model check changed the profile: ${differs.join(", ")}. Launch to go on with it, or change a setting first.`);
-      return;
-    }
-    if (model.busy || model.chaining) return;
+    if (verification.phase !== null) return;
+    if (verification.failure !== null && verification.failure !== pressed.failure) { end(); return; }
+    if (model.configurationFailed || (model.message?.failed && model.message !== pressed.message)) { end(); return; }
+    if (model.busy || model.chaining || !model.configurationCurrent) return;
     end();
-    const review = model.launchReview;
-    if (model.step.step !== "launch" || !review || !catalog) return;
-    if (reviewMatches(pressed.projection, review.composition)) { model.actions.next(); return; }
-    const differs = reviewDifferences(catalog, pressed.review, pressed.projection.providers, review.composition, vocab);
-    setStopped({ review, differs, by: "review" });
-    announce(`The review differs: ${differs.join("; ")}. Launch to use the reviewed pool, or change a setting first.`);
+    if (model.step.step !== "launch") return;
+    const moved = pressed.wanted && model.record?.selection ? teamEdits(pressed.wanted, model.record.selection, familyWord) : [];
+    if (moved.length === 0) { model.actions.next(); return; }
+    const settings = moved.map(edit => `${WORD_NAMES[edit.word].toLowerCase()} ${edit.from} → ${edit.to}`);
+    setNarrowed({ on: profileKey, differs: settings });
+    announce(`The model check changed the profile: ${settings.join(", ")}. Launch to go on with it, or change a setting first.`);
   });
+  // A press that stopped on a review unlike what the panel showed says what differs, once.
+  useEffect(() => {
+    if (differs) announce(`What will run differs: ${differs.join("; ")}. Launch again to run it, or change a setting first.`);
+  }, [differs]);
 
   // What the panel's keys ask of the pane, current on every render.
   const latest = { launch: pressFromKeys, defaults: () => resetTo("defaults"), saved: () => resetTo("saved"), recall, machines: () => picker.current?.open(),

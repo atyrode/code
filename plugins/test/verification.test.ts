@@ -4,8 +4,8 @@ import type { VerificationProvenance } from "../code/contract.ts";
 import { operationReady } from "../code/permission-plan.ts";
 import type { Selection } from "../domain/contracts.ts";
 import { editedDraft } from "../code/generator/draft-store.ts";
-import { autoReviewDue, draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
-  type CatalogWrite, type DraftBase, type GateFacts, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
+import { draftStale, editHoldsCatalogWrite, followCatalogWrite, followInitialization, followRecord, launchStatusText, nextLaunchStep,
+  type CatalogWrite, type DraftBase, type LaunchFacts, type SharedBase } from "../code/generator/launch-step.ts";
 import type { ProfileDraft } from "../code/generator/workbench-model.ts";
 import { adoptsOnly, backgroundCheckDue, CHECKING_HOLD_MS, confirmsCharge, ownInitialization, spendsWithoutAsking, verificationState,
   type BackgroundFacts, type VerificationStatus } from "../code/generator/verification.ts";
@@ -30,8 +30,7 @@ describe("whether a recorded verification still holds", () => {
     // The runtime is upgraded on the destination with the same model catalog and the same accounts.
     const upgraded = verificationState(provenance, { ...present, inventoryArtifactSha256: "9".repeat(64), pool: same }, false);
     expect(upgraded).toMatchObject({ status: "current", changes: { runtimeChanged: true, catalogChanged: false, unpublished: [] } });
-    expect(nextLaunchStep(facts({}, upgraded.status)).step).toBe("review");
-    expect(nextLaunchStep(facts({ previewCurrent: true }, upgraded.status)).step).toBe("launch");
+    expect(nextLaunchStep(facts({}, upgraded.status)).step).toBe("launch");
     // A model catalog republished under another revision that still lists every routed model.
     const republished = verificationState(provenance, { ...present, catalogRevision: moved, pool: same }, false);
     expect(republished).toMatchObject({ status: "current", changes: { runtimeChanged: false, catalogChanged: true } });
@@ -77,14 +76,14 @@ describe("whether a recorded verification still holds", () => {
  */
 function facts(changes: Partial<LaunchFacts> = {}, status: VerificationStatus = "current", ready = true): LaunchFacts {
   const held = status === "verifying" ? "unverified" : status;
-  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true, previewCurrent: false,
+  return { configurationCurrent: true, unsaved: false, stale: false, writable: true, placeable: true, available: true, accounts: "usable", launchReady: true,
     profile: { source: "active" }, localDraft: null, record: { active: {} }, localReview: {}, skillProblems: [],
     queries: { setup: { error: null } }, verification: { status, held, passed: held !== "unverified", mode: null, ready }, unservedLead: null, ...changes };
 }
 const claude = { provider: "anthropic", family: "anthropic", roles: ["reviewer"] };
 
 describe("the next launch step with the model check", () => {
-  test("a check precedes save and review whenever the list in use cannot serve a launch, and the Launch press runs it", () => {
+  test("a check precedes save and launch whenever the list in use cannot serve a launch, and the Launch press runs it", () => {
     for (const status of ["unverified", "unpublished"] as const) {
       expect(nextLaunchStep(facts({}, status)).step).toBe("verify");
       // The bundled preview and an unsaved edit both check before anything saves.
@@ -92,16 +91,15 @@ describe("the next launch step with the model check", () => {
       expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } }, status)).step).toBe("verify");
     }
     expect(launchStatusText(facts({}, "unverified"))).toBe("Launch first checks which models your accounts can use.");
-    expect(nextLaunchStep(facts()).step).toBe("review");
-    expect(nextLaunchStep(facts({ previewCurrent: true })).step).toBe("launch");
+    expect(nextLaunchStep(facts()).step).toBe("launch");
+    expect(launchStatusText(facts())).toBe("Ready to open a terminal.");
     expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } })).step).toBe("save");
     // A bundled preview is never saved directly, even when a check is somehow current.
     expect(nextLaunchStep(facts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" } }))).toMatchObject({ step: "blocked", reason: { code: "unsaved" } });
   });
 
   test("a list that passed a check keeps serving while only the accounts changed, unless the door would refuse a lead", () => {
-    expect(nextLaunchStep(facts({}, "accounts-changed")).step).toBe("review");
-    expect(nextLaunchStep(facts({ previewCurrent: true }, "accounts-changed")).step).toBe("launch");
+    expect(nextLaunchStep(facts({}, "accounts-changed")).step).toBe("launch");
     expect(nextLaunchStep(facts({ unsaved: true, localDraft: { source: "active" } }, "accounts-changed")).step).toBe("save");
     // A lead the changed accounts no longer serve is refused by the session door, so the press checks first.
     expect(nextLaunchStep(facts({ unservedLead: claude }, "accounts-changed")).step).toBe("verify");
@@ -109,7 +107,7 @@ describe("the next launch step with the model check", () => {
     // A list that never passed one (imported) has nothing to keep serving with.
     expect(nextLaunchStep(facts({ verification: { status: "accounts-changed", held: "accounts-changed", passed: false, mode: null, ready: true } })).step).toBe("verify");
     // A check running beside it, the panel's own, holds nothing up.
-    expect(nextLaunchStep(facts({ previewCurrent: true, verification: { status: "verifying", held: "accounts-changed", passed: true, mode: "background", ready: true } })).step).toBe("launch");
+    expect(nextLaunchStep(facts({ verification: { status: "verifying", held: "accounts-changed", passed: true, mode: "background", ready: true } })).step).toBe("launch");
   });
 
   test("configuration and a staged catalog still come first, and the check has its own preconditions in order", () => {
@@ -133,7 +131,7 @@ describe("the next launch step with the model check", () => {
     expect(nextLaunchStep(unseated)).toMatchObject({ step: "blocked", reason: { code: "staged", action: "models" } });
     expect(launchStatusText(unseated)).toBe(nextLaunchStep(unseated).reason!.text);
     // Beside an active catalog a staged one changes nothing: the active profile verifies and launches as before.
-    expect(nextLaunchStep(facts({ record: { active: {}, draft: {} } })).step).toBe("review");
+    expect(nextLaunchStep(facts({ record: { active: {}, draft: {} } })).step).toBe("launch");
   });
 });
 
@@ -336,34 +334,5 @@ describe("checks the panel runs or spends on its own", () => {
     expect(due({ passed: false, held: "unverified", adoptable: true })).toBe(true);
     expect(due({ approvedRequests: 0 })).toBe(false);
     expect(due({ approvedRequests: 0, adoptable: true })).toBe(true);
-  });
-});
-
-/** The same workbench, as the gate reads it: nothing in flight, no charge, every lead served. */
-function gateFacts(changes: Partial<GateFacts> = {}, status: VerificationStatus = "current"): GateFacts {
-  return { ...facts({}, status), running: false, charge: null, unservedLead: null, savedSessionId: "", planYolo: false, ...changes };
-}
-
-describe("reviewing the saved team when its inputs settle", () => {
-  test("only the saved team on a list that serves a launch, with every launch precondition, reviews by itself", () => {
-    expect(autoReviewDue(gateFacts(), 4, null)).toBe(true);
-    expect(autoReviewDue(gateFacts({ unsaved: true, localDraft: { source: "active" } }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ unsaved: true, profile: { source: "starter" }, localDraft: { source: "starter" }, record: null }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ profile: { source: "draft" }, record: { draft: {} } }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({}, "accounts-changed"), 4, null)).toBe(true);
-    expect(autoReviewDue(gateFacts({}, "unpublished"), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ writable: false }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ launchReady: false }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ previewCurrent: true }), 4, null)).toBe(false);
-  });
-
-  test("never while a step runs or a charge waits or a lead is unserved, and once per scope until an input changes", () => {
-    expect(autoReviewDue(gateFacts({ running: true }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ charge: { requests: 3 } }), 4, null)).toBe(false);
-    expect(autoReviewDue(gateFacts({ unservedLead: { provider: "anthropic", family: "anthropic", roles: ["reviewer"] } }), 4, null)).toBe(false);
-    // A refused review or launch in this scope waits for an explicit Review...
-    expect(autoReviewDue(gateFacts(), 4, 4)).toBe(false);
-    // ...and a changed input opens a new scope, which reviews again.
-    expect(autoReviewDue(gateFacts(), 5, 4)).toBe(true);
   });
 });
