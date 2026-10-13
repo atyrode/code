@@ -9,7 +9,7 @@
   height: 100%;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   isolation: isolate;
   container-type: inline-size;
 }

@@ -114,6 +114,19 @@ function dimmed(hole: Box | null, point: { readonly x: number; readonly y: numbe
   const right = left + width, bottom = top + height;
   return `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${left}px ${top}px, ${left}px ${bottom}px, ${right}px ${bottom}px, ${right}px ${top}px, ${left}px ${top}px)`;
 }
+/**
+ * Brings `element` into view by the nearest scrolling box between it and the panel's root, the least
+ * distance that shows it (its top, when it is taller than the box); nothing else scrolls.
+ */
+function revealIn(panel: HTMLElement, element: HTMLElement) {
+  for (let node = element.parentElement; node && node !== panel; node = node.parentElement) {
+    if (!/(auto|scroll)/.test(getComputedStyle(node).overflowY) || node.scrollHeight <= node.clientHeight) continue;
+    const box = node.getBoundingClientRect(), at = element.getBoundingClientRect();
+    if (at.top < box.top) node.scrollTop -= box.top - at.top;
+    else if (at.bottom > box.bottom) node.scrollTop += Math.min(at.bottom - box.bottom, at.top - box.top);
+    return;
+  }
+}
 
 /**
  * THE TOUR, inside the panel and over nothing else (panel-layer.tsx). Its welcome is a card over the
@@ -181,7 +194,8 @@ export function TutorialLayer({ phase, step, shown, onTake, onSkip, onNext, onBa
   const [placed, setPlaced] = useState<Placed | null>(null);
   // The elements the step lights now, which the walk's hold keeps usable when they may be tried.
   const litParts = useRef<readonly HTMLElement[]>([]);
-  // Each step's control is brought into view once, as the step begins, before it is measured.
+  // Each step's control is brought into view once, as the step begins, before it is measured: by the panel's own scrolling
+  // only, never its root nor anything of Manifold's around it, which the layer stands still in.
   const scrolled = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!panel || !current) { scrolled.current = null; return; }
@@ -189,7 +203,7 @@ export function TutorialLayer({ phase, step, shown, onTake, onSkip, onNext, onBa
     const first = tutorialLit(panel, current)?.parts[0];
     if (!first) return;
     scrolled.current = step;
-    first.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealIn(panel, first);
   });
   function measure() {
     let found: Placed | null = null;
