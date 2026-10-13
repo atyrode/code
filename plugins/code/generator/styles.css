@@ -754,6 +754,29 @@
 @media (max-width: 300px) {
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 14px 12px 12px; }
 }
+/*
+ * The tutorial (tutorial.tsx): a thin ring in the accent around the real control, and a card beside
+ * it in the dialog's grammar, a rule in the accent around it so it reads as part of the walk. Both
+ * are laid over the panel (absolute in its root), so nothing in the panel moves; the ring takes no
+ * pointer. The card waits unseen until it is placed, so it never shows where it does not belong.
+ */
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-ring { position: absolute; z-index: 30; box-sizing: border-box; border: 1px solid var(--tui-acc); pointer-events: none; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial { position: absolute; z-index: 31; box-sizing: border-box; max-height: calc(100% - 16px); overflow-y: auto; padding: 12px 14px 10px; border: 1px solid var(--tui-acc); color: var(--tui-fg); background: var(--code-panel); font: 14px/20px var(--code-sans); }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial:not([data-placed]) { top: 0; left: 0; visibility: hidden; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial h2 { margin: 0; color: var(--tui-acc); font-size: 15px; font-weight: 650; line-height: 22px; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-count { color: var(--tui-dim); font-size: 13px; white-space: nowrap; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial p { margin: 4px 0 0; color: var(--tui-mid); overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-top: 10px; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-choices button { white-space: normal; overflow-wrap: anywhere; }
+.plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-skip { margin-left: auto; color: var(--tui-dim); }
+@media (pointer: coarse) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-choices button { min-width: 44px; min-height: 44px; }
+}
+/* The card stands outside the stage and the sheets, whose reduced-motion rules stop their fades, so it stops its own. */
+@media (prefers-reduced-motion: reduce) {
+  .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial *, .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tutorial-ring { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; }
+}
 
 /* Models: the list as the ladders it is, wide as a matrix (tiers down, providers across), else one ladder per provider. */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__models-matrix { display: grid; grid-template-columns: max-content repeat(var(--cols), minmax(0, 1fr)); column-gap: 22px; min-width: 0; }

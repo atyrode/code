@@ -21,8 +21,8 @@ export type MenuCommand = {
 };
 
 /**
- * The bar's one menu: a button, More, that opens a short menu of the panel's sheets and the
- * shortcuts, the WAI-ARIA menu button. A press, ↓, ↵ or Space opens it on its first item, ↑ on its
+ * The bar's one menu: a button, More, that opens a short menu of the panel's sheets, the shortcuts
+ * and the tutorial, the WAI-ARIA menu button. A press, ↓, ↵ or Space opens it on its first item, ↑ on its
  * last; ↑↓, Home and End move, ↵ or Space chooses, and an item's own key chooses it too. Esc closes
  * it and returns focus to More; Tab, a press outside or focus leaving closes it. While it is open
  * it owns its keys (`data-popover`), so the panel's keys leave them alone. Choosing returns focus to

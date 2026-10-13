@@ -6,7 +6,8 @@ import { CatalogDocumentSchema, DomainError, SelectionSchema, type CatalogDocume
 import { clampSelection } from "../domain/routing.ts";
 import { ChecksSchema, MAX_CHECKS, VerificationProvenanceSchema, digest, id, revision, type ActionInput, type Checks,
   type Configuration, type ModelCheck, type VerificationProvenance } from "./contract.ts";
-import { CodeRefusal, digestOf, type CodeContext } from "./context.ts";
+import { CodeRefusal, type CodeContext } from "./context.ts";
+import { bound, keeperOf, personOf } from "./person.ts";
 import { commitConfiguration, expectRevision, poolIdentity, readConfiguration, requireConfiguration } from "./state.ts";
 
 /*
@@ -15,7 +16,7 @@ import { commitConfiguration, expectRevision, poolIdentity, readConfiguration, r
   also kept for the person who checked it, under the exact pool it was verified with and the budget
   it was derived under, and any workspace whose saved choices select that pool adopts it instead of
   spending another check. The person's standing approval of what checks spend lives beside them.
-  Both are keyed by the caller's own principal: nobody reads or writes another person's, and an
+  Both are the person's own records (person.ts): nobody reads or writes another person's, and an
   agent, a service or a token confined to one container keeps none. Workspaces keep their own
   copies, so a `runSession` caller still reads a workspace.
 */
@@ -33,33 +34,9 @@ const StoredApprovalSchema = z.strictObject({
 /** Plugin storage holds at most this many bytes per value (plugin-kit `MAX_STORAGE_VALUE_BYTES`). */
 const MAX_VALUE_BYTES = 64 << 10;
 
-/** Why a caller keeps no checks: not a person, or a person whose sign-in reaches less than the whole workspace tree. */
-type Keeper = { person: string } | { refused: "person_required" | "checks_confined" };
-/**
- * The caller's records are filed under a digest of their principal, cut to 40 hex characters so a
- * check's key (`checks/<person>/<budget>/<pool>`) stays within the 128 characters plugin storage
- * keys may have; every record also names its principal, which every read compares. Only a person
- * whose sign-in reaches the workspace root keeps checks, asked where an unconfined credential is
- * anchored: a token confined to one container, or by an authority ceiling, keeps none, since a
- * check and the approval to spend on checks are the person's own, never one container's.
- */
-async function keeperOf(ctx: CodeContext): Promise<Keeper> {
-  if (ctx.auth.principal.kind !== "human") return { refused: "person_required" };
-  if (ctx.auth.containerScope !== null || !(await ctx.auth.allows("containers:read"))) return { refused: "checks_confined" };
-  return { person: digestOf({ principalId: ctx.auth.principal.id }).slice(0, 40) };
-}
-async function personOf(ctx: CodeContext): Promise<string | null> {
-  const keeper = await keeperOf(ctx);
-  return "person" in keeper ? keeper.person : null;
-}
 const checkKey = (person: string, budget: Budget, pool: string) => `checks/${person}/${budget}/${pool}`;
 const approvalKey = (person: string) => `approvals/${person}`;
 
-/** A stored record that names another principal, or another key than its own, is corruption, never someone's data. */
-function bound<T extends { principalId: string }>(ctx: CodeContext, record: T): T {
-  if (record.principalId !== ctx.auth.principal.id) throw new CodeRefusal("invalid_configuration");
-  return record;
-}
 async function readApproval(ctx: CodeContext, person: string) {
   const raw = await ctx.storage.get(approvalKey(person));
   return raw === null ? null : { raw, approval: bound(ctx, StoredApprovalSchema.parse(JSON.parse(raw))) };

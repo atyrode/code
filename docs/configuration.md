@@ -50,6 +50,7 @@ All Code actions are `atyrode.code.<name>`:
 | Configuration         | `readConfiguration`, `initializeConfiguration`, `select`, `changeAccounts`   |
 | Catalog authoring     | `stageCatalog`, `reviewCatalog`, `promoteCatalog`, `discardCatalog`           |
 | A person's checks     | `readChecks`, `approveChecks`, `adoptCheck`                                   |
+| A person's tutorial   | `readTutorial`, `seeTutorial`                                                |
 | Pure OMP input policy | `composeProbe`, `draftInventory`, `deriveCatalog`, `composeSession`           |
 | External classifier   | `readServiceConfiguration`, `reviewServices`, `configureServices`, `suggest` |
 
@@ -93,6 +94,15 @@ when the caller keeps no such check, `code_invalid_provenance` when the kept lis
 provider the pool does not include, and `code_check_current` when the workspace already
 holds a list of that pool whose benchmark completed no earlier. It saves `selection`
 (else the saved one) narrowed to the check's list, and leaves a staged list as it is.
+
+Whether a person has seen the panel's tutorial is their own record too, kept the same
+way at `tutorial/<person>`. `readTutorial({})` answers `{ keeps, seenAt }`: whether the
+caller keeps the record at all, and when they first finished, skipped or answered the
+tutorial's offer (null before). `seeTutorial({})` records it once and answers the same:
+a record already there stands as it is, so two tabs or devices marking it agree. Neither
+refuses a caller that keeps none: an agent, a service or a confined sign-in reads and
+marks `keeps: false`, and the panel then keeps it in the browser instead. Both ask no
+container capability and are container-graded, as the checks' doors are.
 
 `CatalogDocumentSchema` is `{ schemaVersion: 1, models: [...] }`. Each model has
 an explicit key, provider/id/API identity, tier, quota bucket, costs,
@@ -287,7 +297,7 @@ empty prompt. Headless callers still pass a prompt.
 ## Workbench presentation
 
 The main view is one panel. A **top bar** carries the views as tabs (Generator,
-Accounts, Sessions) and one **More** menu (Models, Setup, Options, Shortcuts). The
+Accounts, Sessions) and one **More** menu (Models, Setup, Options, Shortcuts, Tutorial). The
 panel reads its inputs again on its own, so it has no Refresh button. The **generator**
 holds five rows of plain words, a readout line, the cost and speed meters and the
 launch row; **routing** stands beside it and
@@ -325,8 +335,9 @@ one, More reads **More · staged** and its item **Models · staged**, since noth
 until it is reviewed there. When session options are set, More and its **Options** item
 carry their summary ("· restricted", "· skills off", "· 2 skills"). **Shortcuts** opens a
 native modal dialog that lists every key under the view it acts in (Generator, Views,
-Accounts, Sessions, Anywhere), with `m`, `u` and `o` under Generator, where they act;
-`Esc` or its Close button closes it and it owns its keys while open.
+Accounts, Sessions, Tutorial, Anywhere), with `m`, `u` and `o` under Generator, where they act;
+`Esc` or its Close button closes it and it owns its keys while open. **Tutorial** walks the
+tutorial again (below).
 
 The workbench reads its inputs again on its own: the workspace profile, OMP's setup,
 defaults, bundled model list, skills and accounts, and the machine list, once a minute
@@ -345,6 +356,35 @@ is: the launch line, the usage line, the sessions. The usage reading keeps its o
 cadence (below). Both cadences are one schedule: reads that come due together share one
 pass that reads each observation once, and **Refresh now** (`r`) or opening or closing a
 sheet reads everything in one pass and restarts both.
+
+### The tutorial
+
+On a person's first open of the panel, wherever they open it, a question asks "Welcome
+to Code" with **Take the tour** and **Skip** (`Esc` and the backdrop skip), once the
+generator shows its profile in the main view with no sheet open, nothing running, no
+charge waiting and no other question open. It is offered to people only: an agent or a
+service is never asked. Either answer marks the tutorial seen for that person
+(`seeTutorial`, or the browser for a sign-in that keeps no record), so it is never offered
+again; **Tutorial** in More walks it whenever they like. The walk starts on the generator
+(a sheet closes and the view goes back to it) and keeps to the steps the panel shows
+there, so its count holds when a step opens another view: the profile's rows, the
+readout, Defaults and Revert, routing, usage, the machine, the launch, the Accounts and
+Sessions tabs, and More. Each step draws a thin ring in the accent around its control and
+a card beside it (under it where the panel shows room, else over it), both laid over the
+panel so nothing in it moves, and both kept to the part of the panel the window shows: the
+step's name, where the walk stands ("3 of 10"), one sentence, and **Next** (**Done** at
+the last), **Back** and **Skip**; `→` and `←` step, `Esc` skips, and a held key steps once.
+Each step's card is its own, so moving to it moves focus to its Next and it is read out,
+and its control is scrolled into view. Routing and usage are pointed at where the layout
+puts them: beside the generator, else their tab or Show control. A step may be tried:
+choosing a word in the rows, or opening Accounts, goes on by itself once done since the
+step began, and Next always works too; Back onto a step another view hides brings the
+generator back. The walk launches nothing and spends nothing; a word tried changes the
+rows as any choice does, which Revert puts back. A step whose control is not shown (another
+view or a sheet has the panel), or any step while a popover of the panel is open (More's
+menu, the machine list), hides its card until that changes. The walk's end, finished or
+skipped, puts focus on More, where it is replayed, so a second `↵` of a double press opens
+a menu rather than launching.
 
 ### The generator
 

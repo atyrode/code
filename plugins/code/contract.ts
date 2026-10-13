@@ -114,6 +114,13 @@ export const ChecksSchema = z.strictObject({
   checks: z.array(ModelCheckSchema).max(MAX_CHECKS),
 });
 export type Checks = z.infer<typeof ChecksSchema>;
+/**
+ * WHETHER A PERSON HAS SEEN THE PANEL'S TUTORIAL. `keeps` says whether the caller keeps the record
+ * at all (false for an agent, a service or a confined sign-in, whose browser keeps it instead);
+ * `seenAt` is when they first answered its offer or ended a walk, null before.
+ */
+export const TutorialSchema = z.strictObject({ keeps: z.boolean(), seenAt: epochMilliseconds.nullable() });
+export type Tutorial = z.infer<typeof TutorialSchema>;
 /** The prompt bound is OMP's, in bytes, because the prompt reaches the machine as one entry
  * of the job input map the hub bounds (`PROMPT_MAX_BYTES`, 44 KiB). Code takes the schema
  * itself rather than the number, so the two can never disagree. */
@@ -254,6 +261,9 @@ export const rootActionSchemas = {
   readChecks: { input: z.strictObject({}), result: ChecksSchema },
   // `requests: 0` withdraws the approval, so every later check asks again.
   approveChecks: { input: z.strictObject({ expectedRevision: revision, requests: ChecksSchema.shape.approvedRequests }), result: ChecksSchema },
+  // The caller's own tutorial record: read it, or record that they have seen it (idempotent).
+  readTutorial: { input: z.strictObject({}), result: TutorialSchema },
+  seeTutorial: { input: z.strictObject({}), result: TutorialSchema },
   // Puts the caller's check of the workspace's present pool, derived under `budget`, in use, with `selection` (else the saved
   // one) narrowed to it. `poolIdentityDigest` is the pool the caller found a check for; Code recomputes the pool and refuses any other.
   adoptCheck: { input: RevisionWorkspaceSchema.extend({ accounts: AccountsObservationSchema, poolIdentityDigest: digest,

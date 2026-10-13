@@ -24,10 +24,14 @@ import { SetupSheet } from "./setup-sheet.tsx";
 import { teamWords, type SlotOption } from "./statement-model.ts";
 import { UsagePane, useUsageCadence } from "./usage-pane.tsx";
 import { readHeld } from "./auto-read.ts";
+import { DecisionDialog } from "./decision-dialog.tsx";
+import { tutorialOffer } from "./decision-model.ts";
 import { MoreMenu, type MenuCommand } from "./more-menu.tsx";
 import { usePanelReads, usePanelShown } from "./read-clock.ts";
 import { useWorkbench } from "./workbench-model.ts";
 import { tabMark } from "./runs-model.ts";
+import { TutorialCard, tutorialShown, tutorialTarget, useTutorialSeen } from "./tutorial.tsx";
+import { nextTutorialStep, previousTutorialStep, TUTORIAL_STEPS } from "./tutorial-model.ts";
 
 /** Generator-panel class prefix; every part hangs from the generator root (styles.css). */
 const G = "plugin-atyrode_code_generator__";
@@ -230,6 +234,7 @@ const SHORTCUTS: readonly { readonly title: string; readonly keys: readonly (rea
     ["Esc", "Back to the generator; from Manage accounts, back to the accounts"]] },
   { title: "Accounts", keys: [["↑ ↓", "Move between the accounts"], ["Space", "Include or exclude the account"], ["m", "Manage accounts: pools, sign-in, credentials"]] },
   { title: "Sessions", keys: [["1–9", "Recall the recent profile with that number"]] },
+  { title: "Tutorial", keys: [["→ ←", "Next or back a step"], ["Esc", "End the tutorial"]] },
   { title: "Anywhere", keys: [["r", "Refresh now: read everything again at once, as the panel also does on its own"], ["?", "These shortcuts"]] },
 ];
 
@@ -296,6 +301,14 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   const stageScroll = useRef(0);
   // Where the question a press waits on mounts (decision-dialog.tsx): beside the stage and the sheets, so it shows over either.
   const [decisionHost, setDecisionHost] = useState<HTMLDivElement | null>(null);
+  // The panel's root, which the tutorial's card is laid over (tutorial.tsx), once mounted.
+  const [panelRoot, setPanelRoot] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setPanelRoot(app.current?.closest<HTMLElement>(PANEL_ROOT) ?? null); }, []);
+  // The tutorial: whether the person has seen it, the walk (the step it stands at and the steps it keeps to; null when it is
+  // not walked), and a start waiting for the generator to show.
+  const tutorial = useTutorialSeen(host);
+  const [walk, setWalk] = useState<{ readonly step: number; readonly shown: readonly boolean[] } | null>(null);
+  const [starting, setStarting] = useState(false);
   const currentSheet = useRef(sheet);
   currentSheet.current = sheet;
   // The roster is polled; what reads it is recomputed only when it really changes.
@@ -458,7 +471,8 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
    * A key or a key-line word that changes what shows keeps focus in the panel: a view that took no
    * focus of its own on arrival (the accounts view focuses its first switch) is focused itself, and
    * the main view hands focus to the row the keyboard was last on. Focus left on a hidden control
-   * would drop to the page, where the panel's keys no longer reach.
+   * would drop to the page, where the panel's keys no longer reach. The tutorial's card keeps the
+   * focus it took: a view its step opened is the walk's to go on from.
    */
   function keepFocus() {
     requestAnimationFrame(() => {
@@ -466,6 +480,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       // A sheet opened within the frame (Esc, then a sheet's key) owns focus and gives it back itself.
       if (!node || currentSheet.current) return;
       const active = node.ownerDocument.activeElement;
+      if (active?.closest(`.${G}tutorial`)) return;
       const pane = node.querySelector<HTMLElement>(`[data-pane="${shown === "main" ? "generator" : shown}"]`);
       if (active && pane?.contains(active) && (active as HTMLElement).offsetParent !== null) return;
       if (shown === "main") generator.current?.focusRows();
@@ -532,6 +547,62 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
     };
   }, []);
 
+  // ------------------------------------------------------------ the tutorial: offered once per person, walked over the real controls
+  /**
+   * A walk starts on the generator: a sheet closes and the view goes back to it, then the steps the
+   * panel shows there are taken once that has rendered, and the walk keeps to them, so its count
+   * holds while a step it walks to (the accounts) shows another view, and a walk replayed from
+   * another view never begins past the generator's steps.
+   */
+  function startWalk() {
+    if (currentSheet.current) closeSheet();
+    changeView("main");
+    setStarting(true);
+  }
+  useLayoutEffect(() => {
+    if (!starting || !panelRoot || view !== "main" || sheet !== null) return;
+    setStarting(false);
+    const shown = tutorialShown(panelRoot), first = nextTutorialStep(shown, -1);
+    setWalk(first === null ? null : { step: first, shown });
+  });
+  /**
+   * The walk ends, finished or skipped: it counts as seen, and focus comes back into the panel on More, where the tutorial is
+   * replayed, rather than on the rows, where a second `↵` of a double press would launch.
+   */
+  function endWalk() {
+    setWalk(null);
+    tutorial.see();
+    requestAnimationFrame(() => app.current?.querySelector<HTMLElement>("[data-more]")?.focus({ preventScroll: true }));
+  }
+  /** A step whose control another view hides (the generator's, from the accounts) brings the generator back with it. */
+  function stepWalk(forward: boolean) {
+    if (walk === null || !panelRoot) return;
+    const to = forward ? nextTutorialStep(walk.shown, walk.step) : previousTutorialStep(walk.shown, walk.step);
+    if (to === null) { if (forward) endWalk(); return; }
+    if (view !== "main" && !tutorialTarget(panelRoot, TUTORIAL_STEPS[to]!)) changeView("main");
+    setWalk({ step: to, shown: walk.shown });
+  }
+  // A step the person can try goes on by itself once they did: a profile word chosen since it began, or the accounts opened
+  // since it began, so a step come back to with the accounts already open waits for Next.
+  const selectionKey = JSON.stringify(selection);
+  const walkBegan = useRef<{ readonly step: number; readonly selection: string; readonly view: PanelView } | null>(null);
+  useEffect(() => {
+    if (walk === null) { walkBegan.current = null; return; }
+    if (walkBegan.current?.step !== walk.step) { walkBegan.current = { step: walk.step, selection: selectionKey, view }; return; }
+    const tries = TUTORIAL_STEPS[walk.step]?.tries;
+    if ((tries === "word" && selectionKey !== walkBegan.current.selection) || (tries === "accounts" && view === "accounts" && walkBegan.current.view !== "accounts")) {
+      stepWalk(true);
+    }
+  });
+  // The offer: once per person, to a person and not an agent or a service, opened on the generator at rest with its profile
+  // shown, nothing running, no charge waiting and no other question open; once open it stands until it is answered either
+  // way, since nothing behind it can be pressed meanwhile, so a check writing on its own never closes and reopens it.
+  const offerDue = tutorial.seen === false && host.principal.kind === "human" && walk === null && !starting && view === "main" && sheet === null
+    && selection !== null && teamGate.open && !busy && decisionHost?.querySelector('dialog[open]:not([data-decision="tutorial"])') == null;
+  const [offering, setOffering] = useState(false);
+  useEffect(() => { if (offerDue) setOffering(true); }, [offerDue]);
+  const offer = offering && tutorial.seen === false && walk === null && !starting ? tutorialOffer() : null;
+
   // ------------------------------------------------------------ the bar, the pane heads and the key line: every action a control, keys its accelerators
   // A control names its key only where the panel's key rules give that key its action in the shown view (panel-keys.ts).
   const keyed = (title: string, keys: readonly string[], does: (action: PanelAction) => boolean) => {
@@ -568,6 +639,7 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
       onSelect: () => run({ kind: "sheet", sheet: "options" }) },
     { id: "shortcuts", label: "Shortcuts", aside: null, accelerator: menuKey(["?"], action => action.kind === "shortcuts"), title: "Keyboard shortcuts", dialog: true,
       onSelect: () => run({ kind: "shortcuts" }) },
+    { id: "tutorial", label: "Tutorial", aside: null, accelerator: null, title: "Tutorial: a short tour of Code", onSelect: startWalk },
   ];
   const bar = <nav className={`${G}bar`} aria-label="Code">
     <div className={`${G}tabs`} role="tablist" aria-label="views" onKeyDown={tabKeys}>
@@ -651,7 +723,11 @@ function Workbench({ host, target, machine, machines, rosterError, available, se
   return <>
     {region}
     {tui}
-    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties} />
+    <div ref={setDecisionHost} className={`${G}decision-host`} style={{ "--tui-acc": accent } as CSSProperties}>
+      <DecisionDialog decision={offer} onChoose={choice => { tutorial.see(); if (choice.does.kind === "tour") startWalk(); }} />
+    </div>
+    {walk !== null && panelRoot && <TutorialCard panel={panelRoot} step={walk.step} shown={walk.shown} accent={accent}
+      onNext={() => stepWalk(true)} onBack={() => stepWalk(false)} onEnd={endWalk} />}
     {sheetHost("models", <ModelsSheet host={host} model={model} machine={machine} onBack={closeSheet} backRef={backRef("models")} onPlace={open} />)}
     {sheetHost("setup", <SetupSheet host={host} model={model} target={target} machine={machine} machines={roster} rosterError={rosterError} presence={presence}
       select={select} refreshMachines={refreshMachines} onBack={closeSheet} backRef={backRef("setup")} onPlace={open} open={sheet === "setup"} />)}
