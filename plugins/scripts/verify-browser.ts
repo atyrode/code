@@ -4480,19 +4480,39 @@ async function tourCoarseTargets(browser: BrowserInstance): Promise<void> {
 }
 
 /**
- * A step whose control the window no longer shows keeps its card, so the walk can always go on. In a panel 300px tall, less
- * than half the generator's height, a wheel over the readout, through the profile's opening, scrolls the rows and the
- * readout out of view: the card stands centred in the part of the panel the window shows, the dim closed in its middle and
- * no ring, focus still on Next, and Next goes on to the estimates, which the walk brings into view.
+ * A step whose control the window no longer shows keeps its card, so the walk can always go on. The panel is made short
+ * enough that its scroll region, scrolled to its end, shows nothing of the profile's rows and readout: its height comes from
+ * what the page measures (how tall the region's content is and where the profile ends in it), so fonts that lay the panel
+ * out taller or shorter change the height, never the precondition, and a layout that leaves no such height says so. A real
+ * wheel over the readout, through the profile's opening, scrolls the region to its end: the card then stands centred in the
+ * part of the panel the window shows, the dim closed in its middle and no ring, focus still on Next, and Next goes on to
+ * the estimates, which the walk brings into view.
  */
 async function tourUnshown(browser: BrowserInstance): Promise<void> {
+  const region = `${element(generator)}.querySelector('.scroll-region__viewport')`;
+  const profileGone = `${TOUR_CONTROLS}.profile().every(part => part.getBoundingClientRect().bottom <= ${region}.getBoundingClientRect().top + 0.5)`;
   try {
+    // Measured in a panel the content overflows: the content's height, where the profile ends in it, and what of the panel's
+    // height the region does not take.
     await panelWidth(browser, 860, 300);
+    await showView(browser, "main");
+    const extent = await browser.evaluate<{ content: number; fits: boolean; lit: number; beside: number }>(`(view => {
+      const top = view.getBoundingClientRect().top - view.scrollTop;
+      return { content: view.scrollHeight, fits: view.scrollHeight <= view.clientHeight, beside: ${element(generator)}.getBoundingClientRect().height - view.clientHeight,
+        lit: Math.max(...${TOUR_CONTROLS}.profile().map(part => part.getBoundingClientRect().bottom - top)) };
+    })(${region})`);
+    // Scrolled to its end, a region `height` tall shows only what lies past `content - height`; 16px to spare, and never so
+    // short that the centred card has no room.
+    const height = Math.min(400, Math.floor(extent.content - extent.lit) - 16 + extent.beside);
+    assert(!extent.fits && height >= 220, `At 860px wide the generator leaves too little below the profile to scroll it out of view in a panel tall enough for the card: ${JSON.stringify(extent)}`);
+    await panelWidth(browser, 860, height);
     await showView(browser, "main");
     await openMenu(browser);
     await click(browser, menuItem("tutorial"));
     await until(browser, "in a short panel More's Tutorial starts the walk at the profile, which may be tried", `${tourShows("profile")} && ${TOUR_PLACE}.look === false`);
-    await wheel(browser, await pointOf(browser, readout), 3_000);
+    await wheel(browser, await pointOf(browser, readout), 10_000);
+    await until(browser, `the wheel through the opening scrolls the ${height}px panel's region to its end, the profile wholly out of view`,
+      `(view => view.scrollTop >= view.scrollHeight - view.clientHeight - 1)(${region}) && ${profileGone}`);
     await until(browser, "scrolled out of view, the profile's controls leave its card with no opening and no ring",
       `(place => place?.step === 'profile' && place.placed && place.look === null)(${TOUR_PLACE})`);
     await still(browser);
