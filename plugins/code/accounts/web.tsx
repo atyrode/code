@@ -12,9 +12,9 @@ function AccountsPanel({ host }: PanelProps) {
   // The panel's root, which its layer (a native review) stands in, inside the panel and over nothing else, once mounted.
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const layer = useMemo(() => root ? { panel: root, accent: "var(--code-accent)" } : null, [root]);
-  return <div ref={setRoot} className="plugin-atyrode_code plugin-atyrode_code_accounts-root">
+  return <div ref={setRoot} className="plugin-atyrode_code plugin-atyrode_code_accounts">
     <PanelLayer.Provider value={layer}>
-      <ScrollRegion className="plugin-atyrode_code_accounts" aria-label="Code accounts">
+      <ScrollRegion className="plugin-atyrode_code_accounts__scroll" aria-label="Code accounts">
         <div className="plugin-atyrode_code_accounts__body">
           <div className="plugin-atyrode_code_accounts__target">
             <label htmlFor={`${id}-machine`}>execution destination · choices are shared</label>

@@ -748,6 +748,7 @@
   .plugin-atyrode_code_generator .plugin-atyrode_code_generator__decision-body { padding: 14px 12px 12px; }
 }
 @keyframes plugin-atyrode_code_generator__card-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes plugin-atyrode_code_generator__dim-in { from { opacity: 0; } }
 /*
  * The tour (tutorial.tsx), a layer of the panel's own (the shared layer's parts are in Code's root
  * stylesheet): the dim with an opening cut round the step's control (`clip-path`, which lets the
@@ -759,7 +760,7 @@
  */
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour { position: absolute; inset: 0; z-index: 40; overflow: hidden; pointer-events: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-scrim { position: absolute; inset: 0; background: var(--code-scrim); pointer-events: auto;
-  animation: plugin-atyrode_code__dim-in 180ms var(--tui-ease); transition: clip-path 340ms var(--tui-ease), opacity 220ms var(--tui-ease); }
+  animation: plugin-atyrode_code_generator__dim-in 180ms var(--tui-ease); transition: clip-path 340ms var(--tui-ease), opacity 220ms var(--tui-ease); }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour[data-leaving] .plugin-atyrode_code_generator__tour-scrim { opacity: 0; pointer-events: none; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-room { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 12px; }
 .plugin-atyrode_code_generator .plugin-atyrode_code_generator__tour-ring { position: absolute; box-sizing: border-box; border: 1px solid var(--tui-acc); pointer-events: none;
