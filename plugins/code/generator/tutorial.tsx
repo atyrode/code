@@ -57,30 +57,31 @@ export function tutorialShown(panel: HTMLElement): boolean[] {
 }
 
 type Box = { readonly top: number; readonly left: number; readonly width: number; readonly height: number };
-type Layout = { readonly shown: readonly boolean[]; readonly card: Box | null; readonly ring: Box | null };
+type Layout = { readonly card: Box | null; readonly ring: Box | null };
 
 /**
  * One step of the tutorial: a thin ring in the accent around the real control and a card beside it,
  * under it where there is room in the panel, else over it, both laid over the panel without moving
- * anything in it. The card says what the control is, where the walk stands ("3 of 10"), and offers
- * Next (Done at the last), Back and Skip; `→` and `←` step too, and `Esc` skips. Each step takes
+ * anything in it. The card says what the control is, where the walk stands among the steps it keeps
+ * to (`shown`, "3 of 10"), and offers Next (Done at the last), Back and Skip; `→` and `←` step too,
+ * and `Esc` skips. Each step takes
  * focus on Next once, so the walk reads out and `↵` goes on, and scrolls its control into view.
  * A step whose control is not shown now (another view or a sheet has the panel) hides the card and
  * the ring until it is. Placed in the panel's own coordinates, so a panel inside a transformed
  * canvas places it as well as one that is not.
  */
-export function TutorialCard({ panel, step, accent, onNext, onBack, onEnd }: {
-  panel: HTMLElement; step: number; accent: string; onNext: () => void; onBack: () => void; onEnd: () => void;
+export function TutorialCard({ panel, step, shown, accent, onNext, onBack, onEnd }: {
+  panel: HTMLElement; step: number; shown: readonly boolean[]; accent: string; onNext: () => void; onBack: () => void; onEnd: () => void;
 }) {
   const id = useId();
   const card = useRef<HTMLElement>(null);
   const next = useRef<HTMLButtonElement>(null);
-  const [layout, setLayout] = useState<Layout>({ shown: [], card: null, ring: null });
+  const [layout, setLayout] = useState<Layout>({ card: null, ring: null });
   const current = TUTORIAL_STEPS[step]!;
 
   function measure() {
-    const shown = tutorialShown(panel), target = tutorialTarget(panel, current);
-    let placed: Layout = { shown, card: null, ring: null };
+    const target = tutorialTarget(panel, current);
+    let placed: Layout = { card: null, ring: null };
     if (target) {
       const room = panel.getBoundingClientRect(), at = target.getBoundingClientRect();
       // What of the panel the window shows: a panel taller than the window keeps the card where it can be seen.
@@ -91,7 +92,7 @@ export function TutorialCard({ panel, step, accent, onNext, onBack, onEnd }: {
       const cardTop = under + height <= bottom - EDGE_PX ? under : over >= EDGE_PX ? over : Math.max(EDGE_PX, bottom - EDGE_PX - height);
       const left = Math.min(Math.max(at.left - room.left, EDGE_PX), room.width - EDGE_PX - width);
       const ringLeft = Math.max(1, at.left - room.left - RING_PX), ringTop = Math.max(1, top - RING_PX);
-      placed = { shown, card: { top: cardTop, left, width, height },
+      placed = { card: { top: cardTop, left, width, height },
         ring: { top: ringTop, left: ringLeft, width: Math.min(room.width - 1, at.right - room.left + RING_PX) - ringLeft,
           height: Math.min(room.height - 1, at.bottom - room.top + RING_PX) - ringTop } };
     }
@@ -120,8 +121,8 @@ export function TutorialCard({ panel, step, accent, onNext, onBack, onEnd }: {
     next.current?.focus({ preventScroll: true });
   }, [step, showing]);
 
-  const place = tutorialPlace(layout.shown, step);
-  const last = nextTutorialStep(layout.shown, step) === null, first = previousTutorialStep(layout.shown, step) === null;
+  const place = tutorialPlace(shown, step);
+  const last = nextTutorialStep(shown, step) === null, first = previousTutorialStep(shown, step) === null;
   function keys(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") onEnd();
     else if (event.key === "ArrowRight") onNext();
