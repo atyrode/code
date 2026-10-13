@@ -76,8 +76,10 @@ inventory on a press and on its own, and a launch that stays ready while a chang
 checked again in the background; Setup's
 readiness rows, folder jobs and the owner's classifier (an owner-class identity minted for it alone);
 and a launch that reviews its session only when pressed and launches it in the same press, and
-launch/resume refusal, each press's outcome posted to Manifold's notice stack. The preparation,
-configuration and execution they lead to are refused, never native execution or consent success.
+launch/resume refusal. Notices are proven for what is reached here: saves, a checked list, a stopped
+check and refused launches and resumes; a successful launch or resume, and its "Launched on" or
+"Resumed on" notice and announcement, is never reached. The preparation, configuration and
+execution they lead to are refused, never native execution or consent success.
 This is UI/authority proof, NOT provider or native execution/readiness proof.`;
 if (process.argv.includes("--help")) {
   console.log(HELP);
@@ -2033,6 +2035,9 @@ async function acceptanceScenario(browser: BrowserInstance, label: string, recen
     { view: "main", sheet: false, shortcuts: false, list: false, asks: true, title: true }, "From the question no panel key acts, and focus stays on its title");
   assert.deepEqual(await spoken(), { notices: [], announced: [] }, "A refused press says nothing aloud and posts no notice: its question says it");
   await firstChoiceByTab(browser, "refused");
+  // Its choices, the fix and Close, the shortest of words, are 44px both ways on a coarse pointer. Resizing answers nothing.
+  await questionCoarseTargets(browser, "refused");
+  assert.equal(await browser.evaluate(asks("refused")), true, "Resizing and a coarse pointer leave the question open");
   await key(browser, "Escape", 27);
   await until(browser, "Esc closes the question onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
   await still(browser);
@@ -2650,20 +2655,32 @@ async function checkChargeScenario(browser: BrowserInstance, server: TestServer,
     assert.deepEqual([benchmarks.length, cancels.length], [0, 0], "Esc spends nothing and cancels no native job");
 
     // Mod+↵ takes the launch's step from a row and runs from the initialized revision (a run from the stale one would refuse
-    // before its inventory), and holding it takes no other step. Tab then ↵ in one burst as the question opens is typing
-    // meant for somewhere else, and answers nothing; the same ↵ once Approve has held focus and the question has settled is
-    // one deliberate press, which approves the charge, records the person's approval and spends it once.
+    // before its inventory), and holding it takes no other step. Once the question has settled, Tab then ↵ in one burst is
+    // still typing meant for somewhere else: ↵ comes before Approve has held focus a moment, so it answers nothing. The same
+    // ↵ once Approve has held focus is one deliberate press, which approves the charge, records the person's approval and
+    // spends it once. The page itself records when Approve took focus and when ↵ came, so the burst is known to be one.
     await focusRow(browser, "lane");
     await key(browser, "Enter", 13, { modifiers: CTRL });
     await questionOpens(browser, "charge", "Mod+↵ prepares a charge from revision 1, which asks its question");
+    await browser.evaluate(`(() => {
+      const dialog = ${decision}, burst = { focused: null, entered: null };
+      dialog.addEventListener('focusin', event => { if (event.target.dataset?.choice === 'approve' && burst.focused === null) burst.focused = event.timeStamp; });
+      dialog.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.ctrlKey && burst.entered === null) burst.entered = event.timeStamp; }, true);
+      globalThis.__codeBurst = burst;
+      return true;
+    })()`);
+    await Bun.sleep(DECISION_SETTLE_MS);
     await key(browser, "Tab", 9);
     await key(browser, "Enter", 13);
     await key(browser, "Enter", 13, { modifiers: CTRL, autoRepeat: true });
     await Bun.sleep(300);
     assert.deepEqual([started.length, benchmarks.length, approvals.length, await browser.evaluate(`${asks("charge")} && document.activeElement === ${choice("approve")}`)], [3, 0, 0, true],
-      "Tab then ↵ in one burst as the question opens answers nothing, and a held Mod+↵ takes no other step");
+      "Tab then ↵ in one burst after the question has settled answers nothing, and a held Mod+↵ takes no other step");
+    const burst = await browser.evaluate<{ focused: number | null; entered: number | null }>("globalThis.__codeBurst");
+    assert(burst.focused !== null && burst.entered !== null && burst.entered - burst.focused < DECISION_FOCUS_MS,
+      `↵ came before Approve had held focus ${DECISION_FOCUS_MS}ms: ${JSON.stringify(burst)}`);
     const stopping = await watchSaid(browser);
-    await Bun.sleep(DELIBERATE_MS);
+    await Bun.sleep(DECISION_FOCUS_MS);
     await key(browser, "Enter", 13);
     await waitFor(() => benchmarks.length === 1, timeout, 50);
     await until(browser, "the refused spend stops the check, which says so beside the launch, and the launch offers it again without a conflict",
@@ -3109,21 +3126,23 @@ async function modelsSheetScenario(browser: BrowserInstance, server: TestServer,
     const requests = (provider: string) => charge.benchmark.candidates.filter(candidate => candidate.provider === provider).length;
     const count = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
     // After the hold the charge asks its question over Models, which stays open behind it: Approve, with what the check spends
-    // by provider family, then Cancel. The sheet's next action only waits, saying what the charge spends and that it waits for
-    // the approval, with nothing beside it, and its side says what each provider is charged and which models are not probed.
+    // by provider family, then Cancel. The sheet's next action only waits, not pressable and still, saying what the charge
+    // spends and that it waits for the approval, with nothing beside it, and its side says what each provider is charged and
+    // which models are not probed. From 170 to 1440px the sheet behind the question paints whole.
     const checking = await questionOpens(browser, "charge", "after the hold the charge asks its question over Models");
     assert.deepEqual(checking, { title: "Check your models",
       text: ["Code finds out which models your accounts can use by sending each one a tiny request.", "You approve this once. Later checks run on their own."],
       items: [`${count(charge.benchmark.candidates.length, "tiny request")}: GPT ${requests("openai-codex")} · Claude ${requests("anthropic")}`],
       choices: [["approve", "Approve"], ["cancel", "Cancel"]] }, "A check started in Models asks with Approve, saying what it spends by provider family, and Cancel");
     assert.deepEqual(await browser.evaluate(`({ over: ${element(stage)}.hidden === true && !!${visibleSheet}?.contains(${element(modelsSheet)}), phase: ${phaseIs("charge")},
-      go: ${goIs(modelsSheet, "checking models…", "busy")}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
+      go: ${goIs(modelsSheet, "checking models…", "refused")}, parts: ${goParts(modelsSheet)}, fixes: ${goFixes(modelsSheet)},
       providers: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-pw')].map(el => el.getAttribute('aria-label')).sort(),
       unprobed: [...document.querySelectorAll('${modelsSheet} [data-side="charge"] .${G}models-xid')].map(el => el.textContent) })`), {
       over: true, phase: true, go: true, parts: [[count(charge.benchmark.candidates.length, "tiny request"), "strong"], ["waiting for your approval", null]], fixes: [],
       providers: [`Claude: ${count(requests("anthropic"), "request")}`, `Codex: ${count(requests("openai-codex"), "request")}`],
       unprobed: charge.exclusions.map(exclusion => `${exclusion.provider}/${exclusion.id}`),
     }, "Behind the question Models stays open, its next action waiting on the approval, and says exactly what the charge spends per provider and which models are not probed");
+    await sheetGeometry(browser, modelsSheet, "Models charge");
     // Only a deliberate single press spends: never key repeat on Approve once it has held focus and the question has settled,
     // never the second click of a double-click.
     await firstChoiceByTab(browser, "charge");
@@ -3583,7 +3602,8 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
       choices: [["launch", "Launch"], ["dismiss", "Not now"]] }, "The narrowed stop asks whether to launch the profile as the check left it");
     assert(narrowed.items.length > 0 && narrowed.items.every(text => text.includes(" → ")) && narrowed.items.some(text => text.startsWith("lane ")),
       `The question names each setting the check moved, the lane among them: ${JSON.stringify(narrowed.items)}`);
-    assert.equal(await browser.evaluate(`${lineText}.includes('changed')`), false, "The launch line no longer says what the check changed: the question does");
+    assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="warn"]`)}) === null`), true,
+      "The launch line no longer says what the check changed in a warning of its own: the question does");
     assert.equal(await browser.evaluate("globalThis.__codeAsked"), false, "Within the approval the check never asks its charge and the launch never waits on it");
     const checkedOnly = ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.omp.startBenchmark", "atyrode.code.promoteCatalog"];
     assert.deepEqual(requested(from), checkedOnly,
@@ -3964,8 +3984,7 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await key(viewerBrowser, "ArrowLeft", 37);
     await key(viewerBrowser, "Enter", 13, { modifiers: CTRL });
     // A viewer's refused press asks why, read-only offering no fix: Close alone, its way out. A key answers with Close once it
-    // has held focus a moment and the question has settled, and the question closes onto the row it was asked from; a
-    // pointer press on Close, once settled, closes the next one onto the launch.
+    // has held focus a moment and the question has settled, and the question closes onto the row it was asked from.
     const readOnly = await questionOpens(viewerBrowser, "refused", "the viewer's refused Mod+↵ asks its question");
     assert.deepEqual(readOnly, { title: "Read-only workspace", text: ["You can try settings here, but saving and launching need edit access to this workspace."], items: [],
       choices: [["dismiss", "Close"]] }, "A viewer's refused press asks why, with Close alone");
@@ -3973,10 +3992,28 @@ async function sharedWorkbenchScenario(browser: BrowserInstance, viewerBrowser: 
     await Bun.sleep(DELIBERATE_MS);
     await key(viewerBrowser, "Enter", 13);
     await until(viewerBrowser, "↵ on Close, held a moment, closes the question onto the row it was asked from", `${unasked} && !!${row("thinking")}.contains(document.activeElement)`);
+    // An assistive tool activates a choice with a click that comes with no key and no pointer, and needs no focus on it. The
+    // one synthetic `.click()` in this proof stands for it, on purpose: the first, sent by the page the moment the question
+    // opens, answers nothing, as any press in its first moments; the second, once the question has settled, on Close while
+    // focus is still on the title, takes the way out, onto the launch.
+    await viewerBrowser.evaluate(`(() => {
+      const dialog = ${decision};
+      globalThis.__codeAssisted = false;
+      new MutationObserver((records, observer) => {
+        if (!dialog.open) return;
+        observer.disconnect();
+        dialog.querySelector('button[data-choice="dismiss"]').click();
+        globalThis.__codeAssisted = true;
+      }).observe(dialog, { attributes: true, attributeFilter: ['open'] });
+      return true;
+    })()`);
     await click(viewerBrowser, launchButton);
     await questionOpens(viewerBrowser, "refused", "a press on the viewer's launch asks again");
-    await answer(viewerBrowser, "dismiss");
-    await until(viewerBrowser, "a press on Close closes it onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
+    assert.deepEqual(await viewerBrowser.evaluate(`[globalThis.__codeAssisted, ${asks("refused")}]`), [true, true], "An assistive activation the moment the question opens answers nothing");
+    await Bun.sleep(DECISION_SETTLE_MS);
+    assert.equal(await viewerBrowser.evaluate(`document.activeElement === ${decision}.querySelector('h2')`), true, "Close has had no focus");
+    await viewerBrowser.evaluate(`(${choice("dismiss")}.click(), true)`);
+    await until(viewerBrowser, "a settled assistive activation of Close takes the way out, onto the launch", `${unasked} && document.activeElement === ${launchButton}`);
     // The viewer's accounts are managed read-only: the saved pool shows and cannot be chosen or edited.
     await showView(viewerBrowser, "accounts");
     await click(viewerBrowser, element(`${generator} [data-manage]`));
@@ -5261,20 +5298,39 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
 
     // A GPT account joins the accounts OMP reports after the panel last read them, so the press's own review shows a pool
     // other than the one the panel showed: the press stops there, holds that review and asks whether to launch it, naming
-    // what differs, with Launch it, then Not now; the launch line no longer says it. While the question is open the panel
-    // reads nothing on its own (web.tsx `held`), even shown again after a while at another tab, and the held review stands;
-    // the read it owed comes once Not now has dropped the review, launching nothing.
+    // what differs, with Launch it, then Not now; the launch line no longer says it. A single press on Launch it the moment
+    // the question opens was aimed at the launch that stood there and answers nothing: nothing is launched, and the question
+    // stands. The page records the click the question heard and how long it had been open, so the press is known to have
+    // landed on Launch it before the question settled. While the question is open the panel reads nothing on its own
+    // (web.tsx `held`), even shown again after a while at another tab, and the held review stands; the read it owed comes
+    // once Not now has dropped the review, launching nothing.
     gptJoins = true;
     const reviewsBeforeHold = reviews.length, preparedBeforeHold = prepareRequests, heldAt = trace.requests.length;
+    await browser.evaluate(`(() => {
+      const dialog = ${decision}, early = { opened: null, open: dialog.open, clicks: [] };
+      new MutationObserver(() => { if (dialog.open && !early.open) early.opened = performance.now(); early.open = dialog.open; })
+        .observe(dialog, { attributes: true, attributeFilter: ['open'] });
+      dialog.addEventListener('click', event => early.clicks.push({ choice: event.target.closest('button[data-choice]')?.dataset.choice ?? null,
+        detail: event.detail, settled: event.timeStamp - early.opened >= ${DECISION_SETTLE_MS} }), true);
+      globalThis.__codeEarly = early;
+      return true;
+    })()`);
     await click(browser, launchButton);
-    const differs = await questionOpens(browser, "differs", "the press stops on a review unlike what the panel showed, and asks whether to launch it");
+    await until(browser, "the press stops on a review unlike what the panel showed, and asks whether to launch it", asks("differs"));
+    await press(browser, await browser.evaluate<Point>(`(() => { const box = ${choice("launch")}.getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()`));
+    await Bun.sleep(300);
+    assert.deepEqual(await browser.evaluate("globalThis.__codeEarly.clicks"), [{ choice: "launch", detail: 1, settled: false }],
+      "The question heard one single press on Launch it, before it had settled");
+    assert.deepEqual([await browser.evaluate(asks("differs")), prepareRequests, launchDoors(heldAt)], [true, preparedBeforeHold, ["atyrode.omp.reviewSession"]],
+      "A press on Launch it in the question's first moments launches nothing, and the question stands: the press reviewed once and stopped");
+    const differs = await browser.evaluate<Asked>(asked);
     const differsAt = Date.now();
     await until(browser, "behind its question the launch is ready", launchIs("launch", "ready"));
     assert.deepEqual({ ...differs, items: [] }, { title: "What will run differs", text: ["The session Code is about to start is not quite what the panel shows."], items: [],
       choices: [["launch", "Launch it"], ["dismiss", "Not now"]] }, "The held review asks whether to launch what will run, with Launch it, then Not now");
     assert(differs.items.includes("GPT accounts join the pool"), `The question names what differs, the GPT accounts that joined the pool among it: ${JSON.stringify(differs.items)}`);
-    assert.equal(await browser.evaluate(`${lineText}.includes('differs')`), false, "The launch line no longer says what will run differs: the question does");
-    assert.deepEqual(launchDoors(heldAt), ["atyrode.omp.reviewSession"], "The press reviews once and stops before launching");
+    assert.equal(await browser.evaluate(`document.querySelector(${JSON.stringify(`${generator} .${G}launch-part[data-tone="warn"]`)}) === null`), true,
+      "The launch line no longer says what will run differs in a warning of its own: the question does");
     // The panel's own reads of the machine list (`ownReads`), which only its clock asks for, count what it reads on its own.
     const machineReads = (await browser.evaluate<(number | null)[]>(ownReads))[0];
     assert(typeof machineReads === "number", "The SDK's feed probe counts the panel's reads of the machine list");
@@ -6505,7 +6561,7 @@ async function run(): Promise<void> {
   const cleanupFailures = await stopEverything();
   if (cleanupFailures.length) throw new Error(`Cleanup failed: ${cleanupFailures.join(", ")}${failure ? `; proof failed during ${phase}` : ""}`);
   if (failure) throw failure;
-  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A press waits on the person only in a modal question that opens with focus on its title, moves nothing in the panel, keeps every panel key out, and answers only a deliberate press: never ↵ on its title, Tab then ↵ in one burst, key repeat, a second click, a press in its first moments, a drag onto the backdrop or a press on its border; Esc and a settled press on the backdrop are its way out, onto what had focus. A refused press asks the line's reason, why and the line's own fixes, then Close, never shaking or speaking, and a fix runs from it; a refusal that changes closes it. A first Launch checks the models itself: its charge asks what it spends, by family, with every row and the machine locked behind it, and a double-click on Launch never approves it; the question stands inside the viewport and paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px choices on a coarse pointer and does not animate under reduced motion; Cancel, Esc and the backdrop spend nothing and cancel no job; one Approve records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch, is said aloud and posted to the notice stack and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs, a sheet or a question is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge asked over the sheet with Approve and approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired) and posted to the notice stack, back to code and, after ask first, check again, whose question Esc cancels; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first Approve and launch records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on a question naming what it changed, before any review, whose Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, never posted or announced, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, posting that to the notice stack, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet, a question or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal, which is said aloud and posted to the notice stack, the next one in its place; a press whose own review shows an account pool the panel did not show asks whether to launch what will run, its Not now launching nothing so the next press reviews again, and its Launch it launching that review without another; locked during a launch, the machine stays the Tab stop after it; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows.`);
+  console.log(`PASS (${Math.round((Date.now() - started) / 1000)}s): packed Code in two real browsers and two permitted destinations; shared choices converge with viewer authority intact, and a viewer's main view and accounts refuse every write. Genuine pinned OMP metadata yields an editable render-only starter whose routing and Models list are exactly the policy derivation; a conflicted local profile stays on show without revision-zero rebasing; configuration/metadata failures are not absence, and a failed model list is named with its retry and Models whatever the launch says. A press waits on the person only in a modal question that opens with focus on its title, moves nothing in the panel, keeps every panel key out, and answers only a deliberate press: never ↵ on its title, Tab then ↵ in one burst once it has settled, key repeat, a second click, a press in its first moments on a choice or the backdrop, a drag onto the backdrop or a press on its border; an assistive activation counts once it has settled, with no focus on the choice; Esc and a settled press on the backdrop are its way out, onto what had focus. A refused press asks the line's reason, why and the line's own fixes, then Close, 44px each on a coarse pointer, never shaking or speaking, and a fix runs from it; a refusal that changes closes it. A first Launch checks the models itself: its charge asks what it spends, by family, with every row and the machine locked behind it, and a double-click on Launch never approves it; the question stands inside the viewport and paints whole from 170 to 1440px, shifts nothing under pointer or focus, has 44px choices on a coarse pointer and does not animate under reduced motion; Cancel, Esc and the backdrop spend nothing and cancel no job; one Approve records the person's approval and spends once, and its refused spend saves nothing, stays said beside the launch, is said aloud and posted to the notice stack and is never retried on its own; Setup says how far the approval reaches, and ask first withdraws it so the next charge asks again; an account switch saves through the real changeAccounts CAS and keeps focus. A checked list recorded against the pinned OMP's artifact and the real catalog revision holds; an OMP upgrade alone, with the same accounts and Code, keeps the launch the step while Models says OMP was updated since, and a republished list that drops a routed model makes Launch check the models first. The panel reads its inputs again on its own when shown again, never while an edit is unsaved (a changed row, a named pool, until saved or discarded), a step runs, a sheet or a question is open, and once that ends. Tiered usage windows are rows of their own that leave Claude neither tight nor maxed, and no reset is clipped where the usage grid turns to two columns. The lead row's only box toggles by a press and Space with focus kept on it, survives a lead change, is disabled under Mixed and moves no word of the row; a struck lead or box says why, and a lead whose lane on the box's side cannot run lands on its other. Models, from More with focus on its way back, shows the list as ladders whose rungs say their ids and prices only in the readout, walks them as one roving Tab stop, and offers one next action that follows the step: check models, the checking hold a double-click cannot pass, a charge asked over the sheet with Approve, the sheet still waiting behind it and painting whole from 170 to 1440px, approved only by one deliberate press, which records the approval, measuring per provider, checked with what it left out (Spark, by OMP's spark quota class, retired) and posted to the notice stack, back to code and, after ask first, check again, whose question Esc cancels; a pasted list is refused until it is one, staged by one press (initializing an absent workspace once, never over a competing first save), discarded at its revision, or used by promoting exactly its review. A person's checks reach every workspace they open: after their first Approve and launch records the approval and the press goes on to review and launch, a first check elsewhere spends within it without asking, and one that narrows the profile stops the press on a question naming what it changed, before any review, whose Launch reviews and launches it; a workspace with the same account pool adopts their kept check with no inventory or spend, on a first Save & launch press that goes on to the launch and, once set up, on its own, Models saying it is checked and nothing reviewing the launch until it is pressed; a workspace never set up is never checked on its own; once the accounts change under a list that passed a check, Launch stays ready and launches while the check renewing it runs in the background within the approval; a renewal whose benchmark is refused is said in Models only, never posted or announced, beside a launch still ready, and is never retried on its own; and Setup's ask first cancels a renewal spending under the approval at its owner, which writes nothing and starts nothing again. Setup is one checklist whose rows say what they need, pointing at the first unready one: another machine where OMP is absent, then each native review (Esc back onto the next action, nothing approved; sessions request both OMP's launch and its harness), OMP's folder job by either route, refused, and the owner's classifier reviewed by the real server before its configuration, refused; its facts say every check asks before it spends while nothing is approved. More and its Models item mark a staged list exactly when it waits beside the active one, and a staged-only workspace's launch opens Models on it. Profile and account drafts survive destinations, sheets, the accounts' management and a reload; own account edits never conflict with an unsaved edit while a foreign profile write does; a save is refused for a lead no account serves; a writer without a canvas saves, posting that to the notice stack, never reading launching…, and is told why launching waits, never read-only. From 170 to 1440px no view or sheet overflows, cuts or collides text, no route runs past the routing pane and More's menu stays inside the panel; pointing and focus shift nothing in a view or a sheet; More is a menu button by pointer and keyboard; keys stay panel-local and never act from a sheet, a question or an open machine list, More menu or session drum; arrival keys reach the rows or take the launch's step; a refused keyboard step says why; the wheel steps only focused or rested rows; coarse targets are 44px in views and sheets, which hide their key line; reduced motion animates nothing and leaves no sheet duration. Nothing reviews a launch while the panel sits idle and its observations refresh: one press reviews the session and goes on to launch it, reading launching… throughout (saving… first for Save & launch) and Launch again after a refusal, which is said aloud and posted to the notice stack, the next one in its place; a press whose own review shows an account pool the panel did not show asks whether to launch what will run, a press on its Launch it in its first moments launching nothing, its Not now launching nothing so the next press reviews again, and its Launch it launching that review without another; locked during a launch, the machine stays the Tab stop after it; skills, automation, refused launch, resume and session correlations (one row per folder with its drum, re-read on refresh) stay gated at their native owners, native permission and folder readiness stay review-only, and no native approval, terminal or provider request is made. A sponsor's one press has OMP review the session, then registers Code's Agent and creates its Run at the real doors; the machine's refused launchRun cancels the Run and the same press goes on to the reviewed session, as every later press there does and as a press does where OMP's harness is not enabled. Fixture Runs say their activity, a lease to 24 of 24, renewal due and detached, and one square on the Sessions tab; their dials go pending, queued as next, confirmed, clamped, not served, unanswered then sent again, and forbidden, and a starting or detached Run's dials send nothing; ←→ settle before one send and a press within that settle sends only itself, ↵ and Space send at once, ↑↓ cross Runs; send again keeps the said line whole on a coarse pointer; a pointed word, lease or activity moves nothing, reduced motion stills every mark, and from 170 to 1440px nothing overflows. Every preparation and resume is refused here, so a successful launch or resume, and its "Launched on" or "Resumed on" notice and announcement, is never reached.`);
 }
 
 await run();
