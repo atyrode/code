@@ -447,7 +447,9 @@ async function focusLaunch(browser: BrowserInstance): Promise<void> {
   await tabTo(browser, "the launch", launchButton);
 }
 async function chooseMachine(browser: BrowserInstance, machineId: string, name: string): Promise<void> {
-  await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent`);
+  // The picker reads "no machine" until the panel has picked one, once every online machine has answered; its word then
+  // changes width, so a press aimed before that pick can miss it.
+  await until(browser, "the launch names its machine", `!!${machinePicker}?.textContent && ${machinePicker}.getAttribute('aria-label') !== 'Machine: none'`);
   if (await browser.evaluate<boolean>(`${machinePicker}.textContent === ${JSON.stringify(name)}`)) return;
   await click(browser, machinePicker);
   await until(browser, "the machine list opens", `${machineList} !== null`);
@@ -728,6 +730,46 @@ async function watchActions(browser: BrowserInstance, server: TestServer): Promi
   });
   await browser.send("Network.enable", {});
   return { requests, stop };
+}
+
+/**
+ * This browser's answers to the actions `names` since its page last loaded, read from each response's own body once it
+ * has landed: `answered` counts those that succeeded, by action, and `waiting` those asked and not answered yet. A
+ * request still in flight when the page navigates away is reported neither finished nor failed, so a load starts afresh.
+ */
+async function watchAnswers(browser: BrowserInstance, server: TestServer, names: readonly string[]):
+  Promise<{ answered: (name: string) => number; waiting: () => number; stop: () => void }> {
+  const prefix = `${server.httpUrl}/api/actions/`;
+  const asked = new Map<string, string>(), answered = new Map<string, number>();
+  let loads = 0;
+  const offLoaded = browser.on("Page.frameNavigated", event => {
+    const frame = event.frame as { parentId?: string } | undefined;
+    if (frame === undefined || frame.parentId !== undefined) return;
+    loads++;
+    asked.clear();
+    answered.clear();
+  });
+  const offAsked = browser.on("Network.requestWillBeSent", event => {
+    const request = event.request as { url?: string } | undefined;
+    const name = request?.url?.startsWith(prefix) ? decodeURIComponent(request.url.slice(prefix.length)) : null;
+    if (name !== null && names.includes(name)) asked.set(String(event.requestId), name);
+  });
+  const offFailed = browser.on("Network.loadingFailed", event => { asked.delete(String(event.requestId)); });
+  const offFinished = browser.on("Network.loadingFinished", event => {
+    const requestId = String(event.requestId), name = asked.get(requestId), load = loads;
+    if (name === undefined) return;
+    void (async () => {
+      try {
+        const { result } = await browser.send("Network.getResponseBody", { requestId });
+        const body = result?.base64Encoded === true ? Buffer.from(String(result.body), "base64").toString("utf8") : String(result?.body);
+        const outcome: unknown = JSON.parse(body);
+        if (load === loads && typeof outcome === "object" && outcome !== null && "ok" in outcome && outcome.ok === true) answered.set(name, (answered.get(name) ?? 0) + 1);
+      } catch { /* A body that cannot be read is no answer. */ }
+      finally { if (load === loads) asked.delete(requestId); }
+    })();
+  });
+  await browser.send("Network.enable", {});
+  return { answered: name => answered.get(name) ?? 0, waiting: () => asked.size, stop: () => { offLoaded(); offAsked(); offFailed(); offFinished(); } };
 }
 
 function noNativeEffects(requests: BrowserAction[]): void {
@@ -3210,13 +3252,14 @@ async function keptChecksScenario(browser: BrowserInstance, server: TestServer, 
     assert(narrowed[0]?.[1] === "warn" && narrowed.length > 1 && narrowed.slice(1).every(([text]) => text.includes(" → ")) && narrowed.some(([text]) => text.startsWith("lane ")),
       `The stop names each setting the check moved, the lane among them: ${JSON.stringify(narrowed)}`);
     assert.equal(await browser.evaluate("globalThis.__codeAsked"), false, "Within the approval the check never shows approve and the launch never waits on it");
-    assert.deepEqual(requested(from), ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.omp.startBenchmark",
-      "atyrode.code.promoteCatalog"],
+    const checkedOnly = ["atyrode.code.initializeConfiguration", "atyrode.omp.startInventory", "atyrode.omp.startBenchmark", "atyrode.code.promoteCatalog"];
+    assert.deepEqual(requested(from), checkedOnly,
       "The check within the approval spends without asking, and the press stops on the narrowed profile before reviewing or launching it");
     await pointOf(browser, launchButton);
     await until(browser, "pointed, the launch says it goes on with the narrowed profile", `${readout}.textContent.includes('launch to go on with it, or change a setting first')`);
     await pointAway(browser);
     await until(browser, "Launch is ready to go on with the narrowed profile", launchIs("launch", "ready"));
+    assert.deepEqual(requested(from), checkedOnly, "Once the stopped press has settled, still nothing has reviewed or launched the narrowed profile");
     from = trace.requests.length;
     await click(browser, launchButton);
     await waitFor(() => prepared.length === 2, timeout, 50);
@@ -4848,7 +4891,8 @@ async function syntheticPreviewScenario(browser: BrowserInstance, server: TestSe
     await click(browser, launchButton);
     await until(browser, "the press stops on a review unlike what the panel showed, and says what differs", `${stops} && ${launchIs("launch", "ready")}`);
     const differs = await browser.evaluate<[string, string | null][]>(launchParts);
-    assert(differs[0]?.[1] === "warn" && differs.length > 1, `The stop names what differs: ${JSON.stringify(differs)}`);
+    assert(differs[0]?.[1] === "warn" && differs.some(([text]) => text === "GPT accounts join the pool"),
+      `The stop names what differs, the GPT accounts that joined the pool among it: ${JSON.stringify(differs)}`);
     assert.deepEqual(launchDoors(heldAt), ["atyrode.omp.reviewSession"], "The press reviews once and stops before launching");
     await browser.evaluate(`(() => {
       const held = { lost: !(${stops}), watch: new MutationObserver(() => { if (!(${stops})) held.lost = true; }) };
@@ -5274,9 +5318,16 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
   });
   const agentName = await codeAgentName(workspace.id);
   const actions = await watchActions(browser, server);
+  // The panel's read of Code's Runs (workflow.ts `readRuns`) answers whether this sponsor may register Agents, from Code's
+  // Agents read beside the terminal inventory; a press before it has landed takes the reviewed session.
+  const answers = await watchAnswers(browser, server, ["core.access.listAgentsV2", "core.terminals.listAll"]);
+  // A door that validates an Agent's profile is asked again while Manifold refuses it as busy (workflow.ts `patient`), so a
+  // run of one of those is one step of the press.
+  const validating = ["core.access.registerAgentV2", "core.access.updateAgentV2", "core.access.launchRun"];
   /** The launch's doors the browser called since `from`, in order: the session's review and preparation, and the Agent and Run doors, reads left out. */
   const launchDoors = (from: number) => actions.requests.slice(from).map(request => request.name).filter(name => name === "atyrode.omp.reviewSession" ||
-    name === "atyrode.omp.prepareSession" || (name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name)));
+    name === "atyrode.omp.prepareSession" || (name.startsWith("core.access.") && !["core.access.listAgentsV2", "core.access.listRunsV2", "core.access.inspectRunV2"].includes(name)))
+    .filter((name, index, names) => !(validating.includes(name) && names[index - 1] === name));
   try {
     await arrangeWorkbench(server, sponsor);
     await browser.evaluate(identity(sponsor));
@@ -5287,6 +5338,8 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     // to launch it, Code cancels it, and the same press goes on to the reviewed session, which the fixture refuses at its
     // preparation. The launch reads launching… throughout.
     await until(browser, "the sponsor's saved profile is ready to launch", launchIs("launch", "ready"));
+    await waitFor(() => answers.answered("core.access.listAgentsV2") > 0 && answers.waiting() === 0, timeout, 50);
+    await settle(browser);
     const beforeLaunch = actions.requests.length, launching = await watchLaunch(browser);
     await click(browser, launchButton);
     await waitFor(() => prepares === 1, timeout, 50);
@@ -5713,6 +5766,7 @@ async function agentLaunchScenario(browser: BrowserInstance, server: TestServer,
     heldControl.release();
     heldList.release();
     actions.stop();
+    answers.stop();
     await fixture.stop();
     await browser.evaluate(identity(writer));
   }

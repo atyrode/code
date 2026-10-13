@@ -404,8 +404,9 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   // What a press stands on: what the person chose and where, the saved profile and the authority it acts with. A launch
   // reads the accounts and OMP's defaults again itself and refuses when they moved under its review (workflow.ts
   // `reviewedComposition`), so an observation that moves while it runs never stops it on its own. A held review stands
-  // on the same inputs (`HeldReview.pressEpoch`) and the pins `heldCurrent` names; accounts that moved after it are
-  // refused by that same check when it is launched.
+  // on the same inputs (`HeldReview.pressEpoch`) and the pins `heldCurrent` names; accounts or OMP defaults that moved
+  // after it are refused by that same check when it is launched, so neither is pinned here: the panel's own read of the
+  // defaults may be older than the press's, and pinning it would drop a hold the moment it is made.
   const pressKey = JSON.stringify([generation, authority.current.epoch, draftGeneration.current.epoch, machineId,
     record?.revision, record?.active?.digest, record?.selection, skillChoice, automation]);
   const pressScope = useRef({ key: pressKey, epoch: 0 });
@@ -426,7 +427,7 @@ export function useWorkbench({ host, target, machine, rosterError, available }: 
   const heldCurrent = held !== null && held.pressEpoch === pressEpoch && writable && available && configurationCurrent &&
     defaults.error === null && skillCatalog.error === null && setup.error === null && !!record?.active &&
     held.review.destination.machineId === machineId && held.review.composition.revision === record?.revision &&
-    held.review.native.defaultsRevision === defaults.data?.revision && !unsaved && skillProblems.length === 0 &&
+    !unsaved && skillProblems.length === 0 &&
     (held.review.native.skills.mode !== "selected" || held.review.native.skills.catalogRevision === skillCatalog.data?.revision) &&
     listServes({ verification, unservedLead: heldLead });
   // Whatever stops a held review from standing drops it for good: a read that fails and recovers never brings it back.
